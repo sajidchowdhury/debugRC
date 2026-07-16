@@ -151,6 +151,7 @@ Route::middleware('auth')->group(function () {
     // Reconciliation hub
     Route::get('admin/reconciliation', [ReconciliationController::class, 'index'])->name('admin.reconciliation.index');
     Route::get('admin/reconciliation/refresh', [ReconciliationController::class, 'refresh'])->name('admin.reconciliation.refresh');
+    Route::get('admin/reconciliation/section/{sectionId}', [ReconciliationController::class, 'section'])->name('admin.reconciliation.section');
 
     // Financial reports (18 reports)
     Route::prefix('admin/reports')->name('admin.reports.')->group(function () {

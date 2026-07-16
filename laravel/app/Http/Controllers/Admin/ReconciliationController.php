@@ -22,19 +22,37 @@ class ReconciliationController extends Controller
     /**
      * Show the reconciliation hub.
      */
-    public function index()
+    public function index(Request $request)
     {
-        $result = $this->reconciliationService->reconcileAll();
+        $asOfDate = $request->input('as_of_date');
+        $result = $this->reconciliationService->reconcileAll($asOfDate);
 
-        return view('admin.reports.reconciliation', $result);
+        return view('admin.reports.reconciliation', array_merge($result, [
+            'as_of_date' => $asOfDate,
+        ]));
     }
 
     /**
      * Re-run the reconciliation (AJAX endpoint).
      */
-    public function refresh()
+    public function refresh(Request $request)
     {
-        $result = $this->reconciliationService->reconcileAll();
+        $asOfDate = $request->input('as_of_date');
+        $result = $this->reconciliationService->reconcileAll($asOfDate);
+
+        return response()->json($result);
+    }
+
+    /**
+     * Get a single section's reconciliation with drill-down (AJAX).
+     */
+    public function section(Request $request, string $sectionId)
+    {
+        $result = $this->reconciliationService->reconcileSection($sectionId);
+
+        if (!$result) {
+            return response()->json(['error' => 'Unknown section: ' . $sectionId], 404);
+        }
 
         return response()->json($result);
     }
