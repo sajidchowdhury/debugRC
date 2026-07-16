@@ -16,14 +16,16 @@ use App\Http\Controllers\Admin\BranchController;
 use App\Http\Controllers\Admin\WarehouseController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\ReconciliationController;
+use App\Http\Controllers\Admin\StockTransactionController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phase 3 + Phase 4.
+ * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1.
  *
  * Phase 3: auth + dashboard.
- * Phase 4: master-data CRUD modules (products, customers, suppliers, employees,
- *          banks, ledgers, branches, warehouses).
+ * Phase 4: master-data CRUD modules.
+ * Phase 5: reporting layer (18 reports + reconciliation).
+ * Phase 6.1: stock transactions (SSOT) + warehouse stock balances.
  *
  * Nginx routes /admin/* to Laravel; /* to legacy PHP.
  */
@@ -174,6 +176,17 @@ Route::middleware('auth')->group(function () {
         Route::get('purchase-audit', [ReportController::class, 'purchaseAudit'])->name('purchaseAudit');
         Route::get('stocktake-variance', [ReportController::class, 'stocktakeVariance'])->name('stocktakeVariance');
         Route::get('branch-demand-weekly', [ReportController::class, 'branchDemandWeekly'])->name('branchDemandWeekly');
+    });
+
+    // ============================================================
+    // Phase 6.1: Stock Transactions (SSOT) + Warehouse Stock
+    // ============================================================
+    Route::prefix('admin/stock')->name('admin.stock.')->group(function () {
+        Route::get('transactions', [StockTransactionController::class, 'index'])->name('transactions');
+        Route::get('warehouse-stock', [StockTransactionController::class, 'warehouseStock'])->name('warehouse_stock');
+        Route::get('transactions/{id}', [StockTransactionController::class, 'show'])->name('show');
+        Route::get('availability', [StockTransactionController::class, 'checkAvailability'])->name('availability');
+        Route::get('warehouse-breakdown', [StockTransactionController::class, 'warehouseBreakdown'])->name('warehouse_breakdown');
     });
 });
 

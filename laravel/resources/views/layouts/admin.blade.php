@@ -149,6 +149,11 @@
                             <i class="fas fa-scale-balanced"></i> Reconciliation
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.stock.transactions') }}" class="nav-link {{ request()->routeIs('admin.stock.*') ? 'active' : '' }}">
+                            <i class="fas fa-boxes-stacked"></i> Stock
+                        </a>
+                    </li>
                 </ul>
             </nav>
 
