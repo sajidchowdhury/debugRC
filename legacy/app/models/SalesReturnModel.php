@@ -300,7 +300,7 @@ public function createReturn($data, $items) {
             $this->db->query("
                 INSERT INTO sales_return_items 
                 (sales_return_id, sales_invoice_item_id, product_id, 
-                 return_qty, rate, amount, `condition`)
+                 return_qty, rate, amount, condition)
                 VALUES (:rid, :sii, :pid, :rqty, :rate, :amt, :cond)
             ");
 
@@ -511,7 +511,7 @@ public function confirmReturn($return_id, $items) {
             $this->db->query("
                 UPDATE sales_return_items
                 SET warehouse_id = :wid,
-                    `condition` = :cond,
+                    condition = :cond,
                     return_qty = :rqty,
                     rate = :rate,
                     amount = :amt,
@@ -967,7 +967,7 @@ public function confirmReturn($return_id, $items) {
             JOIN products p ON sri.product_id = p.id
             LEFT JOIN warehouses w ON w.id = sri.warehouse_id
             WHERE sri.sales_return_id = :rid
-              AND sri.`condition` = 'Good'
+              AND sri.condition = 'Good'
               AND sri.confirmed_at IS NOT NULL
               AND COALESCE(sri.warehouse_id, 0) > 0
               AND COALESCE(sri.return_qty, 0) > 0
@@ -1204,7 +1204,7 @@ public function reverseReturn($return_id, $reason = '') {
             SELECT sri.*
             FROM sales_return_items sri
             WHERE sri.sales_return_id = :rid
-              AND sri.`condition` = 'Good'
+              AND sri.condition = 'Good'
               AND sri.confirmed_at IS NOT NULL
               AND COALESCE(sri.warehouse_id, 0) > 0
               AND COALESCE(sri.return_qty, 0) > 0
@@ -1299,7 +1299,7 @@ public function getFilteredReturns($filters = []) {
     }
 
     if (!$hasDateFilter) {
-        $where[] = "sr.return_date = CURDATE()";
+        $where[] = "sr.return_date = CURRENT_DATE";
     }
 
     // === GLOBAL SEARCH ===
@@ -1423,7 +1423,7 @@ public function getFilteredReturns($filters = []) {
             $hasDateFilter = true;
         }
         if (!$hasDateFilter && empty($filters['skip_default_today'])) {
-            $where[] = "sr.return_date = CURDATE()";
+            $where[] = "sr.return_date = CURRENT_DATE";
         }
 
         $searchTerm = trim($dtSearch ?? $filters['search'] ?? '');

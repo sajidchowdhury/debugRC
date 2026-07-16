@@ -424,7 +424,7 @@ class StockAdjustmentModel extends Helper {
             $hasDateFilter = true;
         }
         if (!$hasDateFilter) {
-            $where[] = 'sa.adjustment_date = CURDATE()';
+            $where[] = 'sa.adjustment_date = CURRENT_DATE';
         }
 
         if (!empty($filters['warehouse_id'])) {

@@ -228,7 +228,7 @@ public function getReturnForSlip($id) {
             $this->db->query("
                 INSERT INTO purchase_return_items 
                 (purchase_return_id, purchase_receive_item_id, product_id, warehouse_id, 
-                 return_qty, rate, `condition`)
+                 return_qty, rate, condition)
                 VALUES (:rid, :pri, :pid, :wid, :rqty, :rate, :cond)
             ");
 
@@ -378,7 +378,7 @@ public function getReturnForSlip($id) {
 
     // Default: Today only
     if (!$hasDateFilter) {
-        $where[] = "prt.return_date = CURDATE()";
+        $where[] = "prt.return_date = CURRENT_DATE";
     }
 
     // Global Search
@@ -694,7 +694,7 @@ public function getReturnForSlip($id) {
                     INSERT INTO supplier_ledger
                     (transaction_date, supplier_id, reference_type, reference_id,
                      debit, credit, running_balance, remarks, created_by, is_reversed, branch_id)
-                    VALUES (CURDATE(), :sid, 'reversal', :ref_id, 0, :credit, :bal, :rem, :uid, 0, :bid)
+                    VALUES (CURRENT_DATE, :sid, 'reversal', :ref_id, 0, :credit, :bal, :rem, :uid, 0, :bid)
                 ");
                 $this->db->bind(':sid', $supplierId);
                 $this->db->bind(':ref_id', $returnId);
@@ -816,7 +816,7 @@ public function getReturnForSlip($id) {
         $this->db->query("
             SELECT * FROM purchase_return_items
             WHERE purchase_return_id = :rid
-              AND LOWER(COALESCE(`condition`, 'good')) = 'good'
+              AND LOWER(COALESCE(condition, 'good')) = 'good'
               AND COALESCE(return_qty, 0) > 0
         ");
         $this->db->bind(':rid', $returnId);

@@ -235,7 +235,7 @@ class EmployeeTransactionModel extends Helper {
         }
 
         try {
-            $this->db->query("SHOW COLUMNS FROM employee_transactions LIKE 'journal_entry_id'");
+            $this->db->query("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'employee_transactions' AND column_name = 'journal_entry_id'");
             self::$hasJournalColumn = (bool)$this->db->single();
         } catch (Throwable $e) {
             self::$hasJournalColumn = false;
@@ -401,7 +401,7 @@ class EmployeeTransactionModel extends Helper {
             FROM employee_transactions
             WHERE is_reversed = 0
               AND transaction_type IN ({$outTypes})
-              AND transaction_date = CURDATE()
+              AND transaction_date = CURRENT_DATE
               {$branchSql}
         ");
         foreach ($bind as $k => $v) {
@@ -414,7 +414,7 @@ class EmployeeTransactionModel extends Helper {
             FROM employee_transactions
             WHERE is_reversed = 0
               AND transaction_type IN ({$outTypes})
-              AND transaction_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+              AND transaction_date >= to_char(CURRENT_DATE, 'YYYY-MM-01')::date
               {$branchSql}
         ");
         foreach ($bind as $k => $v) {
@@ -470,7 +470,7 @@ class EmployeeTransactionModel extends Helper {
                 $bindings[':date_to'] = $dateTo;
             }
             if (!$dateFrom && !$dateTo) {
-                $where[] = 'et.transaction_date = CURDATE()';
+                $where[] = 'et.transaction_date = CURRENT_DATE';
             }
         }
 

@@ -39,7 +39,7 @@ class PurchaseOrderModel extends Helper{
 
         try {
             // Generate PO Code
-            $this->db->query("SELECT COUNT(*) as cnt FROM purchase_orders WHERE DATE(created_at) = CURDATE()");
+            $this->db->query("SELECT COUNT(*) as cnt FROM purchase_orders WHERE DATE(created_at) = CURRENT_DATE");
             $row = $this->db->single();
             $po_code = "PO-" . date('Ymd') . "-" . str_pad(($row['cnt'] + 1), 4, '0', STR_PAD_LEFT);
 
@@ -112,7 +112,7 @@ class PurchaseOrderModel extends Helper{
         $this->db->query("
             UPDATE purchase_orders 
             SET status = 'cancelled', 
-                remarks = CONCAT(IFNULL(remarks, ''), '\n\n[Cancelled] Reason: ', :reason),
+                remarks = CONCAT(COALESCE(remarks, ''), '\n\n[Cancelled] Reason: ', :reason),
                 cancelled_at = NOW(),
                 cancelled_by = :uid,
                 cancel_reason = :reason,
@@ -282,8 +282,8 @@ public function getFilteredPOs($filters = []) {
 
     // If no date filter provided → Default to last 30 days (Safe for big data)
     if (!$hasDateFilter) {
-        $where[] = "po.po_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)";
-        $where[] = "po.po_date <= CURDATE()";
+        $where[] = "po.po_date >= (CURRENT_DATE - INTERVAL '30 days')";
+        $where[] = "po.po_date <= CURRENT_DATE";
         
         // Also update filters array so view shows correct dates
         $filters['date_from'] = date('Y-m-d', strtotime('-30 days'));

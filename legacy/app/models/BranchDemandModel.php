@@ -597,7 +597,7 @@ public function sendGoodsWithWarehouses($demand_id, $items) {
         $hasDateFilter = true;
     }
     if (!$hasDateFilter) {
-        $where[] = "bd.demand_date = CURDATE()";
+        $where[] = "bd.demand_date = CURRENT_DATE";
     }
 
     // Status Filter

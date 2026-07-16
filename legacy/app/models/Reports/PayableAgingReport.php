@@ -23,13 +23,13 @@ class PayableAgingReport extends ReportModel
                 s.supplier_name,
                 s.mobile,
                 COALESCE(MAX(b.branch_name), '—') AS branch_name,
-                SUM(CASE WHEN DATEDIFF(:as_of_date, sl.transaction_date) <= 30 THEN
+                SUM(CASE WHEN (:as_of_date::date - sl.transaction_date::date) <= 30 THEN
                     (sl.debit - sl.credit) ELSE 0 END) AS bucket_0_30,
-                SUM(CASE WHEN DATEDIFF(:as_of_date, sl.transaction_date) BETWEEN 31 AND 60 THEN
+                SUM(CASE WHEN (:as_of_date::date - sl.transaction_date::date) BETWEEN 31 AND 60 THEN
                     (sl.debit - sl.credit) ELSE 0 END) AS bucket_31_60,
-                SUM(CASE WHEN DATEDIFF(:as_of_date, sl.transaction_date) BETWEEN 61 AND 90 THEN
+                SUM(CASE WHEN (:as_of_date::date - sl.transaction_date::date) BETWEEN 61 AND 90 THEN
                     (sl.debit - sl.credit) ELSE 0 END) AS bucket_61_90,
-                SUM(CASE WHEN DATEDIFF(:as_of_date, sl.transaction_date) > 90 THEN
+                SUM(CASE WHEN (:as_of_date::date - sl.transaction_date::date) > 90 THEN
                     (sl.debit - sl.credit) ELSE 0 END) AS bucket_90_plus,
                 SUM(sl.debit - sl.credit) AS total_payable
             FROM supplier_ledger sl

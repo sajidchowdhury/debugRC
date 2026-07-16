@@ -53,7 +53,7 @@ class TrialBalanceReport
 
         $sql .= "
             GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.normal_balance, l.ledger_nature
-            ORDER BY FIELD(l.account_type, 'Asset', 'Liability', 'Equity', 'Income', 'Expense'),
+            ORDER BY CASE l.account_type WHEN 'Asset' THEN 1 WHEN 'Liability' THEN 2 WHEN 'Equity' THEN 3 WHEN 'Income' THEN 4 WHEN 'Expense' THEN 5 ELSE 0 END,
                      l.ledger_name ASC
         ";
 

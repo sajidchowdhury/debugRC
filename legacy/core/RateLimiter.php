@@ -145,9 +145,9 @@ class RateLimiter
             $db->query('
                 INSERT INTO login_rate_limits (bucket_key, attempt_count, reset_at)
                 VALUES (:key, 1, :reset_at)
-                ON DUPLICATE KEY UPDATE
+                ON CONFLICT (bucket_key) DO UPDATE SET
                     attempt_count = 1,
-                    reset_at = VALUES(reset_at)
+                    reset_at = EXCLUDED.reset_at
             ');
             $db->bind(':key', $key);
             $db->bind(':reset_at', $resetAt);

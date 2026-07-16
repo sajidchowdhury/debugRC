@@ -138,7 +138,7 @@ class SalesAuditModel extends Helper
                 WHERE sr.status = 'completed'
                   AND COALESCE(sr.is_reversed, 0) = 0
                   AND COALESCE(sr.journal_entry_id, 0) = 0
-                  AND sr.return_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                  AND sr.return_date >= (CURRENT_DATE - INTERVAL '365 days')
                   AND sr.total_amount > 0
                   {$branchSql}
                 ORDER BY sr.id ASC
@@ -268,7 +268,7 @@ class SalesAuditModel extends Helper
                 WHERE COALESCE(cp.is_reversed, 0) = 0
                   AND COALESCE(cp.journal_entry_id, 0) = 0
                   AND COALESCE(cp.transaction_type, 'receive') IN ('receive', 'payment', 'discount', 'write_off')
-                  AND cp.payment_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                  AND cp.payment_date >= (CURRENT_DATE - INTERVAL '365 days')
                   AND cp.amount > 0
                   {$branchSql}
                 ORDER BY cp.id ASC
@@ -364,7 +364,7 @@ class SalesAuditModel extends Helper
                 WHERE COALESCE(sc.is_reversed, 0) = 0
                   AND si.status = 'challan_completed'
                   AND COALESCE(sc.journal_entry_id, 0) = 0
-                  AND sc.challan_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                  AND sc.challan_date >= (CURRENT_DATE - INTERVAL '365 days')
                   {$branchSql}
                 ORDER BY sc.id ASC
                 LIMIT 50
@@ -433,7 +433,7 @@ class SalesAuditModel extends Helper
                 WHERE COALESCE(sc.is_reversed, 0) = 0
                   AND si.status = 'challan_completed'
                   AND COALESCE(sc.journal_entry_id, 0) = 0
-                  AND sc.challan_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                  AND sc.challan_date >= (CURRENT_DATE - INTERVAL '365 days')
                   {$this->branchFilter('si.branch_id')}
                 HAVING cogs_amount > 0.0001
                 ORDER BY sc.challan_date DESC
@@ -480,7 +480,7 @@ class SalesAuditModel extends Helper
                 WHERE si.is_reversed = 0
                   AND si.total_amount > 0
                   AND COALESCE(si.journal_entry_id, 0) = 0
-                  AND si.invoice_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                  AND si.invoice_date >= (CURRENT_DATE - INTERVAL '365 days')
                   {$branchSql}
                 ORDER BY si.id ASC
                 LIMIT 50
@@ -594,7 +594,7 @@ class SalesAuditModel extends Helper
                 WHERE si.is_reversed = 0
                   AND si.total_amount > 0
                   AND COALESCE(si.journal_entry_id, 0) = 0
-                  AND si.invoice_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                  AND si.invoice_date >= (CURRENT_DATE - INTERVAL '365 days')
                   AND (
                       si.status IN ('godown_issued', 'challan_completed')
                       OR EXISTS (
@@ -684,7 +684,7 @@ class SalesAuditModel extends Helper
                 INNER JOIN sales_invoices si ON si.id = sid.sales_invoice_id
                 LEFT JOIN products p ON p.id = sid.product_id
                 WHERE si.is_reversed = 0
-                  AND si.invoice_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                  AND si.invoice_date >= (CURRENT_DATE - INTERVAL '365 days')
                   AND (
                       si.godown_issued_at IS NOT NULL
                       OR si.status IN ('godown_issued', 'challan_completed')
@@ -727,7 +727,7 @@ class SalesAuditModel extends Helper
             INNER JOIN sales_invoices si ON si.id = sii.sales_invoice_id
             INNER JOIN products p ON p.id = sii.product_id
             WHERE si.is_reversed = 0
-              AND si.invoice_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND si.invoice_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND COALESCE(p.is_active, 1) = 0
               {$this->branchFilter('si.branch_id')}
         ");
@@ -737,7 +737,7 @@ class SalesAuditModel extends Helper
             FROM sales_invoice_items sii
             INNER JOIN sales_invoices si ON si.id = sii.sales_invoice_id
             WHERE si.is_reversed = 0
-              AND si.invoice_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND si.invoice_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND NOT EXISTS (SELECT 1 FROM products p WHERE p.id = sii.product_id)
               {$this->branchFilter('si.branch_id')}
         ");
@@ -747,7 +747,7 @@ class SalesAuditModel extends Helper
             FROM sales_invoice_items sii
             INNER JOIN sales_invoices si ON si.id = sii.sales_invoice_id
             WHERE si.is_reversed = 0
-              AND si.invoice_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND si.invoice_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('si.branch_id')}
         ");
 
@@ -772,7 +772,7 @@ class SalesAuditModel extends Helper
             SELECT COUNT(*) AS c FROM sales_invoices si
             WHERE si.is_reversed = 0
               AND COALESCE(si.customer_id, 0) = 0
-              AND si.invoice_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND si.invoice_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('si.branch_id')}
         ");
 
@@ -781,7 +781,7 @@ class SalesAuditModel extends Helper
             FROM sales_invoices si
             LEFT JOIN customers c ON c.id = si.customer_id
             WHERE si.is_reversed = 0
-              AND si.invoice_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND si.invoice_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND (c.id IS NULL OR COALESCE(c.is_active, 0) = 0)
               {$this->branchFilter('si.branch_id')}
         ");
@@ -808,7 +808,7 @@ class SalesAuditModel extends Helper
             FROM sales_invoice_dispatches sid
             INNER JOIN sales_invoices si ON si.id = sid.sales_invoice_id
             WHERE si.is_reversed = 0
-              AND si.invoice_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND si.invoice_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND (
                   si.godown_issued_at IS NOT NULL
                   OR si.status IN ('godown_issued', 'challan_completed')
@@ -880,7 +880,7 @@ class SalesAuditModel extends Helper
         $recentMoves = $this->scalarCount("
             SELECT COUNT(*) AS c FROM stock_transactions st
             WHERE st.reference_type IN ({$refs})
-              AND st.transaction_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND st.transaction_date >= (CURRENT_DATE - INTERVAL '365 days')
             {$this->branchWarehouseFilter('st.warehouse_id')}
         ");
 
@@ -908,7 +908,7 @@ class SalesAuditModel extends Helper
               AND si.status = 'draft'
               AND si.total_amount > 0
               AND COALESCE(si.journal_entry_id, 0) = 0
-              AND si.invoice_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND si.invoice_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('si.branch_id')}
         ");
 
@@ -917,7 +917,7 @@ class SalesAuditModel extends Helper
             WHERE si.is_reversed = 0
               AND si.total_amount > 0
               AND COALESCE(si.journal_entry_id, 0) = 0
-              AND si.invoice_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND si.invoice_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND (
                   si.status IN ('godown_issued', 'challan_completed')
                   OR EXISTS (
@@ -932,7 +932,7 @@ class SalesAuditModel extends Helper
             SELECT COUNT(*) AS c FROM sales_invoices si
             WHERE si.is_reversed = 0
               AND si.total_amount > 0
-              AND si.invoice_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND si.invoice_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('si.branch_id')}
               AND NOT EXISTS (
                   SELECT 1 FROM customer_ledger cl
@@ -947,7 +947,7 @@ class SalesAuditModel extends Helper
             WHERE si.is_reversed = 0
               AND si.status = 'draft'
               AND si.godown_issued_at IS NULL
-              AND si.created_at < DATE_SUB(CURDATE(), INTERVAL {$staleDraftDays} DAY)
+              AND si.created_at < (CURRENT_DATE - INTERVAL '{$staleDraftDays} days')
               {$this->branchFilter('si.branch_id')}
         ");
 
@@ -977,7 +977,7 @@ class SalesAuditModel extends Helper
             SELECT COUNT(*) AS c FROM sales_invoices si
             WHERE si.is_reversed = 0
               AND si.status = 'godown_issued'
-              AND si.godown_issued_at >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND si.godown_issued_at >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('si.branch_id')}
               AND NOT EXISTS (
                   SELECT 1 FROM sales_invoice_dispatches sid
@@ -1014,7 +1014,7 @@ class SalesAuditModel extends Helper
             WHERE si.is_reversed = 0
               AND si.status = 'draft'
               AND si.godown_issued_at IS NULL
-              AND si.created_at < DATE_SUB(CURDATE(), INTERVAL {$staleDraftDays} DAY)
+              AND si.created_at < (CURRENT_DATE - INTERVAL '{$staleDraftDays} days')
               {$this->branchFilter('si.branch_id')}
         ");
 
@@ -1068,7 +1068,7 @@ class SalesAuditModel extends Helper
             INNER JOIN sales_invoices si ON si.id = sc.sales_invoice_id
             WHERE COALESCE(sc.is_reversed, 0) = 0
               AND si.status = 'challan_completed'
-              AND sc.challan_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND sc.challan_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('si.branch_id')}
               AND NOT EXISTS (
                   SELECT 1 FROM stock_transactions st
@@ -1084,7 +1084,7 @@ class SalesAuditModel extends Helper
             INNER JOIN sales_invoices si ON si.id = sc.sales_invoice_id
             WHERE COALESCE(sc.is_reversed, 0) = 0
               AND si.status = 'challan_completed'
-              AND sc.challan_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND sc.challan_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND COALESCE(sc.journal_entry_id, 0) = 0
               {$this->branchFilter('si.branch_id')}
               AND EXISTS (
@@ -1135,7 +1135,7 @@ class SalesAuditModel extends Helper
             SELECT COUNT(*) AS c FROM sales_returns sr
             WHERE sr.status = 'pending'
               AND COALESCE(sr.is_reversed, 0) = 0
-              AND sr.return_date < DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+              AND sr.return_date < (CURRENT_DATE - INTERVAL '14 days')
               {$this->branchFilterViaSalesReturn()}
         ");
 
@@ -1145,7 +1145,7 @@ class SalesAuditModel extends Helper
             INNER JOIN sales_return_items sri ON sri.sales_return_id = sr.id
             WHERE sr.status = 'completed'
               AND COALESCE(sr.is_reversed, 0) = 0
-              AND sri.`condition` = 'Good'
+              AND sri.condition = 'Good'
               AND sri.return_qty > 0
               {$this->branchFilterViaSalesReturn()}
               AND NOT EXISTS (
@@ -1160,7 +1160,7 @@ class SalesAuditModel extends Helper
             SELECT COUNT(*) AS c FROM sales_returns sr
             WHERE sr.status = 'completed'
               AND COALESCE(sr.is_reversed, 0) = 0
-              AND sr.return_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND sr.return_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND COALESCE(sr.journal_entry_id, 0) = 0
               {$this->branchFilterViaSalesReturn()}
         ");
@@ -1199,7 +1199,7 @@ class SalesAuditModel extends Helper
         $noLedger = $this->scalarCount("
             SELECT COUNT(*) AS c FROM customer_payments cp
             WHERE COALESCE(cp.is_reversed, 0) = 0
-              AND cp.payment_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND cp.payment_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('cp.branch_id')}
               AND NOT EXISTS (
                   SELECT 1 FROM customer_ledger cl
@@ -1211,14 +1211,14 @@ class SalesAuditModel extends Helper
         $noJournal = $this->scalarCount("
             SELECT COUNT(*) AS c FROM customer_payments cp
             WHERE COALESCE(cp.is_reversed, 0) = 0
-              AND cp.payment_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND cp.payment_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND COALESCE(cp.journal_entry_id, 0) = 0
               {$this->branchFilter('cp.branch_id')}
         ");
 
         $recent = $this->scalarCount("
             SELECT COUNT(*) AS c FROM customer_payments cp
-            WHERE cp.payment_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+            WHERE cp.payment_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('cp.branch_id')}
         ");
 
@@ -1293,7 +1293,7 @@ class SalesAuditModel extends Helper
     private function countChallansMissingAdjustmentJournal(): int
     {
         try {
-            $this->db->query("SHOW COLUMNS FROM sales_challans LIKE 'transport_adjustment'");
+            $this->db->query("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'sales_challans' AND column_name = 'transport_adjustment'");
             if (!$this->db->single()) {
                 return 0;
             }
@@ -1308,7 +1308,7 @@ class SalesAuditModel extends Helper
             WHERE COALESCE(sc.is_reversed, 0) = 0
               AND ABS(COALESCE(sc.transport_adjustment, 0)) > 0.01
               AND COALESCE(sc.adjustment_journal_entry_id, 0) = 0
-              AND sc.challan_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND sc.challan_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('si.branch_id')}
         ");
     }

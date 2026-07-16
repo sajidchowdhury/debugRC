@@ -38,7 +38,7 @@ class AccountingPeriodService
         }
         try {
             $db = $db ?? new Database();
-            $db->query("SHOW TABLES LIKE 'accounting_periods'");
+            $db->query("SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'accounting_periods'");
             self::$tableExists = (bool)$db->single();
         } catch (Throwable $e) {
             self::$tableExists = false;
@@ -203,11 +203,11 @@ class AccountingPeriodService
         $this->db->query('
             INSERT INTO accounting_periods (branch_id, closed_through_date, closed_by, notes)
             VALUES (:bid, :closed, :uid, :notes)
-            ON DUPLICATE KEY UPDATE
-                closed_through_date = VALUES(closed_through_date),
-                closed_by = VALUES(closed_by),
+            ON CONFLICT (branch_id) DO UPDATE SET
+                closed_through_date = EXCLUDED.closed_through_date,
+                closed_by = EXCLUDED.closed_by,
                 closed_at = CURRENT_TIMESTAMP,
-                notes = VALUES(notes)
+                notes = EXCLUDED.notes
         ');
         $this->db->bind(':bid', $branchId);
         $this->db->bind(':closed', $closedThroughDate);

@@ -242,11 +242,11 @@ class StockTakeModel extends Helper {
                     INSERT INTO stock_take_items
                     (stock_take_session_id, warehouse_id, product_id, system_qty, physical_qty, rate, reason, is_applied)
                     VALUES (:sid, :wid, :pid, :system_qty, :pqty, :rate, :reason, 0)
-                    ON DUPLICATE KEY UPDATE
-                        system_qty   = VALUES(system_qty),
-                        physical_qty = VALUES(physical_qty),
-                        rate         = VALUES(rate),
-                        reason       = VALUES(reason),
+                    ON CONFLICT (stock_take_session_id, warehouse_id, product_id) DO UPDATE
+                        SET system_qty   = EXCLUDED.system_qty,
+                        physical_qty = EXCLUDED.physical_qty,
+                        rate         = EXCLUDED.rate,
+                        reason       = EXCLUDED.reason,
                         updated_at   = NOW()
                 ");
                 $this->db->bind(':sid', $session_id);
@@ -667,7 +667,7 @@ class StockTakeModel extends Helper {
             $hasDateFilter = true;
         }
         if (!$hasDateFilter) {
-            $where[] = 'sts.take_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)';
+            $where[] = 'sts.take_date >= (CURRENT_DATE - INTERVAL \'30 days\')';
         }
 
         if (!empty($filters['search'])) {

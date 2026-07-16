@@ -19,7 +19,7 @@ class ProductModel extends Helper {
     }
 
     public function generateProductCode() {
-        $this->db->query("SELECT MAX(CAST(SUBSTRING(product_code, 4) AS UNSIGNED)) as last_num FROM products");
+        $this->db->query("SELECT MAX(CAST(SUBSTRING(product_code FROM 4) AS BIGINT)) as last_num FROM products");
         $row = $this->db->single();
         $next = ($row['last_num'] ?? 0) + 1;
         return 'P-' . str_pad((string)$next, 4, '0', STR_PAD_LEFT);
@@ -484,7 +484,7 @@ class ProductModel extends Helper {
             {$baseQuery}
             {$whereSql}
             ORDER BY {$orderBy} {$orderDir}
-            LIMIT {$start}, {$length}
+            LIMIT {$length} OFFSET {$start}
         ";
 
         $this->db->query($dataQuery);
@@ -550,7 +550,7 @@ class ProductModel extends Helper {
                 (SELECT COUNT(*) FROM products WHERE category_id = c.id AND is_active = 1) AS product_count
             {$baseQuery} {$whereSql}
             ORDER BY {$orderBy} {$orderDir}
-            LIMIT {$start}, {$length}
+            LIMIT {$length} OFFSET {$start}
         ";
 
         $this->db->query($dataQuery);
@@ -655,7 +655,7 @@ class ProductModel extends Helper {
                 (SELECT COUNT(*) FROM products WHERE group_id = g.id AND is_active = 1) AS product_count
             {$baseQuery} {$whereSql}
             ORDER BY {$orderBy} {$orderDir}
-            LIMIT {$start}, {$length}
+            LIMIT {$length} OFFSET {$start}
         ";
 
         $this->db->query($dataQuery);

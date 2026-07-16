@@ -602,7 +602,7 @@ class MoneyTransferModel extends Helper {
 
         $this->db->query("
             SELECT COALESCE(SUM(amount), 0) AS total FROM money_transfers
-            WHERE is_reversed = 0 AND transfer_date = CURDATE(){$branchSql}
+            WHERE is_reversed = 0 AND transfer_date = CURRENT_DATE{$branchSql}
         ");
         foreach ($bind as $k => $v) {
             $this->db->bind($k, $v);
@@ -611,7 +611,7 @@ class MoneyTransferModel extends Helper {
 
         $this->db->query("
             SELECT COALESCE(SUM(amount), 0) AS total FROM money_transfers
-            WHERE is_reversed = 0 AND transfer_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01'){$branchSql}
+            WHERE is_reversed = 0 AND transfer_date >= to_char(CURRENT_DATE, 'YYYY-MM-01')::date{$branchSql}
         ");
         foreach ($bind as $k => $v) {
             $this->db->bind($k, $v);
@@ -682,7 +682,7 @@ class MoneyTransferModel extends Helper {
                 $bindParams[':to_date'] = $toDate;
             }
             if (!$fromDate && !$toDate) {
-                $where[] = 'mt.transfer_date = CURDATE()';
+                $where[] = 'mt.transfer_date = CURRENT_DATE';
             }
         }
 
@@ -729,7 +729,7 @@ class MoneyTransferModel extends Helper {
                    fb.branch_name AS from_branch_name, tb.branch_name AS to_branch_name
             {$baseQuery} {$whereSql}
             ORDER BY {$orderBy} {$orderDir}
-            LIMIT {$start}, {$length}
+            LIMIT {$length} OFFSET {$start}
         ";
 
         $this->db->query($dataQuery);
@@ -767,7 +767,7 @@ class MoneyTransferModel extends Helper {
             INSERT INTO cash_ledger
             (transaction_date, branch_id, cash_point, reference_type, reference_id,
              debit, credit, running_balance, remarks, created_by)
-            VALUES (CURDATE(), :bid, :point, :ref_type, :ref_id, :debit, :credit, :bal, :rem, :uid)
+            VALUES (CURRENT_DATE, :bid, :point, :ref_type, :ref_id, :debit, :credit, :bal, :rem, :uid)
         ");
 
         $this->db->bind(':bid', $branch_id);

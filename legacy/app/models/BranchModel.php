@@ -345,7 +345,7 @@ public function getAllActiveBranches() {
         $this->db->query('
             SELECT
                 COALESCE(c.id, 0) AS category_id,
-                COALESCE(c.category_name, "Uncategorized") AS label,
+                COALESCE(c.category_name, \'Uncategorized\') AS label,
                 COALESCE(SUM(ws.qty), 0) AS total_qty,
                 COUNT(DISTINCT ws.product_id) AS product_lines
             FROM warehouses w
@@ -371,7 +371,7 @@ public function getAllActiveBranches() {
         $this->db->query('
             SELECT
                 COALESCE(g.id, 0) AS group_id,
-                COALESCE(g.group_name, "Unassigned") AS label,
+                COALESCE(g.group_name, \'Unassigned\') AS label,
                 COALESCE(SUM(ws.qty), 0) AS total_qty,
                 COUNT(DISTINCT ws.product_id) AS product_lines
             FROM warehouses w
@@ -521,7 +521,7 @@ public function getAllActiveBranches() {
             {$baseQuery}
             {$whereSql}
             ORDER BY {$orderBy} {$orderDir}
-            LIMIT {$start}, {$length}
+            LIMIT {$length} OFFSET {$start}
         ";
 
         $this->db->query($dataQuery);

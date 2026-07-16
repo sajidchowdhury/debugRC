@@ -60,7 +60,7 @@ class AccountLockout
                 UPDATE users
                 SET failed_login_count = failed_login_count + 1,
                     locked_until = CASE
-                        WHEN failed_login_count + 1 >= :max_attempts THEN DATE_ADD(NOW(), INTERVAL :lock_minutes MINUTE)
+                        WHEN failed_login_count + 1 >= :max_attempts THEN (NOW() + :lock_minutes * INTERVAL \'1 minute\')
                         ELSE locked_until
                     END
                 WHERE id = :id

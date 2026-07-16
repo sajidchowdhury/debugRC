@@ -406,7 +406,7 @@ class OtherExpenseModel extends Helper {
 
         $this->db->query("
             SELECT COALESCE(SUM(amount),0) AS t FROM other_expenses
-            WHERE COALESCE(is_reversed,0)=0 AND expense_date = CURDATE(){$branchSql}
+            WHERE COALESCE(is_reversed,0)=0 AND expense_date = CURRENT_DATE{$branchSql}
         ");
         foreach ($bind as $k => $v) {
             $this->db->bind($k, $v);
@@ -415,7 +415,7 @@ class OtherExpenseModel extends Helper {
 
         $this->db->query("
             SELECT COALESCE(SUM(amount),0) AS t FROM other_expenses
-            WHERE COALESCE(is_reversed,0)=0 AND expense_date >= DATE_FORMAT(CURDATE(),'%Y-%m-01'){$branchSql}
+            WHERE COALESCE(is_reversed,0)=0 AND expense_date >= to_char(CURRENT_DATE, 'YYYY-MM-01')::date{$branchSql}
         ");
         foreach ($bind as $k => $v) {
             $this->db->bind($k, $v);
@@ -473,7 +473,7 @@ class OtherExpenseModel extends Helper {
                 $bindParams[':to_date'] = $toDate;
             }
             if (!$fromDate && !$toDate) {
-                $where[] = 'oe.expense_date = CURDATE()';
+                $where[] = 'oe.expense_date = CURRENT_DATE';
             }
         }
 
@@ -512,7 +512,7 @@ class OtherExpenseModel extends Helper {
                    oe.remarks, oe.is_reversed, l.ledger_name, b.bank_name
             {$baseQuery} {$whereSql}
             ORDER BY {$orderBy} {$orderDir}
-            LIMIT {$start}, {$length}
+            LIMIT {$length} OFFSET {$start}
         ");
         foreach ($bindParams as $key => $val) {
             $this->db->bind($key, $val);

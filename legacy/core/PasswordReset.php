@@ -28,7 +28,7 @@ class PasswordReset
             $db = new Database();
             $db->query('
                 INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
-                VALUES (:user_id, :token_hash, DATE_ADD(NOW(), INTERVAL :hours HOUR))
+                VALUES (:user_id, :token_hash, (NOW() + :hours * INTERVAL \'1 hour\'))
             ');
             $db->bind(':user_id', $userId);
             $db->bind(':token_hash', $hash);

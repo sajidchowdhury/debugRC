@@ -379,7 +379,7 @@ trait SalesCartOperationsTrait
     protected function dbDraftCartTableExists(): bool
     {
         try {
-            $this->db->query("SHOW TABLES LIKE 'sales_draft_carts'");
+            $this->db->query("SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'sales_draft_carts'");
             return (bool)$this->db->single();
         } catch (Throwable $e) {
             return false;
@@ -402,7 +402,7 @@ trait SalesCartOperationsTrait
         $this->db->query("
             INSERT INTO sales_draft_carts (user_id, branch_id, customer_id, items_json)
             VALUES (:uid, :bid, :cid, :json)
-            ON DUPLICATE KEY UPDATE items_json = VALUES(items_json), branch_id = VALUES(branch_id)
+            ON CONFLICT (user_id, customer_id) DO UPDATE SET items_json = EXCLUDED.items_json, branch_id = EXCLUDED.branch_id
         ");
         $this->db->bind(':uid', $userId);
         $this->db->bind(':bid', $branchId);

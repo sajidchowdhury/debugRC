@@ -96,7 +96,7 @@ class PurchaseReceiveModel extends Helper{
 
         try {
             // Generate Receive Code
-            $this->db->query("SELECT COUNT(*) as cnt FROM purchase_receives WHERE DATE(created_at) = CURDATE()");
+            $this->db->query("SELECT COUNT(*) as cnt FROM purchase_receives WHERE DATE(created_at) = CURRENT_DATE");
             $row = $this->db->single();
             $receive_code = "GRN-" . date('Ymd') . "-" . str_pad(($row['cnt'] + 1), 4, '0', STR_PAD_LEFT);
 
@@ -160,7 +160,7 @@ class PurchaseReceiveModel extends Helper{
 
     // Insert receive item
     $this->db->query("INSERT INTO purchase_receive_items 
-        (purchase_receive_id, purchase_order_item_id, product_id, warehouse_id, qty, rate, `condition`)
+        (purchase_receive_id, purchase_order_item_id, product_id, warehouse_id, qty, rate, condition)
         VALUES (:rid, :poi, :pid, :wid, :qty, :rate, 'Good')");
 
     $this->db->bind(':rid', $receive_id);
@@ -382,7 +382,7 @@ public function getFilteredReceives($filters = []) {
 
     // Default: Today only (if no date selected)
     if (!$hasDateFilter) {
-        $where[] = "pr.receive_date = CURDATE()";
+        $where[] = "pr.receive_date = CURRENT_DATE";
     }
 
     // Global Search
@@ -672,7 +672,7 @@ public function getPurchaseReceivesForDataTable(array $params): array
             $this->db->query("
                 UPDATE purchase_receives 
                 SET status = 'cancelled',
-                    remarks = CONCAT(IFNULL(remarks, ''), '\n\n[CANCELLED ', NOW(), '] ', :reason)
+                    remarks = CONCAT(COALESCE(remarks, ''), '\n\n[CANCELLED ', NOW(), '] ', :reason)
                 WHERE id = :id
             ");
             $this->db->bind(':reason', $reason);

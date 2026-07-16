@@ -393,7 +393,7 @@ class ChallanModel extends SalesModel {
             $this->db->execute();
 
             // Create Challan
-            $this->db->query("INSERT INTO sales_challans (sales_invoice_id, challan_code, challan_date, created_by) VALUES (:iid, :code, CURDATE(), :user)");
+            $this->db->query("INSERT INTO sales_challans (sales_invoice_id, challan_code, challan_date, created_by) VALUES (:iid, :code, CURRENT_DATE, :user)");
             $this->db->bind(':iid', $invoice_id);
             $this->db->bind(':code', $challan_code);
             $this->db->bind(':user', $_SESSION['user_id'] ?? null);
@@ -997,7 +997,7 @@ class ChallanModel extends SalesModel {
         }
 
         try {
-            $this->db->query("SHOW TABLES LIKE 'sales_challan_items'");
+            $this->db->query("SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'sales_challan_items'");
             $cached = (bool)$this->db->single();
         } catch (Throwable $e) {
             $cached = false;
@@ -1133,7 +1133,7 @@ class ChallanModel extends SalesModel {
         }
 
         try {
-            $this->db->query("SHOW COLUMNS FROM sales_challans LIKE 'transport_adjustment'");
+            $this->db->query("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'sales_challans' AND column_name = 'transport_adjustment'");
             $cached = (bool)$this->db->single();
         } catch (Throwable $e) {
             $cached = false;
@@ -1150,7 +1150,7 @@ class ChallanModel extends SalesModel {
         }
 
         try {
-            $this->db->query("SHOW COLUMNS FROM sales_invoices LIKE 'pre_challan_total'");
+            $this->db->query("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'sales_invoices' AND column_name = 'pre_challan_total'");
             $cached = (bool)$this->db->single();
         } catch (Throwable $e) {
             $cached = false;
@@ -1481,7 +1481,7 @@ class ChallanModel extends SalesModel {
             $hasDateFilter = true;
         }
         if (!$hasDateFilter && empty($filters['skip_default_today'])) {
-            $where[] = "si.invoice_date = CURDATE()";
+            $where[] = "si.invoice_date = CURRENT_DATE";
         }
 
         $searchTerm = trim($dtSearch ?? $filters['search'] ?? '');
@@ -1695,7 +1695,7 @@ class ChallanModel extends SalesModel {
         $warehouseLabel = '—';
         if ($challanId > 0) {
             $this->db->query("
-                SELECT GROUP_CONCAT(DISTINCT w.warehouse_name ORDER BY w.warehouse_name SEPARATOR ', ') AS names
+                SELECT string_agg(DISTINCT w.warehouse_name::text, ', ' ORDER BY w.warehouse_name::text) AS names
                 FROM sales_challan_items sci
                 JOIN warehouses w ON w.id = sci.warehouse_id
                 WHERE sci.sales_challan_id = :cid
@@ -1709,7 +1709,7 @@ class ChallanModel extends SalesModel {
 
         if ($warehouseLabel === '—') {
             $this->db->query("
-                SELECT GROUP_CONCAT(DISTINCT w.warehouse_name ORDER BY w.warehouse_name SEPARATOR ', ') AS names
+                SELECT string_agg(DISTINCT w.warehouse_name::text, ', ' ORDER BY w.warehouse_name::text) AS names
                 FROM sales_invoice_dispatches sid
                 JOIN warehouses w ON w.id = sid.warehouse_id
                 WHERE sid.sales_invoice_id = :iid

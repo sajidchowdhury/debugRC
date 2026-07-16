@@ -90,7 +90,7 @@ class PurchaseAuditModel
             INNER JOIN purchase_receives pr ON pr.id = pri.purchase_receive_id
             INNER JOIN products p ON p.id = pri.product_id
             WHERE pr.status = 'received'
-              AND pr.receive_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND pr.receive_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND COALESCE(p.is_active, 1) = 0
               {$this->branchFilter('pr.branch_id')}
         ");
@@ -100,7 +100,7 @@ class PurchaseAuditModel
             FROM purchase_order_items poi
             INNER JOIN purchase_orders po ON po.id = poi.purchase_order_id
             INNER JOIN products p ON p.id = poi.product_id
-            WHERE po.created_at >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+            WHERE po.created_at >= (CURRENT_DATE - INTERVAL '365 days')
               AND COALESCE(p.is_active, 1) = 0
               {$this->branchFilter('po.branch_id')}
         ");
@@ -110,7 +110,7 @@ class PurchaseAuditModel
             FROM purchase_receive_items pri
             INNER JOIN purchase_receives pr ON pr.id = pri.purchase_receive_id
             WHERE pr.status = 'received'
-              AND pr.receive_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND pr.receive_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND NOT EXISTS (SELECT 1 FROM products p WHERE p.id = pri.product_id)
               {$this->branchFilter('pr.branch_id')}
         ");
@@ -120,7 +120,7 @@ class PurchaseAuditModel
             FROM purchase_receive_items pri
             INNER JOIN purchase_receives pr ON pr.id = pri.purchase_receive_id
             WHERE pr.status = 'received'
-              AND pr.receive_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND pr.receive_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('pr.branch_id')}
         ");
 
@@ -163,7 +163,7 @@ class PurchaseAuditModel
             SELECT COUNT(*) AS c FROM purchase_receives pr
             WHERE pr.status = 'received'
               AND COALESCE(pr.supplier_id, 0) = 0
-              AND pr.receive_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND pr.receive_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('pr.branch_id')}
         ");
 
@@ -172,7 +172,7 @@ class PurchaseAuditModel
             FROM purchase_receives pr
             LEFT JOIN suppliers s ON s.id = pr.supplier_id
             WHERE pr.status = 'received'
-              AND pr.receive_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND pr.receive_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND (s.id IS NULL OR COALESCE(s.is_active, 0) = 0)
               {$this->branchFilter('pr.branch_id')}
         ");
@@ -181,7 +181,7 @@ class PurchaseAuditModel
             SELECT COUNT(*) AS c
             FROM purchase_orders po
             LEFT JOIN suppliers s ON s.id = po.supplier_id
-            WHERE po.created_at >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+            WHERE po.created_at >= (CURRENT_DATE - INTERVAL '365 days')
               AND (s.id IS NULL OR COALESCE(s.is_active, 0) = 0)
               {$this->branchFilter('po.branch_id')}
         ");
@@ -191,7 +191,7 @@ class PurchaseAuditModel
             WHERE pr.status = 'received'
               AND COALESCE(pr.purchase_order_id, 0) = 0
               AND COALESCE(pr.supplier_id, 0) = 0
-              AND pr.receive_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND pr.receive_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('pr.branch_id')}
         ");
 
@@ -218,7 +218,7 @@ class PurchaseAuditModel
             FROM purchase_receive_items pri
             INNER JOIN purchase_receives pr ON pr.id = pri.purchase_receive_id
             WHERE pr.status = 'received'
-              AND pr.receive_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND pr.receive_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND (
                   COALESCE(pri.warehouse_id, 0) = 0
                   OR NOT EXISTS (SELECT 1 FROM warehouses w WHERE w.id = pri.warehouse_id)
@@ -232,7 +232,7 @@ class PurchaseAuditModel
             INNER JOIN purchase_receives pr ON pr.id = pri.purchase_receive_id
             INNER JOIN warehouses w ON w.id = pri.warehouse_id
             WHERE pr.status = 'received'
-              AND pr.receive_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND pr.receive_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND COALESCE(w.is_active, 1) = 0
               {$this->branchFilter('pr.branch_id')}
         ");
@@ -243,7 +243,7 @@ class PurchaseAuditModel
             INNER JOIN purchase_receives pr ON pr.id = pri.purchase_receive_id
             INNER JOIN warehouses w ON w.id = pri.warehouse_id
             WHERE pr.status = 'received'
-              AND pr.receive_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND pr.receive_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND w.branch_id IS NOT NULL
               AND pr.branch_id IS NOT NULL
               AND w.branch_id != pr.branch_id
@@ -286,7 +286,7 @@ class PurchaseAuditModel
         $recentPurchaseMoves = $this->scalarCount("
             SELECT COUNT(*) AS c FROM stock_transactions st
             WHERE st.reference_type IN ('purchase_receive','purchase_receive_cancel','purchase_return','purchase_return_reversal')
-              AND st.transaction_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND st.transaction_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchWarehouseFilter('st.warehouse_id')}
         ");
 
@@ -344,14 +344,14 @@ class PurchaseAuditModel
             SELECT COUNT(*) AS c FROM purchase_receives pr
             WHERE pr.status = 'received'
               AND COALESCE(pr.journal_entry_id, 0) = 0
-              AND pr.receive_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND pr.receive_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('pr.branch_id')}
         ");
 
         $noStock = $this->scalarCount("
             SELECT COUNT(*) AS c FROM purchase_receives pr
             WHERE pr.status = 'received'
-              AND pr.receive_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND pr.receive_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('pr.branch_id')}
               AND NOT EXISTS (
                   SELECT 1 FROM stock_transactions st
@@ -388,7 +388,7 @@ class PurchaseAuditModel
         $noJournal = $this->scalarCount("
             SELECT COUNT(*) AS c FROM purchase_returns prt
             WHERE COALESCE(prt.is_reversed, 0) = 0
-              AND prt.return_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND prt.return_date >= (CURRENT_DATE - INTERVAL '365 days')
               AND COALESCE(prt.journal_entry_id, 0) = 0
               {$this->branchFilter('prt.branch_id')}
         ");
@@ -398,7 +398,7 @@ class PurchaseAuditModel
             FROM purchase_returns prt
             INNER JOIN purchase_return_items pri ON pri.purchase_return_id = prt.id
             WHERE COALESCE(prt.is_reversed, 0) = 0
-              AND LOWER(COALESCE(pri.`condition`, 'good')) = 'good'
+              AND LOWER(COALESCE(pri.condition, 'good')) = 'good'
               AND pri.return_qty > 0
               {$this->branchFilter('prt.branch_id')}
               AND NOT EXISTS (
@@ -458,7 +458,7 @@ class PurchaseAuditModel
         $paymentsNoLedger = $this->scalarCount("
             SELECT COUNT(*) AS c FROM supplier_payments sp
             WHERE COALESCE(sp.is_reversed, 0) = 0
-              AND sp.payment_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND sp.payment_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('sp.branch_id')}
               AND NOT EXISTS (
                   SELECT 1 FROM supplier_ledger sl
@@ -469,14 +469,14 @@ class PurchaseAuditModel
 
         $recentPayments = $this->scalarCount("
             SELECT COUNT(*) AS c FROM supplier_payments sp
-            WHERE sp.payment_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+            WHERE sp.payment_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('sp.branch_id')}
         ");
 
         $noJournal = $this->scalarCount("
             SELECT COUNT(*) AS c FROM supplier_payments sp
             WHERE COALESCE(sp.is_reversed, 0) = 0
-              AND sp.payment_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+              AND sp.payment_date >= (CURRENT_DATE - INTERVAL '365 days')
               {$this->branchFilter('sp.branch_id')}
               AND COALESCE(sp.journal_entry_id, 0) = 0
         ");
@@ -487,7 +487,7 @@ class PurchaseAuditModel
             $noJournal = $this->scalarCount("
                 SELECT COUNT(*) AS c FROM supplier_payments sp
                 WHERE COALESCE(sp.is_reversed, 0) = 0
-                  AND sp.payment_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                  AND sp.payment_date >= (CURRENT_DATE - INTERVAL '365 days')
                   {$this->branchFilter('sp.branch_id')}
                   AND COALESCE(sp.journal_entry_id, 0) = 0
             ");
@@ -548,7 +548,7 @@ class PurchaseAuditModel
                 FROM purchase_receives pr
                 WHERE pr.status = 'received'
                   AND COALESCE(pr.journal_entry_id, 0) = 0
-                  AND pr.receive_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                  AND pr.receive_date >= (CURRENT_DATE - INTERVAL '365 days')
                   {$this->branchFilter('pr.branch_id')}
                 ORDER BY pr.receive_date DESC
                 LIMIT " . (int)$limit
@@ -572,7 +572,7 @@ class PurchaseAuditModel
                 INNER JOIN purchase_receives pr ON pr.id = prt.purchase_receive_id
                 WHERE COALESCE(prt.is_reversed, 0) = 0
                   AND COALESCE(prt.journal_entry_id, 0) = 0
-                  AND prt.return_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                  AND prt.return_date >= (CURRENT_DATE - INTERVAL '365 days')
                   {$this->branchFilter('prt.branch_id')}
                 ORDER BY prt.return_date DESC
                 LIMIT " . (int)$limit
@@ -760,7 +760,7 @@ class PurchaseAuditModel
                 FROM supplier_payments sp
                 WHERE COALESCE(sp.is_reversed, 0) = 0
                   AND COALESCE(sp.journal_entry_id, 0) = 0
-                  AND sp.payment_date >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                  AND sp.payment_date >= (CURRENT_DATE - INTERVAL '365 days')
                   AND sp.amount > 0
                   {$branchSql}
                 ORDER BY sp.id ASC

@@ -859,7 +859,7 @@ protected function documentSequencesHaveBranchColumn(): bool
     }
 
     try {
-        $this->db->query("SHOW COLUMNS FROM document_sequences LIKE 'branch_id'");
+        $this->db->query("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'document_sequences' AND column_name = 'branch_id'");
         $cached = (bool)$this->db->single();
     } catch (Throwable $e) {
         $cached = false;

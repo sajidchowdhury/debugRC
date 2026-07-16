@@ -15,7 +15,7 @@ class BankLedgerMappingModel
     public function tableExists(): bool
     {
         try {
-            $this->db->query("SHOW TABLES LIKE 'bank_ledger_mappings'");
+            $this->db->query("SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'bank_ledger_mappings'");
             return (bool)$this->db->single();
         } catch (Throwable $e) {
             return false;
@@ -48,7 +48,7 @@ class BankLedgerMappingModel
         $this->db->query("
             INSERT INTO bank_ledger_mappings (bank_id, ledger_id)
             VALUES (:bid, :lid)
-            ON DUPLICATE KEY UPDATE ledger_id = VALUES(ledger_id)
+            ON CONFLICT (bank_id) DO UPDATE SET ledger_id = EXCLUDED.ledger_id
         ");
         $this->db->bind(':bid', $bankId);
         $this->db->bind(':lid', $ledgerId);

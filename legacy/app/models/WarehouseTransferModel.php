@@ -521,7 +521,7 @@ class WarehouseTransferModel extends Helper {
             $hasDateFilter = true;
         }
         if (!$hasDateFilter) {
-            $where[] = 'wt.transfer_date = CURDATE()';
+            $where[] = 'wt.transfer_date = CURRENT_DATE';
         }
 
         if (!empty($filters['from_warehouse_id'])) {

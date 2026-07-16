@@ -824,7 +824,7 @@ foreach ($items as $item) {
             e.name AS salesman_name,
             {$paid} AS paid_amount,
             GREATEST(0, si.total_amount - {$paid}) AS balance_due,
-            DATEDIFF(CURDATE(), si.invoice_date) AS age_days
+            (CURRENT_DATE::date - si.invoice_date::date) AS age_days
         ";
     }
 
@@ -853,7 +853,7 @@ foreach ($items as $item) {
             $hasDateFilter = true;
         }
         if (!$hasDateFilter && empty($filters['skip_default_today'])) {
-            $where[] = "si.invoice_date = CURDATE()";
+            $where[] = "si.invoice_date = CURRENT_DATE";
         }
 
         $searchTerm = trim($dataTablesSearch ?? $filters['search'] ?? '');
@@ -1107,7 +1107,7 @@ foreach ($items as $item) {
             WHERE si.status = 'draft'
               AND COALESCE(si.is_reversed, 0) = 0
               AND si.godown_issued_at IS NULL
-              AND si.created_at < DATE_SUB(NOW(), INTERVAL :days DAY)
+              AND si.created_at < (NOW() - :days * INTERVAL '1 day')
               {$branchSql}
         ");
         $this->db->bind(':days', $days);
@@ -1133,7 +1133,7 @@ foreach ($items as $item) {
             WHERE si.status = 'draft'
               AND COALESCE(si.is_reversed, 0) = 0
               AND si.godown_issued_at IS NULL
-              AND si.created_at < DATE_SUB(NOW(), INTERVAL :days DAY)
+              AND si.created_at < (NOW() - :days * INTERVAL '1 day')
               {$branchSql}
             ORDER BY si.created_at ASC
             LIMIT {$limit}
@@ -1201,7 +1201,7 @@ foreach ($items as $item) {
             WHERE si.status = 'draft'
               AND COALESCE(si.is_reversed, 0) = 0
               AND si.godown_issued_at IS NULL
-              AND si.created_at < DATE_SUB(NOW(), INTERVAL :days DAY)
+              AND si.created_at < (NOW() - :days * INTERVAL '1 day')
               {$branchSql}
             ORDER BY si.id ASC
             LIMIT 200

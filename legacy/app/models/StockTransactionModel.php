@@ -72,12 +72,12 @@ class StockTransactionModel {
             $this->db->query("
                 INSERT INTO warehouse_stock (warehouse_id, product_id, qty, avg_cost)
                 VALUES (:wid, :pid, :qty, :rate)
-                ON DUPLICATE KEY UPDATE 
-                    qty = qty + VALUES(qty),
-                    avg_cost = CASE 
-                        WHEN (qty + VALUES(qty)) > 0 
-                        THEN (qty * avg_cost + VALUES(qty) * VALUES(avg_cost)) / (qty + VALUES(qty))
-                        ELSE VALUES(avg_cost) 
+                ON CONFLICT (warehouse_id, product_id) DO UPDATE
+                    SET qty = warehouse_stock.qty + EXCLUDED.qty,
+                    avg_cost = CASE
+                        WHEN (warehouse_stock.qty + EXCLUDED.qty) > 0
+                        THEN (warehouse_stock.qty * warehouse_stock.avg_cost + EXCLUDED.qty * EXCLUDED.avg_cost) / (warehouse_stock.qty + EXCLUDED.qty)
+                        ELSE EXCLUDED.avg_cost
                     END
             ");
             $this->db->bind(':wid', $warehouse_id);
@@ -145,7 +145,7 @@ class StockTransactionModel {
             (transaction_date, product_id, warehouse_id, qty, rate, 
              reference_type, reference_id, branch_demand_item_id, remarks, created_by)
             VALUES 
-            (CURDATE(), :pid, :wid, :qty, :rate, 
+            (CURRENT_DATE, :pid, :wid, :qty, :rate, 
              :ref_type, :ref_id, :bdi_id, :remarks, :created_by)
         ");
 

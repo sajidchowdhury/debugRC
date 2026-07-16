@@ -36,7 +36,7 @@ class FcmTokenService
 
         $db->query('INSERT INTO fcm_tokens (user_id, fcm_token, device_info, created_at, updated_at)
                     VALUES (?, ?, ?, NOW(), NOW())
-                    ON DUPLICATE KEY UPDATE device_info = VALUES(device_info), updated_at = NOW()');
+                    ON CONFLICT (user_id, fcm_token) DO UPDATE SET device_info = EXCLUDED.device_info, updated_at = NOW()');
         $db->bind(1, $userId, PDO::PARAM_INT);
         $db->bind(2, $token);
         $db->bind(3, $deviceInfo);

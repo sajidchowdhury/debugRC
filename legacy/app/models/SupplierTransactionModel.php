@@ -385,7 +385,7 @@ class SupplierTransactionModel extends Helper {
             FROM supplier_payments
             WHERE is_reversed = 0
               AND COALESCE(transaction_type, 'payment') IN ('payment', 'advance')
-              AND payment_date = CURDATE()
+              AND payment_date = CURRENT_DATE
               {$branchSql}
         ");
         foreach ($bind as $k => $v) {
@@ -398,7 +398,7 @@ class SupplierTransactionModel extends Helper {
             FROM supplier_payments
             WHERE is_reversed = 0
               AND COALESCE(transaction_type, 'payment') IN ('payment', 'advance')
-              AND payment_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+              AND payment_date >= to_char(CURRENT_DATE, 'YYYY-MM-01')::date
               {$branchSql}
         ");
         foreach ($bind as $k => $v) {
@@ -443,7 +443,7 @@ class SupplierTransactionModel extends Helper {
                 $bindings[':date_to'] = $dateTo;
             }
             if (!$dateFrom && !$dateTo) {
-                $where[] = 'sp.payment_date = CURDATE()';
+                $where[] = 'sp.payment_date = CURRENT_DATE';
             }
         }
 
@@ -572,7 +572,7 @@ class SupplierTransactionModel extends Helper {
             {$baseQuery}
             {$whereSql}
             ORDER BY {$orderBy} {$orderDir}, sp.id DESC
-            LIMIT {$start}, {$length}
+            LIMIT {$length} OFFSET {$start}
         ";
 
         $this->db->query($dataQuery);

@@ -139,7 +139,7 @@ class ManualJournalModel
                 COUNT(*) AS total,
                 SUM(CASE WHEN COALESCE(je.is_reversed, 0) = 0 THEN 1 ELSE 0 END) AS active_count,
                 SUM(CASE WHEN COALESCE(je.is_reversed, 0) = 1 THEN 1 ELSE 0 END) AS reversed_count,
-                SUM(CASE WHEN je.entry_date = CURDATE() AND COALESCE(je.is_reversed, 0) = 0 THEN 1 ELSE 0 END) AS today_count
+                SUM(CASE WHEN je.entry_date = CURRENT_DATE AND COALESCE(je.is_reversed, 0) = 0 THEN 1 ELSE 0 END) AS today_count
             FROM manual_journals mj
             INNER JOIN journal_entries je ON je.id = mj.journal_entry_id
             WHERE 1=1 {$branchSql}
@@ -449,7 +449,7 @@ class ManualJournalModel
     private function logPosting(int $journalEntryId, string $action, string $remarks): void
     {
         try {
-            $this->db->query("SHOW TABLES LIKE 'journal_posting_logs'");
+            $this->db->query("SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'journal_posting_logs'");
             if (!$this->db->single()) {
                 return;
             }

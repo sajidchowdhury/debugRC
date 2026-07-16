@@ -219,7 +219,7 @@ class StockTakeAuditModel
         $openStale = $this->scalarCount("
             SELECT COUNT(*) AS c FROM stock_take_sessions sts
             WHERE sts.status IN ('draft','counting')
-              AND sts.take_date < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+              AND sts.take_date < (CURRENT_DATE - INTERVAL '30 days')
               AND COALESCE(sts.is_reversed, 0) = 0
               {$this->branchFilter('sts.branch_id')}
         ");

@@ -471,7 +471,7 @@ class ReconciliationService extends Helper
         $limit = max(1, min(100, $limit));
 
         try {
-            $this->db->query("SHOW TABLES LIKE 'bank_ledger_mappings'");
+            $this->db->query("SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'bank_ledger_mappings'");
             if (!$this->db->single()) {
                 return [];
             }

@@ -206,7 +206,7 @@ class EmployeeModel extends Helper {
             {$baseQuery}
             {$whereSql}
             ORDER BY {$orderBy} {$orderDir}
-            LIMIT {$start}, {$length}
+            LIMIT {$length} OFFSET {$start}
         ";
 
         $this->db->query($dataQuery);
@@ -407,7 +407,7 @@ class EmployeeModel extends Helper {
 
     public function generateEmployeeCode()
     {
-    $this->db->query("SELECT MAX(CAST(employee_code AS UNSIGNED)) as max_code FROM employees");
+    $this->db->query("SELECT MAX(CAST(employee_code AS BIGINT)) as max_code FROM employees");
     $row = $this->db->single();
 
     $next = ($row['max_code'] ?? 0) + 1;

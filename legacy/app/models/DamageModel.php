@@ -416,7 +416,7 @@ class DamageModel extends Helper {
             $hasDateFilter = true;
         }
         if (!$hasDateFilter) {
-            $where[] = 'di.damage_date = CURDATE()';
+            $where[] = 'di.damage_date = CURRENT_DATE';
         }
 
         if (!empty($filters['warehouse_id'])) {

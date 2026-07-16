@@ -323,8 +323,8 @@ class LedgerModel extends Helper{
     {
         $this->db->query("
             SELECT ledger_code FROM ledgers
-            WHERE ledger_code REGEXP '^L-[0-9]+$'
-            ORDER BY CAST(SUBSTRING(ledger_code, 3) AS UNSIGNED) DESC
+            WHERE ledger_code ~ '^L-[0-9]+$'
+            ORDER BY CAST(SUBSTRING(ledger_code FROM 3) AS BIGINT) DESC
             LIMIT 1
         ");
         $row = $this->db->single();
@@ -894,7 +894,7 @@ class LedgerModel extends Helper{
     public function getBankAccountsForLedger(int $ledgerId): array
     {
         try {
-            $this->db->query("SHOW TABLES LIKE 'bank_ledger_mappings'");
+            $this->db->query("SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'bank_ledger_mappings'");
             if (!$this->db->single()) {
                 return [];
             }

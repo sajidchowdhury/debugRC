@@ -192,7 +192,7 @@ class InvestigationMode
                 INSERT INTO investigation_deactivation_otps
                     (window_id, otp_hash, expires_at, requested_by_user_id)
                 VALUES
-                    (:window_id, :hash, DATE_ADD(NOW(), INTERVAL :minutes MINUTE), :user_id)
+                    (:window_id, :hash, (NOW() + :minutes * INTERVAL \'1 minute\'), :user_id)
             ');
             $db->bind(':window_id', (int)$window['id']);
             $db->bind(':hash', $hash);
@@ -506,7 +506,7 @@ class InvestigationMode
             $db->query('
                 INSERT INTO investigation_activators (user_id, label, is_active)
                 VALUES (:user_id, :label, 1)
-                ON DUPLICATE KEY UPDATE label = VALUES(label), is_active = 1
+                ON CONFLICT (user_id) DO UPDATE SET label = EXCLUDED.label, is_active = 1
             ');
             $db->bind(':user_id', $userId);
             $db->bind(':label', mb_substr(trim($label), 0, 100));

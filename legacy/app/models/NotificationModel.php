@@ -199,10 +199,10 @@ class NotificationModel {
 
         $this->db->query("
             SELECT COUNT(*) AS c
-            FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = 'users'
-              AND COLUMN_NAME = :col
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'users'
+              AND column_name = :col
         ");
         $this->db->bind(':col', $column);
         $cache[$column] = ((int)($this->db->single()['c'] ?? 0)) > 0;

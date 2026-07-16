@@ -443,7 +443,7 @@ public function getCustomerDue($customer_id) {
             FROM customer_payments
             WHERE is_reversed = 0
               AND COALESCE(transaction_type, 'receive') = 'receive'
-              AND payment_date = CURDATE()
+              AND payment_date = CURRENT_DATE
               {$branchSql}
         ");
         foreach ($bind as $k => $v) {
@@ -456,7 +456,7 @@ public function getCustomerDue($customer_id) {
             FROM customer_payments
             WHERE is_reversed = 0
               AND COALESCE(transaction_type, 'receive') = 'receive'
-              AND payment_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+              AND payment_date >= to_char(CURRENT_DATE, 'YYYY-MM-01')::date
               {$branchSql}
         ");
         foreach ($bind as $k => $v) {
@@ -501,7 +501,7 @@ public function getCustomerDue($customer_id) {
                 $bindings[':date_to'] = $dateTo;
             }
             if (!$dateFrom && !$dateTo) {
-                $where[] = 'cp.payment_date = CURDATE()';
+                $where[] = 'cp.payment_date = CURRENT_DATE';
             }
         }
 
@@ -630,7 +630,7 @@ public function getCustomerDue($customer_id) {
             {$baseQuery}
             {$whereSql}
             ORDER BY {$orderBy} {$orderDir}, cp.id DESC
-            LIMIT {$start}, {$length}
+            LIMIT {$length} OFFSET {$start}
         ";
 
         $this->db->query($dataQuery);

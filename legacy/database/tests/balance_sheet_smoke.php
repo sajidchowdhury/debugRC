@@ -1,4 +1,10 @@
 <?php
+// DEPRECATED (Phase 2): This script uses MySQL-specific SQL and will NOT run on PostgreSQL.
+// It is retained for historical reference only. The Laravel migration system (Phase 2.2+)
+// replaces database/run_migrations.php. Utility scripts will be rewritten as Laravel artisan
+// commands. Test scripts will be rewritten as PHPUnit tests in Phase 3+.
+// Do NOT run this script against PostgreSQL.
+
 /**
  * Smoke test: Balance sheet equation when TB is balanced.
  * Run: php database/tests/balance_sheet_smoke.php

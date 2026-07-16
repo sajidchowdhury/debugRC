@@ -28,7 +28,7 @@ class RememberMe
             $db = new Database();
             $db->query('
                 INSERT INTO remember_tokens (user_id, selector, token_hash, expires_at, user_agent, ip_address)
-                VALUES (:user_id, :selector, :token_hash, DATE_ADD(NOW(), INTERVAL :days DAY), :ua, :ip)
+                VALUES (:user_id, :selector, :token_hash, (NOW() + :days * INTERVAL \'1 day\'), :ua, :ip)
             ');
             $db->bind(':user_id', $userId);
             $db->bind(':selector', $selector);

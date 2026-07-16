@@ -727,14 +727,14 @@ class BranchIntercompanyWeeklyReport extends ReportModel
                 tb.branch_name AS to_branch,
                 CONCAT(fb.branch_name, ' → ', tb.branch_name) AS counterparty_name,
                 GREATEST(0, COALESCE(bd.total_value, 0) - COALESCE(bd.settlement_amount, 0)) AS outstanding,
-                DATEDIFF(CURDATE(), bd.demand_date) AS age_days
+                (CURRENT_DATE - bd.demand_date::date) AS age_days
             FROM branch_demands bd
             JOIN branches fb ON fb.id = bd.from_branch_id
             JOIN branches tb ON tb.id = bd.to_branch_id
             WHERE bd.status = 'received'
               AND COALESCE(bd.is_reversed, 0) = 0
               AND COALESCE(bd.total_value, 0) > COALESCE(bd.settlement_amount, 0)
-              AND DATEDIFF(CURDATE(), bd.demand_date) >= :stale_days
+              AND (CURRENT_DATE - bd.demand_date::date) >= :stale_days
         ";
         if ($demandIdOnly > 0) {
             $sql .= ' AND bd.id = :demand_only';

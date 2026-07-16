@@ -241,7 +241,7 @@ class SalesTelegramNotifier
                 b.branch_name,
                 u.username AS received_by_username,
                 e.name AS received_by_name,
-                CASE WHEN si.invoice_date = CURDATE() THEN 1 ELSE 0 END AS is_today_invoice
+                CASE WHEN si.invoice_date = CURRENT_DATE THEN 1 ELSE 0 END AS is_today_invoice
             FROM customer_payments cp
             JOIN sales_invoices si ON si.id = :invoice_id
             JOIN customers c ON c.id = si.customer_id

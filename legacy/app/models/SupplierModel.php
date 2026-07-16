@@ -392,7 +392,7 @@ class SupplierModel extends Helper{
             {$baseQuery}
             {$whereSql}
             ORDER BY {$orderBy} {$orderDir}
-            LIMIT {$start}, {$length}
+            LIMIT {$length} OFFSET {$start}
         ";
 
         $this->db->query($dataQuery);
