@@ -187,6 +187,9 @@ Route::middleware('auth')->group(function () {
         Route::get('transactions/{id}', [StockTransactionController::class, 'show'])->name('show');
         Route::get('availability', [StockTransactionController::class, 'checkAvailability'])->name('availability');
         Route::get('warehouse-breakdown', [StockTransactionController::class, 'warehouseBreakdown'])->name('warehouse_breakdown');
+        // Phase 6.2: drift viewer
+        Route::get('drift', [StockTransactionController::class, 'drift'])->name('drift');
+        Route::post('drift/{id}', [StockTransactionController::class, 'updateDrift'])->name('drift.update');
     });
 });
 

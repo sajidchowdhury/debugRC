@@ -209,4 +209,70 @@ class StockTransactionController extends Controller
             'reversal' => 'Reversal',
         ];
     }
+
+    /**
+     * Phase 6.2: avg_cost_drift viewer — browse drift rows from the replay test.
+     */
+    public function drift(Request $request)
+    {
+        $query = DB::table('avg_cost_drift as d')
+            ->leftJoin('products as p', 'p.id', '=', 'd.product_id')
+            ->leftJoin('warehouses as w', 'w.id', '=', 'd.warehouse_id')
+            ->leftJoin('branches as b', 'b.id', '=', 'w.branch_id')
+            ->when($request->input('status'), fn($q, $s) => $q->where('d.status', $s))
+            ->when($request->input('warehouse_id'), fn($q, $wid) => $q->where('d.warehouse_id', $wid))
+            ->when($request->input('product_id'), fn($q, $pid) => $q->where('d.product_id', $pid))
+            ->select(
+                'd.*',
+                'p.product_code', 'p.product_name',
+                'w.warehouse_name', 'b.branch_name'
+            )
+            ->orderByDesc('d.qty_drift')
+            ->orderByDesc('d.cost_drift');
+
+        $drifts = $query->paginate(50);
+
+        $stats = [
+            'total' => DB::table('avg_cost_drift')->count(),
+            'open' => DB::table('avg_cost_drift')->where('status', 'open')->count(),
+            'investigated' => DB::table('avg_cost_drift')->where('status', 'investigated')->count(),
+            'resolved' => DB::table('avg_cost_drift')->where('status', 'resolved')->count(),
+        ];
+
+        $warehouses = \App\Models\Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
+
+        return view('admin.stock.drift', [
+            'title' => 'Avg-Cost Drift — Replay Verification',
+            'drifts' => $drifts,
+            'stats' => $stats,
+            'warehouses' => $warehouses,
+            'referenceTypeLabels' => $this->referenceTypeLabels(),
+            'filters' => $request->only(['status', 'warehouse_id', 'product_id']),
+        ]);
+    }
+
+    /**
+     * Phase 6.2: Update a drift row's investigation status + notes.
+     */
+    public function updateDrift(Request $request, int $id)
+    {
+        $request->validate([
+            'status' => 'required|in:open,investigated,resolved',
+            'investigation_notes' => 'nullable|string|max:2000',
+        ]);
+
+        $update = [
+            'status' => $request->input('status'),
+            'investigation_notes' => $request->input('investigation_notes'),
+        ];
+
+        if ($request->input('status') === 'resolved') {
+            $update['resolved_at'] = now();
+        }
+
+        DB::table('avg_cost_drift')->where('id', $id)->update($update);
+
+        return redirect()->route('admin.stock.drift')
+            ->with('success', "Drift #{$id} updated.");
+    }
 }
