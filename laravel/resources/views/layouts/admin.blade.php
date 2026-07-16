@@ -199,6 +199,11 @@
                             <i class="fas fa-file-invoice-dollar"></i> Invoices
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.sales-challans.index') }}" class="nav-link {{ request()->routeIs('admin.sales-challans.*') ? 'active' : '' }}">
+                            <i class="fas fa-truck"></i> Challans
+                        </a>
+                    </li>
                 </ul>
             </nav>
 

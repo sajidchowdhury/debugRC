@@ -26,12 +26,13 @@ use App\Http\Controllers\Admin\PurchaseReceiveController;
 use App\Http\Controllers\Admin\PurchaseReturnController;
 use App\Http\Controllers\Admin\SalesCartController;
 use App\Http\Controllers\Admin\SalesInvoiceController;
+use App\Http\Controllers\Admin\SalesChallanController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phases 3-8.2.
+ * RC_ERP Laravel Routes — Phases 3-8.3.
  *
- * Phase 8.2: sales invoice finalize (cart → draft invoice + GL Dr AR / Cr Revenue + credit limit).
+ * Phase 8.3: sales challan (godown prep + stock OUT + Dr COGS / Cr Inventory).
  */
 
 // ===================== AUTH (public) =====================
@@ -312,6 +313,20 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/sales-invoices', SalesInvoiceController::class)
         ->only(['index', 'show'])
         ->names('admin.sales-invoices');
+
+    // ============================================================
+    // Phase 8.3: Sales Challans (godown prep + stock OUT + COGS GL)
+    // ============================================================
+    Route::prefix('admin/sales-challans')->name('admin.sales-challans.')->group(function () {
+        Route::get('godown/{invoiceId}', [SalesChallanController::class, 'godown'])->name('godown');
+        Route::post('godown/{invoiceId}', [SalesChallanController::class, 'storeGodown'])->name('storeGodown');
+        Route::get('issue/{invoiceId}', [SalesChallanController::class, 'challanForm'])->name('challan-form');
+        Route::post('issue/{invoiceId}', [SalesChallanController::class, 'issueChallan'])->name('issueChallan');
+        Route::post('{id}/cancel', [SalesChallanController::class, 'cancel'])->name('cancel');
+    });
+    Route::resource('admin/sales-challans', SalesChallanController::class)
+        ->only(['index', 'show'])
+        ->names('admin.sales-challans');
 });
 
 // ===================== HEALTH CHECK =====================
