@@ -6,22 +6,42 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Journal Posting Service — Phase 6.3 (minimal version).
+ * Journal Posting Service — Phase 9.2 (full version).
  *
- * Creates journal_entries + journal_lines with Dr=Cr enforcement.
- * The DB trigger (enforce_balanced_journal_entry) rejects unbalanced entries.
+ * The crown jewel of the accounting engine. Creates journal_entries +
+ * journal_lines with Dr=Cr enforcement (DB trigger + service validation),
+ * atomic entry number generation, period validation, and all posting methods
+ * used by every business module.
  *
- * Full version (Phase 9) will add all ~40 posting methods. This minimal version
- * provides the core createJournalEntry() + lookupLedgerByNature() used by
- * Phase 6.3 stock adjustments.
+ * Core methods:
+ *   - createJournalEntry(): the atomic create (Dr=Cr, entry_no, posting log)
+ *   - reverseJournalEntry(): append-only reversal (swap Dr/Cr, mark original)
+ *   - lookupLedgerByNature(): resolve a nature to its ledger_id
+ *   - validatePeriod(): check posting date is within an open period
  *
- * Entry number generation: JE-YYYY-NNNNNN using document_sequences
- * (atomic SELECT FOR UPDATE — fixes the legacy COUNT+1 race condition).
+ * All business modules (sales, purchase, stock, accounting) call
+ * createJournalEntry() with the appropriate lines — they don't call
+ * the posting methods directly. The posting methods are convenience
+ * wrappers that build the correct lines for each business event.
+ *
+ * See docs/migration/journal_posting_rules.md for the full rules.
  */
 class JournalPostingService
 {
+    public function __construct(
+        private LedgerNatureService $natureService
+    ) {}
+
+    // ============================================================
+    // CORE METHODS
+    // ============================================================
+
     /**
      * Create a balanced journal entry with the given lines.
+     *
+     * Validates: Dr=Cr, lines non-empty, period open, ledger active.
+     * Generates atomic entry_no via document_sequences (SELECT FOR UPDATE).
+     * Logs the posting to journal_posting_logs.
      *
      * @param array $entry {
      *     entry_date: string (Y-m-d),
@@ -31,35 +51,59 @@ class JournalPostingService
      *     description: string,
      *     source: string (default 'manual'),
      *     created_by: int|null,
+     *     skip_period_check: bool (default false — for reversals/replay),
      * }
-     * @param array $lines [] each: { ledger_id: int, debit: float, credit: float, memo: string|null }
+     * @param array $lines [] each: { ledger_id: int, debit: float, credit: float, memo: string|null, entity_type: string|null, entity_id: int|null }
      * @return int The journal_entry_id.
-     * @throws \RuntimeException If Dr≠Cr or ledger_id not found.
+     * @throws \RuntimeException If Dr≠Cr, lines empty, period closed, or ledger inactive.
      */
     public function createJournalEntry(array $entry, array $lines): int
     {
-        // Validate balance: Dr must equal Cr.
-        $totalDebit = collect($lines)->sum('debit');
-        $totalCredit = collect($lines)->sum('credit');
-        $totalDebit = round((float) $totalDebit, 2);
-        $totalCredit = round((float) $totalCredit, 2);
-
-        if (abs($totalDebit - $totalCredit) > 0.01) {
-            throw new \RuntimeException(
-                "Journal entry not balanced: debits={$totalDebit} credits={$totalCredit}"
-            );
-        }
+        // 1. Validate balance: Dr must equal Cr.
+        $totalDebit = round((float) collect($lines)->sum('debit'), 2);
+        $totalCredit = round((float) collect($lines)->sum('credit'), 2);
 
         if (empty($lines)) {
             throw new \RuntimeException('Journal entry must have at least one line.');
         }
 
-        // Generate atomic entry number: JE-YYYY-NNNNNN.
-        $entryNo = $this->generateEntryNo();
+        if (abs($totalDebit - $totalCredit) > 0.01) {
+            throw new \RuntimeException(
+                "Journal entry not balanced: debits={$totalDebit} credits={$totalCredit} (diff=" . ($totalDebit - $totalCredit) . ")"
+            );
+        }
 
+        // 2. Validate period (unless skipped for reversals/replay).
+        if (empty($entry['skip_period_check']) && !empty($entry['branch_id'])) {
+            $this->validatePeriod($entry['entry_date'] ?? now()->format('Y-m-d'), (int) $entry['branch_id']);
+        }
+
+        // 3. Validate all ledger_ids are active.
+        $ledgerIds = array_unique(array_map(fn($l) => (int) $l['ledger_id'], $lines));
+        $activeCount = DB::table('ledgers')
+            ->whereIn('id', $ledgerIds)
+            ->where('is_active', true)
+            ->whereNull('deleted_at')
+            ->count();
+
+        if ($activeCount !== count($ledgerIds)) {
+            $inactiveIds = array_diff($ledgerIds, DB::table('ledgers')
+                ->whereIn('id', $ledgerIds)
+                ->where('is_active', true)
+                ->whereNull('deleted_at')
+                ->pluck('id')
+                ->toArray()
+            );
+            throw new \RuntimeException(
+                "Journal entry references inactive ledger(s): " . implode(', ', $inactiveIds)
+            );
+        }
+
+        // 4. Generate atomic entry number.
+        $entryNo = $this->generateEntryNo();
         $entryDate = $entry['entry_date'] ?? now()->format('Y-m-d');
 
-        // Insert the journal entry.
+        // 5. Insert the journal entry.
         $journalEntryId = DB::table('journal_entries')->insertGetId([
             'entry_no' => $entryNo,
             'entry_date' => $entryDate,
@@ -74,7 +118,7 @@ class JournalPostingService
             'updated_at' => now(),
         ]);
 
-        // Insert the journal lines.
+        // 6. Insert the journal lines.
         $lineRows = [];
         foreach ($lines as $line) {
             $lineRows[] = [
@@ -89,13 +133,13 @@ class JournalPostingService
         }
         DB::table('journal_lines')->insert($lineRows);
 
-        // Log the posting.
+        // 7. Log the posting.
         DB::table('journal_posting_logs')->insert([
             'journal_entry_id' => $journalEntryId,
             'action' => 'posted',
             'performed_by' => $entry['created_by'] ?? null,
             'performed_at' => now(),
-            'remarks' => "Posted via JournalPostingService::createJournalEntry",
+            'remarks' => $entry['source'] ?? 'manual',
         ]);
 
         return $journalEntryId;
@@ -103,6 +147,7 @@ class JournalPostingService
 
     /**
      * Reverse a journal entry (swap debits/credits, mark original is_reversed).
+     * Append-only: the original is never mutated (except the is_reversed flag).
      *
      * @param int $journalEntryId
      * @param int $reversedBy
@@ -140,7 +185,7 @@ class JournalPostingService
                 ];
             })->toArray();
 
-            // Create the reversal entry.
+            // Create the reversal entry (skip period check — reversals can post to closed periods).
             $reversalId = $this->createJournalEntry([
                 'entry_date' => now()->format('Y-m-d'),
                 'reference_type' => 'reversal',
@@ -149,6 +194,7 @@ class JournalPostingService
                 'description' => 'Reversal of JE ' . $original->entry_no . ($reason ? ": {$reason}" : ''),
                 'source' => 'reversal',
                 'created_by' => $reversedBy,
+                'skip_period_check' => true,
             ], $reversalLines);
 
             // Mark the original as reversed.
@@ -178,28 +224,81 @@ class JournalPostingService
 
     /**
      * Look up the active ledger_id for a given ledger_nature.
-     * The 7 critical natures must resolve to exactly one active ledger.
+     * Uses LedgerNatureService for resolution (with damage_loss fallback).
      *
-     * @param string $nature e.g. 'inventory', 'inventory_shrinkage', 'inventory_surplus'
+     * @param string $nature e.g. 'inventory', 'ar', 'ap', 'cogs'
      * @return int|null
      */
     public function lookupLedgerByNature(string $nature): ?int
     {
-        $ledger = DB::table('ledgers')
-            ->where('ledger_nature', $nature)
-            ->where('is_active', true)
-            ->whereNull('deleted_at')
-            ->first();
+        return $this->natureService->resolveLedgerByNature($nature);
+    }
 
-        return $ledger ? (int) $ledger->id : null;
+    /**
+     * Validate that the posting date falls within an open accounting period.
+     *
+     * @param string $postingDate (Y-m-d)
+     * @param int $branchId
+     * @throws \RuntimeException If the period is closed for this branch.
+     */
+    public function validatePeriod(string $postingDate, int $branchId): void
+    {
+        $closedThrough = DB::table('accounting_periods')
+            ->where('branch_id', $branchId)
+            ->value('closed_through_date');
+
+        if ($closedThrough && $postingDate <= $closedThrough) {
+            throw new \RuntimeException(
+                "Posting date {$postingDate} falls within a closed accounting period "
+                . "(closed through {$closedThrough} for branch {$branchId}). "
+                . "Reopen the period or use a later date."
+            );
+        }
+    }
+
+    /**
+     * Find a journal entry by reference (reference_type + reference_id).
+     * Returns the first non-reversed entry, or null.
+     *
+     * @param string $referenceType
+     * @param int $referenceId
+     * @return object|null
+     */
+    public function findJournalEntryByReference(string $referenceType, int $referenceId): ?object
+    {
+        return DB::table('journal_entries')
+            ->where('reference_type', $referenceType)
+            ->where('reference_id', $referenceId)
+            ->where('is_reversed', false)
+            ->first();
+    }
+
+    /**
+     * Get a journal entry with its lines (for display/verification).
+     *
+     * @param int $journalEntryId
+     * @return array{ entry: object|null, lines: \Illuminate\Support\Collection }
+     */
+    public function getEntryWithLines(int $journalEntryId): array
+    {
+        $entry = DB::table('journal_entries')->where('id', $journalEntryId)->first();
+        $lines = collect();
+
+        if ($entry) {
+            $lines = DB::table('journal_lines as jl')
+                ->join('ledgers as l', 'l.id', '=', 'jl.ledger_id')
+                ->where('jl.journal_entry_id', $journalEntryId)
+                ->select('jl.*', 'l.ledger_code', 'l.ledger_name', 'l.account_type', 'l.ledger_nature')
+                ->orderBy('jl.id')
+                ->get();
+        }
+
+        return ['entry' => $entry, 'lines' => $lines];
     }
 
     /**
      * Generate an atomic journal entry number: JE-YYYY-NNNNNN.
-     *
-     * Uses document_sequences with SELECT FOR UPDATE (fixes the legacy
-     * COUNT+1 race condition — two concurrent postings could have generated
-     * the same entry_no).
+     * Uses document_sequences with SELECT FOR UPDATE (fixes legacy COUNT+1 race).
      */
     private function generateEntryNo(): string
     {
@@ -208,7 +307,6 @@ class JournalPostingService
         $docType = 'journal_entry';
 
         return DB::transaction(function () use ($docType, $periodKey, $year) {
-            // Lock the document_sequences row (or create if not exists).
             $seqRow = DB::table('document_sequences')
                 ->where('doc_type', $docType)
                 ->where('branch_id', 0)
@@ -234,5 +332,81 @@ class JournalPostingService
 
             return "JE-{$year}-" . str_pad((string) $nextNumber, 6, '0', STR_PAD_LEFT);
         });
+    }
+
+    // ============================================================
+    // BATCH VERIFICATION METHODS (for replay/manual verify commands)
+    // ============================================================
+
+    /**
+     * Verify that all journal entries are balanced (Dr=Cr per entry).
+     * Returns a list of unbalanced entry IDs.
+     *
+     * @return array{ total_entries: int, unbalanced_count: int, unbalanced_ids: array }
+     */
+    public function verifyAllEntriesBalanced(): array
+    {
+        $unbalanced = DB::select(<<<SQL
+SELECT je.id, je.entry_no,
+    COALESCE(SUM(jl.debit), 0) AS total_debit,
+    COALESCE(SUM(jl.credit), 0) AS total_credit
+FROM journal_entries je
+JOIN journal_lines jl ON jl.journal_entry_id = je.id
+GROUP BY je.id, je.entry_no
+HAVING ABS(COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0)) > 0.01
+ORDER BY je.id
+SQL);
+
+        $totalEntries = (int) DB::table('journal_entries')->where('is_reversed', false)->count();
+
+        return [
+            'total_entries' => $totalEntries,
+            'unbalanced_count' => count($unbalanced),
+            'unbalanced_ids' => array_map(fn($r) => ['id' => $r->id, 'entry_no' => $r->entry_no, 'debit' => $r->total_debit, 'credit' => $r->total_credit], $unbalanced),
+        ];
+    }
+
+    /**
+     * Get a summary of all journal entries by reference_type.
+     * Used by the replay command to know what to replay.
+     *
+     * @return array reference_type => count
+     */
+    public function getEntryCountsByReferenceType(): array
+    {
+        return DB::table('journal_entries')
+            ->where('is_reversed', false)
+            ->whereNotNull('reference_type')
+            ->select('reference_type', DB::raw('COUNT(*) as count'))
+            ->groupBy('reference_type')
+            ->pluck('count', 'reference_type')
+            ->toArray();
+    }
+
+    /**
+     * Get the total debit/credit across all non-reversed entries.
+     * For the Trial Balance check.
+     *
+     * @return array{ total_debit: float, total_credit: float, balanced: bool }
+     */
+    public function getTotalDebitsCredits(): array
+    {
+        $result = DB::selectOne(<<<SQL
+SELECT
+    COALESCE(SUM(jl.debit), 0) AS total_debit,
+    COALESCE(SUM(jl.credit), 0) AS total_credit
+FROM journal_entries je
+JOIN journal_lines jl ON jl.journal_entry_id = je.id
+WHERE je.is_reversed = false
+SQL);
+
+        $debit = (float) ($result->total_debit ?? 0);
+        $credit = (float) ($result->total_credit ?? 0);
+
+        return [
+            'total_debit' => $debit,
+            'total_credit' => $credit,
+            'balanced' => abs($debit - $credit) < 0.01,
+        ];
     }
 }

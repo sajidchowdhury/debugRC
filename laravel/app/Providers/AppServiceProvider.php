@@ -14,6 +14,9 @@ class AppServiceProvider extends ServiceProvider
         // Phase 3: Register the LegacySessionBridge as a singleton
         // (it's stateless and shared across requests).
         $this->app->singleton(\App\Session\LegacySessionBridge::class);
+
+        // Phase 9.2: Register LedgerNatureService as singleton (used by JournalPostingService).
+        $this->app->singleton(\App\Services\Accounting\LedgerNatureService::class);
     }
 
     /**
