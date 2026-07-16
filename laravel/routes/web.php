@@ -20,10 +20,11 @@ use App\Http\Controllers\Admin\StockTransactionController;
 use App\Http\Controllers\Admin\StockAdjustmentController;
 use App\Http\Controllers\Admin\StockTakeController;
 use App\Http\Controllers\Admin\WarehouseTransferController;
+use App\Http\Controllers\Admin\DamageController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1-6.5.
+ * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1-6.6.
  *
  * Phase 3: auth + dashboard.
  * Phase 4: master-data CRUD modules.
@@ -33,6 +34,7 @@ use Illuminate\Support\Facades\Route;
  * Phase 6.3: stock adjustments (two-phase: draft → confirm → cancel).
  * Phase 6.4: stock take (sessions with per-warehouse counts + variance posting).
  * Phase 6.5: warehouse transfers (same-branch = no GL, cross-branch = intercompany GL).
+ * Phase 6.6: damages (stock OUT + GL Dr Damage Loss / Cr Inventory).
  *
  * Nginx routes /admin/* to Laravel; /* to legacy PHP.
  */
@@ -238,6 +240,18 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/warehouse-transfers', WarehouseTransferController::class)
         ->only(['index', 'create', 'store', 'show'])
         ->names('admin.warehouse-transfers');
+
+    // ============================================================
+    // Phase 6.6: Damages (stock OUT + GL Dr Damage Loss / Cr Inventory)
+    // ============================================================
+    Route::prefix('admin/damages')->name('admin.damages.')->group(function () {
+        Route::get('product-stock', [DamageController::class, 'getProductStock'])->name('product-stock');
+        Route::post('{id}/confirm', [DamageController::class, 'confirm'])->name('confirm');
+        Route::post('{id}/cancel', [DamageController::class, 'cancel'])->name('cancel');
+    });
+    Route::resource('admin/damages', DamageController::class)
+        ->only(['index', 'create', 'store', 'show'])
+        ->names('admin.damages');
 });
 
 // ===================== HEALTH CHECK =====================

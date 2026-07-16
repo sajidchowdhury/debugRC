@@ -169,6 +169,11 @@
                             <i class="fas fa-right-left"></i> Transfers
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.damages.index') }}" class="nav-link {{ request()->routeIs('admin.damages.*') ? 'active' : '' }}">
+                            <i class="fas fa-triangle-exclamation"></i> Damages
+                        </a>
+                    </li>
                 </ul>
             </nav>
 
