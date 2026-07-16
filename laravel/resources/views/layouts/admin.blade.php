@@ -189,6 +189,11 @@
                             <i class="fas fa-rotate-left"></i> P. Returns
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.sales.cart') }}" class="nav-link {{ request()->routeIs('admin.sales.*') ? 'active' : '' }}">
+                            <i class="fas fa-cart-shopping"></i> Sales Cart
+                        </a>
+                    </li>
                 </ul>
             </nav>
 

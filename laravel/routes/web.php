@@ -24,18 +24,18 @@ use App\Http\Controllers\Admin\DamageController;
 use App\Http\Controllers\Admin\PurchaseOrderController;
 use App\Http\Controllers\Admin\PurchaseReceiveController;
 use App\Http\Controllers\Admin\PurchaseReturnController;
+use App\Http\Controllers\Admin\SalesCartController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1-6.6 + Phase 7.1-7.3.
+ * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1-6.6 + Phase 7.1-7.3 + Phase 8.1.
  *
  * Phase 3: auth + dashboard.
  * Phase 4: master-data CRUD modules.
  * Phase 5: reporting layer (18 reports + reconciliation).
  * Phase 6.1-6.6: inventory module.
- * Phase 7.1: purchase orders (draft document, no stock/GL).
- * Phase 7.2: purchase receive / GRN (stock IN + Dr Inventory / Cr AP + supplier_ledger + PO update).
- * Phase 7.3: purchase returns (stock OUT at original rate + Dr AP / Cr Inventory + supplier_ledger debit).
+ * Phase 7.1-7.3: purchase module (PO, GRN, returns).
+ * Phase 8.1: sales cart service (per-user-per-customer draft cart + availability).
  *
  * Nginx routes /admin/* to Laravel; /* to legacy PHP.
  */
@@ -288,6 +288,21 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/purchase-returns', PurchaseReturnController::class)
         ->only(['index', 'create', 'store', 'show'])
         ->names('admin.purchase-returns');
+
+    // ============================================================
+    // Phase 8.1: Sales Cart Service (per-user-per-customer draft cart)
+    // ============================================================
+    Route::prefix('admin/sales')->name('admin.sales.')->group(function () {
+        Route::get('cart', [SalesCartController::class, 'index'])->name('cart');
+        Route::post('cart/load', [SalesCartController::class, 'load'])->name('cart.load');
+        Route::post('cart/add', [SalesCartController::class, 'add'])->name('cart.add');
+        Route::post('cart/update', [SalesCartController::class, 'update'])->name('cart.update');
+        Route::post('cart/remove', [SalesCartController::class, 'remove'])->name('cart.remove');
+        Route::post('cart/clear', [SalesCartController::class, 'clear'])->name('cart.clear');
+        Route::post('cart/validate', [SalesCartController::class, 'validateCart'])->name('cart.validate');
+        Route::post('cart/soft-hold', [SalesCartController::class, 'softHold'])->name('cart.softHold');
+        Route::get('cart/availability', [SalesCartController::class, 'checkAvailability'])->name('cart.availability');
+    });
 });
 
 // ===================== HEALTH CHECK =====================
