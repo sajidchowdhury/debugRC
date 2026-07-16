@@ -154,6 +154,11 @@
                             <i class="fas fa-boxes-stacked"></i> Stock
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.stock-adjustments.index') }}" class="nav-link {{ request()->routeIs('admin.stock-adjustments.*') ? 'active' : '' }}">
+                            <i class="fas fa-sliders"></i> Adjustments
+                        </a>
+                    </li>
                 </ul>
             </nav>
 

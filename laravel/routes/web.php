@@ -17,15 +17,18 @@ use App\Http\Controllers\Admin\WarehouseController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\ReconciliationController;
 use App\Http\Controllers\Admin\StockTransactionController;
+use App\Http\Controllers\Admin\StockAdjustmentController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1.
+ * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1-6.3.
  *
  * Phase 3: auth + dashboard.
  * Phase 4: master-data CRUD modules.
  * Phase 5: reporting layer (18 reports + reconciliation).
  * Phase 6.1: stock transactions (SSOT) + warehouse stock balances.
+ * Phase 6.2: avg-cost replay verification infrastructure.
+ * Phase 6.3: stock adjustments (two-phase: draft → confirm → cancel).
  *
  * Nginx routes /admin/* to Laravel; /* to legacy PHP.
  */
@@ -191,6 +194,20 @@ Route::middleware('auth')->group(function () {
         Route::get('drift', [StockTransactionController::class, 'drift'])->name('drift');
         Route::post('drift/{id}', [StockTransactionController::class, 'updateDrift'])->name('drift.update');
     });
+
+    // ============================================================
+    // Phase 6.3: Stock Adjustments (two-phase: draft → confirm → cancel)
+    // ============================================================
+    Route::prefix('admin/stock-adjustments')->name('admin.stock-adjustments.')->group(function () {
+        Route::get('audit', [StockAdjustmentController::class, 'audit'])->name('audit');
+        Route::get('product-rate', [StockAdjustmentController::class, 'getProductRate'])->name('product-rate');
+        Route::get('{id}/confirm', fn() => redirect()->route('admin.stock-adjustments.index'))->name('confirm');
+        Route::post('{id}/confirm', [StockAdjustmentController::class, 'confirm'])->name('confirm');
+        Route::post('{id}/cancel', [StockAdjustmentController::class, 'cancel'])->name('cancel');
+    });
+    Route::resource('admin/stock-adjustments', StockAdjustmentController::class)
+        ->only(['index', 'create', 'store', 'show'])
+        ->names('admin.stock-adjustments');
 });
 
 // ===================== HEALTH CHECK =====================
