@@ -23,10 +23,11 @@ use App\Http\Controllers\Admin\WarehouseTransferController;
 use App\Http\Controllers\Admin\DamageController;
 use App\Http\Controllers\Admin\PurchaseOrderController;
 use App\Http\Controllers\Admin\PurchaseReceiveController;
+use App\Http\Controllers\Admin\PurchaseReturnController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1-6.6 + Phase 7.1-7.2.
+ * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1-6.6 + Phase 7.1-7.3.
  *
  * Phase 3: auth + dashboard.
  * Phase 4: master-data CRUD modules.
@@ -34,6 +35,7 @@ use Illuminate\Support\Facades\Route;
  * Phase 6.1-6.6: inventory module.
  * Phase 7.1: purchase orders (draft document, no stock/GL).
  * Phase 7.2: purchase receive / GRN (stock IN + Dr Inventory / Cr AP + supplier_ledger + PO update).
+ * Phase 7.3: purchase returns (stock OUT at original rate + Dr AP / Cr Inventory + supplier_ledger debit).
  *
  * Nginx routes /admin/* to Laravel; /* to legacy PHP.
  */
@@ -274,6 +276,18 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/purchase-receives', PurchaseReceiveController::class)
         ->only(['index', 'create', 'store', 'show'])
         ->names('admin.purchase-receives');
+
+    // ============================================================
+    // Phase 7.3: Purchase Returns (stock OUT at original rate + Dr AP / Cr Inventory + supplier_ledger debit)
+    // ============================================================
+    Route::prefix('admin/purchase-returns')->name('admin.purchase-returns.')->group(function () {
+        Route::get('receive-details', [PurchaseReturnController::class, 'getReceiveDetails'])->name('receive-details');
+        Route::post('{id}/confirm', [PurchaseReturnController::class, 'confirm'])->name('confirm');
+        Route::post('{id}/cancel', [PurchaseReturnController::class, 'cancel'])->name('cancel');
+    });
+    Route::resource('admin/purchase-returns', PurchaseReturnController::class)
+        ->only(['index', 'create', 'store', 'show'])
+        ->names('admin.purchase-returns');
 });
 
 // ===================== HEALTH CHECK =====================

@@ -184,6 +184,11 @@
                             <i class="fas fa-truck-ramp-box"></i> GRN
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.purchase-returns.index') }}" class="nav-link {{ request()->routeIs('admin.purchase-returns.*') ? 'active' : '' }}">
+                            <i class="fas fa-rotate-left"></i> P. Returns
+                        </a>
+                    </li>
                 </ul>
             </nav>
 
