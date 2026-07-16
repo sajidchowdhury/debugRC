@@ -1,0 +1,18 @@
+RewriteEngine On
+
+# Redirect direct access to PHP files in assets/uploads to login
+RewriteRule ^(assets|uploads)/.*\.php$ /public/index.php [L,R=302]
+
+# Allow static files (css, js, images, etc.)
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Route everything else to index.php
+RewriteRule ^ index.php [L]
+# Deny direct access to core and config folders
+RewriteRule ^(\.\./(core|config|app)) - [F]
+
+# Custom Error Pages
+ErrorDocument 403 /remote-center-erp/public/error.php?code=403
+ErrorDocument 404 /remote-center-erp/public/error.php?code=404

@@ -1,0 +1,139 @@
+/* Sales return reverse — matches return index theme */
+
+.sr-reverse-app {
+    padding-bottom: 2rem;
+    color: #1e293b;
+}
+
+.sr-reverse-hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+    padding: 1.15rem 1.25rem;
+    background: linear-gradient(135deg, #991b1b 0%, #e11d48 55%, #7c3aed 100%);
+    border-radius: 16px;
+    color: #fff;
+    box-shadow: 0 12px 32px rgba(225, 29, 72, 0.28);
+}
+
+.sr-reverse-hero h1 {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.sr-reverse-hero p {
+    margin: 0.25rem 0 0;
+    font-size: 0.88rem;
+    opacity: 0.92;
+}
+
+.sr-reverse-hero-actions .btn {
+    font-weight: 600;
+    border: none;
+}
+
+.sr-reverse-layout {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 1rem;
+    align-items: start;
+}
+
+@media (max-width: 991px) {
+    .sr-reverse-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.sr-reverse-panel,
+.sr-reverse-side > div {
+    background: #fff;
+    border: 1px solid #fecdd3;
+    border-radius: 14px;
+    padding: 1rem 1.1rem;
+}
+
+.sr-reverse-summary {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+@media (min-width: 768px) {
+    .sr-reverse-summary {
+        grid-template-columns: repeat(4, 1fr);
+    }
+}
+
+.sr-reverse-stat .label {
+    display: block;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #64748b;
+}
+
+.sr-reverse-stat .value {
+    font-weight: 700;
+    font-size: 0.95rem;
+}
+
+.sr-reverse-stat .sub {
+    display: block;
+    font-size: 0.78rem;
+    color: #64748b;
+    margin-top: 0.15rem;
+}
+
+.sr-reverse-stat.highlight .value {
+    color: #be123c;
+}
+
+.sr-reverse-original-reason {
+    margin-bottom: 1rem;
+    padding: 0.65rem 0.85rem;
+    background: #fff1f2;
+    border-radius: 10px;
+    font-size: 0.88rem;
+}
+
+.sr-reverse-effects h3,
+.sr-reverse-stock-preview h3,
+.sr-reverse-items h3 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin: 0 0 0.5rem;
+}
+
+.sr-reverse-effects ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    font-size: 0.85rem;
+}
+
+.sr-reverse-effects li {
+    margin-bottom: 0.35rem;
+}
+
+.sr-reverse-side {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.sr-reverse-form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 1rem;
+}
+
+.sr-reverse-form-actions .btn-danger {
+    font-weight: 700;
+}

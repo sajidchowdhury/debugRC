@@ -1,0 +1,282 @@
+/**
+ * Phase 8C — Accounting mobile layout & accessibility (375px+)
+ * Load on all accounting module pages via main.php
+ */
+
+/* Touch targets (WCAG 2.5.5 advisory) */
+.acct-money-app .form-control,
+.acct-money-app .form-select,
+.acct-money-app .btn,
+.acct-touch-filters .form-control,
+.acct-touch-filters .form-select,
+.acct-touch-filters .btn,
+.accounting-hub .btn,
+.acct-mobile-card .btn {
+    min-height: 44px;
+}
+
+.acct-money-app .form-control-sm,
+.acct-touch-filters .form-control-sm,
+.acct-touch-filters .form-select-sm {
+    min-height: 44px;
+    font-size: 1rem;
+}
+
+.acct-money-app .btn-sm,
+.acct-touch-filters .btn-sm,
+.acct-mobile-card .btn-sm {
+    min-height: 44px;
+    padding-top: 0.35rem;
+    padding-bottom: 0.35rem;
+}
+
+/* Visible focus for keyboard users */
+.acct-money-app :focus-visible,
+.acct-touch-filters :focus-visible,
+.accounting-hub :focus-visible,
+.acct-mobile-card :focus-visible {
+    outline: 2px solid #0f766e;
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .acct-mobile-card,
+    .accounting-health-card,
+    .accounting-recon-light {
+        transition: none;
+    }
+}
+
+/* Collapsible filters on small screens */
+.acct-filter-drawer {
+    border: none;
+    margin: 0;
+    padding: 0;
+}
+
+.acct-filter-drawer summary {
+    list-style: none;
+    cursor: pointer;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.75rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background: #f8fafc;
+    font-weight: 600;
+    color: #334155;
+}
+
+.acct-filter-drawer summary::-webkit-details-marker {
+    display: none;
+}
+
+@media (min-width: 768px) {
+    .acct-filter-drawer summary {
+        display: none;
+    }
+}
+
+.acct-touch-filters .filter-label {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #64748b;
+    margin-bottom: 0.25rem;
+}
+
+/* Mobile card list (shared) */
+.acct-mobile-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+}
+
+.acct-mobile-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    padding: 1rem;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+
+.acct-mobile-card.reversed,
+.acct-mobile-card.is-reversed {
+    opacity: 0.78;
+    background: #f8fafc;
+}
+
+.acct-mobile-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.acct-mobile-card-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    line-height: 1.3;
+}
+
+.acct-mobile-card-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.35rem 0.75rem;
+    font-size: 0.8rem;
+    color: #64748b;
+    margin-bottom: 0.65rem;
+}
+
+.acct-mobile-card-meta dt {
+    font-weight: 600;
+    color: #475569;
+}
+
+.acct-mobile-card-meta dd {
+    margin: 0;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.acct-mobile-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.acct-mobile-card-actions .btn {
+    flex: 1 1 auto;
+}
+
+.acct-mobile-empty {
+    text-align: center;
+    color: #64748b;
+    padding: 1.5rem 1rem;
+    font-size: 0.9rem;
+}
+
+/* Hide desktop table on mobile when paired with card list */
+@media (max-width: 767.98px) {
+    .acct-has-mobile-cards .acct-desktop-table {
+        display: none !important;
+    }
+
+    .accounting-hub .branch-hub-stats {
+        grid-template-columns: 1fr;
+    }
+
+    .accounting-quick-nav {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 0.25rem;
+        scroll-snap-type: x proximity;
+    }
+
+    .accounting-quick-nav a {
+        flex: 0 0 auto;
+        scroll-snap-align: start;
+        white-space: nowrap;
+    }
+
+    .accounting-dash-health {
+        flex-direction: column;
+    }
+
+    .accounting-recon-light-grid {
+        flex-direction: column;
+    }
+
+    .accounting-recon-light {
+        width: 100%;
+        border-radius: 10px;
+    }
+
+    .branch-hub-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .branch-hub-actions .btn {
+        min-height: 44px;
+    }
+
+    .acct-touch-filters .row > [class*="col-"] {
+        flex: 0 0 100%;
+        max-width: 100%;
+    }
+
+    .acct-touch-filters .col-6 {
+        flex: 0 0 50%;
+        max-width: 50%;
+    }
+}
+
+@media (max-width: 374.98px) {
+    .acct-touch-filters .col-6 {
+        flex: 0 0 100%;
+        max-width: 100%;
+    }
+}
+
+@media (min-width: 768px) {
+    .acct-mobile-only {
+        display: none !important;
+    }
+}
+
+@media (max-width: 767.98px) {
+    .acct-desktop-only {
+        display: none !important;
+    }
+}
+
+/* Money form accessibility helpers */
+.acct-form-error-region:empty {
+    display: none;
+}
+
+.acct-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.accounting-guide-doc section {
+    scroll-margin-top: 5rem;
+}
+
+.accounting-guide-toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.accounting-guide-toc a {
+    font-size: 0.82rem;
+    padding: 0.35rem 0.65rem;
+    border-radius: 999px;
+    border: 1px solid #e2e8f0;
+    text-decoration: none;
+    color: #0f766e;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+}
+
+.accounting-guide-toc a:hover {
+    background: #f0fdfa;
+}

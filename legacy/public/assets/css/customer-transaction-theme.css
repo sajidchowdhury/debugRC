@@ -1,0 +1,248 @@
+/* Customer payments / AR receipts — branch-hub theme */
+
+.cust-txn-theme {
+    --bh-primary: #0284c7;
+    --bh-secondary: #0d9488;
+    --bh-accent: #7c3aed;
+}
+
+.cust-txn-theme .branch-hub-hero {
+    box-shadow: 0 14px 36px rgba(2, 132, 199, 0.22);
+}
+
+.cust-txn-theme .branch-avatar,
+.cust-txn-theme .branch-preview-card .branch-avatar {
+    background: linear-gradient(135deg, #0284c7, #0d9488);
+}
+
+.cust-txn-theme .branch-code-pill {
+    color: #0369a1;
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+}
+
+.cust-txn-theme .branch-hub-quick a:hover {
+    border-color: #0284c7;
+    color: #0284c7;
+    background: #f0f9ff;
+}
+
+.cust-txn-theme .branch-aside-tip {
+    background: #f0f9ff;
+    border-color: #bae6fd;
+    color: #0369a1;
+}
+
+.cust-txn-theme .branch-form-footer .btn-primary {
+    background: linear-gradient(135deg, #0284c7, #0d9488);
+}
+
+.cust-txn-amount {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.cust-txn-amount.receive { color: #047857; }
+.cust-txn-amount.payment { color: #b45309; }
+.cust-txn-amount.discount,
+.cust-txn-amount.write_off { color: #6d28d9; }
+
+.cust-txn-type-pill {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.2rem 0.5rem;
+    border-radius: 6px;
+    text-transform: capitalize;
+}
+
+.cust-txn-type-pill.receive { background: #d1fae5; color: #047857; }
+.cust-txn-type-pill.payment { background: #fef3c7; color: #b45309; }
+.cust-txn-type-pill.discount { background: #ede9fe; color: #6d28d9; }
+.cust-txn-type-pill.write_off { background: #fee2e2; color: #b91c1c; }
+
+#custTxnCards {
+    padding: 0.75rem;
+}
+
+.cust-txn-mobile-card {
+    background: #fff;
+    border: 1px solid var(--bh-border, #e2e8f0);
+    border-radius: 14px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+
+.cust-txn-mobile-card.reversed {
+    opacity: 0.75;
+    background: #f8fafc;
+}
+
+.cust-txn-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1rem;
+}
+
+.cust-txn-detail-item {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 0.85rem 1rem;
+}
+
+.cust-txn-detail-item .label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #64748b;
+    margin-bottom: 0.25rem;
+}
+
+.cust-txn-detail-item .value {
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.cust-txn-reversed-banner {
+    border-left: 4px solid #dc2626;
+    background: #fef2f2;
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+}
+
+.cust-txn-settlement-table th {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #64748b;
+}
+
+.cust-txn-due-banner {
+    background: linear-gradient(135deg, #f0f9ff, #ecfdf5);
+    border: 1px solid #bae6fd;
+    border-radius: 12px;
+    padding: 0.75rem 1rem;
+    font-weight: 600;
+    color: #0369a1;
+}
+
+.cust-txn-settlement-panel {
+    background: #f8fafc;
+    border: 1px dashed #cbd5e1;
+    border-radius: 12px;
+    padding: 1rem;
+}
+
+.cust-txn-gl-table th {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #64748b;
+}
+
+.cust-txn-ledger-table .running-bal {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #0369a1;
+}
+
+.cust-txn-type-hint {
+    font-size: 0.8rem;
+    color: #64748b;
+    min-height: 1.25rem;
+}
+
+.cust-txn-hero-amount {
+    font-size: 1.35rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Customer search picker (payment create) */
+.cust-txn-customer-picker {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+}
+
+.cust-txn-search-input:focus {
+    border-color: #0d9488;
+    box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.15);
+}
+
+.cust-txn-search-input.is-locked {
+    background: #f8fafc;
+    cursor: default;
+}
+
+.cust-txn-suggest-list {
+    display: none;
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 100%;
+    z-index: 1060;
+    max-height: 280px;
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+    margin-top: 4px;
+}
+
+.cust-txn-suggest-list.show {
+    display: block;
+}
+
+.cust-txn-suggest-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: #fff;
+    padding: 0.65rem 0.9rem;
+    border-bottom: 1px solid #f1f5f9;
+}
+
+.cust-txn-suggest-item:hover {
+    background: #f0fdfa;
+}
+
+.cust-txn-suggest-item .suggest-title {
+    font-weight: 600;
+    font-size: 0.92rem;
+    display: block;
+}
+
+.cust-txn-suggest-item .suggest-meta {
+    font-size: 0.78rem;
+    color: #64748b;
+    display: block;
+}
+
+.cust-txn-suggest-empty {
+    padding: 0.75rem 0.9rem;
+    color: #64748b;
+    font-size: 0.85rem;
+}
+
+.cust-txn-recents {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.cust-txn-recents.is-hidden {
+    display: none;
+}
+
+.cust-txn-recents .btn {
+    font-size: 0.78rem;
+    padding: 0.2rem 0.55rem;
+}
+
+.branch-hub-panel .purch-audit-item {
+    border-radius: 10px;
+}

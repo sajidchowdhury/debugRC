@@ -1,0 +1,47 @@
+# =============================================
+# Remote Center ERP - Root .htaccess
+# Prevents directory listing + makes clean URLs
+# http://localhost/remote-center-erp/  → works
+# http://localhost/remote-center-erp/public → also works
+# =============================================
+
+Options -Indexes +FollowSymLinks
+
+RewriteEngine On
+# Set RewriteBase to your folder name under htdocs (change if project path differs)
+RewriteBase /remote-center-erp/
+
+# -------------------------------------------------
+# 1. If the file or folder actually exists, serve it normally
+# -------------------------------------------------
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# -------------------------------------------------
+# 2. If the request is already targeting /public/ (e.g. from BASE_URL),
+#    do NOT rewrite it again (prevents double public/public/ problem)
+# -------------------------------------------------
+RewriteCond %{REQUEST_URI} ^/remote-center-erp/public/ [NC]
+RewriteRule ^ - [L]
+
+# -------------------------------------------------
+# 3. Everything else (clean URLs) → rewrite into the public/ folder
+# -------------------------------------------------
+RewriteRule ^(.*)$ public/$1 [L,QSA]
+
+# Fallback DirectoryIndex
+DirectoryIndex public/index.php
+
+# -------------------------------------------------
+# Security: Block direct access to sensitive folders
+# -------------------------------------------------
+RewriteRule ^(app|core|config|logs|vendor)/ - [F,L]
+RewriteRule ^(composer\.json|composer\.lock|\.env) - [F,L]
+
+# -------------------------------------------------
+# Custom Error Pages (Creative Design)
+# -------------------------------------------------
+ErrorDocument 403 /remote-center-erp/public/error.php?code=403
+ErrorDocument 404 /remote-center-erp/public/error.php?code=404
+

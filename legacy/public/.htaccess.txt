@@ -1,0 +1,12 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /remote-center-erp/
+
+    # Redirect /public to clean root URL
+    RewriteCond %{THE_REQUEST} \s/+remote-center-erp/public[^\s]* [NC]
+    RewriteRule ^public/?(.*)$ /remote-center-erp/$1 [R=301,L]
+
+    # Send all requests to /public
+    RewriteCond %{REQUEST_URI} !^/remote-center-erp/public/
+    RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>

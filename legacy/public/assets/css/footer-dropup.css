@@ -1,0 +1,299 @@
+/* Footer drop-up — quick tools above fixed creative footer */
+
+.creative-footer {
+    height: 30px;
+    justify-content: center;
+    overflow: visible;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.footer-investigation-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: rgba(245, 158, 11, 0.18);
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    color: #fbbf24;
+    font-size: 0.72rem;
+    cursor: default;
+}
+
+.footer-investigation-icon:hover {
+    background: rgba(245, 158, 11, 0.28);
+    color: #fcd34d;
+}
+
+.footer-dropup-trigger {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 12px 2px 10px;
+    border: 1px solid rgba(129, 140, 248, 0.35);
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.12);
+    color: #c7d2fe;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.35px;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.footer-dropup-trigger:hover,
+.footer-dropup-trigger:focus-visible {
+    background: rgba(99, 102, 241, 0.22);
+    border-color: rgba(165, 180, 252, 0.55);
+    color: #e0e7ff;
+    outline: none;
+}
+
+.footer-dropup-trigger-glow {
+    position: absolute;
+    inset: -2px;
+    border-radius: 999px;
+    background: radial-gradient(circle at 30% 50%, rgba(99, 102, 241, 0.35), transparent 70%);
+    opacity: 0.6;
+    pointer-events: none;
+    animation: footerDropupPulse 2.8s ease-in-out infinite;
+}
+
+@keyframes footerDropupPulse {
+    0%, 100% { opacity: 0.35; transform: scale(1); }
+    50% { opacity: 0.75; transform: scale(1.03); }
+}
+
+.footer-dropup-trigger > i.fa-wand-magic-sparkles {
+    color: #a5b4fc;
+    font-size: 0.72rem;
+}
+
+.footer-dropup-chevron {
+    font-size: 0.55rem;
+    opacity: 0.85;
+    transition: transform 0.25s ease;
+}
+
+.creative-footer.is-dropup-open .footer-dropup-chevron {
+    transform: rotate(180deg);
+}
+
+.footer-dropup-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1045;
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(3px);
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    pointer-events: none;
+}
+
+.footer-dropup-backdrop.is-visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.footer-dropup-panel {
+    position: fixed;
+    left: 260px;
+    right: 0;
+    bottom: 30px;
+    z-index: 1046;
+    max-width: 420px;
+    margin: 0 auto;
+    padding: 0 16px 8px;
+    transform: translateY(calc(100% + 24px));
+    opacity: 0;
+    visibility: hidden;
+    transition: transform 0.35s cubic-bezier(0.34, 1.2, 0.64, 1), opacity 0.25s ease, visibility 0.25s;
+    pointer-events: none;
+}
+
+.footer-dropup-panel.is-open {
+    transform: translateY(0);
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+}
+
+.footer-dropup-panel::before {
+    content: '';
+    display: block;
+    height: 1px;
+    margin: 0 24px;
+    background: linear-gradient(90deg, transparent, rgba(129, 140, 248, 0.5), transparent);
+}
+
+.footer-dropup-panel > .footer-dropup-handle,
+.footer-dropup-panel > .footer-dropup-head,
+.footer-dropup-panel > .footer-dropup-nav {
+    background: linear-gradient(165deg, #25253a 0%, #1e1e2e 55%, #1a1a28 100%);
+    border-left: 1px solid rgba(99, 102, 241, 0.2);
+    border-right: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.footer-dropup-handle {
+    width: 44px;
+    height: 4px;
+    margin: 10px auto 0;
+    border-radius: 4px;
+    background: rgba(148, 163, 184, 0.45);
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+    border-top: 1px solid rgba(99, 102, 241, 0.25);
+}
+
+.footer-dropup-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 18px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.footer-dropup-eyebrow {
+    margin: 0;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #818cf8;
+    font-weight: 600;
+}
+
+.footer-dropup-title {
+    margin: 2px 0 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #f1f5f9;
+}
+
+.footer-dropup-close {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #94a3b8;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+}
+
+.footer-dropup-close:hover {
+    background: rgba(239, 68, 68, 0.15);
+    color: #fca5a5;
+}
+
+.footer-dropup-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 12px 14px 16px;
+    border-bottom-left-radius: 14px;
+    border-bottom-right-radius: 14px;
+    border-bottom: 1px solid rgba(99, 102, 241, 0.2);
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.footer-dropup-link {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    text-decoration: none;
+    color: inherit;
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.18);
+    transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.footer-dropup-link:hover {
+    background: rgba(99, 102, 241, 0.18);
+    border-color: rgba(129, 140, 248, 0.45);
+    transform: translateY(-1px);
+    color: inherit;
+}
+
+.footer-dropup-link-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #6366f1, #4f46e5);
+    color: #fff;
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+
+.footer-dropup-link-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.footer-dropup-link-text strong {
+    font-size: 0.9rem;
+    color: #e2e8f0;
+}
+
+.footer-dropup-link-text small {
+    font-size: 0.72rem;
+    color: #94a3b8;
+    line-height: 1.3;
+}
+
+.footer-dropup-link-arrow {
+    color: #818cf8;
+    font-size: 0.8rem;
+    transition: transform 0.2s ease;
+}
+
+.footer-dropup-link:hover .footer-dropup-link-arrow {
+    transform: translateX(3px);
+}
+
+/* Align panel with main content when sidebar is mini */
+@media (min-width: 992px) {
+    body.sidebar-mini-footer .footer-dropup-panel {
+        left: 78px;
+    }
+}
+
+@media (max-width: 991.98px) {
+    .footer-dropup-panel {
+        left: 0 !important;
+        max-width: none;
+        padding-left: 12px;
+        padding-right: 12px;
+    }
+}
+
+@media (max-width: 576px) {
+    .creative-footer {
+        height: 26px;
+    }
+
+    .footer-dropup-trigger-label {
+        display: none;
+    }
+
+    .footer-dropup-panel {
+        bottom: 26px;
+    }
+
+    .footer-dropup-trigger {
+        padding: 3px 10px;
+    }
+}

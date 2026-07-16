@@ -1,0 +1,1701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Intelligent Sales Cockpit • Remote Center ERP</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&amp;family=Space+Grotesk:wght@500;600&amp;display=swap');
+        
+        :root {
+            --primary: #0f172a;
+        }
+        
+        body {
+            font-family: 'Inter', system_ui, sans-serif;
+        }
+        
+        .font-display {
+            font-family: 'Space Grotesk', 'Inter', system_ui, sans-serif;
+            font-weight: 600;
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255,255,255, 0.1);
+        }
+
+        .dark .glass {
+            background: rgba(15, 23, 42, 0.75);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+
+        .premium-card {
+            transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), 
+                       box-shadow 0.2s cubic-bezier(0.4, 0.0, 0.2, 1);
+            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.05), 0 4px 6px -4px rgb(0 0 0 / 0.05);
+        }
+        
+        .premium-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.05), 0 8px 10px -6px rgb(0 0 0 / 0.05);
+        }
+
+        .section-title {
+            font-size: 13px;
+            letter-spacing: -.02em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .kpi-value {
+            font-size: 28px;
+            line-height: 1;
+            font-weight: 700;
+            letter-spacing: -.025em;
+        }
+
+        .metric-label {
+            font-size: 12.5px;
+            font-weight: 500;
+            letter-spacing: -.015em;
+        }
+
+        .funnel-stage {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .funnel-stage:hover {
+            transform: scale(1.015);
+            filter: brightness(1.05);
+        }
+
+        .dashboard-header {
+            background: linear-gradient(to right, #0f172a, #1e2937);
+        }
+
+        .ai-banner {
+            background: linear-gradient(90deg, #0f172a, #1e2937);
+            border: 1px solid #334155;
+        }
+
+        .stat-number {
+            font-feature-settings: "ss02";
+        }
+
+        .modern-table th {
+            font-weight: 600;
+            font-size: 11.5px;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: .5px;
+        }
+
+        .executive-shadow {
+            box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.15);
+        }
+
+        .subtle-grid {
+            background-image: 
+                linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+            background-size: 24px 24px;
+        }
+
+        .cockpit-container {
+            max-width: 1680px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .value-positive {
+            color: #10b981;
+        }
+
+        .value-negative {
+            color: #f87171;
+        }
+
+        .mini-chart {
+            height: 38px;
+        }
+
+        .nav-pill {
+            transition: all 0.1s ease;
+        }
+        
+        .nav-pill.active {
+            background-color: #1e2937;
+            box-shadow: 0 1px 3px rgb(0 0 0 / 0.1);
+            font-weight: 600;
+        }
+
+        .sales-funnel {
+            position: relative;
+        }
+        
+        .funnel-bar {
+            position: relative;
+            border-radius: 9999px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+
+        .funnel-bar::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                90deg,
+                transparent 0%,
+                rgba(255,255,255,0.12) 50%,
+                transparent 100%
+            );
+            animation: shimmer 2.5s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(300%); }
+        }
+
+        .metric-card {
+            border: 1px solid #1e2937;
+        }
+
+        .insight-badge {
+            background: linear-gradient(to right, #0ea5e9, #6366f1);
+            -webkit-background-clip: text;
+            color: transparent;
+            font-weight: 700;
+            display: inline-block;
+            line-height: 1;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 1.5rem;
+        }
+
+        @media (max-width: 1280px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .realtime-dot {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-200">
+    <!-- Top Navigation / Header -->
+    <div class="border-b border-slate-800 bg-slate-900">
+        <div class="max-w-[1680px] mx-auto">
+            <div class="px-8 py-4 flex items-center justify-between">
+                <div class="flex items-center gap-x-4">
+                    <!-- Logo / Brand -->
+                    <div class="flex items-center gap-x-3">
+                        <div class="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-2xl flex items-center justify-center shadow-inner">
+                            <i class="fa-solid fa-chart-line text-white text-3xl"></i>
+                        </div>
+                        <div>
+                            <span class="font-display text-3xl font-semibold tracking-tighter">Remote</span>
+                            <span class="font-display text-3xl font-semibold tracking-tighter bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">Center</span>
+                        </div>
+                    </div>
+                    
+                    <div class="h-6 w-px bg-slate-700 mx-1"></div>
+                    
+                    <div>
+                        <div class="flex items-center gap-x-2">
+                            <h1 class="font-display text-3xl font-semibold tracking-tighter">Intelligent Sales Cockpit</h1>
+                            <div class="px-2.5 py-1 bg-slate-800 border border-slate-700 rounded-3xl flex items-center text-xs font-semibold">
+                                <div class="w-2 h-2 bg-emerald-400 rounded-full realtime-dot mr-1.5"></div>
+                                <span class="text-emerald-300">LIVE</span>
+                            </div>
+                        </div>
+                        <p class="text-xs text-slate-400 -mt-0.5">Executive overview • Q2 2026</p>
+                    </div>
+                </div>
+
+                <!-- Right side header controls -->
+                <div class="flex items-center gap-x-3">
+                    <!-- User profile -->
+                    <div class="flex items-center gap-x-2 bg-slate-900 border border-slate-700 px-2 py-1.5 rounded-3xl">
+                        <div class="w-8 h-8 bg-gradient-to-br from-violet-400 to-indigo-500 rounded-2xl overflow-hidden ring-2 ring-slate-700">
+                            <img src="https://i.pravatar.cc/32?img=47" alt="Ayesha Rahman" class="w-full h-full object-cover">
+                        </div>
+                        <div class="pr-2">
+                            <div class="text-sm font-semibold">Ayesha Rahman</div>
+                            <div class="text-[10px] text-emerald-400 -mt-0.5">Sales Director • Dhaka</div>
+                        </div>
+                    </div>
+
+                    <!-- Quick actions -->
+                    <div class="flex items-center gap-x-1">
+                        <button onclick="showExportModal()"
+                                class="flex items-center gap-x-2 px-4 py-2 text-sm font-medium bg-slate-800 hover:bg-slate-700 transition-colors border border-slate-700 rounded-3xl text-white">
+                            <i class="fa-solid fa-download text-xs"></i>
+                            <span class="font-semibold text-xs">Export</span>
+                        </button>
+                        
+                        <button onclick="refreshDashboard()"
+                                class="flex items-center justify-center w-9 h-9 bg-slate-800 hover:bg-slate-700 transition-colors border border-slate-700 rounded-3xl text-white">
+                            <i class="fa-solid fa-sync-alt text-sm"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sub header with date + global metrics -->
+    <div class="max-w-[1680px] mx-auto px-8 pt-5 pb-1">
+        <div class="flex items-end justify-between">
+            <!-- Date Range -->
+            <div>
+                <div class="flex items-center gap-x-1.5 mb-1.5">
+                    <span class="section-title text-slate-400">Reporting period</span>
+                </div>
+                
+                <div class="flex items-center gap-x-1 bg-slate-900 border border-slate-700 p-1 rounded-3xl">
+                    <div onclick="setDateRange(this, 'this-month')" class="nav-pill active cursor-pointer px-4 py-1.5 rounded-[22px] text-sm font-semibold flex items-center gap-x-2 bg-slate-800">
+                        <span>This Month</span>
+                    </div>
+                    <div onclick="setDateRange(this, 'q2-2026')" class="nav-pill cursor-pointer px-4 py-1.5 rounded-[22px] text-sm font-semibold text-slate-300 hover:text-white flex items-center gap-x-2">
+                        <span>Q2 2026</span>
+                    </div>
+                    <div onclick="setDateRange(this, 'ytd')" class="nav-pill cursor-pointer px-4 py-1.5 rounded-[22px] text-sm font-semibold text-slate-300 hover:text-white flex items-center gap-x-2">
+                        <span>YTD</span>
+                    </div>
+                    <div onclick="showCustomDatePicker()" class="nav-pill cursor-pointer px-3.5 py-1.5 rounded-[22px] text-sm font-semibold text-slate-300 hover:text-white flex items-center gap-x-1.5">
+                        <i class="fa-regular fa-calendar text-xs"></i>
+                        <span>Custom</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Global Revenue -->
+            <div class="flex items-center gap-x-8">
+                <div>
+                    <div class="flex items-baseline gap-x-3">
+                        <div>
+                            <span class="text-sm font-medium text-slate-400">Total Revenue (MTD)</span>
+                            <div class="flex items-baseline gap-x-2">
+                                <span id="global-revenue" class="kpi-value font-display text-5xl font-bold tracking-[-1.5px]">1.84</span>
+                                <span class="font-semibold text-2xl text-slate-300">M</span>
+                            </div>
+                        </div>
+                        <div class="mt-1">
+                            <div class="flex items-center text-emerald-400">
+                                <i class="fa-solid fa-arrow-trend-up mr-1 text-sm"></i>
+                                <span id="global-revenue-growth" class="font-extrabold text-lg">+11.4%</span>
+                            </div>
+                            <div class="text-[10px] text-emerald-300 font-medium">vs target</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Achievement -->
+                <div class="bg-slate-900 border border-slate-700 rounded-3xl px-5 py-3 flex items-center gap-x-4">
+                    <div>
+                        <div class="text-xs font-semibold text-slate-400">Achievement</div>
+                        <div class="flex items-baseline">
+                            <span id="global-achievement" class="font-display text-4xl font-extrabold tracking-tighter">108</span>
+                            <span class="text-xl font-semibold text-emerald-400">%</span>
+                        </div>
+                    </div>
+                    <div class="w-12 h-12 flex-shrink-0">
+                        <svg class="w-12 h-12" viewBox="0 0 36 36">
+                            <path class="stroke-slate-700" stroke-width="3.5" fill="none" d="M18 2.5a15.5 15.5 0 1 1 0 31 15.5 15.5 0 1 1 0-31"/>
+                            <path id="achievement-circle" class="stroke-emerald-400" stroke-width="3.5" fill="none" 
+                                  stroke-dasharray="97.4" stroke-dashoffset="0"
+                                  d="M18 2.5a15.5 15.5 0 1 1 0 31 15.5 15.5 0 1 1 0-31"/>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Insight Banner -->
+    <div class="max-w-[1680px] mx-auto px-8 pt-3 pb-4">
+        <div class="ai-banner rounded-3xl px-6 py-4 flex items-center justify-between border border-slate-700 shadow-inner">
+            <div class="flex items-center gap-x-4">
+                <div class="flex items-center gap-x-3">
+                    <div class="w-9 h-9 rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center flex-shrink-0">
+                        <i class="fa-solid fa-robot text-white text-xl"></i>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-x-2">
+                            <span class="font-semibold">AI Insight</span>
+                            <span class="px-2 py-px text-[10px] font-bold bg-white/20 text-white rounded-2xl px-1.5 flex items-center text-center" style="font-size: 9.5px; line-height: 1;">PRO</span>
+                        </div>
+                        <p class="text-sm text-slate-300 leading-tight mt-0.5">You are <span class="font-semibold text-emerald-300">on track to exceed your quarterly target by 8%</span>. Focus on closing the 3 deals currently in negotiation (total value $318k). 2 customers show early churn signals.</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-x-2">
+                <button onclick="askAIForMoreInsights()"
+                        class="text-xs font-semibold px-4 py-2 bg-white/10 hover:bg-white/15 transition-colors rounded-3xl border border-white/20 flex items-center gap-x-2">
+                    <i class="fa-solid fa-comments text-xs"></i>
+                    <span>Ask AI</span>
+                </button>
+                <button onclick="dismissAIBanner(this)"
+                        class="text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors px-3 py-1">
+                    Dismiss
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- KPI Summary Cards -->
+    <div class="max-w-[1680px] mx-auto px-8">
+        <div class="grid grid-cols-5 gap-4">
+            <!-- KPI 1 -->
+            <div onclick="drillDownKPI('revenue')" class="premium-card metric-card bg-slate-900 border border-slate-700 rounded-3xl p-5 cursor-pointer hover:border-blue-700">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="flex items-center gap-x-2">
+                            <i class="fa-solid fa-dollar-sign text-emerald-400"></i>
+                            <span class="metric-label text-slate-300">Total Revenue (MTD)</span>
+                        </div>
+                        <div class="kpi-value font-display text-3xl font-extrabold tracking-[-1.25px] mt-1">$1,842,650</div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-xs px-2 py-px bg-emerald-500/10 text-emerald-400 font-bold rounded-2xl w-fit ml-auto">+14%</div>
+                        <div class="text-[10px] text-emerald-300 font-medium mt-px">vs last month</div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-x-2 mt-4">
+                    <div class="text-xs text-slate-400">Target: <span class="font-semibold text-white">$1.70M</span></div>
+                    <div class="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden">
+                        <div class="h-full bg-emerald-400" style="width: 108%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- KPI 2 -->
+            <div onclick="drillDownKPI('pipeline')" class="premium-card metric-card bg-slate-900 border border-slate-700 rounded-3xl p-5 cursor-pointer hover:border-blue-700">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="flex items-center gap-x-2">
+                            <i class="fa-solid fa-layer-group text-blue-400"></i>
+                            <span class="metric-label text-slate-300">Pipeline Value</span>
+                        </div>
+                        <div class="kpi-value font-display text-3xl font-extrabold tracking-[-1.25px] mt-1">$3.29M</div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-xs px-2 py-px bg-blue-500/10 text-blue-400 font-bold rounded-2xl w-fit ml-auto">+7%</div>
+                        <div class="text-[10px] text-blue-300 font-medium mt-px">vs last week</div>
+                    </div>
+                </div>
+                <div class="mt-4 text-xs flex justify-between items-center">
+                    <div><span class="font-semibold text-white">47</span> <span class="text-slate-400">open deals</span></div>
+                    <div class="text-emerald-400 font-semibold">62% weighted</div>
+                </div>
+            </div>
+
+            <!-- KPI 3 -->
+            <div onclick="drillDownKPI('winrate')" class="premium-card metric-card bg-slate-900 border border-slate-700 rounded-3xl p-5 cursor-pointer hover:border-blue-700">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="flex items-center gap-x-2">
+                            <i class="fa-solid fa-trophy text-amber-400"></i>
+                            <span class="metric-label text-slate-300">Win Rate</span>
+                        </div>
+                        <div class="kpi-value font-display text-3xl font-extrabold tracking-[-1.25px] mt-1">67.8%</div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-xs px-2 py-px bg-emerald-500/10 text-emerald-400 font-bold rounded-2xl w-fit ml-auto">+3.2%</div>
+                        <div class="text-[10px] text-emerald-300 font-medium mt-px">QoQ</div>
+                    </div>
+                </div>
+                <div class="mt-3 text-xs flex items-center gap-x-2">
+                    <span class="font-medium text-white">89 closed</span>
+                    <span class="text-slate-400">•</span>
+                    <span class="text-amber-300">43 lost</span>
+                </div>
+            </div>
+
+            <!-- KPI 4 -->
+            <div onclick="drillDownKPI('forecast')" class="premium-card metric-card bg-slate-900 border border-slate-700 rounded-3xl p-5 cursor-pointer hover:border-blue-700">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="flex items-center gap-x-2">
+                            <i class="fa-solid fa-chart-line text-violet-400"></i>
+                            <span class="metric-label text-slate-300">Forecast Accuracy</span>
+                        </div>
+                        <div class="kpi-value font-display text-3xl font-extrabold tracking-[-1.25px] mt-1">91.4%</div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-xs px-2 py-px bg-violet-500/10 text-violet-400 font-bold rounded-2xl w-fit ml-auto">+4%</div>
+                    </div>
+                </div>
+                <div class="flex items-center justify-between text-xs mt-4">
+                    <div class="font-medium">Current forecast: <span class="font-semibold">$1.94M</span></div>
+                </div>
+            </div>
+
+            <!-- KPI 5 -->
+            <div onclick="drillDownKPI('aov')" class="premium-card metric-card bg-slate-900 border border-slate-700 rounded-3xl p-5 cursor-pointer hover:border-blue-700">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="flex items-center gap-x-2">
+                            <i class="fa-solid fa-handshake text-teal-400"></i>
+                            <span class="metric-label text-slate-300">Avg Deal Size</span>
+                        </div>
+                        <div class="kpi-value font-display text-3xl font-extrabold tracking-[-1.25px] mt-1">$38,450</div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-xs px-2 py-px bg-teal-500/10 text-teal-400 font-bold rounded-2xl w-fit ml-auto">+6%</div>
+                    </div>
+                </div>
+                <div class="text-xs mt-4 flex items-center">
+                    <span class="font-medium text-teal-300">↑ $2,150</span> 
+                    <span class="text-slate-400 ml-1.5">from previous period</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <div class="max-w-[1680px] mx-auto px-8 pt-5">
+        <div class="grid grid-cols-12 gap-5">
+            
+            <!-- Left Column: Funnel + My Activity -->
+            <div class="col-span-12 xl:col-span-7">
+                
+                <!-- Sales Funnel -->
+                <div class="premium-card bg-slate-900 border border-slate-700 rounded-3xl p-6 mb-5">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center gap-x-3">
+                            <span class="font-display text-lg font-semibold tracking-tight">Sales Funnel</span>
+                            <span class="px-3 py-px rounded-3xl bg-blue-600 text-blue-200 text-xs font-bold flex items-center">47 open deals</span>
+                        </div>
+                        <button onclick="drillDownFunnel()" class="text-xs font-semibold flex items-center gap-x-1 text-blue-400 hover:text-blue-300">
+                            <span>View all stages</span> <i class="fa-solid fa-arrow-right text-xs"></i>
+                        </button>
+                    </div>
+
+                    <!-- Funnel Visualization -->
+                    <div class="space-y-[5px] sales-funnel">
+                        <!-- Stage 1 -->
+                        <div onclick="filterByStage('lead')" class="funnel-stage flex items-center gap-x-3 cursor-pointer group">
+                            <div class="w-20 text-xs font-semibold text-right text-slate-300">Leads</div>
+                            <div class="funnel-bar flex-1 bg-gradient-to-r from-blue-600 to-blue-500 h-[38px] rounded-[18px] flex items-center px-4" style="width: 100%">
+                                <div class="flex justify-between w-full items-center text-sm">
+                                    <div>
+                                        <span class="font-extrabold text-white text-[15px]">128</span>
+                                        <span class="text-blue-100 text-xs ml-1">deals</span>
+                                    </div>
+                                    <div class="text-right">
+                                        <span class="font-bold text-white">$4.82M</span>
+                                        <span class="text-xs ml-1 text-blue-100">100%</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Stage 2 -->
+                        <div onclick="filterByStage('qualified')" class="funnel-stage flex items-center gap-x-3 cursor-pointer group">
+                            <div class="w-20 text-xs font-semibold text-right text-slate-300">Qualified</div>
+                            <div class="funnel-bar flex-1 bg-gradient-to-r from-blue-500 to-indigo-600 h-[38px] rounded-[18px] flex items-center px-4" style="width: 82%">
+                                <div class="flex justify-between w-full items-center text-sm">
+                                    <div>
+                                        <span class="font-extrabold text-white text-[15px]">96</span>
+                                        <span class="text-indigo-200 text-xs ml-1">deals</span>
+                                    </div>
+                                    <div class="text-right">
+                                        <span class="font-bold text-white">$3.29M</span>
+                                        <span class="text-xs ml-1 text-indigo-100">75%</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Stage 3 -->
+                        <div onclick="filterByStage('proposal')" class="funnel-stage flex items-center gap-x-3 cursor-pointer group">
+                            <div class="w-20 text-xs font-semibold text-right text-slate-300">Proposal</div>
+                            <div class="funnel-bar flex-1 bg-gradient-to-r from-indigo-500 to-violet-600 h-[38px] rounded-[18px] flex items-center px-4" style="width: 63%">
+                                <div class="flex justify-between w-full items-center text-sm">
+                                    <div>
+                                        <span class="font-extrabold text-white text-[15px]">72</span>
+                                        <span class="text-violet-200 text-xs ml-1">deals</span>
+                                    </div>
+                                    <div class="text-right">
+                                        <span class="font-bold text-white">$2.14M</span>
+                                        <span class="text-xs ml-1 text-violet-100">56%</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Stage 4 -->
+                        <div onclick="filterByStage('negotiation')" class="funnel-stage flex items-center gap-x-3 cursor-pointer group">
+                            <div class="w-20 text-xs font-semibold text-right text-slate-300">Negotiation</div>
+                            <div class="funnel-bar flex-1 bg-gradient-to-r from-violet-500 to-purple-600 h-[38px] rounded-[18px] flex items-center px-4" style="width: 41%">
+                                <div class="flex justify-between w-full items-center text-sm">
+                                    <div>
+                                        <span class="font-extrabold text-white text-[15px]">47</span>
+                                        <span class="text-purple-200 text-xs ml-1">deals</span>
+                                    </div>
+                                    <div class="text-right">
+                                        <span class="font-bold text-white">$1.48M</span>
+                                        <span class="text-xs ml-1 text-purple-100">37%</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Stage 5 -->
+                        <div onclick="filterByStage('closed')" class="funnel-stage flex items-center gap-x-3 cursor-pointer group">
+                            <div class="w-20 text-xs font-semibold text-right text-emerald-300">Closed Won</div>
+                            <div class="funnel-bar flex-1 bg-gradient-to-r from-emerald-500 to-teal-400 h-[38px] rounded-[18px] flex items-center px-4" style="width: 27%">
+                                <div class="flex justify-between w-full items-center text-sm">
+                                    <div>
+                                        <span class="font-extrabold text-white text-[15px]">89</span>
+                                        <span class="text-emerald-100 text-xs ml-1">deals</span>
+                                    </div>
+                                    <div class="text-right">
+                                        <span class="font-bold text-white">$1.84M</span>
+                                        <span class="text-xs ml-1 text-emerald-100">22%</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="flex justify-between items-center text-xs text-slate-400 mt-3 px-1">
+                        <div><span class="font-semibold text-white">67.8%</span> overall conversion</div>
+                        <div class="flex items-center gap-x-1">
+                            <div class="w-2 h-2 bg-emerald-400 rounded-full"></div>
+                            <span class="text-xs">Avg cycle: 28 days</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Revenue Trend -->
+                <div class="premium-card bg-slate-900 border border-slate-700 rounded-3xl p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <span class="font-display text-lg font-semibold tracking-tight">Revenue Trend</span>
+                            <span class="text-xs text-slate-400 ml-2">(Actual vs Target vs Forecast)</span>
+                        </div>
+                        <div class="flex items-center gap-x-4 text-xs">
+                            <div class="flex items-center gap-x-1.5">
+                                <div class="w-3 h-[2.5px] bg-blue-500"></div>
+                                <span class="font-medium text-xs">Actual</span>
+                            </div>
+                            <div class="flex items-center gap-x-1.5">
+                                <div class="w-3 h-[2.5px] bg-amber-400"></div>
+                                <span class="font-medium text-xs">Target</span>
+                            </div>
+                            <div class="flex items-center gap-x-1.5">
+                                <div class="w-3 h-[2.5px] bg-teal-400"></div>
+                                <span class="font-medium text-xs">Forecast</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="h-[218px]">
+                        <canvas id="revenueTrendChart"></canvas>
+                    </div>
+                    
+                    <div class="mt-2 flex justify-between text-xs text-slate-400 px-1">
+                        <div>Jan 2026</div>
+                        <div>Feb</div>
+                        <div>Mar</div>
+                        <div>Apr</div>
+                        <div>May</div>
+                        <div class="font-semibold text-white">Jun (Current)</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Sidebar: My Performance + Action Items -->
+            <div class="col-span-12 xl:col-span-5">
+                
+                <!-- My Activity & Performance -->
+                <div class="premium-card bg-slate-900 border border-slate-700 rounded-3xl p-6 mb-5">
+                    <div class="flex items-center justify-between mb-4">
+                        <span class="font-display text-lg font-semibold tracking-tight">My Performance</span>
+                        <div class="text-xs px-3 py-1 bg-slate-800 text-emerald-300 font-semibold rounded-3xl flex items-center">Rank #2</div>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4">
+                        <!-- Target Achievement -->
+                        <div class="col-span-1 bg-slate-800 border border-slate-700 rounded-3xl p-4">
+                            <div class="text-xs font-medium text-slate-400 mb-1">Target Achievement</div>
+                            
+                            <div class="flex items-center gap-x-4">
+                                <div class="relative w-16 h-16 flex-shrink-0">
+                                    <svg class="w-16 h-16" viewBox="0 0 42 42">
+                                        <circle cx="21" cy="21" r="18.5" fill="none" stroke="#1e2937" stroke-width="4"></circle>
+                                        <circle cx="21" cy="21" r="18.5" fill="none" stroke="#10b981" stroke-width="4" 
+                                                stroke-dasharray="116.24" stroke-dashoffset="18.6" stroke-linecap="round"></circle>
+                                    </svg>
+                                    <div class="absolute inset-0 flex flex-col items-center justify-center">
+                                        <span class="font-extrabold text-2xl text-emerald-400">109</span>
+                                        <span class="text-[9px] font-bold text-emerald-300 -mt-1">%</span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div class="text-xs">Target: <span class="font-semibold">$165k</span></div>
+                                    <div class="font-extrabold text-lg">$179.8k</div>
+                                    <div class="text-xs font-medium text-emerald-400">+$14.8k over</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-span-1">
+                            <div class="flex justify-between mb-1 text-xs">
+                                <span class="font-medium text-slate-400">Deals closed</span>
+                                <span class="font-bold">24</span>
+                            </div>
+                            <div class="flex justify-between mb-3 text-xs">
+                                <span class="font-medium text-slate-400">Revenue closed</span>
+                                <span class="font-bold text-emerald-400">$179.8k</span>
+                            </div>
+                            
+                            <div class="text-xs space-y-1.5">
+                                <div class="flex justify-between items-center">
+                                    <div class="flex items-center gap-x-1.5">
+                                        <i class="fa-solid fa-phone text-xs text-blue-400"></i>
+                                        <span class="text-xs font-medium">Calls</span>
+                                    </div>
+                                    <span class="font-bold">68</span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <div class="flex items-center gap-x-1.5">
+                                        <i class="fa-solid fa-users text-xs text-indigo-400"></i>
+                                        <span class="text-xs font-medium">Meetings</span>
+                                    </div>
+                                    <span class="font-bold">31</span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <div class="flex items-center gap-x-1.5">
+                                        <i class="fa-solid fa-file-invoice text-xs text-teal-400"></i>
+                                        <span class="text-xs font-medium">Quotes sent</span>
+                                    </div>
+                                    <span class="font-bold">42</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Action Items / Things To Do -->
+                <div class="premium-card bg-slate-900 border border-slate-700 rounded-3xl p-5">
+                    <div class="flex items-center justify-between mb-3 px-1">
+                        <div class="flex items-center gap-x-2">
+                            <span class="font-display text-base font-semibold tracking-tight">Your Action List</span>
+                            <span class="text-xs font-bold px-2 bg-amber-500/20 text-amber-300 rounded-2xl flex items-center justify-center h-[17px]">8</span>
+                        </div>
+                        <button onclick="viewAllActions()" class="text-xs text-amber-400 hover:text-amber-300 font-semibold">See all →</button>
+                    </div>
+                    
+                    <div class="space-y-[7px]">
+                        <!-- Action 1 -->
+                        <div onclick="openActionModal(0)" class="bg-slate-800 hover:bg-slate-700 transition-colors border border-slate-700 rounded-3xl p-3 cursor-pointer flex gap-x-3 items-start">
+                            <div class="w-6 h-6 flex-shrink-0 mt-px bg-orange-400/10 flex items-center justify-center rounded-2xl">
+                                <i class="fa-solid fa-exclamation text-orange-400 text-xs"></i>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex justify-between">
+                                    <span class="font-semibold text-sm">Follow up on 3 high-value deals</span>
+                                </div>
+                                <div class="flex items-center justify-between mt-1">
+                                    <div>
+                                        <span class="text-emerald-400 font-bold text-xs">$318,500</span>
+                                        <span class="text-[10px] text-slate-400 ml-1">total value</span>
+                                    </div>
+                                    <span class="text-orange-300 text-xs font-semibold">Due in 2 days</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Action 2 -->
+                        <div onclick="openActionModal(1)" class="bg-slate-800 hover:bg-slate-700 transition-colors border border-slate-700 rounded-3xl p-3 cursor-pointer flex gap-x-3 items-start">
+                            <div class="w-6 h-6 flex-shrink-0 mt-px bg-red-400/10 flex items-center justify-center rounded-2xl">
+                                <i class="fa-solid fa-user-slash text-red-400 text-xs"></i>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex justify-between">
+                                    <span class="font-semibold text-sm">5 customers at risk of churn</span>
+                                </div>
+                                <div class="text-xs text-red-300 mt-0.5 flex justify-between">
+                                    <div><span class="font-bold">High priority</span></div>
+                                    <div class="font-semibold">Review now</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Action 3 -->
+                        <div onclick="openActionModal(2)" class="bg-slate-800 hover:bg-slate-700 transition-colors border border-slate-700 rounded-3xl p-3 cursor-pointer flex gap-x-3 items-start">
+                            <div class="w-6 h-6 flex-shrink-0 mt-px bg-amber-400/10 flex items-center justify-center rounded-2xl">
+                                <i class="fa-solid fa-dollar-sign text-amber-400 text-xs"></i>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex justify-between">
+                                    <span class="font-semibold text-sm">Price approval needed on 2 quotes</span>
+                                </div>
+                                <div class="text-xs mt-0.5 text-amber-300 flex justify-between">
+                                    <span>$74k &amp; $41k</span>
+                                    <span class="font-semibold">2 quotes</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Revenue Trend is above, now bottom section -->
+            
+            <!-- Top Performers & Opportunities -->
+            <div class="col-span-12 xl:col-span-7 mt-1">
+                <div class="grid grid-cols-2 gap-5">
+                    
+                    <!-- Top 5 Products -->
+                    <div class="premium-card bg-slate-900 border border-slate-700 rounded-3xl p-5">
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="font-semibold text-base">Top Products</span>
+                            <span class="text-xs font-semibold px-2 text-blue-300">by revenue</span>
+                        </div>
+                        
+                        <div class="space-y-3 text-sm">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-x-2">
+                                    <span class="font-semibold">Industrial Pump 3000</span>
+                                </div>
+                                <div class="text-right">
+                                    <div class="font-extrabold">$412k</div>
+                                </div>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-x-2">
+                                    <span class="font-semibold">Solar Panel Array V2</span>
+                                </div>
+                                <div class="text-right">
+                                    <div class="font-extrabold">$289k</div>
+                                </div>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-x-2">
+                                    <span class="font-semibold">Remote Monitoring Kit</span>
+                                </div>
+                                <div class="text-right">
+                                    <div class="font-extrabold">$176k</div>
+                                </div>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-x-2">
+                                    <span class="font-semibold">Control Valve Pro</span>
+                                </div>
+                                <div class="text-right">
+                                    <div class="font-extrabold">$142k</div>
+                                </div>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-x-2">
+                                    <span class="font-semibold">Sensor Array 4K</span>
+                                </div>
+                                <div class="text-right">
+                                    <div class="font-extrabold">$91k</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Top 5 Customers -->
+                    <div class="premium-card bg-slate-900 border border-slate-700 rounded-3xl p-5">
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="font-semibold text-base">Top Customers</span>
+                            <span class="text-xs font-semibold px-2 text-blue-300">MTD</span>
+                        </div>
+                        
+                        <div class="space-y-3 text-sm">
+                            <div class="flex justify-between items-center">
+                                <div>
+                                    <div class="font-semibold">Apex Engineering Ltd.</div>
+                                    <div class="text-xs text-emerald-300">B2B • 7 orders</div>
+                                </div>
+                                <div class="text-right font-extrabold">$312k</div>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <div>
+                                    <div class="font-semibold">National Grid Solutions</div>
+                                    <div class="text-xs text-emerald-300">Key Account</div>
+                                </div>
+                                <div class="text-right font-extrabold">$264k</div>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <div>
+                                    <div class="font-semibold">Dhaka Power &amp; Light</div>
+                                    <div class="text-xs text-emerald-300">B2B</div>
+                                </div>
+                                <div class="text-right font-extrabold">$197k</div>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <div>
+                                    <div class="font-semibold">Metro Construction</div>
+                                </div>
+                                <div class="text-right font-extrabold">$154k</div>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <div>
+                                    <div class="font-semibold">Sunrise Pharmaceuticals</div>
+                                </div>
+                                <div class="text-right font-extrabold">$119k</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- High Value Opportunities + Risk Panel -->
+            <div class="col-span-12 xl:col-span-5 mt-1">
+                <div class="grid grid-cols-1 gap-5">
+                    
+                    <!-- High Value Opportunities -->
+                    <div class="premium-card bg-slate-900 border border-slate-700 rounded-3xl p-5">
+                        <div class="flex items-center justify-between mb-3">
+                            <div>
+                                <span class="font-semibold">High-Value Opportunities</span>
+                            </div>
+                            <button onclick="viewOpportunities()" class="text-xs text-blue-400 font-semibold">All 47 →</button>
+                        </div>
+                        
+                        <div class="space-y-2 text-sm">
+                            <div onclick="openOpportunityModal(0)" class="flex items-center justify-between px-3 py-2 hover:bg-slate-800 rounded-2xl cursor-pointer">
+                                <div>
+                                    <div class="font-semibold">Apex Engineering – Phase 2</div>
+                                    <div class="flex items-center gap-x-2 text-xs">
+                                        <span class="text-emerald-400">$185k</span>
+                                        <span class="text-slate-400">• Expected close: Feb 12</span>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <div class="px-2 text-xs py-px rounded bg-emerald-500/10 text-emerald-300 font-bold">80%</div>
+                                </div>
+                            </div>
+                            
+                            <div onclick="openOpportunityModal(1)" class="flex items-center justify-between px-3 py-2 hover:bg-slate-800 rounded-2xl cursor-pointer">
+                                <div>
+                                    <div class="font-semibold">National Grid – Expansion</div>
+                                    <div class="flex items-center gap-x-2 text-xs">
+                                        <span class="text-emerald-400">$134k</span>
+                                        <span class="text-slate-400">• Expected close: Feb 20</span>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <div class="px-2 text-xs py-px rounded bg-emerald-500/10 text-emerald-300 font-bold">65%</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Risk & Alerts -->
+                    <div class="premium-card bg-slate-900 border border-slate-700 rounded-3xl p-5">
+                        <div class="flex justify-between items-center mb-3">
+                            <span class="font-semibold flex items-center gap-x-2">
+                                <span>Risk &amp; Alerts</span>
+                                <span class="px-2 text-red-400 bg-red-500/10 rounded-2xl text-xs font-extrabold">5</span>
+                            </span>
+                        </div>
+                        
+                        <div class="space-y-3">
+                            <div class="flex gap-x-3 items-center bg-red-900/10 border border-red-900/30 px-3 py-2.5 rounded-3xl">
+                                <i class="fa-solid fa-exclamation-triangle text-red-400 text-sm"></i>
+                                <div class="flex-1">
+                                    <div class="text-xs font-semibold">3 At-Risk Deals ($247k)</div>
+                                    <div class="text-xs text-red-300">Follow up overdue by 9 days</div>
+                                </div>
+                            </div>
+                            
+                            <div class="flex gap-x-3 items-center bg-amber-900/10 border border-amber-900/30 px-3 py-2.5 rounded-3xl">
+                                <i class="fa-solid fa-box text-amber-400 text-sm"></i>
+                                <div class="flex-1">
+                                    <div class="text-xs font-semibold">Low stock on bestseller: Industrial Pump 3000</div>
+                                    <div class="text-xs text-amber-300">Only 14 units left. Top seller this month.</div>
+                                </div>
+                            </div>
+                            
+                            <div class="flex gap-x-3 items-center px-3 py-1 text-xs">
+                                <i class="fa-regular fa-clock text-orange-400"></i>
+                                <div>
+                                    <span class="font-medium">7 overdue follow-ups</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+
+    <div class="max-w-[1680px] mx-auto px-8 pt-3 pb-6">
+        <div class="flex items-center justify-between text-xs text-slate-400 px-1">
+            <div>Last refreshed: <span class="font-semibold text-slate-300">just now</span></div>
+            <div class="flex items-center gap-x-2">
+                <div class="flex items-center">
+                    <i class="fa-solid fa-globe mr-1.5 text-xs"></i>
+                    <span>Data source: Live ERP • All branches</span>
+                </div>
+                <button onclick="refreshDashboard()" class="font-semibold flex items-center gap-x-1 hover:text-white text-xs transition-colors">
+                    <i class="fa-solid fa-sync text-xs"></i> 
+                    <span>Refresh</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Drill-down / Modal placeholders -->
+    <div id="modal" onclick="hideModal()" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-[999]">
+        <div onclick="event.stopImmediatePropagation()" class="bg-slate-900 border border-slate-700 rounded-3xl w-full max-w-md mx-4 shadow-2xl">
+            <div id="modal-content" class="p-6"></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Tailwind script configuration
+        function initTailwind() {
+            document.documentElement.style.setProperty('--accent', '#0ea5e9');
+            
+            tailwind.config = {
+                theme: {
+                    extend: {
+                        fontFamily: {
+                            'display': ['Space Grotesk', 'Inter', 'system-ui', 'sans-serif']
+                        }
+                    }
+                }
+            };
+        }
+        
+        // Revenue Trend Chart
+        let revenueChart;
+        
+        function initRevenueChart() {
+            const ctx = document.getElementById('revenueTrendChart');
+            
+            if (revenueChart) revenueChart.destroy();
+            
+            revenueChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+                    datasets: [
+                        {
+                            label: 'Actual Revenue',
+                            data: [1240000, 1380000, 1520000, 1410000, 1690000, 1842650],
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                            borderWidth: 3.5,
+                            tension: 0.35,
+                            fill: true,
+                            pointBackgroundColor: '#3b82f6',
+                            pointBorderColor: '#0f172a',
+                            pointBorderWidth: 2.5,
+                            pointRadius: 4
+                        },
+                        {
+                            label: 'Target',
+                            data: [1300000, 1400000, 1550000, 1550000, 1650000, 1700000],
+                            borderColor: '#f59e0b',
+                            borderDash: [3, 3],
+                            borderWidth: 2.5,
+                            tension: 0.2,
+                            fill: false,
+                            pointRadius: 0
+                        },
+                        {
+                            label: 'Forecast',
+                            data: [1250000, 1350000, 1600000, 1580000, 1750000, 1940000],
+                            borderColor: '#14b8a6',
+                            borderWidth: 2.5,
+                            borderDash: [2, 2],
+                            tension: 0.3,
+                            fill: false,
+                            pointRadius: 0
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                label: function(context) {
+                                    return context.dataset.label + ': $' + (context.raw / 1000000).toFixed(2) + 'M';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: '#1e2937', lineWidth: 0.6 },
+                            borderColor: '#334155',
+                            ticks: { color: '#64748b', font: { size: 11 } }
+                        },
+                        y: {
+                            grid: { color: '#1e2937', lineWidth: 0.6 },
+                            borderColor: '#334155',
+                            ticks: {
+                                color: '#64748b',
+                                font: { size: 11 },
+                                callback: function(val) {
+                                    return '$' + (val / 1000000) + 'M';
+                                }
+                            }
+                        }
+                    },
+                    elements: {
+                        line: { tension: 0.3 },
+                        point: { hitRadius: 15 }
+                    }
+                }
+            });
+        }
+        
+        // Date range handler
+        function setDateRange(element, range) {
+            // Deselect all
+            document.querySelectorAll('.nav-pill').forEach(el => el.classList.remove('active', 'bg-slate-800'));
+            document.querySelectorAll('.nav-pill').forEach(el => el.classList.add('text-slate-300'));
+            
+            // Select current
+            element.classList.add('active', 'bg-slate-800');
+            element.classList.remove('text-slate-300');
+            
+            // Update numbers based on selection
+            const revenueEl = document.getElementById('global-revenue');
+            
+            if (range === 'this-month') {
+                revenueEl.textContent = '1.84';
+                document.getElementById('global-revenue-growth').textContent = '+11.4%';
+                document.getElementById('global-achievement').textContent = '108';
+                updateKpiValues(1842650, 3290000, 67.8);
+            } else if (range === 'q2-2026') {
+                revenueEl.textContent = '4.12';
+                document.getElementById('global-revenue-growth').textContent = '+23%';
+                document.getElementById('global-achievement').textContent = '112';
+                updateKpiValues(4120000, 5830000, 72);
+            } else if (range === 'ytd') {
+                revenueEl.textContent = '9.84';
+                document.getElementById('global-revenue-growth').textContent = '+19%';
+                document.getElementById('global-achievement').textContent = '104';
+                updateKpiValues(9840000, 11500000, 71.3);
+            }
+            
+            // Fake refresh of chart
+            if (revenueChart) {
+                revenueChart.data.datasets[0].data = range === 'this-month' ? 
+                    [1240000, 1380000, 1520000, 1410000, 1690000, 1842650] : 
+                    [890000, 1120000, 1350000, 1600000, 1790000, 1940000];
+                revenueChart.update();
+            }
+            
+            // Toast notification
+            showToast(`Date range updated to ${element.textContent.trim()}`);
+        }
+        
+        function updateKpiValues(revenue, pipeline, winrate) {
+            // This would be more sophisticated in real app
+            const cards = document.querySelectorAll('.metric-card');
+            
+            // Update first card
+            if (cards[0]) {
+                const valEl = cards[0].querySelector('.kpi-value');
+                if (valEl) valEl.textContent = '$' + (revenue / 1000000).toFixed(2) + 'M';
+            }
+            
+            // Pipeline
+            if (cards[1]) {
+                const valEl = cards[1].querySelector('.kpi-value');
+                if (valEl) valEl.textContent = '$' + (pipeline / 1000000).toFixed(2) + 'M';
+            }
+            
+            // Win rate
+            if (cards[2]) {
+                const valEl = cards[2].querySelector('.kpi-value');
+                if (valEl) valEl.textContent = winrate + '%';
+            }
+        }
+        
+        function showCustomDatePicker() {
+            const modal = document.getElementById('modal');
+            const content = document.getElementById('modal-content');
+            
+            content.innerHTML = `
+                <div class="p-1">
+                    <div class="flex justify-between items-center mb-4 px-1">
+                        <span class="font-semibold text-xl">Custom date range</span>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="text-xs font-semibold px-1 text-slate-300">From</label>
+                            <input type="date" value="2026-01-01" class="w-full mt-1 bg-slate-800 border border-slate-700 px-3 py-2 rounded-2xl text-sm">
+                        </div>
+                        <div>
+                            <label class="text-xs font-semibold px-1 text-slate-300">To</label>
+                            <input type="date" value="2026-06-04" class="w-full mt-1 bg-slate-800 border border-slate-700 px-3 py-2 rounded-2xl text-sm">
+                        </div>
+                    </div>
+                    
+                    <div class="flex gap-x-3 mt-5">
+                        <button onclick="hideModal()" class="flex-1 py-2.5 bg-slate-700 hover:bg-slate-600 font-semibold rounded-3xl text-sm">Cancel</button>
+                        <button onclick="applyCustomRange(this)" class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 font-semibold rounded-3xl text-sm">Apply Range</button>
+                    </div>
+                </div>
+            `;
+            
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+        
+        function applyCustomRange(btn) {
+            hideModal();
+            showToast("Custom range applied. Dashboard updated.");
+            
+            // Simulate update
+            document.getElementById('global-revenue').textContent = '1.76';
+            document.querySelectorAll('.nav-pill').forEach(el => el.classList.remove('active', 'bg-slate-800'));
+        }
+        
+        // KPI drill downs
+        function drillDownKPI(type) {
+            const modal = document.getElementById('modal');
+            const content = document.getElementById('modal-content');
+            
+            let html = '';
+            
+            if (type === 'revenue') {
+                html = `
+                    <div>
+                        <div class="flex items-center justify-between mb-5">
+                            <div>
+                                <span class="font-display text-2xl font-extrabold">Revenue Breakdown</span>
+                            </div>
+                            <span class="font-mono text-emerald-300 text-xs font-bold bg-emerald-900/30 px-3 rounded-3xl py-1">$1.84M</span>
+                        </div>
+                        
+                        <div class="space-y-4">
+                            <div class="flex justify-between px-1">
+                                <div class="text-sm">Product Sales</div>
+                                <div class="font-extrabold">$1,412,000 <span class="font-normal text-xs text-emerald-400">(77%)</span></div>
+                            </div>
+                            <div class="flex justify-between px-1">
+                                <div class="text-sm">Service Contracts</div>
+                                <div class="font-extrabold">$312,400 <span class="font-normal text-xs text-emerald-400">(17%)</span></div>
+                            </div>
+                            <div class="flex justify-between px-1">
+                                <div class="text-sm">Add-ons & Upgrades</div>
+                                <div class="font-extrabold">$118,250 <span class="font-normal text-xs text-emerald-400">(6%)</span></div>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-6 pt-4 border-t border-slate-700 text-xs flex justify-between">
+                            <div>Top region: <span class="font-semibold">Dhaka HQ (43%)</span></div>
+                            <button onclick="hideModal()" class="text-blue-400 font-bold">View full report →</button>
+                        </div>
+                    </div>
+                `;
+            } else if (type === 'pipeline') {
+                html = `
+                    <div>
+                        <div class="flex justify-between items-center">
+                            <span class="font-display text-2xl font-extrabold">Pipeline Health</span>
+                            <span class="font-extrabold text-3xl">$3.29M</span>
+                        </div>
+                        
+                        <div class="my-6">
+                            <div class="flex justify-between text-xs font-semibold mb-1 px-0.5">
+                                <div>Weighted: <span class="font-bold text-emerald-400">$2.04M</span></div>
+                                <div>62%</div>
+                            </div>
+                            <div class="h-2 bg-slate-800 rounded-full">
+                                <div class="h-2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-400" style="width: 62%"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="text-xs space-y-2">
+                            <div class="flex justify-between"><span>High probability (80%+)</span> <span class="font-extrabold">$1.21M</span></div>
+                            <div class="flex justify-between"><span>Medium probability</span> <span class="font-extrabold">$1.44M</span></div>
+                            <div class="flex justify-between"><span>Low probability</span> <span class="font-extrabold">$640k</span></div>
+                        </div>
+                        
+                        <div class="text-center mt-6">
+                            <button onclick="hideModal(); filterByStage('negotiation')" class="text-xs px-6 py-2 rounded-3xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs">Go to Negotiation stage</button>
+                        </div>
+                    </div>
+                `;
+            } else if (type === 'winrate') {
+                html = `
+                    <div class="px-1">
+                        <span class="font-display text-2xl font-extrabold">Win Rate Analysis</span>
+                        <div class="mt-4">
+                            <div class="text-5xl font-extrabold tracking-[-1px]">67.8%</div>
+                            <div class="text-xs mt-1">Based on 132 opportunities closed in last 90 days</div>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-3 mt-6 text-sm">
+                            <div class="bg-slate-800 p-3 rounded-3xl">
+                                <div class="font-semibold text-xs">Best performing</div>
+                                <div class="font-bold">Key Accounts (81%)</div>
+                            </div>
+                            <div class="bg-slate-800 p-3 rounded-3xl">
+                                <div class="font-semibold text-xs">Lowest performing</div>
+                                <div class="font-bold">New prospects (42%)</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                html = `<div><span class="font-bold">Drill-down for ${type}</span> would open detailed analytics view with filters.</div>`;
+            }
+            
+            content.innerHTML = html;
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+        
+        function filterByStage(stage) {
+            hideModal();
+            
+            const funnel = document.querySelector('.sales-funnel');
+            funnel.style.transitionDuration = '80ms';
+            
+            // Visual feedback
+            document.querySelectorAll('.funnel-stage').forEach(el => {
+                el.style.opacity = '0.4';
+            });
+            
+            // Highlight relevant
+            setTimeout(() => {
+                let targetIndex = 0;
+                if (stage === 'qualified') targetIndex = 1;
+                if (stage === 'proposal') targetIndex = 2;
+                if (stage === 'negotiation') targetIndex = 3;
+                if (stage === 'closed') targetIndex = 4;
+                
+                const stages = document.querySelectorAll('.funnel-stage');
+                if (stages[targetIndex]) {
+                    stages[targetIndex].style.opacity = '1';
+                    stages[targetIndex].style.transform = 'scale(1.03)';
+                    
+                    setTimeout(() => {
+                        if (stages[targetIndex]) stages[targetIndex].style.transform = 'scale(1)';
+                    }, 1100);
+                }
+                
+                // Reset
+                setTimeout(() => {
+                    document.querySelectorAll('.funnel-stage').forEach(el => el.style.opacity = '1');
+                }, 2000);
+            }, 180);
+            
+            showToast(`Filtered to ${stage} stage`);
+        }
+        
+        // Action items modals
+        const actions = [
+            {
+                title: "Follow up on 3 high-value deals",
+                description: "Apex Engineering ($185k), National Grid ($134k), and Sunrise Pharma ($48k) are waiting on proposals. Expected close this month.",
+                priority: "high",
+                due: "Feb 8, 2026"
+            },
+            {
+                title: "5 customers at risk of churn",
+                description: "These accounts have shown reduced order frequency in the last 45 days. Recommend proactive outreach and discount offers.",
+                priority: "high",
+                due: "Feb 6, 2026"
+            },
+            {
+                title: "Price approval needed on 2 quotes",
+                description: "Quotes #INV-3921 ($74k) and #INV-3934 ($41k) require management approval before sending to customers.",
+                priority: "medium",
+                due: "Today"
+            }
+        ];
+        
+        function openActionModal(index) {
+            const modal = document.getElementById('modal');
+            const content = document.getElementById('modal-content');
+            const action = actions[index];
+            
+            let priorityColor = 'bg-orange-400';
+            if (action.priority === 'high') priorityColor = 'bg-red-400';
+            
+            content.innerHTML = `
+                <div>
+                    <div class="flex items-center gap-x-2">
+                        <span class="font-display text-2xl font-extrabold">${action.title}</span>
+                        <span class="px-3 py-px text-xs font-extrabold rounded-3xl ${priorityColor} text-white">${action.priority.toUpperCase()}</span>
+                    </div>
+                    
+                    <div class="mt-4 text-sm leading-relaxed text-slate-300">
+                        ${action.description}
+                    </div>
+                    
+                    <div class="mt-5 flex items-center gap-x-2 text-xs">
+                        <div class="bg-slate-800 px-3 py-2 rounded-3xl flex items-center">
+                            <i class="fa-solid fa-calendar mr-2 text-xs"></i> 
+                            <span>Due: <span class="font-bold">${action.due}</span></span>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center gap-3 mt-6">
+                        <button onclick="completeAction(${index}, this)" class="flex-1 text-sm bg-emerald-600 hover:bg-emerald-500 py-2.5 rounded-3xl font-semibold transition-colors">Mark as done</button>
+                        <button onclick="hideModal()" class="flex-1 text-sm border border-slate-700 py-2.5 rounded-3xl font-semibold hover:bg-slate-800">Snooze 3 days</button>
+                    </div>
+                </div>
+            `;
+            
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+        
+        function completeAction(index, btn) {
+            btn.innerHTML = `<i class="fa-solid fa-check mr-2"></i> Completed`;
+            btn.disabled = true;
+            
+            setTimeout(() => {
+                hideModal();
+                showToast("Action completed. Great work!");
+                
+                // Remove from UI
+                const actionCards = document.querySelectorAll('.premium-card');
+                if (actionCards[3]) {
+                    actionCards[3].style.transitionDuration = '120ms';
+                    actionCards[3].style.opacity = '0.3';
+                    
+                    setTimeout(() => {
+                        if (actionCards[3]) actionCards[3].style.opacity = '1';
+                    }, 2200);
+                }
+            }, 900);
+        }
+        
+        function viewAllActions() {
+            showToast("Opening full action center...");
+            setTimeout(() => {
+                window.location.hash = '#actions';
+            }, 400);
+        }
+        
+        // Opportunity modals
+        function openOpportunityModal(index) {
+            const modal = document.getElementById('modal');
+            const content = document.getElementById('modal-content');
+            
+            content.innerHTML = `
+                <div class="px-1">
+                    <span class="font-display text-xl font-extrabold">Opportunity Details</span>
+                    
+                    <div class="mt-4 bg-slate-800 rounded-3xl p-4 text-sm">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <div class="font-bold">${index === 0 ? 'Apex Engineering – Phase 2 Expansion' : 'National Grid – Expansion Project'}</div>
+                                <div class="text-xs mt-0.5 text-emerald-300">Expected close: ${index === 0 ? 'Feb 12' : 'Feb 20'}, 2026</div>
+                            </div>
+                            <div class="text-right">
+                                <div class="font-extrabold text-xl">${index === 0 ? '$185k' : '$134k'}</div>
+                                <div class="text-xs text-emerald-300">${index === 0 ? '80%' : '65%'} probability</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-4 text-xs">
+                        <div class="font-medium px-1">Next steps recommended:</div>
+                        <ul class="mt-2 space-y-1 text-xs list-disc pl-4 text-slate-300">
+                            <li>Schedule final technical demo (Feb 4)</li>
+                            <li>Send revised pricing proposal</li>
+                            <li>Loop in account manager for reference call</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="mt-5 flex gap-x-2">
+                        <button onclick="hideModal()" class="flex-1 py-2 rounded-3xl text-xs bg-slate-700 font-semibold">Close</button>
+                        <button onclick="hideModal(); showToast('Opening deal workspace...')" class="flex-1 py-2 rounded-3xl text-xs bg-blue-600 font-semibold">Open full deal</button>
+                    </div>
+                </div>
+            `;
+            
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+        
+        // Misc helpers
+        function showToast(msg) {
+            const toast = document.createElement('div');
+            toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translate(-50%, 0);z-index:99999';
+            toast.className = `px-5 py-2.5 text-sm rounded-3xl bg-slate-800 border border-slate-700 text-white flex items-center gap-x-2 shadow-xl`;
+            toast.innerHTML = `
+                <span>${msg}</span>
+            `;
+            
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.style.transition = 'all 0.2s ease';
+                toast.style.opacity = '0';
+                
+                setTimeout(() => toast.remove(), 150);
+            }, 2200);
+        }
+        
+        function showExportModal() {
+            const modal = document.getElementById('modal');
+            const content = document.getElementById('modal-content');
+            
+            content.innerHTML = `
+                <div>
+                    <span class="font-semibold">Export Dashboard</span>
+                    <div class="text-xs text-slate-400 mt-1">Choose format for current view (Feb 2026 data)</div>
+                    
+                    <div class="mt-4 grid grid-cols-1 gap-2">
+                        <div onclick="exportDashboard('pdf')" class="cursor-pointer flex items-center gap-x-3 px-3 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-600">
+                            <i class="fa-solid fa-file-pdf text-xl text-red-300 w-7"></i>
+                            <div>
+                                <div class="font-semibold">PDF Report</div>
+                                <div class="text-xs text-slate-400">High quality executive summary</div>
+                            </div>
+                        </div>
+                        
+                        <div onclick="exportDashboard('excel')" class="cursor-pointer flex items-center gap-x-3 px-3 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-600">
+                            <i class="fa-solid fa-file-excel text-xl text-emerald-300 w-7"></i>
+                            <div>
+                                <div class="font-semibold">Excel (CSV + Charts)</div>
+                                <div class="text-xs text-slate-400">Full dataset export</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-5 text-center">
+                        <button onclick="hideModal()" class="text-xs px-4 font-medium py-1 text-slate-300">Cancel</button>
+                    </div>
+                </div>
+            `;
+            
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+        
+        function exportDashboard(type) {
+            hideModal();
+            const msg = type === 'pdf' ? 'Generating beautiful PDF report...' : 'Exporting data to Excel...';
+            showToast(msg);
+            
+            setTimeout(() => {
+                showToast(`Download ready: Sales-Cockpit-${type.toUpperCase()}-2026-02.pdf`);
+            }, 1900);
+        }
+        
+        function askAIForMoreInsights() {
+            const banner = document.querySelector('.ai-banner');
+            if (banner) banner.style.opacity = '0.6';
+            
+            showToast("AI is analyzing your pipeline and customer data...");
+            
+            setTimeout(() => {
+                const modal = document.getElementById('modal');
+                const content = document.getElementById('modal-content');
+                
+                content.innerHTML = `
+                    <div>
+                        <div class="flex items-center">
+                            <i class="fa-solid fa-robot mr-2"></i> 
+                            <span class="font-semibold">AI Recommendations</span>
+                        </div>
+                        
+                        <div class="mt-3 space-y-4 text-xs">
+                            <div>
+                                <div class="font-bold">1. Upsell opportunity</div>
+                                <div class="text-slate-300">Apex Engineering has shown interest in add-on monitoring services (est. +$48k ARR).</div>
+                            </div>
+                            <div>
+                                <div class="font-bold">2. Risk mitigation</div>
+                                <div class="text-slate-300">Reach out to Dhaka Power &amp; Light — their last 2 orders were 40% smaller than usual.</div>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-6">
+                            <button onclick="hideModal()" class="w-full text-sm py-2 rounded-3xl bg-gradient-to-r from-indigo-600 to-blue-600 font-semibold">Generate full AI report</button>
+                        </div>
+                    </div>
+                `;
+                modal.classList.remove('hidden');
+                modal.classList.add('flex');
+                
+                if (banner) banner.style.opacity = '1';
+            }, 1400);
+        }
+        
+        function dismissAIBanner(el) {
+            const banner = el.closest('.ai-banner');
+            if (banner) {
+                banner.style.transitionDuration = '120ms';
+                banner.style.opacity = '0';
+                setTimeout(() => banner.remove(), 180);
+            }
+        }
+        
+        function refreshDashboard() {
+            const btns = document.querySelectorAll('button');
+            btns.forEach(b => b.style.pointerEvents = 'none');
+            
+            showToast("Refreshing live data...");
+            
+            // Simulate data refresh
+            setTimeout(() => {
+                const revenueEl = document.getElementById('global-revenue');
+                revenueEl.style.transitionDuration = '120ms';
+                revenueEl.textContent = '1.86';
+                
+                if (revenueChart) {
+                    revenueChart.data.datasets[0].data[5] = 1860000;
+                    revenueChart.update();
+                }
+                
+                showToast("Dashboard data refreshed.");
+                
+                btns.forEach(b => b.style.pointerEvents = 'all');
+            }, 1200);
+        }
+        
+        function drillDownFunnel() {
+            showToast("Opening full funnel analytics...");
+            
+            setTimeout(() => {
+                const funnelContainer = document.querySelector('.sales-funnel');
+                if (funnelContainer) {
+                    funnelContainer.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    funnelContainer.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.3)';
+                    
+                    setTimeout(() => {
+                        if (funnelContainer) funnelContainer.style.boxShadow = '';
+                    }, 1400);
+                }
+            }, 800);
+        }
+        
+        function viewOpportunities() {
+            showToast("Opening full opportunities pipeline...");
+        }
+        
+        function hideModal() {
+            const modal = document.getElementById('modal');
+            modal.classList.remove('flex');
+            modal.classList.add('hidden');
+        }
+        
+        function updateAchievementCircle() {
+            // Already statically drawn in HTML. Could make it dynamic.
+            const circle = document.getElementById('achievement-circle');
+            if (circle) {
+                circle.setAttribute('stroke-dashoffset', '18');
+            }
+        }
+        
+        function initFunnelInteractions() {
+            // Add subtle hover scale animation
+            document.querySelectorAll('.funnel-stage').forEach(stage => {
+                stage.addEventListener('mouseenter', () => {
+                    stage.style.transform = 'scale(1.015)';
+                });
+                
+                stage.addEventListener('mouseleave', () => {
+                    stage.style.transform = 'scale(1)';
+                });
+            });
+        }
+        
+        function initDateRangeDefaults() {
+            // Activate the first pill by default
+            const firstPill = document.querySelector('.nav-pill');
+            if (firstPill) {
+                firstPill.classList.add('active', 'bg-slate-800');
+            }
+        }
+        
+        // Keyboard shortcuts
+        function setupKeyboardShortcuts() {
+            document.addEventListener('keydown', function(e) {
+                if (e.metaKey && e.key === "/") {
+                    e.preventDefault();
+                    const firstAction = document.querySelector('.premium-card:last-child');
+                    if (firstAction) firstAction.click();
+                }
+                
+                if (e.key === "?" && document.activeElement.tagName === "BODY") {
+                    e.preventDefault();
+                    showToast("Keyboard help: Press ⌘/ to jump to action items");
+                }
+            });
+            
+            // Tooltip hint
+            console.log('%c[Sales Cockpit] Keyboard: Press ⌘ + / to open action items', 'color:#64748b');
+        }
+        
+        // Initialize everything
+        function initializeDashboard() {
+            initTailwind();
+            
+            // Charts
+            initRevenueChart();
+            
+            // UI polish
+            updateAchievementCircle();
+            initFunnelInteractions();
+            initDateRangeDefaults();
+            setupKeyboardShortcuts();
+            
+            // Initial values (ensure consistency)
+            setTimeout(() => {
+                const globalRev = document.getElementById('global-revenue');
+                if (globalRev && globalRev.textContent === '1.84') {
+                    // already set in HTML
+                }
+            }, 500);
+            
+            // Demo: Show a helpful toast on load for the user
+            setTimeout(() => {
+                // Uncomment for demo:
+                // showToast("Welcome back! 3 high-priority actions require attention.");
+            }, 4500);
+            
+            // Make certain cards more obvious for drilldown
+            console.log('%c[Intelligent Sales Cockpit] Premium dashboard mockup initialized successfully.', 'color: #64748b');
+            
+            // Accessibility note
+            document.documentElement.setAttribute('data-theme', 'dark');
+        }
+        
+        // Boot the dashboard
+        window.onload = initializeDashboard;
+        
+        // Expose a few functions for easy console testing
+        window.refreshSalesCockpit = () => document.querySelector('button[onclick*="refreshDashboard"]').click();
+    </script>
+</body>
+</html>

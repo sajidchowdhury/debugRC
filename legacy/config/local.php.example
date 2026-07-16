@@ -1,0 +1,46 @@
+<?php
+/**
+ * Local overrides — copy to config/local.php (gitignored).
+ * Used for database credentials, FCM keys, and other machine-specific settings.
+ */
+
+// Database (optional — defaults in config.php are for local XAMPP)
+// define('DB_HOST', 'localhost');
+// define('DB_USER', 'root');
+// define('DB_PASS', '');
+// define('DB_NAME', 'osudlagb_remotecenter');
+
+// Firebase Cloud Messaging (optional)
+// define('FCM_SERVER_KEY', '');
+// define('FCM_VAPID_KEY', '');
+
+// define('APP_ENV', 'development');
+
+// Telegram Bot alerts (Phase 4C — get token from @BotFather)
+// define('TELEGRAM_BOT_TOKEN', '');
+// define('TELEGRAM_ALERTS_ENABLED', true);
+
+// GL reconciliation monitoring (optional)
+// define('GL_RECONCILIATION_TOLERANCE', 0.02);
+// Allow admin to post into closed accounting periods (superadmin always can):
+// define('PERIOD_CLOSE_ADMIN_OVERRIDE', true);
+// define('RECON_ALERT_EMAIL', 'finance@yourcompany.com');
+
+// Sales stale draft cleanup (optional)
+// define('SALES_STALE_DRAFT_DAYS', 14);
+// define('SALES_STALE_DRAFT_AUTO_CANCEL', true); // auto-cancel on sales/today (throttled)
+
+// Auth lockout / reset (optional overrides)
+// define('AUTH_MAX_FAILED_ATTEMPTS', 5);
+// define('AUTH_LOCKOUT_MINUTES', 15);
+// define('AUTH_RESET_TOKEN_HOURS', 1);
+// define('AUTH_REMEMBER_DAYS', 30);
+// Phase 0: AUTH_2FA_ISSUER removed (TOTP 2FA disabled per migration decision).
+
+// Investigation mode (QR activate, email OTP deactivate)
+// define('INVESTIGATION_QR_SECRET', 'change-me-long-random-secret');
+// define('INVESTIGATION_COMPANY_EMAIL', 'compliance@yourcompany.com');
+// define('INVESTIGATION_EFFECTIVE_ROLE', 'admin');
+// define('INVESTIGATION_OTP_MINUTES', 15);
+// define('INVESTIGATION_SHOW_OTP_ON_FAIL', true); // local dev when mail() is unavailable
+// define('MAIL_FROM', 'noreply@yourcompany.com');
