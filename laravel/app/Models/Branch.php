@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use App\Traits\AuditableMasterData;
 
 /**
  * Branch — maps to legacy `branches` table.
@@ -11,7 +12,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  */
 class Branch extends Model
 {
-    use SoftDeletes;
+    use SoftDeletes, AuditableMasterData;
 
     protected $table = 'branches';
 

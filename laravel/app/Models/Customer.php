@@ -7,57 +7,51 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Traits\AuditableMasterData;
 
 /**
- * Employee — maps to legacy `employees` table.
- * The role is stored here (not on User), matching legacy schema.
+ * Customer — maps to legacy `customers` table.
+ * Shop accounts for sales invoices, challan, payments, and customer_ledger AR.
  */
-class Employee extends Model
+class Customer extends Model
 {
     use SoftDeletes, AuditableMasterData;
 
-    protected $table = 'employees';
-
-    protected $primaryKey = 'id';
+    protected $table = 'customers';
 
     public $timestamps = true;
 
-    protected $dates = ['deleted_at', 'joining_date'];
+    protected $dates = ['deleted_at'];
 
     protected $fillable = [
-        'employee_code',
-        'name',
-        'role',
-        'branch_id',
+        'customer_code',
+        'customer_name',
         'phone',
+        'mobile',
         'email',
-        'photo',
         'address',
-        'salary',
-        'joining_date',
+        'branch_id',
+        'sales_person_id',
+        'credit_limit',
+        'opening_balance',
+        'balance_type',
         'is_active',
         'deleted_by',
     ];
 
     protected $casts = [
-        'salary' => 'decimal:2',
+        'credit_limit' => 'decimal:2',
+        'opening_balance' => 'decimal:2',
         'is_active' => 'boolean',
-        'joining_date' => 'date',
     ];
-
-    // ===================== RELATIONSHIPS =====================
 
     public function branch(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(Branch::class, 'branch_id');
     }
 
-    public function user(): \Illuminate\Database\Eloquent\Relations\HasOne
+    public function salesPerson(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
-        return $this->hasOne(User::class, 'employee_id');
+        return $this->belongsTo(Employee::class, 'sales_person_id');
     }
 
-    /**
-     * Scope: active, non-deleted employees.
-     */
     public function scopeActive(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
     {
         return $query->where('is_active', true)->whereNull('deleted_at');

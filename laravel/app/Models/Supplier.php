@@ -7,57 +7,44 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Traits\AuditableMasterData;
 
 /**
- * Employee — maps to legacy `employees` table.
- * The role is stored here (not on User), matching legacy schema.
+ * Supplier — maps to legacy `suppliers` table.
+ * Vendors for purchase orders, GRN, payments, and supplier_ledger AP.
  */
-class Employee extends Model
+class Supplier extends Model
 {
     use SoftDeletes, AuditableMasterData;
 
-    protected $table = 'employees';
-
-    protected $primaryKey = 'id';
+    protected $table = 'suppliers';
 
     public $timestamps = true;
 
-    protected $dates = ['deleted_at', 'joining_date'];
+    protected $dates = ['deleted_at'];
 
     protected $fillable = [
-        'employee_code',
-        'name',
-        'role',
-        'branch_id',
+        'supplier_code',
+        'supplier_name',
         'phone',
+        'mobile',
         'email',
-        'photo',
         'address',
-        'salary',
-        'joining_date',
+        'branch_id',
+        'contact_person',
+        'opening_balance',
+        'balance_type',
         'is_active',
         'deleted_by',
     ];
 
     protected $casts = [
-        'salary' => 'decimal:2',
+        'opening_balance' => 'decimal:2',
         'is_active' => 'boolean',
-        'joining_date' => 'date',
     ];
-
-    // ===================== RELATIONSHIPS =====================
 
     public function branch(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(Branch::class, 'branch_id');
     }
 
-    public function user(): \Illuminate\Database\Eloquent\Relations\HasOne
-    {
-        return $this->hasOne(User::class, 'employee_id');
-    }
-
-    /**
-     * Scope: active, non-deleted employees.
-     */
     public function scopeActive(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
     {
         return $query->where('is_active', true)->whereNull('deleted_at');
