@@ -17,6 +17,10 @@ class AppServiceProvider extends ServiceProvider
 
         // Phase 9.2: Register LedgerNatureService as singleton (used by JournalPostingService).
         $this->app->singleton(\App\Services\Accounting\LedgerNatureService::class);
+
+        // Phase 9.4: Register SubLedgerService + JournalReversalService as singletons.
+        $this->app->singleton(\App\Services\Accounting\SubLedgerService::class);
+        $this->app->singleton(\App\Services\Accounting\JournalReversalService::class);
     }
 
     /**
