@@ -174,6 +174,11 @@
                             <i class="fas fa-triangle-exclamation"></i> Damages
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.purchase-orders.index') }}" class="nav-link {{ request()->routeIs('admin.purchase-orders.*') ? 'active' : '' }}">
+                            <i class="fas fa-shopping-cart"></i> Purchase Orders
+                        </a>
+                    </li>
                 </ul>
             </nav>
 
