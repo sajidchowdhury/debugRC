@@ -32,12 +32,13 @@ use App\Http\Controllers\Admin\SalesReturnController;
 use App\Http\Controllers\Admin\AccountingPeriodController;
 use App\Http\Controllers\Admin\NotificationController;
 use App\Http\Controllers\Admin\SystemPolicyController;
+use App\Http\Controllers\Admin\ArchiveController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phases 3-11.
+ * RC_ERP Laravel Routes — Phases 3-12.
  *
- * Phase 11: system policy & compliance framework (investigation mode as centralized policy engine).
+ * Phase 12: archive layer (anti-corruption layer for legacy MySQL, unified search).
  */
 
 // ===================== AUTH (public) =====================
@@ -389,6 +390,15 @@ Route::middleware('auth')->group(function () {
         Route::get('/', [SystemPolicyController::class, 'index'])->name('index');
         Route::post('/activate', [SystemPolicyController::class, 'activate'])->name('activate');
         Route::post('/deactivate', [SystemPolicyController::class, 'deactivate'])->name('deactivate');
+    });
+
+    // ============================================================
+    // Phase 12: Archive Layer (historical search across PG + legacy MySQL)
+    // ============================================================
+    Route::prefix('admin/archive')->name('admin.archive.')->group(function () {
+        Route::get('/', [ArchiveController::class, 'index'])->name('index');
+        Route::get('customer-ledger/{customerId}', [ArchiveController::class, 'customerLedger'])->name('customer-ledger');
+        Route::get('supplier-ledger/{supplierId}', [ArchiveController::class, 'supplierLedger'])->name('supplier-ledger');
     });
 });
 

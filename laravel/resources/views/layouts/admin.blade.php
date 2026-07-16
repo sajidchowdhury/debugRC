@@ -231,6 +231,11 @@
                         </a>
                     </li>
                     @endcan
+                    <li class="nav-item">
+                        <a href="{{ route('admin.archive.index') }}" class="nav-link {{ request()->routeIs('admin.archive.*') ? 'active' : '' }}">
+                            <i class="fas fa-archive"></i> Archive
+                        </a>
+                    </li>
                 </ul>
             </nav>
 

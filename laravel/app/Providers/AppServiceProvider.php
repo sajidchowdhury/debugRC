@@ -24,6 +24,10 @@ class AppServiceProvider extends ServiceProvider
 
         // Phase 11: Register SystemPolicyService as singleton.
         $this->app->singleton(\App\Services\Compliance\SystemPolicyService::class);
+
+        // Phase 12: Register Archive Layer (Anti-Corruption Layer).
+        $this->app->singleton(\App\Archive\Repositories\ArchiveRepositoryInterface::class, \App\Archive\Repositories\LegacyMySQLRepository::class);
+        $this->app->singleton(\App\Archive\Services\ArchiveService::class);
     }
 
     /**
