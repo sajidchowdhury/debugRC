@@ -14,6 +14,8 @@ use App\Http\Controllers\Admin\BankController;
 use App\Http\Controllers\Admin\LedgerController;
 use App\Http\Controllers\Admin\BranchController;
 use App\Http\Controllers\Admin\WarehouseController;
+use App\Http\Controllers\Admin\ReportController;
+use App\Http\Controllers\Admin\ReconciliationController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -128,6 +130,51 @@ Route::middleware('auth')->group(function () {
         Route::post('{warehouse}/restore', [WarehouseController::class, 'restore'])->name('restore');
     });
     Route::resource('admin/warehouses', WarehouseController::class)->names('admin.warehouses');
+
+    // ============================================================
+    // Phase 5: Reports + Reconciliation
+    // ============================================================
+
+    // Reports hub
+    Route::get('admin/reports', [ReportController::class, 'index'])->name('admin.reports.index');
+
+    // Reconciliation hub
+    Route::get('admin/reconciliation', [ReconciliationController::class, 'index'])->name('admin.reconciliation.index');
+    Route::get('admin/reconciliation/refresh', [ReconciliationController::class, 'refresh'])->name('admin.reconciliation.refresh');
+
+    // Financial reports (18 reports)
+    Route::prefix('admin/reports')->name('admin.reports.')->group(function () {
+        // Finance & Control
+        Route::get('trial-balance', [ReportController::class, 'trialBalance'])->name('trialBalance');
+        Route::get('profit-and-loss', [ReportController::class, 'profitAndLoss'])->name('profitAndLoss');
+        Route::get('balance-sheet', [ReportController::class, 'balanceSheet'])->name('balanceSheet');
+        Route::get('cash-flow', [ReportController::class, 'cashFlow'])->name('cashFlow');
+        Route::get('general-ledger', [ReportController::class, 'generalLedger'])->name('generalLedger');
+        Route::get('journal-entries', [ReportController::class, 'journalEntries'])->name('journalEntries');
+        Route::get('daily-cash-book', [ReportController::class, 'dailyCashBook'])->name('dailyCashBook');
+        Route::get('branch-intercompany', [ReportController::class, 'branchIntercompany'])->name('branchIntercompany');
+        Route::get('branch-wise-ledger', [ReportController::class, 'branchWiseLedger'])->name('branchWiseLedger');
+
+        // Sales & Revenue
+        Route::get('revenue-overview', [ReportController::class, 'revenueOverview'])->name('revenueOverview');
+        Route::get('gross-margin', [ReportController::class, 'grossMargin'])->name('grossMargin');
+        Route::get('customer-performance', [ReportController::class, 'customerPerformance'])->name('customerPerformance');
+
+        // Purchase & Payables
+        Route::get('supplier-wise-purchase', [ReportController::class, 'supplierWisePurchase'])->name('supplierWisePurchase');
+        Route::get('receivable-aging', [ReportController::class, 'receivableAging'])->name('receivableAging');
+        Route::get('payable-aging', [ReportController::class, 'payableAging'])->name('payableAging');
+
+        // Inventory & Stock
+        Route::get('product-stock-analysis', [ReportController::class, 'productStockAnalysis'])->name('productStockAnalysis');
+        Route::get('product-movement', [ReportController::class, 'productMovement'])->name('productMovement');
+
+        // Operations
+        Route::get('sales-audit-checklist', [ReportController::class, 'salesAuditChecklist'])->name('salesAuditChecklist');
+        Route::get('purchase-audit', [ReportController::class, 'purchaseAudit'])->name('purchaseAudit');
+        Route::get('stocktake-variance', [ReportController::class, 'stocktakeVariance'])->name('stocktakeVariance');
+        Route::get('branch-demand-weekly', [ReportController::class, 'branchDemandWeekly'])->name('branchDemandWeekly');
+    });
 });
 
 // ===================== HEALTH CHECK =====================

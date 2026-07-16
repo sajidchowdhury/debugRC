@@ -11,6 +11,9 @@ return [
     ],
     'legacy_url' => env('LEGACY_APP_URL', '/'),
 
+    // Phase 5: GL reconciliation tolerance (amount below which a section is "green").
+    'gl_reconciliation_tolerance' => (float) env('GL_RECONCILIATION_TOLERANCE', 0.02),
+
     'providers' => [
         \Illuminate\Encryption\EncryptionServiceProvider::class,
     ],

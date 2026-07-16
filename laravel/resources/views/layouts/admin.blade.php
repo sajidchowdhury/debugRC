@@ -139,6 +139,16 @@
                             <i class="fas fa-warehouse"></i> Warehouses
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.reports.index') }}" class="nav-link {{ request()->routeIs('admin.reports.*') ? 'active' : '' }}">
+                            <i class="fas fa-chart-bar"></i> Reports
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.reconciliation.index') }}" class="nav-link {{ request()->routeIs('admin.reconciliation.*') ? 'active' : '' }}">
+                            <i class="fas fa-scale-balanced"></i> Reconciliation
+                        </a>
+                    </li>
                 </ul>
             </nav>
 
