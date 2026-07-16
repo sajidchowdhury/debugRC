@@ -190,8 +190,13 @@
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a href="{{ route('admin.sales.cart') }}" class="nav-link {{ request()->routeIs('admin.sales.*') ? 'active' : '' }}">
+                        <a href="{{ route('admin.sales.cart') }}" class="nav-link {{ request()->routeIs('admin.sales.cart') ? 'active' : '' }}">
                             <i class="fas fa-cart-shopping"></i> Sales Cart
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.sales-invoices.index') }}" class="nav-link {{ request()->routeIs('admin.sales-invoices.*') ? 'active' : '' }}">
+                            <i class="fas fa-file-invoice-dollar"></i> Invoices
                         </a>
                     </li>
                 </ul>

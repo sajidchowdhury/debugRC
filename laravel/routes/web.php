@@ -25,19 +25,13 @@ use App\Http\Controllers\Admin\PurchaseOrderController;
 use App\Http\Controllers\Admin\PurchaseReceiveController;
 use App\Http\Controllers\Admin\PurchaseReturnController;
 use App\Http\Controllers\Admin\SalesCartController;
+use App\Http\Controllers\Admin\SalesInvoiceController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1-6.6 + Phase 7.1-7.3 + Phase 8.1.
+ * RC_ERP Laravel Routes — Phases 3-8.2.
  *
- * Phase 3: auth + dashboard.
- * Phase 4: master-data CRUD modules.
- * Phase 5: reporting layer (18 reports + reconciliation).
- * Phase 6.1-6.6: inventory module.
- * Phase 7.1-7.3: purchase module (PO, GRN, returns).
- * Phase 8.1: sales cart service (per-user-per-customer draft cart + availability).
- *
- * Nginx routes /admin/* to Laravel; /* to legacy PHP.
+ * Phase 8.2: sales invoice finalize (cart → draft invoice + GL Dr AR / Cr Revenue + credit limit).
  */
 
 // ===================== AUTH (public) =====================
@@ -302,7 +296,22 @@ Route::middleware('auth')->group(function () {
         Route::post('cart/validate', [SalesCartController::class, 'validateCart'])->name('cart.validate');
         Route::post('cart/soft-hold', [SalesCartController::class, 'softHold'])->name('cart.softHold');
         Route::get('cart/availability', [SalesCartController::class, 'checkAvailability'])->name('cart.availability');
+
+        // Phase 8.2: Invoice finalize
+        Route::post('finalize', [SalesInvoiceController::class, 'finalize'])->name('finalize');
+        Route::get('cart-data', [SalesInvoiceController::class, 'getCartData'])->name('cart-data');
+        Route::get('credit-check', [SalesInvoiceController::class, 'checkCreditLimit'])->name('credit-check');
     });
+
+    // ============================================================
+    // Phase 8.2: Sales Invoices (list + show + cancel)
+    // ============================================================
+    Route::prefix('admin/sales-invoices')->name('admin.sales-invoices.')->group(function () {
+        Route::post('{id}/cancel', [SalesInvoiceController::class, 'cancel'])->name('cancel');
+    });
+    Route::resource('admin/sales-invoices', SalesInvoiceController::class)
+        ->only(['index', 'show'])
+        ->names('admin.sales-invoices');
 });
 
 // ===================== HEALTH CHECK =====================
