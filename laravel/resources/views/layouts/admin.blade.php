@@ -204,6 +204,11 @@
                             <i class="fas fa-truck"></i> Challans
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.customer-payments.index') }}" class="nav-link {{ request()->routeIs('admin.customer-payments.*') ? 'active' : '' }}">
+                            <i class="fas fa-hand-holding-dollar"></i> Payments
+                        </a>
+                    </li>
                 </ul>
             </nav>
 

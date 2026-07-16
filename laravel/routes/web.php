@@ -27,12 +27,13 @@ use App\Http\Controllers\Admin\PurchaseReturnController;
 use App\Http\Controllers\Admin\SalesCartController;
 use App\Http\Controllers\Admin\SalesInvoiceController;
 use App\Http\Controllers\Admin\SalesChallanController;
+use App\Http\Controllers\Admin\CustomerPaymentController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phases 3-8.3.
+ * RC_ERP Laravel Routes — Phases 3-8.4.
  *
- * Phase 8.3: sales challan (godown prep + stock OUT + Dr COGS / Cr Inventory).
+ * Phase 8.4: customer payments (Dr Bank/Cash / Cr AR + intercompany settlement).
  */
 
 // ===================== AUTH (public) =====================
@@ -327,6 +328,17 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/sales-challans', SalesChallanController::class)
         ->only(['index', 'show'])
         ->names('admin.sales-challans');
+
+    // ============================================================
+    // Phase 8.4: Customer Payments (Dr Bank/Cash / Cr AR + intercompany)
+    // ============================================================
+    Route::prefix('admin/customer-payments')->name('admin.customer-payments.')->group(function () {
+        Route::get('outstanding-invoices', [CustomerPaymentController::class, 'getOutstandingInvoices'])->name('outstanding-invoices');
+        Route::post('{id}/cancel', [CustomerPaymentController::class, 'cancel'])->name('cancel');
+    });
+    Route::resource('admin/customer-payments', CustomerPaymentController::class)
+        ->only(['index', 'create', 'store', 'show'])
+        ->names('admin.customer-payments');
 });
 
 // ===================== HEALTH CHECK =====================
