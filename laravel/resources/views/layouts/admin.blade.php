@@ -219,6 +219,11 @@
                             <i class="fas fa-lock"></i> Period Close
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.notifications.rules') }}" class="nav-link {{ request()->routeIs('admin.notifications.*') ? 'active' : '' }}">
+                            <i class="fas fa-bell"></i> Notifications
+                        </a>
+                    </li>
                 </ul>
             </nav>
 

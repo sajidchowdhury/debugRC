@@ -30,12 +30,13 @@ use App\Http\Controllers\Admin\SalesChallanController;
 use App\Http\Controllers\Admin\CustomerPaymentController;
 use App\Http\Controllers\Admin\SalesReturnController;
 use App\Http\Controllers\Admin\AccountingPeriodController;
+use App\Http\Controllers\Admin\NotificationController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phases 3-9.5.
+ * RC_ERP Laravel Routes — Phases 3-10.
  *
- * Phase 9.5: accounting period close + year-end close.
+ * Phase 10: notifications (Laravel database notifications + rules management + inbox).
  */
 
 // ===================== AUTH (public) =====================
@@ -363,6 +364,21 @@ Route::middleware('auth')->group(function () {
         Route::post('period-close', [AccountingPeriodController::class, 'close'])->name('period-close.store');
         Route::post('period-reopen', [AccountingPeriodController::class, 'reopen'])->name('period-reopen');
         Route::post('year-end-close', [AccountingPeriodController::class, 'yearEndClose'])->name('year-end-close');
+    });
+
+    // ============================================================
+    // Phase 10: Notifications (rules + inbox + AJAX)
+    // ============================================================
+    Route::prefix('admin/notifications')->name('admin.notifications.')->group(function () {
+        Route::get('rules', [NotificationController::class, 'rules'])->name('rules');
+        Route::post('rules', [NotificationController::class, 'storeRule'])->name('storeRule');
+        Route::post('rules/{id}/toggle', [NotificationController::class, 'toggleRule'])->name('toggleRule');
+        Route::delete('rules/{id}', [NotificationController::class, 'destroyRule'])->name('destroyRule');
+        Route::get('inbox', [NotificationController::class, 'inbox'])->name('inbox');
+        Route::post('inbox/{id}/read', [NotificationController::class, 'markRead'])->name('markRead');
+        Route::post('inbox/read-all', [NotificationController::class, 'markAllRead'])->name('markAllRead');
+        Route::get('unread-count', [NotificationController::class, 'unreadCount'])->name('unreadCount');
+        Route::get('recent', [NotificationController::class, 'recent'])->name('recent');
     });
 });
 
