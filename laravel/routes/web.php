@@ -22,16 +22,18 @@ use App\Http\Controllers\Admin\StockTakeController;
 use App\Http\Controllers\Admin\WarehouseTransferController;
 use App\Http\Controllers\Admin\DamageController;
 use App\Http\Controllers\Admin\PurchaseOrderController;
+use App\Http\Controllers\Admin\PurchaseReceiveController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1-6.6 + Phase 7.1.
+ * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1-6.6 + Phase 7.1-7.2.
  *
  * Phase 3: auth + dashboard.
  * Phase 4: master-data CRUD modules.
  * Phase 5: reporting layer (18 reports + reconciliation).
- * Phase 6.1-6.6: inventory module (stock transactions, adjustments, stock take, transfers, damages).
+ * Phase 6.1-6.6: inventory module.
  * Phase 7.1: purchase orders (draft document, no stock/GL).
+ * Phase 7.2: purchase receive / GRN (stock IN + Dr Inventory / Cr AP + supplier_ledger + PO update).
  *
  * Nginx routes /admin/* to Laravel; /* to legacy PHP.
  */
@@ -260,6 +262,18 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/purchase-orders', PurchaseOrderController::class)
         ->only(['index', 'create', 'store', 'show', 'edit', 'update'])
         ->names('admin.purchase-orders');
+
+    // ============================================================
+    // Phase 7.2: Purchase Receive / GRN (stock IN + GL + supplier_ledger + PO update)
+    // ============================================================
+    Route::prefix('admin/purchase-receives')->name('admin.purchase-receives.')->group(function () {
+        Route::get('po-details', [PurchaseReceiveController::class, 'getPoDetails'])->name('po-details');
+        Route::post('{id}/confirm', [PurchaseReceiveController::class, 'confirm'])->name('confirm');
+        Route::post('{id}/cancel', [PurchaseReceiveController::class, 'cancel'])->name('cancel');
+    });
+    Route::resource('admin/purchase-receives', PurchaseReceiveController::class)
+        ->only(['index', 'create', 'store', 'show'])
+        ->names('admin.purchase-receives');
 });
 
 // ===================== HEALTH CHECK =====================

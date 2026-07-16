@@ -179,6 +179,11 @@
                             <i class="fas fa-shopping-cart"></i> Purchase Orders
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.purchase-receives.index') }}" class="nav-link {{ request()->routeIs('admin.purchase-receives.*') ? 'active' : '' }}">
+                            <i class="fas fa-truck-ramp-box"></i> GRN
+                        </a>
+                    </li>
                 </ul>
             </nav>
 
