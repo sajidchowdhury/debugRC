@@ -224,6 +224,13 @@
                             <i class="fas fa-bell"></i> Notifications
                         </a>
                     </li>
+                    @can('manage-system-policy')
+                    <li class="nav-item">
+                        <a href="{{ route('admin.compliance.index') }}" class="nav-link {{ request()->routeIs('admin.compliance.*') ? 'active' : '' }}">
+                            <i class="fas fa-shield-halved"></i> Compliance
+                        </a>
+                    </li>
+                    @endcan
                 </ul>
             </nav>
 

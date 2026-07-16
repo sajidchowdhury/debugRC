@@ -23,6 +23,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // Phase 3: Credential-version check — invalidates session if password/role changed.
         $middleware->append(\App\Http\Middleware\CheckCredentialVersion::class);
 
+        // Phase 11: System Policy — loads current policy (cached) and shares with app.
+        $middleware->append(\App\Http\Middleware\CheckSystemPolicy::class);
+
         // Phase 3: Trust proxies (VPS behind Nginx reverse proxy).
         $middleware->trustProxies(at: '*');
 

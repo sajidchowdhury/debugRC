@@ -21,6 +21,9 @@ class AppServiceProvider extends ServiceProvider
         // Phase 9.4: Register SubLedgerService + JournalReversalService as singletons.
         $this->app->singleton(\App\Services\Accounting\SubLedgerService::class);
         $this->app->singleton(\App\Services\Accounting\JournalReversalService::class);
+
+        // Phase 11: Register SystemPolicyService as singleton.
+        $this->app->singleton(\App\Services\Compliance\SystemPolicyService::class);
     }
 
     /**
@@ -32,5 +35,10 @@ class AppServiceProvider extends ServiceProvider
         if (!config('app.legacy_url')) {
             config(['app.legacy_url' => '/']);
         }
+
+        // Phase 11: Register the system policy gate.
+        \Illuminate\Support\Facades\Gate::define('manage-system-policy', function (\App\Models\User $user) {
+            return $user->isSuperadmin();
+        });
     }
 }

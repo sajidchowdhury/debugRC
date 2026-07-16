@@ -31,12 +31,13 @@ use App\Http\Controllers\Admin\CustomerPaymentController;
 use App\Http\Controllers\Admin\SalesReturnController;
 use App\Http\Controllers\Admin\AccountingPeriodController;
 use App\Http\Controllers\Admin\NotificationController;
+use App\Http\Controllers\Admin\SystemPolicyController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phases 3-10.
+ * RC_ERP Laravel Routes — Phases 3-11.
  *
- * Phase 10: notifications (Laravel database notifications + rules management + inbox).
+ * Phase 11: system policy & compliance framework (investigation mode as centralized policy engine).
  */
 
 // ===================== AUTH (public) =====================
@@ -379,6 +380,15 @@ Route::middleware('auth')->group(function () {
         Route::post('inbox/read-all', [NotificationController::class, 'markAllRead'])->name('markAllRead');
         Route::get('unread-count', [NotificationController::class, 'unreadCount'])->name('unreadCount');
         Route::get('recent', [NotificationController::class, 'recent'])->name('recent');
+    });
+
+    // ============================================================
+    // Phase 11: System Policy & Compliance Framework
+    // ============================================================
+    Route::prefix('admin/compliance')->name('admin.compliance.')->group(function () {
+        Route::get('/', [SystemPolicyController::class, 'index'])->name('index');
+        Route::post('/activate', [SystemPolicyController::class, 'activate'])->name('activate');
+        Route::post('/deactivate', [SystemPolicyController::class, 'deactivate'])->name('deactivate');
     });
 });
 
