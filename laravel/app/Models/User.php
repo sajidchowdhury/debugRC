@@ -1,0 +1,147 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
+
+/**
+ * RC_ERP User model — maps to the legacy `users` table.
+ *
+ * Phase 0: totp_secret / totp_enabled columns were DROPPED (2FA removed).
+ * Phase 3: Eloquent model for Laravel auth + RBAC.
+ *
+ * Relationships:
+ *  - belongsTo Employee (employee_id)
+ *  - Employee belongsTo Branch (branch_id)
+ *
+ * The role is stored on the Employee (not User), matching legacy schema.
+ */
+class User extends Authenticatable
+{
+    use Notifiable;
+
+    protected $table = 'users';
+
+    protected $primaryKey = 'id';
+
+    public $timestamps = true;
+
+    // The legacy table uses created_at/updated_at timestamps (no Laravel naming convention issues).
+    // Soft deletes: deleted_at column exists.
+    protected $dates = ['deleted_at'];
+
+    protected $fillable = [
+        'employee_id',
+        'username',
+        'password_hash',
+        'is_active',
+        'last_login',
+        'last_login_ip',
+        'failed_login_count',
+        'locked_until',
+        'credential_version',
+        'telegram_user_id',
+        'created_by',
+    ];
+
+    protected $hidden = [
+        'password_hash',
+        'remember_token',
+    ];
+
+    protected $casts = [
+        'is_active' => 'boolean',
+        'last_login' => 'datetime',
+        'locked_until' => 'datetime',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+        'deleted_at' => 'datetime',
+        'failed_login_count' => 'integer',
+        'credential_version' => 'integer',
+        'telegram_user_id' => 'integer',
+    ];
+
+    /**
+     * Legacy app stores the bcrypt hash in `password_hash`, not `password`.
+     * Override the Laravel auth password field name.
+     */
+    public function getAuthPassword(): string
+    {
+        return $this->password_hash;
+    }
+
+    /**
+     * Override the auth password column name for Laravel's auth guard.
+     */
+    public function getAuthPasswordName(): string
+    {
+        return 'password_hash';
+    }
+
+    /**
+     * The remember-me token column (legacy uses a separate remember_tokens table,
+     * but for Laravel's native remember-me we use the users.remember_token column).
+     */
+    public function getRememberTokenName(): string
+    {
+        return 'remember_token';
+    }
+
+    // ===================== RELATIONSHIPS =====================
+
+    public function employee(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(Employee::class, 'employee_id');
+    }
+
+    // ===================== ROLE HELPERS =====================
+
+    /**
+     * Get the user's role (stored on the Employee, not the User).
+     * Falls back to 'user' if employee relationship is not loaded.
+     */
+    public function getRole(): string
+    {
+        return $this->employee?->role ?? 'user';
+    }
+
+    /**
+     * Get the branch_id for this user (from the Employee).
+     */
+    public function getBranchId(): ?int
+    {
+        return $this->employee?->branch_id;
+    }
+
+    public function isSuperadmin(): bool
+    {
+        return $this->getRole() === 'superadmin';
+    }
+
+    public function isAdmin(): bool
+    {
+        return in_array($this->getRole(), ['admin', 'superadmin'], true);
+    }
+
+    public function hasRole(string ...$roles): bool
+    {
+        return in_array($this->getRole(), $roles, true);
+    }
+
+    /**
+     * Check if account is locked.
+     */
+    public function isLocked(): bool
+    {
+        return $this->locked_until !== null && $this->locked_until->isFuture();
+    }
+
+    /**
+     * Scope: active, non-deleted users.
+     */
+    public function scopeActive(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
+    {
+        return $query->where('is_active', true)->whereNull('deleted_at');
+    }
+}

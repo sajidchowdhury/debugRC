@@ -1,0 +1,139 @@
+# Nginx configuration — RC_ERP VPS (Phase 3)
+#
+# Routes:
+#   /admin/*  → Laravel (public/index.php)
+#   /api/*    → Laravel (public/index.php)  [Phase 13: AI sidecar]
+#   /*        → Legacy PHP (legacy/public/index.php)
+#   /assets/*, /uploads/* → shared static files (served by both apps)
+#
+# Replace YOUR_DOMAIN with your actual domain (e.g. erp.yourcompany.com).
+# Replace /var/www/rcerp_v2 with your actual deployment path.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name YOUR_DOMAIN www.YOUR_DOMAIN;
+
+    # Redirect HTTP → HTTPS (uncomment after certbot certonly)
+    # return 301 https://$host$request_uri;
+
+    root /var/www/rcerp_v2;
+
+    index index.php index.html;
+
+    # ============================================================
+    # LARAVEL ROUTES (/admin/* and /api/*)
+    # ============================================================
+    location /admin {
+        alias /var/www/rcerp_v2/laravel/public;
+        try_files $uri $uri/ /admin/index.php?$query_string;
+
+        location ~ \.php$ {
+            fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+            fastcgi_param SCRIPT_FILENAME $request_filename;
+            include fastcgi_params;
+        }
+    }
+
+    location /api {
+        alias /var/www/rcerp_v2/laravel/public;
+        try_files $uri $uri/ /api/index.php?$query_string;
+
+        location ~ \.php$ {
+            fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+            fastcgi_param SCRIPT_FILENAME $request_filename;
+            include fastcgi_params;
+        }
+    }
+
+    # Laravel health check
+    location = /up {
+        rewrite ^ /admin/up last;
+    }
+
+    # ============================================================
+    # SHARED STATIC ASSETS (served from legacy/public/assets)
+    # Both legacy and Laravel reference /assets/css/custom.css etc.
+    # ============================================================
+    location /assets {
+        alias /var/www/rcerp_v2/legacy/public/assets;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    location /uploads {
+        alias /var/www/rcerp_v2/legacy/public/uploads;
+        # Block PHP execution in uploads (security)
+        location ~ \.php$ { deny all; }
+        expires 30d;
+    }
+
+    # ============================================================
+    # LEGACY PHP ROUTES (everything else)
+    # ============================================================
+    location / {
+        alias /var/www/rcerp_v2/legacy/public/;
+
+        # Try static files first, then route to index.php
+        try_files $uri $uri/ /index.php?$query_string;
+
+        location ~ \.php$ {
+            fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+            fastcgi_param SCRIPT_FILENAME $request_filename;
+            include fastcgi_params;
+        }
+    }
+
+    # ============================================================
+    # SECURITY
+    # ============================================================
+    # Block access to sensitive files
+    location ~ /\.(git|env|htaccess|htpasswd) {
+        deny all;
+    }
+
+    location ~ /(composer\.(json|lock)|package\.json|vite\.config\.js) {
+        deny all;
+    }
+
+    # Block access to legacy app internals
+    location ~ ^/(app|core|config|database|docs|logs|mini-services)/ {
+        deny all;
+    }
+
+    # ============================================================
+    # ERROR PAGES
+    # ============================================================
+    error_page 404 /index.php;
+    error_page 500 502 503 504 /50x.html;
+    location = /50x.html {
+        root /usr/share/nginx/html;
+    }
+
+    # ============================================================
+    # LOGGING
+    # ============================================================
+    access_log /var/log/nginx/rcerp_access.log;
+    error_log /var/log/nginx/rcerp_error.log;
+
+    # ============================================================
+    # UPLOAD LIMITS (for product images, etc.)
+    # ============================================================
+    client_max_body_size 5M;
+}
+
+# ============================================================
+# HTTPS SERVER (uncomment after running: certbot --nginx -d YOUR_DOMAIN)
+# ============================================================
+# server {
+#     listen 443 ssl http2;
+#     listen [::]:443 ssl http2;
+#     server_name YOUR_DOMAIN www.YOUR_DOMAIN;
+#
+#     ssl_certificate /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/YOUR_DOMAIN/privkey.pem;
+#     ssl_protocols TLSv1.2 TLSv1.3;
+#     ssl_ciphers HIGH:!aNULL:!MD5;
+#
+#     # ... (copy all location blocks from the HTTP server above)
+# }
