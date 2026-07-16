@@ -159,6 +159,11 @@
                             <i class="fas fa-sliders"></i> Adjustments
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.stock-take.index') }}" class="nav-link {{ request()->routeIs('admin.stock-take.*') ? 'active' : '' }}">
+                            <i class="fas fa-clipboard-check"></i> Stock Take
+                        </a>
+                    </li>
                 </ul>
             </nav>
 

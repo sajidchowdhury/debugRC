@@ -1,0 +1,709 @@
+@extends('layouts.admin')
+
+@section('content')
+@php
+    $statusBadge = function () use ($session): string {
+        return [
+            'draft'     => '<span class="badge bg-warning-subtle text-warning fs-6"><i class="fas fa-pen-to-square me-1"></i>Draft</span>',
+            'counting'  => '<span class="badge bg-info-subtle text-info fs-6"><i class="fas fa-clipboard-list me-1"></i>Counting</span>',
+            'posted'    => '<span class="badge bg-success-subtle text-success fs-6"><i class="fas fa-circle-check me-1"></i>Posted</span>',
+            'cancelled' => '<span class="badge bg-secondary-subtle text-secondary fs-6"><i class="fas fa-ban me-1"></i>Cancelled</span>',
+        ][$session->status] ?? '<span class="badge bg-light text-dark fs-6">' . e($session->status) . '</span>';
+    };
+
+    $whStatusBadge = function (string $s): string {
+        return [
+            'pending'   => '<span class="badge bg-secondary-subtle text-secondary"><i class="fas fa-hourglass-half me-1"></i>Pending</span>',
+            'counting'  => '<span class="badge bg-info-subtle text-info"><i class="fas fa-clipboard-list me-1"></i>Counting</span>',
+            'completed' => '<span class="badge bg-success-subtle text-success"><i class="fas fa-circle-check me-1"></i>Completed</span>',
+        ][$s] ?? '<span class="badge bg-light text-dark">' . e($s) . '</span>';
+    };
+
+    // Group session items by warehouse_id for per-warehouse stats.
+    $itemsByWh = $session->items->groupBy('warehouse_id');
+    $whStats = [];
+    foreach ($session->warehouses as $wh) {
+        $items = $itemsByWh->get($wh->warehouse_id, collect());
+        $varianceItems = $items->filter(fn ($i) => abs((float) $i->physical_qty - (float) $i->system_qty) > 0.0001);
+        $whStats[$wh->warehouse_id] = [
+            'saved_lines'    => $items->count(),
+            'variance_lines' => $varianceItems->count(),
+            'net_impact'     => $items->sum(fn ($i) => (float) $i->difference * (float) $i->rate),
+        ];
+    }
+
+    // GL journal entry totals.
+    $je          = $session->journalEntry;
+    $jeLines     = $je ? $je->lines : collect();
+    $debitTotal  = $jeLines->sum(fn ($l) => (float) $l->debit);
+    $creditTotal = $jeLines->sum(fn ($l) => (float) $l->credit);
+
+    // Can post? (draft or counting, all warehouses completed, has at least one warehouse)
+    $allCompleted = $progress['total_wh'] > 0 && $progress['completed_wh'] === $progress['total_wh'];
+    $canPost      = ($session->isDraft() || $session->isCounting()) && $allCompleted;
+    $canCancel    = ! $session->isCancelled();
+@endphp
+
+<div class="container-fluid py-2">
+    {{-- Hero header --}}
+    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
+            style="background: linear-gradient(135deg,#7c3aed,#4f46e5);">
+        <div>
+            <h1 class="h4 mb-1">
+                <i class="fas fa-clipboard-check me-2"></i>{{ $title }}
+                {!! $statusBadge() !!}
+                @if ($session->is_reversed)
+                    <span class="badge bg-danger ms-1"><i class="fas fa-rotate-left me-1"></i>Reversed</span>
+                @endif
+            </h1>
+            <p class="mb-0 small opacity-75">
+                @if ($session->branch)
+                    <i class="fas fa-building me-1"></i>{{ $session->branch->branch_name }}
+                    · {{ $session->warehouses->count() }} warehouse(s)
+                @endif
+            </p>
+        </div>
+        <div>
+            <a href="{{ route('admin.stock-take.index') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-arrow-left me-1"></i> Back to list
+            </a>
+        </div>
+    </header>
+
+    {{-- Reversal alert --}}
+    @if ($session->is_reversed)
+        <div class="alert alert-danger d-flex align-items-center mb-3" role="alert">
+            <i class="fas fa-rotate-left me-2 fa-lg"></i>
+            <div>
+                <strong>This session has been reversed.</strong>
+                @if ($session->reversed_at)
+                    Reversed on {{ \Carbon\Carbon::parse($session->reversed_at)->format('d M Y H:i') }}
+                @endif
+                @if ($session->reversed_by)
+                    · by user #{{ $session->reversed_by }}
+                @endif
+                @if ($session->reverse_reason)
+                    · Reason: <em>{{ $session->reverse_reason }}</em>
+                @endif
+            </div>
+        </div>
+    @endif
+
+    <div class="row g-3">
+        {{-- ====== Left: main details ====== --}}
+        <div class="col-lg-8">
+            {{-- Session details card --}}
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white">
+                    <h2 class="h6 mb-0"><i class="fas fa-circle-info me-1 text-primary"></i> Session details</h2>
+                </div>
+                <div class="card-body">
+                    <dl class="row mb-0">
+                        <dt class="col-sm-3 text-muted">Session code</dt>
+                        <dd class="col-sm-9">
+                            <span class="badge bg-secondary-subtle text-secondary">{{ $session->session_code }}</span>
+                        </dd>
+
+                        <dt class="col-sm-3 text-muted">Session date</dt>
+                        <dd class="col-sm-9">{{ \Carbon\Carbon::parse($session->session_date)->format('d M Y') }}</dd>
+
+                        <dt class="col-sm-3 text-muted">Branch</dt>
+                        <dd class="col-sm-9">
+                            @if ($session->branch)
+                                <strong>{{ $session->branch->branch_name }}</strong>
+                                <span class="text-muted">({{ $session->branch->branch_code }})</span>
+                            @else
+                                <span class="text-muted">—</span>
+                            @endif
+                        </dd>
+
+                        <dt class="col-sm-3 text-muted">Status</dt>
+                        <dd class="col-sm-9">{!! $statusBadge() !!}</dd>
+
+                        <dt class="col-sm-3 text-muted">Notes</dt>
+                        <dd class="col-sm-9">{!! nl2br(e($session->notes ?: '—')) !!}</dd>
+
+                        <dt class="col-sm-3 text-muted">Created</dt>
+                        <dd class="col-sm-9 small text-muted">
+                            {{ optional($session->created_at)->format('Y-m-d H:i') }}
+                            @if ($session->created_by) · by user #{{ $session->created_by }} @endif
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+
+            {{-- Warehouses card --}}
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <h2 class="h6 mb-0">
+                        <i class="fas fa-warehouse me-1 text-primary"></i> Warehouses
+                        <span class="badge bg-primary-subtle text-primary ms-1">{{ $session->warehouses->count() }}</span>
+                    </h2>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-sm table-striped table-hover align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Warehouse</th>
+                                    <th>Branch</th>
+                                    <th>Status</th>
+                                    <th class="text-end">Saved Lines</th>
+                                    <th class="text-end">Variance Lines</th>
+                                    <th class="text-end">Net Impact (Tk)</th>
+                                    <th class="text-center">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @forelse ($session->warehouses as $wh)
+                                    @php
+                                        $stat = $whStats[$wh->warehouse_id] ?? ['saved_lines' => 0, 'variance_lines' => 0, 'net_impact' => 0];
+                                        $net = (float) $stat['net_impact'];
+                                    @endphp
+                                    <tr>
+                                        <td>
+                                            @if ($wh->warehouse)
+                                                <span class="fw-semibold">{{ $wh->warehouse->warehouse_name }}</span>
+                                                <div class="small text-muted">{{ $wh->warehouse->warehouse_code }}</div>
+                                            @else
+                                                <span class="text-muted">Warehouse #{{ $wh->warehouse_id }}</span>
+                                            @endif
+                                        </td>
+                                        <td class="small">
+                                            @if ($wh->warehouse && $wh->warehouse->branch)
+                                                {{ $wh->warehouse->branch->branch_name }}
+                                            @else
+                                                <span class="text-muted">—</span>
+                                            @endif
+                                        </td>
+                                        <td>{!! $whStatusBadge($wh->status) !!}</td>
+                                        <td class="text-end">{{ number_format((int) $stat['saved_lines']) }}</td>
+                                        <td class="text-end">
+                                            @if ($stat['variance_lines'] > 0)
+                                                <span class="badge bg-warning-subtle text-warning">{{ $stat['variance_lines'] }}</span>
+                                            @else
+                                                <span class="text-muted">—</span>
+                                            @endif
+                                        </td>
+                                        <td class="text-end">
+                                            @if (abs($net) > 0.01)
+                                                <span class="fw-semibold {{ $net < 0 ? 'text-danger' : 'text-success' }}">
+                                                    {{ $net < 0 ? '-' : '+' }}{{ number_format(abs($net), 2) }}
+                                                </span>
+                                            @else
+                                                <span class="text-muted">—</span>
+                                            @endif
+                                        </td>
+                                        <td class="text-center text-nowrap">
+                                            @if ($wh->status === 'pending')
+                                                <a href="{{ route('admin.stock-take.setup', [$session->id, $wh->warehouse_id]) }}"
+                                                   class="btn btn-sm btn-outline-primary" title="Setup counts">
+                                                    <i class="fas fa-wand-magic-sparkles me-1"></i> Setup Counts
+                                                </a>
+                                            @else
+                                                <a href="{{ route('admin.stock-take.count', [$session->id, $wh->warehouse_id]) }}"
+                                                   class="btn btn-sm btn-outline-secondary" title="Enter counts">
+                                                    <i class="fas fa-pen-to-square me-1"></i> Count
+                                                </a>
+                                            @endif
+                                        </td>
+                                    </tr>
+                                @empty
+                                    <tr>
+                                        <td colspan="7" class="text-center text-muted py-4">
+                                            <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
+                                            No warehouses attached to this session.
+                                        </td>
+                                    </tr>
+                                @endforelse
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            {{-- Variance Lines card (only if any) --}}
+            @if (! empty($varianceLines) && $varianceLines->isNotEmpty())
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-triangle-exclamation me-1 text-warning"></i> Variance lines
+                            <span class="badge bg-warning-subtle text-warning ms-1">{{ $varianceLines->count() }}</span>
+                        </h2>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped table-hover align-middle mb-0" id="varianceTable">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Warehouse</th>
+                                        <th>Product</th>
+                                        <th>Unit</th>
+                                        <th class="text-end">System Qty</th>
+                                        <th class="text-end">Physical Qty</th>
+                                        <th class="text-end">Difference</th>
+                                        <th class="text-end">Rate (Tk)</th>
+                                        <th class="text-end">Variance Value (Tk)</th>
+                                        <th>Reason</th>
+                                        <th class="text-center">Applied?</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @php $vTotalQty = 0; $vTotalValue = 0; @endphp
+                                    @foreach ($varianceLines as $v)
+                                        @php
+                                            $diff  = (float) $v->difference;
+                                            $rate  = (float) $v->rate;
+                                            $value = $diff * $rate;
+                                            $vTotalQty   += $diff;
+                                            $vTotalValue += $value;
+                                            $diffClass   = $diff < 0 ? 'text-danger fw-bold' : ($diff > 0 ? 'text-success fw-bold' : 'text-muted');
+                                            $valueClass  = $value < 0 ? 'text-danger fw-bold' : ($value > 0 ? 'text-success fw-bold' : 'text-muted');
+                                        @endphp
+                                        <tr>
+                                            <td>{{ $v->warehouse_name }}</td>
+                                            <td>
+                                                <span class="fw-semibold">{{ $v->product_name }}</span>
+                                                <div class="small text-muted">{{ $v->product_code }}</div>
+                                            </td>
+                                            <td class="small">{{ $v->unit ?: '—' }}</td>
+                                            <td class="text-end">{{ number_format((float) $v->system_qty, 4) }}</td>
+                                            <td class="text-end">{{ number_format((float) $v->physical_qty, 4) }}</td>
+                                            <td class="text-end {{ $diffClass }}">
+                                                {{ $diff > 0 ? '+' : '' }}{{ number_format($diff, 4) }}
+                                            </td>
+                                            <td class="text-end">{{ number_format($rate, 2) }}</td>
+                                            <td class="text-end {{ $valueClass }}">
+                                                {{ $value > 0 ? '+' : '' }}{{ number_format($value, 2) }}
+                                            </td>
+                                            <td class="small">{{ $v->reason ?: '—' }}</td>
+                                            <td class="text-center">
+                                                @if (! empty($v->is_applied))
+                                                    <span class="badge bg-success-subtle text-success">
+                                                        <i class="fas fa-check me-1"></i>Yes
+                                                    </span>
+                                                @else
+                                                    <span class="badge bg-light text-muted">No</span>
+                                                @endif
+                                            </td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                                <tfoot>
+                                    <tr class="table-light fw-bold">
+                                        <td colspan="5" class="text-end">Totals</td>
+                                        <td class="text-end {{ $vTotalQty < 0 ? 'text-danger' : 'text-success' }}">
+                                            {{ $vTotalQty > 0 ? '+' : '' }}{{ number_format($vTotalQty, 4) }}
+                                        </td>
+                                        <td></td>
+                                        <td class="text-end {{ $vTotalValue < 0 ? 'text-danger' : 'text-success' }}">
+                                            {{ $vTotalValue > 0 ? '+' : '' }}{{ number_format($vTotalValue, 2) }}
+                                        </td>
+                                        <td colspan="2"></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            @endif
+
+            {{-- Stock movements card (only if posted) --}}
+            @if ($session->isPosted() && ! empty($stockMovements) && $stockMovements->isNotEmpty())
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-boxes-stacked me-1 text-info"></i> Stock movements
+                            <span class="badge bg-info-subtle text-info ms-1">{{ $stockMovements->count() }}</span>
+                        </h2>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped table-hover align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>TX#</th>
+                                        <th>Product</th>
+                                        <th class="text-end">Qty</th>
+                                        <th class="text-end">Rate (Tk)</th>
+                                        <th class="text-end">Value (Tk)</th>
+                                        <th class="text-center">Reversed?</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach ($stockMovements as $st)
+                                        @php
+                                            $qty = (float) $st->qty;
+                                            $qtyClass = $qty < 0 ? 'text-danger fw-bold' : 'text-success fw-bold';
+                                        @endphp
+                                        <tr>
+                                            <td class="text-nowrap small">
+                                                {{ \Carbon\Carbon::parse($st->transaction_date)->format('d M Y') }}
+                                            </td>
+                                            <td><span class="badge bg-light text-dark">#{{ $st->id }}</span></td>
+                                            <td>
+                                                <span class="fw-semibold">{{ $st->product_name }}</span>
+                                                <div class="small text-muted">{{ $st->product_code }}</div>
+                                            </td>
+                                            <td class="text-end {{ $qtyClass }}">
+                                                {{ $qty > 0 ? '+' : '' }}{{ number_format($qty, 4) }}
+                                            </td>
+                                            <td class="text-end">{{ number_format((float) $st->rate, 2) }}</td>
+                                            <td class="text-end">{{ number_format((float) $st->total_value, 2) }}</td>
+                                            <td class="text-center">
+                                                @if (! empty($st->is_reversed))
+                                                    <span class="badge bg-danger-subtle text-danger">
+                                                        <i class="fas fa-rotate-left me-1"></i>Yes
+                                                    </span>
+                                                @else
+                                                    <span class="badge bg-light text-muted">—</span>
+                                                @endif
+                                            </td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            @endif
+
+            {{-- GL Journal Entry card (only if posted + has JE) --}}
+            @if ($session->isPosted() && $je)
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-book me-1 text-primary"></i> GL Journal Entry
+                        </h2>
+                        @if ($je->is_reversed)
+                            <span class="badge bg-danger-subtle text-danger">
+                                <i class="fas fa-rotate-left me-1"></i>Entry reversed
+                            </span>
+                        @endif
+                    </div>
+                    <div class="card-body">
+                        <dl class="row mb-3 small">
+                            <dt class="col-sm-2 text-muted">JE#</dt>
+                            <dd class="col-sm-4">
+                                <span class="badge bg-secondary-subtle text-secondary">{{ $je->entry_no }}</span>
+                            </dd>
+                            <dt class="col-sm-2 text-muted">Entry date</dt>
+                            <dd class="col-sm-4">{{ \Carbon\Carbon::parse($je->entry_date)->format('d M Y') }}</dd>
+                            <dt class="col-sm-2 text-muted">Description</dt>
+                            <dd class="col-sm-10">{{ $je->description ?: '—' }}</dd>
+                        </dl>
+
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped table-hover align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Ledger</th>
+                                        <th class="text-end">Debit (Tk)</th>
+                                        <th class="text-end">Credit (Tk)</th>
+                                        <th>Memo</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach ($jeLines as $line)
+                                        <tr>
+                                            <td>
+                                                @if ($line->ledger)
+                                                    <span class="fw-semibold">{{ $line->ledger->ledger_name }}</span>
+                                                    <div class="small text-muted">{{ $line->ledger->ledger_code }}</div>
+                                                @else
+                                                    <span class="text-muted">Ledger #{{ $line->ledger_id }}</span>
+                                                @endif
+                                            </td>
+                                            <td class="text-end">
+                                                {{ (float) $line->debit > 0 ? number_format((float) $line->debit, 2) : '—' }}
+                                            </td>
+                                            <td class="text-end">
+                                                {{ (float) $line->credit > 0 ? number_format((float) $line->credit, 2) : '—' }}
+                                            </td>
+                                            <td class="small">{{ $line->memo ?: '—' }}</td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                                <tfoot>
+                                    <tr class="table-light fw-bold">
+                                        <td class="text-end">Total</td>
+                                        <td class="text-end">{{ number_format($debitTotal, 2) }}</td>
+                                        <td class="text-end">{{ number_format($creditTotal, 2) }}</td>
+                                        <td>
+                                            @if (abs($debitTotal - $creditTotal) < 0.01)
+                                                <span class="badge bg-success-subtle text-success">
+                                                    <i class="fas fa-check me-1"></i>Balanced
+                                                </span>
+                                            @else
+                                                <span class="badge bg-danger-subtle text-danger">
+                                                    <i class="fas fa-triangle-exclamation me-1"></i>Out by
+                                                    {{ number_format(abs($debitTotal - $creditTotal), 2) }}
+                                                </span>
+                                            @endif
+                                        </td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            @endif
+        </div>
+
+        {{-- ====== Right: progress + actions aside ====== --}}
+        <div class="col-lg-4">
+            {{-- Progress card --}}
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white">
+                    <h2 class="h6 mb-0"><i class="fas fa-chart-line me-1 text-primary"></i> Progress summary</h2>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex justify-content-between py-1 border-bottom">
+                        <span class="text-muted">Total warehouses</span>
+                        <strong>{{ (int) $progress['total_wh'] }}</strong>
+                    </div>
+                    <div class="d-flex justify-content-between py-1 border-bottom">
+                        <span class="text-muted">Counted (in progress or done)</span>
+                        <strong>{{ (int) $progress['counted_wh'] }}</strong>
+                    </div>
+                    <div class="d-flex justify-content-between py-1 border-bottom">
+                        <span class="text-muted">Completed</span>
+                        <strong class="text-success">{{ (int) $progress['completed_wh'] }}</strong>
+                    </div>
+                    <div class="d-flex justify-content-between py-1 border-bottom">
+                        <span class="text-muted">Variance lines</span>
+                        @if ($progress['variance_lines'] > 0)
+                            <span class="badge bg-warning-subtle text-warning">{{ (int) $progress['variance_lines'] }}</span>
+                        @else
+                            <strong class="text-muted">0</strong>
+                        @endif
+                    </div>
+                    <div class="d-flex justify-content-between py-1 border-bottom">
+                        <span class="text-muted">Total variance (Tk)</span>
+                        <strong>{{ number_format((float) $progress['variance_value'], 2) }}</strong>
+                    </div>
+                    <div class="d-flex justify-content-between py-1 border-bottom">
+                        <span class="text-muted">
+                            <i class="fas fa-arrow-up text-success me-1"></i>Gain value
+                        </span>
+                        <strong class="text-success">{{ number_format((float) $progress['gain_value'], 2) }}</strong>
+                    </div>
+                    <div class="d-flex justify-content-between py-1">
+                        <span class="text-muted">
+                            <i class="fas fa-arrow-down text-danger me-1"></i>Loss value
+                        </span>
+                        <strong class="text-danger">{{ number_format((float) $progress['loss_value'], 2) }}</strong>
+                    </div>
+
+                    {{-- Progress bar --}}
+                    @if ($progress['total_wh'] > 0)
+                        @php
+                            $pct = (int) round(($progress['completed_wh'] / $progress['total_wh']) * 100);
+                        @endphp
+                        <div class="mt-3">
+                            <div class="d-flex justify-content-between small text-muted mb-1">
+                                <span>Completion</span>
+                                <span>{{ $pct }}%</span>
+                            </div>
+                            <div class="progress" style="height:8px;">
+                                <div class="progress-bar bg-success" role="progressbar"
+                                     style="width: {{ $pct }}%;"
+                                     aria-valuenow="{{ $pct }}" aria-valuemin="0" aria-valuemax="100"></div>
+                            </div>
+                        </div>
+                    @endif
+                </div>
+            </div>
+
+            {{-- Actions card --}}
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white">
+                    <h2 class="h6 mb-0"><i class="fas fa-gear me-1 text-secondary"></i> Status &amp; actions</h2>
+                </div>
+                <div class="card-body">
+                    <div class="text-center mb-3">
+                        <div class="text-muted small mb-1">Current status</div>
+                        <div class="mb-2">{!! $statusBadge() !!}</div>
+                    </div>
+
+                    {{-- POST (only if draft/counting + all warehouses completed) --}}
+                    @if ($canPost)
+                        <form method="POST" action="{{ route('admin.stock-take.post', $session->id) }}" id="postForm">
+                            @csrf
+                            <input type="hidden" name="post_reason" id="postReasonField" value="">
+                            <button type="button" class="btn btn-success w-100 mb-2" id="postBtn">
+                                <i class="fas fa-circle-check me-1"></i> Post Session
+                            </button>
+                        </form>
+                        <div class="alert alert-info small mb-3">
+                            <i class="fas fa-circle-info me-1"></i>
+                            Posting will <strong>apply variances</strong> to stock and <strong>post the GL journal entry</strong>.
+                            Cannot be undone — cancellations will reverse it.
+                        </div>
+                    @elseif ($session->isDraft() || $session->isCounting())
+                        <div class="alert alert-warning small mb-3">
+                            <i class="fas fa-triangle-exclamation me-1"></i>
+                            All warehouses must be <strong>completed</strong> before posting.
+                            Currently {{ (int) $progress['completed_wh'] }} / {{ (int) $progress['total_wh'] }} completed.
+                        </div>
+                    @endif
+
+                    {{-- CANCEL (any non-cancelled status) --}}
+                    @if ($canCancel)
+                        <form method="POST" action="{{ route('admin.stock-take.cancel', $session->id) }}" id="cancelForm">
+                            @csrf
+                            <input type="hidden" name="cancel_reason" id="cancelReasonField" value="">
+                            <button type="button" class="btn btn-outline-danger w-100" id="cancelBtn">
+                                <i class="fas fa-ban me-1"></i>
+                                @if ($session->isPosted())
+                                    Cancel &amp; reverse
+                                @else
+                                    Cancel session
+                                @endif
+                            </button>
+                        </form>
+                        @if ($session->isPosted())
+                            <div class="alert alert-warning small mt-2 mb-0">
+                                <i class="fas fa-triangle-exclamation me-1"></i>
+                                Cancelling a posted session <strong>reverses the stock movements and the GL entry</strong>.
+                                A reason is required.
+                            </div>
+                        @endif
+                    @endif
+
+                    @if ($session->isCancelled())
+                        <div class="alert alert-secondary small mb-0">
+                            <i class="fas fa-ban me-1"></i>
+                            This session is cancelled and cannot be modified further.
+                        </div>
+                    @endif
+
+                    @if ($session->isPosted() && ! $session->is_reversed)
+                        <div class="alert alert-success small mb-0">
+                            <i class="fas fa-circle-check me-1"></i>
+                            This session is posted. Variance has been applied to stock + GL.
+                        </div>
+                    @endif
+                </div>
+            </div>
+
+            {{-- Quick facts card --}}
+            <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white">
+                    <h2 class="h6 mb-0"><i class="fas fa-circle-info me-1 text-muted"></i> Quick facts</h2>
+                </div>
+                <div class="card-body small">
+                    <div class="d-flex justify-content-between py-1 border-bottom">
+                        <span class="text-muted">Items counted</span>
+                        <strong>{{ $session->items->count() }}</strong>
+                    </div>
+                    <div class="d-flex justify-content-between py-1 border-bottom">
+                        <span class="text-muted">GL journal</span>
+                        @if ($je)
+                            <strong>{{ $je->entry_no }}</strong>
+                        @else
+                            <span class="text-muted">Not posted</span>
+                        @endif
+                    </div>
+                    <div class="d-flex justify-content-between py-1 border-bottom">
+                        <span class="text-muted">Reversed</span>
+                        @if ($session->is_reversed)
+                            <span class="badge bg-danger-subtle text-danger">Yes</span>
+                        @else
+                            <span class="text-muted">No</span>
+                        @endif
+                    </div>
+                    <div class="d-flex justify-content-between py-1">
+                        <span class="text-muted">Created</span>
+                        <strong class="small">{{ optional($session->created_at)->format('Y-m-d H:i') }}</strong>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@push('scripts')
+<script>
+$(function () {
+    // ====== POST session ======
+    @if ($canPost)
+        $('#postBtn').on('click', function () {
+            Swal.fire({
+                icon: 'question',
+                title: 'Post this session?',
+                html: '<p class="text-start">This will <strong>apply stock variances</strong> and <strong>post the GL journal entry</strong>. The action cannot be undone — a cancellation will reverse it.</p>',
+                input: 'textarea',
+                inputLabel: 'Optional post reason',
+                inputPlaceholder: 'e.g. Approved by manager after audit review.',
+                showCancelButton: true,
+                confirmButtonText: '<i class="fas fa-check"></i> Post Session',
+                confirmButtonColor: '#198754',
+                cancelButtonText: 'Keep draft',
+                reverseButtons: true
+            }).then(function (result) {
+                if (result.isConfirmed) {
+                    $('#postReasonField').val(result.value || '');
+                    var $btn = $('#postBtn');
+                    $btn.prop('disabled', true)
+                        .html('<i class="fas fa-spinner fa-spin me-1"></i> Posting…');
+                    $('#postForm').submit();
+                }
+            });
+        });
+    @endif
+
+    // ====== CANCEL session ======
+    @if ($canCancel)
+        $('#cancelBtn').on('click', function () {
+            var isPosted = @json($session->isPosted());
+            var title = isPosted ? 'Cancel & reverse this session?' : 'Cancel this session?';
+            var html  = isPosted
+                ? '<p class="text-start">This will <strong>reverse the stock movements and the GL journal entry</strong>. A reason is required.</p>'
+                : '<p class="text-start">The session will be marked cancelled. A reason is required.</p>';
+
+            Swal.fire({
+                icon: 'warning',
+                title: title,
+                html: html,
+                input: 'textarea',
+                inputLabel: 'Cancel reason (required)',
+                inputPlaceholder: 'Why is this session being cancelled?',
+                showCancelButton: true,
+                confirmButtonText: '<i class="fas fa-ban"></i> Cancel session',
+                confirmButtonColor: '#dc3545',
+                cancelButtonText: 'Keep',
+                reverseButtons: true,
+                inputValidator: function (value) {
+                    if (!value || !value.trim()) {
+                        return 'A cancel reason is required.';
+                    }
+                    return null;
+                }
+            }).then(function (result) {
+                if (result.isConfirmed) {
+                    $('#cancelReasonField').val(result.value.trim());
+                    var $btn = $('#cancelBtn');
+                    $btn.prop('disabled', true)
+                        .html('<i class="fas fa-spinner fa-spin me-1"></i> Cancelling…');
+                    $('#cancelForm').submit();
+                }
+            });
+        });
+    @endif
+
+    // Optional: DataTables on the variance lines table.
+    @if (! empty($varianceLines) && $varianceLines->isNotEmpty())
+        $('#varianceTable').DataTable({
+            paging: false,
+            info: false,
+            ordering: true,
+            dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
+            language: { search: 'Filter variance lines:' }
+        });
+    @endif
+});
+</script>
+@endpush
+@endsection
