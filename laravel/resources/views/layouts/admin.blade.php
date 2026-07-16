@@ -214,6 +214,11 @@
                             <i class="fas fa-rotate-left"></i> S. Returns
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.accounting.period-close') }}" class="nav-link {{ request()->routeIs('admin.accounting.*') ? 'active' : '' }}">
+                            <i class="fas fa-lock"></i> Period Close
+                        </a>
+                    </li>
                 </ul>
             </nav>
 

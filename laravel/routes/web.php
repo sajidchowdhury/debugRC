@@ -29,12 +29,13 @@ use App\Http\Controllers\Admin\SalesInvoiceController;
 use App\Http\Controllers\Admin\SalesChallanController;
 use App\Http\Controllers\Admin\CustomerPaymentController;
 use App\Http\Controllers\Admin\SalesReturnController;
+use App\Http\Controllers\Admin\AccountingPeriodController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phases 3-8.5.
+ * RC_ERP Laravel Routes — Phases 3-9.5.
  *
- * Phase 8.5: sales returns (stock IN at ORIGINAL avg_cost + Dr Sales Return/Cr AR + Dr Inventory/Cr COGS).
+ * Phase 9.5: accounting period close + year-end close.
  */
 
 // ===================== AUTH (public) =====================
@@ -352,6 +353,16 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/sales-returns', SalesReturnController::class)
         ->only(['index', 'create', 'store', 'show'])
         ->names('admin.sales-returns');
+
+    // ============================================================
+    // Phase 9.5: Accounting Period Close + Year-End
+    // ============================================================
+    Route::prefix('admin/accounting')->name('admin.accounting.')->group(function () {
+        Route::get('period-close', [AccountingPeriodController::class, 'index'])->name('period-close');
+        Route::post('period-close', [AccountingPeriodController::class, 'close'])->name('period-close.store');
+        Route::post('period-reopen', [AccountingPeriodController::class, 'reopen'])->name('period-reopen');
+        Route::post('year-end-close', [AccountingPeriodController::class, 'yearEndClose'])->name('year-end-close');
+    });
 });
 
 // ===================== HEALTH CHECK =====================
