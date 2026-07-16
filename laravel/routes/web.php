@@ -28,12 +28,13 @@ use App\Http\Controllers\Admin\SalesCartController;
 use App\Http\Controllers\Admin\SalesInvoiceController;
 use App\Http\Controllers\Admin\SalesChallanController;
 use App\Http\Controllers\Admin\CustomerPaymentController;
+use App\Http\Controllers\Admin\SalesReturnController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phases 3-8.4.
+ * RC_ERP Laravel Routes — Phases 3-8.5.
  *
- * Phase 8.4: customer payments (Dr Bank/Cash / Cr AR + intercompany settlement).
+ * Phase 8.5: sales returns (stock IN at ORIGINAL avg_cost + Dr Sales Return/Cr AR + Dr Inventory/Cr COGS).
  */
 
 // ===================== AUTH (public) =====================
@@ -339,6 +340,18 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/customer-payments', CustomerPaymentController::class)
         ->only(['index', 'create', 'store', 'show'])
         ->names('admin.customer-payments');
+
+    // ============================================================
+    // Phase 8.5: Sales Returns (stock IN at ORIGINAL avg_cost + GL)
+    // ============================================================
+    Route::prefix('admin/sales-returns')->name('admin.sales-returns.')->group(function () {
+        Route::get('invoice-details', [SalesReturnController::class, 'getInvoiceDetails'])->name('invoice-details');
+        Route::post('{id}/confirm', [SalesReturnController::class, 'confirm'])->name('confirm');
+        Route::post('{id}/reverse', [SalesReturnController::class, 'reverse'])->name('reverse');
+    });
+    Route::resource('admin/sales-returns', SalesReturnController::class)
+        ->only(['index', 'create', 'store', 'show'])
+        ->names('admin.sales-returns');
 });
 
 // ===================== HEALTH CHECK =====================

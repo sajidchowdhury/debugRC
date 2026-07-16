@@ -209,6 +209,11 @@
                             <i class="fas fa-hand-holding-dollar"></i> Payments
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.sales-returns.index') }}" class="nav-link {{ request()->routeIs('admin.sales-returns.*') ? 'active' : '' }}">
+                            <i class="fas fa-rotate-left"></i> S. Returns
+                        </a>
+                    </li>
                 </ul>
             </nav>
 
