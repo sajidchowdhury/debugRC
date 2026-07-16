@@ -164,6 +164,11 @@
                             <i class="fas fa-clipboard-check"></i> Stock Take
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="{{ route('admin.warehouse-transfers.index') }}" class="nav-link {{ request()->routeIs('admin.warehouse-transfers.*') ? 'active' : '' }}">
+                            <i class="fas fa-right-left"></i> Transfers
+                        </a>
+                    </li>
                 </ul>
             </nav>
 

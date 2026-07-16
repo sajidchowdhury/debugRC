@@ -19,10 +19,11 @@ use App\Http\Controllers\Admin\ReconciliationController;
 use App\Http\Controllers\Admin\StockTransactionController;
 use App\Http\Controllers\Admin\StockAdjustmentController;
 use App\Http\Controllers\Admin\StockTakeController;
+use App\Http\Controllers\Admin\WarehouseTransferController;
 use Illuminate\Support\Facades\Route;
 
 /**
- * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1-6.4.
+ * RC_ERP Laravel Routes — Phase 3 + Phase 4 + Phase 5 + Phase 6.1-6.5.
  *
  * Phase 3: auth + dashboard.
  * Phase 4: master-data CRUD modules.
@@ -31,6 +32,7 @@ use Illuminate\Support\Facades\Route;
  * Phase 6.2: avg-cost replay verification infrastructure.
  * Phase 6.3: stock adjustments (two-phase: draft → confirm → cancel).
  * Phase 6.4: stock take (sessions with per-warehouse counts + variance posting).
+ * Phase 6.5: warehouse transfers (same-branch = no GL, cross-branch = intercompany GL).
  *
  * Nginx routes /admin/* to Laravel; /* to legacy PHP.
  */
@@ -224,6 +226,18 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/stock-take', StockTakeController::class)
         ->only(['index', 'create', 'store', 'show'])
         ->names('admin.stock-take');
+
+    // ============================================================
+    // Phase 6.5: Warehouse Transfers (same-branch = no GL, cross-branch = intercompany GL)
+    // ============================================================
+    Route::prefix('admin/warehouse-transfers')->name('admin.warehouse-transfers.')->group(function () {
+        Route::get('product-stock', [WarehouseTransferController::class, 'getProductStock'])->name('product-stock');
+        Route::post('{id}/confirm', [WarehouseTransferController::class, 'confirm'])->name('confirm');
+        Route::post('{id}/cancel', [WarehouseTransferController::class, 'cancel'])->name('cancel');
+    });
+    Route::resource('admin/warehouse-transfers', WarehouseTransferController::class)
+        ->only(['index', 'create', 'store', 'show'])
+        ->names('admin.warehouse-transfers');
 });
 
 // ===================== HEALTH CHECK =====================
