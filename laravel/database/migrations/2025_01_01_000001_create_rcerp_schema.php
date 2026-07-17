@@ -31,7 +31,21 @@ return new class extends Migration
         $statements = $this->splitSql($sql);
         foreach ($statements as $stmt) {
             $stmt = trim($stmt);
-            if ($stmt === '' || str_starts_with($stmt, '--')) {
+            if ($stmt === '') {
+                continue;
+            }
+            // Only skip statements that contain NOTHING but comments/whitespace.
+            // PostgreSQL handles leading -- comments natively, so a statement
+            // like "-- header\nCREATE TABLE branches (...);" is perfectly valid.
+            //
+            // CRITICAL: We must NOT use str_starts_with($stmt, '--') here, because
+            // splitSql bundles the file header comments together with the first
+            // CREATE TABLE into a single statement. Skipping such a statement
+            // would silently drop the first table of every SQL file, causing
+            // "relation X does not exist" errors on the next table that
+            // references it via a foreign key.
+            $withoutComments = preg_replace('/^[ \t]*--[^\n]*$/m', '', $stmt);
+            if (trim($withoutComments) === '') {
                 continue;
             }
             DB::statement($stmt);
