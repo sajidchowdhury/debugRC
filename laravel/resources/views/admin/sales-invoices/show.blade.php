@@ -654,6 +654,17 @@
                     <h2 class="h6 mb-0"><i class="fas fa-bolt me-1" style="color:#7c3aed;"></i> Actions</h2>
                 </div>
                 <div class="card-body d-grid gap-2">
+                    {{-- Draft: Edit invoice (P1-1) --}}
+                    @if ($invoice->isDraft())
+                        <a href="{{ route('admin.sales-invoices.edit', $invoice->id) }}" class="btn btn-primary w-100">
+                            <i class="fas fa-pen-to-square me-1"></i> Edit Invoice
+                        </a>
+                        <div class="alert alert-info small mb-0">
+                            <i class="fas fa-circle-info me-1"></i>
+                            Editing a draft invoice reverses the old GL + customer ledger and posts a new one. Items, qty, rate, discount, and transport can be changed.
+                        </div>
+                    @endif
+
                     {{-- Draft: Cancel invoice --}}
                     @if ($invoice->isDraft())
                         <form method="POST" action="{{ route('admin.sales-invoices.cancel', $invoice->id) }}" id="cancelForm">

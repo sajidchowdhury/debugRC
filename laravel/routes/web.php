@@ -317,14 +317,21 @@ Route::middleware('auth')->group(function () {
     });
 
     // ============================================================
-    // Phase 8.2: Sales Invoices (list + show + cancel)
+    // Phase 8.2: Sales Invoices (list + show + cancel + edit)
     // P0-7: RBAC — index/show allow accountant (read); cancel is
     // salesman/manager/admin (legacy delete_invoice).
+    // P1-1: edit/update — salesman/manager/admin (legacy edit/update).
     // ============================================================
     Route::prefix('admin/sales-invoices')->name('admin.sales-invoices.')->group(function () {
         Route::post('{id}/cancel', [SalesInvoiceController::class, 'cancel'])
             ->name('cancel')->middleware(['role:salesman,manager,admin', 'branch.isolation']);
+        // P1-1: Edit draft invoice (GET form + PUT update)
+        Route::get('{id}/edit', [SalesInvoiceController::class, 'edit'])
+            ->name('edit')->middleware(['role:salesman,manager,admin', 'branch.isolation']);
+        Route::put('{id}', [SalesInvoiceController::class, 'update'])
+            ->name('update')->middleware(['role:salesman,manager,admin', 'branch.isolation']);
     });
+    // index + show — accountant included (read access)
     Route::resource('admin/sales-invoices', SalesInvoiceController::class)
         ->only(['index', 'show'])
         ->names('admin.sales-invoices')

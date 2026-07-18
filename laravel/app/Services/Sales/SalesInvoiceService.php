@@ -296,6 +296,293 @@ class SalesInvoiceService
     }
 
     /**
+     * Update an existing DRAFT invoice (P1-1).
+     *
+     * Restores the legacy updateExistingInvoice flow:
+     *   1. Assert editable (draft, no godown, no payments, not reversed)
+     *   2. Re-validate credit limit (using NET increase = max(0, newTotal - oldTotal))
+     *   3. Lock branch products FOR UPDATE + re-check availability
+     *   4. Reverse old customer_ledger debit (append-only credit entry)
+     *   5. Reverse old GL journal entry (append-only)
+     *   6. DELETE old items + dispatches + dispatchers
+     *   7. INSERT new items + dispatches (soft reservation, warehouse_id=NULL)
+     *   8. Post new customer_ledger debit (new total)
+     *   9. Post new GL journal entry (Dr AR / Cr Revenue + Discount + Transport)
+     *  10. UPDATE invoice header (sub_total, discount, transport, total, notes, etc.)
+     *
+     * @param int $invoiceId
+     * @param array $data {
+     *     items: array of {product_id, qty, rate},
+     *     invoice_date: string,
+     *     sales_person: string|null,
+     *     discount_amount: float,
+     *     transport_cost: float,
+     *     notes: string|null,
+     *     is_soft_hold: bool,
+     *     credit_limit_override: bool,
+     *     override_reason: string|null,
+     *     updated_by: int,
+     * }
+     * @return SalesInvoice
+     * @throws \RuntimeException If not editable, stock insufficient, credit exceeded, or GL fails.
+     */
+    public function updateInvoice(int $invoiceId, array $data): SalesInvoice
+    {
+        $items = $data['items'] ?? [];
+        $updatedBy = (int) ($data['updated_by'] ?? auth()->id() ?? 0);
+
+        if (empty($items)) {
+            throw new \RuntimeException('Cannot update: items list is empty.');
+        }
+
+        // --- Pre-flight: load invoice (without transaction yet) for validation ---
+        $invoice = SalesInvoice::find($invoiceId);
+        if (!$invoice) {
+            throw new \RuntimeException("Invoice {$invoiceId} not found.");
+        }
+
+        // P0-8: Defense-in-depth branch isolation check.
+        $this->salesAccess->assertBranchAccessible((int) $invoice->branch_id);
+
+        // Assert editable.
+        $this->assertEditable($invoice);
+
+        // Assert no payments.
+        if ($this->invoiceHasPayments($invoiceId)) {
+            throw new \RuntimeException('Cannot edit: payments have been received against this invoice. Reverse the payments first.');
+        }
+
+        $oldTotal = (float) $invoice->total_amount;
+        $customerId = (int) $invoice->customer_id;
+        $branchId = (int) $invoice->branch_id;
+        $oldJournalId = $invoice->journal_entry_id ? (int) $invoice->journal_entry_id : null;
+
+        // --- Calculate new totals ---
+        $subTotal = 0.0;
+        foreach ($items as $item) {
+            $subTotal += (float) $item['qty'] * (float) $item['rate'];
+        }
+        $discount = (float) ($data['discount_amount'] ?? 0);
+        $transport = (float) ($data['transport_cost'] ?? 0);
+        $newTotal = $subTotal + $transport - $discount;
+
+        // --- Credit limit check (NET increase, not full new total) ---
+        $netIncrease = max(0.0, $newTotal - $oldTotal);
+        $creditCheck = $this->checkCreditLimit($customerId, $netIncrease);
+        $isOverride = !empty($data['credit_limit_override']);
+        $overrideReason = trim($data['override_reason'] ?? '');
+
+        if ($creditCheck['exceeds'] && !$isOverride) {
+            throw new \RuntimeException(
+                "Updating this invoice would exceed the customer's credit limit. "
+                . "Current balance: {$creditCheck['current_balance']}, "
+                . "Credit limit: {$creditCheck['credit_limit']}, "
+                . "Net increase: {$netIncrease}. "
+                . "Override with a reason to proceed."
+            );
+        }
+
+        if ($creditCheck['exceeds'] && $isOverride && strlen($overrideReason) < 10) {
+            throw new \RuntimeException('Override reason must be at least 10 characters when exceeding credit limit.');
+        }
+
+        $invoiceDate = $data['invoice_date'] ?? $invoice->invoice_date;
+
+        // --- Atomic update in a DB transaction ---
+        return DB::transaction(function () use (
+            $invoiceId, $invoice, $items, $customerId, $branchId, $oldTotal, $newTotal,
+            $subTotal, $discount, $transport, $invoiceDate, $oldJournalId,
+            $creditCheck, $isOverride, $overrideReason, $updatedBy, $data
+        ) {
+            // Lock the invoice row FOR UPDATE.
+            $locked = SalesInvoice::lockForUpdate()->find($invoiceId);
+            if (!$locked) {
+                throw new \RuntimeException("Invoice {$invoiceId} not found (locked).");
+            }
+
+            // Re-assert editable after lock (race protection).
+            $this->assertEditable($locked);
+
+            // Lock branch products FOR UPDATE.
+            $productIds = collect($items)->pluck('product_id')->unique()->toArray();
+            $this->stockService->lockBranchProductsForUpdate($branchId, $productIds);
+
+            // Re-check stock availability (excluding this invoice's own pipeline).
+            $qtyByProduct = [];
+            foreach ($items as $item) {
+                $pid = (int) $item['product_id'];
+                $qtyByProduct[$pid] = ($qtyByProduct[$pid] ?? 0) + (float) $item['qty'];
+            }
+
+            foreach ($qtyByProduct as $pid => $qty) {
+                $available = $this->availabilityService->getBranchAvailableQty($pid, $branchId, $invoiceId);
+                if ($qty > $available + 0.0001) {
+                    throw new \RuntimeException(
+                        "Insufficient stock for product {$pid}: requested {$qty}, available {$available}"
+                    );
+                }
+            }
+
+            // Step 1: Reverse old customer_ledger debit (append-only credit entry).
+            $this->reverseCustomerLedgerDebit($locked, $updatedBy, 'Invoice edited');
+
+            // Step 2: Reverse old GL journal entry (append-only).
+            if ($oldJournalId) {
+                $this->journalPosting->reverseJournalEntry(
+                    $oldJournalId, $updatedBy,
+                    'Invoice edited: ' . $invoice->invoice_code
+                );
+            }
+
+            // Step 3: DELETE old items + dispatches + dispatchers.
+            DB::table('sales_invoice_items')->where('sales_invoice_id', $invoiceId)->delete();
+            DB::table('sales_invoice_dispatches')->where('sales_invoice_id', $invoiceId)->delete();
+            DB::table('sales_invoice_dispatchers')->where('sales_invoice_id', $invoiceId)->delete();
+
+            // Step 4: INSERT new items.
+            $itemRows = [];
+            foreach ($items as $item) {
+                $itemRows[] = [
+                    'sales_invoice_id' => $invoiceId,
+                    'product_id' => (int) $item['product_id'],
+                    'warehouse_id' => null, // reset to NULL — godown must re-assign after edit
+                    'qty' => (float) $item['qty'],
+                    'rate' => (float) $item['rate'],
+                    'condition_state' => $item['condition_state'] ?? 'Good',
+                ];
+            }
+            DB::table('sales_invoice_items')->insert($itemRows);
+
+            // Step 5: INSERT new dispatches (soft reservation, warehouse_id=NULL).
+            $dispatchRows = [];
+            foreach ($items as $item) {
+                $dispatchRows[] = [
+                    'sales_invoice_id' => $invoiceId,
+                    'product_id' => (int) $item['product_id'],
+                    'warehouse_id' => null,
+                    'qty' => (float) $item['qty'],
+                    'ordered_qty' => (float) $item['qty'],
+                    'dispatched_qty' => 0,
+                    'created_by' => $updatedBy,
+                ];
+            }
+            DB::table('sales_invoice_dispatches')->insert($dispatchRows);
+
+            // Step 6: Post new customer_ledger debit (new total).
+            $this->postCustomerLedgerDebit(
+                $customerId, $branchId, $invoiceId, $invoice->invoice_code,
+                $newTotal, $invoiceDate, $updatedBy
+            );
+
+            // Step 7: Post new GL: Dr AR / Cr Revenue (+ Discount + Transport).
+            $newJournalEntryId = $this->postInvoiceGL(
+                $invoiceId, $invoice->invoice_code, $customerId, $branchId,
+                $subTotal, $discount, $transport, $newTotal,
+                $invoiceDate, $updatedBy
+            );
+
+            // Step 8: UPDATE invoice header.
+            DB::table('sales_invoices')
+                ->where('id', $invoiceId)
+                ->update([
+                    'invoice_date' => $invoiceDate,
+                    'sales_person' => $data['sales_person'] ?? null,
+                    'sub_total' => round($subTotal, 2),
+                    'discount_amount' => round($discount, 2),
+                    'transport_cost' => round($transport, 2),
+                    'total_amount' => round($newTotal, 2),
+                    'due_amount' => round($newTotal, 2) - (float) $invoice->paid_amount,
+                    'is_soft_hold' => $data['is_soft_hold'] ?? false,
+                    'notes' => $data['notes'] ?? null,
+                    'journal_entry_id' => $newJournalEntryId,
+                    // Reset godown/challan flags (edit invalidates prior godown prep).
+                    'is_godown_prepared' => false,
+                    'godown_prepared_at' => null,
+                    'updated_at' => now(),
+                ]);
+
+            // Step 9: Audit log for credit limit override.
+            if ($isOverride && $creditCheck['exceeds']) {
+                DB::table('user_audit_log')->insert([
+                    'user_id' => $updatedBy,
+                    'action' => 'credit_limit_override',
+                    'target_user_id' => null,
+                    'branch_id' => $branchId,
+                    'details' => json_encode([
+                        'action' => 'invoice_edit',
+                        'invoice_id' => $invoiceId,
+                        'invoice_code' => $invoice->invoice_code,
+                        'customer_id' => $customerId,
+                        'old_total' => $oldTotal,
+                        'new_total' => $newTotal,
+                        'net_increase' => $netIncrease,
+                        'credit_limit' => $creditCheck['credit_limit'],
+                        'current_balance' => $creditCheck['current_balance'],
+                        'override_reason' => $overrideReason,
+                    ]),
+                    'ip_address' => request()?->ip(),
+                    'user_agent' => request()?->userAgent() ? mb_substr(request()->userAgent(), 0, 255) : null,
+                    'created_at' => now(),
+                ]);
+            }
+
+            // Audit log for the edit itself.
+            DB::table('user_audit_log')->insert([
+                'user_id' => $updatedBy,
+                'action' => 'sale_updated',
+                'target_user_id' => null,
+                'branch_id' => $branchId,
+                'details' => json_encode([
+                    'invoice_id' => $invoiceId,
+                    'invoice_code' => $invoice->invoice_code,
+                    'old_total' => $oldTotal,
+                    'new_total' => $newTotal,
+                    'items_count' => count($items),
+                    'credit_override' => $isOverride && $creditCheck['exceeds'],
+                ]),
+                'ip_address' => request()?->ip(),
+                'user_agent' => request()?->userAgent() ? mb_substr(request()->userAgent(), 0, 255) : null,
+                'created_at' => now(),
+            ]);
+
+            return SalesInvoice::with(['items.product', 'customer', 'branch', 'journalEntry.lines.ledger'])
+                ->find($invoiceId);
+        });
+    }
+
+    /**
+     * Assert an invoice is editable (P1-1).
+     * Must be: status='draft', not godown-prepared, not reversed.
+     */
+    private function assertEditable(SalesInvoice $invoice): void
+    {
+        if ($invoice->is_reversed) {
+            throw new \RuntimeException('Cannot edit: invoice is reversed.');
+        }
+        if ($invoice->status !== 'draft') {
+            throw new \RuntimeException("Cannot edit: invoice status is '{$invoice->status}'. Only draft invoices can be edited.");
+        }
+        if ($invoice->is_godown_prepared) {
+            throw new \RuntimeException('Cannot edit: godown has already been prepared for this invoice.');
+        }
+        if ($invoice->is_challan_issued) {
+            throw new \RuntimeException('Cannot edit: a delivery challan has already been issued for this invoice.');
+        }
+    }
+
+    /**
+     * Check if an invoice has any non-reversed payment allocations (P1-1).
+     */
+    private function invoiceHasPayments(int $invoiceId): bool
+    {
+        return DB::table('invoice_payment_allocations as ipa')
+            ->join('customer_payments as cp', 'cp.id', '=', 'ipa.payment_id')
+            ->where('ipa.invoice_id', $invoiceId)
+            ->where('cp.is_reversed', false)
+            ->exists();
+    }
+
+    /**
      * Check if the invoice would exceed the customer's credit limit.
      *
      * @return array{ exceeds: bool, current_balance: float, credit_limit: float, new_balance: float }

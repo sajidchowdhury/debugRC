@@ -109,6 +109,86 @@ class SalesInvoiceController extends Controller
         }
     }
 
+    /**
+     * Show the invoice edit form (P1-1).
+     * Only draft invoices (no godown, no payments) can be edited.
+     */
+    public function edit(int $id)
+    {
+        $invoice = SalesInvoice::with(['items.product', 'customer', 'branch'])
+            ->findOrFail($id);
+
+        // Guard: only draft invoices can be edited.
+        if (!$invoice->isDraft() || $invoice->is_godown_prepared || $invoice->is_reversed) {
+            return redirect()->route('admin.sales-invoices.show', $invoice)
+                ->with('error', 'Only draft invoices (before godown) can be edited.');
+        }
+
+        // Check for payments — if any exist, block editing.
+        $hasPayments = DB::table('invoice_payment_allocations as ipa')
+            ->join('customer_payments as cp', 'cp.id', '=', 'ipa.payment_id')
+            ->where('ipa.invoice_id', $id)
+            ->where('cp.is_reversed', false)
+            ->exists();
+
+        if ($hasPayments) {
+            return redirect()->route('admin.sales-invoices.show', $invoice)
+                ->with('error', 'Cannot edit: payments have been received against this invoice. Reverse the payments first.');
+        }
+
+        // Load products for the add-item dropdown (active products).
+        $products = \App\Models\Product::active()->with(['category'])->orderBy('product_name')->limit(500)->get();
+
+        return view('admin.sales-invoices.edit', [
+            'title' => 'Edit Invoice ' . $invoice->invoice_code,
+            'invoice' => $invoice,
+            'products' => $products,
+        ]);
+    }
+
+    /**
+     * Update a draft invoice (P1-1).
+     * Reverses old GL + customer_ledger, re-posts with new items/totals.
+     */
+    public function update(Request $request, int $id)
+    {
+        $validated = $request->validate([
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'required|integer|exists:products,id',
+            'items.*.qty' => 'required|numeric|min:0.001',
+            'items.*.rate' => 'required|numeric|min:0',
+            'items.*.condition_state' => 'nullable|string|in:Good,Damage',
+            'invoice_date' => 'required|date',
+            'sales_person' => 'nullable|string|max:100',
+            'discount_amount' => 'nullable|numeric|min:0',
+            'transport_cost' => 'nullable|numeric|min:0',
+            'notes' => 'nullable|string|max:1000',
+            'is_soft_hold' => 'nullable|boolean',
+            'credit_limit_override' => 'nullable|boolean',
+            'override_reason' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $invoice = $this->invoiceService->updateInvoice($id, [
+                'items' => $validated['items'],
+                'invoice_date' => $validated['invoice_date'],
+                'sales_person' => $validated['sales_person'] ?? null,
+                'discount_amount' => $validated['discount_amount'] ?? 0,
+                'transport_cost' => $validated['transport_cost'] ?? 0,
+                'notes' => $validated['notes'] ?? '',
+                'is_soft_hold' => $validated['is_soft_hold'] ?? false,
+                'credit_limit_override' => $validated['credit_limit_override'] ?? false,
+                'override_reason' => $validated['override_reason'] ?? '',
+                'updated_by' => auth()->id(),
+            ]);
+
+            return redirect()->route('admin.sales-invoices.show', $invoice)
+                ->with('success', "Invoice {$invoice->invoice_code} updated successfully. GL + customer ledger re-posted.");
+        } catch (\Throwable $e) {
+            return back()->withInput()->with('error', $e->getMessage());
+        }
+    }
+
     public function show(int $id)
     {
         $invoice = SalesInvoice::with([

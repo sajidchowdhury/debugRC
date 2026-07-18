@@ -340,13 +340,97 @@ All 8 Phase 0 tasks are complete and pushed to GitHub:
 
 | Task | Description | Status |
 |------|-------------|--------|
-| P1-1 | Invoice edit/update flow | ⬜ Pending |
+| P1-1 | Invoice edit/update flow | ✅ Done | `updateInvoice` service + `edit`/`update` controller + `edit.blade.php` view + routes + edit button on show page |
 | P1-2 | Stale draft cancellation (Artisan + cron) | ⬜ Pending |
 | P1-3 | Fix audit logging (9 business events) | ⬜ Pending |
 | P1-4 | Fix double-bookkeeping (allocations tables) | ⬜ Pending |
 | P1-5 | Linked damage write-off for Damage returns | ⬜ Pending |
 | P1-6 | Print views (invoice/challan/receipt/slip) | ⬜ Pending |
 | P1-7 | Sales notifications (return events) | ⬜ Pending |
+
+---
+
+### P1-1 — Detailed Completion Notes
+
+**Problem:** Legacy `SalesInvoiceOperationsTrait::updateExistingInvoice:351` allowed editing a DRAFT invoice (re-validates credit/stock/price, reverses original JE+ledger, posts new). Laravel had NO edit flow — once finalized, an invoice could only be cancelled. Salesmen could not correct a draft invoice (wrong qty/rate/customer) without cancelling + recreating, losing the invoice code and history.
+
+**Solution:** Implemented a complete edit/update flow across 5 files:
+
+#### 1. `SalesInvoiceService::updateInvoice()` (service layer)
+- **Pre-flight validation:**
+  - Invoice must exist + be editable (`assertEditable` helper: status='draft', no godown, no challan, not reversed)
+  - No payments exist (`invoiceHasPayments` helper checks `invoice_payment_allocations` for non-reversed payments)
+  - Branch isolation check (P0-8 `SalesAccess::assertBranchAccessible`)
+- **Credit limit check** uses NET increase = `max(0, newTotal - oldTotal)` (not full new total) — matches legacy behavior. Override requires reason ≥10 chars.
+- **Atomic transaction** (DB::transaction):
+  1. Lock invoice FOR UPDATE + re-assert editable (race protection)
+  2. Lock branch products FOR UPDATE (`StockService::lockBranchProductsForUpdate`)
+  3. Re-check stock availability (excluding this invoice's own pipeline via `$excludeInvoiceId`)
+  4. Reverse old customer_ledger debit (append-only credit entry via `reverseCustomerLedgerDebit`)
+  5. Reverse old GL journal entry (append-only via `JournalPostingService::reverseJournalEntry`)
+  6. DELETE old `sales_invoice_items` + `sales_invoice_dispatches` + `sales_invoice_dispatchers`
+  7. INSERT new items + dispatches (soft reservation, warehouse_id=NULL)
+  8. Post new customer_ledger debit (new total)
+  9. Post new GL: Dr AR / Cr Revenue + Dr Discount + Cr Transport Revenue
+  10. UPDATE invoice header (sub_total, discount, transport, total, due_amount, notes, journal_entry_id; reset is_godown_prepared=false, godown_prepared_at=null)
+- **Audit logging:** `sale_updated` event + `credit_limit_override` event (if override used), both written to `user_audit_log`
+- **New private helpers:** `assertEditable(SalesInvoice)` + `invoiceHasPayments(int $invoiceId)`
+
+#### 2. `SalesInvoiceController::edit()` + `update()` (controller)
+- `edit($id)`: loads invoice with items+customer+branch; guards (draft? no godown? no payments?); loads active products for dropdown; returns `sales-invoices/edit` view
+- `update($id)`: validates items array + invoice-level fields; delegates to `SalesInvoiceService::updateInvoice()`; redirects to show page with success message
+
+#### 3. Routes (`routes/web.php`)
+- `GET admin/sales-invoices/{id}/edit` → `edit` (role:salesman,manager,admin + branch.isolation)
+- `PUT admin/sales-invoices/{id}` → `update` (role:salesman,manager,admin + branch.isolation)
+
+#### 4. `sales-invoices/edit.blade.php` (view — NEW)
+- Editable items table: qty + rate per line, live line-total calculation
+- Add Item panel: Select2 product search dropdown with pre-loaded active products
+- Remove row button (min 1 item enforced)
+- Invoice meta fields: date, sales_person, discount, transport, notes, soft-hold checkbox
+- Live totals card: subtotal, discount, transport, total, old total, change (delta)
+- Credit limit override checkbox + reason field (toggled by checkbox)
+- Submit button (disabled + spinner during submit to prevent double-submit)
+- Re-indexes item array indices after add/remove so the form submits clean `items[0][product_id]`, `items[1][...]`, etc.
+
+#### 5. `sales-invoices/show.blade.php` (show view — modified)
+- Added "Edit Invoice" button (primary, full-width) in the Actions card for draft invoices
+- Shows only when `isDraft()` is true
+- Links to `route('admin.sales-invoices.edit', $invoice->id)`
+
+**Key design decisions:**
+- Items come from the request body directly (not from the cart) — the edit form has its own items table, independent of the cart
+- The invoice code is PRESERVED across edits (unlike cancel + recreate which generates a new code)
+- Godown/challan flags are reset to false/null on edit (editing invalidates prior godown prep)
+- `due_amount` is recalculated as `newTotal - paid_amount` (paid_amount stays the same since payments aren't affected by editing a draft)
+- Stock availability check excludes the invoice's own pipeline (`$excludeInvoiceId` parameter) so the edit doesn't block itself
+
+### Verification Status (P1-1)
+- [x] `updateInvoice` method added to `SalesInvoiceService` (9-step atomic transaction)
+- [x] `assertEditable` + `invoiceHasPayments` private helpers added
+- [x] Credit limit check uses NET increase (not full new total)
+- [x] Old GL + customer_ledger reversed (append-only)
+- [x] New GL + customer_ledger posted
+- [x] Old items + dispatches deleted, new ones inserted
+- [x] Godown/challan flags reset on edit
+- [x] `edit` + `update` controller methods added
+- [x] Routes added with role + branch.isolation middleware
+- [x] `edit.blade.php` view created (items table, live totals, add/remove items, credit override)
+- [x] Edit button added to show.blade.php Actions card
+- [x] Audit log: `sale_updated` event written
+- [x] Brace/paren balance verified (all files 0/0)
+- [x] No duplicate route names
+- [ ] End-to-end browser test — **PENDING**
+
+### Files Modified (P1-1)
+| File | Change |
+|------|--------|
+| `laravel/app/Services/Sales/SalesInvoiceService.php` | Added `updateInvoice()` method (~220 lines) + `assertEditable()` + `invoiceHasPayments()` private helpers |
+| `laravel/app/Http/Controllers/Admin/SalesInvoiceController.php` | Added `edit()` + `update()` methods |
+| `laravel/routes/web.php` | Added `GET {id}/edit` + `PUT {id}` routes with role + branch.isolation middleware |
+| `laravel/resources/views/admin/sales-invoices/edit.blade.php` | NEW — full edit form with items table, live totals, add/remove items, credit override |
+| `laravel/resources/views/admin/sales-invoices/show.blade.php` | Added "Edit Invoice" button in Actions card for draft invoices |
 
 ---
 
