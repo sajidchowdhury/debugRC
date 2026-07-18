@@ -25,7 +25,7 @@ class SalesReturnItem extends Model
 
     protected $fillable = [
         'sales_return_id', 'sales_invoice_item_id', 'product_id', 'warehouse_id',
-        'qty', 'rate', 'original_cost',
+        'qty', 'rate', 'original_cost', 'damage_invoice_id',
     ];
 
     protected $casts = [

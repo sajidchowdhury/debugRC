@@ -4,6 +4,7 @@ namespace App\Services\Sales;
 
 use App\Models\SalesReturn;
 use App\Services\Stock\StockService;
+use App\Services\Stock\DamageService;
 use App\Services\Accounting\JournalPostingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -36,7 +37,8 @@ class SalesReturnService
         private StockService $stockService,
         private JournalPostingService $journalPosting,
         private SalesAccess $salesAccess,
-        private SalesAuditLogger $auditLogger
+        private SalesAuditLogger $auditLogger,
+        private DamageService $damageService
     ) {}
 
     /**
@@ -168,6 +170,12 @@ class SalesReturnService
                 ]);
             }
 
+            // 1b. P1-5: Linked damage write-off for 'Damage' condition items.
+            // Legacy: SalesReturnModel::createLinkedDamageWriteOff — for each
+            // Damage-condition item, create a damage_invoices row + stock OUT
+            // (immediately back OUT the damaged goods) + GL Dr damage_loss / Cr inventory.
+            $linkedDamageIds = $this->createLinkedDamageWriteOffs($return, $confirmedBy);
+
             // 2. GL Revenue Reversal: Dr Sales Return / Cr AR.
             $journalEntryId = $this->postRevenueReversalGL($return, $confirmedBy);
 
@@ -239,6 +247,10 @@ class SalesReturnService
 
             // Reverse customer_ledger.
             $this->reverseCustomerLedgerCredit($return, $reversedBy, $reason);
+
+            // P1-5: Reverse linked damage write-offs FIRST (before return stock reversal).
+            // Each linked damage_invoice has its own stock OUT + GL that must be reversed.
+            $this->reverseLinkedDamageForReturn($returnId, $reversedBy, $reason);
 
             // Reverse each stock movement (stock OUT at original cost — append-only reversal).
             $stockTxs = DB::table('stock_transactions')
@@ -541,5 +553,117 @@ class SalesReturnService
         }
 
         return $validated;
+    }
+
+    /**
+     * P1-5: Create linked damage write-offs for 'Damage' condition return items.
+     *
+     * Mirrors legacy SalesReturnModel::createLinkedDamageWriteOff:1599.
+     * For each Damage-condition item:
+     *   1. Create a damage_invoices row (linked via sales_return_id)
+     *   2. Create damage_invoice_items
+     *   3. Stock OUT via DamageService (immediately back OUT the damaged goods)
+     *   4. GL: Dr damage_loss / Cr inventory (via DamageService::confirmDamage)
+     *   5. Link sales_return_items.damage_invoice_id → damage_invoices.id
+     *
+     * Groups damage items by warehouse (one damage_invoice per warehouse).
+     *
+     * @param SalesReturn $return
+     * @param int $confirmedBy
+     * @return array List of created damage_invoice IDs
+     */
+    private function createLinkedDamageWriteOffs(SalesReturn $return, int $confirmedBy): array
+    {
+        // Group Damage-condition items by warehouse.
+        $damageByWarehouse = [];
+        foreach ($return->items as $item) {
+            if (($item->condition_state ?? 'Good') !== 'Damage') {
+                continue;
+            }
+            $wid = (int) $item->warehouse_id;
+            if ($wid <= 0) {
+                continue;
+            }
+            $damageByWarehouse[$wid][] = $item;
+        }
+
+        if (empty($damageByWarehouse)) {
+            return []; // No damage items — nothing to write off.
+        }
+
+        $linkedDamageIds = [];
+        $returnDate = $return->return_date->format('Y-m-d');
+
+        foreach ($damageByWarehouse as $warehouseId => $damageItems) {
+            // Build items array for DamageService::createDamage.
+            $items = [];
+            foreach ($damageItems as $item) {
+                $items[] = [
+                    'product_id' => (int) $item->product_id,
+                    'qty' => (float) $item->qty,
+                    'rate' => (float) $item->original_cost, // use original_cost (same as return stock IN)
+                ];
+            }
+
+            // Create the damage invoice (draft) via DamageService.
+            $damage = $this->damageService->createDamage([
+                'warehouse_id' => $warehouseId,
+                'damage_date' => $returnDate,
+                'reason' => 'Auto write-off for damaged sales return #' . $return->return_code,
+                'created_by' => $confirmedBy,
+                'items' => $items,
+            ]);
+
+            // Link damage_invoices.sales_return_id → this return.
+            DB::table('damage_invoices')
+                ->where('id', $damage->id)
+                ->update(['sales_return_id' => $return->id]);
+
+            // Confirm the damage (stock OUT + GL Dr damage_loss / Cr inventory).
+            $damage = $this->damageService->confirmDamage($damage->id, $confirmedBy);
+
+            // Link each return item to the damage invoice.
+            foreach ($damageItems as $item) {
+                DB::table('sales_return_items')
+                    ->where('id', $item->id)
+                    ->update(['damage_invoice_id' => $damage->id]);
+            }
+
+            $linkedDamageIds[] = $damage->id;
+        }
+
+        return $linkedDamageIds;
+    }
+
+    /**
+     * P1-5: Reverse linked damage write-offs when a return is reversed.
+     *
+     * Mirrors legacy SalesReturnModel::reverseLinkedDamageForReturn.
+     * Finds all damage_invoices linked to this return (via sales_return_id)
+     * and cancels each one via DamageService::cancelDamage (reverses stock + GL).
+     *
+     * Must be called BEFORE reversing the return's own stock movements
+     * (so the damage stock OUT is reversed first, then the return stock IN).
+     *
+     * @param int $returnId
+     * @param int $reversedBy
+     * @param string $reason
+     */
+    private function reverseLinkedDamageForReturn(int $returnId, int $reversedBy, string $reason): void
+    {
+        $linkedDamages = DB::table('damage_invoices')
+            ->where('sales_return_id', $returnId)
+            ->where('is_reversed', false)
+            ->get();
+
+        foreach ($linkedDamages as $damage) {
+            // Cancel the damage (reverses stock OUT + GL Dr damage_loss / Cr inventory).
+            $this->damageService->cancelDamage($damage->id, $reversedBy, "Return reversed: {$reason}");
+
+            // Clear the link on sales_return_items (set damage_invoice_id = null).
+            DB::table('sales_return_items')
+                ->where('damage_invoice_id', $damage->id)
+                ->update(['damage_invoice_id' => null]);
+        }
     }
 }

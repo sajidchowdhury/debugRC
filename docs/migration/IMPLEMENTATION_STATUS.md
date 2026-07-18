@@ -344,7 +344,7 @@ All 8 Phase 0 tasks are complete and pushed to GitHub:
 | P1-2 | Stale draft cancellation (Artisan + cron) | ✅ Done | `sales:cancel-stale-drafts` command + daily 02:00 schedule + `config/sales.php` + manual admin endpoint |
 | P1-3 | Fix audit logging (9 business events) | ✅ Done | `SalesAuditLogger` service + 10 audit calls across 4 services + `sales-audit` view + route |
 | P1-4 | Fix double-bookkeeping (allocations tables) | ✅ Done | Consolidated to `invoice_payment_allocations`; dropped `customer_payment_settlements`; new `InvoicePaymentAllocation` model + backward-compatible `settlements()` alias |
-| P1-5 | Linked damage write-off for Damage returns | ⬜ Pending |
+| P1-5 | Linked damage write-off for Damage returns | ✅ Done | Migration (link columns + damage_invoices gaps) + `createLinkedDamageWriteOffs` + `reverseLinkedDamageForReturn` in SalesReturnService |
 | P1-6 | Print views (invoice/challan/receipt/slip) | ⬜ Pending |
 | P1-7 | Sales notifications (return events) | ⬜ Pending |
 
@@ -666,6 +666,85 @@ This is double-bookkeeping: two tables for the same purpose, but only one is eve
 | `laravel/app/Models/CustomerPayment.php` | Replaced `settlements()` with `allocations()` + backward-compat alias |
 | `laravel/app/Services/Sales/CustomerPaymentService.php` | `cancelPayment` uses `invoice_payment_allocations`; eager-load updated |
 | `laravel/app/Http/Controllers/Admin/CustomerPaymentController.php` | Eager-loads updated to `allocations.invoice` |
+
+---
+
+### P1-5 — Detailed Completion Notes
+
+**Problem:** Legacy `SalesReturnModel::createLinkedDamageWriteOff:1597` auto-creates a `damage_invoices` row for 'Damage' condition return items (stock IN then immediately OUT + GL Dr damage_loss / Cr inventory). Laravel had no such linkage — damaged returns didn't auto-write-off, inventory showed damaged goods as saleable, GL was missing damage loss entries.
+
+**Solution:** Implemented linked damage write-off in `SalesReturnService`, reusing the existing `DamageService` for stock OUT + GL posting.
+
+#### 1. Migration: add link columns + fix damage_invoices gaps (NEW)
+- **File:** `laravel/database/migrations/2025_01_09_000002_add_sales_return_damage_link_columns.php`
+- **Columns added:**
+  - `sales_return_items.damage_invoice_id` (FK → damage_invoices, SET NULL) — links return line to the auto-created damage invoice
+  - `damage_invoices.sales_return_id` (FK → sales_returns, SET NULL) — links damage invoice back to the return that triggered it
+  - `damage_invoices.total_value` (numeric 14,2) — **pre-existing schema gap**: DamageService::createDamage referenced this column but 03_stock.sql didn't define it
+  - `damage_invoices.status` (varchar 20, CHECK draft/confirmed/cancelled) — **pre-existing schema gap**: DamageService + model referenced this but schema didn't define it
+- **Indexes:** 2 partial indexes for the link columns (WHERE IS NOT NULL)
+- Idempotent + reversible
+
+#### 2. `SalesReturnService::createLinkedDamageWriteOffs()` (NEW private method)
+- Called from `confirmReturn` after stock IN (step 1b)
+- **Logic (mirrors legacy `createLinkedDamageWriteOff:1599`):**
+  1. Groups Damage-condition items by warehouse (one damage_invoice per warehouse)
+  2. For each warehouse group:
+     - Calls `DamageService::createDamage` (creates draft damage_invoice + items)
+     - Links `damage_invoices.sales_return_id` → this return
+     - Calls `DamageService::confirmDamage` (stock OUT + GL Dr damage_loss / Cr inventory)
+     - Links `sales_return_items.damage_invoice_id` → the damage_invoice
+- **Reuse:** leverages the existing `DamageService` for all stock + GL logic (no duplication)
+- **Rate:** uses `original_cost` (same as the return stock IN — preserves cost integrity)
+
+#### 3. `SalesReturnService::reverseLinkedDamageForReturn()` (NEW private method)
+- Called from `reverseReturn` BEFORE the return's own stock reversal (step before stock_transactions reversal)
+- **Logic:**
+  1. Finds all `damage_invoices` where `sales_return_id = returnId AND is_reversed = false`
+  2. For each: calls `DamageService::cancelDamage` (reverses stock OUT + GL)
+  3. Clears `sales_return_items.damage_invoice_id` (set to NULL)
+- **Order matters:** damage reversal must happen BEFORE return stock reversal (so the damage stock OUT is reversed first, then the return stock IN)
+
+#### 4. Model updates
+- `SalesReturnItem`: added `damage_invoice_id` to `fillable`
+- `DamageInvoice`: added `sales_return_id` to `fillable`
+
+#### 5. DamageService injected into SalesReturnService
+- Constructor updated to accept `DamageService` (for createDamage + confirmDamage + cancelDamage)
+
+**Flow on confirmReturn with mixed Good + Damage items:**
+1. Stock IN for ALL items (Good + Damage) at original_cost
+2. For Damage items only: create linked damage_invoice → stock OUT (immediately back OUT) + GL Dr damage_loss / Cr inventory
+3. GL Revenue Reversal (Dr Sales Return / Cr AR) — for ALL items
+4. GL COGS Reversal (Dr Inventory / Cr COGS) — for ALL items at original_cost
+5. Customer ledger credit
+
+**Flow on reverseReturn:**
+1. Reverse both GL journals (revenue + COGS)
+2. Reverse customer_ledger
+3. **Reverse linked damage invoices** (stock OUT reversal + GL reversal) ← NEW
+4. Reverse return stock IN movements
+5. Mark return as reversed
+
+### Verification Status (P1-5)
+- [x] Migration created: link columns + damage_invoices gap fix (total_value + status)
+- [x] `createLinkedDamageWriteOffs` method added to SalesReturnService
+- [x] Called from `confirmReturn` (step 1b, after stock IN)
+- [x] Reuses `DamageService::createDamage` + `confirmDamage` (no stock/GL duplication)
+- [x] `reverseLinkedDamageForReturn` method added
+- [x] Called from `reverseReturn` (before return stock reversal)
+- [x] DamageService injected into SalesReturnService constructor
+- [x] Models updated: `SalesReturnItem.fillable` + `DamageInvoice.fillable`
+- [x] Brace/paren balance verified (all files 0/0)
+- [ ] End-to-end test (return with Damage items → verify linked damage_invoice created) — **PENDING**
+
+### Files Modified (P1-5)
+| File | Change |
+|------|--------|
+| `laravel/database/migrations/2025_01_09_000002_add_sales_return_damage_link_columns.php` | NEW — link columns + damage_invoices total_value/status gap fix |
+| `laravel/app/Services/Sales/SalesReturnService.php` | Injected DamageService + `createLinkedDamageWriteOffs` + `reverseLinkedDamageForReturn` methods + calls in confirmReturn/reverseReturn |
+| `laravel/app/Models/SalesReturnItem.php` | Added `damage_invoice_id` to fillable |
+| `laravel/app/Models/DamageInvoice.php` | Added `sales_return_id` to fillable |
 
 ---
 

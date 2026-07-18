@@ -48,6 +48,7 @@ class DamageInvoice extends Model
         'damage_date',
         'warehouse_id',
         'branch_id',
+        'sales_return_id',
         'total_value',
         'reason',
         'status',
