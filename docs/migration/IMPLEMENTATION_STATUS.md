@@ -18,7 +18,7 @@
 | **P0-2** | Fix `sales_invoice_dispatches` (ordered_qty/dispatched_qty/created_by) | ✅ Done | Migration `2025_01_08_000002` + 3 service code fixes (qty now populated) |
 | **P0-3** | Fix `sales_returns` (cogs_amount/reason) + `sales_return_items` (sales_invoice_item_id) | ✅ Done | Migration `2025_01_08_000003` — added 3 columns + FK + partial index |
 | **P0-4** | Fix `customer_payments.reference_no` | ✅ Done | Migration `2025_01_08_000004` — added column + partial index |
-| **P0-5** | Add missing `sales_challan_items` table | ⬜ Pending | Per-line issue cost SSOT (migration 040 equivalent) |
+| **P0-5** | Add missing `sales_challan_items` table | ✅ Done | Migration `2025_01_08_000005` + `SalesChallanItem` model + service populate + helper |
 | **P0-6** | Wire cart finalize button to backend | ⬜ Pending | UI stub shows "Coming in Phase 8.2" |
 | **P0-7** | Add RBAC to all sales routes | ⬜ Pending | Currently only `auth` middleware |
 | **P0-8** | Add branch isolation (middleware + policy + scope) | ⬜ Pending | No `assertInvoiceAccessible` equivalent |
@@ -52,23 +52,60 @@
    - Adds partial index `idx_cp_reference_no WHERE reference_no IS NOT NULL`
    - Captures cheque no, bank txn ID, mobile banking txn ID
 
-### Verification Status
-- [x] All 4 migration files created with correct syntax (anonymous class, up/down, idempotent guards)
-- [x] All 5 missing columns now have matching schema
-- [x] Service code updated to populate `qty` alongside `ordered_qty`/`dispatched_qty`
-- [x] Models already had these columns in `fillable` (no model changes needed)
-- [ ] `php artisan migrate` — **PENDING** (no PHP runtime in current sandbox; run in VPS/dev environment)
-- [ ] End-to-end test (finalize invoice → issue challan → receive payment → create return) — **PENDING**
+### P0-5 — Detailed Completion Notes
 
-### Files Modified
+**Problem:** Legacy migration 040 created `sales_challan_items` (per-line issue-rate SSOT). Laravel `04_sales.sql` omitted it, collapsing to aggregate `sales_challans.issue_cost`. This broke per-line COGS reporting, the `challan_reversal_smoke` test, and lost ETL fidelity.
+
+**Solution (3 deliverables):**
+
+1. **Migration `2025_01_08_000005_create_sales_challan_items_table.php`**
+   - Creates `sales_challan_items` table mirroring legacy migration 040 schema, adapted to PG:
+     - `integer GENERATED ALWAYS AS IDENTITY` PK
+     - `numeric(14,4)` qty, `numeric(12,2)` issue_rate, `numeric(14,2)` cogs_amount
+     - FKs to `sales_challans` (CASCADE), `products` (RESTRICT), `warehouses` (RESTRICT)
+   - 3 indexes: `idx_sci_challan`, `idx_sci_product`, `idx_sci_wh`
+   - `updated_at` trigger via shared `update_updated_at_column()` function
+   - **Backfill**: reconstructs rows from `stock_transactions WHERE reference_type='sales_challan'` for existing challans (same approach as legacy migration 040)
+   - Idempotent + reversible
+
+2. **`SalesChallanItem` Eloquent model** (`laravel/app/Models/SalesChallanItem.php`)
+   - `fillable`: sales_challan_id, product_id, warehouse_id, qty, issue_rate, cogs_amount
+   - `casts`: decimal:4 / decimal:2 / integer
+   - Relations: `challan()`, `product()`, `warehouse()`
+   - Scope: `forActiveChallans()` (excludes reversed challans)
+
+3. **`SalesChallan` model** — added `items()` HasMany relation
+
+4. **`SalesChallanService` updates:**
+   - `issueChallan`: after each stock OUT, INSERTs a `sales_challan_items` row with `issue_rate = avgCost` (the current avg_cost snapshot) + `cogs_amount = qty × avgCost`
+   - `issueChallan` return: eager-loads `items.product` + `items.warehouse`
+   - New `getChallanLineItems($challanId)` helper: returns per-line items joined with product + warehouse names (for reporting/audit)
+
+**Design notes:**
+- The Laravel `StockService::reverseTransaction` already reverses stock at the original `stock_transaction.rate` (which IS the original issue_rate), so per-line cost restoration on challan cancel is already correct via the stock_transactions path. The `sales_challan_items` table serves as:
+  1. A denormalized per-line audit snapshot (human-readable)
+  2. The source for GrossMargin per-line breakdown
+  3. A legacy-compatible table for the `challan_reversal_smoke` test
+  4. ETL fidelity (legacy data migrates cleanly)
+- On `cancelChallan`, the `sales_challan_items` rows are retained (not deleted) as an audit trail — the challan is marked `is_reversed=true` but its line items persist.
+
+### Verification Status (P0-5)
+- [x] Migration file created with correct schema (matches legacy migration 040, adapted to PG)
+- [x] Model created with correct fillable/casts/relations
+- [x] SalesChallan model updated with `items()` relation
+- [x] SalesChallanService::issueChallan populates `sales_challan_items` after each stock OUT
+- [x] Helper method `getChallanLineItems` added for reporting
+- [x] Backfill logic included for existing challans
+- [ ] `php artisan migrate` — **PENDING** (no PHP runtime in current sandbox)
+- [ ] End-to-end test (finalize → godown → challan → verify sales_challan_items populated) — **PENDING**
+
+### Files Modified (P0-5)
 | File | Change |
 |------|--------|
-| `laravel/database/migrations/2025_01_08_000001_add_transport_cost_to_sales_invoices.php` | NEW |
-| `laravel/database/migrations/2025_01_08_000002_restore_dispatch_quantity_columns.php` | NEW |
-| `laravel/database/migrations/2025_01_08_000003_fix_sales_return_schema_mismatches.php` | NEW |
-| `laravel/database/migrations/2025_01_08_000004_add_reference_no_to_customer_payments.php` | NEW |
-| `laravel/app/Services/Sales/SalesInvoiceService.php` | Line 184: added `'qty'` to dispatch insert |
-| `laravel/app/Services/Sales/SalesChallanService.php` | Line 192: added `'qty'` to issueChallan update; Line 273: added `'qty'` to cancelChallan update |
+| `laravel/database/migrations/2025_01_08_000005_create_sales_challan_items_table.php` | NEW |
+| `laravel/app/Models/SalesChallanItem.php` | NEW |
+| `laravel/app/Models/SalesChallan.php` | Added `items()` HasMany relation |
+| `laravel/app/Services/Sales/SalesChallanService.php` | `issueChallan`: insert per-line rows; eager-load items; new `getChallanLineItems` helper |
 
 ---
 

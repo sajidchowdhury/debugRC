@@ -184,6 +184,19 @@ class SalesChallanService
                     'created_by' => $data['created_by'] ?? null,
                 ]);
 
+                // P0-5: Persist per-line issue cost snapshot (sales_challan_items).
+                // This denormalized record captures the avg_cost at the moment of stock OUT
+                // so that reversals and reports can use the ORIGINAL per-line rate.
+                DB::table('sales_challan_items')->insert([
+                    'sales_challan_id' => $challanId,
+                    'product_id' => $productId,
+                    'warehouse_id' => $warehouseId,
+                    'qty' => $qty,
+                    'issue_rate' => $avgCost,
+                    'cogs_amount' => round($qty * $avgCost, 2),
+                    'created_at' => now(),
+                ]);
+
                 // Update dispatch row: dispatched_qty = ordered_qty, qty mirrors for GENERATED amount.
                 DB::table('sales_invoice_dispatches')
                     ->where('sales_invoice_id', $invoiceId)
@@ -219,7 +232,7 @@ class SalesChallanService
                     'updated_at' => now(),
                 ]);
 
-            return SalesChallan::with(['salesInvoice.items.product', 'branch', 'journalEntry.lines.ledger'])
+            return SalesChallan::with(['salesInvoice.items.product', 'items.product', 'items.warehouse', 'branch', 'journalEntry.lines.ledger'])
                 ->find($challanId);
         });
     }
@@ -375,5 +388,39 @@ class SalesChallanService
 
             return "CH-{$datePart}-" . str_pad((string) $nextNumber, 4, '0', STR_PAD_LEFT);
         });
+    }
+
+    /**
+     * Get per-line issue-cost items for a challan (P0-5).
+     *
+     * Returns the snapshot of avg_cost at the moment each line's stock was
+     * issued OUT. Used by:
+     *   - GrossMargin report (per-product COGS breakdown)
+     *   - challan_reversal_smoke test (verify issue_rate > 0)
+     *   - Audit / display on challan show page
+     *
+     * @param int $challanId
+     * @return \Illuminate\Support\Collection
+     */
+    public function getChallanLineItems(int $challanId)
+    {
+        return DB::table('sales_challan_items as sci')
+            ->join('products as p', 'p.id', '=', 'sci.product_id')
+            ->join('warehouses as w', 'w.id', '=', 'sci.warehouse_id')
+            ->where('sci.sales_challan_id', $challanId)
+            ->select(
+                'sci.id',
+                'sci.product_id',
+                'p.product_name',
+                'p.product_code',
+                'sci.warehouse_id',
+                'w.warehouse_name',
+                'sci.qty',
+                'sci.issue_rate',
+                'sci.cogs_amount',
+                'sci.created_at'
+            )
+            ->orderBy('sci.id')
+            ->get();
     }
 }

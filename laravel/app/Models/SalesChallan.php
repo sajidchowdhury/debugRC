@@ -96,5 +96,14 @@ class SalesChallan extends Model
         return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'adjustment_journal_entry_id');
     }
 
+    /**
+     * Per-line issue-cost items (P0-5).
+     * Each row snapshots the avg_cost used when stock was issued OUT for this challan.
+     */
+    public function items(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(SalesChallanItem::class, 'sales_challan_id');
+    }
+
     public function isReversed(): bool { return $this->is_reversed; }
 }
