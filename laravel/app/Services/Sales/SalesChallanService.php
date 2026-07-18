@@ -184,11 +184,12 @@ class SalesChallanService
                     'created_by' => $data['created_by'] ?? null,
                 ]);
 
-                // Update dispatch row: dispatched_qty = ordered_qty.
+                // Update dispatch row: dispatched_qty = ordered_qty, qty mirrors for GENERATED amount.
                 DB::table('sales_invoice_dispatches')
                     ->where('sales_invoice_id', $invoiceId)
                     ->where('product_id', $productId)
                     ->update([
+                        'qty' => DB::raw('ordered_qty'),
                         'dispatched_qty' => DB::raw('ordered_qty'),
                         'warehouse_id' => $warehouseId,
                     ]);
@@ -265,10 +266,13 @@ class SalesChallanService
                 );
             }
 
-            // Reset dispatch rows: dispatched_qty = 0.
+            // Reset dispatch rows: dispatched_qty = 0, qty mirrors for GENERATED amount.
             DB::table('sales_invoice_dispatches')
                 ->where('sales_invoice_id', $challan->sales_invoice_id)
-                ->update(['dispatched_qty' => 0]);
+                ->update([
+                    'qty' => 0,
+                    'dispatched_qty' => 0,
+                ]);
 
             // Mark challan as reversed.
             DB::table('sales_challans')

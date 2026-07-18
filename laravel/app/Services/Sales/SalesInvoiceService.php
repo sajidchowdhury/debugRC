@@ -181,6 +181,7 @@ class SalesInvoiceService
                     'sales_invoice_id' => $invoiceId,
                     'product_id' => (int) $item['product_id'],
                     'warehouse_id' => null, // assigned at godown
+                    'qty' => (float) $item['qty'], // mirrors ordered_qty for GENERATED amount
                     'ordered_qty' => (float) $item['qty'],
                     'dispatched_qty' => 0,
                     'created_by' => $data['created_by'] ?? null,
