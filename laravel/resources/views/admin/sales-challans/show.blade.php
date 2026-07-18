@@ -69,9 +69,9 @@
             </p>
         </div>
         <div class="d-flex gap-2">
-            <button type="button" class="btn btn-outline-light btn-sm" onclick="window.print()">
-                <i class="fas fa-print me-1"></i> Print
-            </button>
+            <a href="{{ route('admin.sales-challans.print-challan', $challan->id) }}" class="btn btn-outline-light btn-sm" target="_blank">
+                <i class="fas fa-print me-1"></i> Print Challan
+            </a>
             <a href="{{ route('admin.sales-challans.index') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-arrow-left me-1"></i> Back to list
             </a>

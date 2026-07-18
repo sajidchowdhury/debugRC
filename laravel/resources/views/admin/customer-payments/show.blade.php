@@ -544,9 +544,10 @@
                     <h2 class="h6 mb-0"><i class="fas fa-bolt me-1 text-success"></i> Actions</h2>
                 </div>
                 <div class="card-body d-grid gap-2">
-                    <button type="button" class="btn btn-outline-secondary" onclick="window.print()">
-                        <i class="fas fa-print me-1"></i> Print payment
-                    </button>
+                    {{-- P1-6: Print receipt (dedicated print view) --}}
+                    <a href="{{ route('admin.customer-payments.print-receipt', $payment->id) }}" class="btn btn-outline-primary w-100" target="_blank">
+                        <i class="fas fa-print me-1"></i> Print Receipt
+                    </a>
 
                     @if (! $payment->is_reversed)
                         <form method="POST" action="{{ route('admin.customer-payments.cancel', $payment) }}" id="cancelForm">

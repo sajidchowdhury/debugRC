@@ -342,6 +342,34 @@ class SalesInvoiceController extends Controller
         ]);
     }
 
+    /**
+     * P1-6: Print invoice (paginated, A4-friendly).
+     */
+    public function printInvoice(int $id)
+    {
+        $invoice = SalesInvoice::with(['items.product', 'customer', 'branch', 'salesman'])
+            ->findOrFail($id);
+
+        return view('admin.sales-invoices.print_invoice', [
+            'title' => 'Invoice ' . $invoice->invoice_code,
+            'invoice' => $invoice,
+        ]);
+    }
+
+    /**
+     * P1-6: Print godown copy (picking list for warehouse staff).
+     */
+    public function printGodown(int $id)
+    {
+        $invoice = SalesInvoice::with(['items.product', 'items.warehouse', 'customer', 'branch'])
+            ->findOrFail($id);
+
+        return view('admin.sales-invoices.print_godown', [
+            'title' => 'Godown Copy — ' . $invoice->invoice_code,
+            'invoice' => $invoice,
+        ]);
+    }
+
     public function show(int $id)
     {
         $invoice = SalesInvoice::with([

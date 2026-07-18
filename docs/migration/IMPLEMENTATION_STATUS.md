@@ -345,7 +345,7 @@ All 8 Phase 0 tasks are complete and pushed to GitHub:
 | P1-3 | Fix audit logging (9 business events) | ✅ Done | `SalesAuditLogger` service + 10 audit calls across 4 services + `sales-audit` view + route |
 | P1-4 | Fix double-bookkeeping (allocations tables) | ✅ Done | Consolidated to `invoice_payment_allocations`; dropped `customer_payment_settlements`; new `InvoicePaymentAllocation` model + backward-compatible `settlements()` alias |
 | P1-5 | Linked damage write-off for Damage returns | ✅ Done | Migration (link columns + damage_invoices gaps) + `createLinkedDamageWriteOffs` + `reverseLinkedDamageForReturn` in SalesReturnService |
-| P1-6 | Print views (invoice/challan/receipt/slip) | ⬜ Pending |
+| P1-6 | Print views (invoice/challan/receipt/slip) | ✅ Done | 5 print templates + `layouts/print.blade.php` + 5 routes + 5 controller methods + print buttons on 4 show views |
 | P1-7 | Sales notifications (return events) | ⬜ Pending |
 
 ---

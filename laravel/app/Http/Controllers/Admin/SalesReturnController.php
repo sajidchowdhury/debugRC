@@ -112,6 +112,22 @@ class SalesReturnController extends Controller
         }
     }
 
+    /**
+     * P1-6: Print return slip.
+     */
+    public function printSlip(int $id)
+    {
+        $return = SalesReturn::with([
+            'items.product', 'items.warehouse',
+            'salesInvoice.customer', 'branch',
+        ])->findOrFail($id);
+
+        return view('admin.sales-returns.print_slip', [
+            'title' => 'Return Slip ' . $return->return_code,
+            'salesReturn' => $return,
+        ]);
+    }
+
     public function show(int $id)
     {
         $return = SalesReturn::with([

@@ -180,6 +180,22 @@ class SalesChallanController extends Controller
         }
     }
 
+    /**
+     * P1-6: Print challan (delivery note).
+     */
+    public function printChallan(int $id)
+    {
+        $challan = SalesChallan::with([
+            'items.product', 'items.warehouse',
+            'salesInvoice.customer', 'branch',
+        ])->findOrFail($id);
+
+        return view('admin.sales-challans.print_challan', [
+            'title' => 'Challan ' . $challan->challan_code,
+            'challan' => $challan,
+        ]);
+    }
+
     public function show(int $id)
     {
         $challan = SalesChallan::with([

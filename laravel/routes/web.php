@@ -338,6 +338,11 @@ Route::middleware('auth')->group(function () {
             ->name('edit')->middleware(['role:salesman,manager,admin', 'branch.isolation']);
         Route::put('{id}', [SalesInvoiceController::class, 'update'])
             ->name('update')->middleware(['role:salesman,manager,admin', 'branch.isolation']);
+        // P1-6: Print views
+        Route::get('{id}/print-invoice', [SalesInvoiceController::class, 'printInvoice'])
+            ->name('print-invoice')->middleware('role:salesman,accountant,manager,admin');
+        Route::get('{id}/print-godown', [SalesInvoiceController::class, 'printGodown'])
+            ->name('print-godown')->middleware('role:warehouse_manager,manager,admin');
     });
     // index + show — accountant included (read access)
     Route::resource('admin/sales-invoices', SalesInvoiceController::class)
@@ -363,6 +368,9 @@ Route::middleware('auth')->group(function () {
         // Challan reverse — manager, admin only (legacy reverse_challan)
         Route::post('{id}/cancel', [SalesChallanController::class, 'cancel'])
             ->name('cancel')->middleware(['role:manager,admin', 'branch.isolation']);
+        // P1-6: Print challan
+        Route::get('{id}/print-challan', [SalesChallanController::class, 'printChallan'])
+            ->name('print-challan')->middleware('role:warehouse_manager,dispatcher,accountant,manager,admin');
     });
     // index — warehouse_manager, dispatcher, manager, admin (legacy ChallanController::index)
     Route::resource('admin/sales-challans', SalesChallanController::class)
@@ -387,6 +395,9 @@ Route::middleware('auth')->group(function () {
         // Payment reverse — accountant, manager, admin (legacy reverse_payment)
         Route::post('{id}/cancel', [CustomerPaymentController::class, 'cancel'])
             ->name('cancel')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+        // P1-6: Print payment receipt
+        Route::get('{id}/print-receipt', [CustomerPaymentController::class, 'printReceipt'])
+            ->name('print-receipt')->middleware('role:salesman,accountant,manager,admin');
     });
     // store carries branch_id in the request body → branch.isolation
     Route::resource('admin/customer-payments', CustomerPaymentController::class)
@@ -414,6 +425,9 @@ Route::middleware('auth')->group(function () {
         // Return reverse — accountant, manager, admin (legacy SalesReturn::reverse)
         Route::post('{id}/reverse', [SalesReturnController::class, 'reverse'])
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+        // P1-6: Print return slip
+        Route::get('{id}/print-slip', [SalesReturnController::class, 'printSlip'])
+            ->name('print-slip')->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
     });
     // index — broadest (legacy: admin,manager,salesman,accountant,warehouse_manager)
     Route::resource('admin/sales-returns', SalesReturnController::class)

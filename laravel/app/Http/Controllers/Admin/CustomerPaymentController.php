@@ -124,6 +124,21 @@ class CustomerPaymentController extends Controller
         }
     }
 
+    /**
+     * P1-6: Print payment receipt.
+     */
+    public function printReceipt(int $id)
+    {
+        $payment = CustomerPayment::with([
+            'customer', 'branch', 'bank', 'allocations.invoice',
+        ])->findOrFail($id);
+
+        return view('admin.customer-payments.print_receipt', [
+            'title' => 'Receipt ' . $payment->payment_code,
+            'payment' => $payment,
+        ]);
+    }
+
     public function show(int $id)
     {
         $payment = CustomerPayment::with([

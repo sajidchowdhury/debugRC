@@ -665,6 +665,14 @@
                         </div>
                     @endif
 
+                    {{-- P1-6: Print buttons --}}
+                    <a href="{{ route('admin.sales-invoices.print-invoice', $invoice->id) }}" class="btn btn-outline-primary w-100" target="_blank">
+                        <i class="fas fa-print me-1"></i> Print Invoice
+                    </a>
+                    <a href="{{ route('admin.sales-invoices.print-godown', $invoice->id) }}" class="btn btn-outline-secondary w-100" target="_blank">
+                        <i class="fas fa-warehouse me-1"></i> Print Godown Copy
+                    </a>
+
                     {{-- Draft: Cancel invoice --}}
                     @if ($invoice->isDraft())
                         <form method="POST" action="{{ route('admin.sales-invoices.cancel', $invoice->id) }}" id="cancelForm">

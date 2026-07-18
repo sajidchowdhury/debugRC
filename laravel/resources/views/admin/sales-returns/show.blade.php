@@ -51,7 +51,10 @@
                 · {{ \Carbon\Carbon::parse($r->return_date)->format('d M Y') }}
             </p>
         </div>
-        <div>
+        <div class="d-flex gap-2">
+            <a href="{{ route('admin.sales-returns.print-slip', $r->id) }}" class="btn btn-outline-light btn-sm" target="_blank">
+                <i class="fas fa-print me-1"></i> Print Slip
+            </a>
             <a href="{{ route('admin.sales-returns.index') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-arrow-left me-1"></i> Back to list
             </a>
