@@ -20,7 +20,7 @@
 | **P0-4** | Fix `customer_payments.reference_no` | ✅ Done | Migration `2025_01_08_000004` — added column + partial index |
 | **P0-5** | Add missing `sales_challan_items` table | ✅ Done | Migration `2025_01_08_000005` + `SalesChallanItem` model + service populate + helper |
 | **P0-6** | Wire cart finalize button to backend | ✅ Done | SweetAlert dialog with editable fields + credit pre-check + POST to `/admin/sales/finalize` |
-| **P0-7** | Add RBAC to all sales routes | ⬜ Pending | Currently only `auth` middleware |
+| **P0-7** | Add RBAC to all sales routes | ✅ Done | 19 role middleware assignments across 5 route groups, mirroring legacy `route_roles.php` |
 | **P0-8** | Add branch isolation (middleware + policy + scope) | ⬜ Pending | No `assertInvoiceAccessible` equivalent |
 
 ### P0-1 Through P0-4 — Detailed Completion Notes
@@ -166,6 +166,62 @@
 | File | Change |
 |------|--------|
 | `laravel/resources/views/admin/sales/cart.blade.php` | Replaced finalize stub (lines 919-926) with full `finalizeInvoice()` flow (~210 lines); added 3 endpoints to ENDPOINTS object; updated button tooltip; fixed `state.subtotal` → `state.cart.subtotal` |
+
+---
+
+### P0-7 — Detailed Completion Notes
+
+**Problem:** All sales routes used only the `auth` middleware (line 62 of `web.php`). Any authenticated user — including `user`, `hr`, `other` roles — could finalize invoices, issue challans, post payments, reverse returns, and cancel invoices. Legacy had a 455-line route-role matrix in `app/config/route_roles.php` covering 35 sales actions.
+
+**Solution:** Applied `->middleware('role:...')` to every sales route, mirroring the legacy `route_roles.php` matrix. 19 role middleware assignments across 5 route groups:
+
+| Route Group | Action | Allowed Roles | Legacy Equivalent |
+|-------------|--------|---------------|-------------------|
+| `admin/sales` (group) | cart, cart/*, finalize, cart-data, credit-check | salesman, manager, admin | search_customer, add_to_cart, validate_cart, final_sales |
+| `admin/sales-invoices` | index, show (resource) | salesman, accountant, manager, admin | today, datatable_invoices, show |
+| `admin/sales-invoices` | cancel (POST) | salesman, manager, admin | delete_invoice |
+| `admin/sales-challans` | index (resource) | warehouse_manager, dispatcher, manager, admin | ChallanController::index |
+| `admin/sales-challans` | show (resource) | accountant, warehouse_manager, manager, admin | ChallanController::details |
+| `admin/sales-challans` | godown, storeGodown, challan-form, issueChallan | warehouse_manager, dispatcher, manager, admin | prepare_godown, create_final_challan |
+| `admin/sales-challans` | cancel (POST) | manager, admin | reverse_challan |
+| `admin/customer-payments` | index, create, store, show (resource) | salesman, accountant, manager, admin | PaymentController::receive, store |
+| `admin/customer-payments` | outstanding-invoices (GET) | salesman, accountant, manager, admin | (AJAX helper) |
+| `admin/customer-payments` | cancel (POST) | accountant, manager, admin | reverse_payment |
+| `admin/sales-returns` | index (resource) | salesman, accountant, warehouse_manager, manager, admin | SalesReturnController::index |
+| `admin/sales-returns` | create, store (resource) | salesman, manager, admin | SalesReturnController::create, store |
+| `admin/sales-returns` | show (resource) | accountant, warehouse_manager, manager, admin | SalesReturnController::details |
+| `admin/sales-returns` | invoice-details (GET) | salesman, manager, admin | get_invoice_for_return |
+| `admin/sales-returns` | confirm (POST) | warehouse_manager, accountant, manager, admin | confirm_store |
+| `admin/sales-returns` | reverse (POST) | accountant, manager, admin | SalesReturnController::reverse |
+
+**How the `EnsureRole` middleware works:**
+1. Superadmin → always passes (bypass)
+2. If `admin` is in the allowed roles list AND user role is `admin` → passes (admin tier bypass via `getRoleTiers()`)
+3. If user role is in the allowed roles list → passes (exact match)
+4. Otherwise → 403 JSON for AJAX, redirect to dashboard for non-AJAX
+
+All role lists include `admin` explicitly, so admin users always pass. `superadmin` always passes regardless. Roles `user`, `hr`, `other` are NEVER in any sales role list → they get 403 on all sales routes.
+
+**Implementation approach:**
+- Group-level middleware: `admin/sales` group gets `->middleware('role:salesman,manager,admin')` at the prefix level — applies to all 12 routes in the group
+- Per-route middleware: custom routes (cancel, confirm, reverse, etc.) get `->middleware('role:...')` chained after `->name(...)`
+- Resource splitting: resources with different roles per action (e.g., `sales-returns` where index/create+store/show need different roles) are split into multiple `->only([...])` declarations, each with its own middleware
+
+### Verification Status (P0-7)
+- [x] `EnsureRole` middleware exists at `app/Http/Middleware/EnsureRole.php`
+- [x] `role` alias registered in `bootstrap/app.php:34`
+- [x] `config/roles.php` confirms 3 tiers (superadmin/admin/operational) + 10 roles
+- [x] 19 role middleware assignments applied across 5 route groups
+- [x] All route names unique (no duplicates)
+- [x] Brace/paren balance: 84/84, 499/499
+- [x] Admin/superadmin bypass works (all role lists include `admin`; superadmin always passes)
+- [x] `user`, `hr`, `other` roles excluded from ALL sales routes
+- [ ] End-to-end test with each role — **PENDING** (no PHP runtime in current sandbox)
+
+### Files Modified (P0-7)
+| File | Change |
+|------|--------|
+| `laravel/routes/web.php` | Added `->middleware('role:...')` to 19 sales routes across 5 groups (lines 294-412); split resources by role requirement; added P0-7 comments |
 
 ---
 

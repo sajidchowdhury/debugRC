@@ -293,8 +293,13 @@ Route::middleware('auth')->group(function () {
 
     // ============================================================
     // Phase 8.1: Sales Cart Service (per-user-per-customer draft cart)
+    // P0-7: RBAC — all cart operations are salesman/manager/admin.
+    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+    //  were all admin,manager,salesman per route_roles.php.)
     // ============================================================
-    Route::prefix('admin/sales')->name('admin.sales.')->group(function () {
+    Route::prefix('admin/sales')->name('admin.sales.')
+        ->middleware('role:salesman,manager,admin')
+        ->group(function () {
         Route::get('cart', [SalesCartController::class, 'index'])->name('cart');
         Route::post('cart/load', [SalesCartController::class, 'load'])->name('cart.load');
         Route::post('cart/add', [SalesCartController::class, 'add'])->name('cart.add');
@@ -313,50 +318,98 @@ Route::middleware('auth')->group(function () {
 
     // ============================================================
     // Phase 8.2: Sales Invoices (list + show + cancel)
+    // P0-7: RBAC — index/show allow accountant (read); cancel is
+    // salesman/manager/admin (legacy delete_invoice).
     // ============================================================
     Route::prefix('admin/sales-invoices')->name('admin.sales-invoices.')->group(function () {
-        Route::post('{id}/cancel', [SalesInvoiceController::class, 'cancel'])->name('cancel');
+        Route::post('{id}/cancel', [SalesInvoiceController::class, 'cancel'])
+            ->name('cancel')->middleware('role:salesman,manager,admin');
     });
     Route::resource('admin/sales-invoices', SalesInvoiceController::class)
         ->only(['index', 'show'])
-        ->names('admin.sales-invoices');
+        ->names('admin.sales-invoices')
+        ->middleware('role:salesman,accountant,manager,admin');
 
     // ============================================================
     // Phase 8.3: Sales Challans (godown prep + stock OUT + COGS GL)
+    // P0-7: RBAC — godown/issue are warehouse_manager/dispatcher;
+    // cancel (reverse) is manager/admin only (legacy reverse_challan).
     // ============================================================
     Route::prefix('admin/sales-challans')->name('admin.sales-challans.')->group(function () {
-        Route::get('godown/{invoiceId}', [SalesChallanController::class, 'godown'])->name('godown');
-        Route::post('godown/{invoiceId}', [SalesChallanController::class, 'storeGodown'])->name('storeGodown');
-        Route::get('issue/{invoiceId}', [SalesChallanController::class, 'challanForm'])->name('challan-form');
-        Route::post('issue/{invoiceId}', [SalesChallanController::class, 'issueChallan'])->name('issueChallan');
-        Route::post('{id}/cancel', [SalesChallanController::class, 'cancel'])->name('cancel');
+        // Godown prep + challan issue — warehouse_manager, dispatcher, manager, admin
+        Route::get('godown/{invoiceId}', [SalesChallanController::class, 'godown'])
+            ->name('godown')->middleware('role:warehouse_manager,dispatcher,manager,admin');
+        Route::post('godown/{invoiceId}', [SalesChallanController::class, 'storeGodown'])
+            ->name('storeGodown')->middleware('role:warehouse_manager,dispatcher,manager,admin');
+        Route::get('issue/{invoiceId}', [SalesChallanController::class, 'challanForm'])
+            ->name('challan-form')->middleware('role:warehouse_manager,dispatcher,manager,admin');
+        Route::post('issue/{invoiceId}', [SalesChallanController::class, 'issueChallan'])
+            ->name('issueChallan')->middleware('role:warehouse_manager,dispatcher,manager,admin');
+        // Challan reverse — manager, admin only (legacy reverse_challan)
+        Route::post('{id}/cancel', [SalesChallanController::class, 'cancel'])
+            ->name('cancel')->middleware('role:manager,admin');
     });
+    // index — warehouse_manager, dispatcher, manager, admin (legacy ChallanController::index)
     Route::resource('admin/sales-challans', SalesChallanController::class)
-        ->only(['index', 'show'])
-        ->names('admin.sales-challans');
+        ->only(['index'])
+        ->names('admin.sales-challans')
+        ->middleware('role:warehouse_manager,dispatcher,manager,admin');
+    // show — accountant included (legacy details: admin,manager,accountant,warehouse_manager)
+    Route::resource('admin/sales-challans', SalesChallanController::class)
+        ->only(['show'])
+        ->names('admin.sales-challans')
+        ->middleware('role:accountant,warehouse_manager,manager,admin');
 
     // ============================================================
     // Phase 8.4: Customer Payments (Dr Bank/Cash / Cr AR + intercompany)
+    // P0-7: RBAC — create/store/index/show allow salesman+accountant;
+    // cancel (reverse payment) is accountant/manager/admin only
+    // (legacy reverse_payment).
     // ============================================================
     Route::prefix('admin/customer-payments')->name('admin.customer-payments.')->group(function () {
-        Route::get('outstanding-invoices', [CustomerPaymentController::class, 'getOutstandingInvoices'])->name('outstanding-invoices');
-        Route::post('{id}/cancel', [CustomerPaymentController::class, 'cancel'])->name('cancel');
+        Route::get('outstanding-invoices', [CustomerPaymentController::class, 'getOutstandingInvoices'])
+            ->name('outstanding-invoices')->middleware('role:salesman,accountant,manager,admin');
+        // Payment reverse — accountant, manager, admin (legacy reverse_payment)
+        Route::post('{id}/cancel', [CustomerPaymentController::class, 'cancel'])
+            ->name('cancel')->middleware('role:accountant,manager,admin');
     });
     Route::resource('admin/customer-payments', CustomerPaymentController::class)
         ->only(['index', 'create', 'store', 'show'])
-        ->names('admin.customer-payments');
+        ->names('admin.customer-payments')
+        ->middleware('role:salesman,accountant,manager,admin');
 
     // ============================================================
     // Phase 8.5: Sales Returns (stock IN at ORIGINAL avg_cost + GL)
+    // P0-7: RBAC — create/store is salesman/manager/admin; confirm is
+    // warehouse_manager/accountant/manager/admin (two-step return);
+    // reverse is accountant/manager/admin only (legacy SalesReturn::reverse).
     // ============================================================
     Route::prefix('admin/sales-returns')->name('admin.sales-returns.')->group(function () {
-        Route::get('invoice-details', [SalesReturnController::class, 'getInvoiceDetails'])->name('invoice-details');
-        Route::post('{id}/confirm', [SalesReturnController::class, 'confirm'])->name('confirm');
-        Route::post('{id}/reverse', [SalesReturnController::class, 'reverse'])->name('reverse');
+        // Return create flow — salesman, manager, admin
+        Route::get('invoice-details', [SalesReturnController::class, 'getInvoiceDetails'])
+            ->name('invoice-details')->middleware('role:salesman,manager,admin');
+        // Return confirm — warehouse_manager, accountant, manager, admin (legacy confirm_store)
+        Route::post('{id}/confirm', [SalesReturnController::class, 'confirm'])
+            ->name('confirm')->middleware('role:warehouse_manager,accountant,manager,admin');
+        // Return reverse — accountant, manager, admin (legacy SalesReturn::reverse)
+        Route::post('{id}/reverse', [SalesReturnController::class, 'reverse'])
+            ->name('reverse')->middleware('role:accountant,manager,admin');
     });
+    // index — broadest (legacy: admin,manager,salesman,accountant,warehouse_manager)
     Route::resource('admin/sales-returns', SalesReturnController::class)
-        ->only(['index', 'create', 'store', 'show'])
-        ->names('admin.sales-returns');
+        ->only(['index'])
+        ->names('admin.sales-returns')
+        ->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
+    // create, store — salesman, manager, admin (legacy create/store)
+    Route::resource('admin/sales-returns', SalesReturnController::class)
+        ->only(['create', 'store'])
+        ->names('admin.sales-returns')
+        ->middleware('role:salesman,manager,admin');
+    // show — accountant, warehouse_manager, manager, admin (legacy details)
+    Route::resource('admin/sales-returns', SalesReturnController::class)
+        ->only(['show'])
+        ->names('admin.sales-returns')
+        ->middleware('role:accountant,warehouse_manager,manager,admin');
 
     // ============================================================
     // Phase 9.5: Accounting Period Close + Year-End
