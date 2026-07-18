@@ -37,6 +37,10 @@ class NotificationService
         'soft_delete' => ['icon' => 'fa-trash', 'color' => 'warning', 'title' => 'Record Deleted'],
         'accounts_entry' => ['icon' => 'fa-book', 'color' => 'primary', 'title' => 'Accounting Entry Posted'],
         'user_login' => ['icon' => 'fa-user', 'color' => 'secondary', 'title' => 'User Login'],
+        // P1-7: Sales return events
+        'return_created' => ['icon' => 'fa-arrow-rotate-left', 'color' => 'info', 'title' => 'Sales Return Created'],
+        'return_confirmed' => ['icon' => 'fa-check', 'color' => 'primary', 'title' => 'Sales Return Confirmed'],
+        'return_reversed' => ['icon' => 'fa-rotate-left', 'color' => 'danger', 'title' => 'Sales Return Reversed'],
     ];
 
     /**
@@ -124,6 +128,9 @@ class NotificationService
             'sales_manager' => User::whereHas('employee', fn($q) => $q->whereIn('role', ['manager', 'salesman', 'admin', 'superadmin']))
                 ->where('is_active', true)->whereNull('deleted_at')->get(),
             'accountant' => User::whereHas('employee', fn($q) => $q->whereIn('role', ['accountant', 'admin', 'superadmin']))
+                ->where('is_active', true)->whereNull('deleted_at')->get(),
+            // P1-7: warehouse_manager recipients (for return confirm notifications)
+            'warehouse_manager' => User::whereHas('employee', fn($q) => $q->whereIn('role', ['warehouse_manager', 'manager', 'admin', 'superadmin']))
                 ->where('is_active', true)->whereNull('deleted_at')->get(),
             'all_users' => User::where('is_active', true)->whereNull('deleted_at')->get(),
             'specific_user' => $rule->recipient_user_id

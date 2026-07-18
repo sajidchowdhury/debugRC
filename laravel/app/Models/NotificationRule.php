@@ -60,6 +60,10 @@ class NotificationRule extends Model
         'soft_delete' => 'Any Record Soft-Deleted',
         'accounts_entry' => 'Any Accounting Entry Posted',
         'user_login' => 'User Login',
+        // P1-7: Sales return events (legacy had return_created + return_received)
+        'return_created' => 'Sales Return Created',
+        'return_confirmed' => 'Sales Return Confirmed',
+        'return_reversed' => 'Sales Return Reversed',
     ];
 
     /**
@@ -72,6 +76,8 @@ class NotificationRule extends Model
         'accountant' => 'Accounts',
         'all_users' => 'All Users',
         'specific_user' => 'Specific User',
+        // P1-7: warehouse_manager recipient (for return confirm notifications)
+        'warehouse_manager' => 'Warehouse Manager',
     ];
 
     /**

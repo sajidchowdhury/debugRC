@@ -346,7 +346,7 @@ All 8 Phase 0 tasks are complete and pushed to GitHub:
 | P1-4 | Fix double-bookkeeping (allocations tables) | ✅ Done | Consolidated to `invoice_payment_allocations`; dropped `customer_payment_settlements`; new `InvoicePaymentAllocation` model + backward-compatible `settlements()` alias |
 | P1-5 | Linked damage write-off for Damage returns | ✅ Done | Migration (link columns + damage_invoices gaps) + `createLinkedDamageWriteOffs` + `reverseLinkedDamageForReturn` in SalesReturnService |
 | P1-6 | Print views (invoice/challan/receipt/slip) | ✅ Done | 5 print templates + `layouts/print.blade.php` + 5 routes + 5 controller methods + print buttons on 4 show views |
-| P1-7 | Sales notifications (return events) | ⬜ Pending |
+| P1-7 | Sales notifications (return events) | ✅ Done | 3 new events (return_created/confirmed/reversed) + warehouse_manager recipient type + dispatch calls in SalesReturnService + seeded 4 notification_rules |
 
 ---
 
@@ -745,6 +745,33 @@ This is double-bookkeeping: two tables for the same purpose, but only one is eve
 | `laravel/app/Services/Sales/SalesReturnService.php` | Injected DamageService + `createLinkedDamageWriteOffs` + `reverseLinkedDamageForReturn` methods + calls in confirmReturn/reverseReturn |
 | `laravel/app/Models/SalesReturnItem.php` | Added `damage_invoice_id` to fillable |
 | `laravel/app/Models/DamageInvoice.php` | Added `sales_return_id` to fillable |
+
+---
+
+## 🎉 PHASE 1 COMPLETE — ALL OPERATIONAL FEATURES RESTORED
+
+All 7 Phase 1 tasks are complete and pushed to GitHub:
+
+| Task | Commit | Description |
+|------|--------|-------------|
+| P1-1 | `7c109d4` | Invoice edit/update flow |
+| P1-2 | `864a7c5` | Stale draft cancellation (Artisan + cron) |
+| P1-3 | `7ef0334` | Audit logging (13 business events) |
+| P1-4 | `0860238` | Double-bookkeeping fix (allocations consolidation) |
+| P1-5 | `f4d700b` | Linked damage write-off for Damage returns |
+| P1-6 | `c66d614` | Print views (5 templates) |
+| P1-7 | _(this commit)_ | Sales notifications (return events) |
+
+**Phase 1 Exit Criteria Met:**
+- ✅ Salesman can edit draft invoices (P1-1)
+- ✅ Stale drafts auto-cancel nightly (P1-2)
+- ✅ Audit trail has 13 business events (P1-3)
+- ✅ Single allocation table, no drift (P1-4)
+- ✅ Damage returns auto-write-off (P1-5)
+- ✅ All 5 print views work (P1-6)
+- ✅ Return notifications fire to admins/warehouse/accountants (P1-7)
+
+**Remaining:** Phase 2 (refinements) + Phase 3 (QA/shadow mode).
 
 ---
 

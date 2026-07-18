@@ -6,6 +6,7 @@ use App\Models\SalesReturn;
 use App\Services\Stock\StockService;
 use App\Services\Stock\DamageService;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Notification\NotificationService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -38,7 +39,8 @@ class SalesReturnService
         private JournalPostingService $journalPosting,
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger,
-        private DamageService $damageService
+        private DamageService $damageService,
+        private NotificationService $notifications
     ) {}
 
     /**
@@ -129,6 +131,15 @@ class SalesReturnService
                 $totalRevenue, $totalCogs
             );
 
+            // P1-7: Notify admins that a return was created.
+            $this->notifications->dispatch(
+                'return_created',
+                "Return {$returnCode} created for Tk " . number_format($totalRevenue, 2)
+                . " against invoice #{$invoiceId}.",
+                'sales_return',
+                $returnId
+            );
+
             return SalesReturn::with(['items.product', 'salesInvoice', 'customer', 'branch'])->find($returnId);
         });
     }
@@ -201,6 +212,16 @@ class SalesReturnService
                 $returnId, $return->return_code, (int) $return->branch_id,
                 (float) $return->total_amount, (float) $return->cogs_amount,
                 $journalEntryId
+            );
+
+            // P1-7: Notify warehouse managers + accountants that a return was confirmed.
+            $this->notifications->dispatch(
+                'return_confirmed',
+                "Return {$return->return_code} confirmed — stock restored, GL posted. "
+                . "Total: Tk " . number_format((float) $return->total_amount, 2)
+                . ", COGS reversed: Tk " . number_format((float) $return->cogs_amount, 2) . ".",
+                'sales_return',
+                $returnId
             );
 
             return SalesReturn::with([
@@ -283,6 +304,15 @@ class SalesReturnService
                 $reversedBy,
                 $returnId, $return->return_code, (int) $return->branch_id,
                 (float) $return->total_amount, $reason
+            );
+
+            // P1-7: Notify accountants + admins that a return was reversed.
+            $this->notifications->dispatch(
+                'return_reversed',
+                "Return {$return->return_code} reversed — stock + GL + ledger rolled back. "
+                . "Reason: {$reason}",
+                'sales_return',
+                $returnId
             );
 
             return SalesReturn::find($returnId);
