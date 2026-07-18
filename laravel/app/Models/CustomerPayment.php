@@ -108,9 +108,22 @@ class CustomerPayment extends Model
         return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'intercompany_journal_entry_id');
     }
 
+    /**
+     * Invoice allocations for this payment (P1-4: consolidated to invoice_payment_allocations).
+     * Previously used customer_payment_settlements (dropped — it was never populated).
+     */
+    public function allocations(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(InvoicePaymentAllocation::class, 'payment_id');
+    }
+
+    /**
+     * Backward-compatible alias for allocations().
+     * Views/controllers that used ->settlements will still work.
+     */
     public function settlements(): \Illuminate\Database\Eloquent\Relations\HasMany
     {
-        return $this->hasMany(CustomerPaymentSettlement::class, 'payment_id');
+        return $this->allocations();
     }
 
     public function isDraft(): bool { return $this->status === 'draft'; }

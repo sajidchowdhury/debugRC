@@ -145,7 +145,7 @@ class CustomerPaymentService
                 'customer', 'branch', 'bank',
                 'journalEntry.lines.ledger',
                 'intercompanyJournalEntry.lines.ledger',
-                'settlements.invoice',
+                'allocations.invoice',
             ])->find($paymentId);
         });
     }
@@ -189,24 +189,24 @@ class CustomerPaymentService
             // Reverse customer_ledger (debit entry to restore what customer owes).
             $this->reverseCustomerLedgerCredit($payment, $cancelledBy, $reason);
 
-            // Reverse invoice allocations.
-            $settlements = DB::table('customer_payment_settlements')
+            // Reverse invoice allocations (P1-4: use invoice_payment_allocations, not customer_payment_settlements).
+            $allocations = DB::table('invoice_payment_allocations')
                 ->where('payment_id', $paymentId)
                 ->get();
 
-            foreach ($settlements as $settlement) {
+            foreach ($allocations as $allocation) {
                 // Decrement invoice paid_amount.
                 DB::table('sales_invoices')
-                    ->where('id', $settlement->invoice_id)
+                    ->where('id', $allocation->invoice_id)
                     ->update([
-                        'paid_amount' => DB::raw('GREATEST(0, paid_amount - ' . (float) $settlement->allocated_amount . ')'),
-                        'due_amount' => DB::raw('due_amount + ' . (float) $settlement->allocated_amount),
+                        'paid_amount' => DB::raw('GREATEST(0, paid_amount - ' . (float) $allocation->allocated_amount . ')'),
+                        'due_amount' => DB::raw('due_amount + ' . (float) $allocation->allocated_amount),
                         'updated_at' => now(),
                     ]);
             }
 
             // Delete allocations.
-            DB::table('customer_payment_settlements')->where('payment_id', $paymentId)->delete();
+            DB::table('invoice_payment_allocations')->where('payment_id', $paymentId)->delete();
 
             // Mark payment as reversed.
             DB::table('customer_payments')

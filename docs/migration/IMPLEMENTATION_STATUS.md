@@ -343,7 +343,7 @@ All 8 Phase 0 tasks are complete and pushed to GitHub:
 | P1-1 | Invoice edit/update flow | ✅ Done | `updateInvoice` service + `edit`/`update` controller + `edit.blade.php` view + routes + edit button on show page |
 | P1-2 | Stale draft cancellation (Artisan + cron) | ✅ Done | `sales:cancel-stale-drafts` command + daily 02:00 schedule + `config/sales.php` + manual admin endpoint |
 | P1-3 | Fix audit logging (9 business events) | ✅ Done | `SalesAuditLogger` service + 10 audit calls across 4 services + `sales-audit` view + route |
-| P1-4 | Fix double-bookkeeping (allocations tables) | ⬜ Pending |
+| P1-4 | Fix double-bookkeeping (allocations tables) | ✅ Done | Consolidated to `invoice_payment_allocations`; dropped `customer_payment_settlements`; new `InvoicePaymentAllocation` model + backward-compatible `settlements()` alias |
 | P1-5 | Linked damage write-off for Damage returns | ⬜ Pending |
 | P1-6 | Print views (invoice/challan/receipt/slip) | ⬜ Pending |
 | P1-7 | Sales notifications (return events) | ⬜ Pending |
@@ -603,6 +603,69 @@ All 8 Phase 0 tasks are complete and pushed to GitHub:
 | `laravel/app/Providers/AppServiceProvider.php` | Registered `SalesAuditLogger` as singleton |
 | `laravel/routes/web.php` | Added `GET audit` route (role: accountant, manager, admin) |
 | `laravel/resources/views/admin/sales-audit/index.blade.php` | NEW — filterable audit trail view with 13 event types |
+
+---
+
+### P1-4 — Detailed Completion Notes
+
+**Problem:** PG had BOTH tables tracking payment↔invoice linkage:
+- `invoice_payment_allocations` (in `05_purchase.sql`) — **written** by `CustomerPaymentService::allocateToInvoice`, read by `allocateToInvoice` + `SalesInvoiceController::edit` + `SalesInvoiceService::invoiceHasPayments`
+- `customer_payment_settlements` (in `06_payment_and_misc.sql`) — **read** by `CustomerPaymentService::cancelPayment` + `CustomerPayment::settlements()` relation, but **NEVER written to** (always empty)
+
+This is double-bookkeeping: two tables for the same purpose, but only one is ever populated. The payment show view displayed an **EMPTY allocations list** because the model relation reads from `customer_payment_settlements` while the service writes to `invoice_payment_allocations`.
+
+**Solution (Option A — consolidate to `invoice_payment_allocations`):**
+
+#### 1. Migration: drop `customer_payment_settlements` (NEW)
+- **File:** `laravel/database/migrations/2025_01_09_000001_drop_customer_payment_settlements_table.php`
+- **Safety:** migrates any existing data from `customer_payment_settlements` into `invoice_payment_allocations` before dropping (in case any rows exist — unlikely since it was never written to)
+- Drops indexes `idx_cps_payment` + `idx_cps_invoice` + the table
+- Idempotent (checks `Schema::hasTable` before dropping)
+- Reversible `down()` recreates the table (without data)
+
+#### 2. New `InvoicePaymentAllocation` Eloquent model (NEW)
+- **File:** `laravel/app/Models/InvoicePaymentAllocation.php`
+- Maps to `invoice_payment_allocations` table
+- `fillable`: invoice_id, payment_id, allocated_amount
+- `casts`: decimal:2 / integer
+- Relations: `invoice()` → SalesInvoice, `payment()` → CustomerPayment
+- Previously only accessed via `DB::table()` — now has a proper Eloquent model for relation eager-loading
+
+#### 3. Updated `CustomerPayment` model
+- Replaced `settlements()` relation (was `hasMany(CustomerPaymentSettlement)`) with `allocations()` (`hasMany(InvoicePaymentAllocation)`)
+- Added **backward-compatible `settlements()` alias** that delegates to `allocations()` — so existing views/controllers that use `$payment->settlements` still work without changes
+
+#### 4. Updated `CustomerPaymentService::cancelPayment`
+- Changed from reading `customer_payment_settlements` to reading `invoice_payment_allocations`
+- Changed from deleting `customer_payment_settlements` to deleting `invoice_payment_allocations`
+- Same logic: reverse allocations (decrement invoice paid_amount, increment due_amount), then delete allocation rows
+
+#### 5. Updated `CustomerPaymentController` + `CustomerPaymentService` eager-loads
+- Changed `with(['settlements.invoice'])` → `with(['allocations.invoice'])` in:
+  - `CustomerPaymentController::index` (list view)
+  - `CustomerPaymentController::show` (detail view)
+  - `CustomerPaymentService::confirmPayment` (return eager-load)
+
+**Result:** Single allocation table (`invoice_payment_allocations`), no drift risk. The payment show view now displays the correct allocations list. The backward-compatible `settlements()` alias ensures existing Blade views that use `$payment->settlements` continue to work without modification.
+
+### Verification Status (P1-4)
+- [x] Migration created to drop `customer_payment_settlements` (with data safety migration)
+- [x] `InvoicePaymentAllocation` Eloquent model created
+- [x] `CustomerPayment` model updated: `allocations()` relation + `settlements()` backward-compat alias
+- [x] `cancelPayment` reads from + deletes `invoice_payment_allocations` (not settlements)
+- [x] All 3 eager-loads sites updated to `allocations.invoice`
+- [x] No functional references to `customer_payment_settlements` remain (only comments + dead `CustomerPaymentSettlement.php` model)
+- [x] Brace/paren balance verified (all files 0/0)
+- [ ] End-to-end test (create payment → allocate to invoice → show view displays allocations) — **PENDING**
+
+### Files Modified (P1-4)
+| File | Change |
+|------|--------|
+| `laravel/database/migrations/2025_01_09_000001_drop_customer_payment_settlements_table.php` | NEW — drops redundant table + migrates any existing data |
+| `laravel/app/Models/InvoicePaymentAllocation.php` | NEW — Eloquent model for `invoice_payment_allocations` |
+| `laravel/app/Models/CustomerPayment.php` | Replaced `settlements()` with `allocations()` + backward-compat alias |
+| `laravel/app/Services/Sales/CustomerPaymentService.php` | `cancelPayment` uses `invoice_payment_allocations`; eager-load updated |
+| `laravel/app/Http/Controllers/Admin/CustomerPaymentController.php` | Eager-loads updated to `allocations.invoice` |
 
 ---
 

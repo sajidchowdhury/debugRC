@@ -21,7 +21,7 @@ class CustomerPaymentController extends Controller
 
     public function index(Request $request)
     {
-        $query = CustomerPayment::with(['customer', 'branch', 'bank', 'settlements.invoice'])
+        $query = CustomerPayment::with(['customer', 'branch', 'bank', 'allocations.invoice'])
             ->when($request->input('from_date'), fn($q, $d) => $q->where('payment_date', '>=', $d))
             ->when($request->input('to_date'), fn($q, $d) => $q->where('payment_date', '<=', $d))
             ->when($request->input('customer_id'), fn($q, $cid) => $q->where('customer_id', $cid))
@@ -130,7 +130,7 @@ class CustomerPaymentController extends Controller
             'customer', 'branch', 'bank',
             'journalEntry.lines.ledger',
             'intercompanyJournalEntry.lines.ledger',
-            'settlements.invoice',
+            'allocations.invoice',
         ])->findOrFail($id);
 
         $customerLedgerEntries = DB::table('customer_ledger')
