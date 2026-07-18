@@ -215,7 +215,7 @@
                     <button type="button" id="btnFinalize"
                             class="btn btn-primary ms-auto"
                             data-bs-toggle="tooltip" data-bs-placement="top"
-                            title="Coming in Phase 8.2">
+                            title="Create a draft sales invoice from this cart (GL posted)">
                         <i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice
                     </button>
                 </div>
@@ -368,6 +368,9 @@
         validate:     "{{ route('admin.sales.cart.validate') }}",
         softHold:     "{{ route('admin.sales.cart.softHold') }}",
         availability: "{{ route('admin.sales.cart.availability') }}",
+        finalize:     "{{ route('admin.sales.finalize') }}",
+        creditCheck:  "{{ route('admin.sales.credit-check') }}",
+        invoiceShow:  "{{ route('admin.sales-invoices.index') }}",
     };
 
     // -------- State --------
@@ -917,13 +920,254 @@
         $('#btnSoftHold').on('click', toggleSoftHold);
         $('#btnValidate').on('click', validateCart);
         $('#btnFinalize').on('click', function () {
-            Swal.fire({
-                icon: 'info',
-                title: 'Coming in Phase 8.2',
-                text: 'Invoice finalization will be implemented in Phase 8.2 (SalesInvoiceController).',
-                confirmButtonColor: '#7c3aed'
-            });
+            finalizeInvoice();
         });
+
+        // ============================================================
+        // ============== FINALIZE INVOICE FLOW (P0-6) ================
+        // ============================================================
+        //
+        // Multi-step flow:
+        //   1. Pre-flight: cart must be non-empty + validated.
+        //   2. Open a SweetAlert "Finalize Invoice" dialog with editable
+        //      fields (invoice_date, discount, transport, notes, override).
+        //   3. On confirm: pre-check credit limit via GET /credit-check.
+        //      If exceeded and user didn't tick override → re-prompt.
+        //   4. POST /finalize with all fields.
+        //   5. On success: redirect to the new invoice's show page.
+        //      On error: show SweetAlert error, re-enable button.
+        //
+        // The button is disabled during the AJAX request to mitigate
+        // double-submit (P2-6 will add a proper idempotency token).
+
+        function finalizeInvoice() {
+            // --- Step 1: pre-flight checks ---
+            if (!state.cart || !state.cart.items || state.cart.items.length === 0) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Cart is empty',
+                    text: 'Add at least one product before finalizing.',
+                    confirmButtonColor: '#7c3aed'
+                });
+                return;
+            }
+
+            var valid = state.validation ? !!state.validation.valid : false;
+            if (!valid) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Cart validation failed',
+                    text: 'Click "Validate Cart" and resolve any stock/rate errors before finalizing.',
+                    confirmButtonColor: '#7c3aed'
+                });
+                return;
+            }
+
+            var customerId = state.customerId;
+            if (!customerId) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'No customer selected',
+                    text: 'Please select a customer first.',
+                    confirmButtonColor: '#7c3aed'
+                });
+                return;
+            }
+
+            var subtotal = parseFloat((state.cart && state.cart.subtotal) || 0);
+            var today = new Date().toISOString().split('T')[0];
+
+            // --- Step 2: open the finalize dialog ---
+            Swal.fire({
+                title: '<i class="fas fa-file-invoice-dollar me-2"></i>Finalize Invoice',
+                html:
+                    '<div class="text-start">' +
+                    '<div class="mb-2"><label class="form-label small fw-semibold">Invoice Date</label>' +
+                    '<input type="date" id="finInvoiceDate" class="form-control form-control-sm" value="' + today + '"></div>' +
+
+                    '<div class="row g-2 mb-2">' +
+                    '<div class="col-6"><label class="form-label small fw-semibold">Discount (Tk)</label>' +
+                    '<input type="number" id="finDiscount" class="form-control form-control-sm" min="0" step="0.01" value="0"></div>' +
+                    '<div class="col-6"><label class="form-label small fw-semibold">Transport (Tk)</label>' +
+                    '<input type="number" id="finTransport" class="form-control form-control-sm" min="0" step="0.01" value="0"></div>' +
+                    '</div>' +
+
+                    '<div class="mb-2"><label class="form-label small fw-semibold">Sales Person (optional)</label>' +
+                    '<input type="text" id="finSalesPerson" class="form-control form-control-sm" maxlength="100" placeholder="Free-text name"></div>' +
+
+                    '<div class="mb-2"><label class="form-label small fw-semibold">Notes (optional)</label>' +
+                    '<textarea id="finNotes" class="form-control form-control-sm" rows="2" maxlength="1000"></textarea></div>' +
+
+                    '<div class="form-check mb-2">' +
+                    '<input type="checkbox" id="finSoftHold" class="form-check-input">' +
+                    '<label for="finSoftHold" class="form-check-label small">Mark as soft-hold (awaiting godown)</label>' +
+                    '</div>' +
+
+                    '<div class="form-check mb-1">' +
+                    '<input type="checkbox" id="finOverride" class="form-check-input">' +
+                    '<label for="finOverride" class="form-check-label small text-warning">Override credit limit (if exceeded)</label>' +
+                    '</div>' +
+                    '<input type="text" id="finOverrideReason" class="form-control form-control-sm mb-2" maxlength="500" placeholder="Override reason (min 10 chars if overriding)" disabled>' +
+
+                    '<hr class="my-2"><div class="d-flex justify-content-between">' +
+                    '<span class="text-muted small">Subtotal</span>' +
+                    '<span class="fw-semibold">Tk ' + fmtMoney(subtotal) + '</span>' +
+                    '</div>' +
+                    '<div class="d-flex justify-content-between" id="finTotalRow">' +
+                    '<span class="text-muted small">Estimated Total</span>' +
+                    '<span class="fw-bold text-primary" id="finTotal">Tk ' + fmtMoney(subtotal) + '</span>' +
+                    '</div>' +
+                    '</div>',
+                showCancelButton: true,
+                confirmButtonText: '<i class="fas fa-check me-1"></i> Finalize',
+                cancelButtonText: 'Cancel',
+                confirmButtonColor: '#7c3aed',
+                cancelButtonColor: '#6b7280',
+                width: 540,
+                showLoaderOnConfirm: true,
+                didOpen: function () {
+                    // Wire up live total recalculation.
+                    var $popup = $(Swal.getPopup());
+                    var recalc = function () {
+                        var d = parseFloat($popup.find('#finDiscount').val()) || 0;
+                        var t = parseFloat($popup.find('#finTransport').val()) || 0;
+                        var total = subtotal - d + t;
+                        $popup.find('#finTotal').text('Tk ' + fmtMoney(total));
+                    };
+                    $popup.on('input', '#finDiscount, #finTransport', recalc);
+
+                    // Toggle override reason field.
+                    $popup.on('change', '#finOverride', function () {
+                        $popup.find('#finOverrideReason').prop('disabled', !this.checked);
+                        if (!this.checked) {
+                            $popup.find('#finOverrideReason').val('');
+                        }
+                    });
+                },
+                preConfirm: function () {
+                    var $popup = $(Swal.getPopup());
+                    var invoiceDate = $popup.find('#finInvoiceDate').val();
+                    var discount = parseFloat($popup.find('#finDiscount').val()) || 0;
+                    var transport = parseFloat($popup.find('#finTransport').val()) || 0;
+                    var salesPerson = $popup.find('#finSalesPerson').val().trim();
+                    var notes = $popup.find('#finNotes').val().trim();
+                    var isSoftHold = $popup.find('#finSoftHold').is(':checked');
+                    var override = $popup.find('#finOverride').is(':checked');
+                    var overrideReason = $popup.find('#finOverrideReason').val().trim();
+
+                    if (!invoiceDate) {
+                        Swal.showValidationMessage('Invoice date is required.');
+                        return false;
+                    }
+                    if (discount < 0 || transport < 0) {
+                        Swal.showValidationMessage('Discount and transport cannot be negative.');
+                        return false;
+                    }
+                    if (discount > subtotal + 0.01) {
+                        Swal.showValidationMessage('Discount cannot exceed subtotal (Tk ' + fmtMoney(subtotal) + ').');
+                        return false;
+                    }
+                    if (override && overrideReason.length < 10) {
+                        Swal.showValidationMessage('Override reason must be at least 10 characters.');
+                        return false;
+                    }
+
+                    var total = subtotal - discount + transport;
+
+                    // Disable the finalize button during the async request.
+                    var $btn = $('#btnFinalize').prop('disabled', true).html(
+                        '<span class="spinner-border spinner-border-sm me-1"></span> Finalizing…'
+                    );
+
+                    // Step 3: pre-check credit limit.
+                    return ajaxGet(ENDPOINTS.creditCheck, {
+                        customer_id: customerId,
+                        amount: total
+                    }).then(function (credit) {
+                        if (credit.exceeds && !override) {
+                            Swal.showValidationMessage(
+                                'Credit limit exceeded!\n\n' +
+                                'Current balance: Tk ' + fmtMoney(credit.current_balance) + '\n' +
+                                'Credit limit: Tk ' + fmtMoney(credit.credit_limit) + '\n' +
+                                'New balance: Tk ' + fmtMoney(credit.new_balance) + '\n\n' +
+                                'Tick "Override credit limit" and provide a reason (min 10 chars) to proceed.'
+                            );
+                            $btn.prop('disabled', false).html(
+                                '<i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice'
+                            );
+                            return false;
+                        }
+
+                        // Step 4: POST to finalize endpoint.
+                        return ajaxPost(ENDPOINTS.finalize, {
+                            customer_id: customerId,
+                            branch_id: BRANCH_ID,
+                            invoice_date: invoiceDate,
+                            sales_person: salesPerson || null,
+                            discount_amount: discount,
+                            transport_cost: transport,
+                            notes: notes,
+                            is_soft_hold: isSoftHold,
+                            credit_limit_override: override,
+                            override_reason: override ? overrideReason : ''
+                        }).then(function (resp) {
+                            return resp;
+                        }).catch(function (xhr) {
+                            var msg = (xhr.responseJSON && xhr.responseJSON.message)
+                                ? xhr.responseJSON.message
+                                : 'Finalize failed (HTTP ' + xhr.status + ').';
+                            // Re-enable button on error.
+                            $btn.prop('disabled', false).html(
+                                '<i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice'
+                            );
+                            Swal.showValidationMessage(msg);
+                            return false;
+                        });
+                    }).catch(function (xhr) {
+                        // Credit check itself failed — proceed anyway (fail-open).
+                        var msg = (xhr.responseJSON && xhr.responseJSON.message)
+                            ? xhr.responseJSON.message
+                            : 'Credit check failed (HTTP ' + xhr.status + ').';
+                        $btn.prop('disabled', false).html(
+                            '<i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice'
+                        );
+                        Swal.showValidationMessage('Credit check failed: ' + msg);
+                        return false;
+                    });
+                }
+            }).then(function (result) {
+                // Step 5: handle success / cancel.
+                if (result.isConfirmed && result.value && result.value.status === 'success') {
+                    var resp = result.value;
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Invoice Created',
+                        html: '<strong>' + escHtml(resp.invoice_code) + '</strong><br>' +
+                              '<span class="text-muted small">' + escHtml(resp.message) + '</span>',
+                        confirmButtonColor: '#7c3aed',
+                        confirmButtonText: '<i class="fas fa-eye me-1"></i> View Invoice',
+                        showCancelButton: true,
+                        cancelButtonText: 'Stay on Cart'
+                    }).then(function (view) {
+                        if (view.isConfirmed && resp.redirect) {
+                            window.location.href = resp.redirect;
+                        } else {
+                            // Reset button + clear cart from UI (it was consumed).
+                            $('#btnFinalize').prop('disabled', false).html(
+                                '<i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice'
+                            );
+                            // Reload the cart page to reflect the now-empty cart.
+                            window.location.reload();
+                        }
+                    });
+                } else {
+                    // Re-enable button if dialog was cancelled or failed.
+                    $('#btnFinalize').prop('disabled', false).html(
+                        '<i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice'
+                    );
+                }
+            });
+        }
 
         // --- Initial render ---
         if (state.cart) {

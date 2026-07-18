@@ -19,7 +19,7 @@
 | **P0-3** | Fix `sales_returns` (cogs_amount/reason) + `sales_return_items` (sales_invoice_item_id) | ✅ Done | Migration `2025_01_08_000003` — added 3 columns + FK + partial index |
 | **P0-4** | Fix `customer_payments.reference_no` | ✅ Done | Migration `2025_01_08_000004` — added column + partial index |
 | **P0-5** | Add missing `sales_challan_items` table | ✅ Done | Migration `2025_01_08_000005` + `SalesChallanItem` model + service populate + helper |
-| **P0-6** | Wire cart finalize button to backend | ⬜ Pending | UI stub shows "Coming in Phase 8.2" |
+| **P0-6** | Wire cart finalize button to backend | ✅ Done | SweetAlert dialog with editable fields + credit pre-check + POST to `/admin/sales/finalize` |
 | **P0-7** | Add RBAC to all sales routes | ⬜ Pending | Currently only `auth` middleware |
 | **P0-8** | Add branch isolation (middleware + policy + scope) | ⬜ Pending | No `assertInvoiceAccessible` equivalent |
 
@@ -106,6 +106,66 @@
 | `laravel/app/Models/SalesChallanItem.php` | NEW |
 | `laravel/app/Models/SalesChallan.php` | Added `items()` HasMany relation |
 | `laravel/app/Services/Sales/SalesChallanService.php` | `issueChallan`: insert per-line rows; eager-load items; new `getChallanLineItems` helper |
+
+---
+
+### P0-6 — Detailed Completion Notes
+
+**Problem:** The `#btnFinalize` button in `sales/cart.blade.php:919-926` showed a "Coming in Phase 8.2" SweetAlert stub and did NOT call the backend. The `SalesInvoiceController::finalize` endpoint was fully implemented but unreachable from the UI — the entire sales workflow was blocked at the frontend.
+
+**Solution:** Replaced the stub with a complete 5-step `finalizeInvoice()` flow using SweetAlert2 + the existing `ajaxPost`/`ajaxGet` helpers:
+
+1. **Pre-flight checks** — cart must be non-empty, validated, and have a customer selected. If any check fails, show a warning SweetAlert and abort.
+
+2. **Finalize dialog** — a SweetAlert popup with editable fields:
+   - Invoice Date (default: today)
+   - Discount (Tk) — with validation: ≥0, ≤ subtotal
+   - Transport (Tk) — with validation: ≥0
+   - Sales Person (free-text, optional)
+   - Notes (textarea, optional)
+   - Soft-hold checkbox
+   - Credit limit override checkbox + reason field (reason enabled only when checkbox ticked; min 10 chars if overriding)
+   - Live total recalculation (subtotal − discount + transport) as user types
+
+3. **Credit limit pre-check** — before POSTing to finalize, calls `GET /admin/sales/credit-check?customer_id=X&amount=Y`. If credit exceeded and user didn't tick override → shows validation message with current balance / limit / new balance and asks to tick override + provide reason.
+
+4. **POST to finalize** — calls `POST /admin/sales/finalize` with all fields (`customer_id, branch_id, invoice_date, sales_person, discount_amount, transport_cost, notes, is_soft_hold, credit_limit_override, override_reason`).
+
+5. **Success / error handling**:
+   - On success: shows success SweetAlert with invoice code + "View Invoice" button (redirects to `admin.sales-invoices.show`) or "Stay on Cart" (reloads page to reflect empty cart)
+   - On error: shows SweetAlert error with the server message, re-enables the button
+   - Button disabled + shows spinner during the AJAX request (double-submit mitigation; P2-6 will add a proper idempotency token)
+
+**Additional changes:**
+- Added `finalize`, `creditCheck`, `invoiceShow` to the `ENDPOINTS` JS object (using Blade `route()` helpers)
+- Updated button tooltip from "Coming in Phase 8.2" to "Create a draft sales invoice from this cart (GL posted)"
+- Fixed a `state.subtotal` reference → `state.cart.subtotal` (subtotal lives on the cart object, not directly on state)
+
+**Design notes:**
+- The dialog collects fields the cart doesn't have (invoice_date, discount, transport, notes, override) — these are invoice-level, not cart-level
+- `salesman_id` is intentionally omitted from the dialog — the controller accepts it as nullable, and the service stores the authenticated user's context. The `sales_person` free-text field captures the salesman name (matches legacy pattern)
+- Credit check is fail-open: if the credit-check endpoint itself errors, the finalize still proceeds (the server-side `finalizeFromCart` has its own hard credit-limit check that will block if exceeded without override)
+- The button is disabled during the AJAX request to mitigate double-submit; a proper idempotency token is deferred to P2-6
+
+### Verification Status (P0-6)
+- [x] Stub replaced with full `finalizeInvoice()` function
+- [x] Pre-flight checks (cart non-empty, validated, customer selected)
+- [x] SweetAlert dialog with all required fields
+- [x] Live total recalculation
+- [x] Credit limit pre-check with override flow
+- [x] POST to `/admin/sales/finalize` with correct payload
+- [x] Success → redirect to invoice show page
+- [x] Error → SweetAlert message + button re-enabled
+- [x] Button disabled + spinner during request
+- [x] Brace/paren balance verified (0/0)
+- [x] All helper functions (`ajaxPost`, `ajaxGet`, `fmtMoney`, `escHtml`, `Swal`, `state`) referenced correctly
+- [x] `state.cart.subtotal` reference fixed
+- [ ] End-to-end browser test — **PENDING** (no PHP/browser runtime in current sandbox)
+
+### Files Modified (P0-6)
+| File | Change |
+|------|--------|
+| `laravel/resources/views/admin/sales/cart.blade.php` | Replaced finalize stub (lines 919-926) with full `finalizeInvoice()` flow (~210 lines); added 3 endpoints to ENDPOINTS object; updated button tooltip; fixed `state.subtotal` → `state.cart.subtotal` |
 
 ---
 
