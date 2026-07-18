@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\SalesInvoice;
 use App\Services\Sales\SalesInvoiceService;
 use App\Services\Sales\SalesCartService;
+use App\Services\Sales\SalesAuditLogger;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -22,7 +23,8 @@ class SalesInvoiceController extends Controller
 {
     public function __construct(
         private SalesInvoiceService $invoiceService,
-        private SalesCartService $cartService
+        private SalesCartService $cartService,
+        private SalesAuditLogger $auditLogger
     ) {}
 
     public function index(Request $request)
@@ -272,6 +274,71 @@ class SalesInvoiceController extends Controller
             'found' => $count,
             'cancelled' => $cancelled,
             'errors' => $errors,
+        ]);
+    }
+
+    /**
+     * Sales audit trail (P1-3).
+     * Displays recent sales business events from user_audit_log.
+     */
+    public function auditTrail(Request $request)
+    {
+        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        $actionFilter = $request->input('action');
+        $limit = min(500, max(50, (int) $request->input('limit', 300)));
+
+        $query = DB::table('user_audit_log')
+            ->whereIn('action', [
+                'sale_created', 'sale_updated', 'sale_cancelled',
+                'credit_limit_override',
+                'payment_received', 'payment_reversed',
+                'return_created', 'return_confirmed', 'return_reversed',
+                'godown_prepared', 'challan_issued', 'challan_reversed',
+                'stale_drafts_cancelled',
+            ]);
+
+        if ($branchId) {
+            $query->where('branch_id', $branchId);
+        }
+        if ($actionFilter) {
+            $query->where('action', $actionFilter);
+        }
+
+        $events = $query->orderByDesc('id')->limit($limit)->get();
+
+        // Load user names for display.
+        $userIds = $events->pluck('user_id')->unique()->filter()->toArray();
+        $users = DB::table('users')
+            ->join('employees', 'employees.id', '=', 'users.employee_id')
+            ->whereIn('users.id', $userIds)
+            ->pluck('employees.name', 'users.id');
+
+        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
+
+        // Action labels for display.
+        $actionLabels = [
+            'sale_created' => ['label' => 'Invoice Created', 'icon' => 'fa-file-circle-plus', 'color' => 'success'],
+            'sale_updated' => ['label' => 'Invoice Updated', 'icon' => 'fa-pen-to-square', 'color' => 'primary'],
+            'sale_cancelled' => ['label' => 'Invoice Cancelled', 'icon' => 'fa-ban', 'color' => 'danger'],
+            'credit_limit_override' => ['label' => 'Credit Override', 'icon' => 'fa-shield-halved', 'color' => 'warning'],
+            'payment_received' => ['label' => 'Payment Received', 'icon' => 'fa-money-bill-wave', 'color' => 'success'],
+            'payment_reversed' => ['label' => 'Payment Reversed', 'icon' => 'fa-rotate-left', 'color' => 'danger'],
+            'return_created' => ['label' => 'Return Created', 'icon' => 'fa-arrow-rotate-left', 'color' => 'info'],
+            'return_confirmed' => ['label' => 'Return Confirmed', 'icon' => 'fa-check', 'color' => 'primary'],
+            'return_reversed' => ['label' => 'Return Reversed', 'icon' => 'fa-rotate-left', 'color' => 'danger'],
+            'godown_prepared' => ['label' => 'Godown Prepared', 'icon' => 'fa-warehouse', 'color' => 'primary'],
+            'challan_issued' => ['label' => 'Challan Issued', 'icon' => 'fa-truck', 'color' => 'success'],
+            'challan_reversed' => ['label' => 'Challan Reversed', 'icon' => 'fa-rotate-left', 'color' => 'danger'],
+            'stale_drafts_cancelled' => ['label' => 'Stale Drafts Cleaned', 'icon' => 'fa-broom', 'color' => 'secondary'],
+        ];
+
+        return view('admin.sales-audit.index', [
+            'title' => 'Sales Audit Trail',
+            'events' => $events,
+            'users' => $users,
+            'branches' => $branches,
+            'actionLabels' => $actionLabels,
+            'filters' => $request->only(['branch_id', 'action', 'limit']),
         ]);
     }
 

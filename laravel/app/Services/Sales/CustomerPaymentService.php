@@ -29,7 +29,8 @@ class CustomerPaymentService
 {
     public function __construct(
         private JournalPostingService $journalPosting,
-        private SalesAccess $salesAccess
+        private SalesAccess $salesAccess,
+        private SalesAuditLogger $auditLogger
     ) {}
 
     /**
@@ -132,6 +133,14 @@ class CustomerPaymentService
                     'updated_at' => now(),
                 ]);
 
+            // P1-3: Audit log — payment_received.
+            $this->auditLogger->paymentReceived(
+                $confirmedBy,
+                $paymentId, $payment->payment_code, (int) $payment->customer_id,
+                (int) $payment->branch_id, (float) $payment->amount,
+                $payment->payment_mode, $invoiceId
+            );
+
             return CustomerPayment::with([
                 'customer', 'branch', 'bank',
                 'journalEntry.lines.ledger',
@@ -209,6 +218,13 @@ class CustomerPaymentService
                     'reverse_reason' => $reason,
                     'updated_at' => now(),
                 ]);
+
+            // P1-3: Audit log — payment_reversed.
+            $this->auditLogger->paymentReversed(
+                $cancelledBy,
+                $paymentId, $payment->payment_code, (int) $payment->branch_id,
+                (float) $payment->amount, $reason
+            );
 
             return CustomerPayment::find($paymentId);
         });

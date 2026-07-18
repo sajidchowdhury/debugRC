@@ -318,6 +318,10 @@ Route::middleware('auth')->group(function () {
         // P1-2: Manual stale-draft cancellation (manager+admin only)
         Route::post('cancel-stale-drafts', [SalesInvoiceController::class, 'cancelStaleDrafts'])
             ->name('cancel-stale-drafts')->middleware('role:manager,admin');
+
+        // P1-3: Sales audit trail (accountant+manager+admin read-only)
+        Route::get('audit', [SalesInvoiceController::class, 'auditTrail'])
+            ->name('audit')->middleware('role:accountant,manager,admin');
     });
 
     // ============================================================

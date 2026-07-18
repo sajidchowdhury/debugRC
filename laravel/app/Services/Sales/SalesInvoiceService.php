@@ -35,7 +35,8 @@ class SalesInvoiceService
         private StockAvailabilityService $availabilityService,
         private StockService $stockService,
         private JournalPostingService $journalPosting,
-        private SalesAccess $salesAccess
+        private SalesAccess $salesAccess,
+        private SalesAuditLogger $auditLogger
     ) {}
 
     /**
@@ -238,6 +239,13 @@ class SalesInvoiceService
                 ]);
             }
 
+            // P1-3: Audit log — sale_created.
+            $this->auditLogger->saleCreated(
+                $data['created_by'] ?? auth()->id() ?? 0,
+                $invoiceId, $invoiceCode, $customerId, $branchId,
+                $totalAmount, $data['salesman_id'] ?? null
+            );
+
             return SalesInvoice::with(['items.product', 'customer', 'branch', 'journalEntry.lines.ledger'])
                 ->find($invoiceId);
         });
@@ -290,6 +298,13 @@ class SalesInvoiceService
                     'reverse_reason' => $reason,
                     'updated_at' => now(),
                 ]);
+
+            // P1-3: Audit log — sale_cancelled.
+            $this->auditLogger->saleCancelled(
+                $cancelledBy,
+                $invoiceId, $invoice->invoice_code, (int) $invoice->branch_id,
+                (float) $invoice->total_amount, $reason
+            );
 
             return SalesInvoice::find($invoiceId);
         });

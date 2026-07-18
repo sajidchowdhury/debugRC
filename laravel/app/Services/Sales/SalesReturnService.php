@@ -35,7 +35,8 @@ class SalesReturnService
     public function __construct(
         private StockService $stockService,
         private JournalPostingService $journalPosting,
-        private SalesAccess $salesAccess
+        private SalesAccess $salesAccess,
+        private SalesAuditLogger $auditLogger
     ) {}
 
     /**
@@ -119,6 +120,13 @@ class SalesReturnService
             }
             DB::table('sales_return_items')->insert($itemRows);
 
+            // P1-3: Audit log — return_created.
+            $this->auditLogger->returnCreated(
+                $data['created_by'] ?? auth()->id() ?? 0,
+                $returnId, $returnCode, $invoiceId, $customerId, $branchId,
+                $totalRevenue, $totalCogs
+            );
+
             return SalesReturn::with(['items.product', 'salesInvoice', 'customer', 'branch'])->find($returnId);
         });
     }
@@ -178,6 +186,14 @@ class SalesReturnService
                     'cogs_journal_entry_id' => $cogsJournalEntryId,
                     'updated_at' => now(),
                 ]);
+
+            // P1-3: Audit log — return_confirmed.
+            $this->auditLogger->returnConfirmed(
+                $confirmedBy,
+                $returnId, $return->return_code, (int) $return->branch_id,
+                (float) $return->total_amount, (float) $return->cogs_amount,
+                $journalEntryId
+            );
 
             return SalesReturn::with([
                 'items.product', 'salesInvoice', 'customer', 'branch',
@@ -249,6 +265,13 @@ class SalesReturnService
                     'reverse_reason' => $reason,
                     'updated_at' => now(),
                 ]);
+
+            // P1-3: Audit log — return_reversed.
+            $this->auditLogger->returnReversed(
+                $reversedBy,
+                $returnId, $return->return_code, (int) $return->branch_id,
+                (float) $return->total_amount, $reason
+            );
 
             return SalesReturn::find($returnId);
         });

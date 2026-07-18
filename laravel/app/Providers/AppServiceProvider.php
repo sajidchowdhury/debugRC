@@ -22,6 +22,9 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(\App\Services\Accounting\SubLedgerService::class);
         $this->app->singleton(\App\Services\Accounting\JournalReversalService::class);
 
+        // P1-3: Register SalesAuditLogger as singleton (shared across services).
+        $this->app->singleton(\App\Services\Sales\SalesAuditLogger::class);
+
         // Phase 11: Register SystemPolicyService as singleton.
         $this->app->singleton(\App\Services\Compliance\SystemPolicyService::class);
 

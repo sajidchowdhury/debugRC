@@ -36,7 +36,8 @@ class SalesChallanService
     public function __construct(
         private StockService $stockService,
         private JournalPostingService $journalPosting,
-        private SalesAccess $salesAccess
+        private SalesAccess $salesAccess,
+        private SalesAuditLogger $auditLogger
     ) {}
 
     /**
@@ -96,6 +97,11 @@ class SalesChallanService
                     'godown_prepared_at' => now(),
                     'updated_at' => now(),
                 ]);
+
+            // P1-3: Audit log — godown_prepared.
+            $this->auditLogger->godownPrepared(
+                $preparedBy, $invoiceId, $invoice->invoice_code, (int) $invoice->branch_id
+            );
 
             return SalesInvoice::with(['items.product', 'dispatches', 'customer', 'branch'])->find($invoiceId);
         });
@@ -237,6 +243,13 @@ class SalesChallanService
                     'updated_at' => now(),
                 ]);
 
+            // P1-3: Audit log — challan_issued.
+            $this->auditLogger->challanIssued(
+                $data['created_by'] ?? auth()->id() ?? 0,
+                $challanId, $challanCode, $invoiceId, (int) $invoice->branch_id,
+                $cogsTotal, $journalEntryId
+            );
+
             return SalesChallan::with(['salesInvoice.items.product', 'items.product', 'items.warehouse', 'branch', 'journalEntry.lines.ledger'])
                 ->find($challanId);
         });
@@ -311,6 +324,13 @@ class SalesChallanService
                     'cogs_journal_entry_id' => null,
                     'updated_at' => now(),
                 ]);
+
+            // P1-3: Audit log — challan_reversed.
+            $this->auditLogger->challanReversed(
+                $cancelledBy,
+                $challanId, $challan->challan_code, $challan->sales_invoice_id,
+                (int) $challan->branch_id, $reason
+            );
 
             return SalesChallan::find($challanId);
         });
