@@ -341,7 +341,7 @@ All 8 Phase 0 tasks are complete and pushed to GitHub:
 | Task | Description | Status |
 |------|-------------|--------|
 | P1-1 | Invoice edit/update flow | ✅ Done | `updateInvoice` service + `edit`/`update` controller + `edit.blade.php` view + routes + edit button on show page |
-| P1-2 | Stale draft cancellation (Artisan + cron) | ⬜ Pending |
+| P1-2 | Stale draft cancellation (Artisan + cron) | ✅ Done | `sales:cancel-stale-drafts` command + daily 02:00 schedule + `config/sales.php` + manual admin endpoint |
 | P1-3 | Fix audit logging (9 business events) | ⬜ Pending |
 | P1-4 | Fix double-bookkeeping (allocations tables) | ⬜ Pending |
 | P1-5 | Linked damage write-off for Damage returns | ⬜ Pending |
@@ -431,6 +431,85 @@ All 8 Phase 0 tasks are complete and pushed to GitHub:
 | `laravel/routes/web.php` | Added `GET {id}/edit` + `PUT {id}` routes with role + branch.isolation middleware |
 | `laravel/resources/views/admin/sales-invoices/edit.blade.php` | NEW — full edit form with items table, live totals, add/remove items, credit override |
 | `laravel/resources/views/admin/sales-invoices/show.blade.php` | Added "Edit Invoice" button in Actions card for draft invoices |
+
+---
+
+### P1-2 — Detailed Completion Notes
+
+**Problem:** Legacy had a 3-tier stale-draft cleanup (auto on today page, manual admin endpoint, weekly cron) with `SALES_STALE_DRAFT_DAYS=14`. Laravel had NONE — drafts accumulated forever, holding pipeline qty in `sales_invoice_dispatches` and inflating the availability calc.
+
+**Solution:** Implemented a complete stale-draft cancellation system with 4 deliverables:
+
+#### 1. Artisan Command: `sales:cancel-stale-drafts` (NEW)
+- **File:** `laravel/app/Console/Commands/CancelStaleSalesDrafts.php`
+- **Signature:** `php artisan sales:cancel-stale-drafts [--days=N] [--branch=N] [--dry-run]`
+- **Logic (mirrors legacy `cancelStaleDraftInvoices:1189`):**
+  - Query: `status='draft' AND is_reversed=false AND is_godown_prepared=false AND is_challan_issued=false AND created_at < NOW() - INTERVAL 'N days'`
+  - Limit 200 per run (configurable via `sales.stale_draft_max_per_run`)
+  - For each: call `SalesInvoiceService::cancelInvoice($id, $systemUserId, 'Stale draft auto-cancel (>N days)')`
+  - This reverses GL + customer_ledger atomically (append-only)
+  - Writes `stale_drafts_cancelled` audit event to `user_audit_log`
+- **Options:**
+  - `--days=30` — override the threshold (default: config, 14)
+  - `--branch=2` — only cancel drafts for a specific branch
+  - `--dry-run` — report only, no cancellation (table preview of what would be cancelled)
+- **Gated by config:** if `sales.stale_draft_auto_cancel=false`, scheduled runs are skipped (manual invocations still work)
+
+#### 2. Scheduler Entry (routes/console.php)
+- **Schedule:** `dailyAt('02:00')` + `withoutOverlapping()` + `runInBackground()`
+- Runs nightly at 02:00 Asia/Dhaka (the app timezone)
+- Named `sales-cancel-stale-drafts` for the scheduler monitor
+
+#### 3. Config File: `config/sales.php` (NEW)
+- `stale_draft_days` — env `SALES_STALE_DRAFT_DAYS`, default 14
+- `stale_draft_auto_cancel` — env `SALES_STALE_DRAFT_AUTO_CANCEL`, default true (Laravel defaults to true because the scheduled command is the primary mechanism; legacy defaulted to false)
+- `stale_draft_cancelled_by` — env `SALES_STALE_DRAFT_CANCELLED_BY`, default 1 (system user for audit log)
+- `stale_draft_max_per_run` — env `SALES_STALE_DRAFT_MAX_PER_RUN`, default 200
+
+#### 4. Manual Admin Endpoint
+- **Route:** `POST /admin/sales/cancel-stale-drafts` (role: manager, admin — matches legacy `cancel_stale_drafts`)
+- **Controller:** `SalesInvoiceController::cancelStaleDrafts()`
+- **Accepts:** `days` (optional), `dry_run` (optional boolean)
+- **Returns JSON:** `{ status, days, found, cancelled, errors }` (or `drafts` list for dry-run)
+- **Audit:** writes `stale_drafts_cancelled` event with `trigger: 'manual_endpoint'` + `triggered_by: auth()->id()`
+- **Use case:** admin dashboard "Cancel stale drafts now" button (can be wired to a UI button in a future task)
+
+**Legacy 3-tier mapping:**
+| Legacy Tier | Laravel Equivalent |
+|-------------|-------------------|
+| Auto-cancel on sales/today page load (throttled 6h) | Replaced by daily scheduled command (cleaner — no per-request overhead) |
+| Manual admin endpoint (`SalesController::cancel_stale_drafts`) | `POST /admin/sales/cancel-stale-drafts` (manager+admin) |
+| Weekly cron (`cancel_stale_sales_drafts.php` Sunday 02:00) | `Schedule::command('sales:cancel-stale-drafts')->dailyAt('02:00')` |
+
+**Query criteria (matches legacy):**
+- `status = 'draft'` — not yet finalized
+- `is_reversed = false` — not already cancelled
+- `is_godown_prepared = false` — no godown work started
+- `is_challan_issued = false` — no stock dispatched
+- `created_at < NOW() - INTERVAL '14 days'` — older than threshold
+
+### Verification Status (P1-2)
+- [x] `CancelStaleSalesDrafts` Artisan command created with `--days`, `--branch`, `--dry-run` options
+- [x] Command calls `SalesInvoiceService::cancelInvoice` for each stale draft (reverses GL + ledger)
+- [x] Command writes `stale_drafts_cancelled` audit event to `user_audit_log`
+- [x] Command limited to 200 per run (configurable)
+- [x] Scheduler entry added: `dailyAt('02:00')` + `withoutOverlapping` + `runInBackground`
+- [x] `config/sales.php` created with 4 env-overridable settings
+- [x] Manual admin endpoint `POST /admin/sales/cancel-stale-drafts` (role: manager, admin)
+- [x] Endpoint supports `dry_run` mode (returns draft list without cancelling)
+- [x] Endpoint writes audit event with `trigger: 'manual_endpoint'`
+- [x] Brace/paren balance verified (all files 0/0)
+- [x] No duplicate route names
+- [ ] End-to-end test (`php artisan sales:cancel-stale-drafts --dry-run`) — **PENDING**
+
+### Files Modified (P1-2)
+| File | Change |
+|------|--------|
+| `laravel/app/Console/Commands/CancelStaleSalesDrafts.php` | NEW — Artisan command with --days/--branch/--dry-run options |
+| `laravel/config/sales.php` | NEW — stale_draft_days, stale_draft_auto_cancel, stale_draft_cancelled_by, stale_draft_max_per_run |
+| `laravel/routes/console.php` | Added daily 02:00 schedule for `sales:cancel-stale-drafts` |
+| `laravel/app/Http/Controllers/Admin/SalesInvoiceController.php` | Added `cancelStaleDrafts()` method (manual admin endpoint with dry_run support) |
+| `laravel/routes/web.php` | Added `POST cancel-stale-drafts` route (role: manager, admin) |
 
 ---
 

@@ -314,6 +314,10 @@ Route::middleware('auth')->group(function () {
         Route::post('finalize', [SalesInvoiceController::class, 'finalize'])->name('finalize');
         Route::get('cart-data', [SalesInvoiceController::class, 'getCartData'])->name('cart-data');
         Route::get('credit-check', [SalesInvoiceController::class, 'checkCreditLimit'])->name('credit-check');
+
+        // P1-2: Manual stale-draft cancellation (manager+admin only)
+        Route::post('cancel-stale-drafts', [SalesInvoiceController::class, 'cancelStaleDrafts'])
+            ->name('cancel-stale-drafts')->middleware('role:manager,admin');
     });
 
     // ============================================================

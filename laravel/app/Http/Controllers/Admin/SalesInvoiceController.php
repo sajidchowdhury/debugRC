@@ -189,6 +189,92 @@ class SalesInvoiceController extends Controller
         }
     }
 
+    /**
+     * Manual admin endpoint: cancel stale draft invoices (P1-2).
+     * Calls the Artisan command's underlying logic via the service.
+     * Accessible via POST /admin/sales/cancel-stale-drafts (manager+admin only).
+     */
+    public function cancelStaleDrafts(Request $request)
+    {
+        $request->validate([
+            'days' => 'nullable|integer|min:1|max:365',
+            'dry_run' => 'nullable|boolean',
+        ]);
+
+        $days = (int) ($request->input('days') ?: config('sales.stale_draft_days', 14));
+        $dryRun = (bool) $request->input('dry_run', false);
+        $systemUserId = (int) (config('sales.stale_draft_cancelled_by') ?: 1);
+
+        // Query stale drafts (limit per config).
+        $maxPerRun = (int) config('sales.stale_draft_max_per_run', 200);
+        $staleDrafts = SalesInvoice::where('status', 'draft')
+            ->where('is_reversed', false)
+            ->where('is_godown_prepared', false)
+            ->where('is_challan_issued', false)
+            ->where('created_at', '<', now()->subDays($days))
+            ->orderBy('id', 'asc')
+            ->limit($maxPerRun)
+            ->get(['id', 'invoice_code', 'created_at', 'total_amount', 'branch_id']);
+
+        $count = $staleDrafts->count();
+
+        if ($dryRun) {
+            return response()->json([
+                'status' => 'dry_run',
+                'days' => $days,
+                'found' => $count,
+                'drafts' => $staleDrafts->map(fn($i) => [
+                    'id' => $i->id,
+                    'invoice_code' => $i->invoice_code,
+                    'created_at' => $i->created_at?->toIso8601String(),
+                    'total_amount' => (float) $i->total_amount,
+                    'branch_id' => $i->branch_id,
+                ]),
+            ]);
+        }
+
+        $cancelled = 0;
+        $errors = [];
+        $reason = "Stale draft manual cancel (>{$days} days)";
+
+        foreach ($staleDrafts as $draft) {
+            try {
+                $this->invoiceService->cancelInvoice($draft->id, $systemUserId, $reason);
+                $cancelled++;
+            } catch (\Throwable $e) {
+                $errors[] = "{$draft->invoice_code}: {$e->getMessage()}";
+            }
+        }
+
+        // Audit log.
+        DB::table('user_audit_log')->insert([
+            'user_id' => auth()->id() ?? $systemUserId,
+            'action' => 'stale_drafts_cancelled',
+            'target_user_id' => null,
+            'branch_id' => null,
+            'details' => json_encode([
+                'cancelled_count' => $cancelled,
+                'error_count' => count($errors),
+                'errors' => array_slice($errors, 0, 20),
+                'days_threshold' => $days,
+                'reason' => $reason,
+                'trigger' => 'manual_endpoint',
+                'triggered_by' => auth()->id(),
+            ]),
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent() ? mb_substr($request->userAgent(), 0, 255) : null,
+            'created_at' => now(),
+        ]);
+
+        return response()->json([
+            'status' => 'success',
+            'days' => $days,
+            'found' => $count,
+            'cancelled' => $cancelled,
+            'errors' => $errors,
+        ]);
+    }
+
     public function show(int $id)
     {
         $invoice = SalesInvoice::with([

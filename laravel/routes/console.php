@@ -15,3 +15,14 @@ Schedule::command('reports:refresh')
     ->runInBackground()
     ->name('reports-refresh')
     ->description('Refresh financial report materialized views');
+
+// P1-2: Cancel stale sales draft invoices nightly at 02:00.
+// Drafts older than 14 days (configurable) with no godown/challan/reversal
+// are auto-cancelled (GL + customer_ledger reversed). Gated by
+// config('sales.stale_draft_auto_cancel').
+Schedule::command('sales:cancel-stale-drafts')
+    ->dailyAt('02:00')
+    ->withoutOverlapping()
+    ->runInBackground()
+    ->name('sales-cancel-stale-drafts')
+    ->description('Cancel stale draft sales invoices (>14 days, no godown)');
