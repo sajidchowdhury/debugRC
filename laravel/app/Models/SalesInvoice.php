@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Traits\AuditableMasterData;
+use App\Models\Scopes\BranchScope;
 
 /**
  * Sales Invoice — Phase 8.2.
@@ -61,6 +62,16 @@ class SalesInvoice extends Model
     public $timestamps = true;
 
     protected $dates = ['deleted_at'];
+
+    /**
+     * P0-8: Branch isolation global scope.
+     * Non-admin users only see invoices from their session branch_id.
+     * Admin/superadmin bypass (see all branches).
+     */
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new BranchScope);
+    }
 
     protected $fillable = [
         'invoice_code', 'invoice_date', 'customer_id', 'salesman_id', 'sales_person',

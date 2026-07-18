@@ -298,7 +298,7 @@ Route::middleware('auth')->group(function () {
     //  were all admin,manager,salesman per route_roles.php.)
     // ============================================================
     Route::prefix('admin/sales')->name('admin.sales.')
-        ->middleware('role:salesman,manager,admin')
+        ->middleware(['role:salesman,manager,admin', 'branch.isolation'])
         ->group(function () {
         Route::get('cart', [SalesCartController::class, 'index'])->name('cart');
         Route::post('cart/load', [SalesCartController::class, 'load'])->name('cart.load');
@@ -323,7 +323,7 @@ Route::middleware('auth')->group(function () {
     // ============================================================
     Route::prefix('admin/sales-invoices')->name('admin.sales-invoices.')->group(function () {
         Route::post('{id}/cancel', [SalesInvoiceController::class, 'cancel'])
-            ->name('cancel')->middleware('role:salesman,manager,admin');
+            ->name('cancel')->middleware(['role:salesman,manager,admin', 'branch.isolation']);
     });
     Route::resource('admin/sales-invoices', SalesInvoiceController::class)
         ->only(['index', 'show'])
@@ -340,14 +340,14 @@ Route::middleware('auth')->group(function () {
         Route::get('godown/{invoiceId}', [SalesChallanController::class, 'godown'])
             ->name('godown')->middleware('role:warehouse_manager,dispatcher,manager,admin');
         Route::post('godown/{invoiceId}', [SalesChallanController::class, 'storeGodown'])
-            ->name('storeGodown')->middleware('role:warehouse_manager,dispatcher,manager,admin');
+            ->name('storeGodown')->middleware(['role:warehouse_manager,dispatcher,manager,admin', 'branch.isolation']);
         Route::get('issue/{invoiceId}', [SalesChallanController::class, 'challanForm'])
             ->name('challan-form')->middleware('role:warehouse_manager,dispatcher,manager,admin');
         Route::post('issue/{invoiceId}', [SalesChallanController::class, 'issueChallan'])
-            ->name('issueChallan')->middleware('role:warehouse_manager,dispatcher,manager,admin');
+            ->name('issueChallan')->middleware(['role:warehouse_manager,dispatcher,manager,admin', 'branch.isolation']);
         // Challan reverse — manager, admin only (legacy reverse_challan)
         Route::post('{id}/cancel', [SalesChallanController::class, 'cancel'])
-            ->name('cancel')->middleware('role:manager,admin');
+            ->name('cancel')->middleware(['role:manager,admin', 'branch.isolation']);
     });
     // index — warehouse_manager, dispatcher, manager, admin (legacy ChallanController::index)
     Route::resource('admin/sales-challans', SalesChallanController::class)
@@ -371,12 +371,17 @@ Route::middleware('auth')->group(function () {
             ->name('outstanding-invoices')->middleware('role:salesman,accountant,manager,admin');
         // Payment reverse — accountant, manager, admin (legacy reverse_payment)
         Route::post('{id}/cancel', [CustomerPaymentController::class, 'cancel'])
-            ->name('cancel')->middleware('role:accountant,manager,admin');
+            ->name('cancel')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
     });
+    // store carries branch_id in the request body → branch.isolation
     Route::resource('admin/customer-payments', CustomerPaymentController::class)
-        ->only(['index', 'create', 'store', 'show'])
+        ->only(['index', 'create', 'show'])
         ->names('admin.customer-payments')
         ->middleware('role:salesman,accountant,manager,admin');
+    Route::resource('admin/customer-payments', CustomerPaymentController::class)
+        ->only(['store'])
+        ->names('admin.customer-payments')
+        ->middleware(['role:salesman,accountant,manager,admin', 'branch.isolation']);
 
     // ============================================================
     // Phase 8.5: Sales Returns (stock IN at ORIGINAL avg_cost + GL)
@@ -390,10 +395,10 @@ Route::middleware('auth')->group(function () {
             ->name('invoice-details')->middleware('role:salesman,manager,admin');
         // Return confirm — warehouse_manager, accountant, manager, admin (legacy confirm_store)
         Route::post('{id}/confirm', [SalesReturnController::class, 'confirm'])
-            ->name('confirm')->middleware('role:warehouse_manager,accountant,manager,admin');
+            ->name('confirm')->middleware(['role:warehouse_manager,accountant,manager,admin', 'branch.isolation']);
         // Return reverse — accountant, manager, admin (legacy SalesReturn::reverse)
         Route::post('{id}/reverse', [SalesReturnController::class, 'reverse'])
-            ->name('reverse')->middleware('role:accountant,manager,admin');
+            ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
     });
     // index — broadest (legacy: admin,manager,salesman,accountant,warehouse_manager)
     Route::resource('admin/sales-returns', SalesReturnController::class)
@@ -401,10 +406,15 @@ Route::middleware('auth')->group(function () {
         ->names('admin.sales-returns')
         ->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
     // create, store — salesman, manager, admin (legacy create/store)
+    // store carries branch_id (resolved from invoice) → branch.isolation
     Route::resource('admin/sales-returns', SalesReturnController::class)
-        ->only(['create', 'store'])
+        ->only(['create'])
         ->names('admin.sales-returns')
         ->middleware('role:salesman,manager,admin');
+    Route::resource('admin/sales-returns', SalesReturnController::class)
+        ->only(['store'])
+        ->names('admin.sales-returns')
+        ->middleware(['role:salesman,manager,admin', 'branch.isolation']);
     // show — accountant, warehouse_manager, manager, admin (legacy details)
     Route::resource('admin/sales-returns', SalesReturnController::class)
         ->only(['show'])

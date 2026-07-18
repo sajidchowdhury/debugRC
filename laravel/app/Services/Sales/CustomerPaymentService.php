@@ -28,7 +28,8 @@ use Illuminate\Support\Facades\Log;
 class CustomerPaymentService
 {
     public function __construct(
-        private JournalPostingService $journalPosting
+        private JournalPostingService $journalPosting,
+        private SalesAccess $salesAccess
     ) {}
 
     /**
@@ -56,6 +57,9 @@ class CustomerPaymentService
         $paymentCode = $this->generatePaymentCode();
         $customerId = (int) $data['customer_id'];
         $branchId = (int) $data['branch_id'];
+
+        // P0-8: Defense-in-depth branch isolation check.
+        $this->salesAccess->assertBranchAccessible($branchId);
 
         return DB::transaction(function () use ($data, $paymentCode, $customerId, $branchId) {
             $paymentId = DB::table('customer_payments')->insertGetId([

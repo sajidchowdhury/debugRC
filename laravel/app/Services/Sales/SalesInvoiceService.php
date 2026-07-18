@@ -34,7 +34,8 @@ class SalesInvoiceService
         private SalesCartService $cartService,
         private StockAvailabilityService $availabilityService,
         private StockService $stockService,
-        private JournalPostingService $journalPosting
+        private JournalPostingService $journalPosting,
+        private SalesAccess $salesAccess
     ) {}
 
     /**
@@ -68,6 +69,9 @@ class SalesInvoiceService
         if ($branchId <= 0) {
             throw new \InvalidArgumentException('branch_id is required.');
         }
+
+        // P0-8: Defense-in-depth branch isolation check.
+        $this->salesAccess->assertBranchAccessible($branchId);
 
         // Step 1: Load + validate the cart.
         $cartData = $this->cartService->getCart($data['created_by'] ?? auth()->id(), $customerId, $branchId);
@@ -256,6 +260,10 @@ class SalesInvoiceService
             if (!$invoice) {
                 throw new \RuntimeException("Invoice {$invoiceId} not found.");
             }
+
+            // P0-8: Defense-in-depth branch isolation check.
+            $this->salesAccess->assertBranchAccessible((int) $invoice->branch_id);
+
             if (!$invoice->isDraft()) {
                 throw new \RuntimeException("Only draft invoices can be cancelled (current: {$invoice->status}). Cancel via reversal for confirmed invoices.");
             }

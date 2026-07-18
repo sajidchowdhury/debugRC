@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Traits\AuditableMasterData;
+use App\Models\Scopes\BranchScope;
 
 /**
  * Customer Payment — Phase 8.4.
@@ -48,6 +49,16 @@ class CustomerPayment extends Model
     public $timestamps = true;
 
     protected $dates = ['deleted_at'];
+
+    /**
+     * P0-8: Branch isolation global scope.
+     * Non-admin users only see payments from their session branch_id.
+     * Admin/superadmin bypass (see all branches).
+     */
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new BranchScope);
+    }
 
     protected $fillable = [
         'payment_code', 'payment_date', 'customer_id', 'branch_id',

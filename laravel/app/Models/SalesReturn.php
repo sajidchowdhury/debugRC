@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Traits\AuditableMasterData;
+use App\Models\Scopes\BranchScope;
 
 /**
  * Sales Return — Phase 8.5.
@@ -51,6 +52,16 @@ class SalesReturn extends Model
     public $timestamps = true;
 
     protected $dates = ['deleted_at'];
+
+    /**
+     * P0-8: Branch isolation global scope.
+     * Non-admin users only see returns from their session branch_id.
+     * Admin/superadmin bypass (see all branches).
+     */
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new BranchScope);
+    }
 
     protected $fillable = [
         'return_code', 'return_date', 'sales_invoice_id', 'customer_id', 'branch_id',

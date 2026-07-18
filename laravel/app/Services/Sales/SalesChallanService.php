@@ -35,7 +35,8 @@ class SalesChallanService
 {
     public function __construct(
         private StockService $stockService,
-        private JournalPostingService $journalPosting
+        private JournalPostingService $journalPosting,
+        private SalesAccess $salesAccess
     ) {}
 
     /**
@@ -123,6 +124,10 @@ class SalesChallanService
             if (!$invoice) {
                 throw new \RuntimeException("Invoice {$invoiceId} not found.");
             }
+
+            // P0-8: Defense-in-depth branch isolation check.
+            $this->salesAccess->assertBranchAccessible((int) $invoice->branch_id);
+
             if (!$invoice->is_godown_prepared) {
                 throw new \RuntimeException("Invoice must be godown-prepared before issuing challan.");
             }

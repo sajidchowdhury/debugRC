@@ -33,6 +33,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'role' => \App\Http\Middleware\EnsureRole::class,
             'legacy.session' => \App\Http\Middleware\SyncLegacySession::class,
+            // P0-8: Branch isolation — validates request branch_id matches session branch_id
+            'branch.isolation' => \App\Http\Middleware\EnforceBranchIsolation::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

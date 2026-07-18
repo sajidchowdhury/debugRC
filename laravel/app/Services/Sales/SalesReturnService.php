@@ -34,7 +34,8 @@ class SalesReturnService
 {
     public function __construct(
         private StockService $stockService,
-        private JournalPostingService $journalPosting
+        private JournalPostingService $journalPosting,
+        private SalesAccess $salesAccess
     ) {}
 
     /**
@@ -64,6 +65,9 @@ class SalesReturnService
         if ($invoice->is_reversed) {
             throw new \RuntimeException("Cannot return against a reversed invoice.");
         }
+
+        // P0-8: Defense-in-depth branch isolation check.
+        $this->salesAccess->assertBranchAccessible((int) $invoice->branch_id);
 
         // Find the challan for this invoice.
         $challan = DB::table('sales_challans')
