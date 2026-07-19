@@ -165,3 +165,153 @@ ON CONFLICT (filename) DO NOTHING;
 -- ============================================================
 -- DONE. Run sync_sequences.sql next.
 -- ============================================================
+
+-- ============================================================
+-- P2-4: Status enum + column rename + branch_id backfill conversions
+-- ============================================================
+-- These fixes handle data conversions that pgloader cannot do automatically
+-- because the PG schema redesigned some columns (status enums changed,
+-- columns renamed, denormalized columns added).
+-- Each fix is idempotent (safe to run multiple times).
+-- ============================================================
+
+-- ============================================================
+-- FIX 9 (P2-4): sales_invoices.status conversion
+-- ============================================================
+-- Legacy MySQL: status ENUM('draft','godown_issued','challan_completed',
+--                           'cancelled','reversed')
+-- PG schema:    status VARCHAR(20) CHECK('draft','confirmed','cancelled',
+--                                        'reversed')
+--               + boolean flags is_godown_prepared + is_challan_issued
+--
+-- Conversion:
+--   'godown_issued'    → is_godown_prepared=true, godown_prepared_at=godown_issued_at, status='confirmed'
+--   'challan_completed' → is_godown_prepared=true, is_challan_issued=true,
+--                         challan_issued_at=challan_completed_at, status='confirmed'
+--
+-- NOTE: If pgloader loaded the legacy status values, they violate the PG
+-- CHECK constraint. We must convert BEFORE the CHECK is enforced.
+-- If the migration adding the CHECK has already run, the legacy values
+-- would have been rejected at insert — in that case, this fix is a no-op.
+
+DO $$
+BEGIN
+    -- Convert 'godown_issued' → confirmed + is_godown_prepared=true
+    IF EXISTS (SELECT 1 FROM sales_invoices WHERE status = 'godown_issued' LIMIT 1) THEN
+        UPDATE sales_invoices
+        SET is_godown_prepared = true,
+            godown_prepared_at = COALESCE(godown_prepared_at, updated_at),
+            status = 'confirmed'
+        WHERE status = 'godown_issued';
+        RAISE NOTICE 'Converted % sales_invoices from godown_issued to confirmed', ROW_COUNT;
+    END IF;
+
+    -- Convert 'challan_completed' → confirmed + both flags true
+    IF EXISTS (SELECT 1 FROM sales_invoices WHERE status = 'challan_completed' LIMIT 1) THEN
+        UPDATE sales_invoices
+        SET is_godown_prepared = true,
+            is_challan_issued = true,
+            godown_prepared_at = COALESCE(godown_prepared_at, updated_at),
+            challan_issued_at = COALESCE(challan_issued_at, updated_at),
+            status = 'confirmed'
+        WHERE status = 'challan_completed';
+        RAISE NOTICE 'Converted % sales_invoices from challan_completed to confirmed', ROW_COUNT;
+    END IF;
+END;
+$$;
+
+-- ============================================================
+-- FIX 10 (P2-4): sales_returns.status conversion
+-- ============================================================
+-- Legacy MySQL: status ENUM('pending','completed','reversed')
+-- PG schema:    status VARCHAR(20) CHECK('created','confirmed','reversed')
+--
+-- Conversion: 'pending' → 'created', 'completed' → 'confirmed'
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM sales_returns WHERE status = 'pending' LIMIT 1) THEN
+        UPDATE sales_returns SET status = 'created' WHERE status = 'pending';
+        RAISE NOTICE 'Converted % sales_returns from pending to created', ROW_COUNT;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM sales_returns WHERE status = 'completed' LIMIT 1) THEN
+        UPDATE sales_returns SET status = 'confirmed' WHERE status = 'completed';
+        RAISE NOTICE 'Converted % sales_returns from completed to confirmed', ROW_COUNT;
+    END IF;
+END;
+$$;
+
+-- ============================================================
+-- FIX 11 (P2-4): sales_returns.branch_id backfill
+-- ============================================================
+-- Legacy sales_returns did NOT store branch_id (derived via JOIN to
+-- sales_invoices). PG schema adds it as a denormalized column.
+-- Backfill from the linked invoice.
+
+UPDATE sales_returns sr
+SET branch_id = si.branch_id
+FROM sales_invoices si
+WHERE sr.sales_invoice_id = si.id
+  AND (sr.branch_id IS NULL OR sr.branch_id = 0);
+
+-- ============================================================
+-- FIX 12 (P2-4): customers.shop_name — add back if missing
+-- ============================================================
+-- Legacy customers had shop_name; PG schema removed it. If the column
+-- was dropped, all legacy code referencing c.shop_name will fail.
+-- This fix checks if the column exists; if not, it adds it back and
+-- populates from customer_name (best available fallback).
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'customers' AND column_name = 'shop_name'
+    ) THEN
+        ALTER TABLE customers ADD COLUMN shop_name varchar(200);
+        UPDATE customers SET shop_name = customer_name WHERE shop_name IS NULL;
+        RAISE NOTICE 'Added + populated customers.shop_name from customer_name';
+    END IF;
+END;
+$$;
+
+-- ============================================================
+-- FIX 13 (P2-4): customer_payments.transaction_type — backfill
+-- ============================================================
+-- Legacy had transaction_type ENUM('receive','payment','discount','write_off').
+-- P2-5 restores this column. If the migration hasn't run yet, this is a no-op.
+-- If it has, backfill existing rows to 'receive' (the default for existing data).
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'customer_payments' AND column_name = 'transaction_type'
+    ) THEN
+        UPDATE customer_payments
+        SET transaction_type = 'receive'
+        WHERE transaction_type IS NULL OR transaction_type = '';
+        RAISE NOTICE 'Backfilled % customer_payments.transaction_type to receive', ROW_COUNT;
+    END IF;
+END;
+$$;
+
+-- ============================================================
+-- FIX 14 (P2-4): sales_return_items.original_cost — backfill
+-- ============================================================
+-- P0-3 added the original_cost column. For existing returns (migrated from
+-- legacy which didn't populate it), backfill from the challan's stock_transaction rate.
+
+UPDATE sales_return_items sri
+SET original_cost = COALESCE(st.rate, sri.rate)
+FROM stock_transactions st
+WHERE st.reference_type = 'sales_challan'
+  AND st.product_id = sri.product_id
+  AND st.warehouse_id = sri.warehouse_id
+  AND st.qty < -0.0001  -- stock OUT (negative)
+  AND (sri.original_cost IS NULL OR sri.original_cost = 0);
+
+-- ============================================================
+-- P2-4 ETL conversions complete. Re-run etl_verify.sql to confirm.
+-- ============================================================

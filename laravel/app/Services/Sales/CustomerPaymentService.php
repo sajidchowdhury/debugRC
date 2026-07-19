@@ -70,6 +70,7 @@ class CustomerPaymentService
                 'branch_id' => $branchId,
                 'bank_id' => $data['bank_id'] ?? null,
                 'payment_mode' => $data['payment_mode'] ?? 'cash',
+                'transaction_type' => $data['transaction_type'] ?? 'receive', // P2-5: receive/payment/discount/write_off
                 'amount' => round((float) $data['amount'], 2),
                 'discount_amount' => round((float) ($data['discount_amount'] ?? 0), 2),
                 'reference_no' => $data['reference_no'] ?? null,

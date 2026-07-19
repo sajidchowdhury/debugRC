@@ -63,7 +63,7 @@ class CustomerPayment extends Model
     protected $fillable = [
         'payment_code', 'payment_date', 'customer_id', 'branch_id',
         'bank_id', 'payment_mode', 'amount', 'discount_amount',
-        'reference_no', 'journal_entry_id', 'intercompany_journal_entry_id',
+        'reference_no', 'transaction_type', 'journal_entry_id', 'intercompany_journal_entry_id',
         'is_reversed', 'reversed_at', 'reversed_by', 'reverse_reason',
         'notes', 'created_by',
     ];
