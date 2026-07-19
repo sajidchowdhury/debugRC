@@ -60,6 +60,21 @@ class ProductController extends BaseMasterDataController
         return ['category', 'group', 'priceHistory'];
     }
 
+    /**
+     * Phase 18: Columns to export for the CSV download.
+     */
+    protected function exportColumns(): array
+    {
+        return [
+            'product_code'  => 'Code',
+            'product_name'  => 'Product Name',
+            'unit'          => 'Unit',
+            'purchase_rate' => 'Purchase Rate',
+            'sales_rate'    => 'Sales Rate',
+            'is_active'     => 'Active',
+        ];
+    }
+
     protected function formData(): array
     {
         return [

@@ -51,6 +51,22 @@ class WarehouseController extends BaseMasterDataController
         return ['branch'];
     }
 
+    /**
+     * Phase 18: Columns to export for the CSV download.
+     * Uses dotted relation path 'branch.branch_name' so the exporter
+     * pulls the parent branch's name from the eager-loaded relation.
+     */
+    protected function exportColumns(): array
+    {
+        return [
+            'warehouse_code'        => 'Code',
+            'warehouse_name'        => 'Warehouse Name',
+            'branch.branch_name'    => 'Branch Name',
+            'location'              => 'Location',
+            'is_active'             => 'Active',
+        ];
+    }
+
     protected function formData(): array
     {
         return [

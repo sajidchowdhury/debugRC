@@ -68,6 +68,22 @@ class CustomerController extends BaseMasterDataController
     }
 
     /**
+     * Phase 18: Columns to export for the CSV download.
+     */
+    protected function exportColumns(): array
+    {
+        return [
+            'customer_code'      => 'Code',
+            'customer_name'      => 'Customer Name',
+            'phone'              => 'Phone',
+            'mobile'             => 'Mobile',
+            'email'              => 'Email',
+            'branch.branch_name' => 'Branch Name',
+            'is_active'          => 'Active',
+        ];
+    }
+
+    /**
      * Select-dropdown data for create/edit views.
      */
     protected function formData(): array

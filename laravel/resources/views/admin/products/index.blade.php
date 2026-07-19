@@ -31,6 +31,9 @@
             <a href="{{ route('admin.product-categories.index') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-tags me-1"></i> Categories
             </a>
+            <a href="{{ route($routePrefix . '.export') }}" class="btn btn-outline-light btn-sm" title="Download all products as a CSV file">
+                <i class="fas fa-file-csv me-1"></i> Export CSV
+            </a>
             <a href="{{ route($routePrefix . '.create') }}" class="btn btn-light btn-sm">
                 <i class="fas fa-plus me-1"></i> New product
             </a>

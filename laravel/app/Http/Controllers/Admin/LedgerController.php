@@ -76,6 +76,21 @@ class LedgerController extends BaseMasterDataController
     }
 
     /**
+     * Phase 18: Columns to export for the CSV download.
+     */
+    protected function exportColumns(): array
+    {
+        return [
+            'ledger_code'   => 'Code',
+            'ledger_name'   => 'Ledger Name',
+            'account_type'  => 'Account Type',
+            'ledger_nature' => 'Ledger Nature',
+            'is_system'     => 'System',
+            'is_active'     => 'Active',
+        ];
+    }
+
+    /**
      * Detail with parent + children + journal lines for the show page summary.
      */
     protected function detailWith(): array

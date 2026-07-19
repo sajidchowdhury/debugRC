@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Services\Export\CsvExporter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -44,6 +45,59 @@ abstract class BaseMasterDataController extends Controller
     protected function indexStats(): array
     {
         return [];
+    }
+
+    /**
+     * Phase 18: Columns to export for the CSV export.
+     *
+     * Override in subclass to customize which columns are exported and
+     * their human-readable labels. Returns an associative array
+     * `[key => label]`. The `key` may be either a direct attribute on
+     * the model OR a dotted relation path (e.g. 'branch.branch_name').
+     *
+     * Default behavior: derive columns from the model's $fillable array,
+     * with labels converted from snake_case to Title Case. If the model
+     * has no $fillable, falls back to ['id' => 'ID', 'is_active' => 'Active'].
+     *
+     * @return array<string,string>
+     */
+    protected function exportColumns(): array
+    {
+        $model = ($this->modelClass)::make();
+        $fillable = $model->getFillable();
+
+        if (empty($fillable)) {
+            return [
+                'id'        => 'ID',
+                'is_active' => 'Active',
+                'created_at' => 'Created At',
+                'updated_at' => 'Updated At',
+            ];
+        }
+
+        $columns = [];
+        foreach ($fillable as $field) {
+            $columns[$field] = self::humanizeLabel($field);
+        }
+
+        // Always include is_active + timestamps at the end if not already present.
+        if (!isset($columns['is_active'])) {
+            $columns['is_active'] = 'Active';
+        }
+        if (!isset($columns['created_at'])) {
+            $columns['created_at'] = 'Created At';
+        }
+
+        return $columns;
+    }
+
+    /**
+     * Convert snake_case field name to a human-readable label.
+     * e.g. 'branch_code' → 'Branch Code', 'is_active' → 'Is Active'.
+     */
+    protected static function humanizeLabel(string $field): string
+    {
+        return ucfirst(str_replace('_', ' ', $field));
     }
 
     /**
@@ -365,5 +419,69 @@ abstract class BaseMasterDataController extends Controller
             'recordsFiltered' => $filtered,
             'data' => $items,
         ]);
+    }
+
+    // ===================== CSV EXPORT (Phase 18) =====================
+
+    /**
+     * Stream a CSV export of the current listing.
+     *
+     * Reuses the same query logic as dataTablesResponse() — eager-loads
+     * the same relations ($this->indexWith()), applies the same global
+     * search term (?search= or ?q=), and respects the ?deleted=1 toggle
+     * for inactive records.
+     *
+     * Subclasses override exportColumns() to choose which columns are
+     * exported and their labels. Subclasses that override
+     * dataTablesResponse() to add custom filters should also override
+     * export() to apply those same filters (or call applyExportFilters()
+     * from within).
+     *
+     * Route: GET /admin/{module}/export
+     * Middleware: role:admin,manager (set per-route in routes/web.php).
+     */
+    public function export(Request $request)
+    {
+        $showDeleted = $request->boolean('deleted');
+        $query = ($this->modelClass)::query()->with($this->indexWith());
+
+        if ($showDeleted) {
+            $query->onlyTrashed();
+        } else {
+            $query->whereNull('deleted_at');
+        }
+
+        $this->applyExportSearch($query, $request);
+
+        $columns = $this->exportColumns();
+        $label   = $this->label;
+
+        return CsvExporter::export("{$label}s", $columns, $query);
+    }
+
+    /**
+     * Apply the same search filter used by dataTablesResponse() to the
+     * export query. Honours both `?search=` and `?q=` query params.
+     *
+     * Override in subclass if the dataTablesResponse() uses different
+     * filter logic (e.g. ProductController applies ?filterCategory=…).
+     */
+    protected function applyExportSearch($query, Request $request): void
+    {
+        if ($this->searchFields === []) {
+            return;
+        }
+
+        $search = trim((string) ($request->input('search') ?? $request->input('q') ?? ''));
+
+        if ($search === '') {
+            return;
+        }
+
+        $query->where(function ($q) use ($search) {
+            foreach ($this->searchFields as $field) {
+                $q->orWhere($field, 'ILIKE', "%{$search}%");
+            }
+        });
     }
 }

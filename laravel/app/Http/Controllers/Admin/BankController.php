@@ -77,6 +77,24 @@ class BankController extends BaseMasterDataController
     }
 
     /**
+     * Phase 18: Columns to export for the CSV download.
+     *
+     * Note: 'branch_name' is a direct column on the banks table (the bank's
+     * physical branch, e.g. "Dhanmondi Branch") — it's NOT a relation here.
+     */
+    protected function exportColumns(): array
+    {
+        return [
+            'bank_name'      => 'Bank Name',
+            'account_number' => 'Account Number',
+            'account_holder' => 'Account Holder',
+            'branch_name'    => 'Bank Branch Name',
+            'balance'        => 'Balance',
+            'is_active'      => 'Active',
+        ];
+    }
+
+    /**
      * Form dropdown data: GL ledgers of nature `cash_bank`.
      */
     protected function formData(): array

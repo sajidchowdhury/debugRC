@@ -48,6 +48,22 @@ class BranchController extends BaseMasterDataController
     }
 
     /**
+     * Phase 18: Columns to export for the CSV download.
+     */
+    protected function exportColumns(): array
+    {
+        return [
+            'branch_code' => 'Code',
+            'branch_name' => 'Branch Name',
+            'address'     => 'Address',
+            'phone'       => 'Phone',
+            'email'       => 'Email',
+            'is_active'   => 'Active',
+            'created_at'  => 'Created At',
+        ];
+    }
+
+    /**
      * Validation rules for create/update.
      * Phase 5: Added code pattern validation matching legacy CODE_PATTERN.
      *

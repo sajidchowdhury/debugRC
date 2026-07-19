@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\ApiDocController;
 use App\Http\Controllers\Api\V1\BranchApiController;
 use App\Http\Controllers\Api\V1\DashboardApiController;
 use App\Http\Controllers\Api\V1\LookupApiController;
@@ -29,7 +30,13 @@ use Illuminate\Support\Facades\Route;
  *   GET    /api/v1/lookups/customers   active customers (id + code + name)
  *   GET    /api/v1/lookups/suppliers   active suppliers (id + code + name)
  *   GET    /api/v1/lookups/ledgers     active ledgers (id + code + name + type)
+ *
+ * Phase 18 — interactive API docs page (publicly accessible, no auth):
+ *   GET    /api/docs                   HTML docs + interactive tester
  */
+
+// Phase 18: Public API docs page (NOT behind api.auth).
+Route::get('/docs', [ApiDocController::class, 'index'])->name('api.docs');
 
 Route::prefix('v1')->middleware('api.auth')->group(function (): void {
     // ---------- Branches (REST CRUD) ----------

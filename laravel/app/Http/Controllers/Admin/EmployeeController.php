@@ -55,6 +55,22 @@ class EmployeeController extends BaseMasterDataController
         return ['branch', 'user'];
     }
 
+    /**
+     * Phase 18: Columns to export for the CSV download.
+     */
+    protected function exportColumns(): array
+    {
+        return [
+            'employee_code'      => 'Code',
+            'name'               => 'Name',
+            'role'               => 'Role',
+            'branch.branch_name' => 'Branch Name',
+            'phone'              => 'Phone',
+            'email'              => 'Email',
+            'is_active'          => 'Active',
+        ];
+    }
+
     protected function formData(): array
     {
         return [

@@ -65,6 +65,24 @@ class UserController extends BaseMasterDataController
     }
 
     /**
+     * Phase 18: Columns to export for the CSV download.
+     * Uses dotted relation paths 'employee.name' and 'employee.role' to
+     * pull the linked employee's name and role (role is stored on
+     * Employee, not on User — matches legacy schema).
+     */
+    protected function exportColumns(): array
+    {
+        return [
+            'username'           => 'Username',
+            'employee.name'      => 'Employee Name',
+            'employee.role'      => 'Role',
+            'is_active'          => 'Active',
+            'last_login'         => 'Last Login',
+            'telegram_user_id'   => 'Telegram User ID',
+        ];
+    }
+
+    /**
      * Form dropdown data: employees without an existing user account.
      * Used by the create form so admins can only assign logins to employees
      * that don't already have one (users.employee_id is UNIQUE).

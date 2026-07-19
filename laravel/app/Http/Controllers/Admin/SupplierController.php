@@ -67,6 +67,20 @@ class SupplierController extends BaseMasterDataController
     }
 
     /**
+     * Phase 18: Columns to export for the CSV download.
+     */
+    protected function exportColumns(): array
+    {
+        return [
+            'supplier_code' => 'Code',
+            'supplier_name' => 'Supplier Name',
+            'phone'         => 'Phone',
+            'email'         => 'Email',
+            'is_active'     => 'Active',
+        ];
+    }
+
+    /**
      * Select-dropdown data for create/edit views.
      */
     protected function formData(): array
