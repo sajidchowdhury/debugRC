@@ -196,13 +196,23 @@ abstract class BaseMasterDataController extends Controller
 
     /**
      * Soft-delete the specified resource.
+     * Phase 3: calls canDeactivate() safety check before deactivating.
      */
     public function destroy(Request $request, int $id)
     {
         $item = ($this->modelClass)::findOrFail($id);
 
+        // Phase 3: Safety check — can this entity be deactivated?
+        if ($item->is_active) {
+            $deactivationCheck = $this->canDeactivate($item);
+            if (!$deactivationCheck['ok']) {
+                return back()->with('error', $deactivationCheck['message']);
+            }
+        }
+
         try {
             $item->deleted_by = Auth::id();
+            $item->is_active = false;
             $item->save();
             $item->delete();
 
@@ -211,6 +221,59 @@ abstract class BaseMasterDataController extends Controller
         } catch (\Throwable $e) {
             return back()->with('error', "Failed to deactivate {$this->label}: {$e->getMessage()}");
         }
+    }
+
+    /**
+     * Phase 3: Toggle active/inactive status (legacy 'toggle' action).
+     * Activates if inactive, deactivates if active (with safety check).
+     */
+    public function toggle(int $id)
+    {
+        $item = ($this->modelClass)::withTrashed()->findOrFail($id);
+
+        try {
+            if ($item->is_active) {
+                // Deactivating — run safety check.
+                $deactivationCheck = $this->canDeactivate($item);
+                if (!$deactivationCheck['ok']) {
+                    return back()->with('error', $deactivationCheck['message']);
+                }
+
+                $item->is_active = false;
+                $item->deleted_by = Auth::id();
+                $item->save();
+                $item->delete();
+
+                return redirect()->route("{$this->routePrefix}.index")
+                    ->with('success', "{$this->label} deactivated.");
+            } else {
+                // Activating — restore if soft-deleted.
+                if ($item->trashed()) {
+                    $item->restore();
+                }
+                $item->is_active = true;
+                $item->deleted_by = null;
+                $item->save();
+
+                return redirect()->route("{$this->routePrefix}.index")
+                    ->with('success', "{$this->label} activated.");
+            }
+        } catch (\Throwable $e) {
+            return back()->with('error', "Failed to toggle {$this->label}: {$e->getMessage()}");
+        }
+    }
+
+    /**
+     * Phase 3: Safety check before deactivation.
+     * Override in subclass to add entity-specific checks (e.g. outstanding
+     * balances, dependent records). Default: always allow.
+     *
+     * @param mixed $item The model instance being deactivated
+     * @return array{ok: bool, message: string}
+     */
+    protected function canDeactivate($item): array
+    {
+        return ['ok' => true, 'message' => ''];
     }
 
     /**

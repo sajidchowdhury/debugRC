@@ -134,6 +134,7 @@ Route::middleware('auth')->group(function () {
     Route::prefix('admin/branches')->name('admin.branches.')->group(function () {
         Route::get('audit', [BranchController::class, 'audit'])->name('audit')->middleware('role:admin');
         Route::post('{branch}/restore', [BranchController::class, 'restore'])->name('restore')->middleware('role:admin');
+        Route::post('{branch}/toggle', [BranchController::class, 'toggle'])->name('toggle')->middleware('role:admin');
     });
     // Read access (index, show): admin, manager, warehouse_manager
     Route::resource('admin/branches', BranchController::class)
@@ -150,6 +151,7 @@ Route::middleware('auth')->group(function () {
     Route::prefix('admin/warehouses')->name('admin.warehouses.')->group(function () {
         Route::get('audit', [WarehouseController::class, 'audit'])->name('audit')->middleware('role:admin');
         Route::post('{warehouse}/restore', [WarehouseController::class, 'restore'])->name('restore')->middleware('role:admin');
+        Route::post('{warehouse}/toggle', [WarehouseController::class, 'toggle'])->name('toggle')->middleware('role:admin');
     });
     // Read access (index, show): admin, manager, warehouse_manager
     Route::resource('admin/warehouses', WarehouseController::class)
