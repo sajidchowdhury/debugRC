@@ -44,8 +44,8 @@
                             <th>When</th>
                             <th>User</th>
                             <th>Action</th>
-                            <th>Branch ID</th>
-                            <th>Details</th>
+                            <th>Branch</th>
+                            <th>Changes</th>
                             <th>IP</th>
                         </tr>
                     </thead>
@@ -55,12 +55,32 @@
                                 $action = (string) ($log->action ?? '');
                                 $cls = str_contains($action, 'created') ? 'bg-success-subtle text-success'
                                      : (str_contains($action, 'updated') ? 'bg-primary-subtle text-primary'
-                                     : 'bg-warning-subtle text-warning');
+                                     : (str_contains($action, 'deleted') ? 'bg-danger-subtle text-danger'
+                                     : (str_contains($action, 'restored') ? 'bg-info-subtle text-info'
+                                     : 'bg-warning-subtle text-warning')));
+                                $details = is_string($log->details) ? json_decode($log->details, true) : ($log->details ?? []);
+                                $old = $details['old'] ?? [];
+                                $new = $details['new'] ?? [];
+                                $changedFields = [];
+                                if (!empty($new) && is_array($new)) {
+                                    foreach ($new as $field => $value) {
+                                        if (in_array($field, ['created_at', 'updated_at', 'deleted_at', 'deleted_by'])) continue;
+                                        $oldVal = $old[$field] ?? '';
+                                        $changedFields[] = $field . ': ' . ($oldVal !== '' ? $oldVal . ' → ' : '') . $value;
+                                    }
+                                }
+                                $performerName = $log->performed_by_name ?? ('#' . ($log->user_id ?? 0));
                             @endphp
                             <tr>
-                                <td class="text-nowrap small">{{ $log->created_at ?? '—' }}</td>
-                                <td>{{ $log->performed_by_name ?? ('#' . ($log->user_id ?? 0)) }}</td>
-                                <td><span class="badge {{ $cls }}">{{ ucfirst($action ?: 'unknown') }}</span></td>
+                                <td class="text-nowrap small">
+                                    @if ($log->created_at)
+                                        {{ \Carbon\Carbon::parse($log->created_at)->format('d M Y, H:i') }}
+                                    @else
+                                        —
+                                    @endif
+                                </td>
+                                <td>{{ $performerName }}</td>
+                                <td><span class="badge {{ $cls }}">{{ ucfirst(str_replace('master_data_', '', $action ?: 'unknown')) }}</span></td>
                                 <td>
                                     @if (!empty($log->target_id))
                                         <a href="{{ route('admin.branches.show', $log->target_id) }}" class="fw-semibold text-decoration-none">
@@ -71,8 +91,15 @@
                                     @endif
                                 </td>
                                 <td class="small">
-                                    @if (!empty($log->details))
-                                        <code class="text-muted">{{ is_string($log->details) ? $log->details : json_encode($log->details) }}</code>
+                                    @if (!empty($changedFields))
+                                        <ul class="list-unstyled mb-0">
+                                            @foreach (array_slice($changedFields, 0, 5) as $change)
+                                                <li><code class="text-muted">{{ $change }}</code></li>
+                                            @endforeach
+                                            @if (count($changedFields) > 5)
+                                                <li class="text-muted">+{{ count($changedFields) - 5 }} more</li>
+                                            @endif
+                                        </ul>
                                     @else
                                         —
                                     @endif

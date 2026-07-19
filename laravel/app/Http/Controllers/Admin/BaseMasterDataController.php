@@ -297,13 +297,28 @@ abstract class BaseMasterDataController extends Controller
 
     /**
      * Show audit history for the module.
+     * Phase 4: Fixed query to join users→employees for performer name,
+     * and extract target_id from JSON details.
      */
     public function audit(Request $request)
     {
         $tableName = (new ($this->modelClass))->getTable();
-        $auditLogs = DB::table('user_audit_log')
-            ->whereRaw("details::jsonb->>'table' = ?", [$tableName])
-            ->orderBy('created_at', 'desc')
+
+        $auditLogs = DB::table('user_audit_log as ual')
+            ->leftJoin('users as u', 'u.id', '=', 'ual.user_id')
+            ->leftJoin('employees as e', 'e.id', '=', 'u.employee_id')
+            ->whereRaw("ual.details::jsonb->>'table' = ?", [$tableName])
+            ->select(
+                'ual.id',
+                'ual.user_id',
+                'ual.action',
+                'ual.details',
+                'ual.ip_address',
+                'ual.created_at',
+                'e.name as performed_by_name',
+                DB::raw("ual.details::jsonb->>'record_id' as target_id")
+            )
+            ->orderBy('ual.created_at', 'desc')
             ->paginate(50);
 
         return view("{$this->viewDir}.audit", [
