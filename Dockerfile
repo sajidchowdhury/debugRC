@@ -10,6 +10,8 @@ FROM php:8.4-fpm-bookworm
 # -----------------------------------------------------------------------------
 # System dependencies
 # -----------------------------------------------------------------------------
+# postgresql-client: needed by entrypoint.sh to load SQL schema files via psql
+# libpq-dev: needed to compile pdo_pgsql + pgsql PHP extensions
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -24,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     supervisor \
     cron \
-    nginx \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------

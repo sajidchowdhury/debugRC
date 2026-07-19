@@ -5,9 +5,16 @@
 # Runs on container startup:
 #   1. Ensures storage directories are writable
 #   2. Installs Composer dependencies (if vendor/ is empty)
-#   3. Runs database migrations
-#   4. Creates admin user (if not exists)
-#   5. Starts PHP-FPM
+#   3. Waits for PostgreSQL to be ready
+#   4. Loads SQL schema (if tables don't exist yet)
+#   5. Runs database migrations
+#   6. Creates admin user (if not exists)
+#   7. Clears caches
+#   8. Starts PHP-FPM
+#
+# NOTE: This script does NOT depend on the MySQL Archive container.
+#       The MySQL archive is optional (started via --profile archive).
+#       The Laravel ArchiveService handles MySQL connection failures gracefully.
 # =============================================================================
 
 set -e
@@ -41,11 +48,20 @@ fi
 # Step 3: Wait for PostgreSQL to be ready
 # ---------------------------------------------------------------------------
 echo "▶ Step 3: Waiting for PostgreSQL..."
+MAX_RETRIES=30
+RETRY_COUNT=0
 until php -r "new PDO('pgsql:host=rcerp_postgres;port=5432;dbname=' . getenv('DB_DATABASE'), getenv('DB_USERNAME'), getenv('DB_PASSWORD'));" 2>/dev/null; do
-    echo "  ⏳ PostgreSQL not ready — retrying in 2s..."
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+        echo "  ✗ PostgreSQL not ready after $MAX_RETRIES attempts — continuing anyway"
+        break
+    fi
+    echo "  ⏳ PostgreSQL not ready — retrying in 2s... ($RETRY_COUNT/$MAX_RETRIES)"
     sleep 2
 done
-echo "  ✓ PostgreSQL is ready"
+if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+    echo "  ✓ PostgreSQL is ready"
+fi
 
 # ---------------------------------------------------------------------------
 # Step 4: Run database setup (schema + migrations)
@@ -63,12 +79,12 @@ try {
 }
 " 2>/dev/null)
 
-if [ "$TABLE_COUNT" -lt 10 ]; then
+if [ "$TABLE_COUNT" -lt 10 ] 2>/dev/null; then
     echo "  Loading SQL schema files..."
     for sql_file in database/sql/01_*.sql database/sql/02_*.sql database/sql/03_*.sql database/sql/04_*.sql database/sql/05_*.sql database/sql/06_*.sql database/sql/07_*.sql; do
         if [ -f "$sql_file" ]; then
             echo "    → Loading $(basename $sql_file)..."
-            PGPASSWORD="${DB_PASSWORD}" psql -h rcerp_postgres -U "${DB_USERNAME}" -d "${DB_DATABASE}" -f "$sql_file" 2>/dev/null || true
+            PGPASSWORD="${DB_PASSWORD}" psql -h rcerp_postgres -U "${DB_USERNAME}" -d "${DB_DATABASE}" -f "$sql_file" 2>&1 | tail -1 || true
         fi
     done
     echo "  ✓ Schema loaded"
@@ -78,7 +94,7 @@ fi
 
 # Run migrations
 echo "  Running Laravel migrations..."
-php artisan migrate --force 2>/dev/null || echo "  ⚠ Migration warning (may already be migrated)"
+php artisan migrate --force 2>&1 | tail -5 || echo "  ⚠ Migration warning (may already be migrated)"
 echo "  ✓ Migrations complete"
 
 # Create migrations table if it doesn't exist (for tracking)
@@ -153,7 +169,7 @@ echo "║  Application:  http://localhost:8080                     ║"
 echo "║  Login:        admin / password123                       ║"
 echo "║  PostgreSQL:   localhost:5432                            ║"
 echo "║  Redis:        localhost:6379                            ║"
-echo "║  MySQL Archive: localhost:3306                           ║"
+echo "║  MySQL Archive: localhost:3307 (optional, --profile archive) ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 

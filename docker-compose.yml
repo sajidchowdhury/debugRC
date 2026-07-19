@@ -1,18 +1,20 @@
 # =============================================================================
 # RC_ERP_v2 — Docker Compose for Local Development
 # =============================================================================
-# Brings up 5 containers:
-#   1. rcerp_app      — PHP 8.4 FPM (Laravel application)
-#   2. rcerp_nginx    — Nginx reverse proxy (serves at http://localhost:8080)
-#   3. rcerp_postgres — PostgreSQL 16 (primary database)
-#   4. rcerp_redis    — Redis 7 (sessions, cache, queue)
+# Core stack (starts by default):
+#   1. rcerp_postgres  — PostgreSQL 16 (primary database)
+#   2. rcerp_redis     — Redis 7 (sessions, cache, queue)
+#   3. rcerp_app       — PHP 8.4 FPM (Laravel application)
+#   4. rcerp_nginx     — Nginx reverse proxy (http://localhost:8080)
+#
+# Optional (does NOT start by default):
 #   5. rcerp_mysql_archive — MySQL 8 (read-only legacy archive)
 #
 # Usage:
-#   docker-compose up -d          # Start all containers
-#   docker-compose down           # Stop all containers
-#   docker-compose logs -f app    # Follow app logs
-#   docker-compose exec app bash  # Shell into app container
+#   docker compose up -d                          # Start core stack only
+#   docker compose --profile archive up -d        # Start core + MySQL archive
+#   docker compose --profile archive up -d rcerp_mysql_archive  # Start only archive
+#   docker compose down                           # Stop all
 # =============================================================================
 
 services:
@@ -64,19 +66,33 @@ services:
       retries: 5
 
   # ---------------------------------------------------------------------------
-  # MySQL 8 — Read-Only Legacy Archive
+  # MySQL 8 — Read-Only Legacy Archive (OPTIONAL)
+  # ---------------------------------------------------------------------------
+  # This container is NOT required for the application to run.
+  # It provides read-only access to the legacy MySQL database for the
+  # Anti-Corruption Layer (Phase 12 archive feature).
+  #
+  # It does NOT start by default. To start it:
+  #   docker compose --profile archive up -d rcerp_mysql_archive
+  #
+  # Host port changed from 3306 → 3307 to avoid conflicts with XAMPP/MySQL
+  # that may already be running on port 3306 on the host machine.
+  # Internal Docker networking is unaffected — containers communicate on
+  # port 3306 via the rcerp_network bridge.
   # ---------------------------------------------------------------------------
   rcerp_mysql_archive:
     image: mysql:8.0
     container_name: rcerp_mysql_archive
     restart: unless-stopped
+    profiles:
+      - archive
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-archive_root_secret}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-rcerp_legacy}
       MYSQL_USER: ${MYSQL_USER:-archive_reader}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-archive_reader_secret}
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - mysql_archive_data:/var/lib/mysql
       - ./mysql_archive/init:/docker-entrypoint-initdb.d:ro
@@ -87,10 +103,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    # Read-only user is granted SELECT only via init script
 
   # ---------------------------------------------------------------------------
   # PHP 8.4 FPM — Laravel Application
+  # ---------------------------------------------------------------------------
+  # Depends ONLY on PostgreSQL + Redis (the two databases Laravel actually
+  # uses at runtime). The MySQL archive is NOT in depends_on because:
+  #   1. Laravel uses PostgreSQL only — MySQL is read-only archive
+  #   2. The ArchiveService catches connection errors gracefully
+  #   3. Making it optional allows the app to start without MySQL
   # ---------------------------------------------------------------------------
   rcerp_app:
     build:
@@ -112,7 +133,7 @@ services:
       APP_TIMEZONE: Asia/Dhaka
       APP_URL: http://localhost:8080
 
-      # PostgreSQL
+      # PostgreSQL (primary database — always required)
       DB_CONNECTION: pgsql
       DB_HOST: rcerp_postgres
       DB_PORT: "5432"
@@ -120,7 +141,7 @@ services:
       DB_USERNAME: ${POSTGRES_USER:-rcerp_app}
       DB_PASSWORD: ${POSTGRES_PASSWORD:-rcerp_secret}
 
-      # Redis
+      # Redis (sessions, cache, queue — always required)
       REDIS_CLIENT: predis
       REDIS_HOST: rcerp_redis
       REDIS_PASSWORD: null
@@ -141,7 +162,9 @@ services:
       CACHE_STORE: redis
       QUEUE_CONNECTION: redis
 
-      # MySQL Archive (read-only)
+      # MySQL Archive (optional — only used when archive profile is active)
+      # These env vars are always set, but the ArchiveService handles
+      # connection failures gracefully if the MySQL container isn't running.
       ARCHIVE_MYSQL_HOST: rcerp_mysql_archive
       ARCHIVE_MYSQL_PORT: "3306"
       ARCHIVE_MYSQL_DATABASE: ${MYSQL_DATABASE:-rcerp_legacy}
@@ -162,6 +185,10 @@ services:
 
   # ---------------------------------------------------------------------------
   # Nginx — Reverse Proxy (serves at http://localhost:8080)
+  # ---------------------------------------------------------------------------
+  # Depends on rcerp_app with condition: service_started (not service_healthy)
+  # because PHP-FPM doesn't have a built-in healthcheck. The app container
+  # will be "started" as soon as its entrypoint begins running.
   # ---------------------------------------------------------------------------
   rcerp_nginx:
     image: nginx:1.25-alpine
