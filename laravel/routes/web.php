@@ -156,12 +156,22 @@ Route::middleware('auth')->group(function () {
         ->names('admin.employees')
         ->middleware('role:admin');
 
-    // --- Banks ---
+    // --- Banks (RBAC: admin for write, admin/manager/accountant for read) ---
     Route::prefix('admin/banks')->name('admin.banks.')->group(function () {
-        Route::get('audit', [BankController::class, 'audit'])->name('audit');
-        Route::post('{bank}/restore', [BankController::class, 'restore'])->name('restore');
+        Route::get('audit', [BankController::class, 'audit'])->name('audit')->middleware('role:admin');
+        Route::post('{bank}/restore', [BankController::class, 'restore'])->name('restore')->where(['bank' => '[0-9]+'])->middleware('role:admin');
+        Route::post('{bank}/toggle', [BankController::class, 'toggle'])->name('toggle')->where(['bank' => '[0-9]+'])->middleware('role:admin');
     });
-    Route::resource('admin/banks', BankController::class)->names('admin.banks');
+    // Read access (index, show): admin, manager, accountant
+    Route::resource('admin/banks', BankController::class)
+        ->only(['index', 'show'])->where(['bank' => '[0-9]+'])
+        ->names('admin.banks')
+        ->middleware('role:admin,manager,accountant');
+    // Write access (create, store, edit, update, destroy): admin only
+    Route::resource('admin/banks', BankController::class)
+        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['bank' => '[0-9]+'])
+        ->names('admin.banks')
+        ->middleware('role:admin');
 
     // --- Ledgers (Chart of Accounts) ---
     Route::prefix('admin/ledgers')->name('admin.ledgers.')->group(function () {

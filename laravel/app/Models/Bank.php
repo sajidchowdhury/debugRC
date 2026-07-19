@@ -4,16 +4,21 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use App\Traits\AuditableMasterData;
 
 /**
  * Bank — maps to legacy `banks` table.
  * Phase 2 FIX: balance is now numeric(18,2) (was FLOAT in MySQL).
  * Each bank maps to a GL ledger of nature 'cash_bank' via bank_ledger_mappings.
+ *
+ * Phase 13: added HasFactory trait for Bank module test suite. Added
+ * `deleted_by` to $fillable (now exists on the table via migration
+ * 2025_01_13_000001_add_soft_deletes_to_banks).
  */
 class Bank extends Model
 {
-    use SoftDeletes, AuditableMasterData;
+    use SoftDeletes, HasFactory, AuditableMasterData;
 
     protected $table = 'banks';
 
@@ -30,6 +35,7 @@ class Bank extends Model
         'is_active',
         'ledger_id',
         'created_by',
+        'deleted_by',
     ];
 
     protected $casts = [
