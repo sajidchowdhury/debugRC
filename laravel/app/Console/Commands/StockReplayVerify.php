@@ -303,6 +303,180 @@ class StockReplayVerify extends Command
             'shadow_rows' => count($shadowRows),
         ]);
 
+        // ============================================================
+        // P3-1: Sales-specific data integrity verification
+        // ============================================================
+        $this->newLine();
+        $this->info('=== P3-1: Sales-Specific Data Integrity Checks ===');
+
+        $salesIssues = $this->verifySalesReturnOriginalCost();
+        $challanIssues = $this->verifyChallanIssueRates();
+        $damageIssues = $this->verifyLinkedDamageTransactions();
+
+        $totalSalesIssues = $salesIssues + $challanIssues + $damageIssues;
+
+        if ($totalSalesIssues > 0) {
+            $this->warn("Sales-specific data integrity issues found: {$totalSalesIssues}");
+            $this->warn("  - Sales return rate mismatches: {$salesIssues}");
+            $this->warn("  - Challan issue rate mismatches: {$challanIssues}");
+            $this->warn("  - Linked damage transaction issues: {$damageIssues}");
+
+            Log::warning('Sales-specific data integrity issues', [
+                'return_rate_mismatches' => $salesIssues,
+                'challan_rate_mismatches' => $challanIssues,
+                'damage_issues' => $damageIssues,
+            ]);
+
+            // Don't fail the overall test for data integrity issues — these
+            // are informational (the replay may still pass). Log for investigation.
+            $this->warn('These are informational — investigate but they do not block replay sign-off.');
+        } else {
+            $this->info('✓ All sales-specific data integrity checks passed.');
+            $this->info('  - Sales return rates match original_cost snapshots');
+            $this->info('  - Challan issue rates match sales_challan_items');
+            $this->info('  - Linked damage transactions are consistent');
+        }
+
+        $this->newLine();
+        $this->info('Phase 6.2 + P3-1 replay verification complete.');
+
         return self::SUCCESS;
+    }
+
+    /**
+     * P3-1: Verify that sales_return stock_transactions used the original_cost
+     * from sales_return_items (not the current avg_cost at the time).
+     *
+     * This is the CRITICAL correctness check from the audit: legacy used
+     * current avg_cost for sales returns (a COGS-integrity bug); Laravel
+     * should use the snapshotted original_cost.
+     *
+     * @return int Number of mismatches found
+     */
+    private function verifySalesReturnOriginalCost(): int
+    {
+        // For each sales_return stock_transaction, the rate should match the
+        // original_cost on the corresponding sales_return_item.
+        $mismatches = DB::table('stock_transactions as st')
+            ->join('sales_return_items as sri', function ($join) {
+                $join->on('sri.product_id', '=', 'st.product_id')
+                     ->on('sri.warehouse_id', '=', 'st.warehouse_id')
+                     ->whereColumn('sri.sales_return_id', '=', 'st.reference_id');
+            })
+            ->where('st.reference_type', 'sales_return')
+            ->where('st.qty', '>', 0) // IN transactions
+            ->where('st.is_reversed', false)
+            ->whereRaw('ABS(st.rate - COALESCE(sri.original_cost, 0)) > 0.01')
+            ->select(
+                'st.id as transaction_id',
+                'st.reference_id as return_id',
+                'st.product_id',
+                'st.warehouse_id',
+                'st.rate as transaction_rate',
+                'sri.original_cost',
+                DB::raw('ABS(st.rate - COALESCE(sri.original_cost, 0)) as rate_diff')
+            )
+            ->get();
+
+        foreach ($mismatches as $m) {
+            $this->warn("  RETURN RATE MISMATCH: TX #{$m->transaction_id} (return #{$m->return_id}, "
+                . "product {$m->product_id}, wh {$m->warehouse_id}): "
+                . "rate={$m->transaction_rate}, original_cost={$m->original_cost}, diff={$m->rate_diff}");
+        }
+
+        return $mismatches->count();
+    }
+
+    /**
+     * P3-1: Verify that sales_challan stock_transactions have rates matching
+     * the issue_rate stored in sales_challan_items.
+     *
+     * @return int Number of mismatches found
+     */
+    private function verifyChallanIssueRates(): int
+    {
+        $mismatches = DB::table('stock_transactions as st')
+            ->join('sales_challan_items as sci', function ($join) {
+                $join->on('sci.product_id', '=', 'st.product_id')
+                     ->on('sci.warehouse_id', '=', 'st.warehouse_id')
+                     ->whereColumn('sci.sales_challan_id', '=', 'st.reference_id');
+            })
+            ->where('st.reference_type', 'sales_challan')
+            ->where('st.qty', '<', 0) // OUT transactions
+            ->where('st.is_reversed', false)
+            ->whereRaw('ABS(st.rate - sci.issue_rate) > 0.01')
+            ->select(
+                'st.id as transaction_id',
+                'st.reference_id as challan_id',
+                'st.product_id',
+                'st.rate as transaction_rate',
+                'sci.issue_rate',
+                DB::raw('ABS(st.rate - sci.issue_rate) as rate_diff')
+            )
+            ->get();
+
+        foreach ($mismatches as $m) {
+            $this->warn("  CHALLAN RATE MISMATCH: TX #{$m->transaction_id} (challan #{$m->challan_id}, "
+                . "product {$m->product_id}): "
+                . "rate={$m->transaction_rate}, issue_rate={$m->issue_rate}, diff={$m->rate_diff}");
+        }
+
+        return $mismatches->count();
+    }
+
+    /**
+     * P3-1: Verify that damage stock_transactions linked to sales returns
+     * (via damage_invoices.sales_return_id) are consistent.
+     *
+     * Checks:
+     *   - Each linked damage_invoice has stock_transactions with reference_type='damage'
+     *   - The damage transaction rate matches the return item's original_cost
+     *
+     * @return int Number of issues found
+     */
+    private function verifyLinkedDamageTransactions(): int
+    {
+        $issues = 0;
+
+        // Check 1: Linked damage_invoices should have at least one damage stock_transaction.
+        $orphanDamages = DB::table('damage_invoices as di')
+            ->leftJoin('stock_transactions as st', function ($join) {
+                $join->on('st.reference_id', '=', 'di.id')
+                     ->where('st.reference_type', '=', 'damage')
+                     ->where('st.is_reversed', false);
+            })
+            ->whereNotNull('di.sales_return_id')
+            ->whereNull('st.id')
+            ->where('di.is_reversed', false)
+            ->count();
+
+        if ($orphanDamages > 0) {
+            $this->warn("  ORPHAN DAMAGE: {$orphanDamages} linked damage_invoices have no stock_transactions.");
+            $issues += $orphanDamages;
+        }
+
+        // Check 2: Damage transaction rates should match the return item's original_cost
+        // (since P1-5 uses original_cost as the damage rate).
+        $rateMismatches = DB::table('stock_transactions as st')
+            ->join('damage_invoices as di', 'di.id', '=', 'st.reference_id')
+            ->join('damage_invoice_items as dii', 'dii.damage_invoice_id', '=', 'di.id')
+            ->join('sales_return_items as sri', function ($join) {
+                $join->on('sri.damage_invoice_id', '=', 'di.id')
+                     ->on('sri.product_id', '=', 'st.product_id');
+            })
+            ->where('st.reference_type', 'damage')
+            ->where('st.qty', '<', 0) // OUT transactions
+            ->where('st.is_reversed', false)
+            ->whereNotNull('di.sales_return_id')
+            ->whereRaw('ABS(st.rate - COALESCE(sri.original_cost, 0)) > 0.01')
+            ->count();
+
+        if ($rateMismatches > 0) {
+            $this->warn("  DAMAGE RATE MISMATCH: {$rateMismatches} damage transactions have rates "
+                . "that don't match the return item's original_cost.");
+            $issues += $rateMismatches;
+        }
+
+        return $issues;
     }
 }

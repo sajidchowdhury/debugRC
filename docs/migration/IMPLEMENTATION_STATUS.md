@@ -793,7 +793,7 @@ All 7 Phase 1 tasks are complete and pushed to GitHub:
 
 | Task | Description | Status |
 |------|-------------|--------|
-| P3-1 | Stock replay verification | ⬜ Pending |
+| P3-1 | Stock replay verification | ✅ Code Ready | Enhanced `stock:replay-verify` with 3 sales-specific data integrity checks (return original_cost, challan issue_rate, linked damage) + verification checklist doc |
 | P3-2 | Journal replay verification | ⬜ Pending |
 | P3-3 | Reconciliation (6 sections) | ⬜ Pending |
 | P3-4 | Shadow mode (7 days) | ⬜ Pending |
