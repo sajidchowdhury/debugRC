@@ -175,11 +175,22 @@ Route::middleware('auth')->group(function () {
         ->middleware('role:admin');
 
     // --- Ledgers (Chart of Accounts) ---
+    // RBAC (Phase 15): admin for write, admin/accountant for read (accounting-domain).
     Route::prefix('admin/ledgers')->name('admin.ledgers.')->group(function () {
-        Route::get('audit', [LedgerController::class, 'audit'])->name('audit');
-        Route::post('{ledger}/restore', [LedgerController::class, 'restore'])->name('restore');
+        Route::get('audit', [LedgerController::class, 'audit'])->name('audit')->middleware('role:admin,accountant');
+        Route::post('{ledger}/restore', [LedgerController::class, 'restore'])->name('restore')->where(['ledger' => '[0-9]+'])->middleware('role:admin');
+        Route::post('{ledger}/toggle', [LedgerController::class, 'toggle'])->name('toggle')->where(['ledger' => '[0-9]+'])->middleware('role:admin');
     });
-    Route::resource('admin/ledgers', LedgerController::class)->names('admin.ledgers');
+    // Read access (index, show): admin, accountant (accounting-domain master data)
+    Route::resource('admin/ledgers', LedgerController::class)
+        ->only(['index', 'show'])->where(['ledger' => '[0-9]+'])
+        ->names('admin.ledgers')
+        ->middleware('role:admin,accountant');
+    // Write access (create, store, edit, update, destroy): admin only
+    Route::resource('admin/ledgers', LedgerController::class)
+        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['ledger' => '[0-9]+'])
+        ->names('admin.ledgers')
+        ->middleware('role:admin');
 
     // --- Branches (RBAC: admin for write, admin/manager/warehouse_manager for read) ---
     Route::prefix('admin/branches')->name('admin.branches.')->group(function () {
