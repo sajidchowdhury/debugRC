@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Models\Branch;
 use App\Models\Customer;
 use App\Models\Employee;
+use App\Services\MasterData\CodeGenerator;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -14,7 +15,9 @@ use Illuminate\Support\Facades\DB;
  *
  * Replicates the legacy /customer/* PHP UI in Blade, riding on the shared
  * BaseMasterDataController CRUD skeleton. Behaviour overrides:
- *   - store(): auto-generate customer_code (CUS-YYYY-NNNNNN) when blank.
+ *   - store(): auto-generate customer_code (CUS-YYYY-NNNNNN) when blank
+ *     via the centralized CodeGenerator service (Phase 17 refactor — the
+ *     per-controller generateCustomerCode() method was removed).
  *   - store()/update(): pre-normalize customer_code (uppercase + trim)
  *     BEFORE validation so the unique rule is case-insensitive.
  *   - update(): runs canDeactivate() when is_active is being flipped to
@@ -110,6 +113,9 @@ class CustomerController extends BaseMasterDataController
      * Override store(): auto-generate customer_code (CUS-YYYY-NNNNNN) when
      * the user didn't supply one. Format mirrors the legacy helper.
      *
+     * Phase 17 refactor: now uses the centralized CodeGenerator service
+     * instead of a per-controller generateCustomerCode() method.
+     *
      * Phase 10: pre-normalize customer_code (uppercase + trim) BEFORE
      * validation so the unique rule is case-insensitive. Also normalize
      * free-text fields and only set is_active when explicitly provided
@@ -120,7 +126,7 @@ class CustomerController extends BaseMasterDataController
         // Pre-fill the code so the unique rule sees it. We generate the next
         // sequence before validation so a collision can't sneak in.
         if (empty(trim((string) $request->input('customer_code')))) {
-            $request->merge(['customer_code' => $this->generateCustomerCode()]);
+            $request->merge(['customer_code' => CodeGenerator::customerCode()]);
         }
 
         // Phase 10: normalize customer_code BEFORE validation for
@@ -259,27 +265,5 @@ class CustomerController extends BaseMasterDataController
         }
 
         return ['ok' => true, 'message' => ''];
-    }
-
-    /**
-     * Generate the next customer code in the CUS-YYYY-NNNNNN format.
-     * Looks at the highest numeric suffix in the table and increments it,
-     * scoped inside the current year. This is intentionally a single
-     * table-scan + str_pad — race conditions are bounded by a unique index
-     * on customer_code (callers will get a validation error and retry).
-     */
-    protected function generateCustomerCode(): string
-    {
-        $year  = now()->format('Y');
-        $prefix = "CUS-{$year}-";
-
-        $last = DB::table('customers')
-            ->where('customer_code', 'LIKE', "{$prefix}%")
-            ->selectRaw("MAX(SUBSTRING(customer_code FROM LENGTH('{$prefix}') + 1)) AS seq")
-            ->value('seq');
-
-        $next = ((int) $last) + 1;
-
-        return $prefix . str_pad((string) $next, 6, '0', STR_PAD_LEFT);
     }
 }

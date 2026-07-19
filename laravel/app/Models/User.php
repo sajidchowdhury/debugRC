@@ -48,6 +48,7 @@ class User extends Authenticatable
         'locked_until',
         'credential_version',
         'telegram_user_id',
+        'api_token',
         'created_by',
         'deleted_by',
     ];
@@ -55,6 +56,7 @@ class User extends Authenticatable
     protected $hidden = [
         'password_hash',
         'remember_token',
+        'api_token',
     ];
 
     protected $casts = [
@@ -68,6 +70,43 @@ class User extends Authenticatable
         'credential_version' => 'integer',
         'telegram_user_id' => 'integer',
     ];
+
+    /**
+     * Phase 13: Generate a new API token for this user.
+     *
+     * Returns the plain-text token — callers MUST give it to the client
+     * immediately and not log/store it. The stored column (`api_token`)
+     * holds only the SHA-256 hash so a DB leak doesn't expose live tokens.
+     *
+     * Mirrors Laravel Sanctum's plain-text-token → hashed-storage pattern.
+     */
+    public function generateApiToken(): string
+    {
+        $plain = \Illuminate\Support\Str::random(60);
+
+        $this->api_token = hash('sha256', $plain);
+        $this->save();
+
+        return $plain;
+    }
+
+    /**
+     * Phase 13: Find a user by their plain-text bearer token.
+     *
+     * Hashes the plain text and looks up the matching row in users.api_token.
+     * Returns null on no match, disabled user, or soft-deleted user.
+     */
+    public static function findByApiToken(string $plainToken): ?self
+    {
+        if ($plainToken === '') {
+            return null;
+        }
+
+        return static::where('api_token', hash('sha256', $plainToken))
+            ->where('is_active', true)
+            ->whereNull('deleted_at')
+            ->first();
+    }
 
     /**
      * Legacy app stores the bcrypt hash in `password_hash`, not `password`.

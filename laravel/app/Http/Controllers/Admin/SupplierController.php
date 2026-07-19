@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Models\Branch;
 use App\Models\Supplier;
+use App\Services\MasterData\CodeGenerator;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -12,7 +13,9 @@ use Illuminate\Support\Facades\DB;
  *
  * Replicates the legacy /supplier/* PHP UI in Blade, riding on the shared
  * BaseMasterDataController CRUD skeleton. Behaviour overrides:
- *   - store(): auto-generate supplier_code (SUP-NNNNNN) when blank.
+ *   - store(): auto-generate supplier_code (SUP-NNNNNN) when blank via the
+ *     centralized CodeGenerator service (Phase 17 refactor — the
+ *     per-controller generateSupplierCode() method was removed).
  *   - store()/update(): pre-normalize supplier_code (uppercase + trim)
  *     BEFORE validation so the unique rule is case-insensitive.
  *   - update(): runs canDeactivate() when is_active is being flipped to
@@ -104,6 +107,9 @@ class SupplierController extends BaseMasterDataController
      * Override store(): auto-generate supplier_code (SUP-NNNNNN) when the
      * user didn't supply one.
      *
+     * Phase 17 refactor: now uses the centralized CodeGenerator service
+     * instead of a per-controller generateSupplierCode() method.
+     *
      * Phase 11: pre-normalize supplier_code BEFORE validation for
      * case-insensitive unique check (same fix as Phase 8/9/10). Also
      * normalize free-text fields and only set is_active when explicitly
@@ -115,7 +121,7 @@ class SupplierController extends BaseMasterDataController
         // Pre-fill the code so the unique rule sees it. We generate the next
         // sequence before validation so a collision can't sneak in.
         if (empty(trim((string) $request->input('supplier_code')))) {
-            $request->merge(['supplier_code' => $this->generateSupplierCode()]);
+            $request->merge(['supplier_code' => CodeGenerator::supplierCode()]);
         }
 
         // Phase 11: normalize supplier_code BEFORE validation for
@@ -257,22 +263,5 @@ class SupplierController extends BaseMasterDataController
         }
 
         return ['ok' => true, 'message' => ''];
-    }
-
-    /**
-     * Generate the next supplier code in the SUP-NNNNNN format.
-     */
-    protected function generateSupplierCode(): string
-    {
-        $prefix = 'SUP-';
-
-        $last = DB::table('suppliers')
-            ->where('supplier_code', 'LIKE', "{$prefix}%")
-            ->selectRaw("MAX(SUBSTRING(supplier_code FROM LENGTH('{$prefix}') + 1)) AS seq")
-            ->value('seq');
-
-        $next = ((int) $last) + 1;
-
-        return $prefix . str_pad((string) $next, 6, '0', STR_PAD_LEFT);
     }
 }

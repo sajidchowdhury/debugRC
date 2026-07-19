@@ -73,25 +73,58 @@ class CodeGeneratorTest extends TestCase
         $this->assertEquals(6, strlen($code)); // P- + 4 digits
     }
 
-    public function test_customer_code_uses_C_prefix(): void
+    public function test_customer_code_uses_CUS_prefix_with_year(): void
     {
+        // Phase 17: customerCode is now CUS-YYYY-NNNNNN (matches legacy
+        // CustomerController::generateCustomerCode format).
         $code = CodeGenerator::customerCode();
 
-        $this->assertStringStartsWith('C-', $code);
+        $this->assertStringStartsWith('CUS-', $code);
+        $year = now()->format('Y');
+        $this->assertStringStartsWith("CUS-{$year}-", $code);
     }
 
-    public function test_supplier_code_uses_S_prefix(): void
+    public function test_customer_code_starts_at_000001_for_current_year(): void
     {
+        // Ensure no customers exist for this year so we test the empty case.
+        $year = now()->format('Y');
+        $prefix = "CUS-{$year}-";
+        \App\Models\Customer::where('customer_code', 'LIKE', "{$prefix}%")->delete();
+
+        $code = CodeGenerator::customerCode();
+
+        $this->assertEquals("{$prefix}000001", $code);
+    }
+
+    public function test_customer_code_increments_within_year(): void
+    {
+        $year = now()->format('Y');
+        $prefix = "CUS-{$year}-";
+        \App\Models\Customer::factory()->create(['customer_code' => "{$prefix}000005"]);
+
+        $code = CodeGenerator::customerCode();
+
+        $this->assertEquals("{$prefix}000006", $code);
+    }
+
+    public function test_supplier_code_uses_SUP_prefix(): void
+    {
+        // Phase 17: supplierCode is now SUP-NNNNNN (matches legacy
+        // SupplierController::generateSupplierCode format).
         $code = CodeGenerator::supplierCode();
 
-        $this->assertStringStartsWith('S-', $code);
+        $this->assertStringStartsWith('SUP-', $code);
+        $this->assertEquals(10, strlen($code)); // SUP- + 6 digits
     }
 
     public function test_employee_code_uses_EMP_prefix(): void
     {
+        // Phase 17: employeeCode is now EMP-NNNNNN (6-digit pad, matches
+        // legacy EmployeeController::generateEmployeeCode format).
         $code = CodeGenerator::employeeCode();
 
         $this->assertStringStartsWith('EMP-', $code);
+        $this->assertEquals(10, strlen($code)); // EMP- + 6 digits
     }
 
     public function test_warehouse_code_uses_WH_prefix(): void

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Models\Branch;
 use App\Models\Employee;
 use App\Services\Auth\CredentialVersion;
+use App\Services\MasterData\CodeGenerator;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -15,7 +16,9 @@ use Illuminate\Support\Facades\Storage;
  * Reproduces the legacy /employee/* UI in Blade on top of the Laravel 11
  * scaffold. Inherits full CRUD from BaseMasterDataController and adds:
  *  - photo upload (random filename, public/employees disk)
- *  - auto employee_code generation (EMP-NNNNNN) when not supplied
+ *  - auto employee_code generation (EMP-NNNNNN) when not supplied via the
+ *    centralized CodeGenerator service (Phase 17 refactor — the
+ *    per-controller generateEmployeeCode() method was removed)
  *  - read-only account view (linked user + salary/advance summary)
  *
  * Phase 12 hardening (mirrors Branch/Warehouse/Product/Customer/Supplier):
@@ -131,7 +134,9 @@ class EmployeeController extends BaseMasterDataController
 
         // Auto-generate employee_code if not provided.
         if (empty($validated['employee_code'])) {
-            $validated['employee_code'] = $this->generateEmployeeCode();
+            // Phase 17 refactor: use centralized CodeGenerator (EMP-NNNNNN)
+            // instead of the per-controller generateEmployeeCode() method.
+            $validated['employee_code'] = CodeGenerator::employeeCode();
         }
 
         // Photo upload — random filename, public/employees disk.
@@ -263,26 +268,6 @@ class EmployeeController extends BaseMasterDataController
     }
 
     // ===================== HELPERS =====================
-
-    /**
-     * Generate the next employee_code in EMP-NNNNNN format.
-     * Looks at the highest numeric suffix across all (incl. trashed) records.
-     */
-    protected function generateEmployeeCode(): string
-    {
-        $last = Employee::withTrashed()
-            ->where('employee_code', 'LIKE', 'EMP-%')
-            ->orderByRaw("LENGTH(employee_code) DESC")
-            ->orderBy('employee_code', 'desc')
-            ->first();
-
-        $next = 1;
-        if ($last && preg_match('/^EMP-(\d+)$/', $last->employee_code, $m)) {
-            $next = ((int) $m[1]) + 1;
-        }
-
-        return 'EMP-' . str_pad((string) $next, 6, '0', STR_PAD_LEFT);
-    }
 
     /**
      * Store an uploaded photo on the public disk under employees/.

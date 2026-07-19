@@ -6,7 +6,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Auto-Generate Code Service — Phase 16.
+ * Auto-Generate Code Service — Phase 16 + Task 17-REFACTOR-AUTOGEN-API.
  *
  * Generates sequential, human-readable codes for master-data entities
  * following the legacy RC_ERP conventions:
@@ -14,19 +14,30 @@ use Illuminate\Support\Facades\Log;
  *   Branch    → HO, PT, NW, TR (manual — short alphabetic)
  *   Warehouse → WH-NNNN
  *   Product   → P-NNNN
- *   Customer  → C-NNNN
- *   Supplier  → S-NNNN
- *   Employee  → EMP-NNNN
+ *   Customer  → CUS-YYYY-NNNNNN (year-scoped sequence)
+ *   Supplier  → SUP-NNNNNN
+ *   Employee  → EMP-NNNNNN
  *   Ledger    → L-NNNN
  *   Bank      → B-NNNN (manual — bank-specific)
  *
- * The code is zero-padded to 4 digits and uses the next available sequence
- * number based on the MAX(existing code) + 1 pattern. This mirrors the
- * legacy app/helpers/MasterDataCodeHelper.php behavior.
+ * Phase 17 refactor: the Customer/Supplier/Employee controllers used to
+ * have their own private generateXxxCode() methods. Those have been
+ * removed and the centralized CodeGenerator now produces the SAME formats
+ * the per-controller methods did, so existing data stays backward-compatible:
+ *
+ *   - Customer   → CUS-YYYY-NNNNNN  (6-digit zero-pad, scoped by year)
+ *   - Supplier    → SUP-NNNNNN       (6-digit zero-pad)
+ *   - Employee    → EMP-NNNNNN       (6-digit zero-pad)
+ *
+ * The code is zero-padded and uses the next available sequence number based
+ * on the MAX(existing code) + 1 pattern. This mirrors the legacy
+ * app/helpers/MasterDataCodeHelper.php behavior.
  *
  * Usage:
  *   $code = CodeGenerator::generate('products', 'product_code', 'P-');
  *   // Returns: P-0001, P-0002, etc.
+ *   $code = CodeGenerator::customerCode();
+ *   // Returns: CUS-2025-000001
  */
 class CodeGenerator
 {
@@ -90,27 +101,44 @@ class CodeGenerator
     }
 
     /**
-     * Generate a customer code (C-NNNN format).
+     * Generate a customer code in the legacy CUS-YYYY-NNNNNN format.
+     *
+     * The sequence is scoped per-year (so the year-prefix changes every
+     * calendar year). For backward compatibility with existing data the
+     * sequence number is zero-padded to 6 digits.
+     *
+     * Examples: CUS-2025-000001, CUS-2025-000002, CUS-2026-000001
      */
     public static function customerCode(): string
     {
-        return self::generate('customers', 'customer_code', 'C-');
+        $year   = now()->format('Y');
+        $prefix = "CUS-{$year}-";
+
+        return self::generate('customers', 'customer_code', $prefix, 6);
     }
 
     /**
-     * Generate a supplier code (S-NNNN format).
+     * Generate a supplier code in the SUP-NNNNNN format.
+     *
+     * Zero-padded to 6 digits to match the legacy SupplierController
+     * format (was previously `S-NNNN` in Phase 16 — changed in Task 17
+     * to match existing data).
      */
     public static function supplierCode(): string
     {
-        return self::generate('suppliers', 'supplier_code', 'S-');
+        return self::generate('suppliers', 'supplier_code', 'SUP-', 6);
     }
 
     /**
-     * Generate an employee code (EMP-NNNN format).
+     * Generate an employee code in the EMP-NNNNNN format.
+     *
+     * Zero-padded to 6 digits to match the legacy EmployeeController
+     * format (was `EMP-NNNN` in Phase 16 — changed in Task 17 to
+     * match existing data).
      */
     public static function employeeCode(): string
     {
-        return self::generate('employees', 'employee_code', 'EMP-');
+        return self::generate('employees', 'employee_code', 'EMP-', 6);
     }
 
     /**
