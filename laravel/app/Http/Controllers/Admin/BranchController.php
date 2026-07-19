@@ -49,17 +49,78 @@ class BranchController extends BaseMasterDataController
 
     /**
      * Validation rules for create/update.
+     * Phase 5: Added code pattern validation matching legacy CODE_PATTERN.
      */
     protected function validationRules(?int $id = null): array
     {
         return [
-            'branch_code' => 'required|string|max:20|unique:branches,branch_code,' . $id,
+            'branch_code' => 'required|string|max:20|regex:/^[A-Za-z0-9\-_.]+$/|unique:branches,branch_code,' . $id,
             'branch_name' => 'required|string|max:100',
             'address'     => 'nullable|string',
-            'phone'       => 'nullable|string|max:30',
+            'phone'       => 'nullable|string|max:20',
             'email'       => 'nullable|email|max:100',
             'is_active'   => 'boolean',
         ];
+    }
+
+    /**
+     * Phase 5: Override store() to uppercase branch_code (legacy normalization).
+     */
+    public function store(\Illuminate\Http\Request $request)
+    {
+        $validated = $request->validate($this->validationRules());
+        $validated['branch_code'] = strtoupper(trim($validated['branch_code']));
+        $validated['branch_name'] = trim($validated['branch_name']);
+        if (isset($validated['phone'])) $validated['phone'] = trim($validated['phone']);
+        if (isset($validated['email'])) $validated['email'] = trim($validated['email']);
+        if (isset($validated['address'])) $validated['address'] = trim($validated['address']);
+
+        // Set created_by from the authenticated user.
+        $columns = \Illuminate\Support\Facades\Schema::getColumnListing(($this->modelClass)::make()->getTable());
+        if (in_array('created_by', $columns)) {
+            $validated['created_by'] = \Illuminate\Support\Facades\Auth::id();
+        }
+
+        try {
+            $model = ($this->modelClass)::create($validated);
+            return redirect()->route("{$this->routePrefix}.show", $model)
+                ->with('success', "{$this->label} created successfully.");
+        } catch (\Throwable $e) {
+            return back()->withInput()->with('error', "Failed to create {$this->label}: {$e->getMessage()}");
+        }
+    }
+
+    /**
+     * Phase 5: Override update() to uppercase branch_code + run deactivation
+     * safety check if is_active is being set to false during the update.
+     */
+    public function update(\Illuminate\Http\Request $request, int $id)
+    {
+        $item = ($this->modelClass)::findOrFail($id);
+        $validated = $request->validate($this->validationRules($id));
+
+        // Normalize fields (legacy behavior).
+        $validated['branch_code'] = strtoupper(trim($validated['branch_code']));
+        $validated['branch_name'] = trim($validated['branch_name']);
+        if (isset($validated['phone'])) $validated['phone'] = trim($validated['phone']);
+        if (isset($validated['email'])) $validated['email'] = trim($validated['email']);
+        if (isset($validated['address'])) $validated['address'] = trim($validated['address']);
+
+        // Phase 5: If is_active is being set to false, run deactivation safety check.
+        if (isset($validated['is_active']) && !$validated['is_active'] && $item->is_active) {
+            $deactivationCheck = $this->canDeactivate($item);
+            if (!$deactivationCheck['ok']) {
+                return back()->withInput()->with('error', $deactivationCheck['message']);
+            }
+        }
+
+        try {
+            $item->update($validated);
+            return redirect()->route("{$this->routePrefix}.show", $item)
+                ->with('success', "{$this->label} updated successfully.");
+        } catch (\Throwable $e) {
+            return back()->withInput()->with('error', "Failed to update {$this->label}: {$e->getMessage()}");
+        }
     }
 
     /**
