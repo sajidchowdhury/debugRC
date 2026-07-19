@@ -212,13 +212,228 @@ SQL)->balance;
         // Summary
         // ============================================================
         $this->info('=== Verification Summary ===');
-        if ($allPass) {
-            $this->info('✓ ALL CHECKS PASSED. The accounting engine is verified.');
-            $this->info('  Phase 9.2 replay verification PASSED.');
+
+        // ============================================================
+        // P3-2: Sales-specific GL verification
+        // ============================================================
+        $this->newLine();
+        $this->info('=== P3-2: Sales-Specific GL Verification ===');
+
+        $salesIssues = 0;
+        $salesIssues += $this->verifySalesInvoiceGL();
+        $salesIssues += $this->verifyChallanCOGSGL();
+        $salesIssues += $this->verifySalesReturnGL();
+        $salesIssues += $this->verifyCustomerPaymentGL();
+        $salesIssues += $this->verifyTransportAdjustmentGL();
+
+        if ($salesIssues > 0) {
+            $this->warn("Sales-specific GL issues found: {$salesIssues}");
+            $this->warn('These are informational — investigate but they do not block the core GL checks.');
+        } else {
+            $this->info('✓ All sales-specific GL checks passed.');
+            $this->info('  - Every non-draft invoice has exactly 1 GL JE');
+            $this->info('  - Every issued challan has a COGS JE matching issue_cost');
+            $this->info('  - Every confirmed return has revenue + COGS JEs at original_cost');
+            $this->info('  - Every confirmed payment has a GL JE');
+            $this->info('  - Transport adjustment JEs reference correct challans');
+        }
+
+        $this->newLine();
+        if ($allPass && $salesIssues === 0) {
+            $this->info('✓ ALL CHECKS PASSED (core + sales-specific).');
+            $this->info('  Phase 9.2 + P3-2 replay verification PASSED.');
+            return self::SUCCESS;
+        } elseif ($allPass) {
+            $this->info('✓ Core GL checks passed. Sales-specific issues are informational.');
             return self::SUCCESS;
         } else {
-            $this->error('✗ SOME CHECKS FAILED. Investigate the issues above.');
+            $this->error('✗ SOME CORE CHECKS FAILED. Investigate the issues above.');
             return self::FAILURE;
         }
+    }
+
+    // ============================================================
+    // P3-2: Sales-specific GL verification methods
+    // ============================================================
+
+    /**
+     * P3-2: Verify every non-draft, non-cancelled invoice has exactly 1 GL JE.
+     * @return int Issue count
+     */
+    private function verifySalesInvoiceGL(): int
+    {
+        $this->info('  Checking sales invoice GL entries...');
+
+        // Invoices without a journal_entry_id
+        $missingJE = DB::table('sales_invoices')
+            ->whereNotIn('status', ['draft', 'cancelled'])
+            ->where('is_reversed', false)
+            ->whereNull('journal_entry_id')
+            ->count();
+
+        if ($missingJE > 0) {
+            $this->warn("    INVOICE MISSING JE: {$missingJE} non-draft invoices have no journal_entry_id.");
+        }
+
+        // Invoices with reversed GL JE but invoice not reversed
+        $staleJE = DB::table('sales_invoices as si')
+            ->join('journal_entries as je', 'je.id', '=', 'si.journal_entry_id')
+            ->where('si.is_reversed', false)
+            ->whereNotIn('si.status', ['cancelled'])
+            ->where('je.is_reversed', true)
+            ->count();
+
+        if ($staleJE > 0) {
+            $this->warn("    STALE JE: {$staleJE} active invoices have a reversed GL JE.");
+        }
+
+        $issues = $missingJE + $staleJE;
+        if ($issues === 0) {
+            $this->info('    ✓ All non-draft invoices have valid GL entries.');
+        }
+        return $issues;
+    }
+
+    /**
+     * P3-2: Verify every issued challan has a COGS JE matching issue_cost.
+     * @return int Issue count
+     */
+    private function verifyChallanCOGSGL(): int
+    {
+        $this->info('  Checking challan COGS GL entries...');
+
+        // Challans without a journal_entry_id
+        $missingJE = DB::table('sales_challans')
+            ->where('is_reversed', false)
+            ->whereNull('journal_entry_id')
+            ->count();
+
+        if ($missingJE > 0) {
+            $this->warn("    CHALLAN MISSING JE: {$missingJE} active challans have no journal_entry_id.");
+        }
+
+        // COGS JE amount should match issue_cost
+        $cogsMismatches = DB::table('sales_challans as sc')
+            ->join('journal_entries as je', 'je.id', '=', 'sc.journal_entry_id')
+            ->join('journal_lines as jl', 'jl.journal_entry_id', '=', 'je.id')
+            ->join('ledgers as l', 'l.id', '=', 'jl.ledger_id')
+            ->where('sc.is_reversed', false)
+            ->where('je.is_reversed', false)
+            ->where('l.ledger_nature', 'cogs')
+            ->whereRaw('ABS(sc.issue_cost - jl.debit) > 0.01')
+            ->count();
+
+        if ($cogsMismatches > 0) {
+            $this->warn("    COGS MISMATCH: {$cogsMismatches} challans have COGS JE ≠ issue_cost.");
+        }
+
+        $issues = $missingJE + $cogsMismatches;
+        if ($issues === 0) {
+            $this->info('    ✓ All challan COGS entries match issue_cost.');
+        }
+        return $issues;
+    }
+
+    /**
+     * P3-2: Verify every confirmed return has revenue + COGS JEs at original_cost.
+     * @return int Issue count
+     */
+    private function verifySalesReturnGL(): int
+    {
+        $this->info('  Checking sales return GL entries...');
+
+        // Confirmed returns should have both journal_entry_id + cogs_journal_entry_id
+        $missingJE = DB::table('sales_returns')
+            ->where('status', 'confirmed')
+            ->where('is_reversed', false)
+            ->where(function ($q) {
+                $q->whereNull('journal_entry_id')
+                  ->orWhereNull('cogs_journal_entry_id');
+            })
+            ->count();
+
+        if ($missingJE > 0) {
+            $this->warn("    RETURN MISSING JE: {$missingJE} confirmed returns missing revenue or COGS JE.");
+        }
+
+        // COGS reversal amount should match cogs_amount (sum of qty × original_cost)
+        $cogsMismatches = DB::table('sales_returns as sr')
+            ->join('journal_entries as je', 'je.id', '=', 'sr.cogs_journal_entry_id')
+            ->join('journal_lines as jl', 'jl.journal_entry_id', '=', 'je.id')
+            ->join('ledgers as l', 'l.id', '=', 'jl.ledger_id')
+            ->where('sr.status', 'confirmed')
+            ->where('sr.is_reversed', false)
+            ->where('je.is_reversed', false)
+            ->where('l.ledger_nature', 'cogs')
+            ->whereRaw('ABS(sr.cogs_amount - jl.credit) > 0.01')
+            ->count();
+
+        if ($cogsMismatches > 0) {
+            $this->warn("    RETURN COGS MISMATCH: {$cogsMismatches} returns have COGS JE ≠ cogs_amount.");
+        }
+
+        $issues = $missingJE + $cogsMismatches;
+        if ($issues === 0) {
+            $this->info('    ✓ All confirmed returns have valid revenue + COGS JEs.');
+        }
+        return $issues;
+    }
+
+    /**
+     * P3-2: Verify every confirmed payment has a GL JE.
+     * @return int Issue count
+     */
+    private function verifyCustomerPaymentGL(): int
+    {
+        $this->info('  Checking customer payment GL entries...');
+
+        $missingJE = DB::table('customer_payments')
+            ->where('is_reversed', false)
+            ->whereNull('journal_entry_id')
+            ->count();
+
+        if ($missingJE > 0) {
+            $this->warn("    PAYMENT MISSING JE: {$missingJE} active payments have no journal_entry_id.");
+        } else {
+            $this->info('    ✓ All active payments have GL entries.');
+        }
+        return $missingJE;
+    }
+
+    /**
+     * P3-2: Verify transport adjustment JEs reference correct challans.
+     * @return int Issue count
+     */
+    private function verifyTransportAdjustmentGL(): int
+    {
+        $this->info('  Checking transport adjustment GL entries...');
+
+        // Challans with adjustment_journal_entry_id but the JE is reversed while challan is not
+        $staleAdjustments = DB::table('sales_challans as sc')
+            ->leftJoin('journal_entries as je', 'je.id', '=', 'sc.adjustment_journal_entry_id')
+            ->where('sc.is_reversed', false)
+            ->whereNotNull('sc.adjustment_journal_entry_id')
+            ->where('je.is_reversed', true)
+            ->count();
+
+        if ($staleAdjustments > 0) {
+            $this->warn("    STALE ADJUSTMENT: {$staleAdjustments} active challans have reversed adjustment JEs.");
+        }
+
+        // Transport adjustment amount on challan should be non-zero if adjustment JE exists
+        $zeroAdjustments = DB::table('sales_challans')
+            ->whereNotNull('adjustment_journal_entry_id')
+            ->where('transport_adjustment', 0)
+            ->count();
+
+        if ($zeroAdjustments > 0) {
+            $this->warn("    ZERO ADJUSTMENT: {$zeroAdjustments} challans have adjustment JE but transport_adjustment=0.");
+        }
+
+        $issues = $staleAdjustments + $zeroAdjustments;
+        if ($issues === 0) {
+            $this->info('    ✓ All transport adjustment JEs are consistent.');
+        }
+        return $issues;
     }
 }
