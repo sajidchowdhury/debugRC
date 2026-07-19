@@ -34,6 +34,8 @@ use App\Http\Controllers\Admin\AccountingPeriodController;
 use App\Http\Controllers\Admin\NotificationController;
 use App\Http\Controllers\Admin\SystemPolicyController;
 use App\Http\Controllers\Admin\ArchiveController;
+use App\Http\Controllers\Admin\GlobalAuditController;
+use App\Http\Controllers\Admin\SystemHealthController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -622,6 +624,22 @@ Route::middleware('auth')->group(function () {
         Route::get('customer-ledger/{customerId}', [ArchiveController::class, 'customerLedger'])->name('customer-ledger');
         Route::get('supplier-ledger/{supplierId}', [ArchiveController::class, 'supplierLedger'])->name('supplier-ledger');
     });
+
+    // ============================================================
+    // Phase 20-AUDIT-HEALTH: Global Audit Log Viewer + System Health
+    // ============================================================
+
+    // Global audit log viewer — cross-module audit entries with filtering + CSV export.
+    Route::prefix('admin/audit')->name('admin.audit.')->middleware('role:admin')->group(function () {
+        Route::get('/', [GlobalAuditController::class, 'index'])->name('index');
+        Route::get('/export', [GlobalAuditController::class, 'export'])->name('export');
+        Route::get('/{id}', [GlobalAuditController::class, 'show'])->name('show')->where(['id' => '[0-9]+']);
+    });
+
+    // System health monitoring dashboard.
+    Route::get('admin/system-health', [SystemHealthController::class, 'index'])
+        ->name('admin.system-health.index')
+        ->middleware('role:admin');
 });
 
 // ===================== HEALTH CHECK =====================
