@@ -14,6 +14,7 @@ use App\Http\Controllers\Admin\BankController;
 use App\Http\Controllers\Admin\LedgerController;
 use App\Http\Controllers\Admin\BranchController;
 use App\Http\Controllers\Admin\WarehouseController;
+use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\ReconciliationController;
 use App\Http\Controllers\Admin\StockTransactionController;
@@ -212,6 +213,27 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/warehouses', WarehouseController::class)
         ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['warehouse' => '[0-9]+'])
         ->names('admin.warehouses')
+        ->middleware('role:admin');
+
+    // --- Users (RBAC: admin for write, admin/manager for read) ---
+    // Phase 14: User administration — login accounts tied to Employees.
+    Route::prefix('admin/users')->name('admin.users.')->group(function () {
+        Route::get('audit', [UserController::class, 'audit'])->name('audit')->middleware('role:admin');
+        Route::post('{user}/restore', [UserController::class, 'restore'])->name('restore')->where(['user' => '[0-9]+'])->middleware('role:admin');
+        Route::post('{user}/toggle', [UserController::class, 'toggle'])->name('toggle')->where(['user' => '[0-9]+'])->middleware('role:admin');
+        Route::post('{user}/unlock', [UserController::class, 'unlock'])->name('unlock')->where(['user' => '[0-9]+'])->middleware('role:admin');
+        Route::post('{user}/reset-password', [UserController::class, 'resetPassword'])->name('resetPassword')->where(['user' => '[0-9]+'])->middleware('role:admin');
+        Route::get('{user}/security', [UserController::class, 'securityAudit'])->name('security')->where(['user' => '[0-9]+'])->middleware('role:admin');
+    });
+    // Read access (index, show): admin, manager
+    Route::resource('admin/users', UserController::class)
+        ->only(['index', 'show'])->where(['user' => '[0-9]+'])
+        ->names('admin.users')
+        ->middleware('role:admin,manager');
+    // Write access (create, store, edit, update, destroy): admin only
+    Route::resource('admin/users', UserController::class)
+        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['user' => '[0-9]+'])
+        ->names('admin.users')
         ->middleware('role:admin');
 
     // ============================================================

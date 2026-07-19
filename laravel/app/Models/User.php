@@ -3,14 +3,19 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use App\Traits\AuditableMasterData;
 
 /**
  * RC_ERP User model — maps to the legacy `users` table.
  *
  * Phase 0: totp_secret / totp_enabled columns were DROPPED (2FA removed).
  * Phase 3: Eloquent model for Laravel auth + RBAC.
+ * Phase 14: added SoftDeletes + AuditableMasterData traits so the
+ *           BaseMasterDataController base (withTrashed / restore / audit
+ *           log) works for the User admin module.
  *
  * Relationships:
  *  - belongsTo Employee (employee_id)
@@ -20,7 +25,7 @@ use Illuminate\Notifications\Notifiable;
  */
 class User extends Authenticatable
 {
-    use Notifiable, HasFactory;
+    use Notifiable, HasFactory, SoftDeletes, AuditableMasterData;
 
     protected $table = 'users';
 
@@ -44,6 +49,7 @@ class User extends Authenticatable
         'credential_version',
         'telegram_user_id',
         'created_by',
+        'deleted_by',
     ];
 
     protected $hidden = [
@@ -144,5 +150,23 @@ class User extends Authenticatable
     public function scopeActive(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
     {
         return $query->where('is_active', true)->whereNull('deleted_at');
+    }
+
+    /**
+     * Scope: users currently locked (locked_until in the future).
+     * Phase 14 — used by UserController::indexStats().
+     */
+    public function scopeLocked(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
+    {
+        return $query->whereNotNull('locked_until')->where('locked_until', '>', now());
+    }
+
+    /**
+     * Scope: users with a linked Telegram account.
+     * Phase 14 — used by UserController::indexStats().
+     */
+    public function scopeWithTelegram(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
+    {
+        return $query->whereNotNull('telegram_user_id');
     }
 }
