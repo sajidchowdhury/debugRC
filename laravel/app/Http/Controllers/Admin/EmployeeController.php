@@ -5,16 +5,30 @@ namespace App\Http\Controllers\Admin;
 use App\Models\Branch;
 use App\Models\Employee;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Employee master-data controller — Phase 4-C.
+ * Employee master-data controller — Phase 4-C + Phase 12 hardening.
  *
  * Reproduces the legacy /employee/* UI in Blade on top of the Laravel 11
  * scaffold. Inherits full CRUD from BaseMasterDataController and adds:
  *  - photo upload (random filename, public/employees disk)
  *  - auto employee_code generation (EMP-NNNNNN) when not supplied
  *  - read-only account view (linked user + salary/advance summary)
+ *
+ * Phase 12 hardening (mirrors Branch/Warehouse/Product/Customer/Supplier):
+ *  - store()/update(): pre-normalize employee_code (uppercase + trim)
+ *    BEFORE validation for case-insensitive unique check.
+ *  - store()/update(): trim name BEFORE validation.
+ *  - validationRules(): default $id to 0 when null (matches the rest of the
+ *    module suite — avoids "invalid input syntax for type integer" on store).
+ *  - store()/update(): only set is_active when explicitly provided; otherwise
+ *    let the DB default (true) apply on store, and preserve existing value
+ *    on update.
+ *  - update(): runs canDeactivate() safety check before flipping is_active=false.
+ *  - canDeactivate(): 2 safety checks — outstanding employee ledger balance
+ *    AND active linked user account (legacy `hasActiveUserAccount()` guard).
  */
 class EmployeeController extends BaseMasterDataController
 {
@@ -45,20 +59,31 @@ class EmployeeController extends BaseMasterDataController
         ];
     }
 
+    /**
+     * Validation rules — used for both store and update.
+     * The $id parameter is forwarded by the base controller on update so the
+     * unique rule excludes the current row.
+     *
+     * Phase 12: default $id to 0 when null (matches Branch/Warehouse/Customer/
+     * Supplier pattern and avoids "invalid input syntax for type integer" on
+     * store when validationRules() is called without an argument).
+     */
     protected function validationRules(?int $id = null): array
     {
+        $id = $id ?? 0;
+
         return [
-            'employee_code' => 'required|string|max:30|unique:employees,employee_code,' . $id,
-            'name'          => 'required|string|max:100',
-            'role'          => 'required|in:superadmin,admin,manager,accountant,salesman,warehouse_manager,dispatcher,hr,user,other',
-            'branch_id'     => 'required|exists:branches,id',
-            'phone'         => 'nullable|string|max:30',
-            'email'         => 'nullable|email|max:100',
-            'address'       => 'nullable|string',
-            'salary'        => 'nullable|numeric|min:0',
-            'joining_date'  => 'nullable|date',
-            'is_active'     => 'boolean',
-            'photo'         => 'nullable|image|mimes:jpeg,png,webp,gif|max:2048',
+            'employee_code' => ['nullable', 'string', 'max:30', "unique:employees,employee_code,{$id}"],
+            'name'          => ['required', 'string', 'max:100'],
+            'role'          => ['required', 'in:superadmin,admin,manager,accountant,salesman,warehouse_manager,dispatcher,hr,user,other'],
+            'branch_id'     => ['required', 'exists:branches,id'],
+            'phone'         => ['nullable', 'string', 'max:30'],
+            'email'         => ['nullable', 'email', 'max:100'],
+            'address'       => ['nullable', 'string'],
+            'salary'        => ['nullable', 'numeric', 'min:0'],
+            'joining_date'  => ['nullable', 'date'],
+            'is_active'     => ['boolean'],
+            'photo'         => ['nullable', 'image', 'mimes:jpeg,png,webp,gif', 'max:2048'],
         ];
     }
 
@@ -82,30 +107,43 @@ class EmployeeController extends BaseMasterDataController
      * Override store() to:
      *  - relax employee_code to nullable on input (auto-generated when absent)
      *  - auto-generate employee_code in EMP-NNNNNN format
+     *  - Phase 12: pre-normalize employee_code (uppercase + trim) + name (trim)
+     *    BEFORE validation so the unique rule is case-insensitive.
+     *  - Phase 12: only set is_active when the request explicitly provides it
+     *    (matches Branch/Warehouse/Customer/Supplier — preserves DB default true).
      *  - handle photo upload (random bin2hex filename, public/employees disk)
-     *  - coerce is_active checkbox to boolean (form pre-checks it)
      */
     public function store(Request $request)
     {
-        // Relax employee_code: not required on input, but still unique if provided
+        // Phase 12: pre-normalize employee_code + name BEFORE validation.
+        if ($request->has('employee_code')) {
+            $request->merge(['employee_code' => strtoupper(trim((string) $request->input('employee_code')))]);
+        }
+        if ($request->has('name')) {
+            $request->merge(['name' => trim((string) $request->input('name'))]);
+        }
+
+        // Relax employee_code: not required on input, but still unique if provided.
         $rules = $this->validationRules();
-        $rules['employee_code'] = 'nullable|string|max:30|unique:employees,employee_code';
+        $rules['employee_code'] = ['nullable', 'string', 'max:30', 'unique:employees,employee_code'];
         $validated = $request->validate($rules);
 
-        // Auto-generate employee_code if not provided
+        // Auto-generate employee_code if not provided.
         if (empty($validated['employee_code'])) {
             $validated['employee_code'] = $this->generateEmployeeCode();
         }
 
-        // Photo upload — random filename, public/employees disk
+        // Photo upload — random filename, public/employees disk.
         if ($request->hasFile('photo') && $request->file('photo')->isValid()) {
             $validated['photo'] = $this->storePhoto($request->file('photo'));
         }
 
-        // HTML checkbox is absent when unchecked → coerce to bool, default false.
-        // (The create form pre-checks the "Active" switch, so a normal submit
-        // arrives with is_active=1; unchecking explicitly deactivates.)
-        $validated['is_active'] = (bool) ($validated['is_active'] ?? false);
+        // Phase 12: only set is_active when the request explicitly provides it.
+        // Otherwise let the DB default (true) apply — matches the
+        // Branch/Warehouse/Customer/Supplier pattern.
+        if (!$request->has('is_active')) {
+            unset($validated['is_active']);
+        }
 
         try {
             $model = Employee::create($validated);
@@ -122,22 +160,36 @@ class EmployeeController extends BaseMasterDataController
 
     /**
      * Override update() to:
+     *  - Phase 12: pre-normalize employee_code (uppercase + trim) + name (trim)
+     *    BEFORE validation.
+     *  - Phase 12: run canDeactivate() safety check when is_active is being
+     *    flipped from true → false.
+     *  - Phase 12: only flip is_active when explicitly provided (so omitting
+     *    the checkbox on update doesn't silently deactivate).
      *  - handle new photo upload (delete old photo if replaced)
      *  - honor remove_photo checkbox
-     *  - coerce is_active to boolean (checkbox may be absent)
      */
     public function update(Request $request, int $id)
     {
         $item = Employee::findOrFail($id);
+
+        // Phase 12: pre-normalize employee_code + name BEFORE validation.
+        if ($request->has('employee_code')) {
+            $request->merge(['employee_code' => strtoupper(trim((string) $request->input('employee_code')))]);
+        }
+        if ($request->has('name')) {
+            $request->merge(['name' => trim((string) $request->input('name'))]);
+        }
+
         $validated = $request->validate($this->validationRules($id));
 
-        // Honor "remove current photo" checkbox
+        // Honor "remove current photo" checkbox.
         if ($request->boolean('remove_photo') && $item->photo) {
             Storage::disk('public')->delete($item->photo);
             $validated['photo'] = null;
         }
 
-        // New photo upload — delete old photo if being replaced
+        // New photo upload — delete old photo if being replaced.
         if ($request->hasFile('photo') && $request->file('photo')->isValid()) {
             if ($item->photo) {
                 Storage::disk('public')->delete($item->photo);
@@ -145,8 +197,19 @@ class EmployeeController extends BaseMasterDataController
             $validated['photo'] = $this->storePhoto($request->file('photo'));
         }
 
-        // Checkbox absent = unchecked → false
-        $validated['is_active'] = (bool) ($validated['is_active'] ?? false);
+        // Phase 12: only flip is_active when explicitly provided.
+        if (!$request->has('is_active')) {
+            unset($validated['is_active']);
+        }
+
+        // Deactivation safety check — runs when is_active is being
+        // explicitly set to false on an active employee.
+        if (isset($validated['is_active']) && !$validated['is_active'] && $item->is_active) {
+            $deactivationCheck = $this->canDeactivate($item);
+            if (!$deactivationCheck['ok']) {
+                return back()->withInput()->with('error', $deactivationCheck['message']);
+            }
+        }
 
         try {
             $item->update($validated);
@@ -220,5 +283,59 @@ class EmployeeController extends BaseMasterDataController
         $filename = $ext !== '' ? "{$name}.{$ext}" : $name;
 
         return $file->storeAs('employees', $filename, 'public');
+    }
+
+    /**
+     * Phase 12: Can this employee be safely deactivated?
+     * Mirrors the legacy EmployeeModel::hasActiveUserAccount() +
+     * hasHistoricalReferences() guards:
+     *   1. Active user account linked — deactivating an employee with an
+     *      active login account would orphan the user. Legacy blocked the
+     *      toggle / soft-delete outright when `users.is_active=true AND
+     *      users.deleted_at IS NULL`.
+     *   2. Outstanding employee ledger balance — sum of debit (advances/
+     *      salary paid) minus credit (repayments/salary credit). A non-zero
+     *      balance means there's an unsettled advance the employee owes.
+     *
+     * @param  Employee  $item
+     * @return array{ok: bool, message: string}
+     */
+    protected function canDeactivate($item): array
+    {
+        $employeeId = $item->id;
+
+        // 1. Active user account — login would be orphaned.
+        $activeUserCount = DB::table('users')
+            ->where('employee_id', $employeeId)
+            ->where('is_active', true)
+            ->whereNull('deleted_at')
+            ->count();
+
+        // 2. Outstanding employee ledger balance — sum of debit (advances,
+        //    deductions, salary paid) minus credit (repayments, salary credit).
+        $balance = DB::table('employee_ledger')
+            ->where('employee_id', $employeeId)
+            ->selectRaw('COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0) AS balance')
+            ->value('balance');
+
+        $balance = (float) $balance;
+
+        $parts = [];
+        if ($activeUserCount > 0) {
+            $parts[] = "{$activeUserCount} active linked user account(s)";
+        }
+        if (abs($balance) > 0.005) {
+            $parts[] = "outstanding employee balance of " . number_format($balance, 2);
+        }
+
+        if (!empty($parts)) {
+            return [
+                'ok' => false,
+                'message' => "Cannot deactivate this employee. It has " . implode(', ', $parts)
+                    . ". Please resolve them first.",
+            ];
+        }
+
+        return ['ok' => true, 'message' => ''];
     }
 }

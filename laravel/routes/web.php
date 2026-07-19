@@ -138,13 +138,23 @@ Route::middleware('auth')->group(function () {
         ->names('admin.suppliers')
         ->middleware('role:admin');
 
-    // --- Employees ---
+    // --- Employees (RBAC: admin for write, admin/manager/hr for read) ---
     Route::prefix('admin/employees')->name('admin.employees.')->group(function () {
-        Route::get('audit', [EmployeeController::class, 'audit'])->name('audit');
-        Route::get('{employee}/account', [EmployeeController::class, 'account'])->name('account');
-        Route::post('{employee}/restore', [EmployeeController::class, 'restore'])->name('restore');
+        Route::get('audit', [EmployeeController::class, 'audit'])->name('audit')->middleware('role:admin');
+        Route::get('{employee}/account', [EmployeeController::class, 'account'])->name('account')->where(['employee' => '[0-9]+'])->middleware('role:admin,manager,hr');
+        Route::post('{employee}/restore', [EmployeeController::class, 'restore'])->name('restore')->where(['employee' => '[0-9]+'])->middleware('role:admin');
+        Route::post('{employee}/toggle', [EmployeeController::class, 'toggle'])->name('toggle')->where(['employee' => '[0-9]+'])->middleware('role:admin');
     });
-    Route::resource('admin/employees', EmployeeController::class)->names('admin.employees');
+    // Read access (index, show): admin, manager, hr
+    Route::resource('admin/employees', EmployeeController::class)
+        ->only(['index', 'show'])->where(['employee' => '[0-9]+'])
+        ->names('admin.employees')
+        ->middleware('role:admin,manager,hr');
+    // Write access (create, store, edit, update, destroy): admin only
+    Route::resource('admin/employees', EmployeeController::class)
+        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['employee' => '[0-9]+'])
+        ->names('admin.employees')
+        ->middleware('role:admin');
 
     // --- Banks ---
     Route::prefix('admin/banks')->name('admin.banks.')->group(function () {
