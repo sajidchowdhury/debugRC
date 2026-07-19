@@ -38,6 +38,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'branch.isolation' => \App\Http\Middleware\EnforceBranchIsolation::class,
             // Phase 13: API bearer-token auth (mobile/AI sidecar).
             'api.auth' => \App\Http\Middleware\ApiAuth::class,
+            // Phase 19: API rate limiting — 60 req/min per token+IP by default.
+            'api.rate' => \App\Http\Middleware\ApiRateLimit::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

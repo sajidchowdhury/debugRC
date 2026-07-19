@@ -30,9 +30,9 @@
             <a href="{{ route('admin.branches.audit') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-clock-rotate-left me-1"></i> Audit
             </a>
-            <button type="button" class="btn btn-outline-light btn-sm" onclick="window.print()">
+            <a href="{{ route('admin.branches.print') }}" target="_blank" class="btn btn-outline-light btn-sm" title="Open a print-friendly directory view in a new tab">
                 <i class="fas fa-print me-1"></i> Print
-            </button>
+            </a>
             <a href="{{ route('admin.branches.export') }}" class="btn btn-outline-light btn-sm" id="btnExportCsv" title="Download all branches as a CSV file">
                 <i class="fas fa-file-csv me-1"></i> Export CSV
             </a>

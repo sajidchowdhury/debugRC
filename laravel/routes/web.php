@@ -74,6 +74,8 @@ Route::middleware('auth')->group(function () {
     // --- Products (RBAC: admin for write, admin/manager/warehouse_manager for read) ---
     Route::prefix('admin/products')->name('admin.products.')->group(function () {
         Route::get('export', [ProductController::class, 'export'])->name('export')->middleware('role:admin,manager,warehouse_manager');
+        // Phase 19: Print directory (same RBAC as export)
+        Route::get('print', [ProductController::class, 'print'])->name('print')->middleware('role:admin,manager,warehouse_manager');
         Route::get('audit', [ProductController::class, 'audit'])->name('audit')->middleware('role:admin');
         Route::get('{product}/price-history', [ProductController::class, 'priceHistory'])->name('priceHistory')->where(['product' => '[0-9]+'])->middleware('role:admin,manager,warehouse_manager');
         Route::post('{product}/price', [ProductController::class, 'addPrice'])->name('addPrice')->where(['product' => '[0-9]+'])->middleware('role:admin');
@@ -109,6 +111,8 @@ Route::middleware('auth')->group(function () {
     // --- Customers (RBAC: admin for write, admin/manager/salesman for read) ---
     Route::prefix('admin/customers')->name('admin.customers.')->group(function () {
         Route::get('export', [CustomerController::class, 'export'])->name('export')->middleware('role:admin,manager,salesman');
+        // Phase 19: Print directory (same RBAC as export)
+        Route::get('print', [CustomerController::class, 'print'])->name('print')->middleware('role:admin,manager,salesman');
         Route::get('audit', [CustomerController::class, 'audit'])->name('audit')->middleware('role:admin');
         Route::post('{customer}/restore', [CustomerController::class, 'restore'])->name('restore')->where(['customer' => '[0-9]+'])->middleware('role:admin');
         Route::post('{customer}/toggle', [CustomerController::class, 'toggle'])->name('toggle')->where(['customer' => '[0-9]+'])->middleware('role:admin');
@@ -127,6 +131,8 @@ Route::middleware('auth')->group(function () {
     // --- Suppliers (RBAC: admin for write, admin/manager/accountant for read) ---
     Route::prefix('admin/suppliers')->name('admin.suppliers.')->group(function () {
         Route::get('export', [SupplierController::class, 'export'])->name('export')->middleware('role:admin,manager,accountant');
+        // Phase 19: Print directory (same RBAC as export)
+        Route::get('print', [SupplierController::class, 'print'])->name('print')->middleware('role:admin,manager,accountant');
         Route::get('audit', [SupplierController::class, 'audit'])->name('audit')->middleware('role:admin');
         Route::post('{supplier}/restore', [SupplierController::class, 'restore'])->name('restore')->where(['supplier' => '[0-9]+'])->middleware('role:admin');
         Route::post('{supplier}/toggle', [SupplierController::class, 'toggle'])->name('toggle')->where(['supplier' => '[0-9]+'])->middleware('role:admin');
@@ -145,6 +151,8 @@ Route::middleware('auth')->group(function () {
     // --- Employees (RBAC: admin for write, admin/manager/hr for read) ---
     Route::prefix('admin/employees')->name('admin.employees.')->group(function () {
         Route::get('export', [EmployeeController::class, 'export'])->name('export')->middleware('role:admin,manager,hr');
+        // Phase 19: Print directory (same RBAC as export)
+        Route::get('print', [EmployeeController::class, 'print'])->name('print')->middleware('role:admin,manager,hr');
         Route::get('audit', [EmployeeController::class, 'audit'])->name('audit')->middleware('role:admin');
         Route::get('{employee}/account', [EmployeeController::class, 'account'])->name('account')->where(['employee' => '[0-9]+'])->middleware('role:admin,manager,hr');
         Route::post('{employee}/restore', [EmployeeController::class, 'restore'])->name('restore')->where(['employee' => '[0-9]+'])->middleware('role:admin');
@@ -164,6 +172,8 @@ Route::middleware('auth')->group(function () {
     // --- Banks (RBAC: admin for write, admin/manager/accountant for read) ---
     Route::prefix('admin/banks')->name('admin.banks.')->group(function () {
         Route::get('export', [BankController::class, 'export'])->name('export')->middleware('role:admin,manager,accountant');
+        // Phase 19: Print directory (same RBAC as export)
+        Route::get('print', [BankController::class, 'print'])->name('print')->middleware('role:admin,manager,accountant');
         Route::get('audit', [BankController::class, 'audit'])->name('audit')->middleware('role:admin');
         Route::post('{bank}/restore', [BankController::class, 'restore'])->name('restore')->where(['bank' => '[0-9]+'])->middleware('role:admin');
         Route::post('{bank}/toggle', [BankController::class, 'toggle'])->name('toggle')->where(['bank' => '[0-9]+'])->middleware('role:admin');
@@ -183,6 +193,8 @@ Route::middleware('auth')->group(function () {
     // RBAC (Phase 15): admin for write, admin/accountant for read (accounting-domain).
     Route::prefix('admin/ledgers')->name('admin.ledgers.')->group(function () {
         Route::get('export', [LedgerController::class, 'export'])->name('export')->middleware('role:admin,accountant');
+        // Phase 19: Print directory (same RBAC as export)
+        Route::get('print', [LedgerController::class, 'print'])->name('print')->middleware('role:admin,accountant');
         Route::get('audit', [LedgerController::class, 'audit'])->name('audit')->middleware('role:admin,accountant');
         Route::post('{ledger}/restore', [LedgerController::class, 'restore'])->name('restore')->where(['ledger' => '[0-9]+'])->middleware('role:admin');
         Route::post('{ledger}/toggle', [LedgerController::class, 'toggle'])->name('toggle')->where(['ledger' => '[0-9]+'])->middleware('role:admin');
@@ -201,6 +213,8 @@ Route::middleware('auth')->group(function () {
     // --- Branches (RBAC: admin for write, admin/manager/warehouse_manager for read) ---
     Route::prefix('admin/branches')->name('admin.branches.')->group(function () {
         Route::get('export', [BranchController::class, 'export'])->name('export')->middleware('role:admin,manager,warehouse_manager');
+        // Phase 19: Print directory (same RBAC as export)
+        Route::get('print', [BranchController::class, 'print'])->name('print')->middleware('role:admin,manager,warehouse_manager');
         Route::get('audit', [BranchController::class, 'audit'])->name('audit')->middleware('role:admin');
         Route::post('{branch}/restore', [BranchController::class, 'restore'])->name('restore')->middleware('role:admin');
         Route::post('{branch}/toggle', [BranchController::class, 'toggle'])->name('toggle')->middleware('role:admin');
@@ -219,6 +233,8 @@ Route::middleware('auth')->group(function () {
     // --- Warehouses (RBAC: admin for write, admin/manager/warehouse_manager for read) ---
     Route::prefix('admin/warehouses')->name('admin.warehouses.')->group(function () {
         Route::get('export', [WarehouseController::class, 'export'])->name('export')->middleware('role:admin,manager,warehouse_manager');
+        // Phase 19: Print directory (same RBAC as export)
+        Route::get('print', [WarehouseController::class, 'print'])->name('print')->middleware('role:admin,manager,warehouse_manager');
         Route::get('audit', [WarehouseController::class, 'audit'])->name('audit')->middleware('role:admin');
         Route::post('{warehouse}/restore', [WarehouseController::class, 'restore'])->name('restore')->middleware('role:admin');
         Route::post('{warehouse}/toggle', [WarehouseController::class, 'toggle'])->name('toggle')->middleware('role:admin');
@@ -238,6 +254,8 @@ Route::middleware('auth')->group(function () {
     // Phase 14: User administration — login accounts tied to Employees.
     Route::prefix('admin/users')->name('admin.users.')->group(function () {
         Route::get('export', [UserController::class, 'export'])->name('export')->middleware('role:admin,manager');
+        // Phase 19: Print directory (same RBAC as export)
+        Route::get('print', [UserController::class, 'print'])->name('print')->middleware('role:admin,manager');
         Route::get('audit', [UserController::class, 'audit'])->name('audit')->middleware('role:admin');
         Route::post('{user}/restore', [UserController::class, 'restore'])->name('restore')->where(['user' => '[0-9]+'])->middleware('role:admin');
         Route::post('{user}/toggle', [UserController::class, 'toggle'])->name('toggle')->where(['user' => '[0-9]+'])->middleware('role:admin');

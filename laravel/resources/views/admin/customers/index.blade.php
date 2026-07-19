@@ -83,6 +83,9 @@
         <a href="{{ route("{$routePrefix}.audit") }}" class="btn btn-outline-light btn-sm">
             <i class="fas fa-clock-rotate-left me-1"></i> Audit
         </a>
+        <a href="{{ route("{$routePrefix}.print") }}" target="_blank" class="btn btn-outline-light btn-sm" title="Open a print-friendly directory view in a new tab">
+            <i class="fas fa-print me-1"></i> Print
+        </a>
         <a href="{{ route("{$routePrefix}.export") }}" class="btn btn-outline-light btn-sm" title="Download all customers as a CSV file">
             <i class="fas fa-file-csv me-1"></i> Export CSV
         </a>

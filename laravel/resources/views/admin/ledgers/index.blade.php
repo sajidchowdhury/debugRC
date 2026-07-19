@@ -38,6 +38,9 @@
             <a href="{{ route('admin.ledgers.audit') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-clock-rotate-left me-1"></i> Audit
             </a>
+            <a href="{{ route('admin.ledgers.print') }}" target="_blank" class="btn btn-outline-light btn-sm" title="Open a print-friendly directory view in a new tab">
+                <i class="fas fa-print me-1"></i> Print
+            </a>
             <a href="{{ route('admin.ledgers.export') }}" class="btn btn-outline-light btn-sm" title="Download all ledgers as a CSV file">
                 <i class="fas fa-file-csv me-1"></i> Export CSV
             </a>

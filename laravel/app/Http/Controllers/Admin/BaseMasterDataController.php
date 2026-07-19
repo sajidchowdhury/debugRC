@@ -484,4 +484,91 @@ abstract class BaseMasterDataController extends Controller
             }
         });
     }
+
+    // ===================== PRINT (Phase 19) =====================
+
+    /**
+     * Phase 19: Render a print-friendly HTML view of the current listing.
+     *
+     * Reuses the same query scoping as export() — eager-loads the same
+     * relations (indexWith), applies the same search filter (?search= or
+     * ?q=), and respects the ?deleted=1 toggle for inactive records — so the
+     * print view always matches what the user sees on the index page.
+     *
+     * The print view extends the shared `admin.partials.print-layout` which
+     * provides:
+     *   - Minimal HTML (no sidebar, no navbar, no JS frameworks)
+     *   - Company header + print timestamp + filter summary
+     *   - Clean table styling (borders, alternating rows)
+     *   - `@media print` CSS for proper page formatting
+     *   - A "Print" button (window.print()) shown on screen, hidden when
+     *     actually printing.
+     *
+     * Subclasses override printColumns() to choose which columns are
+     * displayed and their labels. Defaults to exportColumns().
+     *
+     * Route: GET /admin/{module}/print
+     * Middleware: role:admin,manager (set per-route in routes/web.php).
+     */
+    public function print(Request $request)
+    {
+        $showDeleted = $request->boolean('deleted');
+        $query = ($this->modelClass)::query()->with($this->indexWith());
+
+        if ($showDeleted) {
+            $query->onlyTrashed();
+        } else {
+            $query->whereNull('deleted_at');
+        }
+
+        $this->applyExportSearch($query, $request);
+
+        $items = $query->orderBy('id', 'desc')->get();
+
+        return view("{$this->viewDir}.print", [
+            'title'       => "{$this->label} Directory — Print",
+            'items'       => $items,
+            'routePrefix' => $this->routePrefix,
+            'label'       => $this->label,
+            'columns'     => $this->printColumns(),
+            'showDeleted' => $showDeleted,
+            'filters'     => $this->printFiltersSummary($request),
+        ]);
+    }
+
+    /**
+     * Phase 19: Columns to display on the print view.
+     *
+     * Defaults to exportColumns() (same key => label array). Override in
+     * subclass when the print view should differ — e.g. include extra
+     * relation columns or omit verbose fields like notes.
+     *
+     * @return array<string,string>
+     */
+    protected function printColumns(): array
+    {
+        return $this->exportColumns();
+    }
+
+    /**
+     * Build a short human-readable summary of the active filters shown
+     * on the print header (so the printout reflects what was filtered).
+     *
+     * @return array<string,string>
+     */
+    protected function printFiltersSummary(Request $request): array
+    {
+        $summary = [];
+
+        $search = trim((string) ($request->input('search') ?? $request->input('q') ?? ''));
+        if ($search !== '') {
+            $summary['Search'] = $search;
+        }
+
+        if ($request->boolean('deleted')) {
+            $summary['Status'] = 'Inactive only';
+        }
+
+        return $summary;
+    }
 }
