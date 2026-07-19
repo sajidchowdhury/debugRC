@@ -225,14 +225,29 @@ abstract class BaseMasterDataController extends Controller
 
     /**
      * Phase 3: Toggle active/inactive status (legacy 'toggle' action).
-     * Activates if inactive, deactivates if active (with safety check).
+     * Activates if inactive (or soft-deleted), deactivates if active (with safety check).
+     *
+     * Note: We check trashed() first because soft-deletion sets deleted_at
+     * but does NOT change is_active. A soft-deleted branch with is_active=true
+     * should be treated as "inactive" and re-activated on toggle.
      */
     public function toggle(int $id)
     {
         $item = ($this->modelClass)::withTrashed()->findOrFail($id);
 
         try {
-            if ($item->is_active) {
+            if (!$item->is_active || $item->trashed()) {
+                // Activating — restore if soft-deleted.
+                if ($item->trashed()) {
+                    $item->restore();
+                }
+                $item->is_active = true;
+                $item->deleted_by = null;
+                $item->save();
+
+                return redirect()->route("{$this->routePrefix}.index")
+                    ->with('success', "{$this->label} activated.");
+            } else {
                 // Deactivating — run safety check.
                 $deactivationCheck = $this->canDeactivate($item);
                 if (!$deactivationCheck['ok']) {
@@ -246,17 +261,6 @@ abstract class BaseMasterDataController extends Controller
 
                 return redirect()->route("{$this->routePrefix}.index")
                     ->with('success', "{$this->label} deactivated.");
-            } else {
-                // Activating — restore if soft-deleted.
-                if ($item->trashed()) {
-                    $item->restore();
-                }
-                $item->is_active = true;
-                $item->deleted_by = null;
-                $item->save();
-
-                return redirect()->route("{$this->routePrefix}.index")
-                    ->with('success', "{$this->label} activated.");
             }
         } catch (\Throwable $e) {
             return back()->with('error', "Failed to toggle {$this->label}: {$e->getMessage()}");

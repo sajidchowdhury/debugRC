@@ -7,6 +7,7 @@ use App\Models\Employee;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Tests\Helpers\BuildsRoleUsers;
+use Tests\Helpers\InsertsBranchDependencies;
 use Tests\TestCase;
 
 /**
@@ -18,7 +19,7 @@ use Tests\TestCase;
  */
 class BranchCrudTest extends TestCase
 {
-    use BuildsRoleUsers;
+    use BuildsRoleUsers, InsertsBranchDependencies;
 
     protected function setUp(): void
     {
@@ -358,14 +359,7 @@ class BranchCrudTest extends TestCase
     {
         // Branch with an active warehouse → deactivation should be blocked
         $branch = Branch::factory()->create();
-        DB::table('warehouses')->insert([
-            'warehouse_code' => 'WH-BLOCK-01',
-            'warehouse_name' => 'Blocking Warehouse',
-            'branch_id'      => $branch->id,
-            'is_active'      => true,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertWarehouse($branch->id, isActive: true, code: 'WH-BLOCK-01');
 
         $response = $this->put(route('admin.branches.update', $branch), [
             'branch_code' => $branch->branch_code,
@@ -427,14 +421,7 @@ class BranchCrudTest extends TestCase
     public function test_destroy_blocked_when_branch_has_active_warehouses(): void
     {
         $branch = Branch::factory()->create();
-        DB::table('warehouses')->insert([
-            'warehouse_code' => 'WH-BLK-DST-01',
-            'warehouse_name' => 'Blocking Warehouse',
-            'branch_id'      => $branch->id,
-            'is_active'      => true,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertWarehouse($branch->id, isActive: true, code: 'WH-BLK-DST-01');
 
         $response = $this->delete(route('admin.branches.destroy', $branch));
 

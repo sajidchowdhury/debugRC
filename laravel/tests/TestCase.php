@@ -36,30 +36,14 @@ abstract class TestCase extends BaseTestCase
     {
         parent::setUp();
 
-        // Remove middleware that depends on Redis or external services.
-        // We keep the `role` alias so RBAC tests exercise EnsureRole directly.
+        // Remove middleware that depends on Redis, external services, or
+        // investigation-mode behavior. We keep the `role` alias so RBAC
+        // tests exercise EnsureRole directly.
         $this->withoutMiddleware([
             \App\Http\Middleware\SyncLegacySession::class,
             \App\Http\Middleware\CheckCredentialVersion::class,
+            \App\Http\Middleware\CheckSystemPolicy::class,
         ]);
-
-        // Stub the system policy service so investigation-mode scopes don't
-        // interfere with master-data CRUD tests.
-        app()->forgetInstance(\App\Services\Compliance\SystemPolicyService::class);
-        app()->singleton(\App\Services\Compliance\SystemPolicyService::class, function () {
-            return new class
-            {
-                public function getCurrentPolicy()
-                {
-                    return null;
-                }
-
-                public function getCurrentMode(): string
-                {
-                    return 'NORMAL';
-                }
-            };
-        });
 
         // Ensure tests always run as if on the web guard.
         $this->withSession(['credential_version' => '1']);

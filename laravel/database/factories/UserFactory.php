@@ -33,10 +33,11 @@ class UserFactory extends Factory
     public function definition(): array
     {
         self::$sequence += 1;
+        $suffix = strtoupper(substr(uniqid(), -6));
 
         return [
             'employee_id'            => null, // must be set by caller
-            'username'               => 'user' . self::$sequence,
+            'username'               => 'user_' . $suffix,
             'password_hash'          => Hash::make('password'),
             'is_active'              => true,
             'last_login'             => null,

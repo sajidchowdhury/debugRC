@@ -1,0 +1,4 @@
+.phpunit.result.cache
+phpunit-coverage.xml
+bootstrap/cache/*.php
+vendor/

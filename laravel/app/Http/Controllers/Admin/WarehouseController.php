@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Models\Branch;
 use App\Models\Warehouse;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -60,11 +61,16 @@ class WarehouseController extends BaseMasterDataController
     /**
      * Validation rules for create/update.
      * Phase 5: Added code pattern validation matching legacy CODE_PATTERN.
+     *
+     * Phase 8: Default $id to 0 when null (on store) to avoid PostgreSQL
+     * "invalid input syntax for type integer: ''" error from the unique rule.
      */
     protected function validationRules(?int $id = null): array
     {
+        $id = $id ?? 0;
+
         return [
-            'warehouse_code' => 'required|string|max:20|regex:/^[A-Za-z0-9\-_.]+$/|unique:warehouses,warehouse_code,' . $id,
+            'warehouse_code' => 'required|string|max:30|regex:/^[A-Za-z0-9\-_.]+$/|unique:warehouses,warehouse_code,' . $id,
             'warehouse_name' => 'required|string|max:100',
             'branch_id'      => 'required|exists:branches,id',
             'location'       => 'nullable|string',
@@ -75,12 +81,19 @@ class WarehouseController extends BaseMasterDataController
     /**
      * Phase 5: Override store() to uppercase warehouse_code + validate
      * that the assigned branch is active (legacy isActiveBranch check).
+     * Phase 8: Normalize code BEFORE validation for case-insensitive unique.
      */
     public function store(\Illuminate\Http\Request $request)
     {
+        // Pre-normalize before validation.
+        if ($request->has('warehouse_code')) {
+            $request->merge(['warehouse_code' => strtoupper(trim($request->input('warehouse_code')))]);
+        }
+        if ($request->has('warehouse_name')) {
+            $request->merge(['warehouse_name' => trim($request->input('warehouse_name'))]);
+        }
+
         $validated = $request->validate($this->validationRules());
-        $validated['warehouse_code'] = strtoupper(trim($validated['warehouse_code']));
-        $validated['warehouse_name'] = trim($validated['warehouse_name']);
         if (isset($validated['location'])) $validated['location'] = trim($validated['location']);
 
         // Phase 5: Verify the assigned branch is active (legacy isActiveBranch).
@@ -107,15 +120,21 @@ class WarehouseController extends BaseMasterDataController
     /**
      * Phase 5: Override update() — code normalization + active branch
      * validation + canChangeBranch() + deactivation safety check.
+     * Phase 8: Normalize code BEFORE validation for case-insensitive unique.
      */
     public function update(\Illuminate\Http\Request $request, int $id)
     {
         $item = Warehouse::findOrFail($id);
-        $validated = $request->validate($this->validationRules($id));
 
-        // Normalize fields (legacy behavior).
-        $validated['warehouse_code'] = strtoupper(trim($validated['warehouse_code']));
-        $validated['warehouse_name'] = trim($validated['warehouse_name']);
+        // Pre-normalize before validation.
+        if ($request->has('warehouse_code')) {
+            $request->merge(['warehouse_code' => strtoupper(trim($request->input('warehouse_code')))]);
+        }
+        if ($request->has('warehouse_name')) {
+            $request->merge(['warehouse_name' => trim($request->input('warehouse_name'))]);
+        }
+
+        $validated = $request->validate($this->validationRules($id));
         if (isset($validated['location'])) $validated['location'] = trim($validated['location']);
 
         // Phase 5: Verify the assigned branch is active.

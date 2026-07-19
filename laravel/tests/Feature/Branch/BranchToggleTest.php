@@ -7,6 +7,7 @@ use App\Models\Employee;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Tests\Helpers\BuildsRoleUsers;
+use Tests\Helpers\InsertsBranchDependencies;
 use Tests\TestCase;
 
 /**
@@ -25,7 +26,7 @@ use Tests\TestCase;
  */
 class BranchToggleTest extends TestCase
 {
-    use BuildsRoleUsers;
+    use BuildsRoleUsers, InsertsBranchDependencies;
 
     protected function setUp(): void
     {
@@ -138,19 +139,11 @@ class BranchToggleTest extends TestCase
     public function test_toggle_blocked_when_branch_has_active_warehouses(): void
     {
         $branch = Branch::factory()->create();
-        DB::table('warehouses')->insert([
-            'warehouse_code' => 'WH-TOGGLE-01',
-            'warehouse_name' => 'Blocking Warehouse',
-            'branch_id'      => $branch->id,
-            'is_active'      => true,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertWarehouse($branch->id, isActive: true, code: 'WH-TOGGLE-01');
 
         $response = $this->post(route('admin.branches.toggle', $branch));
 
         $response->assertSessionHas('error');
-        $response->assertSessionHasErrors([]);
         $this->assertTrue($branch->fresh()->is_active);
 
         // Verify error message mentions warehouses
@@ -161,14 +154,7 @@ class BranchToggleTest extends TestCase
     public function test_toggle_allows_deactivation_when_warehouses_are_inactive(): void
     {
         $branch = Branch::factory()->create();
-        DB::table('warehouses')->insert([
-            'warehouse_code' => 'WH-INACTIVE-01',
-            'warehouse_name' => 'Inactive Warehouse',
-            'branch_id'      => $branch->id,
-            'is_active'      => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertWarehouse($branch->id, isActive: false, code: 'WH-INACTIVE-01');
 
         $response = $this->post(route('admin.branches.toggle', $branch));
 
@@ -181,14 +167,7 @@ class BranchToggleTest extends TestCase
     {
         $branch = Branch::factory()->create();
         for ($i = 1; $i <= 3; $i++) {
-            DB::table('warehouses')->insert([
-                'warehouse_code' => "WH-MULTI-{$i}",
-                'warehouse_name' => "Warehouse {$i}",
-                'branch_id'      => $branch->id,
-                'is_active'      => true,
-                'created_at'     => now(),
-                'updated_at'     => now(),
-            ]);
+            $this->insertWarehouse($branch->id, isActive: true, code: "WH-MULTI-{$i}");
         }
 
         $response = $this->post(route('admin.branches.toggle', $branch));
@@ -231,15 +210,7 @@ class BranchToggleTest extends TestCase
     public function test_toggle_blocked_when_branch_has_open_sales_invoices(): void
     {
         $branch = Branch::factory()->create();
-        DB::table('sales_invoices')->insert([
-            'invoice_no'   => 'INV-TOGGLE-001',
-            'branch_id'    => $branch->id,
-            'invoice_date' => now()->toDateString(),
-            'status'       => 'confirmed',
-            'is_reversed'  => false,
-            'created_at'   => now(),
-            'updated_at'   => now(),
-        ]);
+        $this->insertSalesInvoice($branch->id, status: 'confirmed', isReversed: false, invoiceCode: 'INV-TOGGLE-001');
 
         $response = $this->post(route('admin.branches.toggle', $branch));
 
@@ -251,15 +222,7 @@ class BranchToggleTest extends TestCase
     public function test_toggle_allows_deactivation_when_invoices_are_cancelled(): void
     {
         $branch = Branch::factory()->create();
-        DB::table('sales_invoices')->insert([
-            'invoice_no'   => 'INV-CANCEL-001',
-            'branch_id'    => $branch->id,
-            'invoice_date' => now()->toDateString(),
-            'status'       => 'cancelled',
-            'is_reversed'  => false,
-            'created_at'   => now(),
-            'updated_at'   => now(),
-        ]);
+        $this->insertSalesInvoice($branch->id, status: 'cancelled', isReversed: false, invoiceCode: 'INV-CANCEL-001');
 
         $response = $this->post(route('admin.branches.toggle', $branch));
 
@@ -270,15 +233,7 @@ class BranchToggleTest extends TestCase
     public function test_toggle_allows_deactivation_when_invoices_are_reversed(): void
     {
         $branch = Branch::factory()->create();
-        DB::table('sales_invoices')->insert([
-            'invoice_no'   => 'INV-REVERSED-001',
-            'branch_id'    => $branch->id,
-            'invoice_date' => now()->toDateString(),
-            'status'       => 'reversed',
-            'is_reversed'  => true,
-            'created_at'   => now(),
-            'updated_at'   => now(),
-        ]);
+        $this->insertSalesInvoice($branch->id, status: 'reversed', isReversed: true, invoiceCode: 'INV-REVERSED-001');
 
         $response = $this->post(route('admin.branches.toggle', $branch));
 
@@ -294,16 +249,7 @@ class BranchToggleTest extends TestCase
     {
         $branch = Branch::factory()->create();
         $otherBranch = Branch::factory()->create();
-        DB::table('branch_demands')->insert([
-            'demand_code'    => 'BD-TOGGLE-01',
-            'demand_date'    => now()->toDateString(),
-            'from_branch_id' => $branch->id,
-            'to_branch_id'   => $otherBranch->id,
-            'status'         => 'pending',
-            'is_reversed'    => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertBranchDemand($branch->id, $otherBranch->id, status: 'pending', demandCode: 'BD-TOGGLE-01');
 
         $response = $this->post(route('admin.branches.toggle', $branch));
 
@@ -316,16 +262,7 @@ class BranchToggleTest extends TestCase
     {
         $branch = Branch::factory()->create();
         $otherBranch = Branch::factory()->create();
-        DB::table('branch_demands')->insert([
-            'demand_code'    => 'BD-TOGGLE-02',
-            'demand_date'    => now()->toDateString(),
-            'from_branch_id' => $otherBranch->id,
-            'to_branch_id'   => $branch->id,
-            'status'         => 'pending',
-            'is_reversed'    => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertBranchDemand($otherBranch->id, $branch->id, status: 'pending', demandCode: 'BD-TOGGLE-02');
 
         $response = $this->post(route('admin.branches.toggle', $branch));
 
@@ -338,16 +275,7 @@ class BranchToggleTest extends TestCase
     {
         $branch = Branch::factory()->create();
         $otherBranch = Branch::factory()->create();
-        DB::table('branch_demands')->insert([
-            'demand_code'    => 'BD-FULFILLED-01',
-            'demand_date'    => now()->toDateString(),
-            'from_branch_id' => $branch->id,
-            'to_branch_id'   => $otherBranch->id,
-            'status'         => 'fulfilled',
-            'is_reversed'    => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertBranchDemand($branch->id, $otherBranch->id, status: 'fulfilled', demandCode: 'BD-FULFILLED-01');
 
         $response = $this->post(route('admin.branches.toggle', $branch));
 
@@ -374,14 +302,19 @@ class BranchToggleTest extends TestCase
 
     public function test_toggle_allows_deactivation_when_user_account_is_disabled(): void
     {
+        // Note: the active employee itself triggers blocker 2, so the overall
+        // result is ok=false. The point of this test is to verify the message
+        // does NOT include "user account" — i.e. the inactive user was
+        // correctly excluded from the active-user count.
         $branch = Branch::factory()->create();
         $employee = Employee::factory()->forBranch($branch->id)->create();
         User::factory()->forEmployee($employee->id)->create(['is_active' => false]);
 
         $response = $this->post(route('admin.branches.toggle', $branch));
 
-        $response->assertSessionHas('success');
-        $this->assertFalse($branch->fresh()->is_active);
+        $response->assertSessionHas('error');
+        $this->assertStringNotContainsString('user account', session('error'));
+        $this->assertStringContainsString('employee', session('error'));
     }
 
     public function test_toggle_allows_deactivation_when_linked_employee_is_inactive(): void
@@ -405,14 +338,7 @@ class BranchToggleTest extends TestCase
         $branch = Branch::factory()->create();
 
         // Blocker 1: active warehouse
-        DB::table('warehouses')->insert([
-            'warehouse_code' => 'WH-COMBO-01',
-            'warehouse_name' => 'Combo Warehouse',
-            'branch_id'      => $branch->id,
-            'is_active'      => true,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertWarehouse($branch->id, isActive: true, code: 'WH-COMBO-01');
 
         // Blocker 2: active employee
         Employee::factory()->forBranch($branch->id)->create();

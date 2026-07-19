@@ -29,10 +29,11 @@ class WarehouseFactory extends Factory
     public function definition(): array
     {
         self::$sequence += 1;
+        $suffix = strtoupper(substr(uniqid(), -6));
 
         return [
-            'warehouse_code' => 'WH-' . str_pad((string) self::$sequence, 4, '0', STR_PAD_LEFT),
-            'warehouse_name' => 'Warehouse ' . self::$sequence,
+            'warehouse_code' => 'WH-' . $suffix,
+            'warehouse_name' => 'Warehouse ' . $suffix,
             'branch_id'      => null, // must be set by caller
             'location'       => $this->faker->optional()->address(),
             'is_active'      => true,

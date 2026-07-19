@@ -31,24 +31,14 @@ class BranchFactory extends Factory
     {
         self::$sequence += 1;
 
-        $names = [
-            'Head Office',
-            'Patuatuli Branch',
-            'Nowabpur Branch',
-            'Tarabo Branch',
-            'Dhanmondi Branch',
-            'Uttara Branch',
-        ];
-
-        $name = $names[array_key_exists(self::$sequence - 1, $names)
-            ? self::$sequence - 1
-            : array_rand($names)] . ' #' . self::$sequence;
-
-        // Generate an alphabetic prefix (HO, PT, NW, TR, DM, UT, ...) + sequence.
-        $prefix = strtoupper(substr(preg_replace('/[^A-Z]/i', '', $name), 0, 2));
+        // Use uniqid() to guarantee uniqueness across PHP process restarts
+        // (the static counter resets on each test run, so previous test data
+        // left in the DB would collide with new factory-generated codes).
+        $suffix = strtoupper(substr(uniqid(), -6));
+        $name = 'Test Branch ' . $suffix;
 
         return [
-            'branch_code' => $prefix . '-' . str_pad((string) self::$sequence, 4, '0', STR_PAD_LEFT),
+            'branch_code' => 'TB-' . $suffix,
             'branch_name' => $name,
             'address'     => $this->faker->optional()->address(),
             'phone'       => $this->faker->optional()->phoneNumber(),

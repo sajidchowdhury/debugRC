@@ -50,9 +50,16 @@ class BranchController extends BaseMasterDataController
     /**
      * Validation rules for create/update.
      * Phase 5: Added code pattern validation matching legacy CODE_PATTERN.
+     *
+     * Note: The unique rule uses a placeholder `__ID__` that the store/update
+     * methods replace with the actual record id (or 0 on store, to exclude
+     * no existing rows). This avoids the PostgreSQL "invalid input syntax for
+     * type integer: ''" error that occurs when $id is null on store.
      */
     protected function validationRules(?int $id = null): array
     {
+        $id = $id ?? 0;
+
         return [
             'branch_code' => 'required|string|max:20|regex:/^[A-Za-z0-9\-_.]+$/|unique:branches,branch_code,' . $id,
             'branch_name' => 'required|string|max:100',
@@ -65,12 +72,21 @@ class BranchController extends BaseMasterDataController
 
     /**
      * Phase 5: Override store() to uppercase branch_code (legacy normalization).
+     * Phase 8: Normalize branch_code BEFORE validation so the unique check
+     * is case-insensitive (e.g. 'uniq-002' collides with existing 'UNIQ-002').
      */
     public function store(\Illuminate\Http\Request $request)
     {
+        // Pre-normalize branch_code before validation runs.
+        if ($request->has('branch_code')) {
+            $request->merge(['branch_code' => strtoupper(trim($request->input('branch_code')))]);
+        }
+        if ($request->has('branch_name')) {
+            $request->merge(['branch_name' => trim($request->input('branch_name'))]);
+        }
+
         $validated = $request->validate($this->validationRules());
-        $validated['branch_code'] = strtoupper(trim($validated['branch_code']));
-        $validated['branch_name'] = trim($validated['branch_name']);
+        // branch_code is already uppercased from the merge above.
         if (isset($validated['phone'])) $validated['phone'] = trim($validated['phone']);
         if (isset($validated['email'])) $validated['email'] = trim($validated['email']);
         if (isset($validated['address'])) $validated['address'] = trim($validated['address']);
@@ -93,15 +109,24 @@ class BranchController extends BaseMasterDataController
     /**
      * Phase 5: Override update() to uppercase branch_code + run deactivation
      * safety check if is_active is being set to false during the update.
+     * Phase 8: Normalize branch_code BEFORE validation for case-insensitive
+     * unique checking.
      */
     public function update(\Illuminate\Http\Request $request, int $id)
     {
         $item = ($this->modelClass)::findOrFail($id);
+
+        // Pre-normalize branch_code before validation runs.
+        if ($request->has('branch_code')) {
+            $request->merge(['branch_code' => strtoupper(trim($request->input('branch_code')))]);
+        }
+        if ($request->has('branch_name')) {
+            $request->merge(['branch_name' => trim($request->input('branch_name'))]);
+        }
+
         $validated = $request->validate($this->validationRules($id));
 
-        // Normalize fields (legacy behavior).
-        $validated['branch_code'] = strtoupper(trim($validated['branch_code']));
-        $validated['branch_name'] = trim($validated['branch_name']);
+        // Normalize remaining fields (legacy behavior).
         if (isset($validated['phone'])) $validated['phone'] = trim($validated['phone']);
         if (isset($validated['email'])) $validated['email'] = trim($validated['email']);
         if (isset($validated['address'])) $validated['address'] = trim($validated['address']);

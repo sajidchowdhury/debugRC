@@ -30,9 +30,10 @@ class EmployeeFactory extends Factory
     public function definition(): array
     {
         self::$sequence += 1;
+        $suffix = strtoupper(substr(uniqid(), -6));
 
         return [
-            'employee_code' => 'EMP-' . self::$sequence,
+            'employee_code' => 'EMP-' . $suffix,
             'name'          => $this->faker->name(),
             'role'          => 'other',
             'branch_id'     => null, // must be set by caller

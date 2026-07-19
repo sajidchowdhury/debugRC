@@ -138,12 +138,12 @@ Route::middleware('auth')->group(function () {
     });
     // Read access (index, show): admin, manager, warehouse_manager
     Route::resource('admin/branches', BranchController::class)
-        ->only(['index', 'show'])
+        ->only(['index', 'show'])->where(['branch' => '[0-9]+'])
         ->names('admin.branches')
         ->middleware('role:admin,manager,warehouse_manager');
     // Write access (create, store, edit, update, destroy): admin only
     Route::resource('admin/branches', BranchController::class)
-        ->only(['create', 'store', 'edit', 'update', 'destroy'])
+        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['branch' => '[0-9]+'])
         ->names('admin.branches')
         ->middleware('role:admin');
 
@@ -155,12 +155,12 @@ Route::middleware('auth')->group(function () {
     });
     // Read access (index, show): admin, manager, warehouse_manager
     Route::resource('admin/warehouses', WarehouseController::class)
-        ->only(['index', 'show'])
+        ->only(['index', 'show'])->where(['warehouse' => '[0-9]+'])
         ->names('admin.warehouses')
         ->middleware('role:admin,manager,warehouse_manager');
     // Write access (create, store, edit, update, destroy): admin only
     Route::resource('admin/warehouses', WarehouseController::class)
-        ->only(['create', 'store', 'edit', 'update', 'destroy'])
+        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['warehouse' => '[0-9]+'])
         ->names('admin.warehouses')
         ->middleware('role:admin');
 
@@ -366,7 +366,7 @@ Route::middleware('auth')->group(function () {
     });
     // index + show — accountant included (read access)
     Route::resource('admin/sales-invoices', SalesInvoiceController::class)
-        ->only(['index', 'show'])
+        ->only(['index', 'show'])->where(['warehouse' => '[0-9]+'])
         ->names('admin.sales-invoices')
         ->middleware('role:salesman,accountant,manager,admin');
 

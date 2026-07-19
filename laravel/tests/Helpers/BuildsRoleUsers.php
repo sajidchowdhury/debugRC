@@ -41,7 +41,7 @@ trait BuildsRoleUsers
         $user = User::factory()
             ->forEmployee($employee->id)
             ->create(array_merge([
-                'username'      => strtolower($role) . '_' . $employee->id,
+                'username'      => strtolower($role) . '_' . substr(uniqid(), -6),
                 'password_hash' => Hash::make('password'),
             ], $userOverrides));
 
@@ -50,13 +50,20 @@ trait BuildsRoleUsers
 
     /**
      * Create and authenticate as a User with the given role.
+     *
+     * Returns `$this` (the test instance) so callers can chain HTTP request
+     * methods directly: `$this->actingAsRole('admin')->get(route('...'))`.
+     *
+     * If you need the User object itself, use `makeRoleUser()` instead.
+     *
+     * @return static
      */
-    protected function actingAsRole(string $role, ?Branch $branch = null): User
+    protected function actingAsRole(string $role, ?Branch $branch = null)
     {
         $user = $this->makeRoleUser($role, [], [], $branch);
         $this->actingAs($user);
 
-        return $user;
+        return $this;
     }
 
     /**

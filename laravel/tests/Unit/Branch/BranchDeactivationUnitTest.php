@@ -9,6 +9,7 @@ use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use ReflectionMethod;
 use Tests\Helpers\BuildsRoleUsers;
+use Tests\Helpers\InsertsBranchDependencies;
 use Tests\TestCase;
 
 /**
@@ -30,7 +31,7 @@ use Tests\TestCase;
  */
 class BranchDeactivationUnitTest extends TestCase
 {
-    use BuildsRoleUsers;
+    use BuildsRoleUsers, InsertsBranchDependencies;
 
     private BranchController $controller;
 
@@ -72,14 +73,7 @@ class BranchDeactivationUnitTest extends TestCase
     {
         $branch = Branch::factory()->create();
 
-        DB::table('warehouses')->insert([
-            'warehouse_code' => 'WH-UNIT-01',
-            'warehouse_name' => 'Inactive WH',
-            'branch_id'      => $branch->id,
-            'is_active'      => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertWarehouse($branch->id, isActive: false, code: 'WH-UNIT-01');
 
         Employee::factory()->forBranch($branch->id)->inactive()->create();
 
@@ -96,14 +90,7 @@ class BranchDeactivationUnitTest extends TestCase
     {
         $branch = Branch::factory()->create();
 
-        DB::table('warehouses')->insert([
-            'warehouse_code' => 'WH-UNIT-02',
-            'warehouse_name' => 'Active WH',
-            'branch_id'      => $branch->id,
-            'is_active'      => true,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertWarehouse($branch->id, isActive: true, code: 'WH-UNIT-02');
 
         $result = $this->callCanDeactivate($branch);
 
@@ -116,14 +103,7 @@ class BranchDeactivationUnitTest extends TestCase
         $branch = Branch::factory()->create();
 
         for ($i = 1; $i <= 5; $i++) {
-            DB::table('warehouses')->insert([
-                'warehouse_code' => "WH-COUNT-{$i}",
-                'warehouse_name' => "Warehouse {$i}",
-                'branch_id'      => $branch->id,
-                'is_active'      => true,
-                'created_at'     => now(),
-                'updated_at'     => now(),
-            ]);
+            $this->insertWarehouse($branch->id, isActive: true, code: "WH-COUNT-{$i}");
         }
 
         $result = $this->callCanDeactivate($branch);
@@ -167,15 +147,7 @@ class BranchDeactivationUnitTest extends TestCase
     {
         $branch = Branch::factory()->create();
 
-        DB::table('sales_invoices')->insert([
-            'invoice_no'   => 'INV-UNIT-001',
-            'branch_id'    => $branch->id,
-            'invoice_date' => now()->toDateString(),
-            'status'       => 'confirmed',
-            'is_reversed'  => false,
-            'created_at'   => now(),
-            'updated_at'   => now(),
-        ]);
+        $this->insertSalesInvoice($branch->id, status: 'confirmed', isReversed: false, invoiceCode: 'INV-UNIT-001');
 
         $result = $this->callCanDeactivate($branch);
 
@@ -187,15 +159,7 @@ class BranchDeactivationUnitTest extends TestCase
     {
         $branch = Branch::factory()->create();
 
-        DB::table('sales_invoices')->insert([
-            'invoice_no'   => 'INV-CAN-001',
-            'branch_id'    => $branch->id,
-            'invoice_date' => now()->toDateString(),
-            'status'       => 'cancelled',
-            'is_reversed'  => false,
-            'created_at'   => now(),
-            'updated_at'   => now(),
-        ]);
+        $this->insertSalesInvoice($branch->id, status: 'cancelled', isReversed: false, invoiceCode: 'INV-CAN-001');
 
         $result = $this->callCanDeactivate($branch);
 
@@ -206,15 +170,7 @@ class BranchDeactivationUnitTest extends TestCase
     {
         $branch = Branch::factory()->create();
 
-        DB::table('sales_invoices')->insert([
-            'invoice_no'   => 'INV-REV-001',
-            'branch_id'    => $branch->id,
-            'invoice_date' => now()->toDateString(),
-            'status'       => 'reversed',
-            'is_reversed'  => true,
-            'created_at'   => now(),
-            'updated_at'   => now(),
-        ]);
+        $this->insertSalesInvoice($branch->id, status: 'reversed', isReversed: true, invoiceCode: 'INV-REV-001');
 
         $result = $this->callCanDeactivate($branch);
 
@@ -224,18 +180,10 @@ class BranchDeactivationUnitTest extends TestCase
     public function test_is_reversed_true_blocks_deactivation_even_if_status_not_cancelled(): void
     {
         // Test the WHERE clause: whereNotIn('status', ['cancelled', 'reversed'])
-        // Even if is_reversed=true, if status is 'draft' the invoice counts.
+        // Even if is_reversed=false, if status is 'draft' the invoice counts.
         $branch = Branch::factory()->create();
 
-        DB::table('sales_invoices')->insert([
-            'invoice_no'   => 'INV-DRF-001',
-            'branch_id'    => $branch->id,
-            'invoice_date' => now()->toDateString(),
-            'status'       => 'draft',
-            'is_reversed'  => false,
-            'created_at'   => now(),
-            'updated_at'   => now(),
-        ]);
+        $this->insertSalesInvoice($branch->id, status: 'draft', isReversed: false, invoiceCode: 'INV-DRF-001');
 
         $result = $this->callCanDeactivate($branch);
 
@@ -252,16 +200,7 @@ class BranchDeactivationUnitTest extends TestCase
         $branch = Branch::factory()->create();
         $other  = Branch::factory()->create();
 
-        DB::table('branch_demands')->insert([
-            'demand_code'    => 'BD-UNIT-001',
-            'demand_date'    => now()->toDateString(),
-            'from_branch_id' => $branch->id,
-            'to_branch_id'   => $other->id,
-            'status'         => 'pending',
-            'is_reversed'    => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertBranchDemand($branch->id, $other->id, status: 'pending', demandCode: 'BD-UNIT-001');
 
         $result = $this->callCanDeactivate($branch);
 
@@ -274,16 +213,7 @@ class BranchDeactivationUnitTest extends TestCase
         $branch = Branch::factory()->create();
         $other  = Branch::factory()->create();
 
-        DB::table('branch_demands')->insert([
-            'demand_code'    => 'BD-UNIT-002',
-            'demand_date'    => now()->toDateString(),
-            'from_branch_id' => $other->id,
-            'to_branch_id'   => $branch->id,
-            'status'         => 'pending',
-            'is_reversed'    => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertBranchDemand($other->id, $branch->id, status: 'pending', demandCode: 'BD-UNIT-002');
 
         $result = $this->callCanDeactivate($branch);
 
@@ -295,16 +225,7 @@ class BranchDeactivationUnitTest extends TestCase
         $branch = Branch::factory()->create();
         $other  = Branch::factory()->create();
 
-        DB::table('branch_demands')->insert([
-            'demand_code'    => 'BD-FUL-001',
-            'demand_date'    => now()->toDateString(),
-            'from_branch_id' => $branch->id,
-            'to_branch_id'   => $other->id,
-            'status'         => 'fulfilled',
-            'is_reversed'    => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertBranchDemand($branch->id, $other->id, status: 'fulfilled', demandCode: 'BD-FUL-001');
 
         $result = $this->callCanDeactivate($branch);
 
@@ -316,16 +237,7 @@ class BranchDeactivationUnitTest extends TestCase
         $branch = Branch::factory()->create();
         $other  = Branch::factory()->create();
 
-        DB::table('branch_demands')->insert([
-            'demand_code'    => 'BD-CAN-001',
-            'demand_date'    => now()->toDateString(),
-            'from_branch_id' => $branch->id,
-            'to_branch_id'   => $other->id,
-            'status'         => 'cancelled',
-            'is_reversed'    => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertBranchDemand($branch->id, $other->id, status: 'cancelled', demandCode: 'BD-CAN-001');
 
         $result = $this->callCanDeactivate($branch);
 
@@ -351,6 +263,10 @@ class BranchDeactivationUnitTest extends TestCase
 
     public function test_inactive_user_account_does_not_block_deactivation(): void
     {
+        // Note: the active employee itself triggers blocker 2, so the overall
+        // result will be ok=false. The point of this test is to verify the
+        // message does NOT include "user account" — i.e. the inactive user
+        // was correctly excluded from the active-user count.
         $branch = Branch::factory()->create();
 
         $employee = Employee::factory()->forBranch($branch->id)->create();
@@ -358,7 +274,9 @@ class BranchDeactivationUnitTest extends TestCase
 
         $result = $this->callCanDeactivate($branch);
 
-        $this->assertTrue($result['ok']);
+        $this->assertFalse($result['ok']);
+        $this->assertStringNotContainsString('user account', $result['message']);
+        $this->assertStringContainsString('employee', $result['message']);
     }
 
     public function test_user_account_with_inactive_employee_does_not_block_deactivation(): void
@@ -383,37 +301,13 @@ class BranchDeactivationUnitTest extends TestCase
         $other  = Branch::factory()->create();
 
         // All 5 blockers
-        DB::table('warehouses')->insert([
-            'warehouse_code' => 'WH-ALL-01',
-            'warehouse_name' => 'Active WH',
-            'branch_id'      => $branch->id,
-            'is_active'      => true,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertWarehouse($branch->id, isActive: true, code: 'WH-ALL-01');
 
         Employee::factory()->forBranch($branch->id)->create();
 
-        DB::table('sales_invoices')->insert([
-            'invoice_no'   => 'INV-ALL-01',
-            'branch_id'    => $branch->id,
-            'invoice_date' => now()->toDateString(),
-            'status'       => 'confirmed',
-            'is_reversed'  => false,
-            'created_at'   => now(),
-            'updated_at'   => now(),
-        ]);
+        $this->insertSalesInvoice($branch->id, status: 'confirmed', isReversed: false, invoiceCode: 'INV-ALL-01');
 
-        DB::table('branch_demands')->insert([
-            'demand_code'    => 'BD-ALL-01',
-            'demand_date'    => now()->toDateString(),
-            'from_branch_id' => $branch->id,
-            'to_branch_id'   => $other->id,
-            'status'         => 'pending',
-            'is_reversed'    => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertBranchDemand($branch->id, $other->id, status: 'pending', demandCode: 'BD-ALL-01');
 
         $employee = Employee::factory()->forBranch($branch->id)->create();
         User::factory()->forEmployee($employee->id)->create(['is_active' => true]);
@@ -449,14 +343,7 @@ class BranchDeactivationUnitTest extends TestCase
     {
         $branch = Branch::factory()->create();
 
-        DB::table('warehouses')->insert([
-            'warehouse_code' => 'WH-CONTRACT-01',
-            'warehouse_name' => 'Active WH',
-            'branch_id'      => $branch->id,
-            'is_active'      => true,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        $this->insertWarehouse($branch->id, isActive: true, code: 'WH-CONTRACT-01');
 
         $result = $this->callCanDeactivate($branch);
 

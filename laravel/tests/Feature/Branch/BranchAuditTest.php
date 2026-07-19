@@ -279,8 +279,10 @@ class BranchAuditTest extends TestCase
 
     public function test_toggle_activate_writes_restored_audit_entry(): void
     {
+        // Use destroy() so the branch is properly soft-deleted (sets deleted_at)
+        // AND is_active=false. Then toggle-activate will fire restored + updated.
         $branch = Branch::factory()->create();
-        $branch->delete();
+        $this->delete(route('admin.branches.destroy', $branch));
 
         $this->post(route('admin.branches.toggle', $branch));
 
@@ -341,16 +343,27 @@ class BranchAuditTest extends TestCase
         $user = $this->makeRoleUser('admin');
         $this->actingAs($user);
 
-        $branch = Branch::factory()->create();
+        // Use the HTTP store route so the audit entry is attributed to $user.
+        $this->post(route('admin.branches.store'), [
+            'branch_code' => 'AUDIT-PERF-01',
+            'branch_name' => 'Performer Name Test',
+        ]);
+        $branch = Branch::where('branch_code', 'AUDIT-PERF-01')->first();
+        $this->assertNotNull($branch);
 
         $response = $this->get(route('admin.branches.audit'));
 
         $auditLogs = $response->viewData('auditLogs');
-        $createdByUser = $auditLogs->firstWhere('action', 'master_data_created');
+        // Find the audit entry for THIS branch's creation (avoids matching
+        // entries from prior tests where user_id may be null).
+        $createdByUser = $auditLogs->first(function ($log) use ($branch) {
+            return $log->action === 'master_data_created'
+                && (int) $log->target_id === $branch->id;
+        });
 
-        if ($createdByUser) {
-            $this->assertEquals($user->employee->name, $createdByUser->performed_by_name);
-        }
+        $this->assertNotNull($createdByUser, 'Audit page should contain a master_data_created entry for the new branch');
+        $this->assertEquals($user->id, $createdByUser->user_id);
+        $this->assertEquals($user->employee->name, $createdByUser->performed_by_name);
     }
 
     public function test_audit_page_extracts_target_id_from_details_jsonb(): void
@@ -360,20 +373,23 @@ class BranchAuditTest extends TestCase
         $response = $this->get(route('admin.branches.audit'));
 
         $auditLogs = $response->viewData('auditLogs');
-        $entry = $auditLogs->firstWhere('action', 'master_data_created');
+        // Find the audit entry specifically for this branch's creation.
+        $entry = $auditLogs->first(function ($log) use ($branch) {
+            return $log->action === 'master_data_created'
+                && (int) $log->target_id === $branch->id;
+        });
 
-        if ($entry) {
-            $this->assertEquals($branch->id, (int) $entry->target_id);
-        }
+        $this->assertNotNull($entry, "Audit page should contain a master_data_created entry for branch #{$branch->id}");
+        $this->assertEquals($branch->id, (int) $entry->target_id);
     }
 
     // ====================================================================
     // AUDIT INVARIANT — every mutation produces exactly one audit entry
     // ====================================================================
 
-    public function test_full_lifecycle_produces_4_audit_entries(): void
+    public function test_full_lifecycle_produces_5_audit_entries(): void
     {
-        // 1. CREATE
+        // 1. CREATE → 1 entry (master_data_created)
         $this->post(route('admin.branches.store'), [
             'branch_code' => 'LIFE-01',
             'branch_name' => 'Lifecycle Test',
@@ -381,7 +397,7 @@ class BranchAuditTest extends TestCase
         $branch = Branch::where('branch_code', 'LIFE-01')->first();
         $this->assertCount(1, $this->auditEntriesFor($branch), 'After create: 1 audit entry');
 
-        // 2. UPDATE
+        // 2. UPDATE → 1 entry (master_data_updated)
         $this->put(route('admin.branches.update', $branch), [
             'branch_code' => 'LIFE-01',
             'branch_name' => 'Lifecycle Test Updated',
@@ -389,12 +405,17 @@ class BranchAuditTest extends TestCase
         ]);
         $this->assertCount(2, $this->auditEntriesFor($branch), 'After update: 2 audit entries');
 
-        // 3. DELETE (toggle deactivate)
+        // 3. TOGGLE-DEACTIVATE → 2 entries:
+        //    - master_data_updated (is_active=false, deleted_by set)
+        //    - master_data_deleted (soft-delete)
         $this->post(route('admin.branches.toggle', $branch));
-        $this->assertCount(3, $this->auditEntriesFor($branch), 'After toggle-deactivate: 3 audit entries');
+        $this->assertCount(4, $this->auditEntriesFor($branch), 'After toggle-deactivate: 4 audit entries (updated + deleted)');
 
-        // 4. RESTORE (toggle activate)
+        // 4. TOGGLE-ACTIVATE → 3 entries:
+        //    - master_data_updated (deleted_at cleared by restore's internal save)
+        //    - master_data_restored (restore event)
+        //    - master_data_updated (is_active=true, deleted_by=null)
         $this->post(route('admin.branches.toggle', $branch));
-        $this->assertCount(4, $this->auditEntriesFor($branch), 'After toggle-activate: 4 audit entries');
+        $this->assertCount(7, $this->auditEntriesFor($branch), 'After toggle-activate: 7 audit entries (updated + restored + updated)');
     }
 }
