@@ -30,6 +30,12 @@
             <a href="{{ route('admin.branches.audit') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-clock-rotate-left me-1"></i> Audit
             </a>
+            <button type="button" class="btn btn-outline-light btn-sm" onclick="window.print()">
+                <i class="fas fa-print me-1"></i> Print
+            </button>
+            <button type="button" class="btn btn-outline-light btn-sm" id="btnExportCsv">
+                <i class="fas fa-file-csv me-1"></i> Export
+            </button>
             <a href="{{ route('admin.branches.create') }}" class="btn btn-light btn-sm">
                 <i class="fas fa-plus me-1"></i> New branch
             </a>
@@ -180,6 +186,30 @@ $(function() {
         ordering: true,
         dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
         language: { search: 'Filter:', emptyTable: 'No branches found.' }
+    });
+
+    // Phase 6: CSV export
+    $('#btnExportCsv').on('click', function() {
+        var rows = [['Code', 'Branch Name', 'Phone', 'Email', 'Address', 'Status']];
+        $('#branchTable tbody tr').each(function() {
+            var code = $(this).find('td').eq(0).text().trim();
+            var name = $(this).find('td').eq(1).text().trim();
+            var phone = $(this).find('td').eq(2).find('.fa-phone').parent().text().trim() || '';
+            var email = $(this).find('td').eq(2).find('.fa-envelope').parent().text().trim() || '';
+            var addr = $(this).find('td').eq(3).text().trim();
+            var status = $(this).find('td').eq(4).text().trim();
+            rows.push([code, name, phone, email, addr, status]);
+        });
+        var csv = rows.map(function(r) {
+            return r.map(function(c) { return '"' + (c || '').replace(/"/g, '""') + '"'; }).join(',');
+        }).join('\n');
+        var blob = new Blob([csv], { type: 'text/csv' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'branches_' + new Date().toISOString().slice(0,10) + '.csv';
+        a.click();
+        URL.revokeObjectURL(url);
     });
 });
 </script>

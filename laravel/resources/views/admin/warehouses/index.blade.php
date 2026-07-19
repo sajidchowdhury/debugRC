@@ -41,6 +41,12 @@
             <a href="{{ route('admin.warehouses.audit') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-clock-rotate-left me-1"></i> Audit
             </a>
+            <button type="button" class="btn btn-outline-light btn-sm" onclick="window.print()">
+                <i class="fas fa-print me-1"></i> Print
+            </button>
+            <button type="button" class="btn btn-outline-light btn-sm" id="btnExportCsv">
+                <i class="fas fa-file-csv me-1"></i> Export
+            </button>
             <a href="{{ route('admin.warehouses.create') }}" class="btn btn-light btn-sm">
                 <i class="fas fa-plus me-1"></i> New warehouse
             </a>
@@ -181,6 +187,29 @@ $(function() {
         ordering: true,
         dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
         language: { search: 'Filter:', emptyTable: 'No warehouses found.' }
+    });
+
+    // Phase 6: CSV export
+    $('#btnExportCsv').on('click', function() {
+        var rows = [['Code', 'Warehouse Name', 'Branch', 'Location', 'Status']];
+        $('#warehouseTable tbody tr').each(function() {
+            var code = $(this).find('td').eq(0).text().trim();
+            var name = $(this).find('td').eq(1).text().trim();
+            var branch = $(this).find('td').eq(2).text().trim();
+            var loc = $(this).find('td').eq(3).text().trim();
+            var status = $(this).find('td').eq(4).text().trim();
+            rows.push([code, name, branch, loc, status]);
+        });
+        var csv = rows.map(function(r) {
+            return r.map(function(c) { return '"' + (c || '').replace(/"/g, '""') + '"'; }).join(',');
+        }).join('\n');
+        var blob = new Blob([csv], { type: 'text/csv' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'warehouses_' + new Date().toISOString().slice(0,10) + '.csv';
+        a.click();
+        URL.revokeObjectURL(url);
     });
 });
 </script>
