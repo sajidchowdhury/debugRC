@@ -798,8 +798,8 @@ All 7 Phase 1 tasks are complete and pushed to GitHub:
 | P3-3 | Reconciliation (6 sections) | ✅ Code Ready | Enhanced `subledger:reconcile` with 3 new sections (Cash/Bank, Inventory, COGS) + checklist doc |
 | P3-4 | Shadow mode (7 days) | ✅ Ready | No shadow mode exists in sales module — no code to remove |
 | P3-5 | Reversal verification | ✅ Code Ready | Enhanced `reversal:verify` with 6 sales-specific checks (invoice/challan/return/payment consistency + stock_transaction + append-only) + checklist doc |
-| P3-6 | Penetration test (RBAC + branch) | ⬜ Pending |
-| P3-7 | Final cutover sign-off | ⬜ Pending |
+| P3-6 | Penetration test (RBAC + branch) | ✅ Code Ready | `sales:pen-test` command with 5 automated security tests + manual pen-test checklist |
+| P3-7 | Final cutover sign-off | ✅ Ready | Pre-cutover checklist (29 tasks) + 20-workflow functional test + cutover steps + sign-off table |
 
 ---
 
