@@ -977,6 +977,20 @@
             var subtotal = parseFloat((state.cart && state.cart.subtotal) || 0);
             var today = new Date().toISOString().split('T')[0];
 
+            // P2-6: Generate idempotency token (UUID v4) for this finalize attempt.
+            // Prevents duplicate invoice creation on double-click or refresh-after-submit.
+            var idempotencyToken = (function() {
+                if (window.crypto && window.crypto.randomUUID) {
+                    return window.crypto.randomUUID();
+                }
+                // Fallback UUID v4 generator (older browsers).
+                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    var r = Math.random() * 16 | 0;
+                    var v = c === 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+            })();
+
             // --- Step 2: open the finalize dialog ---
             Swal.fire({
                 title: '<i class="fas fa-file-invoice-dollar me-2"></i>Finalize Invoice',
@@ -1109,7 +1123,8 @@
                             notes: notes,
                             is_soft_hold: isSoftHold,
                             credit_limit_override: override,
-                            override_reason: override ? overrideReason : ''
+                            override_reason: override ? overrideReason : '',
+                            idempotency_token: idempotencyToken
                         }).then(function (resp) {
                             return resp;
                         }).catch(function (xhr) {

@@ -66,6 +66,8 @@ class SalesInvoiceController extends Controller
 
     /**
      * Finalize a cart into a draft invoice (AJAX endpoint).
+     * P2-6: Idempotency token prevents duplicate invoice creation on
+     * double-click or refresh-after-submit.
      */
     public function finalize(Request $request)
     {
@@ -81,7 +83,21 @@ class SalesInvoiceController extends Controller
             'is_soft_hold' => 'nullable|boolean',
             'credit_limit_override' => 'nullable|boolean',
             'override_reason' => 'nullable|string|max:500',
+            'idempotency_token' => 'required|string|uuid',
         ]);
+
+        // P2-6: Idempotency check — if this token was already processed,
+        // return the cached response (prevents duplicate invoice on double-submit).
+        $cacheKey = 'finalize:' . $validated['idempotency_token'];
+        $cached = \Illuminate\Support\Facades\Cache::get($cacheKey);
+
+        if ($cached !== null) {
+            // Return the original response — this is a duplicate submission.
+            return response()->json(array_merge($cached, [
+                'idempotent_replay' => true,
+                'message' => 'Duplicate submission detected — returning the original result.',
+            ]));
+        }
 
         try {
             $invoice = $this->invoiceService->finalizeFromCart([
@@ -99,13 +115,18 @@ class SalesInvoiceController extends Controller
                 'created_by' => auth()->id(),
             ]);
 
-            return response()->json([
+            $response = [
                 'status' => 'success',
                 'message' => "Invoice {$invoice->invoice_code} created (draft). GL posted.",
                 'invoice_id' => $invoice->id,
                 'invoice_code' => $invoice->invoice_code,
                 'redirect' => route('admin.sales-invoices.show', $invoice),
-            ]);
+            ];
+
+            // P2-6: Cache the response for 10 minutes (idempotency window).
+            \Illuminate\Support\Facades\Cache::put($cacheKey, $response, 600);
+
+            return response()->json($response);
         } catch (\Throwable $e) {
             return response()->json(['status' => 'error', 'message' => $e->getMessage()], 400);
         }
