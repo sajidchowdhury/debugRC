@@ -118,12 +118,11 @@ class MenuService
 
         return [
             'id' => $menu->id,
-            'menu_name' => $menu->menu_name,
+            'menu_name' => $menu->menu_label, // PG column is menu_label, not menu_name
             'url' => $url,
             'icon' => $menu->icon ?? 'fas fa-circle',
             'controller' => $menu->controller,
             'action' => $menu->action,
-            'section' => $menu->section,
             'sort_order' => $menu->sort_order,
             'children' => [],
         ];
@@ -135,15 +134,8 @@ class MenuService
      */
     private function resolveMenuUrl(Menu $menu): string
     {
-        // If menu_link is set and starts with #, it's a dropdown parent.
-        if ($menu->menu_link && str_starts_with($menu->menu_link, '#')) {
-            return '#';
-        }
-
-        // If menu_link is set as a URL path, use it directly.
-        if ($menu->menu_link && !empty($menu->menu_link)) {
-            return '/' . ltrim($menu->menu_link, '/');
-        }
+        // The PG menus table does NOT have a menu_link column.
+        // Routes are resolved from controller + action via the route map below.
 
         // Map controller/action to Laravel named routes.
         $controller = strtolower($menu->controller ?? '');

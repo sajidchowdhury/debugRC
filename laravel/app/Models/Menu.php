@@ -5,31 +5,38 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * Menu — DB-driven navigation menu (mirrors legacy menus table).
+ * Menu — DB-driven navigation menu.
+ *
+ * Maps to the PostgreSQL `menus` table (01_auth_and_master.sql):
+ *   id, parent_id, menu_label, controller, action, icon, sort_order,
+ *   is_active, created_at, updated_at
  *
  * Hierarchical: parent_id = 0 for top-level; children reference parent.
  * Per-user visibility controlled via user_menu_permissions.
  *
+ * NOTE: The legacy MySQL table had extra columns (menu_name, menu_link,
+ * section) that were NOT carried over to the PG schema. The PG schema
+ * uses `menu_label` (not `menu_name`). The MenuService resolves routes
+ * from controller + action (no menu_link needed).
+ *
  * @property int $id
- * @property string $menu_name
- * @property string|null $menu_link
+ * @property int $parent_id
+ * @property string $menu_label
  * @property string|null $controller
  * @property string|null $action
  * @property string|null $icon
- * @property int $parent_id
  * @property int $sort_order
- * @property string|null $section
  * @property bool $is_active
  */
 class Menu extends Model
 {
     protected $table = 'menus';
 
-    public $timestamps = false;
+    public $timestamps = false; // created_at/updated_at exist but are DB-managed via trigger
 
     protected $fillable = [
-        'menu_name', 'menu_link', 'controller', 'action', 'icon',
-        'parent_id', 'sort_order', 'section', 'is_active',
+        'menu_label', 'controller', 'action', 'icon',
+        'parent_id', 'sort_order', 'is_active',
     ];
 
     protected $casts = [
