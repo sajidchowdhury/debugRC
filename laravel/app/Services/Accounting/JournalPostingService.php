@@ -237,6 +237,14 @@ class JournalPostingService
     /**
      * Validate that the posting date falls within an open accounting period.
      *
+     * P2-1: Admin bypass — when config('accounting.period_close_admin_override')
+     * is true AND the authenticated user is admin/superadmin, the check is
+     * skipped (but the override is logged to user_audit_log for audit trail).
+     *
+     * Reversals bypass this check entirely via the 'skip_period_check' flag
+     * in createJournalEntry (so a reversal against a closed-period posting
+     * can still proceed).
+     *
      * @param string $postingDate (Y-m-d)
      * @param int $branchId
      * @throws \RuntimeException If the period is closed for this branch.
@@ -247,13 +255,43 @@ class JournalPostingService
             ->where('branch_id', $branchId)
             ->value('closed_through_date');
 
-        if ($closedThrough && $postingDate <= $closedThrough) {
-            throw new \RuntimeException(
-                "Posting date {$postingDate} falls within a closed accounting period "
-                . "(closed through {$closedThrough} for branch {$branchId}). "
-                . "Reopen the period or use a later date."
-            );
+        if (!$closedThrough || $postingDate > $closedThrough) {
+            return; // Period is open for this date.
         }
+
+        // P2-1: Admin bypass — check config + user role.
+        if (config('accounting.period_close_admin_override', false)) {
+            $user = \Illuminate\Support\Facades\Auth::user();
+            if ($user && $user->isAdmin()) {
+                // Log the override for audit trail.
+                DB::table('user_audit_log')->insert([
+                    'user_id' => $user->id,
+                    'action' => 'period_close_override',
+                    'target_user_id' => null,
+                    'branch_id' => $branchId,
+                    'details' => json_encode([
+                        'posting_date' => $postingDate,
+                        'closed_through' => $closedThrough,
+                        'branch_id' => $branchId,
+                        'reason' => 'Admin override: posting to closed period',
+                    ]),
+                    'ip_address' => request()?->ip(),
+                    'user_agent' => request()?->userAgent() ? mb_substr(request()->userAgent(), 0, 255) : null,
+                    'created_at' => now(),
+                ]);
+
+                return; // Bypass — admin allowed to post.
+            }
+        }
+
+        throw new \RuntimeException(
+            "Posting date {$postingDate} falls within a closed accounting period "
+            . "(closed through {$closedThrough} for branch {$branchId}). "
+            . "Reopen the period or use a later date."
+            . (config('accounting.period_close_admin_override', false)
+                ? ' (Admin override is enabled — contact an admin.)'
+                : '')
+        );
     }
 
     /**
