@@ -8,6 +8,7 @@ use App\Models\ProductGroup;
 use App\Models\ProductPriceHistory;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 /**
@@ -70,7 +71,10 @@ class ProductController extends BaseMasterDataController
 
     protected function validationRules(?int $id = null): array
     {
-        $id = $id ?? 'NULL';
+        // Phase 9: default $id to 0 (instead of 'NULL') to match the
+        // Branch/Warehouse pattern. This avoids any potential PostgreSQL
+        // "invalid input syntax for type integer" edge cases on store.
+        $id = $id ?? 0;
 
         return [
             'product_code'    => 'required|string|max:50|unique:products,product_code,' . $id,
@@ -101,8 +105,22 @@ class ProductController extends BaseMasterDataController
         }
         unset($validated['image']);
 
-        // Checkbox: if not present, is_active = false
-        $validated['is_active'] = $request->boolean('is_active');
+        // Phase 9: Set created_by from authenticated user when the column exists.
+        // (products table does NOT have created_by, so this is a no-op — kept for
+        // symmetry with Branch/Warehouse controllers and future schema changes.)
+        $columns = \Illuminate\Support\Facades\Schema::getColumnListing(($this->modelClass)::make()->getTable());
+        if (in_array('created_by', $columns) && !array_key_exists('created_by', $validated)) {
+            $validated['created_by'] = Auth::id();
+        }
+
+        // Only set is_active when the request explicitly provides it; otherwise
+        // let the DB default (true) apply. This matches Branch/Warehouse behavior
+        // and keeps the 'defaults to active' contract for new products.
+        if ($request->has('is_active')) {
+            $validated['is_active'] = $request->boolean('is_active');
+        } else {
+            unset($validated['is_active']);
+        }
 
         try {
             $product = Product::create($validated);
@@ -129,7 +147,22 @@ class ProductController extends BaseMasterDataController
         }
         unset($validated['image']);
 
-        $validated['is_active'] = $request->boolean('is_active');
+        // Phase 9: Only set is_active when the request explicitly provides it.
+        // This prevents an omitted is_active from silently flipping the value
+        // to false on update (matches Branch/Warehouse pattern).
+        if ($request->has('is_active')) {
+            $validated['is_active'] = $request->boolean('is_active');
+        } else {
+            unset($validated['is_active']);
+        }
+
+        // Phase 9: If is_active is being set to false, run deactivation safety check.
+        if (isset($validated['is_active']) && !$validated['is_active'] && $product->is_active) {
+            $deactivationCheck = $this->canDeactivate($product);
+            if (!$deactivationCheck['ok']) {
+                return back()->withInput()->with('error', $deactivationCheck['message']);
+            }
+        }
 
         try {
             $product->update($validated);
@@ -141,14 +174,27 @@ class ProductController extends BaseMasterDataController
     }
 
     /**
-     * Soft-delete (override base to ensure Auth facade is properly resolved).
+     * Soft-delete (Phase 9 override to enforce safety check + is_active=false).
+     *
+     * Runs the canDeactivate() safety check before soft-deleting. Sets
+     * is_active=false + deleted_by before the delete() call so the audit
+     * trait captures the final deactivated state.
      */
     public function destroy(Request $request, int $id)
     {
         $item = Product::findOrFail($id);
 
+        // Phase 9: Safety check — can this product be deactivated?
+        if ($item->is_active) {
+            $deactivationCheck = $this->canDeactivate($item);
+            if (!$deactivationCheck['ok']) {
+                return back()->with('error', $deactivationCheck['message']);
+            }
+        }
+
         try {
             $item->deleted_by = Auth::id();
+            $item->is_active = false;
             $item->save();
             $item->delete();
 
@@ -157,6 +203,76 @@ class ProductController extends BaseMasterDataController
         } catch (\Throwable $e) {
             return back()->with('error', "Failed to deactivate {$this->label}: {$e->getMessage()}");
         }
+    }
+
+    /**
+     * Phase 9: Safety check before product deactivation.
+     *
+     * Mirrors legacy product-master safety rules — a product must not be
+     * deactivated while it is referenced by live stock or open transactions.
+     *
+     * Checks:
+     *   1. No stock-on-hand (qty > 0) in warehouse_stock for this product
+     *   2. No sales_invoice_items for this product on non-reversed,
+     *      non-cancelled invoices
+     *   3. No purchase_order_items for this product on pending purchase
+     *      orders (status in draft, sent, partial)
+     *
+     * @param  \App\Models\Product  $item
+     * @return array{ok: bool, message: string}
+     */
+    protected function canDeactivate($item): array
+    {
+        $productId = $item->id;
+
+        // 1. Stock-on-hand in any warehouse.
+        $stockQty = (float) DB::table('warehouse_stock')
+            ->where('product_id', $productId)
+            ->sum('qty');
+
+        if ($stockQty > 0.0001) {
+            return [
+                'ok' => false,
+                'message' => 'Cannot deactivate this product. It still has '
+                    . number_format($stockQty, 2)
+                    . ' units of stock in warehouses. Please move or adjust the stock first.',
+            ];
+        }
+
+        // 2. Open sales invoices referencing this product.
+        $openSalesItems = DB::table('sales_invoice_items as sii')
+            ->join('sales_invoices as si', 'si.id', '=', 'sii.sales_invoice_id')
+            ->where('sii.product_id', $productId)
+            ->where('si.is_reversed', false)
+            ->whereNotIn('si.status', ['cancelled', 'reversed'])
+            ->count();
+
+        if ($openSalesItems > 0) {
+            return [
+                'ok' => false,
+                'message' => 'Cannot deactivate this product. It appears on '
+                    . $openSalesItems
+                    . ' open sales invoice item(s). Please resolve them first.',
+            ];
+        }
+
+        // 3. Pending purchase orders referencing this product.
+        $pendingPoItems = DB::table('purchase_order_items as poi')
+            ->join('purchase_orders as po', 'po.id', '=', 'poi.purchase_order_id')
+            ->where('poi.product_id', $productId)
+            ->whereIn('po.status', ['draft', 'sent', 'partial'])
+            ->count();
+
+        if ($pendingPoItems > 0) {
+            return [
+                'ok' => false,
+                'message' => 'Cannot deactivate this product. It appears on '
+                    . $pendingPoItems
+                    . ' pending purchase order item(s). Please resolve them first.',
+            ];
+        }
+
+        return ['ok' => true, 'message' => ''];
     }
 
     // ===================== PRICE HISTORY =====================
@@ -192,7 +308,7 @@ class ProductController extends BaseMasterDataController
         $validated = $request->validate([
             'min_rate'      => 'required|numeric|min:0',
             'max_rate'      => 'required|numeric|min:0|gte:min_rate',
-            'default_rate'  => 'required|numeric|min:0|between:min_rate,max_rate',
+            'default_rate'  => 'required|numeric|min:0|gte:min_rate|lte:max_rate',
             'effective_from'=> 'nullable|date',
         ]);
 

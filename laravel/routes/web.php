@@ -70,15 +70,25 @@ Route::middleware('auth')->group(function () {
     // Phase 4: Master Data Modules
     // ============================================================
 
-    // --- Products ---
+    // --- Products (RBAC: admin for write, admin/manager/warehouse_manager for read) ---
     Route::prefix('admin/products')->name('admin.products.')->group(function () {
-        Route::get('audit', [ProductController::class, 'audit'])->name('audit');
-        Route::get('{product}/price-history', [ProductController::class, 'priceHistory'])->name('priceHistory');
-        Route::post('{product}/price', [ProductController::class, 'addPrice'])->name('addPrice');
-        Route::delete('{product}/price/{price}', [ProductController::class, 'deletePrice'])->name('deletePrice');
-        Route::post('{product}/restore', [ProductController::class, 'restore'])->name('restore');
+        Route::get('audit', [ProductController::class, 'audit'])->name('audit')->middleware('role:admin');
+        Route::get('{product}/price-history', [ProductController::class, 'priceHistory'])->name('priceHistory')->where(['product' => '[0-9]+'])->middleware('role:admin,manager,warehouse_manager');
+        Route::post('{product}/price', [ProductController::class, 'addPrice'])->name('addPrice')->where(['product' => '[0-9]+'])->middleware('role:admin');
+        Route::delete('{product}/price/{price}', [ProductController::class, 'deletePrice'])->name('deletePrice')->where(['product' => '[0-9]+', 'price' => '[0-9]+'])->middleware('role:admin');
+        Route::post('{product}/restore', [ProductController::class, 'restore'])->name('restore')->where(['product' => '[0-9]+'])->middleware('role:admin');
+        Route::post('{product}/toggle', [ProductController::class, 'toggle'])->name('toggle')->where(['product' => '[0-9]+'])->middleware('role:admin');
     });
-    Route::resource('admin/products', ProductController::class)->names('admin.products');
+    // Read access (index, show): admin, manager, warehouse_manager
+    Route::resource('admin/products', ProductController::class)
+        ->only(['index', 'show'])->where(['product' => '[0-9]+'])
+        ->names('admin.products')
+        ->middleware('role:admin,manager,warehouse_manager');
+    // Write access (create, store, edit, update, destroy): admin only
+    Route::resource('admin/products', ProductController::class)
+        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['product' => '[0-9]+'])
+        ->names('admin.products')
+        ->middleware('role:admin');
 
     // --- Product Categories ---
     Route::prefix('admin/product-categories')->name('admin.product-categories.')->group(function () {

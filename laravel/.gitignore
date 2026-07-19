@@ -2,3 +2,4 @@
 phpunit-coverage.xml
 bootstrap/cache/*.php
 vendor/
+server.php
