@@ -246,6 +246,9 @@ class SalesInvoiceService
                 $totalAmount, $data['salesman_id'] ?? null
             );
 
+            // P2-7: Invalidate pipeline cache (new dispatches were added).
+            $this->availabilityService->invalidatePipelineForInvoice($invoiceId);
+
             return SalesInvoice::with(['items.product', 'customer', 'branch', 'journalEntry.lines.ledger'])
                 ->find($invoiceId);
         });
@@ -313,6 +316,9 @@ class SalesInvoiceService
                 $invoiceId, $invoice->invoice_code, (int) $invoice->branch_id,
                 (float) $invoice->total_amount, $reason
             );
+
+            // P2-7: Invalidate pipeline cache (dispatches were deleted).
+            $this->availabilityService->invalidatePipelineForInvoice($invoiceId);
 
             return SalesInvoice::find($invoiceId);
         });
@@ -567,6 +573,9 @@ class SalesInvoiceService
                 'user_agent' => request()?->userAgent() ? mb_substr(request()->userAgent(), 0, 255) : null,
                 'created_at' => now(),
             ]);
+
+            // P2-7: Invalidate pipeline cache (dispatches were deleted + re-inserted).
+            $this->availabilityService->invalidatePipelineForInvoice($invoiceId);
 
             return SalesInvoice::with(['items.product', 'customer', 'branch', 'journalEntry.lines.ledger'])
                 ->find($invoiceId);

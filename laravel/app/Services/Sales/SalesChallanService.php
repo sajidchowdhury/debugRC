@@ -5,6 +5,7 @@ namespace App\Services\Sales;
 use App\Models\SalesInvoice;
 use App\Models\SalesChallan;
 use App\Services\Stock\StockService;
+use App\Services\Stock\StockAvailabilityService;
 use App\Services\Accounting\JournalPostingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -37,7 +38,8 @@ class SalesChallanService
         private StockService $stockService,
         private JournalPostingService $journalPosting,
         private SalesAccess $salesAccess,
-        private SalesAuditLogger $auditLogger
+        private SalesAuditLogger $auditLogger,
+        private StockAvailabilityService $availabilityService
     ) {}
 
     /**
@@ -297,6 +299,9 @@ class SalesChallanService
                 $cogsTotal, $journalEntryId
             );
 
+            // P2-7: Invalidate pipeline cache (dispatched_qty changed).
+            $this->availabilityService->invalidatePipelineForInvoice($invoiceId);
+
             return SalesChallan::with(['salesInvoice.items.product', 'items.product', 'items.warehouse', 'branch', 'journalEntry.lines.ledger'])
                 ->find($challanId);
         });
@@ -425,6 +430,9 @@ class SalesChallanService
                 $challanId, $challan->challan_code, $challan->sales_invoice_id,
                 (int) $challan->branch_id, $reason
             );
+
+            // P2-7: Invalidate pipeline cache (dispatched_qty reset to 0).
+            $this->availabilityService->invalidatePipelineForInvoice($challan->sales_invoice_id);
 
             return SalesChallan::find($challanId);
         });
