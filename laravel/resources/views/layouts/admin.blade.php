@@ -85,7 +85,7 @@
     {{-- ==================== MAIN LAYOUT ==================== --}}
     <div class="container-fluid">
         <div class="row">
-            {{-- Sidebar --}}
+            {{-- Sidebar — DB-driven menu with per-user permissions --}}
             <nav id="sidebar" class="sidebar col-lg-2 col-md-3 d-none d-lg-block">
                 <div class="sidebar-header">
                     <span class="logo">
@@ -93,147 +93,92 @@
                         <span class="logo-text">RC ERP</span>
                     </span>
                 </div>
-                <ul class="nav flex-column">
-                    <li class="nav-item">
-                        <a href="{{ route('dashboard') }}" class="nav-link {{ request()->routeIs('dashboard') ? 'active' : '' }}">
-                            <i class="fas fa-tachometer-alt"></i> Dashboard
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.products.index') }}" class="nav-link {{ request()->routeIs('admin.products.*') ? 'active' : '' }}">
-                            <i class="fas fa-boxes-stacked"></i> Products
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.customers.index') }}" class="nav-link {{ request()->routeIs('admin.customers.*') ? 'active' : '' }}">
-                            <i class="fas fa-users"></i> Customers
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.suppliers.index') }}" class="nav-link {{ request()->routeIs('admin.suppliers.*') ? 'active' : '' }}">
-                            <i class="fas fa-truck"></i> Suppliers
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.employees.index') }}" class="nav-link {{ request()->routeIs('admin.employees.*') ? 'active' : '' }}">
-                            <i class="fas fa-id-badge"></i> Employees
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.banks.index') }}" class="nav-link {{ request()->routeIs('admin.banks.*') ? 'active' : '' }}">
-                            <i class="fas fa-university"></i> Banks
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.ledgers.index') }}" class="nav-link {{ request()->routeIs('admin.ledgers.*') ? 'active' : '' }}">
-                            <i class="fas fa-book"></i> Ledgers
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.branches.index') }}" class="nav-link {{ request()->routeIs('admin.branches.*') ? 'active' : '' }}">
-                            <i class="fas fa-sitemap"></i> Branches
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.warehouses.index') }}" class="nav-link {{ request()->routeIs('admin.warehouses.*') ? 'active' : '' }}">
-                            <i class="fas fa-warehouse"></i> Warehouses
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.reports.index') }}" class="nav-link {{ request()->routeIs('admin.reports.*') ? 'active' : '' }}">
-                            <i class="fas fa-chart-bar"></i> Reports
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.reconciliation.index') }}" class="nav-link {{ request()->routeIs('admin.reconciliation.*') ? 'active' : '' }}">
-                            <i class="fas fa-scale-balanced"></i> Reconciliation
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.stock.transactions') }}" class="nav-link {{ request()->routeIs('admin.stock.*') ? 'active' : '' }}">
-                            <i class="fas fa-boxes-stacked"></i> Stock
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.stock-adjustments.index') }}" class="nav-link {{ request()->routeIs('admin.stock-adjustments.*') ? 'active' : '' }}">
-                            <i class="fas fa-sliders"></i> Adjustments
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.stock-take.index') }}" class="nav-link {{ request()->routeIs('admin.stock-take.*') ? 'active' : '' }}">
-                            <i class="fas fa-clipboard-check"></i> Stock Take
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.warehouse-transfers.index') }}" class="nav-link {{ request()->routeIs('admin.warehouse-transfers.*') ? 'active' : '' }}">
-                            <i class="fas fa-right-left"></i> Transfers
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.damages.index') }}" class="nav-link {{ request()->routeIs('admin.damages.*') ? 'active' : '' }}">
-                            <i class="fas fa-triangle-exclamation"></i> Damages
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.purchase-orders.index') }}" class="nav-link {{ request()->routeIs('admin.purchase-orders.*') ? 'active' : '' }}">
-                            <i class="fas fa-shopping-cart"></i> Purchase Orders
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.purchase-receives.index') }}" class="nav-link {{ request()->routeIs('admin.purchase-receives.*') ? 'active' : '' }}">
-                            <i class="fas fa-truck-ramp-box"></i> GRN
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.purchase-returns.index') }}" class="nav-link {{ request()->routeIs('admin.purchase-returns.*') ? 'active' : '' }}">
-                            <i class="fas fa-rotate-left"></i> P. Returns
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.sales.cart') }}" class="nav-link {{ request()->routeIs('admin.sales.cart') ? 'active' : '' }}">
-                            <i class="fas fa-cart-shopping"></i> Sales Cart
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.sales-invoices.index') }}" class="nav-link {{ request()->routeIs('admin.sales-invoices.*') ? 'active' : '' }}">
-                            <i class="fas fa-file-invoice-dollar"></i> Invoices
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.sales-challans.index') }}" class="nav-link {{ request()->routeIs('admin.sales-challans.*') ? 'active' : '' }}">
-                            <i class="fas fa-truck"></i> Challans
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.customer-payments.index') }}" class="nav-link {{ request()->routeIs('admin.customer-payments.*') ? 'active' : '' }}">
-                            <i class="fas fa-hand-holding-dollar"></i> Payments
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.sales-returns.index') }}" class="nav-link {{ request()->routeIs('admin.sales-returns.*') ? 'active' : '' }}">
-                            <i class="fas fa-rotate-left"></i> S. Returns
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.accounting.period-close') }}" class="nav-link {{ request()->routeIs('admin.accounting.*') ? 'active' : '' }}">
-                            <i class="fas fa-lock"></i> Period Close
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="{{ route('admin.notifications.rules') }}" class="nav-link {{ request()->routeIs('admin.notifications.*') ? 'active' : '' }}">
-                            <i class="fas fa-bell"></i> Notifications
-                        </a>
-                    </li>
+                <ul class="nav flex-column" id="sidebarMenu">
+                    @php
+                        $menuTree = app(\App\Services\MenuService::class)->getUserMenuTree(auth()->user());
+                        $currentUri = '/' . request()->path();
+                    @endphp
+
+                    @foreach ($menuTree as $mainMenu)
+                        @php
+                            $hasChildren = !empty($mainMenu['children']);
+                            $isActive = $hasChildren && collect($mainMenu['children'])->contains(function ($child) use ($currentUri) {
+                                return !empty($child['url']) && $child['url'] !== '#' &&
+                                    (str_contains($currentUri, parse_url($child['url'], PHP_URL_PATH) ?? '') ||
+                                     str_contains($mainMenu['url'] ?? '', $currentUri));
+                            });
+                        @endphp
+
+                        @if ($hasChildren)
+                            {{-- Dropdown parent --}}
+                            <li class="nav-item">
+                                <a href="#" class="nav-link d-flex align-items-center {{ $isActive ? 'active' : '' }}"
+                                   data-bs-toggle="collapse" data-bs-target="#menu-{{ $mainMenu['id'] }}">
+                                    <i class="{{ $mainMenu['icon'] }}"></i>
+                                    <span class="ms-2">{{ $mainMenu['menu_name'] }}</span>
+                                    <i class="fas fa-chevron-down ms-auto small"></i>
+                                </a>
+                                <ul class="nav flex-column ms-3 collapse {{ $isActive ? 'show' : '' }}" id="menu-{{ $mainMenu['id'] }}">
+                                    @foreach ($mainMenu['children'] as $child)
+                                        @php
+                                            $hasGrandchildren = !empty($child['children']);
+                                            $childActive = !empty($child['url']) && $child['url'] !== '#' &&
+                                                str_contains($currentUri, parse_url($child['url'], PHP_URL_PATH) ?? '');
+                                        @endphp
+
+                                        @if ($hasGrandchildren)
+                                            {{-- Sub-dropdown --}}
+                                            <li class="nav-item">
+                                                <a href="#" class="nav-link small d-flex align-items-center {{ $childActive ? 'active' : '' }}"
+                                                   data-bs-toggle="collapse" data-bs-target="#submenu-{{ $child['id'] }}">
+                                                    <i class="{{ $child['icon'] }}"></i>
+                                                    <span class="ms-2">{{ $child['menu_name'] }}</span>
+                                                </a>
+                                                <ul class="nav flex-column ms-3 collapse {{ $childActive ? 'show' : '' }}" id="submenu-{{ $child['id'] }}">
+                                                    @foreach ($child['children'] as $grandchild)
+                                                        <li class="nav-item">
+                                                            <a href="{{ $grandchild['url'] }}" class="nav-link small">
+                                                                <i class="{{ $grandchild['icon'] }}"></i>
+                                                                <span class="ms-2">{{ $grandchild['menu_name'] }}</span>
+                                                            </a>
+                                                        </li>
+                                                    @endforeach
+                                                </ul>
+                                            </li>
+                                        @else
+                                            {{-- Leaf item --}}
+                                            <li class="nav-item">
+                                                <a href="{{ $child['url'] }}" class="nav-link small {{ $childActive ? 'active' : '' }}">
+                                                    <i class="{{ $child['icon'] }}"></i>
+                                                    <span class="ms-2">{{ $child['menu_name'] }}</span>
+                                                </a>
+                                            </li>
+                                        @endif
+                                    @endforeach
+                                </ul>
+                            </li>
+                        @else
+                            {{-- Top-level leaf --}}
+                            <li class="nav-item">
+                                <a href="{{ $mainMenu['url'] }}" class="nav-link {{ str_contains($currentUri, parse_url($mainMenu['url'] ?? '', PHP_URL_PATH) ?? '') ? 'active' : '' }}">
+                                    <i class="{{ $mainMenu['icon'] }}"></i>
+                                    <span class="ms-2">{{ $mainMenu['menu_name'] }}</span>
+                                </a>
+                            </li>
+                        @endif
+                    @endforeach
+
+                    {{-- System menus (always visible to admin/superadmin) --}}
                     @can('manage-system-policy')
                     <li class="nav-item">
                         <a href="{{ route('admin.compliance.index') }}" class="nav-link {{ request()->routeIs('admin.compliance.*') ? 'active' : '' }}">
-                            <i class="fas fa-shield-halved"></i> Compliance
+                            <i class="fas fa-shield-halved"></i> <span class="ms-2">Compliance</span>
                         </a>
                     </li>
                     @endcan
                     <li class="nav-item">
                         <a href="{{ route('admin.archive.index') }}" class="nav-link {{ request()->routeIs('admin.archive.*') ? 'active' : '' }}">
-                            <i class="fas fa-archive"></i> Archive
+                            <i class="fas fa-archive"></i> <span class="ms-2">Archive</span>
                         </a>
                     </li>
                 </ul>

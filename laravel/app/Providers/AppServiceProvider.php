@@ -25,6 +25,9 @@ class AppServiceProvider extends ServiceProvider
         // P1-3: Register SalesAuditLogger as singleton (shared across services).
         $this->app->singleton(\App\Services\Sales\SalesAuditLogger::class);
 
+        // DB-driven menu system: register MenuService as singleton.
+        $this->app->singleton(\App\Services\MenuService::class);
+
         // Phase 11: Register SystemPolicyService as singleton.
         $this->app->singleton(\App\Services\Compliance\SystemPolicyService::class);
 
