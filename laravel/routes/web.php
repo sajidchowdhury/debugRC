@@ -104,12 +104,22 @@ Route::middleware('auth')->group(function () {
     });
     Route::resource('admin/product-groups', ProductGroupController::class)->names('admin.product-groups');
 
-    // --- Customers ---
+    // --- Customers (RBAC: admin for write, admin/manager/salesman for read) ---
     Route::prefix('admin/customers')->name('admin.customers.')->group(function () {
-        Route::get('audit', [CustomerController::class, 'audit'])->name('audit');
-        Route::post('{customer}/restore', [CustomerController::class, 'restore'])->name('restore');
+        Route::get('audit', [CustomerController::class, 'audit'])->name('audit')->middleware('role:admin');
+        Route::post('{customer}/restore', [CustomerController::class, 'restore'])->name('restore')->where(['customer' => '[0-9]+'])->middleware('role:admin');
+        Route::post('{customer}/toggle', [CustomerController::class, 'toggle'])->name('toggle')->where(['customer' => '[0-9]+'])->middleware('role:admin');
     });
-    Route::resource('admin/customers', CustomerController::class)->names('admin.customers');
+    // Read access (index, show): admin, manager, salesman
+    Route::resource('admin/customers', CustomerController::class)
+        ->only(['index', 'show'])->where(['customer' => '[0-9]+'])
+        ->names('admin.customers')
+        ->middleware('role:admin,manager,salesman');
+    // Write access (create, store, edit, update, destroy): admin only
+    Route::resource('admin/customers', CustomerController::class)
+        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['customer' => '[0-9]+'])
+        ->names('admin.customers')
+        ->middleware('role:admin');
 
     // --- Suppliers ---
     Route::prefix('admin/suppliers')->name('admin.suppliers.')->group(function () {
