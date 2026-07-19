@@ -29,6 +29,7 @@ class Branch extends Model
         'phone',
         'email',
         'is_active',
+        'created_by',
         'deleted_by',
     ];
 

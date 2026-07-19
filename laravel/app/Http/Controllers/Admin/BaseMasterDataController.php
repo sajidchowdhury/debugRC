@@ -132,6 +132,12 @@ abstract class BaseMasterDataController extends Controller
     {
         $validated = $request->validate($this->validationRules());
 
+        // Set created_by from the authenticated user (if the table has the column).
+        $columns = \Illuminate\Support\Facades\Schema::getColumnListing(($this->modelClass)::make()->getTable());
+        if (in_array('created_by', $columns)) {
+            $validated['created_by'] = Auth::id();
+        }
+
         try {
             $model = ($this->modelClass)::create($validated);
             return redirect()->route("{$this->routePrefix}.show", $model)

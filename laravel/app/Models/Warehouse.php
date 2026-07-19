@@ -28,6 +28,7 @@ class Warehouse extends Model
         'branch_id',
         'location',
         'is_active',
+        'created_by',
         'deleted_by',
     ];
 

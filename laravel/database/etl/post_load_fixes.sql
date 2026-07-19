@@ -315,3 +315,45 @@ WHERE st.reference_type = 'sales_challan'
 -- ============================================================
 -- P2-4 ETL conversions complete. Re-run etl_verify.sql to confirm.
 -- ============================================================
+
+-- ============================================================
+-- Branch Module Phase 1: ETL fix for warehouses.address → location rename
+-- ============================================================
+-- Legacy MySQL warehouses table had `address text`.
+-- PG schema renamed it to `location text` (01_auth_and_master.sql).
+-- pgloader maps by column name, so legacy `address` data lands in
+-- a column named `address` — but PG has `location`.
+--
+-- This fix:
+--   1. If `address` column exists (pgloader created it), copy data
+--      to `location`, then drop `address`.
+--   2. If `address` doesn't exist (pgloader matched by name correctly
+--      or data loaded via custom script), this is a no-op.
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'warehouses' AND column_name = 'address'
+    ) AND EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'warehouses' AND column_name = 'location'
+    ) THEN
+        -- Copy data from address → location where location is NULL.
+        UPDATE warehouses SET location = address WHERE location IS NULL AND address IS NOT NULL;
+        -- Drop the legacy address column.
+        ALTER TABLE warehouses DROP COLUMN address;
+        RAISE NOTICE 'Migrated warehouses.address → warehouses.location';
+    ELSIF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'warehouses' AND column_name = 'address'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'warehouses' AND column_name = 'location'
+    ) THEN
+        -- Only address exists (PG schema not applied yet) — rename it.
+        ALTER TABLE warehouses RENAME COLUMN address TO location;
+        RAISE NOTICE 'Renamed warehouses.address → warehouses.location';
+    END IF;
+END;
+$$;
