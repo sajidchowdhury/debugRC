@@ -780,7 +780,7 @@ All 7 Phase 1 tasks are complete and pushed to GitHub:
 | Task | Description | Status |
 |------|-------------|--------|
 | P2-1 | Period-close admin bypass | ✅ Done | `config/accounting.php` + `validatePeriod` admin bypass with audit log |
-| P2-2 | Invoice state machine (path back to draft) | ⬜ Pending |
+| P2-2 | Invoice state machine (path back to draft) | ✅ Done | `cancelChallan` resets invoice to draft + clears godown/warehouse assignments; `cancelInvoice` adds explicit challan + payment guards |
 | P2-3 | Transport snapshot workflow | ⬜ Pending |
 | P2-4 | ETL data conversion plan | ⬜ Pending |
 | P2-5 | Restore transaction_type or document alternative | ⬜ Pending |

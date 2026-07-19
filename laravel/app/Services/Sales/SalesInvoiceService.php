@@ -276,6 +276,14 @@ class SalesInvoiceService
                 throw new \RuntimeException("Only draft invoices can be cancelled (current: {$invoice->status}). Cancel via reversal for confirmed invoices.");
             }
 
+            // P2-2: Explicit guards with clear messages (legacy layered checks).
+            if ($this->hasActiveChallan($invoiceId)) {
+                throw new \RuntimeException("Cannot cancel: a delivery challan exists for this invoice. Reverse the challan first.");
+            }
+            if ($this->invoiceHasPayments($invoiceId)) {
+                throw new \RuntimeException("Cannot cancel: payments have been received against this invoice. Reverse the payments first.");
+            }
+
             // Reverse GL.
             if ($invoice->journal_entry_id) {
                 $this->journalPosting->reverseJournalEntry(
@@ -594,6 +602,17 @@ class SalesInvoiceService
             ->join('customer_payments as cp', 'cp.id', '=', 'ipa.payment_id')
             ->where('ipa.invoice_id', $invoiceId)
             ->where('cp.is_reversed', false)
+            ->exists();
+    }
+
+    /**
+     * Check if an invoice has any non-reversed sales challans (P2-2).
+     */
+    private function hasActiveChallan(int $invoiceId): bool
+    {
+        return DB::table('sales_challans')
+            ->where('sales_invoice_id', $invoiceId)
+            ->where('is_reversed', false)
             ->exists();
     }
 

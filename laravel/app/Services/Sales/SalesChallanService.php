@@ -315,15 +315,33 @@ class SalesChallanService
                     'reverse_reason' => $reason,
                 ]);
 
-            // Reset invoice: is_challan_issued=false (back to godown-prepared state).
+            // P2-2: Reset invoice back to DRAFT state (fully editable).
+            // Legacy reverseChallan resets invoice to 'godown_issued' state,
+            // but Laravel's edit flow requires status='draft'. Since cancelling
+            // a challan invalidates the godown assignment (warehouse_id on items
+            // was set during godown prep, and the items may need re-picking),
+            // we reset the invoice all the way back to draft.
             DB::table('sales_invoices')
                 ->where('id', $challan->sales_invoice_id)
                 ->update([
+                    'status' => 'draft',
                     'is_challan_issued' => false,
                     'challan_issued_at' => null,
                     'cogs_journal_entry_id' => null,
+                    'is_godown_prepared' => false,
+                    'godown_prepared_at' => null,
                     'updated_at' => now(),
                 ]);
+
+            // P2-2: Reset warehouse_id on invoice items + dispatches (godown
+            // assignment is invalidated — user must re-run godown prep).
+            DB::table('sales_invoice_items')
+                ->where('sales_invoice_id', $challan->sales_invoice_id)
+                ->update(['warehouse_id' => null]);
+
+            DB::table('sales_invoice_dispatches')
+                ->where('sales_invoice_id', $challan->sales_invoice_id)
+                ->update(['warehouse_id' => null]);
 
             // P1-3: Audit log — challan_reversed.
             $this->auditLogger->challanReversed(
