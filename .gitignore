@@ -8,6 +8,7 @@ config/local.php
 .env
 .env.*
 !.env.example
+!.env.docker
 *.pem
 *.key
 
@@ -64,3 +65,9 @@ legacy/public/uploads/products/*
 legacy/public/uploads/employees/*
 !legacy/public/uploads/products/.gitkeep
 !legacy/public/uploads/employees/.gitkeep
+
+# --- Docker volumes (local data — never commit) ---
+postgres/data/
+redis/data/
+mysql_archive/data/
+docker/data/
