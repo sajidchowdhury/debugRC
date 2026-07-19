@@ -130,19 +130,37 @@ Route::middleware('auth')->group(function () {
     });
     Route::resource('admin/ledgers', LedgerController::class)->names('admin.ledgers');
 
-    // --- Branches ---
+    // --- Branches (RBAC: admin for write, admin/manager/warehouse_manager for read) ---
     Route::prefix('admin/branches')->name('admin.branches.')->group(function () {
-        Route::get('audit', [BranchController::class, 'audit'])->name('audit');
-        Route::post('{branch}/restore', [BranchController::class, 'restore'])->name('restore');
+        Route::get('audit', [BranchController::class, 'audit'])->name('audit')->middleware('role:admin');
+        Route::post('{branch}/restore', [BranchController::class, 'restore'])->name('restore')->middleware('role:admin');
     });
-    Route::resource('admin/branches', BranchController::class)->names('admin.branches');
+    // Read access (index, show): admin, manager, warehouse_manager
+    Route::resource('admin/branches', BranchController::class)
+        ->only(['index', 'show'])
+        ->names('admin.branches')
+        ->middleware('role:admin,manager,warehouse_manager');
+    // Write access (create, store, edit, update, destroy): admin only
+    Route::resource('admin/branches', BranchController::class)
+        ->only(['create', 'store', 'edit', 'update', 'destroy'])
+        ->names('admin.branches')
+        ->middleware('role:admin');
 
-    // --- Warehouses ---
+    // --- Warehouses (RBAC: admin for write, admin/manager/warehouse_manager for read) ---
     Route::prefix('admin/warehouses')->name('admin.warehouses.')->group(function () {
-        Route::get('audit', [WarehouseController::class, 'audit'])->name('audit');
-        Route::post('{warehouse}/restore', [WarehouseController::class, 'restore'])->name('restore');
+        Route::get('audit', [WarehouseController::class, 'audit'])->name('audit')->middleware('role:admin');
+        Route::post('{warehouse}/restore', [WarehouseController::class, 'restore'])->name('restore')->middleware('role:admin');
     });
-    Route::resource('admin/warehouses', WarehouseController::class)->names('admin.warehouses');
+    // Read access (index, show): admin, manager, warehouse_manager
+    Route::resource('admin/warehouses', WarehouseController::class)
+        ->only(['index', 'show'])
+        ->names('admin.warehouses')
+        ->middleware('role:admin,manager,warehouse_manager');
+    // Write access (create, store, edit, update, destroy): admin only
+    Route::resource('admin/warehouses', WarehouseController::class)
+        ->only(['create', 'store', 'edit', 'update', 'destroy'])
+        ->names('admin.warehouses')
+        ->middleware('role:admin');
 
     // ============================================================
     // Phase 5: Reports + Reconciliation
