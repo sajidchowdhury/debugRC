@@ -75,7 +75,7 @@ class SalesInvoice extends Model
 
     protected $fillable = [
         'invoice_code', 'invoice_date', 'customer_id', 'salesman_id', 'sales_person',
-        'branch_id', 'sub_total', 'discount_amount', 'transport_cost', 'total_amount',
+        'branch_id', 'sub_total', 'discount_amount', 'transport_cost', 'pre_challan_transport', 'total_amount', 'pre_challan_total',
         'paid_amount', 'due_amount', 'payment_mode', 'status',
         'is_godown_prepared', 'godown_prepared_at',
         'is_challan_issued', 'challan_issued_at',

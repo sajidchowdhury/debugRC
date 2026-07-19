@@ -233,6 +233,53 @@ class SalesChallanService
                     'updated_at' => now(),
                 ]);
 
+            // P2-3: Transport snapshot + adjustment.
+            // If the challan form's transport_cost differs from the invoice's
+            // original transport_cost, snapshot the original values + post an
+            // adjustment (customer_ledger + GL) for the delta.
+            $newTransport = (float) ($data['transport_cost'] ?? 0);
+            $oldTransport = (float) $invoice->transport_cost;
+            $transportAdjustment = round($newTransport - $oldTransport, 2);
+            $adjustmentJournalEntryId = null;
+
+            if (abs($transportAdjustment) > 0.01) {
+                // Snapshot original values on the invoice.
+                DB::table('sales_invoices')
+                    ->where('id', $invoiceId)
+                    ->update([
+                        'pre_challan_transport' => $oldTransport,
+                        'pre_challan_total' => (float) $invoice->total_amount,
+                    ]);
+
+                // Update invoice transport_cost + total_amount + due_amount.
+                $newTotal = (float) $invoice->sub_total - (float) $invoice->discount_amount + $newTransport;
+                DB::table('sales_invoices')
+                    ->where('id', $invoiceId)
+                    ->update([
+                        'transport_cost' => round($newTransport, 2),
+                        'total_amount' => round($newTotal, 2),
+                        'due_amount' => round($newTotal - (float) $invoice->paid_amount, 2),
+                    ]);
+
+                // Post customer_ledger 'invoice_adjustment' entry for the delta.
+                $this->postTransportAdjustmentLedger($invoice, $transportAdjustment, $challanCode, $data['created_by'] ?? null);
+
+                // Post GL adjustment JE (Dr/Cr AR + Revenue, swapped by sign).
+                $adjustmentJournalEntryId = $this->postTransportAdjustmentGL(
+                    $invoiceId, $challanCode, $challanDate, (int) $invoice->branch_id,
+                    $transportAdjustment, (int) $invoice->customer_id,
+                    $data['created_by'] ?? null
+                );
+            }
+
+            // Store transport_adjustment + adjustment_journal_entry_id on the challan.
+            DB::table('sales_challans')
+                ->where('id', $challanId)
+                ->update([
+                    'transport_adjustment' => $transportAdjustment,
+                    'adjustment_journal_entry_id' => $adjustmentJournalEntryId,
+                ]);
+
             // Update invoice: is_challan_issued=true.
             DB::table('sales_invoices')
                 ->where('id', $invoiceId)
@@ -314,6 +361,35 @@ class SalesChallanService
                     'reversed_by' => $cancelledBy,
                     'reverse_reason' => $reason,
                 ]);
+
+            // P2-3: Reverse transport adjustment (if any).
+            // If the challan had a transport_adjustment, reverse the adjustment
+            // GL JE + restore the invoice's original transport_cost + total_amount
+            // from the pre_challan snapshot.
+            if ($challan->adjustment_journal_entry_id) {
+                $this->journalPosting->reverseJournalEntry(
+                    $challan->adjustment_journal_entry_id, $cancelledBy,
+                    "Challan cancelled: transport adjustment reversed — {$reason}"
+                );
+            }
+
+            // Restore invoice transport snapshot (if snapshot exists).
+            $invoiceRow = DB::table('sales_invoices')
+                ->where('id', $challan->sales_invoice_id)
+                ->first(['pre_challan_transport', 'pre_challan_total', 'paid_amount']);
+
+            if ($invoiceRow && $invoiceRow->pre_challan_transport !== null) {
+                $restoredTotal = (float) $invoiceRow->pre_challan_total;
+                DB::table('sales_invoices')
+                    ->where('id', $challan->sales_invoice_id)
+                    ->update([
+                        'transport_cost' => (float) $invoiceRow->pre_challan_transport,
+                        'total_amount' => $restoredTotal,
+                        'due_amount' => round($restoredTotal - (float) $invoiceRow->paid_amount, 2),
+                        'pre_challan_transport' => null,
+                        'pre_challan_total' => null,
+                    ]);
+            }
 
             // P2-2: Reset invoice back to DRAFT state (fully editable).
             // Legacy reverseChallan resets invoice to 'godown_issued' state,
@@ -465,5 +541,106 @@ class SalesChallanService
             )
             ->orderBy('sci.id')
             ->get();
+    }
+
+    /**
+     * P2-3: Post customer_ledger 'invoice_adjustment' entry for transport delta.
+     *
+     * @param SalesInvoice $invoice
+     * @param float $adjustment Signed delta (positive = transport increased → customer owes more)
+     * @param string $challanCode
+     * @param int|null $createdBy
+     */
+    private function postTransportAdjustmentLedger($invoice, float $adjustment, string $challanCode, ?int $createdBy): void
+    {
+        $currentBalance = (float) DB::table('customer_ledger')
+            ->where('customer_id', $invoice->customer_id)
+            ->orderByDesc('id')
+            ->value('balance');
+
+        // Positive adjustment = customer owes more (debit); negative = owes less (credit).
+        $debit = $adjustment > 0 ? abs($adjustment) : 0;
+        $credit = $adjustment < 0 ? abs($adjustment) : 0;
+        $newBalance = $currentBalance + $adjustment;
+
+        DB::table('customer_ledger')->insert([
+            'customer_id' => $invoice->customer_id,
+            'branch_id' => $invoice->branch_id,
+            'transaction_date' => now()->format('Y-m-d'),
+            'transaction_type' => 'invoice_adjustment',
+            'reference_type' => 'sales_invoice',
+            'reference_id' => $invoice->id,
+            'debit' => $debit,
+            'credit' => $credit,
+            'balance' => $newBalance,
+            'description' => 'Challan ' . $challanCode . ' — transport adjustment ' . ($adjustment >= 0 ? '+' : '') . number_format($adjustment, 2),
+            'created_by' => $createdBy,
+            'created_at' => now(),
+        ]);
+    }
+
+    /**
+     * P2-3: Post GL adjustment journal for transport delta.
+     *
+     * If transport increased (positive adjustment):
+     *   Dr AR / Cr Transport Revenue
+     * If transport decreased (negative adjustment):
+     *   Dr Transport Revenue / Cr AR  (i.e., Cr AR / Dr Transport Revenue swapped)
+     *
+     * @return int|null journal_entry_id (null if no transport_revenue ledger configured)
+     */
+    private function postTransportAdjustmentGL(
+        int $invoiceId, string $challanCode, string $challanDate, int $branchId,
+        float $adjustment, int $customerId, ?int $createdBy
+    ): ?int {
+        $amount = abs($adjustment);
+        if ($amount < 0.01) {
+            return null;
+        }
+
+        $arLedgerId = $this->journalPosting->lookupLedgerByNature('ar');
+        if (!$arLedgerId) {
+            throw new \RuntimeException('Accounts Receivable ledger not found (nature: ar).');
+        }
+
+        $transportLedgerId = $this->journalPosting->lookupLedgerByNature('transport_revenue');
+        if (!$transportLedgerId) {
+            // Fall back to sales_revenue if transport_revenue not configured.
+            $transportLedgerId = $this->journalPosting->lookupLedgerByNature('sales_revenue');
+        }
+        if (!$transportLedgerId) {
+            throw new \RuntimeException('Transport Revenue / Sales Revenue ledger not found.');
+        }
+
+        // Positive adjustment: Dr AR / Cr Transport Revenue
+        // Negative adjustment: Dr Transport Revenue / Cr AR (swapped)
+        $isIncrease = $adjustment > 0;
+
+        $lines = [
+            [
+                'ledger_id' => $arLedgerId,
+                'debit' => $isIncrease ? $amount : 0,
+                'credit' => $isIncrease ? 0 : $amount,
+                'entity_type' => 'customer', 'entity_id' => $customerId,
+                'memo' => 'Challan ' . $challanCode . ' — transport adjustment AR',
+            ],
+            [
+                'ledger_id' => $transportLedgerId,
+                'debit' => $isIncrease ? 0 : $amount,
+                'credit' => $isIncrease ? $amount : 0,
+                'entity_type' => 'sales_invoice', 'entity_id' => $invoiceId,
+                'memo' => 'Challan ' . $challanCode . ' — transport adjustment revenue',
+            ],
+        ];
+
+        return $this->journalPosting->createJournalEntry([
+            'entry_date' => $challanDate,
+            'reference_type' => 'sales_invoice',
+            'reference_id' => $invoiceId,
+            'branch_id' => $branchId,
+            'description' => 'Transport adjustment — Challan ' . $challanCode,
+            'source' => 'sales_challan',
+            'created_by' => $createdBy,
+        ], $lines);
     }
 }
