@@ -121,12 +121,22 @@ Route::middleware('auth')->group(function () {
         ->names('admin.customers')
         ->middleware('role:admin');
 
-    // --- Suppliers ---
+    // --- Suppliers (RBAC: admin for write, admin/manager/accountant for read) ---
     Route::prefix('admin/suppliers')->name('admin.suppliers.')->group(function () {
-        Route::get('audit', [SupplierController::class, 'audit'])->name('audit');
-        Route::post('{supplier}/restore', [SupplierController::class, 'restore'])->name('restore');
+        Route::get('audit', [SupplierController::class, 'audit'])->name('audit')->middleware('role:admin');
+        Route::post('{supplier}/restore', [SupplierController::class, 'restore'])->name('restore')->where(['supplier' => '[0-9]+'])->middleware('role:admin');
+        Route::post('{supplier}/toggle', [SupplierController::class, 'toggle'])->name('toggle')->where(['supplier' => '[0-9]+'])->middleware('role:admin');
     });
-    Route::resource('admin/suppliers', SupplierController::class)->names('admin.suppliers');
+    // Read access (index, show): admin, manager, accountant
+    Route::resource('admin/suppliers', SupplierController::class)
+        ->only(['index', 'show'])->where(['supplier' => '[0-9]+'])
+        ->names('admin.suppliers')
+        ->middleware('role:admin,manager,accountant');
+    // Write access (create, store, edit, update, destroy): admin only
+    Route::resource('admin/suppliers', SupplierController::class)
+        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['supplier' => '[0-9]+'])
+        ->names('admin.suppliers')
+        ->middleware('role:admin');
 
     // --- Employees ---
     Route::prefix('admin/employees')->name('admin.employees.')->group(function () {
