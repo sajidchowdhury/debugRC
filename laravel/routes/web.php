@@ -210,7 +210,7 @@ Route::middleware('auth')->group(function () {
     Route::prefix('admin/stock-adjustments')->name('admin.stock-adjustments.')->group(function () {
         Route::get('audit', [StockAdjustmentController::class, 'audit'])->name('audit');
         Route::get('product-rate', [StockAdjustmentController::class, 'getProductRate'])->name('product-rate');
-        Route::get('{id}/confirm', fn() => redirect()->route('admin.stock-adjustments.index'))->name('confirm');
+        Route::get('{id}/confirm', fn() => redirect()->route('admin.stock-adjustments.index'))->name('confirm-form');
         Route::post('{id}/confirm', [StockAdjustmentController::class, 'confirm'])->name('confirm');
         Route::post('{id}/cancel', [StockAdjustmentController::class, 'cancel'])->name('cancel');
     });
