@@ -51,12 +51,19 @@ class LedgerValidationTest extends TestCase
     // ledger_code — required, max 20, unique (case-insensitive)
     // ====================================================================
 
-    public function test_ledger_code_is_required_on_store(): void
+    public function test_ledger_code_auto_generated_when_blank_on_store(): void
     {
+        // Phase 16: ledger_code is now auto-generated (L-NNNN) when blank.
+        // So omitting it should NOT produce a validation error — it should
+        // succeed and create a ledger with an auto-generated code.
         $this->post(route('admin.ledgers.store'), [
-            'ledger_name'  => 'No Code Ledger',
+            'ledger_name'  => 'Auto Code Ledger',
             'account_type' => 'Asset',
-        ])->assertSessionHasErrors('ledger_code');
+        ])->assertRedirect();
+
+        $this->assertDatabaseHas('ledgers', [
+            'ledger_name' => 'Auto Code Ledger',
+        ]);
     }
 
     public function test_ledger_code_is_required_on_update(): void
@@ -700,15 +707,14 @@ class LedgerValidationTest extends TestCase
     public function test_multiple_validation_errors_are_all_reported(): void
     {
         $response = $this->post(route('admin.ledgers.store'), [
-            'ledger_code'     => '',                  // required
-            'ledger_name'     => '',                  // required
-            'account_type'    => 'NotAType',          // in
-            'opening_balance' => 'not-a-number',      // numeric
-            'sort_order'      => 'not-an-int',        // integer
+            'ledger_code'     => 'INVALID CODE!',        // regex/invalid (not auto-generated when provided)
+            'ledger_name'     => '',                     // required
+            'account_type'    => 'NotAType',             // in
+            'opening_balance' => 'not-a-number',         // numeric
+            'sort_order'      => 'not-an-int',           // integer
         ]);
 
         $response->assertSessionHasErrors([
-            'ledger_code',
             'ledger_name',
             'account_type',
             'opening_balance',

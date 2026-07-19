@@ -186,6 +186,11 @@ class LedgerController extends BaseMasterDataController
     {
         $this->normalizeInputs($request);
 
+        // Phase 16: Auto-generate ledger_code (L-NNNN) when not provided.
+        if (empty(trim((string) $request->input('ledger_code')))) {
+            $request->merge(['ledger_code' => \App\Services\MasterData\CodeGenerator::ledgerCode()]);
+        }
+
         $validated = $request->validate($this->validationRules());
 
         // Only set is_active when explicitly provided (preserve DB default true).

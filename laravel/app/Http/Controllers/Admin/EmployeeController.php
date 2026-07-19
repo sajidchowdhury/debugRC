@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Models\Branch;
 use App\Models\Employee;
+use App\Services\Auth\CredentialVersion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -212,7 +213,18 @@ class EmployeeController extends BaseMasterDataController
         }
 
         try {
+            // Phase 16: Credential bump — if role or branch_id changed, bump the
+            // linked user's credential_version to invalidate all active sessions.
+            // This prevents privilege escalation/demotion from taking effect on
+            // next request (defense-in-depth alongside CheckCredentialVersion middleware).
+            $roleChanged = isset($validated['role']) && $validated['role'] !== $item->getOriginal('role');
+            $branchChanged = isset($validated['branch_id']) && (int) $validated['branch_id'] !== (int) $item->getOriginal('branch_id');
+
             $item->update($validated);
+
+            if (($roleChanged || $branchChanged) && $item->user) {
+                CredentialVersion::bump($item->user->id);
+            }
 
             return redirect()->route("{$this->routePrefix}.show", $item)
                 ->with('success', "{$this->label} updated successfully.");
