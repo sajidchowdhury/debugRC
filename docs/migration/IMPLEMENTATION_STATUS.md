@@ -796,8 +796,8 @@ All 7 Phase 1 tasks are complete and pushed to GitHub:
 | P3-1 | Stock replay verification | ✅ Code Ready | Enhanced `stock:replay-verify` with 3 sales-specific data integrity checks (return original_cost, challan issue_rate, linked damage) + verification checklist doc |
 | P3-2 | Journal replay verification | ✅ Code Ready | Enhanced `journal:replay-verify` with 5 sales-specific GL checks (invoice JE, challan COGS, return revenue+COGS, payment JE, transport adjustment) + checklist doc |
 | P3-3 | Reconciliation (6 sections) | ✅ Code Ready | Enhanced `subledger:reconcile` with 3 new sections (Cash/Bank, Inventory, COGS) + checklist doc |
-| P3-4 | Shadow mode (7 days) | ⬜ Pending |
-| P3-5 | Reversal verification | ⬜ Pending |
+| P3-4 | Shadow mode (7 days) | ✅ Ready | No shadow mode exists in sales module — no code to remove |
+| P3-5 | Reversal verification | ✅ Code Ready | Enhanced `reversal:verify` with 6 sales-specific checks (invoice/challan/return/payment consistency + stock_transaction + append-only) + checklist doc |
 | P3-6 | Penetration test (RBAC + branch) | ⬜ Pending |
 | P3-7 | Final cutover sign-off | ⬜ Pending |
 

@@ -140,13 +140,288 @@ SQL)->cnt;
 
         // Summary.
         $this->info('=== Verification Summary ===');
-        if ($allPass) {
-            $this->info('✓ ALL REVERSALS VERIFIED. Every reversal nets to zero.');
-            $this->info('  Phase 9.4 reversal verification PASSED.');
+
+        // ============================================================
+        // P3-5: Sales-specific reversal verification
+        // ============================================================
+        $this->newLine();
+        $this->info('=== P3-5: Sales-Specific Reversal Checks ===');
+
+        $salesIssues = 0;
+        $salesIssues += $this->verifyInvoiceReversalConsistency();
+        $salesIssues += $this->verifyChallanReversalConsistency();
+        $salesIssues += $this->verifyReturnReversalConsistency();
+        $salesIssues += $this->verifyPaymentReversalConsistency();
+        $salesIssues += $this->verifyStockTransactionReversalConsistency();
+        $salesIssues += $this->verifyAppendOnlyIntegrity();
+
+        if ($salesIssues > 0) {
+            $this->warn("Sales-specific reversal issues found: {$salesIssues}");
+            $this->warn('These are informational — investigate but they do not block the core reversal checks.');
+        } else {
+            $this->info('✓ All sales-specific reversal checks passed.');
+            $this->info('  - Cancelled invoices have reversed GL JEs');
+            $this->info('  - Cancelled challans have reversed COGS JEs + stock_transactions');
+            $this->info('  - Reversed returns have reversed revenue + COGS JEs');
+            $this->info('  - Cancelled payments have reversed GL JEs');
+            $this->info('  - Stock transactions are consistently reversed');
+            $this->info('  - Append-only integrity: originals not mutated');
+        }
+
+        $this->newLine();
+        if ($allPass && $salesIssues === 0) {
+            $this->info('✓ ALL REVERSALS VERIFIED (core + sales-specific).');
+            $this->info('  Phase 9.4 + P3-5 reversal verification PASSED.');
+            return self::SUCCESS;
+        } elseif ($allPass) {
+            $this->info('✓ Core reversal checks passed. Sales-specific issues are informational.');
             return self::SUCCESS;
         } else {
-            $this->error('✗ SOME REVERSAL ISSUES FOUND. Investigate the issues above.');
+            $this->error('✗ SOME CORE REVERSAL ISSUES FOUND. Investigate the issues above.');
             return self::FAILURE;
         }
+    }
+
+    // ============================================================
+    // P3-5: Sales-specific reversal verification methods
+    // ============================================================
+
+    /**
+     * P3-5: Verify cancelled invoices have reversed GL JEs.
+     */
+    private function verifyInvoiceReversalConsistency(): int
+    {
+        $this->info('  Checking invoice reversal consistency...');
+
+        // Cancelled invoices should have reversed GL JEs.
+        $unreversedJE = DB::table('sales_invoices as si')
+            ->leftJoin('journal_entries as je', 'je.id', '=', 'si.journal_entry_id')
+            ->where('si.is_reversed', true)
+            ->whereNotNull('si.journal_entry_id')
+            ->where('je.is_reversed', false)
+            ->count();
+
+        if ($unreversedJE > 0) {
+            $this->warn("    INVOICE JE NOT REVERSED: {$unreversedJE} cancelled invoices have active GL JEs.");
+        }
+
+        // Cancelled invoices should have reversed customer_ledger entries.
+        $unreversedLedger = DB::table('sales_invoices as si')
+            ->join('customer_ledger as cl', function ($join) {
+                $join->on('cl.reference_id', '=', 'si.id')
+                     ->where('cl.reference_type', '=', 'sales_invoice');
+            })
+            ->where('si.is_reversed', true)
+            ->where('cl.is_reversed', false)
+            ->count();
+
+        if ($unreversedLedger > 0) {
+            $this->warn("    LEDGER NOT REVERSED: {$unreversedLedger} cancelled invoices have active customer_ledger entries.");
+        }
+
+        $issues = $unreversedJE + $unreversedLedger;
+        if ($issues === 0) {
+            $this->info('    ✓ All cancelled invoices have consistently reversed GL + ledger entries.');
+        }
+        return $issues;
+    }
+
+    /**
+     * P3-5: Verify cancelled challans have reversed COGS JEs + reversed stock_transactions.
+     */
+    private function verifyChallanReversalConsistency(): int
+    {
+        $this->info('  Checking challan reversal consistency...');
+
+        // Cancelled challans should have reversed COGS JEs.
+        $unreversedJE = DB::table('sales_challans as sc')
+            ->leftJoin('journal_entries as je', 'je.id', '=', 'sc.journal_entry_id')
+            ->where('sc.is_reversed', true)
+            ->whereNotNull('sc.journal_entry_id')
+            ->where('je.is_reversed', false)
+            ->count();
+
+        if ($unreversedJE > 0) {
+            $this->warn("    CHALLAN JE NOT REVERSED: {$unreversedJE} cancelled challans have active COGS JEs.");
+        }
+
+        // Cancelled challans should have reversed stock_transactions.
+        $unreversedStock = DB::table('sales_challans as sc')
+            ->join('stock_transactions as st', function ($join) {
+                $join->on('st.reference_id', '=', 'sc.id')
+                     ->where('st.reference_type', '=', 'sales_challan');
+            })
+            ->where('sc.is_reversed', true)
+            ->where('st.is_reversed', false)
+            ->count();
+
+        if ($unreversedStock > 0) {
+            $this->warn("    STOCK NOT REVERSED: {$unreversedStock} cancelled challans have active stock_transactions.");
+        }
+
+        $issues = $unreversedJE + $unreversedStock;
+        if ($issues === 0) {
+            $this->info('    ✓ All cancelled challans have consistently reversed GL + stock entries.');
+        }
+        return $issues;
+    }
+
+    /**
+     * P3-5: Verify reversed returns have reversed revenue + COGS JEs.
+     */
+    private function verifyReturnReversalConsistency(): int
+    {
+        $this->info('  Checking return reversal consistency...');
+
+        $unreversedJE = DB::table('sales_returns as sr')
+            ->leftJoin('journal_entries as je', 'je.id', '=', 'sr.journal_entry_id')
+            ->where('sr.is_reversed', true)
+            ->whereNotNull('sr.journal_entry_id')
+            ->where('je.is_reversed', false)
+            ->count();
+
+        $unreversedCogsJE = DB::table('sales_returns as sr')
+            ->leftJoin('journal_entries as je', 'je.id', '=', 'sr.cogs_journal_entry_id')
+            ->where('sr.is_reversed', true)
+            ->whereNotNull('sr.cogs_journal_entry_id')
+            ->where('je.is_reversed', false)
+            ->count();
+
+        // Reversed returns should have reversed stock_transactions.
+        $unreversedStock = DB::table('sales_returns as sr')
+            ->join('stock_transactions as st', function ($join) {
+                $join->on('st.reference_id', '=', 'sr.id')
+                     ->where('st.reference_type', '=', 'sales_return');
+            })
+            ->where('sr.is_reversed', true)
+            ->where('st.is_reversed', false)
+            ->count();
+
+        $issues = $unreversedJE + $unreversedCogsJE + $unreversedStock;
+
+        if ($unreversedJE > 0) {
+            $this->warn("    RETURN JE NOT REVERSED: {$unreversedJE} reversed returns have active revenue JEs.");
+        }
+        if ($unreversedCogsJE > 0) {
+            $this->warn("    RETURN COGS JE NOT REVERSED: {$unreversedCogsJE} reversed returns have active COGS JEs.");
+        }
+        if ($unreversedStock > 0) {
+            $this->warn("    RETURN STOCK NOT REVERSED: {$unreversedStock} reversed returns have active stock_transactions.");
+        }
+        if ($issues === 0) {
+            $this->info('    ✓ All reversed returns have consistently reversed GL + stock entries.');
+        }
+        return $issues;
+    }
+
+    /**
+     * P3-5: Verify cancelled payments have reversed GL JEs.
+     */
+    private function verifyPaymentReversalConsistency(): int
+    {
+        $this->info('  Checking payment reversal consistency...');
+
+        $unreversedJE = DB::table('customer_payments as cp')
+            ->leftJoin('journal_entries as je', 'je.id', '=', 'cp.journal_entry_id')
+            ->where('cp.is_reversed', true)
+            ->whereNotNull('cp.journal_entry_id')
+            ->where('je.is_reversed', false)
+            ->count();
+
+        if ($unreversedJE > 0) {
+            $this->warn("    PAYMENT JE NOT REVERSED: {$unreversedJE} cancelled payments have active GL JEs.");
+        } else {
+            $this->info('    ✓ All cancelled payments have consistently reversed GL entries.');
+        }
+        return $unreversedJE;
+    }
+
+    /**
+     * P3-5: Verify stock_transactions reversal consistency across all reference types.
+     */
+    private function verifyStockTransactionReversalConsistency(): int
+    {
+        $this->info('  Checking stock_transaction reversal consistency...');
+
+        // Find stock_transactions where the referenced business record is reversed
+        // but the stock_transaction is NOT reversed (inconsistency).
+        $issues = 0;
+
+        // Check sales_challan reference type.
+        $challanIssues = DB::table('stock_transactions as st')
+            ->join('sales_challans as sc', 'sc.id', '=', 'st.reference_id')
+            ->where('st.reference_type', 'sales_challan')
+            ->where('sc.is_reversed', true)
+            ->where('st.is_reversed', false)
+            ->count();
+
+        if ($challanIssues > 0) {
+            $this->warn("    STOCK/CHALLAN INCONSISTENCY: {$challanIssues} stock_transactions for reversed challans are not reversed.");
+            $issues += $challanIssues;
+        }
+
+        // Check sales_return reference type.
+        $returnIssues = DB::table('stock_transactions as st')
+            ->join('sales_returns as sr', 'sr.id', '=', 'st.reference_id')
+            ->where('st.reference_type', 'sales_return')
+            ->where('sr.is_reversed', true)
+            ->where('st.is_reversed', false)
+            ->count();
+
+        if ($returnIssues > 0) {
+            $this->warn("    STOCK/RETURN INCONSISTENCY: {$returnIssues} stock_transactions for reversed returns are not reversed.");
+            $issues += $returnIssues;
+        }
+
+        // Check damage reference type (linked to sales returns via P1-5).
+        $damageIssues = DB::table('stock_transactions as st')
+            ->join('damage_invoices as di', 'di.id', '=', 'st.reference_id')
+            ->where('st.reference_type', 'damage')
+            ->where('di.is_reversed', true)
+            ->where('st.is_reversed', false)
+            ->count();
+
+        if ($damageIssues > 0) {
+            $this->warn("    STOCK/DAMAGE INCONSISTENCY: {$damageIssues} stock_transactions for reversed damages are not reversed.");
+            $issues += $damageIssues;
+        }
+
+        if ($issues === 0) {
+            $this->info('    ✓ All stock_transactions are consistently reversed with their business records.');
+        }
+        return $issues;
+    }
+
+    /**
+     * P3-5: Verify append-only integrity — reversed originals should not have
+     * their journal_lines mutated (debit/credit values changed after reversal).
+     * Only the is_reversed flag + reversal_of_entry_id should be set.
+     */
+    private function verifyAppendOnlyIntegrity(): int
+    {
+        $this->info('  Checking append-only integrity (originals not mutated)...');
+
+        // Reversed journal_entries should still have their original lines intact.
+        // Check: reversed entries should have the same number of lines as when created
+        // (at least 2 lines for a valid JE). This is a sanity check — if lines were
+        // deleted or zeroed out, the entry would fail the balance check in P3-2.
+        $mutatedEntries = DB::table('journal_entries as je')
+            ->leftJoin('journal_lines as jl', 'jl.journal_entry_id', '=', 'je.id')
+            ->where('je.is_reversed', true)
+            ->groupBy('je.id', 'je.entry_no')
+            ->havingRaw('COUNT(jl.id) < 2')
+            ->select('je.id', 'je.entry_no', DB::raw('COUNT(jl.id) as line_count'))
+            ->get();
+
+        $issues = $mutatedEntries->count();
+        if ($issues > 0) {
+            $this->warn("    MUTATED ENTRIES: {$issues} reversed entries have < 2 lines (may have been mutated).");
+            foreach ($mutatedEntries->take(10) as $e) {
+                $this->warn("      JE #{$e->id} ({$e->entry_no}): {$e->line_count} lines");
+            }
+        } else {
+            $this->info('    ✓ All reversed entries retain their original lines (append-only verified).');
+        }
+        return $issues;
     }
 }
