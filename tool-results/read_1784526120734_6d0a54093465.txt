@@ -1,0 +1,663 @@
+     1→<?php
+     2→
+     3→namespace App\Services\Sales;
+     4→
+     5→use App\Models\SalesReturn;
+     6→use App\Services\Stock\StockService;
+     7→use App\Services\Stock\DamageService;
+     8→use App\Services\Accounting\JournalPostingService;
+     9→use App\Services\Accounting\SubLedgerService;
+    10→use App\Services\Notification\NotificationService;
+    11→use Illuminate\Support\Facades\DB;
+    12→use Illuminate\Support\Facades\Log;
+    13→
+    14→/**
+    15→ * Sales Return Service — Phase 8.5.
+    16→ *
+    17→ * Two-phase: create → confirm → reverse.
+    18→ *
+    19→ * CRITICAL CORRECTNESS (per avg_cost_rule.md §3):
+    20→ *   Stock comes back IN at the ORIGINAL avg_cost from the challan's stock_transaction
+    21→ *   (NOT current avg_cost). This ensures:
+    22→ *   1. The COGS reversal matches the original COGS exactly.
+    23→ *   2. The avg_cost is restored to its pre-sale value.
+    24→ *
+    25→ * The original_cost is looked up from the stock_transaction for the challan
+    26→ * (reference_type='sales_challan', reference_id=challan_id, product_id).
+    27→ * This is snapshotted into sales_return_items.original_cost.
+    28→ *
+    29→ * On confirm (4 operations, all atomic):
+    30→ *   1. Stock IN via StockService at ORIGINAL avg_cost (ref='sales_return')
+    31→ *      → avg_cost recalculated (IN rule: weighted average with original cost)
+    32→ *   2. GL Revenue Reversal: Dr Sales Return / Cr AR (at sales rate)
+    33→ *   3. GL COGS Reversal: Dr Inventory / Cr COGS (at original avg_cost)
+    34→ *   4. Customer ledger: credit entry (customer owes less)
+    35→ */
+    36→class SalesReturnService
+    37→{
+    38→    public function __construct(
+    39→        private StockService $stockService,
+    40→        private JournalPostingService $journalPosting,
+    41→        private SubLedgerService $subLedger,
+    42→        private SalesAccess $salesAccess,
+    43→        private SalesAuditLogger $auditLogger,
+    44→        private DamageService $damageService,
+    45→        private NotificationService $notifications
+    46→    ) {}
+    47→
+    48→    /**
+    49→     * Phase 1: Create a sales return (no stock, no GL).
+    50→     * Looks up ORIGINAL avg_cost from the challan's stock_transaction.
+    51→     *
+    52→     * @param array $data {
+    53→     *     sales_invoice_id: int,
+    54→     *     return_date: string (Y-m-d),
+    55→     *     reason: string|null,
+    56→     *     created_by: int,
+    57→     *     items: array each { product_id, warehouse_id, qty, rate, sales_invoice_item_id }
+    58→     * }
+    59→     * @return SalesReturn
+    60→     */
+    61→    public function createReturn(array $data): SalesReturn
+    62→    {
+    63→        $invoiceId = (int) ($data['sales_invoice_id'] ?? 0);
+    64→        if ($invoiceId <= 0) {
+    65→            throw new \InvalidArgumentException('sales_invoice_id is required.');
+    66→        }
+    67→
+    68→        $invoice = DB::table('sales_invoices')->where('id', $invoiceId)->first();
+    69→        if (!$invoice) {
+    70→            throw new \InvalidArgumentException("Invoice {$invoiceId} not found.");
+    71→        }
+    72→        if ($invoice->is_reversed) {
+    73→            throw new \RuntimeException("Cannot return against a reversed invoice.");
+    74→        }
+    75→
+    76→        // P0-8: Defense-in-depth branch isolation check.
+    77→        $this->salesAccess->assertBranchAccessible((int) $invoice->branch_id);
+    78→
+    79→        // Find the challan for this invoice.
+    80→        $challan = DB::table('sales_challans')
+    81→            ->where('sales_invoice_id', $invoiceId)
+    82→            ->where('is_reversed', false)
+    83→            ->first();
+    84→        if (!$challan) {
+    85→            throw new \RuntimeException("No active challan found for invoice {$invoiceId}. Returns require a completed challan.");
+    86→        }
+    87→
+    88→        $items = $this->validateItems($data['items'], $invoiceId, $challan->id);
+    89→        $totalRevenue = collect($items)->sum(fn($i) => $i['qty'] * $i['rate']);
+    90→        $totalCogs = collect($items)->sum(fn($i) => $i['qty'] * $i['original_cost']);
+    91→
+    92→        $returnCode = $this->generateReturnCode();
+    93→        $customerId = (int) $invoice->customer_id;
+    94→        $branchId = (int) $invoice->branch_id;
+    95→
+    96→        return DB::transaction(function () use (
+    97→            $data, $items, $totalRevenue, $totalCogs, $returnCode, $invoiceId, $customerId, $branchId
+    98→        ) {
+    99→            $returnId = DB::table('sales_returns')->insertGetId([
+   100→                'return_code' => $returnCode,
+   101→                'return_date' => $data['return_date'] ?? now()->format('Y-m-d'),
+   102→                'sales_invoice_id' => $invoiceId,
+   103→                'customer_id' => $customerId,
+   104→                'branch_id' => $branchId,
+   105→                'total_amount' => round($totalRevenue, 2),
+   106→                'cogs_amount' => round($totalCogs, 2),
+   107→                'status' => 'created',
+   108→                'is_reversed' => false,
+   109→                'reason' => $data['reason'] ?? null,
+   110→                'created_by' => $data['created_by'] ?? null,
+   111→                'created_at' => now(),
+   112→                'updated_at' => now(),
+   113→            ]);
+   114→
+   115→            $itemRows = [];
+   116→            foreach ($items as $item) {
+   117→                $itemRows[] = [
+   118→                    'sales_return_id' => $returnId,
+   119→                    'sales_invoice_item_id' => $item['sales_invoice_item_id'],
+   120→                    'product_id' => $item['product_id'],
+   121→                    'warehouse_id' => $item['warehouse_id'],
+   122→                    'qty' => $item['qty'],
+   123→                    'rate' => $item['rate'],
+   124→                    'original_cost' => $item['original_cost'],
+   125→                ];
+   126→            }
+   127→            DB::table('sales_return_items')->insert($itemRows);
+   128→
+   129→            // P1-3: Audit log — return_created.
+   130→            $this->auditLogger->returnCreated(
+   131→                $data['created_by'] ?? auth()->id() ?? 0,
+   132→                $returnId, $returnCode, $invoiceId, $customerId, $branchId,
+   133→                $totalRevenue, $totalCogs
+   134→            );
+   135→
+   136→            // P1-7: Notify admins that a return was created.
+   137→            $this->notifications->dispatch(
+   138→                'return_created',
+   139→                "Return {$returnCode} created for Tk " . number_format($totalRevenue, 2)
+   140→                . " against invoice #{$invoiceId}.",
+   141→                'sales_return',
+   142→                $returnId
+   143→            );
+   144→
+   145→            return SalesReturn::with(['items.product', 'salesInvoice', 'customer', 'branch'])->find($returnId);
+   146→        });
+   147→    }
+   148→
+   149→    /**
+   150→     * Phase 2: Confirm a sales return — stock IN + GL + customer_ledger.
+   151→     *
+   152→     * @param int $returnId
+   153→     * @param int $confirmedBy
+   154→     * @return SalesReturn
+   155→     * @throws \RuntimeException If not 'created' status, or stock/GL fails.
+   156→     */
+   157→    public function confirmReturn(int $returnId, int $confirmedBy): SalesReturn
+   158→    {
+   159→        return DB::transaction(function () use ($returnId, $confirmedBy) {
+   160→            $return = SalesReturn::with('items')->lockForUpdate()->find($returnId);
+   161→
+   162→            if (!$return) {
+   163→                throw new \RuntimeException("Return {$returnId} not found.");
+   164→            }
+   165→            if (!$return->isCreated()) {
+   166→                throw new \RuntimeException("Only 'created' returns can be confirmed (current: {$return->status}).");
+   167→            }
+   168→
+   169→            $returnDate = $return->return_date->format('Y-m-d');
+   170→
+   171→            // 1. Stock IN at ORIGINAL avg_cost (CRITICAL: not current avg_cost).
+   172→            foreach ($return->items as $item) {
+   173→                $this->stockService->applyTransaction([
+   174→                    'warehouse_id' => $item->warehouse_id,
+   175→                    'product_id' => $item->product_id,
+   176→                    'qty' => (float) $item->qty, // positive = IN
+   177→                    'rate' => (float) $item->original_cost, // ORIGINAL avg_cost from challan
+   178→                    'reference_type' => 'sales_return',
+   179→                    'reference_id' => $return->id,
+   180→                    'notes' => 'Sales Return ' . $return->return_code . ' — stock restored at original cost',
+   181→                    'transaction_date' => $returnDate,
+   182→                    'created_by' => $confirmedBy,
+   183→                ]);
+   184→            }
+   185→
+   186→            // 1b. P1-5: Linked damage write-off for 'Damage' condition items.
+   187→            // Legacy: SalesReturnModel::createLinkedDamageWriteOff — for each
+   188→            // Damage-condition item, create a damage_invoices row + stock OUT
+   189→            // (immediately back OUT the damaged goods) + GL Dr damage_loss / Cr inventory.
+   190→            $linkedDamageIds = $this->createLinkedDamageWriteOffs($return, $confirmedBy);
+   191→
+   192→            // 2. GL Revenue Reversal: Dr Sales Return / Cr AR.
+   193→            $journalEntryId = $this->postRevenueReversalGL($return, $confirmedBy);
+   194→
+   195→            // 3. GL COGS Reversal: Dr Inventory / Cr COGS.
+   196→            $cogsJournalEntryId = $this->postCogsReversalGL($return, $confirmedBy);
+   197→
+   198→            // 4. Customer ledger via SubLedgerService: credit entry (customer owes less).
+   199→            $this->subLedger->postCustomerLedgerEntry([
+   200→                'customer_id' => $return->customer_id,
+   201→                'branch_id' => $return->branch_id,
+   202→                'transaction_date' => $return->return_date->format('Y-m-d'),
+   203→                'transaction_type' => 'sales_return',
+   204→                'reference_type' => 'sales_return',
+   205→                'reference_id' => $return->id,
+   206→                'debit' => 0,
+   207→                'credit' => (float) $return->total_amount,
+   208→                'description' => 'Sales Return ' . $return->return_code . ($return->reason ? ' — ' . $return->reason : ''),
+   209→                'journal_entry_id' => $journalEntryId,
+   210→                'created_by' => $confirmedBy,
+   211→            ]);
+   212→
+   213→            // 5. Update return status.
+   214→            DB::table('sales_returns')
+   215→                ->where('id', $returnId)
+   216→                ->update([
+   217→                    'status' => 'confirmed',
+   218→                    'journal_entry_id' => $journalEntryId,
+   219→                    'cogs_journal_entry_id' => $cogsJournalEntryId,
+   220→                    'updated_at' => now(),
+   221→                ]);
+   222→
+   223→            // P1-3: Audit log — return_confirmed.
+   224→            $this->auditLogger->returnConfirmed(
+   225→                $confirmedBy,
+   226→                $returnId, $return->return_code, (int) $return->branch_id,
+   227→                (float) $return->total_amount, (float) $return->cogs_amount,
+   228→                $journalEntryId
+   229→            );
+   230→
+   231→            // P1-7: Notify warehouse managers + accountants that a return was confirmed.
+   232→            $this->notifications->dispatch(
+   233→                'return_confirmed',
+   234→                "Return {$return->return_code} confirmed — stock restored, GL posted. "
+   235→                . "Total: Tk " . number_format((float) $return->total_amount, 2)
+   236→                . ", COGS reversed: Tk " . number_format((float) $return->cogs_amount, 2) . ".",
+   237→                'sales_return',
+   238→                $returnId
+   239→            );
+   240→
+   241→            return SalesReturn::with([
+   242→                'items.product', 'salesInvoice', 'customer', 'branch',
+   243→                'journalEntry.lines.ledger', 'cogsJournalEntry.lines.ledger',
+   244→            ])->find($returnId);
+   245→        });
+   246→    }
+   247→
+   248→    /**
+   249→     * Phase 3: Reverse a confirmed return.
+   250→     * Reverses stock + both GL journals + customer_ledger.
+   251→     *
+   252→     * @param int $returnId
+   253→     * @param int $reversedBy
+   254→     * @param string $reason
+   255→     * @return SalesReturn
+   256→     */
+   257→    public function reverseReturn(int $returnId, int $reversedBy, string $reason = ''): SalesReturn
+   258→    {
+   259→        return DB::transaction(function () use ($returnId, $reversedBy, $reason) {
+   260→            $return = SalesReturn::with('items')->lockForUpdate()->find($returnId);
+   261→
+   262→            if (!$return) {
+   263→                throw new \RuntimeException("Return {$returnId} not found.");
+   264→            }
+   265→            if (!$return->isConfirmed()) {
+   266→                throw new \RuntimeException("Only confirmed returns can be reversed (current: {$return->status}).");
+   267→            }
+   268→
+   269→            // Reverse both GL journals.
+   270→            if ($return->journal_entry_id) {
+   271→                $this->journalPosting->reverseJournalEntry(
+   272→                    $return->journal_entry_id, $reversedBy,
+   273→                    "Return reversed: {$reason}"
+   274→                );
+   275→            }
+   276→            if ($return->cogs_journal_entry_id) {
+   277→                $this->journalPosting->reverseJournalEntry(
+   278→                    $return->cogs_journal_entry_id, $reversedBy,
+   279→                    "Return reversed: {$reason}"
+   280→                );
+   281→            }
+   282→
+   283→            // Reverse customer_ledger via SubLedgerService (debit entry to restore what customer owes).
+   284→            $this->subLedger->postCustomerLedgerEntry([
+   285→                'customer_id' => $return->customer_id,
+   286→                'branch_id' => $return->branch_id,
+   287→                'transaction_date' => now()->format('Y-m-d'),
+   288→                'transaction_type' => 'sales_return_reversal',
+   289→                'reference_type' => 'sales_return',
+   290→                'reference_id' => $return->id,
+   291→                'debit' => (float) $return->total_amount,
+   292→                'credit' => 0,
+   293→                'description' => 'Return reversal ' . $return->return_code . ": {$reason}",
+   294→                'journal_entry_id' => $return->journal_entry_id,
+   295→                'created_by' => $reversedBy,
+   296→            ]);
+   297→
+   298→            // P1-5: Reverse linked damage write-offs FIRST (before return stock reversal).
+   299→            // Each linked damage_invoice has its own stock OUT + GL that must be reversed.
+   300→            $this->reverseLinkedDamageForReturn($returnId, $reversedBy, $reason);
+   301→
+   302→            // Reverse each stock movement (stock OUT at original cost — append-only reversal).
+   303→            $stockTxs = DB::table('stock_transactions')
+   304→                ->where('reference_type', 'sales_return')
+   305→                ->where('reference_id', $returnId)
+   306→                ->where('is_reversed', false)
+   307→                ->get();
+   308→
+   309→            foreach ($stockTxs as $tx) {
+   310→                $this->stockService->reverseTransaction(
+   311→                    $tx->id, $reversedBy,
+   312→                    "Return reversed: {$reason}"
+   313→                );
+   314→            }
+   315→
+   316→            // Mark return as reversed.
+   317→            DB::table('sales_returns')
+   318→                ->where('id', $returnId)
+   319→                ->update([
+   320→                    'status' => 'reversed',
+   321→                    'is_reversed' => true,
+   322→                    'reversed_at' => now(),
+   323→                    'reversed_by' => $reversedBy,
+   324→                    'reverse_reason' => $reason,
+   325→                    'updated_at' => now(),
+   326→                ]);
+   327→
+   328→            // P1-3: Audit log — return_reversed.
+   329→            $this->auditLogger->returnReversed(
+   330→                $reversedBy,
+   331→                $returnId, $return->return_code, (int) $return->branch_id,
+   332→                (float) $return->total_amount, $reason
+   333→            );
+   334→
+   335→            // P1-7: Notify accountants + admins that a return was reversed.
+   336→            $this->notifications->dispatch(
+   337→                'return_reversed',
+   338→                "Return {$return->return_code} reversed — stock + GL + ledger rolled back. "
+   339→                . "Reason: {$reason}",
+   340→                'sales_return',
+   341→                $returnId
+   342→            );
+   343→
+   344→            return SalesReturn::find($returnId);
+   345→        });
+   346→    }
+   347→
+   348→    /**
+   349→     * Post GL Revenue Reversal: Dr Sales Return / Cr AR.
+   350→     *
+   351→     * @return int journal_entry_id
+   352→     */
+   353→    private function postRevenueReversalGL(SalesReturn $return, int $createdBy): int
+   354→    {
+   355→        $amount = (float) $return->total_amount;
+   356→        if ($amount < 0.01) return 0;
+   357→
+   358→        $returnLedgerId = $this->journalPosting->lookupLedgerByNature('sales_return');
+   359→        $arLedgerId = $this->journalPosting->lookupLedgerByNature('ar');
+   360→
+   361→        if (!$returnLedgerId) {
+   362→            throw new \RuntimeException('Sales Return ledger not found (nature: sales_return).');
+   363→        }
+   364→        if (!$arLedgerId) {
+   365→            throw new \RuntimeException('Accounts Receivable ledger not found (nature: ar).');
+   366→        }
+   367→
+   368→        return $this->journalPosting->createJournalEntry([
+   369→            'entry_date' => $return->return_date->format('Y-m-d'),
+   370→            'reference_type' => 'sales_return',
+   371→            'reference_id' => $return->id,
+   372→            'branch_id' => $return->branch_id,
+   373→            'description' => 'Sales Return Revenue Reversal ' . $return->return_code,
+   374→            'source' => 'sales_return',
+   375→            'created_by' => $createdBy,
+   376→        ], [
+   377→            [
+   378→                'ledger_id' => $returnLedgerId,
+   379→                'debit' => $amount, 'credit' => 0,
+   380→                'entity_type' => 'sales_return', 'entity_id' => $return->id,
+   381→                'memo' => 'Return ' . $return->return_code . ' — revenue reversal',
+   382→            ],
+   383→            [
+   384→                'ledger_id' => $arLedgerId,
+   385→                'debit' => 0, 'credit' => $amount,
+   386→                'entity_type' => 'customer', 'entity_id' => $return->customer_id,
+   387→                'memo' => 'Return ' . $return->return_code . ' — AR credit',
+   388→            ],
+   389→        ]);
+   390→    }
+   391→
+   392→    /**
+   393→     * Post GL COGS Reversal: Dr Inventory / Cr COGS (at ORIGINAL avg_cost).
+   394→     *
+   395→     * @return int journal_entry_id
+   396→     */
+   397→    private function postCogsReversalGL(SalesReturn $return, int $createdBy): int
+   398→    {
+   399→        $cogsAmount = (float) $return->cogs_amount;
+   400→        if ($cogsAmount < 0.01) return 0;
+   401→
+   402→        $inventoryLedgerId = $this->journalPosting->lookupLedgerByNature('inventory');
+   403→        $cogsLedgerId = $this->journalPosting->lookupLedgerByNature('cogs');
+   404→
+   405→        if (!$inventoryLedgerId) {
+   406→            throw new \RuntimeException('Inventory ledger not found (nature: inventory).');
+   407→        }
+   408→        if (!$cogsLedgerId) {
+   409→            throw new \RuntimeException('COGS ledger not found (nature: cogs).');
+   410→        }
+   411→
+   412→        return $this->journalPosting->createJournalEntry([
+   413→            'entry_date' => $return->return_date->format('Y-m-d'),
+   414→            'reference_type' => 'sales_return',
+   415→            'reference_id' => $return->id,
+   416→            'branch_id' => $return->branch_id,
+   417→            'description' => 'Sales Return COGS Reversal ' . $return->return_code,
+   418→            'source' => 'sales_return',
+   419→            'created_by' => $createdBy,
+   420→        ], [
+   421→            [
+   422→                'ledger_id' => $inventoryLedgerId,
+   423→                'debit' => $cogsAmount, 'credit' => 0,
+   424→                'entity_type' => 'sales_return', 'entity_id' => $return->id,
+   425→                'memo' => 'Return ' . $return->return_code . ' — inventory restored',
+   426→            ],
+   427→            [
+   428→                'ledger_id' => $cogsLedgerId,
+   429→                'debit' => 0, 'credit' => $cogsAmount,
+   430→                'entity_type' => 'sales_return', 'entity_id' => $return->id,
+   431→                'memo' => 'Return ' . $return->return_code . ' — COGS reversal',
+   432→            ],
+   433→        ]);
+   434→    }
+   435→
+   436→    /**
+   437→     * Generate atomic return code: SR-YYYYMMDD-NNNN.
+   438→     */
+   439→    private function generateReturnCode(): string
+   440→    {
+   441→        $datePart = now()->format('Ymd');
+   442→        $periodKey = now()->format('Y-m');
+   443→        $docType = 'sales_return';
+   444→
+   445→        return DB::transaction(function () use ($docType, $periodKey, $datePart) {
+   446→            $seqRow = DB::table('document_sequences')
+   447→                ->where('doc_type', $docType)
+   448→                ->where('branch_id', 0)
+   449→                ->where('period_key', $periodKey)
+   450→                ->lockForUpdate()
+   451→                ->first();
+   452→
+   453→            $nextNumber = $seqRow ? ((int) $seqRow->last_number + 1) : 1;
+   454→
+   455→            if ($seqRow) {
+   456→                DB::table('document_sequences')->where('id', $seqRow->id)
+   457→                    ->update(['last_number' => $nextNumber, 'updated_at' => now()]);
+   458→            } else {
+   459→                DB::table('document_sequences')->insert([
+   460→                    'doc_type' => $docType, 'branch_id' => 0,
+   461→                    'period_key' => $periodKey, 'last_number' => $nextNumber,
+   462→                    'updated_at' => now(),
+   463→                ]);
+   464→            }
+   465→
+   466→            return "SR-{$datePart}-" . str_pad((string) $nextNumber, 4, '0', STR_PAD_LEFT);
+   467→        });
+   468→    }
+   469→
+   470→    /**
+   471→     * Validate items — look up ORIGINAL avg_cost from the challan's stock_transaction.
+   472→     *
+   473→     * @param array $items
+   474→     * @param int $invoiceId
+   475→     * @param int $challanId
+   476→     * @return array
+   477→     */
+   478→    private function validateItems(array $items, int $invoiceId, int $challanId): array
+   479→    {
+   480→        $validated = [];
+   481→
+   482→        foreach ($items as $item) {
+   483→            $productId = (int) ($item['product_id'] ?? 0);
+   484→            $qty = (float) ($item['qty'] ?? 0);
+   485→            $warehouseId = (int) ($item['warehouse_id'] ?? 0);
+   486→            $invoiceItemId = (int) ($item['sales_invoice_item_id'] ?? 0);
+   487→
+   488→            if ($productId <= 0 || $qty <= 0 || $warehouseId <= 0) continue;
+   489→
+   490→            // Check returnable_qty (invoice item qty - already returned).
+   491→            if ($invoiceItemId > 0) {
+   492→                $invoiceItem = DB::table('sales_invoice_items')->where('id', $invoiceItemId)->first();
+   493→                if ($invoiceItem) {
+   494→                    $alreadyReturned = (float) DB::table('sales_return_items as sri')
+   495→                        ->join('sales_returns as sr', 'sr.id', '=', 'sri.sales_return_id')
+   496→                        ->where('sri.sales_invoice_item_id', $invoiceItemId)
+   497→                        ->whereIn('sr.status', ['created', 'confirmed'])
+   498→                        ->where('sr.is_reversed', false)
+   499→                        ->sum('sri.qty');
+   500→
+   501→                    $returnable = (float) $invoiceItem->qty - $alreadyReturned;
+   502→                    if ($qty > $returnable + 0.0001) {
+   503→                        throw new \RuntimeException(
+   504→                            "Return qty {$qty} exceeds returnable qty {$returnable} for product {$productId}."
+   505→                        );
+   506→                    }
+   507→                }
+   508→            }
+   509→
+   510→            // CRITICAL: Look up ORIGINAL avg_cost from the challan's stock_transaction.
+   511→            $challanStockTx = DB::table('stock_transactions')
+   512→                ->where('reference_type', 'sales_challan')
+   513→                ->where('reference_id', $challanId)
+   514→                ->where('product_id', $productId)
+   515→                ->where('warehouse_id', $warehouseId)
+   516→                ->where('is_reversed', false)
+   517→                ->first();
+   518→
+   519→            $originalCost = $challanStockTx ? (float) $challanStockTx->rate : 0;
+   520→            if ($originalCost <= 0) {
+   521→                throw new \RuntimeException(
+   522→                    "Cannot determine original avg_cost for product {$productId} from challan. "
+   523→                    . "The challan stock transaction may be missing or reversed."
+   524→                );
+   525→            }
+   526→
+   527→            // Rate = sales rate from the invoice item (for revenue reversal).
+   528→            $rate = (float) ($item['rate'] ?? 0);
+   529→            if ($rate <= 0 && $invoiceItemId > 0) {
+   530→                $invoiceItem = DB::table('sales_invoice_items')->where('id', $invoiceItemId)->first();
+   531→                $rate = $invoiceItem ? (float) $invoiceItem->rate : 0;
+   532→            }
+   533→
+   534→            $validated[] = [
+   535→                'product_id' => $productId,
+   536→                'warehouse_id' => $warehouseId,
+   537→                'qty' => $qty,
+   538→                'rate' => $rate, // sales rate (for revenue reversal)
+   539→                'original_cost' => $originalCost, // ORIGINAL avg_cost (for COGS + stock IN)
+   540→                'sales_invoice_item_id' => $invoiceItemId > 0 ? $invoiceItemId : null,
+   541→            ];
+   542→        }
+   543→
+   544→        if (empty($validated)) {
+   545→            throw new \InvalidArgumentException('At least one valid item is required.');
+   546→        }
+   547→
+   548→        return $validated;
+   549→    }
+   550→
+   551→    /**
+   552→     * P1-5: Create linked damage write-offs for 'Damage' condition return items.
+   553→     *
+   554→     * Mirrors legacy SalesReturnModel::createLinkedDamageWriteOff:1599.
+   555→     * For each Damage-condition item:
+   556→     *   1. Create a damage_invoices row (linked via sales_return_id)
+   557→     *   2. Create damage_invoice_items
+   558→     *   3. Stock OUT via DamageService (immediately back OUT the damaged goods)
+   559→     *   4. GL: Dr damage_loss / Cr inventory (via DamageService::confirmDamage)
+   560→     *   5. Link sales_return_items.damage_invoice_id → damage_invoices.id
+   561→     *
+   562→     * Groups damage items by warehouse (one damage_invoice per warehouse).
+   563→     *
+   564→     * @param SalesReturn $return
+   565→     * @param int $confirmedBy
+   566→     * @return array List of created damage_invoice IDs
+   567→     */
+   568→    private function createLinkedDamageWriteOffs(SalesReturn $return, int $confirmedBy): array
+   569→    {
+   570→        // Group Damage-condition items by warehouse.
+   571→        $damageByWarehouse = [];
+   572→        foreach ($return->items as $item) {
+   573→            if (($item->condition_state ?? 'Good') !== 'Damage') {
+   574→                continue;
+   575→            }
+   576→            $wid = (int) $item->warehouse_id;
+   577→            if ($wid <= 0) {
+   578→                continue;
+   579→            }
+   580→            $damageByWarehouse[$wid][] = $item;
+   581→        }
+   582→
+   583→        if (empty($damageByWarehouse)) {
+   584→            return []; // No damage items — nothing to write off.
+   585→        }
+   586→
+   587→        $linkedDamageIds = [];
+   588→        $returnDate = $return->return_date->format('Y-m-d');
+   589→
+   590→        foreach ($damageByWarehouse as $warehouseId => $damageItems) {
+   591→            // Build items array for DamageService::createDamage.
+   592→            $items = [];
+   593→            foreach ($damageItems as $item) {
+   594→                $items[] = [
+   595→                    'product_id' => (int) $item->product_id,
+   596→                    'qty' => (float) $item->qty,
+   597→                    'rate' => (float) $item->original_cost, // use original_cost (same as return stock IN)
+   598→                ];
+   599→            }
+   600→
+   601→            // Create the damage invoice (draft) via DamageService.
+   602→            $damage = $this->damageService->createDamage([
+   603→                'warehouse_id' => $warehouseId,
+   604→                'damage_date' => $returnDate,
+   605→                'reason' => 'Auto write-off for damaged sales return #' . $return->return_code,
+   606→                'created_by' => $confirmedBy,
+   607→                'items' => $items,
+   608→            ]);
+   609→
+   610→            // Link damage_invoices.sales_return_id → this return.
+   611→            DB::table('damage_invoices')
+   612→                ->where('id', $damage->id)
+   613→                ->update(['sales_return_id' => $return->id]);
+   614→
+   615→            // Confirm the damage (stock OUT + GL Dr damage_loss / Cr inventory).
+   616→            $damage = $this->damageService->confirmDamage($damage->id, $confirmedBy);
+   617→
+   618→            // Link each return item to the damage invoice.
+   619→            foreach ($damageItems as $item) {
+   620→                DB::table('sales_return_items')
+   621→                    ->where('id', $item->id)
+   622→                    ->update(['damage_invoice_id' => $damage->id]);
+   623→            }
+   624→
+   625→            $linkedDamageIds[] = $damage->id;
+   626→        }
+   627→
+   628→        return $linkedDamageIds;
+   629→    }
+   630→
+   631→    /**
+   632→     * P1-5: Reverse linked damage write-offs when a return is reversed.
+   633→     *
+   634→     * Mirrors legacy SalesReturnModel::reverseLinkedDamageForReturn.
+   635→     * Finds all damage_invoices linked to this return (via sales_return_id)
+   636→     * and cancels each one via DamageService::cancelDamage (reverses stock + GL).
+   637→     *
+   638→     * Must be called BEFORE reversing the return's own stock movements
+   639→     * (so the damage stock OUT is reversed first, then the return stock IN).
+   640→     *
+   641→     * @param int $returnId
+   642→     * @param int $reversedBy
+   643→     * @param string $reason
+   644→     */
+   645→    private function reverseLinkedDamageForReturn(int $returnId, int $reversedBy, string $reason): void
+   646→    {
+   647→        $linkedDamages = DB::table('damage_invoices')
+   648→            ->where('sales_return_id', $returnId)
+   649→            ->where('is_reversed', false)
+   650→            ->get();
+   651→
+   652→        foreach ($linkedDamages as $damage) {
+   653→            // Cancel the damage (reverses stock OUT + GL Dr damage_loss / Cr inventory).
+   654→            $this->damageService->cancelDamage($damage->id, $reversedBy, "Return reversed: {$reason}");
+   655→
+   656→            // Clear the link on sales_return_items (set damage_invoice_id = null).
+   657→            DB::table('sales_return_items')
+   658→                ->where('damage_invoice_id', $damage->id)
+   659→                ->update(['damage_invoice_id' => null]);
+   660→        }
+   661→    }
+   662→}
+   663→
