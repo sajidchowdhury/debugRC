@@ -752,7 +752,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | G-8 | **Discount GL posting on payment** | `postCustomerDiscount()` in JournalPostingService | ✅ FIXED — Discount GL now posts on confirm: receive+discount→Dr Sales Discount/Cr AR for discount_amount; write_off→Dr Bad Debt Expense/Cr AR; payment→Dr AR/Cr Bank/Cash | ✅ VERIFIED & FIXED |
 | G-9 | **Salesman commission tracking** | salesman_id tracked on invoices | No commission calculation service | ❌ Not implemented | Commission reports not possible |
 | G-10 | **Call It A Day** batch operation | `callItADay()` in SalesInvoiceOperationsTrait | ✅ Implemented in SalesInvoiceService + SalesInvoiceController | ✅ VERIFIED — SalesInvoiceService::callItADay(), route POST admin/sales-invoices/call-it-a-day, SalesAuditLogger::callItADay(), migration adds call_a_day column | End-of-day workflow complete |
-| G-11 | **Customer 360 hub** | `CustomerController::show()` with summary, ledger, invoices, payments | Basic show view (name, contact, credit limit) — NO ledger/invoice/payment tabs | ⚠️ VERIFIED — customers/show.blade.php (197 lines) is a static detail page; comment says "placeholder for future customer-ledger widget" | No unified customer view |
+| G-11 | **Customer 360 hub** | `CustomerController::show()` with summary, ledger, invoices, payments | ✅ FIXED — Full 360° hub with 7 KPI cards (AR balance, credit utilization bar, total invoiced, total paid, open invoices, last payment, total returns), 5-tab interface (Overview/Ledger/Invoices/Payments/Returns), server-side DataTables AJAX for each tab, date range filter on ledger, status/type filters on invoices & payments, reverse relationships added to Customer model, new payment shortcut button | ✅ VERIFIED & FIXED |
 
 ### 6.3 MEDIUM Priority Gaps (Nice to Have)
 
@@ -1132,7 +1132,7 @@ LIMIT 30;
 | 8 | ~~Implement payment transaction types (discount, write_off, refund) with GL~~ | ✅ DONE | Business Logic + UI | 2025-01-20 — Full implementation: type-specific GL posting (4 types with correct Dr/Cr), type-specific customer_ledger entries, type-specific payment code prefixes (PAY/DISC/WOFF/RFND), type-specific audit events (payment_discount/payment_write_off/payment_refund), dynamic create form with type selector + color-coded hero + GL info, show view with type badge + gradient, index with type filter + 7 stats cards, print receipt with type label |
 | 9 | ~~Implement discount_amount GL posting on payment confirm~~ | ✅ DONE | Business Logic | 2025-01-20 — Included in Task #8: receive type posts Dr Sales Discount / Cr AR for discount_amount; discount type posts entire amount as Dr Sales Discount / Cr AR |
 | 10 | ~~Implement Call It A Day batch operation~~ | ✅ Done | 1 day | Business Logic |
-| 11 | Implement Customer 360 hub view | ⚠️ High | 2 days | UI |
+| 11 | ~~Implement Customer 360 hub view~~ | ✅ DONE | UI | 2025-01-20 — Full 360° hub: 7 KPI cards, 5-tab interface (Overview/Ledger/Invoices/Payments/Returns), server-side DataTables AJAX, Customer model reverse relationships, date/status/type filters, New Payment shortcut |
 
 ### Phase 1C: PostgreSQL Power Features (Week 3-4)
 
@@ -1245,7 +1245,7 @@ Core principles:
 | Return slip print | ✅ Bengali | ✅ Full | None |
 | Damage write-off | ✅ Manual + auto from return | ✅ Manual + auto from return | None |
 | Customer CRUD | ✅ Full with deactivation safety | ✅ Full with deactivation safety | None |
-| Customer 360 hub | ✅ Summary + ledger + invoices + payments | ⚠️ Basic show view only (no ledger/invoice/payment tabs) | MEDIUM |
+| Customer 360 hub | ✅ Summary + ledger + invoices + payments | ✅ Full 360° hub (7 KPIs, 5 tabs, DataTables AJAX, filters) | None |
 | Customer ledger | ✅ Running balance SSOT | ✅ Running balance SSOT | None |
 | Credit limit enforcement | ✅ Full | ✅ Full | None |
 | Stock availability (pipeline) | ✅ physical - pipeline | ✅ physical - pipeline + Redis cache | Better |

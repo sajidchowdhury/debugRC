@@ -57,4 +57,39 @@ class Customer extends Model
     {
         return $query->where('is_active', true)->whereNull('deleted_at');
     }
+
+    // ───────── Reverse Relationships (Customer 360 Hub) ─────────
+
+    /**
+     * All sales invoices for this customer (including reversed/cancelled).
+     * Use ->where('is_reversed', false)->whereNotIn('status', ['cancelled']) for active only.
+     */
+    public function salesInvoices(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(SalesInvoice::class, 'customer_id');
+    }
+
+    /**
+     * All payments received from this customer.
+     */
+    public function payments(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(CustomerPayment::class, 'customer_id');
+    }
+
+    /**
+     * Customer sub-ledger entries (AR running balance).
+     */
+    public function ledgerEntries(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(CustomerLedger::class, 'customer_id');
+    }
+
+    /**
+     * All sales returns for this customer.
+     */
+    public function salesReturns(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(SalesReturn::class, 'customer_id');
+    }
 }

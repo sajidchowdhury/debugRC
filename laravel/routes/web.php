@@ -116,6 +116,11 @@ Route::middleware('auth')->group(function () {
         // Phase 19: Print directory (same RBAC as export)
         Route::get('print', [CustomerController::class, 'print'])->name('print')->middleware('role:admin,manager,salesman');
         Route::get('audit', [CustomerController::class, 'audit'])->name('audit')->middleware('role:admin');
+        // Customer 360 Hub — AJAX DataTables endpoints (same RBAC as show)
+        Route::get('{customer}/ledger-data', [CustomerController::class, 'ledgerData'])->name('ledger-data')->where(['customer' => '[0-9]+'])->middleware('role:admin,manager,salesman');
+        Route::get('{customer}/invoices-data', [CustomerController::class, 'invoicesData'])->name('invoices-data')->where(['customer' => '[0-9]+'])->middleware('role:admin,manager,salesman');
+        Route::get('{customer}/payments-data', [CustomerController::class, 'paymentsData'])->name('payments-data')->where(['customer' => '[0-9]+'])->middleware('role:admin,manager,salesman');
+        Route::get('{customer}/returns-data', [CustomerController::class, 'returnsData'])->name('returns-data')->where(['customer' => '[0-9]+'])->middleware('role:admin,manager,salesman');
         Route::post('{customer}/restore', [CustomerController::class, 'restore'])->name('restore')->where(['customer' => '[0-9]+'])->middleware('role:admin');
         Route::post('{customer}/toggle', [CustomerController::class, 'toggle'])->name('toggle')->where(['customer' => '[0-9]+'])->middleware('role:admin');
     });
