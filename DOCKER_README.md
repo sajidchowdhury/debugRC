@@ -51,8 +51,8 @@
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/sajidchowdhury/RC_ERP_v2.git
-cd RC_ERP_v2
+git clone https://github.com/sajidchowdhury/debugRC.git
+cd debugRC
 
 # 2. Copy environment file
 cp .env.docker .env
@@ -156,6 +156,9 @@ RC_ERP_v2/
 │   └── init/
 │       └── 01-init-archive.sql  # MySQL archive init (sample legacy data)
 ├── laravel/                    # Laravel application (volume-mounted)
+│   ├── public/
+│   │   └── build/              # Vite-compiled frontend assets
+│   └── ...
 └── legacy/                     # Legacy PHP app (volume-mounted)
 ```
 
