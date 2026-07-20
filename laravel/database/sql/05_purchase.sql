@@ -125,9 +125,14 @@ CREATE INDEX idx_prti_warehouse ON purchase_return_items(warehouse_id);
 CREATE TABLE invoice_payment_allocations (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     invoice_id integer NOT NULL REFERENCES sales_invoices(id),
-    payment_id integer NOT NULL,
-    allocated_amount numeric(14,2) NOT NULL DEFAULT 0,
-    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
+    payment_id integer NOT NULL REFERENCES customer_payments(id) ON DELETE CASCADE,
+    allocated_amount numeric(14,2) NOT NULL DEFAULT 0 CHECK (allocated_amount > 0),
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ipa_unique_invoice_payment EXCLUDE USING gist (invoice_id WITH =, payment_id WITH =)
 );
 CREATE INDEX idx_ipa_invoice ON invoice_payment_allocations(invoice_id);
 CREATE INDEX idx_ipa_payment ON invoice_payment_allocations(payment_id);
+
+-- Over-allocation trigger: prevents SUM(allocated_amount) > invoice total_amount.
+-- See migration 2025_01_21_000003 for the full trigger + function definition.
+-- Requires: CREATE EXTENSION IF NOT EXISTS btree_gist;

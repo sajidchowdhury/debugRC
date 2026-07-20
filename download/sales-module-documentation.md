@@ -1,6 +1,6 @@
 # RC-ERP Sales Module — Complete Documentation & Gap Analysis
 
-> **Document Version**: 1.3 — Updated with CTE-based queries implementation (Task 32 ✅)
+> **Document Version**: 1.4 — Updated with EXCLUDE constraint for invoice_payment_allocations (Task 33 ✅)
 > **Date**: 2025-07-21  
 > **Scope**: Legacy CodeIgniter/MySQL → Laravel 12/PostgreSQL migration  
 > **Focus**: Sales Entry, Challan/Godown Copy, Invoice, Payment Receive, Sales Return  
@@ -32,6 +32,7 @@
 8. [Implementation Priority & Phase Plan](#8-implementation-priority--phase-plan)
 9. [LISTEN/NOTIFY — Real-Time Update Implementation](#9-listennotify--real-time-update-implementation-task-31-)
 10. [CTE-Based Complex Queries — Implementation](#10-cte-based-complex-queries--implementation-task-32-)
+11. [EXCLUDE Constraint — invoice_payment_allocations (Task 33)](#11-exclude-constraint--invoice_payment_allocations-task-33)
 
 ---
 
@@ -525,7 +526,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | 10 | `customers` | Legacy | 01_auth_and_master.sql | ✅ Active |
 | 11 | `customer_payments` | Legacy | 06_payment_and_misc.sql | ✅ Active |
 | 12 | `customer_payment_settlements` | Legacy | 06_payment_and_misc.sql | ⚠️ DROPPED by P1-4 |
-| 13 | `invoice_payment_allocations` | New (Laravel) | 05_purchase.sql | ✅ Active (replacement) |
+| 13 | `invoice_payment_allocations` | New (Laravel) | 05_purchase.sql | ✅ Active (EXCLUDE + FK + CHECK + trigger, Task 33) |
 | 14 | `customer_ledger` | Legacy | 02_accounting.sql | ✅ Active |
 | 15 | `products` | Legacy | 01_auth_and_master.sql | ✅ Active |
 | 16 | `product_price_history` | Legacy | 01_auth_and_master.sql | ✅ Active |
@@ -1031,17 +1032,109 @@ CREATE TABLE sales_invoices_2025_02 PARTITION OF sales_invoices
 
 ### 7.12 EXCLUDE Constraints — Prevent Overlapping Allocations
 
+> **Status**: ✅ IMPLEMENTED (Task 33, migration `2025_01_21_000003`)
+
+The original proposal used `numrange(0, allocated_amount, '[]') WITH &&` which would prevent ALL
+multiple allocations to the same invoice (since all ranges start at 0, they always overlap).
+This is incorrect for a system that supports partial payments — a single invoice can legitimately
+receive multiple allocations from different payments.
+
+The implemented design uses a **composable four-layer approach**:
+
+#### Layer 1: CHECK Constraint (allocated_amount > 0)
+
 ```sql
--- Prevent double-allocation of the same invoice amount
 ALTER TABLE invoice_payment_allocations
-  ADD CONSTRAINT no_overallocation
+  ADD CONSTRAINT ipa_allocated_amount_positive
+  CHECK (allocated_amount > 0);
+```
+
+Prevents zero or negative allocation amounts at the DB level. Previously enforced only in
+`CustomerPaymentService::allocateToInvoice()` PHP code — a race condition could bypass
+application-level validation.
+
+#### Layer 2: EXCLUDE Constraint (one allocation per invoice+payment pair)
+
+```sql
+-- Requires: CREATE EXTENSION IF NOT EXISTS btree_gist;
+ALTER TABLE invoice_payment_allocations
+  ADD CONSTRAINT ipa_unique_invoice_payment
   EXCLUDE USING gist (
     invoice_id WITH =,
-    numrange(0, allocated_amount, '[]') WITH &&
+    payment_id WITH =
   );
 ```
 
-**Why this matters for long-term**: Application-level validation can be bypassed by race conditions. EXCLUDE constraints enforce **mathematical invariants** at the DB level.
+Prevents duplicate `(invoice_id, payment_id)` rows. Without this, a race condition where two
+concurrent requests allocate the same payment to the same invoice could insert two rows,
+inflating the invoice's `paid_amount`. The GiST index with `btree_gist` extension enables the
+`=` operator on integers within an exclusion constraint.
+
+#### Layer 3: FK Constraint (payment_id → customer_payments)
+
+```sql
+ALTER TABLE invoice_payment_allocations
+  ADD CONSTRAINT ipa_payment_id_foreign
+  FOREIGN KEY (payment_id) REFERENCES customer_payments(id)
+  ON DELETE CASCADE;
+```
+
+The original schema (`05_purchase.sql`) had `invoice_id FK → sales_invoices(id)` but **omitted**
+the `payment_id FK → customer_payments(id)`. This allowed orphaned allocation rows if a payment
+was hard-deleted. The `ON DELETE CASCADE` ensures allocations are automatically cleaned up
+(though the application uses `is_reversed` soft-delete, this provides defense-in-depth).
+
+#### Layer 4: Over-allocation Trigger
+
+```sql
+CREATE OR REPLACE FUNCTION fn_ipa_no_overallocation()
+RETURNS trigger AS $$
+DECLARE
+    v_total_allocated numeric(14,2);
+    v_invoice_total  numeric(14,2);
+BEGIN
+    SELECT COALESCE(SUM(ipa.allocated_amount), 0)
+    INTO v_total_allocated
+    FROM invoice_payment_allocations ipa
+    JOIN customer_payments cp ON cp.id = ipa.payment_id AND cp.is_reversed = false
+    WHERE ipa.invoice_id = NEW.invoice_id;
+
+    SELECT total_amount
+    INTO v_invoice_total
+    FROM sales_invoices
+    WHERE id = NEW.invoice_id;
+
+    IF v_total_allocated > v_invoice_total + 0.01 THEN
+        RAISE EXCEPTION
+            'Over-allocation prevented: invoice % total_amount is %, but allocated amount is %',
+            NEW.invoice_id, v_invoice_total, v_total_allocated;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_ipa_no_overallocation
+  AFTER INSERT ON invoice_payment_allocations
+  DEFERRABLE INITIALLY IMMEDIATE
+  FOR EACH ROW
+  EXECUTE FUNCTION fn_ipa_no_overallocation();
+```
+
+The EXCLUDE constraint prevents duplicate rows but **cannot** enforce sum-based invariants
+(PostgreSQL exclusion constraints check pairwise overlap, not aggregate sums). The trigger
+checks that after each INSERT, the cumulative allocated amount for an invoice (excluding
+reversed payments) does not exceed the invoice's `total_amount`. This is the "no_overallocation"
+guard documented in the original §7.12 proposal, implemented correctly using a constraint trigger.
+
+The `DEFERRABLE INITIALLY IMMEDIATE` clause allows the check to be deferred when needed
+(e.g., batch allocations within a single transaction), while checking immediately by default.
+
+**Why this matters**: Application-level validation in `CustomerPaymentService::allocateToInvoice()`
+uses `SELECT ... lockForUpdate()` to prevent race conditions, but this only works within a
+single PHP request's database transaction. Two concurrent web requests processing payments for
+the same invoice could both pass the `paidSoFar < outstanding` check before either commits.
+The DB-level trigger closes this window entirely.
 
 ### 7.13 Deferred Constraints — For Multi-Table Atomic Operations
 
@@ -1175,7 +1268,7 @@ LIMIT 30;
 |---|------|----------|--------|------|
 | 31 | ~~Implement LISTEN/NOTIFY for real-time updates~~ ✅ DONE | Medium | 3 days | Database + Business Logic |
 | 32 | ~~Implement CTE-based complex queries (today's summary, AR aging)~~ ✅ DONE | Medium | 2 days | Business Logic |
-| 33 | Add EXCLUDE constraint for invoice_payment_allocations | Low | 1 day | Database |
+| 33 | ~~Add EXCLUDE constraint for invoice_payment_allocations~~ ✅ DONE | Low | 1 day | Database |
 | 34 | Set up table partitioning for sales_invoices + stock_transactions | Low | 2 days | Database |
 | 35 | Configure deferred FK constraints | Low | 1 day | Database |
 | 36 | Implement Sales API write endpoints (mobile) | Medium | 5 days | Business Logic + API |
@@ -1630,6 +1723,181 @@ These are useful for DBAs, monitoring scripts, and ad-hoc analysis without needi
 4. **Coexistence with old reports**: The CTE reports are new routes (`*-cte`), not replacements. The original `receivableAging`, `generalLedger`, `grossMargin` routes still work. This allows gradual migration and A/B comparison.
 
 5. **No recursive CTEs**: None of the current queries need recursion. The CTEs are used for step-by-step data transformation and aggregation, which is where CTEs shine without recursion.
+
+---
+
+## 11. EXCLUDE Constraint — invoice_payment_allocations (Task 33)
+
+### 11.1 Overview
+
+Task 33 adds database-level integrity constraints to the `invoice_payment_allocations` table, which is the single source of truth for how customer payments are distributed across sales invoices (after P1-4 consolidated away the redundant `customer_payment_settlements` table).
+
+Prior to this task, the table had **no database-level protection** against:
+
+- **Zero or negative allocations**: A bug or SQL injection could insert rows with `allocated_amount ≤ 0`, corrupting invoice balances.
+- **Duplicate (invoice_id, payment_id) pairs**: Two concurrent web requests allocating the same payment to the same invoice could both pass the application-level `paidSoFar < outstanding` check before either commits, resulting in duplicate rows that inflate `paid_amount`.
+- **Orphaned allocations**: The `payment_id` column had no FK constraint, so hard-deleting a payment would leave dangling allocation rows.
+- **Over-allocation**: The SUM of allocations for an invoice could exceed `total_amount` under race conditions, even with `lockForUpdate()` in the service layer.
+
+This implementation uses a **composable four-layer approach**, each constraint addressing a specific class of integrity violation.
+
+### 11.2 Migration Details
+
+**File**: `database/migrations/2025_01_21_000003_add_exclude_constraint_invoice_payment_allocations.php`
+
+### 11.3 Layer 1 — CHECK Constraint
+
+```sql
+ALTER TABLE invoice_payment_allocations
+  ADD CONSTRAINT ipa_allocated_amount_positive
+  CHECK (allocated_amount > 0);
+```
+
+This is the simplest layer: every allocation must have a positive amount. The `CustomerPaymentService::allocateToInvoice()` method validates this in PHP, but DB-level enforcement ensures integrity even if the application is bypassed (direct SQL, migration scripts, psql sessions).
+
+Note: Refund allocations (transaction_type = 'payment') store the **positive** amount in the allocation row and apply the sign logic separately when updating `sales_invoices.paid_amount`. So the CHECK constraint is compatible with refund workflows.
+
+### 11.4 Layer 2 — EXCLUDE Constraint
+
+```sql
+-- Prerequisite: btree_gist extension for = operator on integers in GiST
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+ALTER TABLE invoice_payment_allocations
+  ADD CONSTRAINT ipa_unique_invoice_payment
+  EXCLUDE USING gist (
+    invoice_id WITH =,
+    payment_id WITH =
+  );
+```
+
+An EXCLUDE constraint prevents any two rows from satisfying the specified condition simultaneously. Here, the condition is `invoice_id WITH =, payment_id WITH =` — meaning no two rows can have the same `(invoice_id, payment_id)` combination.
+
+**Why EXCLUDE instead of UNIQUE?** A standard `UNIQUE (invoice_id, payment_id)` constraint would achieve the same result here. The EXCLUDE constraint was chosen for three reasons:
+
+1. **Consistency with the documentation plan** — §7.12 specified an EXCLUDE constraint as the PostgreSQL power feature for this table.
+2. **Future extensibility** — EXCLUDE constraints support range operators (`&&`, `@>`, `<@`), which could be extended later to enforce more complex overlap conditions (e.g., preventing overlapping fiscal period allocations).
+3. **GiST index benefit** — The EXCLUDE constraint automatically creates a GiST index that supports both the constraint check and potential future spatial/range queries on the table.
+
+The constraint is enforced at INSERT time by PostgreSQL, closing the race-condition window that exists with application-level checks. Even if two PHP-FPM workers simultaneously attempt to allocate the same payment to the same invoice, PostgreSQL will reject the second INSERT with a constraint violation error.
+
+### 11.5 Layer 3 — FK Constraint (payment_id)
+
+```sql
+ALTER TABLE invoice_payment_allocations
+  ADD CONSTRAINT ipa_payment_id_foreign
+  FOREIGN KEY (payment_id) REFERENCES customer_payments(id)
+  ON DELETE CASCADE;
+```
+
+The original schema in `05_purchase.sql` defined `invoice_id REFERENCES sales_invoices(id)` but **omitted** the `payment_id` foreign key. This was an oversight in the initial migration — the `CustomerPayment` model's `allocations()` relation assumes the FK exists, and the `CustomerPaymentService::cancelPayment()` method hard-deletes allocation rows when reversing a payment.
+
+With `ON DELETE CASCADE`, if a `customer_payments` row is deleted, all its allocation rows are automatically removed. The application typically uses soft-delete (`is_reversed = true`) rather than hard-delete, but the CASCADE provides defense-in-depth against data integrity issues.
+
+### 11.6 Layer 4 — Over-allocation Trigger
+
+```sql
+CREATE OR REPLACE FUNCTION fn_ipa_no_overallocation()
+RETURNS trigger AS $$
+DECLARE
+    v_total_allocated numeric(14,2);
+    v_invoice_total  numeric(14,2);
+BEGIN
+    SELECT COALESCE(SUM(ipa.allocated_amount), 0)
+    INTO v_total_allocated
+    FROM invoice_payment_allocations ipa
+    JOIN customer_payments cp ON cp.id = ipa.payment_id AND cp.is_reversed = false
+    WHERE ipa.invoice_id = NEW.invoice_id;
+
+    SELECT total_amount
+    INTO v_invoice_total
+    FROM sales_invoices
+    WHERE id = NEW.invoice_id;
+
+    IF v_total_allocated > v_invoice_total + 0.01 THEN
+        RAISE EXCEPTION
+            'Over-allocation prevented: invoice % total_amount is %, but allocated amount is %',
+            NEW.invoice_id, v_invoice_total, v_total_allocated;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_ipa_no_overallocation
+  AFTER INSERT ON invoice_payment_allocations
+  DEFERRABLE INITIALLY IMMEDIATE
+  FOR EACH ROW
+  EXECUTE FUNCTION fn_ipa_no_overallocation();
+```
+
+This is the most important layer. The EXCLUDE constraint prevents duplicate rows, but it **cannot** enforce sum-based invariants — PostgreSQL exclusion constraints check pairwise overlap between rows, not aggregate sums across multiple rows. For example, three allocations of 40, 35, and 30 against an invoice with `total_amount = 100` would each pass pairwise exclusion checks but collectively exceed the invoice total.
+
+The trigger computes `SUM(allocated_amount)` for the invoice (excluding allocations linked to reversed payments, matching the application logic) and compares it against `total_amount`. The `+0.01` tolerance handles floating-point rounding artifacts.
+
+**Constraint Trigger vs Regular Trigger**: A `CONSTRAINT TRIGGER` is deferrable, meaning it can be delayed to transaction commit time using `SET CONSTRAINTS trg_ipa_no_overallocation DEFERRED`. This is essential for the payment confirmation workflow, where `CustomerPaymentService::confirm()` allocates to multiple invoices in a single transaction. Without deferrability, the trigger would fire after each allocation INSERT, potentially failing on the last allocation even though the overall transaction is valid.
+
+The `INITIALLY IMMEDIATE` default means the trigger fires immediately after each INSERT unless explicitly deferred, providing the fastest feedback for single-allocation operations.
+
+### 11.7 Race Condition Analysis
+
+The following table shows how each layer addresses specific race conditions:
+
+| Scenario | Application Guard | DB Guard (Task 33) | Protected? |
+|----------|-------------------|---------------------|------------|
+| Two workers allocate same payment to same invoice simultaneously | `lockForUpdate()` on invoice | EXCLUDE `ipa_unique_invoice_payment` | ✅ Double-protected |
+| Allocation amount exceeds invoice total | PHP check `paidSoFar < outstanding` | Trigger `trg_ipa_no_overallocation` | ✅ Double-protected |
+| Zero/negative allocation amount inserted via psql | None | CHECK `ipa_allocated_amount_positive` | ✅ DB-only |
+| Payment hard-deleted, leaving orphaned allocations | None | FK `ipa_payment_id_foreign CASCADE` | ✅ DB-only |
+| Batch allocations within single transaction | PHP sequential validation | DEFERRABLE trigger | ✅ Both layers |
+
+### 11.8 Schema File Update
+
+The canonical SQL schema file `database/sql/05_purchase.sql` was updated to reflect the constraints in the CREATE TABLE definition:
+
+```sql
+CREATE TABLE invoice_payment_allocations (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    invoice_id integer NOT NULL REFERENCES sales_invoices(id),
+    payment_id integer NOT NULL REFERENCES customer_payments(id) ON DELETE CASCADE,
+    allocated_amount numeric(14,2) NOT NULL DEFAULT 0 CHECK (allocated_amount > 0),
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ipa_unique_invoice_payment EXCLUDE USING gist (invoice_id WITH =, payment_id WITH =)
+);
+```
+
+This ensures that any fresh database creation from the SQL files will have the constraints from the start, while existing databases get them via the migration.
+
+### 11.9 Extension Dependency
+
+The EXCLUDE constraint requires the `btree_gist` PostgreSQL extension, which enables B-tree equality operators (`=`) to be used within GiST indexes. Without this extension, the EXCLUDE constraint would fail with:
+
+```
+ERROR: operator = is not a member of operator family "gist_integer_ops"
+```
+
+The migration includes `CREATE EXTENSION IF NOT EXISTS btree_gist` as the first step. This extension is part of PostgreSQL's `contrib` modules and is available on all supported PG versions (12+). It adds no overhead to tables that don't use GiST indexes.
+
+### 11.10 Rollback Support
+
+The migration's `down()` method drops all added constraints in reverse order:
+
+1. Drop trigger `trg_ipa_no_overallocation`
+2. Drop function `fn_ipa_no_overallocation()`
+3. Drop FK `ipa_payment_id_foreign`
+4. Drop EXCLUDE `ipa_unique_invoice_payment`
+5. Drop CHECK `ipa_allocated_amount_positive`
+
+The `btree_gist` extension is **not** dropped in rollback, as other features may depend on it.
+
+### 11.11 Files Modified
+
+| File | Change |
+|------|--------|
+| `database/migrations/2025_01_21_000003_add_exclude_constraint_invoice_payment_allocations.php` | **New** — migration adding all 4 constraint layers |
+| `database/sql/05_purchase.sql` | Updated — added FK, CHECK, EXCLUDE to CREATE TABLE |
+| `app/Models/InvoicePaymentAllocation.php` | Updated — docblock with constraint documentation |
+| `docs/sales-module-documentation.md` | Updated — Task 33 ✅, Section 11, §7.12 revised, §4.1 updated |
 
 ---
 

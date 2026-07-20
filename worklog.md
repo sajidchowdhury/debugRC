@@ -53,3 +53,25 @@ Stage Summary:
 - 4 PostgreSQL CTE functions (total 27 CTEs across all functions)
 - Key improvements: 12x fewer roundtrips for dashboard, SQL running balance, accurate per-item COGS, sub-ledger accurate AR aging
 - CTE reports coexist with original reports (new -cte routes, not replacements)
+---
+Task ID: 33
+Agent: Main Agent
+Task: Add EXCLUDE constraint for invoice_payment_allocations
+
+Work Log:
+- Explored existing schema (05_purchase.sql), model, service, and docs
+- Identified 4 gaps: missing CHECK, missing EXCLUDE, missing FK on payment_id, no over-allocation guard
+- Created migration 2025_01_21_000003 with 4-layer approach:
+  1. CHECK (allocated_amount > 0)
+  2. EXCLUDE USING gist (invoice_id WITH =, payment_id WITH =)
+  3. FK payment_id → customer_payments(id) ON DELETE CASCADE
+  4. CONSTRAINT TRIGGER trg_ipa_no_overallocation (SUM guard)
+- Updated 05_purchase.sql to reflect constraints in CREATE TABLE
+- Updated InvoicePaymentAllocation model docblock
+- Updated sales-module-documentation.md: v1.4, Task 33 ✅, §7.12 revised, §4.1 updated, Section 11 added
+
+Stage Summary:
+- 4 database-level constraints now protect invoice_payment_allocations
+- Original numrange approach replaced with composable 4-layer design (original was incorrect for partial payments)
+- btree_gist extension required and included in migration
+- Documentation version bumped to 1.4
