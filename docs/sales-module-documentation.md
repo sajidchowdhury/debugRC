@@ -620,6 +620,8 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | 6 | `CustomerController` | CRUD (extends BaseMasterDataController) | CodeGenerator, Customer model |
 | 7 | `DashboardController` | index, salesTrendAjax | 6 private KPI methods (getRevenueKPIs, getSalesTrend, getBranchRevenue, getReceivableAging, getTopCustomers, getTopProducts) |
 | 8 | `SalesFunnelController` | index (funnel dashboard) | 7 private data methods (getFunnelData, getKPIs, getConversionRates, getPipelineTrend, getSalesmanPerformance, getOpenOpportunities, getForecast) |
+| 9 | `CustomerPerformanceController` | index (customer performance) | 7 private data methods (getKPIs, getSegmentation, getChurnDistribution, getTopCustomers, getCLVTrend, getRevenueBySegment, getCustomerTable) |
+| 10 | `CsvExportController` | exportInvoices, exportChallans | Streaming CSV with BOM, same filter params as index pages |
 
 ### 5.2 Models (10 primary + supporting)
 
@@ -695,6 +697,8 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | sales-audit/index | 166 | Audit trail with action icons |
 | dashboard/index | ~550 | Revenue Overview: 6 KPI cards + 4 Chart.js charts (sales trend line, aging donut, branch bar, revenue vs collection) + 2 mini-tables + 7D/30D/90D AJAX toggle |
 | reports/sales_funnel | ~580 | Sales Funnel: 6 KPI cards + 4 Chart.js charts (funnel bar, forecast, pipeline trend, salesman stacked) + conversion rates + opportunities + leaderboard + branch/date filters |
+| reports/customer_performance | ~530 | Customer Performance: 6 KPI cards + 4 Chart.js charts (segmentation donut, churn donut, CLV trend line, revenue by segment bar) + top 15 table + full customer table + branch/salesman filters |
+| sales-invoices/print_blank_godown | ~170 | Blank Godown: bilingual handwriting template, blank write-in cells, 17 items/page, watermark, dispatcher area |
 
 ### 5.5 Routes (5 groups)
 
@@ -707,6 +711,9 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | Returns | admin/sales-returns | role:varies per action | index, create, store, show, confirm, reverse, print-slip, invoice-details |
 | Dashboard | / | auth | index, sales-trend (AJAX 7D/30D/90D) |
 | Reports/Funnel | admin/reports | role:manager,admin | sales-funnel (funnel KPIs, conversion, trend, forecast, salesman, opportunities) |
+| Reports/CustPerf | admin/reports | role:manager,admin | customer-performance (CLV, churn, segmentation, trend) |
+| CSV Export | admin/sales-invoices, admin/sales-challans | role:accountant,manager,admin | export-csv (invoices + challans) |
+| Blank Godown | admin/sales-invoices | role:warehouse_manager,manager,admin | print-blank-godown |
 
 ### 5.6 Artisan Commands + pg_cron
 
@@ -779,10 +786,10 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | G-15 | **Go-live checklist** | Manager sign-off checklist | Not implemented | ❌ Not implemented |
 | G-16 | **Revenue Overview dashboard** | Chart.js KPI dashboard with filters | ✅ FIXED — Full Revenue Overview dashboard: 6 KPI cards (today revenue, MTD revenue + growth %, MTD collection + rate, MTD outstanding, total outstanding, collection rate), 4 Chart.js charts (sales trend line with 7D/30D/90D toggle, receivable aging donut, branch revenue bar, revenue vs collection horizontal bar), 2 mini-tables (top 5 customers, top 5 products), AJAX trend refresh endpoint | ✅ VERIFIED & FIXED |
 | G-17 | **Sales Funnel/Pipeline dashboard** | Pipeline stages, win rate, velocity | ✅ FIXED — Full Sales Funnel dashboard: 6 KPI cards (open pipeline, weighted pipeline, closed won, win rate, pipeline velocity, stale drafts), 4 Chart.js charts (horizontal funnel bar with total+weighted value, revenue forecast 30/60/90d bar, pipeline trend 6-month line, salesman stacked bar), stage conversion rates table, pipeline stage summary table with probability weights, open opportunities table (top 25 with health badges), salesman leaderboard table, branch + date range filters, SalesFunnelController with 7 data methods (getFunnelData, getKPIs, getConversionRates, getPipelineTrend, getSalesmanPerformance, getOpenOpportunities, getForecast). Pipeline stages derived from status + boolean flags: Draft Cart (10%) → Draft Invoice (25%) → Godown Ready (50%) → Delivered (75%) → Paid/Closed (100%) | ✅ VERIFIED & FIXED |
-| G-18 | **Customer Performance dashboard** | CLV, churn risk, segment breakdown | Basic report view only | ⚠️ Partial |
-| G-19 | **Blank godown copy print** | Handwrite template with blank cells | ✅ IMPLEMENTED — print_godown.blade.php has blank Picked Qty + Signature columns | ✅ VERIFIED — This was previously marked wrong |
-| G-20 | **Invoice CSV export** | `export()` in SalesController | Not implemented | ❌ Not implemented |
-| G-21 | **Challan CSV export** | `export()` in ChallanController | Not implemented | ❌ Not implemented |
+| G-18 | **Customer Performance dashboard** | CLV, churn risk, segment breakdown | ✅ FIXED — Full Customer Performance dashboard: 6 KPI cards (active customers, avg CLV, churn rate, repeat rate, AOV, retention), 4 Chart.js charts (segmentation donut, churn distribution donut, CLV trend dual-axis line, revenue by segment horizontal bar), customer segmentation (High Value/Loyal/At Risk/New), CLV = AOV × frequency × 3 (3yr), churn risk (Low/Medium/High), top 15 customers table with CLV + churn badges, full customer table (top 100) with segment + CLV + churn, branch + salesman filters, 365-day default range, CustomerPerformanceController with 7 data methods | ✅ VERIFIED & FIXED |
+| G-19 | **Blank godown copy print** | Handwrite template with blank cells | ✅ FIXED — Dedicated print_blank_godown.blade.php: Bengali/English bilingual, blank write-in cells for warehouse/carton/pieces/signature, 17 items per page, BLANK GODOWN watermark, dispatcher write-in area, 3 signature lines, route admin/sales-invoices/print-blank-godown | ✅ VERIFIED & FIXED |
+| G-20 | **Invoice CSV export** | `export()` in SalesController | ✅ IMPLEMENTED — CsvExportController::exportInvoices() with streaming CSV, BOM for Excel, same filters as index page, cursor() for memory efficiency | ✅ VERIFIED & FIXED |
+| G-21 | **Challan CSV export** | `export()` in ChallanController | ✅ IMPLEMENTED — CsvExportController::exportChallans() with streaming CSV, BOM for Excel, same filters as index page | ✅ VERIFIED & FIXED |
 | G-22 | **Dead model cleanup** | N/A | ✅ FIXED — Removed dead `CustomerPaymentSettlement` model (table dropped by P1-4, replaced by `InvoicePaymentAllocation`) | ✅ VERIFIED & FIXED |
 
 ### 6.4 Design Improvements in Laravel (Better Than Legacy)
@@ -1953,9 +1960,9 @@ $customers = Customer::search('rahman', ranked: true)->limit(30)->get();
 | 23 | ~~Implement FCM push notifications~~ | ✅ Replaced by Laravel Notification system | Business Logic |
 | 24 | ~~Implement Revenue Overview dashboard (Chart.js KPIs)~~ | ✅ Done | UI |
 | 25 | ~~Implement Sales Funnel/Pipeline dashboard~~ | ✅ Done | UI |
-| 26 | Implement Customer Performance dashboard | Medium | 3 days | UI |
-| 27 | Implement blank godown copy print template | Low | 1 day | UI |
-| 28 | Implement CSV export for invoices + challans | Low | 1 day | Business Logic |
+| 26 | ~~Implement Customer Performance dashboard~~ | ✅ Done | UI |
+| 27 | ~~Implement blank godown copy print template~~ | ✅ Done | UI |
+| 28 | ~~Implement CSV export for invoices + challans~~ | ✅ Done | Business Logic |
 | 29 | Implement Sales guideline page (Bengali/English) | Low | 2 days | UI |
 | 30 | Implement Go-live checklist | Low | 1 day | UI |
 
@@ -2024,7 +2031,7 @@ Core principles:
 | Invoice print | ✅ A4 multi-page Bengali | ✅ A4 multi-page | None |
 | Godown prep | ✅ Full | ✅ Full | None |
 | Godown copy print | ✅ Bengali picking list | ✅ Picking list | None |
-| Blank godown copy | ✅ Handwrite template | ✅ print_godown.blade.php has blank Picked Qty + Signature columns | None |
+| Blank godown copy | ✅ Bengali handwrite template | ✅ Dedicated blank template (bilingual, blank write-in, 17/page, watermark) | None |
 | Challan finalize | ✅ Full (stock OUT + COGS) | ✅ Full (stock OUT + COGS) | None |
 | Challan print | ✅ Bengali delivery note | ✅ Delivery note | None |
 | Challan reversal | ✅ Full (stock + GL restore) | ✅ Full | None |
@@ -2057,11 +2064,11 @@ Core principles:
 | FCM notifications | ✅ Push to warehouse managers | ✅ Laravel broadcast channel (Reverb WebSocket) | Better |
 | Revenue Overview dashboard | ✅ Chart.js KPIs + filters | ✅ 6 KPIs + 4 Chart.js charts + AJAX trend refresh | Better |
 | Sales Funnel dashboard | ✅ Pipeline stages, win rate | ✅ 6 KPIs + 4 Chart.js charts + forecast + salesman leaderboard | Better |
-| Customer Performance | ✅ CLV, churn, segments | ⚠️ Basic report only | MEDIUM |
+| Customer Performance | ✅ CLV, churn, segments | ✅ Full dashboard (6 KPIs + 4 charts + segmentation + CLV + churn + filters) | None |
 | Sales API (mobile) | ❌ No API | ⚠️ Read-only (dashboard + lookups) | MEDIUM |
 | Sales guideline page | ✅ Bengali/English | ❌ Not implemented | LOW |
 | Go-live checklist | ✅ Manager sign-off | ❌ Not implemented | LOW |
-| CSV export | ✅ Invoices + challans | ❌ Not implemented | LOW |
+| CSV export | ✅ Invoices + challans | ✅ Streaming CSV with BOM, same filters, cursor() memory-efficient | Better |
 | Salesman commission | ❌ Not in legacy | ❌ Not implemented | LOW |
 
 ---
