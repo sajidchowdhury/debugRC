@@ -513,7 +513,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 |---|-------|-------------|-------------|--------|
 | 1 | `sales_invoices` | Legacy | 04_sales.sql | ✅ Active |
 | 2 | `sales_invoice_items` | Legacy | 04_sales.sql | ✅ Active |
-| 3 | `sales_invoice_dispatchers` | Legacy | 04_sales.sql | ✅ Active (no UI code) |
+| 3 | `sales_invoice_dispatchers` | Legacy | 04_sales.sql | ✅ Active (UI + service code for assignment) |
 | 4 | `sales_invoice_dispatches` | Legacy | 04_sales.sql | ✅ Active |
 | 5 | `sales_challans` | Legacy | 04_sales.sql | ✅ Active |
 | 6 | `sales_challan_items` | Legacy (late addition) | Migration P0-5 | ✅ Added via migration |
@@ -746,7 +746,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 
 | # | Gap | Legacy Has | Laravel Status | Verified? | Impact |
 |---|-----|-----------|---------------|-----------|--------|
-| G-5 | **Invoice dispatchers not assigned** | `sales_invoice_dispatchers` populated in godown/challan flow | Table exists but NO UI or service code for assignment | ❌ VERIFIED — SalesChallanService/Controller have zero dispatcher refs; only deletion on edit exists | Dispatcher feature broken |
+| G-5 | **Invoice dispatchers not assigned** | `sales_invoice_dispatchers` populated in finalize/edit flow | ✅ FIXED — Full UI + service implementation: dispatchers() relationship, assignDispatchers() method, Select2 multi-select in cart/edit, badge display in show/print, branch isolation + role validation | ✅ VERIFIED & FIXED |
 | G-6 | **Multi-payment allocation** | One payment can be allocated to multiple invoices | `confirmPayment()` accepts single invoiceId only | ⚠️ VERIFIED — Service has `?int $invoiceId` param, no loop for multi-allocation | Cannot split payment across invoices |
 | G-7 | **Payment transaction types** | receive/payment/discount/write_off | Column exists (CHECK constraint) but only 'receive' is set by service | ⚠️ VERIFIED — `transaction_type` column added by P2-5 but service hardcodes 'receive' | Discount, write-off, refund features missing |
 | G-8 | **Discount GL posting on payment** | `postCustomerDiscount()` in JournalPostingService | discount_amount field exists but no GL posted on confirm | ❌ VERIFIED — No discount GL in CustomerPaymentService::confirmPayment() | Discounts not reflected in GL |
@@ -1127,7 +1127,7 @@ LIMIT 30;
 
 | # | Task | Priority | Effort | Type |
 |---|------|----------|--------|------|
-| 6 | Implement invoice dispatchers assignment (UI + service) | ⚠️ High | 2 days | Business Logic + UI |
+| 6 | Implement invoice dispatchers assignment (UI + service) | ✅ DONE | Business Logic + UI | 2025-01-20 — Full implementation: dispatchers() belongsToMany, assignDispatchers() with branch/role validation, Select2 multi-select in cart+edit, badge display in show+print, AJAX endpoints + routes |
 | 7 | Implement multi-invoice payment allocation | ⚠️ High | 3 days | Business Logic + UI |
 | 8 | Implement payment transaction types (discount, write_off, refund) with GL | ⚠️ High | 3 days | Business Logic |
 | 9 | Implement discount_amount GL posting on payment confirm | ⚠️ High | 1 day | Business Logic |
@@ -1238,7 +1238,7 @@ Core principles:
 | Payment receipt print | ✅ Full | ✅ Full | None |
 | Multi-invoice allocation | ✅ CustomerTransactionController | ❌ Single invoice only | HIGH |
 | Payment types (discount/write-off) | ✅ transaction_type column | ❌ Only 'receive' set | HIGH |
-| Invoice dispatchers | ✅ Assigned in godown flow | ❌ No UI/service code | HIGH |
+| Invoice dispatchers | ✅ Assigned in godown flow | ✅ Assigned in finalize/edit flow (UI + service) | None |
 | Sales return create | ✅ Two-phase | ✅ Two-phase | None |
 | Return warehouse confirm | ✅ Good/Damage condition | ✅ Good/Damage + damage linkage | None |
 | Return reversal | ✅ Full (stock + GL + damage) | ✅ Full | None |
