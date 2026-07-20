@@ -1,10 +1,22 @@
 # RC-ERP Sales Module — Complete Documentation & Gap Analysis
 
-> **Document Version**: 1.0  
+> **Document Version**: 1.1 — Updated with verified implementation status  
 > **Date**: 2025-07-20  
 > **Scope**: Legacy CodeIgniter/MySQL → Laravel 12/PostgreSQL migration  
 > **Focus**: Sales Entry, Challan/Godown Copy, Invoice, Payment Receive, Sales Return  
-> **Rule**: Documentation only — no coding at this stage  
+> **Rule**: Documentation only — no coding at this stage
+
+---
+
+### Status Key
+
+| Marker | Meaning |
+|--------|---------|
+| ✅ Done | Fully implemented and working in Laravel |
+| ⚠️ Partial | Exists but incomplete or has issues |
+| ❌ TODO | Not implemented yet |
+| 🔴 Bug | Implemented but has a bug that must be fixed |
+| 💡 Better | Laravel implementation is superior to legacy |  
 
 ---
 
@@ -723,40 +735,40 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 
 ### 6.1 CRITICAL Gaps (Must Fix)
 
-| # | Gap | Legacy Has | Laravel Status | Impact |
-|---|-----|-----------|---------------|--------|
-| G-1 | **Sales services bypass SubLedgerService** | Inline customer_ledger writes | Same inline pattern, SubLedgerService exists but unused | 🔴 Single point of control missing; journal_entry_id not consistently linked in customer_ledger |
-| G-2 | **Sales services bypass JournalReversalService** | Manual GL + sub-ledger reversal inline | Same inline pattern | 🔴 Duplicated reversal logic that can drift; JournalReversalService::reverseByJournalEntry() can cascade GL+sub-ledger atomically |
-| G-3 | **journal_entry_id not always linked in customer_ledger** | Some paths link, some don't | SalesInvoiceService does NOT pass journal_entry_id to customer_ledger debit | 🔴 Breaks reconciliation chain; JournalReversalService finds sub-ledger entries by journal_entry_id |
-| G-4 | **SQL injection in ReconciliationService** | Parameterized in legacy | String-interpolated date filters | 🔴 Security vulnerability |
+| # | Gap | Legacy Has | Laravel Status | Verified? | Impact |
+|---|-----|-----------|---------------|-----------|--------|
+| G-1 | **Sales services bypass SubLedgerService** | Inline customer_ledger writes | Same inline pattern, SubLedgerService exists but unused | 🔴 VERIFIED — 14 raw `customer_ledger` inserts in SalesInvoiceService, zero SubLedgerService refs | Single point of control missing; journal_entry_id not consistently linked |
+| G-2 | **Sales services bypass JournalReversalService** | Manual GL + sub-ledger reversal inline | Same inline pattern | 🔴 VERIFIED — JournalReversalService exists but sales services reverse GL+ledger manually | Duplicated reversal logic that can drift |
+| G-3 | **journal_entry_id not always linked in customer_ledger** | Some paths link, some don't | SalesInvoiceService does NOT pass journal_entry_id to customer_ledger debit | 🔴 VERIFIED — CustomerPaymentService DOES pass it; SalesInvoiceService DOES NOT | Breaks reconciliation chain |
+| G-4 | **SQL injection in ReconciliationService** | Parameterized in legacy | String-interpolated date filters (`$asOfDate`) | 🔴 VERIFIED — Lines 105, 163, 220 use raw interpolation in `DB::select()` | Security vulnerability |
 
 ### 6.2 HIGH Priority Gaps (Should Fix)
 
-| # | Gap | Legacy Has | Laravel Status | Impact |
-|---|-----|-----------|---------------|--------|
-| G-5 | **Invoice dispatchers not assigned** | `sales_invoice_dispatchers` populated in godown/challan flow | Table exists but NO controller/service code | ⚠️ Dispatcher feature broken |
-| G-6 | **Multi-payment allocation** | One payment can be allocated to multiple invoices | `confirmPayment()` accepts single invoiceId only | ⚠️ Cannot split payment across invoices |
-| G-7 | **Payment transaction types** | receive/payment/discount/write_off | Column exists but only 'receive' is set by service | ⚠️ Discount, write-off, refund features missing |
-| G-8 | **Discount GL posting on payment** | `postCustomerDiscount()` in JournalPostingService | discount_amount field exists but no GL posted | ⚠️ Discounts not reflected in GL |
-| G-9 | **Salesman commission tracking** | salesman_id tracked on invoices | No commission calculation service | ⚠️ Commission reports not possible |
-| G-10 | **Call It A Day** batch operation | `callItADay()` in SalesInvoiceOperationsTrait | Not implemented in Laravel service | ⚠️ End-of-day workflow missing |
-| G-11 | **Customer 360 hub** | `CustomerController::show()` with summary, ledger, invoices, payments | Basic CRUD only; no hub view | ⚠️ No unified customer view |
+| # | Gap | Legacy Has | Laravel Status | Verified? | Impact |
+|---|-----|-----------|---------------|-----------|--------|
+| G-5 | **Invoice dispatchers not assigned** | `sales_invoice_dispatchers` populated in godown/challan flow | Table exists but NO UI or service code for assignment | ❌ VERIFIED — SalesChallanService/Controller have zero dispatcher refs; only deletion on edit exists | Dispatcher feature broken |
+| G-6 | **Multi-payment allocation** | One payment can be allocated to multiple invoices | `confirmPayment()` accepts single invoiceId only | ⚠️ VERIFIED — Service has `?int $invoiceId` param, no loop for multi-allocation | Cannot split payment across invoices |
+| G-7 | **Payment transaction types** | receive/payment/discount/write_off | Column exists (CHECK constraint) but only 'receive' is set by service | ⚠️ VERIFIED — `transaction_type` column added by P2-5 but service hardcodes 'receive' | Discount, write-off, refund features missing |
+| G-8 | **Discount GL posting on payment** | `postCustomerDiscount()` in JournalPostingService | discount_amount field exists but no GL posted on confirm | ❌ VERIFIED — No discount GL in CustomerPaymentService::confirmPayment() | Discounts not reflected in GL |
+| G-9 | **Salesman commission tracking** | salesman_id tracked on invoices | No commission calculation service | ❌ Not implemented | Commission reports not possible |
+| G-10 | **Call It A Day** batch operation | `callItADay()` in SalesInvoiceOperationsTrait | Not implemented in Laravel service | ❌ VERIFIED — Zero matches for callItADay/call_it_a_day in Laravel codebase | End-of-day workflow missing |
+| G-11 | **Customer 360 hub** | `CustomerController::show()` with summary, ledger, invoices, payments | Basic show view (name, contact, credit limit) — NO ledger/invoice/payment tabs | ⚠️ VERIFIED — customers/show.blade.php (197 lines) is a static detail page; comment says "placeholder for future customer-ledger widget" | No unified customer view |
 
 ### 6.3 MEDIUM Priority Gaps (Nice to Have)
 
-| # | Gap | Legacy Has | Laravel Status |
-|---|-----|-----------|---------------|
-| G-12 | **Sales API write endpoints** | Full AJAX CRUD | Only read-only dashboard + lookups |
-| G-13 | **Telegram/FCM notifications** | Full notification suite (5 event types) | Not implemented in Laravel |
-| G-14 | **Sales guideline page** | Bengali/English user guide | Not implemented |
-| G-15 | **Go-live checklist** | Manager sign-off checklist | Not implemented |
-| G-16 | **Revenue Overview dashboard** | Chart.js KPI dashboard with filters | Basic report view only |
-| G-17 | **Sales Funnel/Pipeline dashboard** | Pipeline stages, win rate, velocity | Not implemented |
-| G-18 | **Customer Performance dashboard** | CLV, churn risk, segment breakdown | Basic report view only |
-| G-19 | **Blank godown copy print** | Handwrite template with blank cells | Not implemented |
-| G-20 | **Invoice CSV export** | `export()` in SalesController | Not implemented |
-| G-21 | **Challan CSV export** | `export()` in ChallanController | Not implemented |
-| G-22 | **Dead model cleanup** | N/A | `CustomerPaymentSettlement` model still exists (table dropped) |
+| # | Gap | Legacy Has | Laravel Status | Verified? |
+|---|-----|-----------|---------------|-----------|
+| G-12 | **Sales API write endpoints** | Full AJAX CRUD | Only read-only dashboard + lookups | ❌ Not implemented |
+| G-13 | **Telegram/FCM notifications** | Full notification suite (5 event types) | Schema + UI placeholders exist (fcm_tokens table, telegram_user_id in user CRUD) but NO dispatch code | ⚠️ VERIFIED — No Telegram bot API calls, no FCM push service |
+| G-14 | **Sales guideline page** | Bengali/English user guide | Not implemented | ❌ Not implemented |
+| G-15 | **Go-live checklist** | Manager sign-off checklist | Not implemented | ❌ Not implemented |
+| G-16 | **Revenue Overview dashboard** | Chart.js KPI dashboard with filters | Basic report view only | ⚠️ Partial |
+| G-17 | **Sales Funnel/Pipeline dashboard** | Pipeline stages, win rate, velocity | Not implemented | ❌ Not implemented |
+| G-18 | **Customer Performance dashboard** | CLV, churn risk, segment breakdown | Basic report view only | ⚠️ Partial |
+| G-19 | **Blank godown copy print** | Handwrite template with blank cells | ✅ IMPLEMENTED — print_godown.blade.php has blank Picked Qty + Signature columns | ✅ VERIFIED — This was previously marked wrong |
+| G-20 | **Invoice CSV export** | `export()` in SalesController | Not implemented | ❌ Not implemented |
+| G-21 | **Challan CSV export** | `export()` in ChallanController | Not implemented | ❌ Not implemented |
+| G-22 | **Dead model cleanup** | N/A | `CustomerPaymentSettlement` model still exists (table dropped by P1-4) | ⚠️ VERIFIED — Model file exists but orphaned; service uses invoice_payment_allocations |
 
 ### 6.4 Design Improvements in Laravel (Better Than Legacy)
 
@@ -1216,7 +1228,7 @@ Core principles:
 | Invoice print | ✅ A4 multi-page Bengali | ✅ A4 multi-page | None |
 | Godown prep | ✅ Full | ✅ Full | None |
 | Godown copy print | ✅ Bengali picking list | ✅ Picking list | None |
-| Blank godown copy | ✅ Handwrite template | ❌ Missing | Medium |
+| Blank godown copy | ✅ Handwrite template | ✅ print_godown.blade.php has blank Picked Qty + Signature columns | None |
 | Challan finalize | ✅ Full (stock OUT + COGS) | ✅ Full (stock OUT + COGS) | None |
 | Challan print | ✅ Bengali delivery note | ✅ Delivery note | None |
 | Challan reversal | ✅ Full (stock + GL restore) | ✅ Full | None |
@@ -1233,7 +1245,7 @@ Core principles:
 | Return slip print | ✅ Bengali | ✅ Full | None |
 | Damage write-off | ✅ Manual + auto from return | ✅ Manual + auto from return | None |
 | Customer CRUD | ✅ Full with deactivation safety | ✅ Full with deactivation safety | None |
-| Customer 360 hub | ✅ Summary + ledger + invoices + payments | ❌ Basic CRUD only | MEDIUM |
+| Customer 360 hub | ✅ Summary + ledger + invoices + payments | ⚠️ Basic show view only (no ledger/invoice/payment tabs) | MEDIUM |
 | Customer ledger | ✅ Running balance SSOT | ✅ Running balance SSOT | None |
 | Credit limit enforcement | ✅ Full | ✅ Full | None |
 | Stock availability (pipeline) | ✅ physical - pipeline | ✅ physical - pipeline + Redis cache | Better |
@@ -1245,8 +1257,8 @@ Core principles:
 | Audit trail | ✅ UserAudit + file dual-write | ✅ SalesAuditLogger + file dual-write | None |
 | Stale draft cleanup | ✅ Full (throttled, batched) | ✅ Full (scheduled, dry-run) | None |
 | Call It A Day | ✅ Batch operation | ❌ Not implemented | MEDIUM |
-| Telegram notifications | ✅ 5 event types | ❌ Not implemented | MEDIUM |
-| FCM notifications | ✅ Push to warehouse managers | ❌ Not implemented | MEDIUM |
+| Telegram notifications | ✅ 5 event types | ⚠️ Schema+UI placeholders exist, no dispatch code | MEDIUM |
+| FCM notifications | ✅ Push to warehouse managers | ⚠️ fcm_tokens table exists, no push service | MEDIUM |
 | Revenue Overview dashboard | ✅ Chart.js KPIs + filters | ⚠️ Basic report only | MEDIUM |
 | Sales Funnel dashboard | ✅ Pipeline stages, win rate | ❌ Not implemented | MEDIUM |
 | Customer Performance | ✅ CLV, churn, segments | ⚠️ Basic report only | MEDIUM |
@@ -1255,6 +1267,10 @@ Core principles:
 | Go-live checklist | ✅ Manager sign-off | ❌ Not implemented | LOW |
 | CSV export | ✅ Invoices + challans | ❌ Not implemented | LOW |
 | Salesman commission | ❌ Not in legacy | ❌ Not implemented | LOW |
+
+---
+
+> **Last Verified**: 2025-07-20 — All gap items manually checked against Laravel codebase by running targeted searches on service files, controllers, models, and views.
 
 ## Appendix B: Key Formulas Reference
 
