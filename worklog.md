@@ -1,5 +1,36 @@
 
 ---
+Task ID: 28
+Agent: Main Agent
+Task: Implement Tasks 26, 27, 28 (Customer Performance, Blank Godown, CSV Export)
+
+Work Log:
+- Task 26: Created CustomerPerformanceController with 7 data methods (getKPIs, getSegmentation, getChurnDistribution, getTopCustomers, getCLVTrend, getRevenueBySegment, getCustomerTable)
+  - 6 KPI cards: active customers, avg CLV, churn rate, repeat rate, AOV, retention
+  - 4 Chart.js charts: segmentation donut, churn distribution donut, CLV trend dual-axis, revenue by segment horizontal bar
+  - Customer segmentation: High Value (top 20%), Loyal (4+ invoices), At Risk (churn > 60%), New (< 90 days)
+  - CLV = AOV × frequency × 3 (3-year multiplier), churn risk Low/Medium/High
+  - Full dashboard blade view with branch + salesman filters, 365-day default range
+  - Route updated from ReportController to CustomerPerformanceController
+- Task 27: Created print_blank_godown.blade.php (bilingual handwriting template)
+  - Blank write-in cells for warehouse, carton, pieces picked, signature
+  - 17 items per page pagination, BLANK GODOWN watermark
+  - Dispatcher write-in area, 3 signature lines, Bengali/English instructions
+  - Controller method printBlankGodown(), route admin/sales-invoices/print-blank-godown
+  - Added "Print Blank Godown" button on invoice show page
+- Task 28: Created CsvExportController with exportInvoices() and exportChallans()
+  - Streaming CSV with BOM for Excel UTF-8 compatibility
+  - Same filter params as index pages, cursor() for memory efficiency
+  - Routes: admin/sales-invoices/export-csv, admin/sales-challans/export-csv
+  - Export CSV buttons with JS filter-param passthrough on both index pages
+- Updated docs: G-18 ✅ FIXED, G-19 ✅ FIXED (dedicated template), G-20/G-21 ✅ FIXED
+- Tasks 26/27/28 marked ✅ Done, comparison table + routes + controllers updated
+
+Stage Summary:
+- 4 commits pushed to GitHub: 946171f, 3961f05, 91659b2, be2dab2
+- All 3 tasks complete with documentation updates
+
+---
 Task ID: 27
 Agent: Main Agent
 Task: Implement pg_cron for stale draft cleanup + materialized view refresh (Task 21)
