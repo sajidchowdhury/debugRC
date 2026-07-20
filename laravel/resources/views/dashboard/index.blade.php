@@ -1,44 +1,17 @@
-@extends('layouts.app')
+@extends('layouts.admin')
 
 @section('content')
-<div class="container-fluid py-4">
-    {{-- Top bar --}}
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <div>
-            <h2 class="mb-1">
-                <i class="fas fa-tachometer-alt me-2 text-primary"></i>Dashboard
-            </h2>
-            <p class="text-muted mb-0">
-                Welcome back, <strong>{{ session('employee_name', Auth::user()->username) }}</strong>
-                — {{ session('role') }} @if (session('branch_name')) · {{ session('branch_name') }} @endif
-            </p>
-        </div>
-        <div class="d-flex gap-2">
-            <a href="{{ $legacyUrl }}" class="btn btn-outline-secondary btn-sm">
-                <i class="fas fa-arrow-left me-1"></i>Back to Legacy App
-            </a>
-            <form method="POST" action="{{ route('logout') }}">
-                @csrf
-                <button type="submit" class="btn btn-outline-danger btn-sm">
-                    <i class="fas fa-sign-out-alt me-1"></i>Logout
-                </button>
-            </form>
-        </div>
+<div class="py-3">
+    {{-- Welcome header --}}
+    <div class="mb-4">
+        <h2 class="mb-1">
+            <i class="fas fa-tachometer-alt me-2 text-primary"></i>Dashboard
+        </h2>
+        <p class="text-muted mb-0">
+            Welcome back, <strong>{{ session('employee_name', Auth::user()->username) }}</strong>
+            — {{ session('role') }} @if (session('branch_name')) · {{ session('branch_name') }} @endif
+        </p>
     </div>
-
-    {{-- Flash messages --}}
-    @if (session('success'))
-        <div class="alert alert-success alert-dismissible fade show" role="alert">
-            {{ session('success') }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    @endif
-    @if (session('error'))
-        <div class="alert alert-danger alert-dismissible fade show" role="alert">
-            {{ session('error') }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    @endif
 
     {{-- Stats cards --}}
     <div class="row g-3 mb-4">
@@ -104,9 +77,9 @@
                 Laravel Migration — Phase 3 Active
             </h5>
             <p class="card-text text-muted">
-                This dashboard is served by the new Laravel 11 application.
+                This dashboard is served by the new Laravel application.
                 The legacy PHP app is still running for all ERP modules.
-                Modules will be progressively ported in Phases 4–9.
+                Modules will be progressively ported in upcoming phases.
             </p>
             <div class="row g-2">
                 <div class="col-auto">
