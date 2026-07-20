@@ -1,0 +1,43 @@
+# =============================================================================
+# RC_ERP_v2 — Git Attributes
+# =============================================================================
+# Enforce LF line endings for all text files.
+# CRITICAL: Shell scripts MUST use LF — CRLF causes "no such file or directory"
+# errors in Docker/Linux containers because #!/bin/bash\r is invalid.
+# =============================================================================
+
+# Auto-detect text files and normalize to LF
+* text=auto eol=lf
+
+# Shell scripts — MUST use LF (no exceptions)
+*.sh text eol=lf
+entrypoint.sh text eol=lf
+
+# Config files that need LF
+*.conf text eol=lf
+*.ini text eol=lf
+*.sql text eol=lf
+*.env* text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# PHP/Laravel — LF
+*.php text eol=lf
+*.blade.php text eol=lf
+*.json text eol=lf
+*.css text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+
+# Binary files — don't touch
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.pdf binary
+*.zip binary
