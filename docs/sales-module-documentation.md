@@ -738,7 +738,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | # | Gap | Legacy Has | Laravel Status | Verified? | Impact |
 |---|-----|-----------|---------------|-----------|--------|
 | G-1 | **Sales services bypass SubLedgerService** | Inline customer_ledger writes | ✅ FIXED — All 8 inline `customer_ledger` inserts replaced with `SubLedgerService::postCustomerLedgerEntry()` calls in SalesInvoiceService (3), CustomerPaymentService (2), SalesReturnService (2), SalesChallanService (1) | ✅ VERIFIED & FIXED | Single point of control restored; journal_entry_id now consistently linked |
-| G-2 | **Sales services bypass JournalReversalService** | Manual GL + sub-ledger reversal inline | Same inline pattern | 🔴 VERIFIED — JournalReversalService exists but sales services reverse GL+ledger manually | Duplicated reversal logic that can drift |
+| G-2 | **Sales services bypass JournalReversalService** | Manual GL + sub-ledger reversal inline | ✅ FIXED — All 10 inline reversal calls (journalPosting->reverseJournalEntry + manual subLedger reversal) replaced with journalReversal->reverseByJournalEntry() cascade in SalesInvoiceService (2), CustomerPaymentService (2), SalesChallanService (2), SalesReturnService (2), PurchaseReturnService (1), PurchaseReceiveService (1); also replaced 4 direct supplier_ledger inserts with SubLedgerService calls and removed 4 dead private methods | ✅ VERIFIED & FIXED | Single point of control for reversal; original sub-ledger entries now correctly marked is_reversed=true (preventing double-count) |
 | G-3 | **journal_entry_id not always linked in customer_ledger** | Some paths link, some don't | ✅ FIXED — SubLedgerService integration ensures journal_entry_id is passed to every customer_ledger insert; GL is posted first, then ledger with the journal_entry_id | ✅ VERIFIED & FIXED | Reconciliation chain now complete |
 | G-4 | **SQL injection in ReconciliationService** | Parameterized in legacy | String-interpolated date filters (`$asOfDate`) | 🔴 VERIFIED — Lines 105, 163, 220 use raw interpolation in `DB::select()` | Security vulnerability |
 
@@ -1118,7 +1118,7 @@ LIMIT 30;
 | # | Task | Priority | Effort | Type |
 |---|------|----------|--------|------|
 | 1 | Fix SubLedgerService integration — Sales services should use SubLedgerService instead of inline customer_ledger writes | ✅ DONE | Business Logic | 2025-01-18 — All 8 inline writes replaced with SubLedgerService::postCustomerLedgerEntry() |
-| 2 | Fix JournalReversalService integration — Sales services should delegate reversals to JournalReversalService::reverseByJournalEntry() | 🔴 Critical | 2 days | Business Logic |
+| 2 | Fix JournalReversalService integration — Sales services should delegate reversals to JournalReversalService::reverseByJournalEntry() | ✅ DONE | Business Logic | 2025-01-18 — All 10 inline reversal calls replaced with JournalReversalService::reverseByJournalEntry() cascade; 4 direct supplier_ledger inserts replaced with SubLedgerService calls; 4 dead private methods removed (-160 lines) |
 | 3 | Fix journal_entry_id linking in customer_ledger — Ensure every customer_ledger row has journal_entry_id | ✅ DONE | Business Logic | 2025-01-18 — Fixed as part of SubLedgerService integration (G-1); also added DEFAULT false migration for is_reversed |
 | 4 | Fix SQL injection in ReconciliationService — Parameterize all date filters | 🔴 Critical | 0.5 day | Security |
 | 5 | Remove dead CustomerPaymentSettlement model | Medium | 0.5 day | Cleanup |
