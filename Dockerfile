@@ -80,8 +80,15 @@ WORKDIR /var/www/laravel
 # -----------------------------------------------------------------------------
 # Entrypoint
 # -----------------------------------------------------------------------------
+# NOTE: We strip Windows CRLF (\r) from the shell script after COPY.
+# Git on Windows converts LF -> CRLF on checkout, which causes the infamous
+# "exec /usr/local/bin/entrypoint.sh: no such file or directory" error
+# because Linux tries to find /bin/bash\r instead of /bin/bash.
+# The sed command removes all \r characters, making it work on any OS.
+# -----------------------------------------------------------------------------
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["php-fpm"]
