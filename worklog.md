@@ -1,5 +1,34 @@
 
 ---
+Task ID: 25
+Agent: Main Agent
+Task: Implement Sales Funnel/Pipeline dashboard
+
+Work Log:
+- Researched legacy SalesFunnelPipeline view and ReportController funnel methods
+- Identified Laravel pipeline stages: Draft Cart (10%) → Draft Invoice (25%) → Godown Ready (50%) → Delivered (75%) → Paid/Closed (100%)
+- Discovered Laravel uses status + boolean flags (is_godown_prepared, is_challan_issued) instead of legacy status progression
+- Created SalesFunnelController with 7 data methods: getFunnelData, getKPIs, getConversionRates, getPipelineTrend, getSalesmanPerformance, getOpenOpportunities, getForecast
+- Created sales_funnel.blade.php with full Chart.js dashboard:
+  - 6 KPI cards: open pipeline, weighted pipeline, closed won, win rate, pipeline velocity, stale drafts
+  - 4 Chart.js charts: horizontal funnel bar (total + weighted), revenue forecast 30/60/90d, pipeline trend 6-month line, salesman stacked bar
+  - Stage conversion rates table
+  - Pipeline stage summary table with probability weights
+  - Open opportunities table (top 25) with health badges (Fresh/Aging/Stale)
+  - Salesman leaderboard table with win rates
+  - Branch + date range filters
+- Added route: GET /admin/reports/sales-funnel → SalesFunnelController@index
+- Added SalesFunnelController import to routes/web.php
+- Added sales_funnel to ReportsCatalog (featured)
+- Updated sales-module-documentation.md: G-17 VERIFIED & FIXED, Task #25 marked Done, comparison table updated
+
+Stage Summary:
+- Sales Funnel/Pipeline dashboard fully implemented with real computed metrics (not hardcoded like legacy)
+- Pipeline stages derived from status + boolean flags matching Laravel schema
+- Win rate, velocity, forecast computed from actual invoice data
+- Documentation updated: G-17 gap marked VERIFIED & FIXED
+
+---
 Task ID: 22-24
 Agent: Main Agent
 Task: Remove Telegram/FCM notifications and implement Revenue Overview dashboard (Chart.js KPIs)

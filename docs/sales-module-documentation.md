@@ -100,7 +100,7 @@
 - `go_live_checklist.php` — Go-live checklist
 - `audit.php` — Sales audit log viewer
 - `RevenueOverview.php` — Executive KPI dashboard (Chart.js) — NOW: full Revenue Overview dashboard with 4 Chart.js charts
-- `SalesFunnelPipeline.php` — Pipeline/funnel dashboard
+- `SalesFunnelPipeline.php` — Pipeline/funnel dashboard — NOW: full Sales Funnel dashboard with 4 Chart.js charts, conversion rates, forecast, salesman leaderboard
 - `CustomerPerformance.php` — Customer 360° intelligence
 
 **Challan views (6):**
@@ -762,7 +762,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | G-14 | **Sales guideline page** | Bengali/English user guide | Not implemented | ❌ Not implemented |
 | G-15 | **Go-live checklist** | Manager sign-off checklist | Not implemented | ❌ Not implemented |
 | G-16 | **Revenue Overview dashboard** | Chart.js KPI dashboard with filters | ✅ FIXED — Full Revenue Overview dashboard: 6 KPI cards (today revenue, MTD revenue + growth %, MTD collection + rate, MTD outstanding, total outstanding, collection rate), 4 Chart.js charts (sales trend line with 7D/30D/90D toggle, receivable aging donut, branch revenue bar, revenue vs collection horizontal bar), 2 mini-tables (top 5 customers, top 5 products), AJAX trend refresh endpoint | ✅ VERIFIED & FIXED |
-| G-17 | **Sales Funnel/Pipeline dashboard** | Pipeline stages, win rate, velocity | Not implemented | ❌ Not implemented |
+| G-17 | **Sales Funnel/Pipeline dashboard** | Pipeline stages, win rate, velocity | ✅ FIXED — Full Sales Funnel dashboard: 6 KPI cards (open pipeline, weighted pipeline, closed won, win rate, pipeline velocity, stale drafts), 4 Chart.js charts (horizontal funnel bar with total+weighted value, revenue forecast 30/60/90d bar, pipeline trend 6-month line, salesman stacked bar), stage conversion rates table, pipeline stage summary table with probability weights, open opportunities table (top 25 with health badges), salesman leaderboard table, branch + date range filters, SalesFunnelController with 7 data methods (getFunnelData, getKPIs, getConversionRates, getPipelineTrend, getSalesmanPerformance, getOpenOpportunities, getForecast). Pipeline stages derived from status + boolean flags: Draft Cart (10%) → Draft Invoice (25%) → Godown Ready (50%) → Delivered (75%) → Paid/Closed (100%) | ✅ VERIFIED & FIXED |
 | G-18 | **Customer Performance dashboard** | CLV, churn risk, segment breakdown | Basic report view only | ⚠️ Partial |
 | G-19 | **Blank godown copy print** | Handwrite template with blank cells | ✅ IMPLEMENTED — print_godown.blade.php has blank Picked Qty + Signature columns | ✅ VERIFIED — This was previously marked wrong |
 | G-20 | **Invoice CSV export** | `export()` in SalesController | Not implemented | ❌ Not implemented |
@@ -1929,7 +1929,7 @@ $customers = Customer::search('rahman', ranked: true)->limit(30)->get();
 | 22 | ~~Implement Telegram notifications (5 event types)~~ | ✅ Replaced by Laravel Notification system | Business Logic |
 | 23 | ~~Implement FCM push notifications~~ | ✅ Replaced by Laravel Notification system | Business Logic |
 | 24 | ~~Implement Revenue Overview dashboard (Chart.js KPIs)~~ | ✅ Done | UI |
-| 25 | Implement Sales Funnel/Pipeline dashboard | Medium | 3 days | UI |
+| 25 | ~~Implement Sales Funnel/Pipeline dashboard~~ | ✅ Done | UI |
 | 26 | Implement Customer Performance dashboard | Medium | 3 days | UI |
 | 27 | Implement blank godown copy print template | Low | 1 day | UI |
 | 28 | Implement CSV export for invoices + challans | Low | 1 day | Business Logic |
@@ -2033,7 +2033,7 @@ Core principles:
 | Telegram notifications | ✅ 5 event types | ✅ Laravel Notifiable + ERPNotification (database + broadcast channels) | Equal |
 | FCM notifications | ✅ Push to warehouse managers | ✅ Laravel broadcast channel (Reverb WebSocket) | Better |
 | Revenue Overview dashboard | ✅ Chart.js KPIs + filters | ✅ 6 KPIs + 4 Chart.js charts + AJAX trend refresh | Better |
-| Sales Funnel dashboard | ✅ Pipeline stages, win rate | ❌ Not implemented | MEDIUM |
+| Sales Funnel dashboard | ✅ Pipeline stages, win rate | ✅ 6 KPIs + 4 Chart.js charts + forecast + salesman leaderboard | Better |
 | Customer Performance | ✅ CLV, churn, segments | ⚠️ Basic report only | MEDIUM |
 | Sales API (mobile) | ❌ No API | ⚠️ Read-only (dashboard + lookups) | MEDIUM |
 | Sales guideline page | ✅ Bengali/English | ❌ Not implemented | LOW |
