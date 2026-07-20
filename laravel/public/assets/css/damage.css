@@ -1,0 +1,17 @@
+/* Damage module — aligned with stock-take / adjustment */
+.dmg-app .dmg-hero {
+    background: linear-gradient(135deg, #991b1b 0%, #b45309 55%, #7f1d1d 100%);
+}
+
+.dmg-app .st-status-pill.damaged {
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+}
+
+.dmg-line-head .form-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6b7280;
+    margin-bottom: 0.15rem;
+}

@@ -1,0 +1,38 @@
+@media print {
+    body * { visibility: hidden; }
+    .oe-slip, .oe-slip * { visibility: visible; }
+    .oe-slip { position: absolute; left: 0; top: 0; width: 100%; }
+    nav, .sidebar, .no-print { display: none !important; }
+}
+
+.oe-slip {
+    max-width: 720px;
+    margin: 1.5rem auto;
+    padding: 1.5rem 2rem;
+    border: 2px solid #b91c1c;
+    font-family: Georgia, 'Times New Roman', serif;
+    color: #111;
+}
+
+.oe-slip-head h2 { font-size: 1.25rem; margin-bottom: 0.25rem; }
+.oe-slip-head h3 { font-size: 1rem; font-weight: normal; margin-bottom: 0.5rem; color: #b91c1c; }
+.oe-slip-code { font-family: ui-monospace, monospace; font-weight: 700; }
+.oe-slip-reversed { color: #b91c1c; font-weight: 700; letter-spacing: 0.08em; }
+
+.oe-slip-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+}
+
+.oe-slip-table th,
+.oe-slip-table td {
+    border: 1px solid #ccc;
+    padding: 0.45rem 0.65rem;
+    text-align: left;
+}
+
+.oe-slip-table .amount { font-weight: 700; font-size: 1.1rem; }
+
+.oe-slip-foot { margin-top: 2rem; font-size: 0.85rem; color: #555; }
+.oe-slip-foot .sig { margin-top: 2.5rem; }

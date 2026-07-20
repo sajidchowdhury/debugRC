@@ -1,0 +1,140 @@
+/* System users — theme on branch-hub layout */
+
+.user-theme {
+    --bh-primary: #4f46e5;
+    --bh-secondary: #db2777;
+    --bh-accent: #0d9488;
+}
+
+.user-theme .branch-hub-hero {
+    box-shadow: 0 14px 36px rgba(79, 70, 229, 0.22);
+}
+
+.user-theme .branch-avatar,
+.user-theme .branch-preview-card .branch-avatar {
+    background: linear-gradient(135deg, #4f46e5, #db2777);
+}
+
+.user-theme .branch-code-pill {
+    color: #4338ca;
+}
+
+.user-theme .branch-hub-quick a:hover {
+    border-color: #4f46e5;
+    color: #4f46e5;
+    background: #eef2ff;
+}
+
+.user-theme .branch-aside-tip {
+    background: #eef2ff;
+    border-color: #c7d2fe;
+    color: #3730a3;
+}
+
+.user-theme .branch-form-footer .btn-primary {
+    background: linear-gradient(135deg, #4f46e5, #db2777);
+}
+
+.user-perm-table thead th {
+    background: #1e293b;
+    color: #f8fafc;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.user-perm-table tbody tr[data-level="1"] td:first-child {
+    padding-left: 1.25rem;
+}
+
+.user-perm-table tbody tr[data-level="2"] td:first-child {
+    padding-left: 2rem;
+}
+
+.user-perm-table tbody tr[data-level="3"] td:first-child {
+    padding-left: 2.75rem;
+}
+
+.user-perm-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--bh-border, #e2e8f0);
+    background: #f8fafc;
+}
+
+.user-perm-search {
+    flex: 1;
+    min-width: 220px;
+    max-width: 420px;
+    margin: 0;
+}
+
+.user-perm-toolbar-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.user-perm-copy-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--bh-border, #e2e8f0);
+    background: #eef2ff;
+}
+
+.user-perm-copy-label {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #3730a3;
+    white-space: nowrap;
+}
+
+.user-perm-copy-bar .form-select {
+    min-width: 220px;
+    max-width: 320px;
+    border-radius: 10px;
+}
+
+.user-perm-copy-hint {
+    flex: 1 1 180px;
+}
+
+.user-perm-status-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    padding: 0.65rem 1rem;
+    border-bottom: 1px solid #f1f5f9;
+}
+
+.user-perm-table-wrap {
+    max-height: min(68vh, 720px);
+    overflow: auto;
+}
+
+.user-perm-menu-name {
+    font-weight: 600;
+    color: var(--bh-text, #0f172a);
+    font-size: 0.86rem;
+}
+
+.user-perm-menu-meta {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--bh-muted, #64748b);
+    margin-top: 0.1rem;
+}
+
+.user-perm-table tbody tr.perm-search-match {
+    background: #fef9c3;
+}
+
+.user-perm-table tbody tr.menu-row:hover {
+    background: #f8fafc;
+}

@@ -1,0 +1,63 @@
+/**
+ * Shared money-flow modules (Customer / Supplier / Employee / Other income & expense).
+ * Import after branch-index.css on accounting transaction pages.
+ */
+.acct-money-app {
+    --acct-money-primary: #0284c7;
+    --acct-money-secondary: #0d9488;
+    --acct-money-danger: #dc2626;
+    --acct-money-surface: #ffffff;
+    --acct-money-muted: #64748b;
+}
+
+.acct-money-app .acct-sticky-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    background: linear-gradient(180deg, transparent, #fff 24%);
+    padding: 1rem 0 0.5rem;
+    margin-top: 1rem;
+}
+
+@media (max-width: 767.98px) {
+    .acct-money-app .branch-hub-table-wrap {
+        display: none !important;
+    }
+
+    .acct-money-app .branch-form-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .acct-money-app .branch-form-aside {
+        order: -1;
+    }
+
+    .acct-money-app .branch-hub-actions .btn {
+        min-height: 44px;
+    }
+
+    .acct-money-app .btn-action,
+    .acct-money-app .branch-action-bar .btn-action {
+        min-width: 44px;
+        min-height: 44px;
+    }
+}
+
+/* GL preview aside (customer / supplier / employee create forms) */
+.acct-money-app #accounting_preview .acct-gl-preview-table {
+    font-size: 0.8125rem;
+}
+
+.acct-money-app #accounting_preview .acct-gl-preview-table th {
+    font-weight: 600;
+    color: var(--acct-money-muted);
+    border-bottom-width: 1px;
+}
+
+.acct-money-app #accounting_preview .acct-gl-preview-table td {
+    vertical-align: middle;
+}
+
+.acct-money-app #accounting_preview .fw-bold {
+    font-variant-numeric: tabular-nums;
+}

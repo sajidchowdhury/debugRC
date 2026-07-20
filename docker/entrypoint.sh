@@ -203,10 +203,10 @@ RETRY_COUNT=0
 until php -r "new PDO('pgsql:host=rcerp_postgres;port=5432;dbname=rcerp', 'rcerp_app', 'rcerp_secret');" 2>/dev/null; do
     RETRY_COUNT=$((RETRY_COUNT + 1))
     if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-        echo "  ✗ PostgreSQL not ready after $MAX_RETRIES attempts — continuing anyway"
+        echo "  ✗ PostgreSQL not ready after $MAX_RETRIES attempts"
         break
     fi
-    echo "  ⏳ PostgreSQL not ready — retrying in 2s... ($RETRY_COUNT/$MAX_RETRIES)"
+    echo "  ⏳ PostgreSQL not ready — retrying... ($RETRY_COUNT/$MAX_RETRIES)"
     sleep 2
 done
 if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
@@ -373,7 +373,7 @@ php artisan route:clear 2>/dev/null || true
 echo "  ✓ Caches cleared"
 
 # ---------------------------------------------------------------------------
-# Done — start PHP-FPM
+# Done
 # ---------------------------------------------------------------------------
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
@@ -383,9 +383,7 @@ echo "║  Application:  http://localhost:8080                     ║"
 echo "║  Login:        admin / password123                       ║"
 echo "║  PostgreSQL:   localhost:5432                            ║"
 echo "║  Redis:        localhost:6379                            ║"
-echo "║  MySQL Archive: localhost:3307 (optional, --profile archive) ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
-# Execute the main command (php-fpm)
 exec "$@"

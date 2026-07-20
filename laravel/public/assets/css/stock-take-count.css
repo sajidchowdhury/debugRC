@@ -1,0 +1,193 @@
+/* Stock take — count workspace (excel-like) */
+
+.st-count-workspace {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-height: calc(100vh - 220px);
+}
+
+.st-count-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    align-items: flex-end;
+    padding: 0.75rem 1rem;
+    background: #fff;
+    border: 1px solid var(--st-border, #a7f3d0);
+    border-radius: 12px;
+}
+
+.st-count-toolbar .form-label {
+    font-size: 0.72rem;
+    margin-bottom: 0.15rem;
+    color: var(--st-muted, #64748b);
+}
+
+.st-count-search-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 200px;
+}
+
+.st-count-search-wrap i {
+    position: absolute;
+    left: 0.65rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #94a3b8;
+    font-size: 0.85rem;
+}
+
+.st-count-search-wrap input {
+    padding-left: 2rem;
+}
+
+.st-count-summary-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    padding: 0.5rem 1rem;
+    background: #f0fdf4;
+    border: 1px solid #a7f3d0;
+    border-radius: 10px;
+    font-size: 0.85rem;
+}
+
+.st-count-summary-bar strong {
+    font-weight: 700;
+}
+
+.st-count-grid-wrap {
+    flex: 1;
+    overflow: auto;
+    border: 1px solid var(--st-border, #a7f3d0);
+    border-radius: 12px;
+    background: #fff;
+}
+
+.st-count-grid {
+    width: 100%;
+    margin-bottom: 0;
+    font-size: 0.82rem;
+}
+
+.st-count-grid thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #ecfdf5;
+    border-bottom: 2px solid #a7f3d0;
+    white-space: nowrap;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.st-count-grid tbody tr:hover {
+    background: #f8fafc;
+}
+
+.st-count-grid tbody tr.is-hidden {
+    display: none;
+}
+
+.st-count-grid tbody tr.is-counted {
+    background: #eff6ff;
+}
+
+.st-wh-card.is-progress {
+    border-color: #fcd34d;
+    background: #fffbeb;
+}
+
+.st-count-grid .physical-qty {
+    min-width: 5.5rem;
+    font-weight: 600;
+    border-color: #94a3b8;
+}
+
+.st-count-grid .physical-qty:focus {
+    border-color: #0d9488;
+    box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.2);
+}
+
+.st-count-grid .col-impact {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.st-count-foot {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: #fff;
+    border: 1px solid var(--st-border, #a7f3d0);
+    border-radius: 12px;
+}
+
+.st-count-hint-inline {
+    font-size: 0.8rem;
+    color: #475569;
+    max-width: 42rem;
+}
+
+.st-finalize-banner {
+    background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
+    color: #fff;
+    border-radius: 14px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.st-finalize-banner h2 {
+    font-size: 1.1rem;
+    margin: 0 0 0.25rem;
+    font-weight: 700;
+}
+
+.st-finalize-banner p {
+    margin: 0;
+    opacity: 0.92;
+    font-size: 0.88rem;
+}
+
+.st-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.st-step {
+    flex: 1;
+    min-width: 140px;
+    padding: 0.5rem 0.75rem;
+    border-radius: 10px;
+    border: 1px solid var(--st-border, #a7f3d0);
+    background: #fff;
+    font-size: 0.78rem;
+}
+
+.st-step.is-done {
+    background: #ecfdf5;
+    border-color: #6ee7b7;
+}
+
+.st-step.is-active {
+    border-color: #0d9488;
+    box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.15);
+}
+
+.st-step .num {
+    font-weight: 700;
+    color: #0d9488;
+}

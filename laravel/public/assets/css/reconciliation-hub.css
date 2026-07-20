@@ -1,0 +1,316 @@
+/* GL reconciliation hub — traffic-light section cards */
+
+.recon-hub {
+    --recon-ok: #059669;
+    --recon-ok-bg: #ecfdf5;
+    --recon-warn: #d97706;
+    --recon-warn-bg: #fffbeb;
+    --recon-fail: #dc2626;
+    --recon-fail-bg: #fef2f2;
+    --recon-muted: #64748b;
+    --recon-border: #e2e8f0;
+    padding-bottom: 2rem;
+}
+
+.recon-hub-hero {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding: 1.35rem 1.4rem;
+    background: linear-gradient(135deg, #0f766e 0%, #4f46e5 100%);
+    border-radius: 18px;
+    color: #fff;
+    box-shadow: 0 14px 36px rgba(15, 118, 110, 0.28);
+}
+
+.recon-hub-hero h1 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.recon-hub-hero p {
+    margin: 0.35rem 0 0;
+    font-size: 0.86rem;
+    opacity: 0.92;
+    max-width: 36rem;
+}
+
+.recon-status-banner {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.15rem;
+    border-radius: 14px;
+    margin-bottom: 1rem;
+    border: 1px solid var(--recon-border);
+    background: #fff;
+}
+
+.recon-status-banner.recon-ok {
+    border-color: rgba(5, 150, 105, 0.35);
+    background: var(--recon-ok-bg);
+}
+
+.recon-status-banner.recon-warn {
+    border-color: rgba(217, 119, 6, 0.35);
+    background: var(--recon-warn-bg);
+}
+
+.recon-status-banner.recon-fail {
+    border-color: rgba(220, 38, 38, 0.35);
+    background: var(--recon-fail-bg);
+}
+
+.recon-traffic-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 0.65rem;
+    margin-bottom: 1.25rem;
+}
+
+@media (max-width: 1199.98px) {
+    .recon-traffic-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@media (max-width: 575.98px) {
+    .recon-traffic-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+.recon-traffic-pill {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.65rem 0.5rem;
+    border-radius: 12px;
+    border: 1px solid var(--recon-border);
+    background: #fff;
+    text-decoration: none;
+    color: inherit;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.recon-traffic-pill:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+    color: inherit;
+}
+
+.recon-traffic-pill .recon-light {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    box-shadow: inset 0 -2px 4px rgba(0, 0, 0, 0.12);
+}
+
+.recon-traffic-pill.recon-ok .recon-light { background: var(--recon-ok); }
+.recon-traffic-pill.recon-warn .recon-light { background: var(--recon-warn); }
+.recon-traffic-pill.recon-fail .recon-light { background: var(--recon-fail); }
+
+.recon-traffic-pill .recon-pill-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    text-align: center;
+    color: var(--recon-muted);
+}
+
+.recon-filter-panel {
+    background: #fff;
+    border: 1px solid var(--recon-border);
+    border-radius: 14px;
+    padding: 1rem 1.15rem;
+    margin-bottom: 1rem;
+}
+
+.recon-tolerance-callout {
+    background: #f8fafc;
+    border: 1px dashed #cbd5e1;
+    border-radius: 12px;
+    padding: 0.85rem 1rem;
+    margin-bottom: 1.25rem;
+    font-size: 0.84rem;
+}
+
+.recon-tolerance-callout code {
+    font-size: 0.8rem;
+}
+
+.recon-section {
+    background: #fff;
+    border: 1px solid var(--recon-border);
+    border-radius: 16px;
+    margin-bottom: 1rem;
+    overflow: hidden;
+}
+
+.recon-section.recon-ok { border-left: 4px solid var(--recon-ok); }
+.recon-section.recon-warn { border-left: 4px solid var(--recon-warn); }
+.recon-section.recon-fail { border-left: 4px solid var(--recon-fail); }
+
+.recon-section-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.85rem 1.1rem;
+    background: #f8fafc;
+    border-bottom: 1px solid var(--recon-border);
+}
+
+.recon-section-head h2 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.recon-section-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+}
+
+.recon-section.recon-ok .recon-section-badge {
+    background: var(--recon-ok-bg);
+    color: var(--recon-ok);
+}
+
+.recon-section.recon-warn .recon-section-badge {
+    background: var(--recon-warn-bg);
+    color: var(--recon-warn);
+}
+
+.recon-section.recon-fail .recon-section-badge {
+    background: var(--recon-fail-bg);
+    color: var(--recon-fail);
+}
+
+.recon-section-body {
+    padding: 1rem 1.1rem;
+}
+
+.recon-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+    margin-bottom: 0.85rem;
+}
+
+@media (max-width: 767.98px) {
+    .recon-metrics {
+        grid-template-columns: 1fr;
+    }
+}
+
+.recon-metric {
+    background: #f8fafc;
+    border: 1px solid var(--recon-border);
+    border-radius: 12px;
+    padding: 0.75rem 0.85rem;
+}
+
+.recon-metric-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--recon-muted);
+    margin-bottom: 0.25rem;
+}
+
+.recon-metric-value {
+    font-size: 1.15rem;
+    font-weight: 700;
+}
+
+.recon-metric.diff-ok .recon-metric-value { color: var(--recon-ok); }
+.recon-metric.diff-bad .recon-metric-value { color: var(--recon-fail); }
+
+.recon-integrity-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.85rem;
+}
+
+.recon-integrity-chip {
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.35rem 0.65rem;
+    border-radius: 999px;
+    border: 1px solid var(--recon-border);
+}
+
+.recon-integrity-chip.ok {
+    background: var(--recon-ok-bg);
+    border-color: rgba(5, 150, 105, 0.3);
+    color: var(--recon-ok);
+}
+
+.recon-integrity-chip.warn {
+    background: var(--recon-warn-bg);
+    border-color: rgba(217, 119, 6, 0.3);
+    color: var(--recon-warn);
+}
+
+.recon-mismatch-table {
+    font-size: 0.84rem;
+}
+
+.recon-mismatch-table a {
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.recon-mismatch-table a:hover {
+    text-decoration: underline;
+}
+
+.recon-alert-panel {
+    border: 1px solid var(--recon-border);
+    border-radius: 14px;
+    overflow: hidden;
+    background: #fff;
+}
+
+.recon-alert-panel-head {
+    padding: 0.75rem 1rem;
+    background: #f8fafc;
+    border-bottom: 1px solid var(--recon-border);
+}
+
+.recon-quick-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin-bottom: 1rem;
+}
+
+.recon-quick-nav a {
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid var(--recon-border);
+    background: #fff;
+    color: #334155;
+    text-decoration: none;
+}
+
+.recon-quick-nav a:hover {
+    background: #f1f5f9;
+    color: #0f172a;
+}
