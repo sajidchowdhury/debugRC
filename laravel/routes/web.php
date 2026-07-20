@@ -34,6 +34,7 @@ use App\Http\Controllers\Admin\SalesChallanController;
 use App\Http\Controllers\Admin\CustomerPaymentController;
 use App\Http\Controllers\Admin\SalesReturnController;
 use App\Http\Controllers\Admin\SalesGuideController;
+use App\Http\Controllers\Admin\GoLiveChecklistController;
 use App\Http\Controllers\Admin\AccountingPeriodController;
 use App\Http\Controllers\Admin\NotificationController;
 use App\Http\Controllers\Admin\SystemPolicyController;
@@ -470,6 +471,10 @@ Route::middleware('auth')->group(function () {
         // G-14: Sales guideline page (Bengali/English) — all sales-module roles
         Route::get('guide', [SalesGuideController::class, 'guide'])
             ->name('guide')->middleware('role:salesman,warehouse_manager,dispatcher,accountant,manager,admin');
+
+        // G-15: Go-live checklist (manager sign-off) — manager, admin, accountant, warehouse_manager
+        Route::get('go-live-checklist', [GoLiveChecklistController::class, 'index'])
+            ->name('go-live-checklist')->middleware('role:accountant,warehouse_manager,manager,admin');
     });
 
     // ============================================================

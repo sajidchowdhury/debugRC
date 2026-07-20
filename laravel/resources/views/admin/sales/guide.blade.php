@@ -41,6 +41,7 @@
             <a href="#scenarios">বাস্তব পরিস্থিতি</a>
             <a href="#roles">কে কী করবে</a>
             <a href="#faq">প্রশ্ন ও সমাধান</a>
+            <a href="{{ route('admin.sales.go-live-checklist') }}" class="sales-guide-nav-external"><i class="fas fa-rocket me-1"></i> Go-Live Checklist</a>
         </nav>
 
         <main class="sales-guide-main">
