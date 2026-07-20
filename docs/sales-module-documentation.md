@@ -1,6 +1,6 @@
 # RC-ERP Sales Module — Complete Documentation & Gap Analysis
 
-> **Document Version**: 1.1 — Updated with verified implementation status  
+> **Document Version**: 1.2 — Updated with Revenue Overview + Sales Funnel dashboard implementations, Telegram/FCM removal
 > **Date**: 2025-07-20  
 > **Scope**: Legacy CodeIgniter/MySQL → Laravel 12/PostgreSQL migration  
 > **Focus**: Sales Entry, Challan/Godown Copy, Invoice, Payment Receive, Sales Return  
@@ -48,7 +48,7 @@
 | 7 | `SalesAuditController` | `controllers/SalesAuditController.php` (67 lines) | Ecosystem health checks, stale draft cleanup |
 | 8 | `ReportController` | `controllers/ReportController.php` (1388 lines) | Gross margin, revenue overview, sales funnel, customer performance, AR aging, product movement |
 
-**Supporting controllers**: `ReconciliationController` (GL tie-out), `DashboardController` (summary stats)
+**Supporting controllers**: `ReconciliationController` (GL tie-out), `DashboardController` (Revenue Overview dashboard + AJAX trend), `SalesFunnelController` (Pipeline dashboard with KPIs, conversion, forecast)
 
 ### 1.2 Models (12 primary)
 
@@ -131,7 +131,11 @@
 
 ### 1.5 AJAX/API Endpoints (37 total)
 
-**SalesController (16):** search_customer, search_product, product_by_code, get_branch, product_stock_at_branch, get_warehouse_stock, get_employees, customer_details, add_to_cart, load_cart, validate_cart, hydrate_edit_cart, list_draft_carts, clear_tab_cart, delete_tab_cart, delete_from_cart, update_cart_item, save_fcm_token, final_sales, update, today_filter_summary, cancel_stale_drafts, datatable_invoices, call_it_a_day, delete_invoice, get_invoice_for_edit, save_payment, reverse_payment
+**SalesController (16):** search_customer, search_product, product_by_code, get_branch, product_stock_at_branch, get_warehouse_stock, get_employees, customer_details, add_to_cart, load_cart, validate_cart, hydrate_edit_cart, list_draft_carts, clear_tab_cart, delete_tab_cart, delete_from_cart, update_cart_item, ~~save_fcm_token~~ *(removed — FCM replaced by Laravel Notification)*, final_sales, update, today_filter_summary, cancel_stale_drafts, datatable_invoices, call_it_a_day, delete_invoice, get_invoice_for_edit, save_payment, reverse_payment
+
+**DashboardController (1):** salesTrendAjax (7D/30D/90D chart refresh)
+
+**SalesFunnelController (1):** index (funnel KPIs, conversion rates, trend, salesman performance, forecast, open opportunities)
 
 **ChallanController (6):** filter_summary, datatable_challans, prepare_godown, create_final_challan, reverse_challan, get_warehouses_for_product, get_dispatchers
 
@@ -614,6 +618,8 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | 4 | `CustomerPaymentController` | index, create, store, show, cancel, printReceipt, getOutstandingInvoices | CustomerPaymentService |
 | 5 | `SalesReturnController` | index, create, store, show, confirm, reverse, printSlip, getInvoiceDetails | SalesReturnService |
 | 6 | `CustomerController` | CRUD (extends BaseMasterDataController) | CodeGenerator, Customer model |
+| 7 | `DashboardController` | index, salesTrendAjax | 6 private KPI methods (getRevenueKPIs, getSalesTrend, getBranchRevenue, getReceivableAging, getTopCustomers, getTopProducts) |
+| 8 | `SalesFunnelController` | index (funnel dashboard) | 7 private data methods (getFunnelData, getKPIs, getConversionRates, getPipelineTrend, getSalesmanPerformance, getOpenOpportunities, getForecast) |
 
 ### 5.2 Models (10 primary + supporting)
 
@@ -687,6 +693,8 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | customer-payments/show | 615 | Detail + GL + intercompany |
 | customer-payments/print_receipt | 116 | Payment receipt print |
 | sales-audit/index | 166 | Audit trail with action icons |
+| dashboard/index | ~550 | Revenue Overview: 6 KPI cards + 4 Chart.js charts (sales trend line, aging donut, branch bar, revenue vs collection) + 2 mini-tables + 7D/30D/90D AJAX toggle |
+| reports/sales_funnel | ~580 | Sales Funnel: 6 KPI cards + 4 Chart.js charts (funnel bar, forecast, pipeline trend, salesman stacked) + conversion rates + opportunities + leaderboard + branch/date filters |
 
 ### 5.5 Routes (5 groups)
 
@@ -697,6 +705,8 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | Challans | admin/sales-challans | role:warehouse_manager,dispatcher,manager,admin | index, show, godown, storeGodown, challan-form, issueChallan, cancel, print-challan |
 | Payments | admin/customer-payments | role:salesman,accountant,manager,admin | index, create, store, show, cancel, print-receipt, outstanding-invoices |
 | Returns | admin/sales-returns | role:varies per action | index, create, store, show, confirm, reverse, print-slip, invoice-details |
+| Dashboard | / | auth | index, sales-trend (AJAX 7D/30D/90D) |
+| Reports/Funnel | admin/reports | role:manager,admin | sales-funnel (funnel KPIs, conversion, trend, forecast, salesman, opportunities) |
 
 ### 5.6 Artisan Commands
 
@@ -2043,7 +2053,7 @@ Core principles:
 
 ---
 
-> **Last Verified**: 2025-07-20 — All gap items manually checked against Laravel codebase by running targeted searches on service files, controllers, models, and views.
+> **Last Verified**: 2025-07-20 — All gap items manually checked against Laravel codebase by running targeted searches on service files, controllers, models, and views. Revenue Overview + Sales Funnel dashboards verified. Telegram/FCM removal verified.
 
 ## Appendix B: Key Formulas Reference
 
