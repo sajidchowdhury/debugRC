@@ -1,0 +1,99 @@
+/* Warehouse module — theme overrides on branch-hub layout */
+
+.warehouse-theme {
+    --bh-primary: #d97706;
+    --bh-secondary: #7c3aed;
+    --bh-accent: #0ea5e9;
+}
+
+.warehouse-theme .branch-hub-hero {
+    box-shadow: 0 14px 36px rgba(217, 119, 6, 0.25);
+}
+
+.warehouse-theme .branch-avatar,
+.warehouse-theme .branch-preview-card .branch-avatar {
+    background: linear-gradient(135deg, #d97706, #7c3aed);
+}
+
+.warehouse-theme .branch-code-pill {
+    color: #7c3aed;
+}
+
+.warehouse-theme .branch-mini-stat i {
+    color: #d97706;
+}
+
+.warehouse-theme .branch-hub-quick a:hover {
+    border-color: #d97706;
+    color: #d97706;
+    background: #fffbeb;
+}
+
+.warehouse-theme .branch-aside-tip {
+    background: #fffbeb;
+    border-color: #fde68a;
+    color: #b45309;
+}
+
+.warehouse-theme .branch-form-footer .btn-primary {
+    background: linear-gradient(135deg, #d97706, #7c3aed);
+}
+
+#warehouseCards {
+    padding: 0.75rem;
+}
+
+.warehouse-mobile-card {
+    background: #fff;
+    border: 1px solid var(--bh-border, #e2e8f0);
+    border-radius: 14px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+
+.warehouse-mobile-card .card-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-bottom: 0.65rem;
+}
+
+.warehouse-mobile-card .card-meta {
+    font-size: 0.8rem;
+    color: var(--bh-muted, #64748b);
+    margin-bottom: 0.35rem;
+}
+
+.warehouse-mobile-card .card-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #f1f5f9;
+}
+
+.branch-branch-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 8px;
+    background: #f5f3ff;
+    border: 1px solid #ddd6fe;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #6d28d9;
+}
+
+@media (max-width: 767.98px) {
+    .warehouse-theme .branch-hub-table-wrap .dataTables_wrapper {
+        display: none !important;
+    }
+}
+
+@media (min-width: 768px) {
+    #warehouseCards {
+        display: none !important;
+    }
+}

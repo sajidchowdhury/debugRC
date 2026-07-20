@@ -1,0 +1,150 @@
+/* Employee transactions — branch-hub theme (violet) */
+
+.emp-txn-theme {
+    --bh-primary: #6d28d9;
+    --bh-secondary: #7c3aed;
+    --bh-accent: #5b21b6;
+}
+
+.emp-txn-theme .branch-hub-hero {
+    box-shadow: 0 14px 36px rgba(109, 40, 217, 0.22);
+}
+
+.emp-txn-theme .branch-avatar,
+.emp-txn-theme .branch-preview-card .branch-avatar {
+    background: linear-gradient(135deg, #6d28d9, #7c3aed);
+}
+
+.emp-txn-theme .branch-code-pill {
+    color: #5b21b6;
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+}
+
+.emp-txn-theme .branch-hub-quick a:hover {
+    border-color: #6d28d9;
+    color: #6d28d9;
+    background: #f5f3ff;
+}
+
+.emp-txn-theme .branch-aside-tip {
+    background: #f5f3ff;
+    border-color: #ddd6fe;
+    color: #5b21b6;
+}
+
+.emp-txn-theme .branch-form-footer .btn-primary {
+    background: linear-gradient(135deg, #6d28d9, #7c3aed);
+}
+
+.emp-txn-amount {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.emp-txn-amount.advance,
+.emp-txn-amount.loan,
+.emp-txn-amount.salary,
+.emp-txn-amount.adjustment { color: #b45309; }
+
+.emp-txn-amount.repayment,
+.emp-txn-amount.deduction { color: #047857; }
+
+.emp-txn-type-pill {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.2rem 0.5rem;
+    border-radius: 6px;
+    text-transform: capitalize;
+}
+
+.emp-txn-type-pill.advance { background: #ede9fe; color: #6d28d9; }
+.emp-txn-type-pill.loan { background: #fef3c7; color: #b45309; }
+.emp-txn-type-pill.salary { background: #dbeafe; color: #1d4ed8; }
+.emp-txn-type-pill.repayment { background: #d1fae5; color: #047857; }
+.emp-txn-type-pill.deduction { background: #fce7f3; color: #be185d; }
+.emp-txn-type-pill.adjustment { background: #f1f5f9; color: #475569; }
+
+#empTxnCards { padding: 0.75rem; }
+
+.emp-txn-mobile-card {
+    background: #fff;
+    border: 1px solid var(--bh-border, #e2e8f0);
+    border-radius: 14px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+
+.emp-txn-mobile-card.reversed {
+    opacity: 0.75;
+    background: #f8fafc;
+}
+
+.emp-txn-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1rem;
+}
+
+.emp-txn-detail-item {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 0.85rem 1rem;
+}
+
+.emp-txn-detail-item .label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #64748b;
+    margin-bottom: 0.25rem;
+}
+
+.emp-txn-detail-item .value {
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.emp-txn-reversed-banner {
+    border-left: 4px solid #dc2626;
+    background: #fef2f2;
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+}
+
+.emp-txn-due-banner {
+    background: linear-gradient(135deg, #f5f3ff, #ede9fe);
+    border: 1px solid #ddd6fe;
+    border-radius: 12px;
+    padding: 0.75rem 1rem;
+    font-weight: 600;
+    color: #5b21b6;
+}
+
+.emp-txn-type-hint {
+    font-size: 0.8rem;
+    color: #64748b;
+    min-height: 1.25rem;
+}
+
+.emp-txn-hero-amount {
+    font-size: 1.35rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.emp-txn-gl-table th,
+.emp-txn-ledger-table th {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #64748b;
+}
+
+.emp-txn-ledger-table .running-bal {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #5b21b6;
+}

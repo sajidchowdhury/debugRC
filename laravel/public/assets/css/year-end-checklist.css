@@ -1,0 +1,32 @@
+.year-end-close-banner {
+    padding: 0.75rem 1rem;
+    border-radius: 12px;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+}
+
+.year-end-close-banner.ok {
+    background: #ecfdf5;
+    border: 1px solid rgba(5, 150, 105, 0.35);
+    color: #065f46;
+}
+
+.year-end-close-banner.blocked {
+    background: #fef2f2;
+    border: 1px solid rgba(220, 38, 38, 0.35);
+    color: #991b1b;
+}
+
+.year-end-filters {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 0.75rem 1rem;
+}
+
+.year-end-ops-note {
+    background: #f8fafc;
+    border: 1px dashed #cbd5e1;
+    border-radius: 12px;
+    padding: 0.85rem 1rem;
+}

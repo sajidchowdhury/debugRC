@@ -1,0 +1,189 @@
+/* Branch demand — shared UI (matches purchase-index patterns) */
+
+.bd-demand-app {
+    --bd-primary: #6366f1;
+    --bd-primary-dark: #4f46e5;
+    --bd-accent: #0ea5e9;
+    --bd-surface: #eef2ff;
+    --bd-border: #c7d2fe;
+    --bd-text: #1e293b;
+    --bd-muted: #64748b;
+    padding-bottom: 2rem;
+    color: var(--bd-text);
+}
+
+.bd-demand-app .purch-index-hero {
+    background: linear-gradient(135deg, var(--bd-primary) 0%, var(--bd-accent) 100%);
+    box-shadow: 0 12px 32px color-mix(in srgb, var(--bd-primary) 35%, transparent);
+}
+
+.bd-demand-app .purch-index-tag.is-alt {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.bd-status-pill {
+    display: inline-block;
+    margin-left: 0.35rem;
+    padding: 0.2rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    background: rgba(255, 255, 255, 0.25);
+    color: #fff;
+}
+
+.bd-status-pill.pending { background: #fbbf24; color: #78350f; }
+.bd-status-pill.received { background: #34d399; color: #064e3b; }
+.bd-status-pill.rejected { background: #f87171; color: #7f1d1d; }
+.bd-status-pill.reversed { background: #94a3b8; color: #1e293b; }
+
+.bd-detail-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+@media (min-width: 992px) {
+    .bd-detail-stats {
+        grid-template-columns: repeat(4, 1fr);
+    }
+}
+
+.bd-detail-stat {
+    background: #fff;
+    border: 1px solid var(--bd-border);
+    border-radius: 12px;
+    padding: 0.85rem 1rem;
+}
+
+.bd-detail-stat .label {
+    display: block;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--bd-muted);
+}
+
+.bd-detail-stat .value {
+    display: block;
+    font-weight: 700;
+    font-size: 1rem;
+    margin-top: 0.15rem;
+}
+
+.bd-detail-stat .sub {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--bd-muted);
+    margin-top: 0.1rem;
+}
+
+.bd-detail-stat.warn .value {
+    color: #b45309;
+}
+
+.bd-detail-stat.ok .value {
+    color: #047857;
+}
+
+.bd-settle-progress {
+    margin-bottom: 1rem;
+}
+
+.bd-section-card {
+    background: #fff;
+    border: 1px solid var(--bd-border);
+    border-radius: 14px;
+    overflow: hidden;
+    margin-bottom: 1rem;
+}
+
+.bd-section-head {
+    padding: 0.7rem 1rem;
+    background: var(--bd-surface);
+    border-bottom: 1px solid var(--bd-border);
+    font-weight: 700;
+    font-size: 0.92rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.bd-section-body {
+    padding: 1rem;
+}
+
+.bd-settle-table {
+    font-size: 0.86rem;
+    margin-bottom: 0;
+}
+
+.bd-settle-table tr.is-reversed td {
+    opacity: 0.55;
+    text-decoration: line-through;
+}
+
+.bd-source-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 0.15rem 0.45rem;
+    border-radius: 6px;
+    background: #e0e7ff;
+    color: #3730a3;
+}
+
+.bd-source-badge.transfer {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.bd-form-card {
+    background: #fff;
+    border: 1px solid var(--bd-border);
+    border-radius: 14px;
+    padding: 1.25rem;
+}
+
+.bd-items-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 1rem 0 0.75rem;
+}
+
+.bd-index-table .badge-status {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-radius: 6px;
+}
+
+.bd-index-table .badge-status.pending { background: #fef3c7; color: #92400e; }
+.bd-index-table .badge-status.received { background: #d1fae5; color: #065f46; }
+.bd-index-table .badge-status.rejected { background: #fee2e2; color: #991b1b; }
+.bd-index-table .badge-status.reversed { background: #f1f5f9; color: #475569; }
+
+.bd-index-table tr.is-reversed td {
+    opacity: 0.65;
+}
+
+.bd-empty-state {
+    text-align: center;
+    padding: 2.5rem 1rem;
+    color: var(--bd-muted);
+}
+
+.bd-empty-state i {
+    font-size: 2rem;
+    opacity: 0.35;
+    margin-bottom: 0.5rem;
+}

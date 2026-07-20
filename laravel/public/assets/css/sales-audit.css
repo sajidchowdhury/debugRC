@@ -1,0 +1,111 @@
+/* Sales audit logs — matches Today's Sales shell */
+
+.sales-audit-app {
+    --sa-primary: #4f46e5;
+    --sa-accent: #6366f1;
+    --sa-card: #ffffff;
+    --sa-border: #e2e8f0;
+    --sa-text: #0f172a;
+    --sa-muted: #64748b;
+    padding-bottom: 2rem;
+    color: var(--sa-text);
+}
+
+.sales-audit-hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.25rem;
+    padding: 1.15rem 1.25rem;
+    background: linear-gradient(135deg, #312e81 0%, var(--sa-primary) 50%, var(--sa-accent) 100%);
+    border-radius: 16px;
+    color: #fff;
+    box-shadow: 0 12px 32px rgba(79, 70, 229, 0.28);
+}
+
+.sales-audit-hero h1 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.sales-audit-hero p {
+    margin: 0.25rem 0 0;
+    opacity: 0.92;
+    font-size: 0.85rem;
+}
+
+.sales-audit-hero-actions .btn {
+    font-weight: 600;
+}
+
+.sales-audit-panel {
+    background: var(--sa-card);
+    border: 1px solid var(--sa-border);
+    border-radius: 16px;
+    box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06);
+    overflow: hidden;
+}
+
+.sales-audit-panel .table {
+    margin-bottom: 0;
+    font-size: 0.88rem;
+}
+
+.sales-audit-panel thead th {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--sa-muted);
+    background: #f8fafc;
+    border-bottom: 1px solid var(--sa-border);
+    white-space: nowrap;
+}
+
+.sales-audit-panel tbody tr:hover {
+    background: #f8fafc;
+}
+
+.sales-audit-panel code {
+    font-size: 0.78rem;
+    color: var(--sa-primary);
+    background: #eef2ff;
+    padding: 0.15rem 0.4rem;
+    border-radius: 6px;
+}
+
+.sales-audit-footer {
+    padding: 0.75rem 1rem;
+    background: #f8fafc;
+    border-top: 1px solid var(--sa-border);
+    font-size: 0.8rem;
+    color: var(--sa-muted);
+}
+
+.sales-audit-empty {
+    padding: 3rem 1rem;
+    text-align: center;
+    color: var(--sa-muted);
+}
+
+.sales-audit-empty i {
+    font-size: 2rem;
+    opacity: 0.4;
+    margin-bottom: 0.75rem;
+}
+
+.sales-return-audit-hero {
+    background: linear-gradient(135deg, #be123c 0%, #e11d48 50%, #7c3aed 100%);
+    box-shadow: 0 12px 32px rgba(225, 29, 72, 0.28);
+}
+
+@media (max-width: 767px) {
+    .sales-audit-hero h1 {
+        font-size: 1.15rem;
+    }
+    .sales-audit-panel .table {
+        font-size: 0.8rem;
+    }
+}

@@ -1,0 +1,32 @@
+/* Inter-branch warehouse transfer theme */
+
+.wt-transfer-app .purch-index-hero.wt-hero {
+    background: linear-gradient(135deg, #4338ca 0%, #6366f1 50%, #818cf8 100%);
+    box-shadow: 0 12px 32px rgba(67, 56, 202, 0.35);
+}
+
+.wt-route-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+}
+
+.wt-transfer-app .item-row {
+    background: #eef2ff;
+    border: 1px solid #c7d2fe;
+    border-radius: 10px;
+    padding: 0.65rem 0.5rem 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.wt-branch-hint {
+    font-size: 0.8rem;
+    color: #4338ca;
+    font-weight: 600;
+}

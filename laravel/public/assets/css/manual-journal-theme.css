@@ -1,0 +1,79 @@
+/* Manual journal — balance strip + line editor */
+
+.manual-journal-theme {
+    --mj-ok: #059669;
+    --mj-bad: #dc2626;
+}
+
+.mj-lines-table .form-select,
+.mj-lines-table .form-control {
+    font-size: 0.84rem;
+}
+
+.mj-totals-row td {
+    background: #f8fafc;
+    border-top: 2px solid #e2e8f0;
+}
+
+.mj-balance-badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+}
+
+.mj-balance-badge.balanced {
+    background: #ecfdf5;
+    color: var(--mj-ok);
+}
+
+.mj-balance-badge.unbalanced {
+    background: #fef2f2;
+    color: var(--mj-bad);
+}
+
+.mj-line-row.mj-line-error {
+    background: #fff7ed;
+}
+
+.oe-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+}
+
+.oe-detail-grid .span-2 {
+    grid-column: span 2;
+}
+
+@media (max-width: 767.98px) {
+    .oe-detail-grid {
+        grid-template-columns: 1fr;
+    }
+    .oe-detail-grid .span-2 {
+        grid-column: span 1;
+    }
+}
+
+.oe-detail-item {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 0.75rem 0.85rem;
+}
+
+.oe-detail-item .label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: #64748b;
+    margin-bottom: 0.2rem;
+}
+
+.accounting-period-banner {
+    font-size: 0.84rem;
+    border-left: 4px solid #d97706;
+}

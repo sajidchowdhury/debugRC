@@ -1,0 +1,320 @@
+/* Workforce / employee — theme on branch-hub layout */
+
+.employee-theme {
+    --bh-primary: #7c3aed;
+    --bh-secondary: #0891b2;
+    --bh-accent: #059669;
+}
+
+.employee-theme .branch-hub-hero {
+    box-shadow: 0 14px 36px rgba(124, 58, 237, 0.22);
+}
+
+.employee-theme .branch-avatar,
+.employee-theme .branch-preview-card .branch-avatar,
+.employee-photo-thumb {
+    background: linear-gradient(135deg, #7c3aed, #0891b2);
+}
+
+.employee-theme .branch-code-pill {
+    color: #6d28d9;
+}
+
+.employee-theme .branch-hub-quick a:hover {
+    border-color: #7c3aed;
+    color: #7c3aed;
+    background: #f5f3ff;
+}
+
+.employee-theme .branch-aside-tip {
+    background: #f5f3ff;
+    border-color: #ddd6fe;
+    color: #5b21b6;
+}
+
+.employee-theme .branch-form-footer .btn-primary {
+    background: linear-gradient(135deg, #7c3aed, #0891b2);
+}
+
+.employee-photo-thumb {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 50%;
+    border: 1px solid var(--bh-border, #e2e8f0);
+}
+
+.employee-photo-placeholder {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #94a3b8;
+    background: #f1f5f9;
+    font-size: 1.1rem;
+}
+
+.employee-role-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.employee-user-pill.active {
+    background: #ecfdf5;
+    color: #047857;
+}
+
+.employee-user-pill.inactive {
+    background: #fffbeb;
+    color: #b45309;
+}
+
+.employee-user-pill.none {
+    background: #f8fafc;
+    color: #64748b;
+}
+
+.employee-photo-upload-preview {
+    width: 120px;
+    height: 120px;
+    border: 2px dashed var(--bh-border, #e2e8f0);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: #f8fafc;
+    flex-shrink: 0;
+}
+
+#employeeCards {
+    padding: 0.75rem;
+}
+
+.employee-mobile-card {
+    background: #fff;
+    border: 1px solid var(--bh-border, #e2e8f0);
+    border-radius: 14px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+
+/* Employee + account hub (C3) */
+
+.emp-account-profile-head {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.emp-account-profile-head h2 {
+    margin: 0 0 0.35rem;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--bh-text, #0f172a);
+}
+
+.emp-account-photo {
+    width: 72px;
+    height: 72px;
+    border-radius: 16px;
+    object-fit: cover;
+    flex-shrink: 0;
+    border: 2px solid #fff;
+    box-shadow: 0 6px 18px rgba(124, 58, 237, 0.18);
+}
+
+.emp-account-photo-fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #fff;
+    background: linear-gradient(135deg, #7c3aed, #0891b2);
+}
+
+.emp-account-login-summary {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr;
+    gap: 1rem;
+    padding: 1rem;
+    background: var(--bh-surface, #f8fafc);
+    border: 1px solid var(--bh-border, #e2e8f0);
+    border-radius: 14px;
+}
+
+@media (max-width: 767.98px) {
+    .emp-account-login-summary {
+        grid-template-columns: 1fr;
+    }
+}
+
+.emp-account-username .branch-code-pill {
+    font-size: 0.95rem;
+    padding: 0.35rem 0.75rem;
+}
+
+.emp-account-login-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.65rem;
+}
+
+.emp-account-meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.emp-account-meta-item .label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--bh-muted, #64748b);
+}
+
+.emp-account-meta-item .value {
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: var(--bh-text, #0f172a);
+}
+
+.hub-action-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.65rem;
+}
+
+.hub-action-tile-form {
+    margin: 0;
+    min-width: 0;
+}
+
+.hub-action-tile {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.85rem 1rem;
+    background: var(--bh-surface, #f8fafc);
+    border: 1px solid var(--bh-border, #e2e8f0);
+    border-radius: 14px;
+    text-decoration: none;
+    color: inherit;
+    text-align: left;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    cursor: pointer;
+}
+
+button.hub-action-tile {
+    appearance: none;
+    font: inherit;
+}
+
+.hub-action-tile:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+    border-color: #c4b5fd;
+}
+
+.hub-action-tile.warn:hover {
+    border-color: #fde68a;
+}
+
+.hub-action-tile.danger:hover {
+    border-color: #fecaca;
+}
+
+.hub-action-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 0.95rem;
+}
+
+.hub-action-icon.indigo {
+    background: #ede9fe;
+    color: #6d28d9;
+}
+
+.hub-action-icon.teal {
+    background: #ccfbf1;
+    color: #0f766e;
+}
+
+.hub-action-icon.amber {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+.hub-action-icon.warn {
+    background: #fffbeb;
+    color: #b45309;
+}
+
+.hub-action-icon.danger {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.hub-action-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+}
+
+.hub-action-text strong {
+    font-size: 0.86rem;
+    color: var(--bh-text, #0f172a);
+}
+
+.hub-action-text small {
+    font-size: 0.72rem;
+    color: var(--bh-muted, #64748b);
+}
+
+.employee-theme .hub-breakdown-bar > span {
+    background: linear-gradient(90deg, #7c3aed, #0891b2);
+}
+
+.employee-theme .hub-breakdown-bar.group > span {
+    background: linear-gradient(90deg, #059669, #0891b2);
+}
+
+.employee-theme .employee-user-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.emp-hub-name-link {
+    color: var(--bh-text, #0f172a);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.emp-hub-name-link:hover {
+    color: #6d28d9;
+    text-decoration: underline;
+}
