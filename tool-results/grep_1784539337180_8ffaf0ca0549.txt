@@ -1,0 +1,214 @@
+/home/z/my-project/download/sales-module-documentation.md:135:**SalesController (16):** search_customer, search_product, product_by_code, get_branch, product_stock_at_branch, get_warehouse_stock, get_employees, customer_details, add_to_cart, load_cart, validate_cart, hydrate_edit_cart, list_draft_carts, clear_tab_cart, delete_tab_cart, delete_from_cart, update_cart_item, save_fcm_token, final_sales, update, today_filter_summary, cancel_stale_drafts, datatable_invoices, call_it_a_day, delete_invoice, get_invoice_for_edit, save_payment, reverse_payment
+/home/z/my-project/download/sales-module-documentation.md:141:**CustomerTransactionController (5):** DataTables, search_customer, store, get_due, reverse
+/home/z/my-project/download/sales-module-documentation.md:154:| `guardJsonApi($key, $limit, $window)` | AJAX GET endpoints — rate limiting | search_customer (90/60s), search_product (90/60s), product_by_code (120/60s), etc. |
+/home/z/my-project/docs/migration/IMPLEMENTATION_STATUS.md:180:| `admin/sales` (group) | cart, cart/*, finalize, cart-data, credit-check | salesman, manager, admin | search_customer, add_to_cart, validate_cart, final_sales |
+/home/z/my-project/docs/migration/phase12_complete.md:54:- **ArchiveRepositoryInterface**: defines the contract (searchInvoices, findInvoice, searchCustomers, getCustomerLedger, getSupplierLedger, isAvailable)
+/home/z/my-project/docs/sales-module-documentation.md:135:**SalesController (16):** search_customer, search_product, product_by_code, get_branch, product_stock_at_branch, get_warehouse_stock, get_employees, customer_details, add_to_cart, load_cart, validate_cart, hydrate_edit_cart, list_draft_carts, clear_tab_cart, delete_tab_cart, delete_from_cart, update_cart_item, save_fcm_token, final_sales, update, today_filter_summary, cancel_stale_drafts, datatable_invoices, call_it_a_day, delete_invoice, get_invoice_for_edit, save_payment, reverse_payment
+/home/z/my-project/docs/sales-module-documentation.md:141:**CustomerTransactionController (5):** DataTables, search_customer, store, get_due, reverse
+/home/z/my-project/docs/sales-module-documentation.md:154:| `guardJsonApi($key, $limit, $window)` | AJAX GET endpoints — rate limiting | search_customer (90/60s), search_product (90/60s), product_by_code (120/60s), etc. |
+/home/z/my-project/legacy/app/models/SalesModel.php:37:    public function searchCustomers($term)
+/home/z/my-project/legacy/app/models/SalesModel.php:42:    public function searchProductsWithStock($term, $branch_id)
+/home/z/my-project/legacy/app/models/PurchaseOrderModel.php:151:        public function searchProducts($term) {
+/home/z/my-project/tool-results/read_1784522248578_fb3252d99166.txt:429:   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/tool-results/read_1784525991276_b3ea76677514.txt:135:   135→**SalesController (16):** search_customer, search_product, product_by_code, get_branch, product_stock_at_branch, get_warehouse_stock, get_employees, customer_details, add_to_cart, load_cart, validate_cart, hydrate_edit_cart, list_draft_carts, clear_tab_cart, delete_tab_cart, delete_from_cart, update_cart_item, save_fcm_token, final_sales, update, today_filter_summary, cancel_stale_drafts, datatable_invoices, call_it_a_day, delete_invoice, get_invoice_for_edit, save_payment, reverse_payment
+/home/z/my-project/tool-results/read_1784525991276_b3ea76677514.txt:141:   141→**CustomerTransactionController (5):** DataTables, search_customer, store, get_due, reverse
+/home/z/my-project/tool-results/read_1784525991276_b3ea76677514.txt:154:   154→| `guardJsonApi($key, $limit, $window)` | AJAX GET endpoints — rate limiting | search_customer (90/60s), search_product (90/60s), product_by_code (120/60s), etc. |
+/home/z/my-project/tool-results/read_1784522285862_c84bdef1080a.txt:230:   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/legacy/app/controllers/PurchaseOrderController.php:169:    public function search_products() {
+/home/z/my-project/legacy/app/controllers/PurchaseOrderController.php:176:        $this->sendJson($this->model->searchProducts($term));
+/home/z/my-project/tool-results/read_1784521827816_590e41fec958.txt:81:    81→    81→    81→    public function search_customer() {
+/home/z/my-project/tool-results/read_1784521827816_590e41fec958.txt:82:    82→    82→    82→        $this->guardJsonApi('sales.search_customer', 90, 60);
+/home/z/my-project/tool-results/read_1784521827816_590e41fec958.txt:84:    84→    84→    84→        $this->sendJson($this->model->searchCustomers($term));
+/home/z/my-project/tool-results/read_1784521827816_590e41fec958.txt:87:    87→    87→    87→    public function search_product() {
+/home/z/my-project/tool-results/read_1784521827816_590e41fec958.txt:88:    88→    88→    88→        $this->guardJsonApi('sales.search_product', 90, 60);
+/home/z/my-project/tool-results/read_1784521827816_590e41fec958.txt:91:    91→    91→    91→        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+/home/z/my-project/legacy/app/controllers/CustomerTransactionController.php:93:    public function search_customer() {
+/home/z/my-project/legacy/app/controllers/SalesController.php:81:    public function search_customer() {
+/home/z/my-project/legacy/app/controllers/SalesController.php:82:        $this->guardJsonApi('sales.search_customer', 90, 60);
+/home/z/my-project/legacy/app/controllers/SalesController.php:84:        $this->sendJson($this->model->searchCustomers($term));
+/home/z/my-project/legacy/app/controllers/SalesController.php:87:    public function search_product() {
+/home/z/my-project/legacy/app/controllers/SalesController.php:88:        $this->guardJsonApi('sales.search_product', 90, 60);
+/home/z/my-project/legacy/app/controllers/SalesController.php:91:        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+/home/z/my-project/tool-results/read_1784521815380_e7b7c1431959.txt:81:    81→    public function search_customer() {
+/home/z/my-project/tool-results/read_1784521815380_e7b7c1431959.txt:82:    82→        $this->guardJsonApi('sales.search_customer', 90, 60);
+/home/z/my-project/tool-results/read_1784521815380_e7b7c1431959.txt:84:    84→        $this->sendJson($this->model->searchCustomers($term));
+/home/z/my-project/tool-results/read_1784521815380_e7b7c1431959.txt:87:    87→    public function search_product() {
+/home/z/my-project/tool-results/read_1784521815380_e7b7c1431959.txt:88:    88→        $this->guardJsonApi('sales.search_product', 90, 60);
+/home/z/my-project/tool-results/read_1784521815380_e7b7c1431959.txt:91:    91→        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+/home/z/my-project/tool-results/read_1784522263902_ff04c8bc6546.txt:429:   429→   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/legacy/app/config/route_roles.php:58:        'search_customer'         => ['admin', 'manager', 'salesman'],
+/home/z/my-project/legacy/app/config/route_roles.php:59:        'search_product'          => ['admin', 'manager', 'salesman'],
+/home/z/my-project/legacy/app/config/route_roles.php:202:        'search_products' => ['admin', 'manager', 'warehouse_manager'],
+/home/z/my-project/legacy/app/config/route_roles.php:411:        'search_customer' => ['admin', 'manager', 'accountant', 'salesman'],
+/home/z/my-project/tool-results/read_1784521822640_9d8cd68e581b.txt:81:    81→    81→    public function search_customer() {
+/home/z/my-project/tool-results/read_1784521822640_9d8cd68e581b.txt:82:    82→    82→        $this->guardJsonApi('sales.search_customer', 90, 60);
+/home/z/my-project/tool-results/read_1784521822640_9d8cd68e581b.txt:84:    84→    84→        $this->sendJson($this->model->searchCustomers($term));
+/home/z/my-project/tool-results/read_1784521822640_9d8cd68e581b.txt:87:    87→    87→    public function search_product() {
+/home/z/my-project/tool-results/read_1784521822640_9d8cd68e581b.txt:88:    88→    88→        $this->guardJsonApi('sales.search_product', 90, 60);
+/home/z/my-project/tool-results/read_1784521822640_9d8cd68e581b.txt:91:    91→    91→        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+/home/z/my-project/legacy/app/helpers/Helper.php:622:        return $svc->searchProductsWithStock($term, (int)$branch_id);
+/home/z/my-project/tool-results/read_1784517595616_9d8cd68e581b.txt:81:    81→    81→    public function search_customer() {
+/home/z/my-project/tool-results/read_1784517595616_9d8cd68e581b.txt:82:    82→    82→        $this->guardJsonApi('sales.search_customer', 90, 60);
+/home/z/my-project/tool-results/read_1784517595616_9d8cd68e581b.txt:84:    84→    84→        $this->sendJson($this->model->searchCustomers($term));
+/home/z/my-project/tool-results/read_1784517595616_9d8cd68e581b.txt:87:    87→    87→    public function search_product() {
+/home/z/my-project/tool-results/read_1784517595616_9d8cd68e581b.txt:88:    88→    88→        $this->guardJsonApi('sales.search_product', 90, 60);
+/home/z/my-project/tool-results/read_1784517595616_9d8cd68e581b.txt:91:    91→    91→        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+/home/z/my-project/tool-results/read_1784517585684_e7b7c1431959.txt:81:    81→    public function search_customer() {
+/home/z/my-project/tool-results/read_1784517585684_e7b7c1431959.txt:82:    82→        $this->guardJsonApi('sales.search_customer', 90, 60);
+/home/z/my-project/tool-results/read_1784517585684_e7b7c1431959.txt:84:    84→        $this->sendJson($this->model->searchCustomers($term));
+/home/z/my-project/tool-results/read_1784517585684_e7b7c1431959.txt:87:    87→    public function search_product() {
+/home/z/my-project/tool-results/read_1784517585684_e7b7c1431959.txt:88:    88→        $this->guardJsonApi('sales.search_product', 90, 60);
+/home/z/my-project/tool-results/read_1784517585684_e7b7c1431959.txt:91:    91→        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+/home/z/my-project/tool-results/read_1784522288925_e840ccf60afe.txt:230:   230→   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/tool-results/read_1784522274351_9f97141149c0.txt:429:   429→   429→   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/tool-results/read_1784521846819_ff04c8bc6546.txt:429:   429→   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/legacy/app/services/Stock/StockAvailabilityService.php:190:    public function searchProductsWithStock(string $term, int $branchId): array
+/home/z/my-project/tool-results/read_1784521842418_fb3252d99166.txt:429:   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/tool-results/read_1784515762042_fb3252d99166.txt:429:   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/legacy/public/assets/js/CustomerTransaction.js:170:                const res = await fetch(base + 'CustomerTransaction/search_customer?term=' + encodeURIComponent(term), {
+/home/z/my-project/legacy/public/assets/js/CustomerTransaction.js:604:                const res = await fetch(base + 'CustomerTransaction/search_customer?term=' + encodeURIComponent(term), {
+/home/z/my-project/legacy/public/assets/js/sales-edit.js:454:            const res = await fetch(BASE_URL + `sales/search_product?term=${encodeURIComponent(term)}&branch_id=${branchId}`);
+/home/z/my-project/legacy/public/assets/js/sales-create.js:224:            const res = await fetch(BASE_URL + 'sales/search_customer?term=' + encodeURIComponent(term));
+/home/z/my-project/legacy/public/assets/js/sales-create.js:294:            const res = await fetch(BASE_URL + `sales/search_product?term=${encodeURIComponent(term)}&branch_id=${branchId}`);
+/home/z/my-project/legacy/public/assets/js/PurchaseReceive.js:336:                   onkeyup="searchProductForDirect(this, ${itemCounter})">
+/home/z/my-project/legacy/public/assets/js/PurchaseReceive.js:373:function searchProductForDirect(input, rowId) {
+/home/z/my-project/legacy/public/assets/js/PurchaseReceive.js:381:    fetch(BASE_URL + 'PurchaseOrder/search_products', {
+/home/z/my-project/legacy/public/assets/js/sales.js:303:    const res = await fetch(BASE_URL + "sales/search_customer?term=");
+/home/z/my-project/legacy/public/assets/js/sales.js:434:        const res = await fetch(BASE_URL + `sales/search_product?term=${encodeURIComponent(term)}&branch_id=${branchId}`);
+/home/z/my-project/legacy/public/assets/js/PurchaseOrder.js:122:                searchTimers[rowId] = setTimeout(() => searchProduct(productInput, rowId), 220);
+/home/z/my-project/legacy/public/assets/js/PurchaseOrder.js:175:    function searchProduct(input, rowId) {
+/home/z/my-project/legacy/public/assets/js/PurchaseOrder.js:186:        fetch(`${BASE_URL}PurchaseOrder/search_products`, {
+/home/z/my-project/legacy/docs/SALES_ECOSYSTEM_PHASE_PLAN.md:131:| `/sales/search_customer` | `search_customer` | GET | — | Autocomplete customers |
+/home/z/my-project/legacy/docs/SALES_ECOSYSTEM_PHASE_PLAN.md:132:| `/sales/search_product` | `search_product` | GET | — | Products + branch available qty |
+/home/z/my-project/legacy/docs/SALES_API_ACCESS.md:35:| `search_customer` | 90 | Any logged-in | Autocomplete |
+/home/z/my-project/legacy/docs/SALES_API_ACCESS.md:36:| `search_product` | 90 | Any logged-in | Stock-aware search |
+/home/z/my-project/legacy/docs/SALES_MODULE_MODERNIZATION_PLAN.md:304:| 6.3 | Product search with live stock badge | High | Reuse `search_product` | Shows available qty; out-of-stock disabled |
+/home/z/my-project/legacy/docs/PRODUCT_MODULE_PHASE_PLAN.md:80:| 4.1 | `searchProductsWithStock` returns range fields | ✅ | `min_rate`, `max_rate`, `default_rate`, `price` alias |
+/home/z/my-project/legacy/docs/PRODUCT_MODULE_PHASE_PLAN.md:105:### `GET /sales/search_product` (via `StockAvailabilityService::searchProductsWithStock`)
+/home/z/my-project/legacy/docs/PRODUCT_MODULE_PHASE_PLAN.md:195:- [ ] `search_product` JSON includes `min_rate`, `max_rate`, `default_rate`, `price`
+/home/z/my-project/laravel/app/Archive/Services/ArchiveService.php:94:    public function searchCustomers(string $search, int $limit = 50): Collection
+/home/z/my-project/laravel/app/Archive/Services/ArchiveService.php:113:            fn() => $this->archiveRepository->searchCustomers($search, $limit)
+/home/z/my-project/laravel/app/Archive/Repositories/LegacyMySQLRepository.php:120:    public function searchCustomers(string $search, int $limit = 50): Collection
+/home/z/my-project/laravel/app/Archive/Repositories/ArchiveRepositoryInterface.php:47:    public function searchCustomers(string $search, int $limit = 50): Collection;
+/home/z/my-project/laravel/app/Http/Controllers/Admin/ArchiveController.php:38:                'customer' => $this->archiveService->searchCustomers($search),
+/home/z/my-project/laravel/routes/web.php:434:    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/laravel/public/assets/js/CustomerTransaction.js:170:                const res = await fetch(base + 'CustomerTransaction/search_customer?term=' + encodeURIComponent(term), {
+/home/z/my-project/laravel/public/assets/js/CustomerTransaction.js:604:                const res = await fetch(base + 'CustomerTransaction/search_customer?term=' + encodeURIComponent(term), {
+/home/z/my-project/laravel/public/assets/js/sales-edit.js:454:            const res = await fetch(BASE_URL + `sales/search_product?term=${encodeURIComponent(term)}&branch_id=${branchId}`);
+/home/z/my-project/laravel/public/assets/js/sales-create.js:224:            const res = await fetch(BASE_URL + 'sales/search_customer?term=' + encodeURIComponent(term));
+/home/z/my-project/laravel/public/assets/js/sales-create.js:294:            const res = await fetch(BASE_URL + `sales/search_product?term=${encodeURIComponent(term)}&branch_id=${branchId}`);
+/home/z/my-project/laravel/public/assets/js/PurchaseReceive.js:336:                   onkeyup="searchProductForDirect(this, ${itemCounter})">
+/home/z/my-project/laravel/public/assets/js/PurchaseReceive.js:373:function searchProductForDirect(input, rowId) {
+/home/z/my-project/laravel/public/assets/js/PurchaseReceive.js:381:    fetch(BASE_URL + 'PurchaseOrder/search_products', {
+/home/z/my-project/laravel/public/assets/js/sales.js:303:    const res = await fetch(BASE_URL + "sales/search_customer?term=");
+/home/z/my-project/laravel/public/assets/js/sales.js:434:        const res = await fetch(BASE_URL + `sales/search_product?term=${encodeURIComponent(term)}&branch_id=${branchId}`);
+/home/z/my-project/laravel/public/assets/js/PurchaseOrder.js:122:                searchTimers[rowId] = setTimeout(() => searchProduct(productInput, rowId), 220);
+/home/z/my-project/laravel/public/assets/js/PurchaseOrder.js:175:    function searchProduct(input, rowId) {
+/home/z/my-project/laravel/public/assets/js/PurchaseOrder.js:186:        fetch(`${BASE_URL}PurchaseOrder/search_products`, {
+/home/z/my-project/debugRC/download/sales-module-documentation.md:135:**SalesController (16):** search_customer, search_product, product_by_code, get_branch, product_stock_at_branch, get_warehouse_stock, get_employees, customer_details, add_to_cart, load_cart, validate_cart, hydrate_edit_cart, list_draft_carts, clear_tab_cart, delete_tab_cart, delete_from_cart, update_cart_item, save_fcm_token, final_sales, update, today_filter_summary, cancel_stale_drafts, datatable_invoices, call_it_a_day, delete_invoice, get_invoice_for_edit, save_payment, reverse_payment
+/home/z/my-project/debugRC/download/sales-module-documentation.md:141:**CustomerTransactionController (5):** DataTables, search_customer, store, get_due, reverse
+/home/z/my-project/debugRC/download/sales-module-documentation.md:154:| `guardJsonApi($key, $limit, $window)` | AJAX GET endpoints — rate limiting | search_customer (90/60s), search_product (90/60s), product_by_code (120/60s), etc. |
+/home/z/my-project/debugRC/legacy/app/models/SalesModel.php:37:    public function searchCustomers($term)
+/home/z/my-project/debugRC/legacy/app/models/SalesModel.php:42:    public function searchProductsWithStock($term, $branch_id)
+/home/z/my-project/debugRC/legacy/app/models/PurchaseOrderModel.php:151:        public function searchProducts($term) {
+/home/z/my-project/debugRC/legacy/app/controllers/PurchaseOrderController.php:169:    public function search_products() {
+/home/z/my-project/debugRC/legacy/app/controllers/PurchaseOrderController.php:176:        $this->sendJson($this->model->searchProducts($term));
+/home/z/my-project/debugRC/legacy/app/controllers/CustomerTransactionController.php:93:    public function search_customer() {
+/home/z/my-project/debugRC/legacy/app/controllers/SalesController.php:81:    public function search_customer() {
+/home/z/my-project/debugRC/legacy/app/controllers/SalesController.php:82:        $this->guardJsonApi('sales.search_customer', 90, 60);
+/home/z/my-project/debugRC/legacy/app/controllers/SalesController.php:84:        $this->sendJson($this->model->searchCustomers($term));
+/home/z/my-project/debugRC/legacy/app/controllers/SalesController.php:87:    public function search_product() {
+/home/z/my-project/debugRC/legacy/app/controllers/SalesController.php:88:        $this->guardJsonApi('sales.search_product', 90, 60);
+/home/z/my-project/debugRC/legacy/app/controllers/SalesController.php:91:        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+/home/z/my-project/debugRC/legacy/app/config/route_roles.php:58:        'search_customer'         => ['admin', 'manager', 'salesman'],
+/home/z/my-project/debugRC/legacy/app/config/route_roles.php:59:        'search_product'          => ['admin', 'manager', 'salesman'],
+/home/z/my-project/debugRC/legacy/app/config/route_roles.php:202:        'search_products' => ['admin', 'manager', 'warehouse_manager'],
+/home/z/my-project/debugRC/legacy/app/config/route_roles.php:411:        'search_customer' => ['admin', 'manager', 'accountant', 'salesman'],
+/home/z/my-project/debugRC/legacy/app/helpers/Helper.php:622:        return $svc->searchProductsWithStock($term, (int)$branch_id);
+/home/z/my-project/debugRC/legacy/app/services/Stock/StockAvailabilityService.php:190:    public function searchProductsWithStock(string $term, int $branchId): array
+/home/z/my-project/debugRC/legacy/public/assets/js/CustomerTransaction.js:170:                const res = await fetch(base + 'CustomerTransaction/search_customer?term=' + encodeURIComponent(term), {
+/home/z/my-project/debugRC/legacy/public/assets/js/CustomerTransaction.js:604:                const res = await fetch(base + 'CustomerTransaction/search_customer?term=' + encodeURIComponent(term), {
+/home/z/my-project/debugRC/legacy/public/assets/js/sales-edit.js:454:            const res = await fetch(BASE_URL + `sales/search_product?term=${encodeURIComponent(term)}&branch_id=${branchId}`);
+/home/z/my-project/debugRC/legacy/public/assets/js/sales-create.js:224:            const res = await fetch(BASE_URL + 'sales/search_customer?term=' + encodeURIComponent(term));
+/home/z/my-project/debugRC/legacy/public/assets/js/sales-create.js:294:            const res = await fetch(BASE_URL + `sales/search_product?term=${encodeURIComponent(term)}&branch_id=${branchId}`);
+/home/z/my-project/debugRC/legacy/public/assets/js/PurchaseReceive.js:336:                   onkeyup="searchProductForDirect(this, ${itemCounter})">
+/home/z/my-project/debugRC/legacy/public/assets/js/PurchaseReceive.js:373:function searchProductForDirect(input, rowId) {
+/home/z/my-project/debugRC/legacy/public/assets/js/PurchaseReceive.js:381:    fetch(BASE_URL + 'PurchaseOrder/search_products', {
+/home/z/my-project/debugRC/legacy/public/assets/js/sales.js:303:    const res = await fetch(BASE_URL + "sales/search_customer?term=");
+/home/z/my-project/debugRC/legacy/public/assets/js/sales.js:434:        const res = await fetch(BASE_URL + `sales/search_product?term=${encodeURIComponent(term)}&branch_id=${branchId}`);
+/home/z/my-project/debugRC/legacy/public/assets/js/PurchaseOrder.js:122:                searchTimers[rowId] = setTimeout(() => searchProduct(productInput, rowId), 220);
+/home/z/my-project/debugRC/legacy/public/assets/js/PurchaseOrder.js:175:    function searchProduct(input, rowId) {
+/home/z/my-project/debugRC/legacy/public/assets/js/PurchaseOrder.js:186:        fetch(`${BASE_URL}PurchaseOrder/search_products`, {
+/home/z/my-project/debugRC/legacy/docs/SALES_ECOSYSTEM_PHASE_PLAN.md:131:| `/sales/search_customer` | `search_customer` | GET | — | Autocomplete customers |
+/home/z/my-project/debugRC/legacy/docs/SALES_ECOSYSTEM_PHASE_PLAN.md:132:| `/sales/search_product` | `search_product` | GET | — | Products + branch available qty |
+/home/z/my-project/debugRC/legacy/docs/SALES_API_ACCESS.md:35:| `search_customer` | 90 | Any logged-in | Autocomplete |
+/home/z/my-project/debugRC/legacy/docs/SALES_API_ACCESS.md:36:| `search_product` | 90 | Any logged-in | Stock-aware search |
+/home/z/my-project/debugRC/legacy/docs/SALES_MODULE_MODERNIZATION_PLAN.md:304:| 6.3 | Product search with live stock badge | High | Reuse `search_product` | Shows available qty; out-of-stock disabled |
+/home/z/my-project/debugRC/legacy/docs/PRODUCT_MODULE_PHASE_PLAN.md:80:| 4.1 | `searchProductsWithStock` returns range fields | ✅ | `min_rate`, `max_rate`, `default_rate`, `price` alias |
+/home/z/my-project/debugRC/legacy/docs/PRODUCT_MODULE_PHASE_PLAN.md:105:### `GET /sales/search_product` (via `StockAvailabilityService::searchProductsWithStock`)
+/home/z/my-project/debugRC/legacy/docs/PRODUCT_MODULE_PHASE_PLAN.md:195:- [ ] `search_product` JSON includes `min_rate`, `max_rate`, `default_rate`, `price`
+/home/z/my-project/debugRC/laravel/app/Archive/Services/ArchiveService.php:94:    public function searchCustomers(string $search, int $limit = 50): Collection
+/home/z/my-project/debugRC/laravel/app/Archive/Services/ArchiveService.php:113:            fn() => $this->archiveRepository->searchCustomers($search, $limit)
+/home/z/my-project/debugRC/laravel/app/Archive/Repositories/LegacyMySQLRepository.php:120:    public function searchCustomers(string $search, int $limit = 50): Collection
+/home/z/my-project/debugRC/laravel/app/Archive/Repositories/ArchiveRepositoryInterface.php:47:    public function searchCustomers(string $search, int $limit = 50): Collection;
+/home/z/my-project/debugRC/laravel/app/Http/Controllers/Admin/ArchiveController.php:38:                'customer' => $this->archiveService->searchCustomers($search),
+/home/z/my-project/debugRC/laravel/routes/web.php:434:    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/debugRC/laravel/public/assets/js/CustomerTransaction.js:170:                const res = await fetch(base + 'CustomerTransaction/search_customer?term=' + encodeURIComponent(term), {
+/home/z/my-project/debugRC/laravel/public/assets/js/CustomerTransaction.js:604:                const res = await fetch(base + 'CustomerTransaction/search_customer?term=' + encodeURIComponent(term), {
+/home/z/my-project/debugRC/laravel/public/assets/js/sales-edit.js:454:            const res = await fetch(BASE_URL + `sales/search_product?term=${encodeURIComponent(term)}&branch_id=${branchId}`);
+/home/z/my-project/debugRC/laravel/public/assets/js/sales-create.js:224:            const res = await fetch(BASE_URL + 'sales/search_customer?term=' + encodeURIComponent(term));
+/home/z/my-project/debugRC/laravel/public/assets/js/sales-create.js:294:            const res = await fetch(BASE_URL + `sales/search_product?term=${encodeURIComponent(term)}&branch_id=${branchId}`);
+/home/z/my-project/debugRC/laravel/public/assets/js/PurchaseReceive.js:336:                   onkeyup="searchProductForDirect(this, ${itemCounter})">
+/home/z/my-project/debugRC/laravel/public/assets/js/PurchaseReceive.js:373:function searchProductForDirect(input, rowId) {
+/home/z/my-project/debugRC/laravel/public/assets/js/PurchaseReceive.js:381:    fetch(BASE_URL + 'PurchaseOrder/search_products', {
+/home/z/my-project/debugRC/laravel/public/assets/js/sales.js:303:    const res = await fetch(BASE_URL + "sales/search_customer?term=");
+/home/z/my-project/debugRC/laravel/public/assets/js/sales.js:434:        const res = await fetch(BASE_URL + `sales/search_product?term=${encodeURIComponent(term)}&branch_id=${branchId}`);
+/home/z/my-project/debugRC/laravel/public/assets/js/PurchaseOrder.js:122:                searchTimers[rowId] = setTimeout(() => searchProduct(productInput, rowId), 220);
+/home/z/my-project/debugRC/laravel/public/assets/js/PurchaseOrder.js:175:    function searchProduct(input, rowId) {
+/home/z/my-project/debugRC/laravel/public/assets/js/PurchaseOrder.js:186:        fetch(`${BASE_URL}PurchaseOrder/search_products`, {
+/home/z/my-project/debugRC/docs/migration/IMPLEMENTATION_STATUS.md:180:| `admin/sales` (group) | cart, cart/*, finalize, cart-data, credit-check | salesman, manager, admin | search_customer, add_to_cart, validate_cart, final_sales |
+/home/z/my-project/debugRC/docs/migration/phase12_complete.md:54:- **ArchiveRepositoryInterface**: defines the contract (searchInvoices, findInvoice, searchCustomers, getCustomerLedger, getSupplierLedger, isAvailable)
+/home/z/my-project/debugRC/docs/sales-module-documentation.md:135:**SalesController (16):** search_customer, search_product, product_by_code, get_branch, product_stock_at_branch, get_warehouse_stock, get_employees, customer_details, add_to_cart, load_cart, validate_cart, hydrate_edit_cart, list_draft_carts, clear_tab_cart, delete_tab_cart, delete_from_cart, update_cart_item, save_fcm_token, final_sales, update, today_filter_summary, cancel_stale_drafts, datatable_invoices, call_it_a_day, delete_invoice, get_invoice_for_edit, save_payment, reverse_payment
+/home/z/my-project/debugRC/docs/sales-module-documentation.md:141:**CustomerTransactionController (5):** DataTables, search_customer, store, get_due, reverse
+/home/z/my-project/debugRC/docs/sales-module-documentation.md:154:| `guardJsonApi($key, $limit, $window)` | AJAX GET endpoints — rate limiting | search_customer (90/60s), search_product (90/60s), product_by_code (120/60s), etc. |
+/home/z/my-project/debugRC/tool-results/read_1784522248578_fb3252d99166.txt:429:   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/debugRC/tool-results/read_1784525991276_b3ea76677514.txt:135:   135→**SalesController (16):** search_customer, search_product, product_by_code, get_branch, product_stock_at_branch, get_warehouse_stock, get_employees, customer_details, add_to_cart, load_cart, validate_cart, hydrate_edit_cart, list_draft_carts, clear_tab_cart, delete_tab_cart, delete_from_cart, update_cart_item, save_fcm_token, final_sales, update, today_filter_summary, cancel_stale_drafts, datatable_invoices, call_it_a_day, delete_invoice, get_invoice_for_edit, save_payment, reverse_payment
+/home/z/my-project/debugRC/tool-results/read_1784525991276_b3ea76677514.txt:141:   141→**CustomerTransactionController (5):** DataTables, search_customer, store, get_due, reverse
+/home/z/my-project/debugRC/tool-results/read_1784525991276_b3ea76677514.txt:154:   154→| `guardJsonApi($key, $limit, $window)` | AJAX GET endpoints — rate limiting | search_customer (90/60s), search_product (90/60s), product_by_code (120/60s), etc. |
+/home/z/my-project/debugRC/tool-results/read_1784522285862_c84bdef1080a.txt:230:   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/debugRC/tool-results/read_1784521827816_590e41fec958.txt:81:    81→    81→    81→    public function search_customer() {
+/home/z/my-project/debugRC/tool-results/read_1784521827816_590e41fec958.txt:82:    82→    82→    82→        $this->guardJsonApi('sales.search_customer', 90, 60);
+/home/z/my-project/debugRC/tool-results/read_1784521827816_590e41fec958.txt:84:    84→    84→    84→        $this->sendJson($this->model->searchCustomers($term));
+/home/z/my-project/debugRC/tool-results/read_1784521827816_590e41fec958.txt:87:    87→    87→    87→    public function search_product() {
+/home/z/my-project/debugRC/tool-results/read_1784521827816_590e41fec958.txt:88:    88→    88→    88→        $this->guardJsonApi('sales.search_product', 90, 60);
+/home/z/my-project/debugRC/tool-results/read_1784521827816_590e41fec958.txt:91:    91→    91→    91→        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+/home/z/my-project/debugRC/tool-results/read_1784521815380_e7b7c1431959.txt:81:    81→    public function search_customer() {
+/home/z/my-project/debugRC/tool-results/read_1784521815380_e7b7c1431959.txt:82:    82→        $this->guardJsonApi('sales.search_customer', 90, 60);
+/home/z/my-project/debugRC/tool-results/read_1784521815380_e7b7c1431959.txt:84:    84→        $this->sendJson($this->model->searchCustomers($term));
+/home/z/my-project/debugRC/tool-results/read_1784521815380_e7b7c1431959.txt:87:    87→    public function search_product() {
+/home/z/my-project/debugRC/tool-results/read_1784521815380_e7b7c1431959.txt:88:    88→        $this->guardJsonApi('sales.search_product', 90, 60);
+/home/z/my-project/debugRC/tool-results/read_1784521815380_e7b7c1431959.txt:91:    91→        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+/home/z/my-project/debugRC/tool-results/read_1784522263902_ff04c8bc6546.txt:429:   429→   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/debugRC/tool-results/read_1784521822640_9d8cd68e581b.txt:81:    81→    81→    public function search_customer() {
+/home/z/my-project/debugRC/tool-results/read_1784521822640_9d8cd68e581b.txt:82:    82→    82→        $this->guardJsonApi('sales.search_customer', 90, 60);
+/home/z/my-project/debugRC/tool-results/read_1784521822640_9d8cd68e581b.txt:84:    84→    84→        $this->sendJson($this->model->searchCustomers($term));
+/home/z/my-project/debugRC/tool-results/read_1784521822640_9d8cd68e581b.txt:87:    87→    87→    public function search_product() {
+/home/z/my-project/debugRC/tool-results/read_1784521822640_9d8cd68e581b.txt:88:    88→    88→        $this->guardJsonApi('sales.search_product', 90, 60);
+/home/z/my-project/debugRC/tool-results/read_1784521822640_9d8cd68e581b.txt:91:    91→    91→        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+/home/z/my-project/debugRC/tool-results/read_1784517595616_9d8cd68e581b.txt:81:    81→    81→    public function search_customer() {
+/home/z/my-project/debugRC/tool-results/read_1784517595616_9d8cd68e581b.txt:82:    82→    82→        $this->guardJsonApi('sales.search_customer', 90, 60);
+/home/z/my-project/debugRC/tool-results/read_1784517595616_9d8cd68e581b.txt:84:    84→    84→        $this->sendJson($this->model->searchCustomers($term));
+/home/z/my-project/debugRC/tool-results/read_1784517595616_9d8cd68e581b.txt:87:    87→    87→    public function search_product() {
+/home/z/my-project/debugRC/tool-results/read_1784517595616_9d8cd68e581b.txt:88:    88→    88→        $this->guardJsonApi('sales.search_product', 90, 60);
+/home/z/my-project/debugRC/tool-results/read_1784517595616_9d8cd68e581b.txt:91:    91→    91→        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+/home/z/my-project/debugRC/tool-results/read_1784517585684_e7b7c1431959.txt:81:    81→    public function search_customer() {
+/home/z/my-project/debugRC/tool-results/read_1784517585684_e7b7c1431959.txt:82:    82→        $this->guardJsonApi('sales.search_customer', 90, 60);
+/home/z/my-project/debugRC/tool-results/read_1784517585684_e7b7c1431959.txt:84:    84→        $this->sendJson($this->model->searchCustomers($term));
+/home/z/my-project/debugRC/tool-results/read_1784517585684_e7b7c1431959.txt:87:    87→    public function search_product() {
+/home/z/my-project/debugRC/tool-results/read_1784517585684_e7b7c1431959.txt:88:    88→        $this->guardJsonApi('sales.search_product', 90, 60);
+/home/z/my-project/debugRC/tool-results/read_1784517585684_e7b7c1431959.txt:91:    91→        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+/home/z/my-project/debugRC/tool-results/read_1784522288925_e840ccf60afe.txt:230:   230→   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/debugRC/tool-results/read_1784522274351_9f97141149c0.txt:429:   429→   429→   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/debugRC/tool-results/read_1784521846819_ff04c8bc6546.txt:429:   429→   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/debugRC/tool-results/read_1784521842418_fb3252d99166.txt:429:   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+/home/z/my-project/debugRC/tool-results/read_1784515762042_fb3252d99166.txt:429:   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
