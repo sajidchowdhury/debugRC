@@ -18,6 +18,7 @@ use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\SalesFunnelController;
 use App\Http\Controllers\Admin\CustomerPerformanceController;
+use App\Http\Controllers\Admin\CsvExportController;
 use App\Http\Controllers\Admin\ReconciliationController;
 use App\Http\Controllers\Admin\StockTransactionController;
 use App\Http\Controllers\Admin\StockAdjustmentController;
@@ -502,6 +503,11 @@ Route::middleware('auth')->group(function () {
         ->names('admin.sales-invoices')
         ->middleware('role:salesman,accountant,manager,admin');
 
+    // CSV export — invoices
+    Route::get('admin/sales-invoices/export-csv', [CsvExportController::class, 'exportInvoices'])
+        ->name('admin.sales-invoices.export-csv')
+        ->middleware('role:accountant,manager,admin');
+
     // ============================================================
     // Phase 8.3: Sales Challans (godown prep + stock OUT + COGS GL)
     // P0-7: RBAC — godown/issue are warehouse_manager/dispatcher;
@@ -534,6 +540,11 @@ Route::middleware('auth')->group(function () {
         ->only(['show'])
         ->names('admin.sales-challans')
         ->middleware('role:accountant,warehouse_manager,manager,admin');
+
+    // CSV export — challans
+    Route::get('admin/sales-challans/export-csv', [CsvExportController::class, 'exportChallans'])
+        ->name('admin.sales-challans.export-csv')
+        ->middleware('role:accountant,manager,admin');
 
     // ============================================================
     // Phase 8.4: Customer Payments (Dr Bank/Cash / Cr AR + intercompany)

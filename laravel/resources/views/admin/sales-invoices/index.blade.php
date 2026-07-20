@@ -182,6 +182,9 @@
                     <a href="{{ route('admin.sales-invoices.index') }}" class="btn btn-outline-secondary btn-sm">
                         <i class="fas fa-eraser me-1"></i> Clear
                     </a>
+                    <a id="csvExportBtn" href="{{ route('admin.sales-invoices.export-csv') }}" class="btn btn-outline-success btn-sm" target="_blank">
+                        <i class="fas fa-file-csv me-1"></i> Export CSV
+                    </a>
                 </div>
             </form>
         </div>
@@ -294,6 +297,18 @@ $(function () {
         ordering: true,
         dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
         language: { search: 'Filter rows:', emptyTable: 'No sales invoices on this page.' }
+    });
+
+    // CSV export: pass current filter params to export URL
+    $('#csvExportBtn').on('click', function(e) {
+        e.preventDefault();
+        const params = new URLSearchParams();
+        const fields = ['from_date', 'to_date', 'customer_id', 'branch_id', 'status', 'search'];
+        fields.forEach(f => {
+            const val = $(`[name="${f}"]`).val();
+            if (val && val !== '') params.set(f, val);
+        });
+        window.open($(this).attr('href') + '?' + params.toString(), '_blank');
     });
 });
 </script>
