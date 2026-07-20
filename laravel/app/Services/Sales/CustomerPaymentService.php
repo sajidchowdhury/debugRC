@@ -4,6 +4,7 @@ namespace App\Services\Sales;
 
 use App\Models\CustomerPayment;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -30,6 +31,7 @@ class CustomerPaymentService
 {
     public function __construct(
         private JournalPostingService $journalPosting,
+        private JournalReversalService $journalReversal,
         private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger
@@ -185,36 +187,21 @@ class CustomerPaymentService
                 throw new \RuntimeException("Payment is already cancelled.");
             }
 
-            // Reverse GL.
+            // Reverse GL + linked customer_ledger via JournalReversalService (cascade).
             if ($payment->journal_entry_id) {
-                $this->journalPosting->reverseJournalEntry(
+                $this->journalReversal->reverseByJournalEntry(
                     $payment->journal_entry_id, $cancelledBy,
                     "Payment cancelled: {$reason}"
                 );
             }
 
-            // Reverse intercompany GL.
+            // Reverse intercompany GL + linked sub-ledger via JournalReversalService.
             if ($payment->intercompany_journal_entry_id) {
-                $this->journalPosting->reverseJournalEntry(
+                $this->journalReversal->reverseByJournalEntry(
                     $payment->intercompany_journal_entry_id, $cancelledBy,
                     "Payment cancelled: {$reason}"
                 );
             }
-
-            // Reverse customer_ledger via SubLedgerService (debit entry to restore what customer owes).
-            $this->subLedger->postCustomerLedgerEntry([
-                'customer_id' => $payment->customer_id,
-                'branch_id' => $payment->branch_id,
-                'transaction_date' => now()->format('Y-m-d'),
-                'transaction_type' => 'customer_payment_reversal',
-                'reference_type' => 'customer_payment',
-                'reference_id' => $payment->id,
-                'debit' => $amount,
-                'credit' => 0,
-                'description' => 'Payment reversal ' . $payment->payment_code . ": {$reason}",
-                'journal_entry_id' => $payment->journal_entry_id,
-                'created_by' => $cancelledBy,
-            ]);
 
             // Reverse invoice allocations (P1-4: use invoice_payment_allocations, not customer_payment_settlements).
             $allocations = DB::table('invoice_payment_allocations')

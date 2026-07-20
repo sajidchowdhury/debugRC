@@ -6,6 +6,7 @@ use App\Models\SalesReturn;
 use App\Services\Stock\StockService;
 use App\Services\Stock\DamageService;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
 use App\Services\Notification\NotificationService;
 use Illuminate\Support\Facades\DB;
@@ -38,6 +39,7 @@ class SalesReturnService
     public function __construct(
         private StockService $stockService,
         private JournalPostingService $journalPosting,
+        private JournalReversalService $journalReversal,
         private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger,
@@ -266,34 +268,19 @@ class SalesReturnService
                 throw new \RuntimeException("Only confirmed returns can be reversed (current: {$return->status}).");
             }
 
-            // Reverse both GL journals.
+            // Reverse both GL journals + linked customer_ledger via JournalReversalService (cascade).
             if ($return->journal_entry_id) {
-                $this->journalPosting->reverseJournalEntry(
+                $this->journalReversal->reverseByJournalEntry(
                     $return->journal_entry_id, $reversedBy,
                     "Return reversed: {$reason}"
                 );
             }
             if ($return->cogs_journal_entry_id) {
-                $this->journalPosting->reverseJournalEntry(
+                $this->journalReversal->reverseByJournalEntry(
                     $return->cogs_journal_entry_id, $reversedBy,
                     "Return reversed: {$reason}"
                 );
             }
-
-            // Reverse customer_ledger via SubLedgerService (debit entry to restore what customer owes).
-            $this->subLedger->postCustomerLedgerEntry([
-                'customer_id' => $return->customer_id,
-                'branch_id' => $return->branch_id,
-                'transaction_date' => now()->format('Y-m-d'),
-                'transaction_type' => 'sales_return_reversal',
-                'reference_type' => 'sales_return',
-                'reference_id' => $return->id,
-                'debit' => (float) $return->total_amount,
-                'credit' => 0,
-                'description' => 'Return reversal ' . $return->return_code . ": {$reason}",
-                'journal_entry_id' => $return->journal_entry_id,
-                'created_by' => $reversedBy,
-            ]);
 
             // P1-5: Reverse linked damage write-offs FIRST (before return stock reversal).
             // Each linked damage_invoice has its own stock OUT + GL that must be reversed.

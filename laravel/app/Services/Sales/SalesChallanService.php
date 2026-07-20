@@ -7,6 +7,7 @@ use App\Models\SalesChallan;
 use App\Services\Stock\StockService;
 use App\Services\Stock\StockAvailabilityService;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -38,6 +39,7 @@ class SalesChallanService
     public function __construct(
         private StockService $stockService,
         private JournalPostingService $journalPosting,
+        private JournalReversalService $journalReversal,
         private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger,
@@ -343,9 +345,9 @@ class SalesChallanService
                 throw new \RuntimeException("Challan is already cancelled.");
             }
 
-            // Reverse GL (COGS journal).
+            // Reverse GL (COGS journal) + linked sub-ledger via JournalReversalService (cascade).
             if ($challan->journal_entry_id) {
-                $this->journalPosting->reverseJournalEntry(
+                $this->journalReversal->reverseByJournalEntry(
                     $challan->journal_entry_id, $cancelledBy,
                     "Challan cancelled: {$reason}"
                 );
@@ -383,12 +385,12 @@ class SalesChallanService
                     'reverse_reason' => $reason,
                 ]);
 
-            // P2-3: Reverse transport adjustment (if any).
+            // P2-3: Reverse transport adjustment (if any) + linked sub-ledger via JournalReversalService.
             // If the challan had a transport_adjustment, reverse the adjustment
             // GL JE + restore the invoice's original transport_cost + total_amount
             // from the pre_challan snapshot.
             if ($challan->adjustment_journal_entry_id) {
-                $this->journalPosting->reverseJournalEntry(
+                $this->journalReversal->reverseByJournalEntry(
                     $challan->adjustment_journal_entry_id, $cancelledBy,
                     "Challan cancelled: transport adjustment reversed — {$reason}"
                 );

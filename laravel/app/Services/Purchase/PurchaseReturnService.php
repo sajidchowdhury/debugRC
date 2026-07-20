@@ -5,6 +5,8 @@ namespace App\Services\Purchase;
 use App\Models\PurchaseReturn;
 use App\Services\Stock\StockService;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\JournalReversalService;
+use App\Services\Accounting\SubLedgerService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -30,7 +32,9 @@ class PurchaseReturnService
 {
     public function __construct(
         private StockService $stockService,
-        private JournalPostingService $journalPosting
+        private JournalPostingService $journalPosting,
+        private JournalReversalService $journalReversal,
+        private SubLedgerService $subLedger
     ) {}
 
     /**
@@ -151,8 +155,20 @@ class PurchaseReturnService
             // 3. Post GL: Dr AP / Cr Inventory.
             $journalEntryId = $this->postReturnGL($return, $confirmedBy);
 
-            // 4. Post supplier_ledger debit (we owe less).
-            $this->postSupplierLedgerDebit($return, $journalEntryId, $confirmedBy);
+            // 4. Post supplier_ledger debit via SubLedgerService (we owe less).
+            $this->subLedger->postSupplierLedgerEntry([
+                'supplier_id' => $return->supplier_id,
+                'branch_id' => $return->branch_id,
+                'transaction_date' => $return->return_date->format('Y-m-d'),
+                'transaction_type' => 'purchase_return',
+                'reference_type' => 'purchase_return',
+                'reference_id' => $return->id,
+                'debit' => (float) $return->total_amount,
+                'credit' => 0,
+                'description' => 'Purchase Return ' . $return->return_code . ($return->reason ? ' — ' . $return->reason : ''),
+                'journal_entry_id' => $journalEntryId,
+                'created_by' => $confirmedBy,
+            ]);
 
             // 5. Update return status.
             DB::table('purchase_returns')
@@ -188,16 +204,13 @@ class PurchaseReturnService
             }
 
             if ($return->isConfirmed()) {
-                // Reverse GL.
+                // Reverse GL + linked supplier_ledger via JournalReversalService (cascade).
                 if ($return->journal_entry_id) {
-                    $this->journalPosting->reverseJournalEntry(
+                    $this->journalReversal->reverseByJournalEntry(
                         $return->journal_entry_id, $cancelledBy,
                         "Return cancelled: {$reason}"
                     );
                 }
-
-                // Reverse supplier_ledger (credit entry to restore what we owe).
-                $this->reverseSupplierLedgerDebit($return, $cancelledBy, $reason);
 
                 // Reverse each stock movement.
                 $stockTxs = DB::table('stock_transactions')
@@ -288,73 +301,6 @@ class PurchaseReturnService
                 'entity_id' => $return->id,
                 'memo' => 'Inventory out (cost) — ' . $return->return_code,
             ],
-        ]);
-    }
-
-    /**
-     * Post supplier_ledger debit entry (we owe the supplier less).
-     */
-    private function postSupplierLedgerDebit(PurchaseReturn $return, ?int $journalEntryId, int $createdBy): void
-    {
-        $amount = (float) $return->total_amount;
-        if ($amount < 0.01 || !$return->supplier_id) {
-            return;
-        }
-
-        $currentBalance = (float) DB::table('supplier_ledger')
-            ->where('supplier_id', $return->supplier_id)
-            ->orderByDesc('id')
-            ->value('balance');
-
-        $newBalance = $currentBalance - $amount; // debit reduces what we owe
-
-        DB::table('supplier_ledger')->insert([
-            'supplier_id' => $return->supplier_id,
-            'branch_id' => $return->branch_id,
-            'transaction_date' => $return->return_date->format('Y-m-d'),
-            'transaction_type' => 'purchase_return',
-            'reference_type' => 'purchase_return',
-            'reference_id' => $return->id,
-            'debit' => $amount,
-            'credit' => 0,
-            'balance' => $newBalance,
-            'description' => 'Purchase Return ' . $return->return_code . ($return->reason ? ' — ' . $return->reason : ''),
-            'journal_entry_id' => $journalEntryId,
-            'created_by' => $createdBy,
-            'created_at' => now(),
-        ]);
-    }
-
-    /**
-     * Reverse supplier_ledger (credit entry to restore what we owe on cancel).
-     */
-    private function reverseSupplierLedgerDebit(PurchaseReturn $return, int $cancelledBy, string $reason): void
-    {
-        $amount = (float) $return->total_amount;
-        if ($amount < 0.01 || !$return->supplier_id) {
-            return;
-        }
-
-        $currentBalance = (float) DB::table('supplier_ledger')
-            ->where('supplier_id', $return->supplier_id)
-            ->orderByDesc('id')
-            ->value('balance');
-
-        $newBalance = $currentBalance + $amount; // credit restores what we owe
-
-        DB::table('supplier_ledger')->insert([
-            'supplier_id' => $return->supplier_id,
-            'branch_id' => $return->branch_id,
-            'transaction_date' => now()->format('Y-m-d'),
-            'transaction_type' => 'purchase_return_reversal',
-            'reference_type' => 'purchase_return',
-            'reference_id' => $return->id,
-            'debit' => 0,
-            'credit' => $amount,
-            'balance' => $newBalance,
-            'description' => 'Return reversal ' . $return->return_code . ": {$reason}",
-            'created_by' => $cancelledBy,
-            'created_at' => now(),
         ]);
     }
 

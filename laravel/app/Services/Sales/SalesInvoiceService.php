@@ -7,6 +7,7 @@ use App\Models\SalesDraftCart;
 use App\Services\Stock\StockAvailabilityService;
 use App\Services\Stock\StockService;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -36,6 +37,7 @@ class SalesInvoiceService
         private StockAvailabilityService $availabilityService,
         private StockService $stockService,
         private JournalPostingService $journalPosting,
+        private JournalReversalService $journalReversal,
         private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger
@@ -297,28 +299,13 @@ class SalesInvoiceService
                 throw new \RuntimeException("Cannot cancel: payments have been received against this invoice. Reverse the payments first.");
             }
 
-            // Reverse GL.
+            // Reverse GL + linked customer_ledger via JournalReversalService (cascade).
             if ($invoice->journal_entry_id) {
-                $this->journalPosting->reverseJournalEntry(
+                $this->journalReversal->reverseByJournalEntry(
                     $invoice->journal_entry_id, $cancelledBy,
                     "Invoice cancelled: {$reason}"
                 );
             }
-
-            // Reverse customer_ledger via SubLedgerService (credit entry to reduce what customer owes).
-            $this->subLedger->postCustomerLedgerEntry([
-                'customer_id' => $invoice->customer_id,
-                'branch_id' => $invoice->branch_id,
-                'transaction_date' => now()->format('Y-m-d'),
-                'transaction_type' => 'sales_invoice_reversal',
-                'reference_type' => 'sales_invoice',
-                'reference_id' => $invoice->id,
-                'debit' => 0,
-                'credit' => (float) $invoice->total_amount,
-                'description' => 'Invoice reversal ' . $invoice->invoice_code . ": {$reason}",
-                'journal_entry_id' => $invoice->journal_entry_id,
-                'created_by' => $cancelledBy,
-            ]);
 
             // Mark invoice as cancelled.
             DB::table('sales_invoices')
@@ -353,13 +340,12 @@ class SalesInvoiceService
      *   1. Assert editable (draft, no godown, no payments, not reversed)
      *   2. Re-validate credit limit (using NET increase = max(0, newTotal - oldTotal))
      *   3. Lock branch products FOR UPDATE + re-check availability
-     *   4. Reverse old customer_ledger debit (append-only credit entry)
-     *   5. Reverse old GL journal entry (append-only)
-     *   6. DELETE old items + dispatches + dispatchers
-     *   7. INSERT new items + dispatches (soft reservation, warehouse_id=NULL)
-     *   8. Post new customer_ledger debit (new total)
-     *   9. Post new GL journal entry (Dr AR / Cr Revenue + Discount + Transport)
-     *  10. UPDATE invoice header (sub_total, discount, transport, total, notes, etc.)
+     *   4. Reverse old GL journal entry + linked customer_ledger via JournalReversalService
+     *   5. DELETE old items + dispatches + dispatchers
+     *   6. INSERT new items + dispatches (soft reservation, warehouse_id=NULL)
+     *   7. Post new customer_ledger debit (new total)
+     *   8. Post new GL journal entry (Dr AR / Cr Revenue + Discount + Transport)
+     *   9. UPDATE invoice header (sub_total, discount, transport, total, notes, etc.)
      *
      * @param int $invoiceId
      * @param array $data {
@@ -474,30 +460,17 @@ class SalesInvoiceService
                 }
             }
 
-            // Step 1: Reverse old customer_ledger debit via SubLedgerService (append-only credit entry).
-            $this->subLedger->postCustomerLedgerEntry([
-                'customer_id' => $customerId,
-                'branch_id' => $branchId,
-                'transaction_date' => now()->format('Y-m-d'),
-                'transaction_type' => 'sales_invoice_reversal',
-                'reference_type' => 'sales_invoice',
-                'reference_id' => $invoiceId,
-                'debit' => 0,
-                'credit' => $oldTotal,
-                'description' => 'Invoice edit reversal ' . $locked->invoice_code,
-                'journal_entry_id' => $oldJournalId,
-                'created_by' => $updatedBy,
-            ]);
-
-            // Step 2: Reverse old GL journal entry (append-only).
+            // Step 1: Reverse old GL journal entry + linked customer_ledger via JournalReversalService.
+            // The cascade handles both the GL reversal (swap Dr/Cr) and the sub-ledger
+            // reversal (mark original is_reversed, post opposite entry) atomically.
             if ($oldJournalId) {
-                $this->journalPosting->reverseJournalEntry(
+                $this->journalReversal->reverseByJournalEntry(
                     $oldJournalId, $updatedBy,
                     'Invoice edited: ' . $invoice->invoice_code
                 );
             }
 
-            // Step 3: DELETE old items + dispatches + dispatchers.
+            // Step 2: DELETE old items + dispatches + dispatchers.
             DB::table('sales_invoice_items')->where('sales_invoice_id', $invoiceId)->delete();
             DB::table('sales_invoice_dispatches')->where('sales_invoice_id', $invoiceId)->delete();
             DB::table('sales_invoice_dispatchers')->where('sales_invoice_id', $invoiceId)->delete();

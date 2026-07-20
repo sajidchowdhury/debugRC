@@ -5,6 +5,8 @@ namespace App\Services\Purchase;
 use App\Models\PurchaseReceive;
 use App\Services\Stock\StockService;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\JournalReversalService;
+use App\Services\Accounting\SubLedgerService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -33,6 +35,8 @@ class PurchaseReceiveService
     public function __construct(
         private StockService $stockService,
         private JournalPostingService $journalPosting,
+        private JournalReversalService $journalReversal,
+        private SubLedgerService $subLedger,
         private PurchaseOrderService $poService
     ) {}
 
@@ -161,8 +165,20 @@ class PurchaseReceiveService
             // 2. Post GL: Dr Inventory / Cr Accounts Payable.
             $journalEntryId = $this->postReceiveGL($receive, $confirmedBy);
 
-            // 3. Post supplier_ledger credit (we owe the supplier more).
-            $this->postSupplierLedgerCredit($receive, $journalEntryId, $confirmedBy);
+            // 3. Post supplier_ledger credit via SubLedgerService (we owe the supplier more).
+            $this->subLedger->postSupplierLedgerEntry([
+                'supplier_id' => $receive->supplier_id,
+                'branch_id' => $receive->branch_id,
+                'transaction_date' => $receive->receive_date->format('Y-m-d'),
+                'transaction_type' => 'purchase_receive',
+                'reference_type' => 'purchase_receive',
+                'reference_id' => $receive->id,
+                'debit' => 0,
+                'credit' => (float) $receive->total_amount,
+                'description' => 'GRN ' . $receive->receive_code . ($receive->notes ? ' — ' . $receive->notes : ''),
+                'journal_entry_id' => $journalEntryId,
+                'created_by' => $confirmedBy,
+            ]);
 
             // 4. Update PO received_qty (if against a PO).
             if ($receive->purchase_order_id) {
@@ -214,16 +230,13 @@ class PurchaseReceiveService
             }
 
             if ($receive->isConfirmed()) {
-                // Reverse GL.
+                // Reverse GL + linked supplier_ledger via JournalReversalService (cascade).
                 if ($receive->journal_entry_id) {
-                    $this->journalPosting->reverseJournalEntry(
+                    $this->journalReversal->reverseByJournalEntry(
                         $receive->journal_entry_id, $cancelledBy,
                         "GRN cancelled: {$reason}"
                     );
                 }
-
-                // Reverse supplier_ledger (debit entry to reduce what we owe).
-                $this->reverseSupplierLedgerCredit($receive, $cancelledBy, $reason);
 
                 // Reverse each stock movement.
                 $stockTxs = DB::table('stock_transactions')
@@ -315,74 +328,6 @@ class PurchaseReceiveService
                 'entity_id' => $receive->supplier_id,
                 'memo' => 'Payable to supplier — ' . $receive->receive_code,
             ],
-        ]);
-    }
-
-    /**
-     * Post supplier_ledger credit entry (we owe the supplier more).
-     */
-    private function postSupplierLedgerCredit(PurchaseReceive $receive, ?int $journalEntryId, int $createdBy): void
-    {
-        $amount = (float) $receive->total_amount;
-        if ($amount < 0.01 || !$receive->supplier_id) {
-            return;
-        }
-
-        // Get current balance.
-        $currentBalance = (float) DB::table('supplier_ledger')
-            ->where('supplier_id', $receive->supplier_id)
-            ->orderByDesc('id')
-            ->value('balance');
-
-        $newBalance = $currentBalance + $amount; // credit increases what we owe
-
-        DB::table('supplier_ledger')->insert([
-            'supplier_id' => $receive->supplier_id,
-            'branch_id' => $receive->branch_id,
-            'transaction_date' => $receive->receive_date->format('Y-m-d'),
-            'transaction_type' => 'purchase_receive',
-            'reference_type' => 'purchase_receive',
-            'reference_id' => $receive->id,
-            'debit' => 0,
-            'credit' => $amount,
-            'balance' => $newBalance,
-            'description' => 'GRN ' . $receive->receive_code . ($receive->notes ? ' — ' . $receive->notes : ''),
-            'journal_entry_id' => $journalEntryId,
-            'created_by' => $createdBy,
-            'created_at' => now(),
-        ]);
-    }
-
-    /**
-     * Reverse supplier_ledger (debit entry to reduce what we owe on cancel).
-     */
-    private function reverseSupplierLedgerCredit(PurchaseReceive $receive, int $cancelledBy, string $reason): void
-    {
-        $amount = (float) $receive->total_amount;
-        if ($amount < 0.01 || !$receive->supplier_id) {
-            return;
-        }
-
-        $currentBalance = (float) DB::table('supplier_ledger')
-            ->where('supplier_id', $receive->supplier_id)
-            ->orderByDesc('id')
-            ->value('balance');
-
-        $newBalance = $currentBalance - $amount; // debit reduces what we owe
-
-        DB::table('supplier_ledger')->insert([
-            'supplier_id' => $receive->supplier_id,
-            'branch_id' => $receive->branch_id,
-            'transaction_date' => now()->format('Y-m-d'),
-            'transaction_type' => 'purchase_receive_reversal',
-            'reference_type' => 'purchase_receive',
-            'reference_id' => $receive->id,
-            'debit' => $amount,
-            'credit' => 0,
-            'balance' => $newBalance,
-            'description' => 'GRN reversal ' . $receive->receive_code . ": {$reason}",
-            'created_by' => $cancelledBy,
-            'created_at' => now(),
         ]);
     }
 
