@@ -1025,23 +1025,199 @@ CREATE INDEX idx_po_listing_covering
 
 **Why this matters for long-term**: Covering indexes enable **index-only scans** — PostgreSQL never needs to visit the heap (actual table pages). For frequently queried columns, this can be 5-10x faster on large tables.
 
-### 7.4 BRIN Indexes — For Time-Series Data
+### 7.4 BRIN Indexes — ✅ Implemented (Task 15)
+
+PostgreSQL BRIN (Block Range Index) indexes store only min/max summaries per block range of pages, making them extraordinarily compact — typically ~0.1% of table size versus ~10% for B-tree indexes. They are ideal for columns with natural physical correlation (i.e., rows are appended in roughly increasing order), which is the case for all date/timestamp columns in this ERP. BRIN indexes complement existing B-tree indexes: B-tree handles equality/point lookups efficiently, while BRIN handles date-range scans (e.g., "last 30 days", "this month") at near-zero storage and maintenance cost.
+
+**Design principles applied:**
+
+1. **Only on chronologically-correlated columns** — `created_at`, `*_date` columns where new rows are appended in increasing order. BRIN is useless on columns with random physical ordering (e.g., `customer_id`).
+2. **pages_per_range tuning** — 32 for medium tables (~256 KB per range), 64 for very-large or pure-append tables (stock_transactions, audit logs) where coarser summaries still provide excellent correlation.
+3. **Complementary to B-tree** — Existing B-tree indexes on `invoice_date`, `payment_date`, `entry_date` handle point lookups; BRIN accelerates the much more common date-range queries used by every dashboard and report.
+4. **Dual-column strategy** — Both `*_date` (business date) and `created_at` (system timestamp) are indexed separately because queries use either or both, and each has independent correlation.
+
+Migration: `2025_01_20_000003_add_brin_indexes_time_series_tables.php`
+Schema: `07_views_triggers_constraints.sql` — BRIN INDEXES section added.
+
+#### 1. Core Transaction Tables (10 indexes)
+
+These are the highest-traffic tables in the ERP. Every listing page and dashboard filters by date range — today, this week, this month, or a custom range. BRIN allows PostgreSQL to skip entire block ranges of old data that fall outside the query window.
 
 ```sql
--- sales_invoices inserted chronologically → BRIN is ideal
-CREATE INDEX idx_si_created_brin ON sales_invoices USING BRIN (created_at)
-  WITH (pages_per_range = 32);
+-- sales_invoices: AR aging, collections dashboard, monthly revenue
+CREATE INDEX idx_si_created_at_brin
+    ON sales_invoices USING BRIN (created_at)
+    WITH (pages_per_range = 32);
 
--- stock_transactions appended chronologically
-CREATE INDEX idx_st_date_brin ON stock_transactions USING BRIN (transaction_date)
-  WITH (pages_per_range = 32);
+CREATE INDEX idx_si_invoice_date_brin
+    ON sales_invoices USING BRIN (invoice_date)
+    WITH (pages_per_range = 32);
 
--- customer_ledger appended chronologically
-CREATE INDEX idx_cl_date_brin ON customer_ledger USING BRIN (created_at)
-  WITH (pages_per_range = 32);
+-- customer_payments: daily collection report, payment history
+CREATE INDEX idx_cp_payment_date_brin
+    ON customer_payments USING BRIN (payment_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX idx_cp_created_at_brin
+    ON customer_payments USING BRIN (created_at)
+    WITH (pages_per_range = 32);
+
+-- supplier_payments: AP aging, payment history
+CREATE INDEX idx_sp_payment_date_brin
+    ON supplier_payments USING BRIN (payment_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX idx_sp_created_at_brin
+    ON supplier_payments USING BRIN (created_at)
+    WITH (pages_per_range = 32);
+
+-- sales_returns: returns report by period
+CREATE INDEX idx_sr_return_date_brin
+    ON sales_returns USING BRIN (return_date)
+    WITH (pages_per_range = 32);
+
+-- purchase_receives: GRN listing by date, monthly purchase summary
+CREATE INDEX idx_pr_receive_date_brin
+    ON purchase_receives USING BRIN (receive_date)
+    WITH (pages_per_range = 32);
+
+-- purchase_returns: return date range queries
+CREATE INDEX idx_prtn_return_date_brin
+    ON purchase_returns USING BRIN (return_date)
+    WITH (pages_per_range = 32);
+
+-- purchase_orders: PO listing by date
+CREATE INDEX idx_po_po_date_brin
+    ON purchase_orders USING BRIN (po_date)
+    WITH (pages_per_range = 32);
 ```
 
-**Why this matters for long-term**: BRIN indexes are **tiny** (~0.1% of table size vs ~10% for B-tree) and perfect for append-only time-series data. They're essentially free to maintain and dramatically speed up date-range queries on large tables.
+#### 2. Sub-Ledgers (8 indexes)
+
+Sub-ledger rows are appended chronologically per entity. The AR aging report scans `customer_ledger WHERE transaction_date >= ?`, the AP aging scans `supplier_ledger WHERE transaction_date >= ?`, and the employee statement queries `employee_ledger WHERE transaction_date BETWEEN ? AND ?`. BRIN on `transaction_date` allows the planner to skip months or years of historical blocks instantly, while BRIN on `created_at` supports system-level queries (e.g., "entries created in the last hour for reconciliation").
+
+```sql
+-- customer_ledger: AR aging, customer 360 ledger tab
+CREATE INDEX idx_cl_transaction_date_brin
+    ON customer_ledger USING BRIN (transaction_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX idx_cl_created_at_brin
+    ON customer_ledger USING BRIN (created_at)
+    WITH (pages_per_range = 32);
+
+-- supplier_ledger: AP aging, supplier payment history
+CREATE INDEX idx_sl_transaction_date_brin
+    ON supplier_ledger USING BRIN (transaction_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX idx_sl_created_at_brin
+    ON supplier_ledger USING BRIN (created_at)
+    WITH (pages_per_range = 32);
+
+-- employee_ledger: employee advance/loan/salary statement
+CREATE INDEX idx_el_transaction_date_brin
+    ON employee_ledger USING BRIN (transaction_date)
+    WITH (pages_per_range = 32);
+
+-- branch_ledger: intercompany settlement by period
+CREATE INDEX idx_bl_transaction_date_brin
+    ON branch_ledger USING BRIN (transaction_date)
+    WITH (pages_per_range = 32);
+
+-- cash_ledger: daily cash position, branch cash history
+CREATE INDEX idx_cashl_transaction_date_brin
+    ON cash_ledger USING BRIN (transaction_date)
+    WITH (pages_per_range = 32);
+
+-- branch_expenses: expense report by period
+CREATE INDEX idx_be_expense_date_brin
+    ON branch_expenses USING BRIN (expense_date)
+    WITH (pages_per_range = 32);
+```
+
+#### 3. Inventory Ledger (2 indexes) — pages_per_range = 64
+
+`stock_transactions` is the largest append-only table in the ERP. Every stock movement — sales challan, purchase receive, return, adjustment, transfer — appends a row. The product movement report queries "last 30 days of stock movements for product X", which is a date-range scan that benefits enormously from BRIN. Using `pages_per_range = 64` because this table grows fastest and coarser block ranges still maintain excellent physical correlation.
+
+```sql
+CREATE INDEX idx_st_transaction_date_brin
+    ON stock_transactions USING BRIN (transaction_date)
+    WITH (pages_per_range = 64);
+
+CREATE INDEX idx_st_created_at_brin
+    ON stock_transactions USING BRIN (created_at)
+    WITH (pages_per_range = 64);
+```
+
+#### 4. Audit & Log Tables (3 indexes) — pages_per_range = 64
+
+Audit logs and notification tables are pure append-only — rows are never updated, only inserted. This makes them the ideal BRIN use case with perfect physical correlation. Using `pages_per_range = 64` because these tables accumulate indefinitely and the coarser granularity is acceptable for date-range queries like "show audit events from the last 7 days".
+
+```sql
+-- user_audit_log: security audit trail queries by date range
+CREATE INDEX idx_ual_created_at_brin
+    ON user_audit_log USING BRIN (created_at)
+    WITH (pages_per_range = 64);
+
+-- notifications: "show recent notifications" (last 7 days)
+CREATE INDEX idx_notif_created_at_brin
+    ON notifications USING BRIN (created_at)
+    WITH (pages_per_range = 64);
+
+-- journal_posting_logs: audit trail for GL posting actions
+CREATE INDEX idx_jpl_performed_at_brin
+    ON journal_posting_logs USING BRIN (performed_at)
+    WITH (pages_per_range = 64);
+```
+
+#### 5. Daily Summaries (1 index)
+
+`daily_warehouse_stock_summary` stores one row per warehouse×product×day. Queries always filter by `summary_date` range (e.g., "stock movement summary for the last 30 days"). Rows are strictly ordered by date, making BRIN extremely effective.
+
+```sql
+CREATE INDEX idx_dwss_summary_date_brin
+    ON daily_warehouse_stock_summary USING BRIN (summary_date)
+    WITH (pages_per_range = 32);
+```
+
+#### 6. Other Transaction Tables (6 indexes)
+
+Income, expense, employee transactions, money transfers, sales challans, and manual journals each have their own business date columns and are appended chronologically. These support their respective listing and reporting pages.
+
+```sql
+-- other_incomes: income report by period
+CREATE INDEX idx_oi_income_date_brin
+    ON other_incomes USING BRIN (income_date)
+    WITH (pages_per_range = 32);
+
+-- other_expenses: expense report by period
+CREATE INDEX idx_oe_expense_date_brin
+    ON other_expenses USING BRIN (expense_date)
+    WITH (pages_per_range = 32);
+
+-- employee_transactions: employee statement by period
+CREATE INDEX idx_et_transaction_date_brin
+    ON employee_transactions USING BRIN (transaction_date)
+    WITH (pages_per_range = 32);
+
+-- money_transfers: transfer history by date
+CREATE INDEX idx_mt_transfer_date_brin
+    ON money_transfers USING BRIN (transfer_date)
+    WITH (pages_per_range = 32);
+
+-- sales_challans: challan listing by date
+CREATE INDEX idx_sc_challan_date_brin
+    ON sales_challans USING BRIN (challan_date)
+    WITH (pages_per_range = 32);
+
+-- manual_journals: manual journal listing by date
+CREATE INDEX idx_mj_journal_date_brin
+    ON manual_journals USING BRIN (journal_date)
+    WITH (pages_per_range = 32);
+```
+
+**Total: 30 BRIN indexes** across 22 tables. At ~0.1% of table size, the total BRIN index footprint is negligible — estimated under 1 MB even for tables with millions of rows. Every date-range query (AR aging, AP aging, daily collection, monthly revenue, product movement, stock summary) now benefits from block-level pruning without the storage cost of additional B-tree indexes.
 
 ### 7.5 JSONB Indexing — Cart + Configuration Queries
 
@@ -1310,7 +1486,7 @@ LIMIT 30;
 | 12 | ~~Add GENERATED columns for due_amount, issue_cost, cogs_amount, stock_value~~ | ✅ DONE | Database | 2025-01-20 — 3 GENERATED columns added: due_amount (sales_invoices = total_amount - paid_amount), cogs_amount (sales_challan_items = qty × issue_rate), stock_value (warehouse_stock = qty × avg_cost, new column). issue_cost on sales_challans CANNOT be GENERATED (PostgreSQL forbids subqueries in GENERATED expressions — cross-table aggregate). All 6 due_amount manual-write sites refactored to only update paid_amount/total_amount; 4 cogs_amount insert sites cleaned; 4 stock_value DB::raw() queries simplified to use column. Models updated: due_amount & cogs_amount removed from $fillable, stock_value cast added. Partial index on stock_value for non-zero rows. |
 | 13 | ~~Add partial indexes (open invoices, unpaid, pending returns, active ledger)~~ | ✅ Done | 1 day | Database |
 | 14 | ~~Add covering indexes (INCLUDE) for high-frequency queries~~ | ✅ Done | 1 day | Database |
-| 15 | Add BRIN indexes for time-series tables | High | 0.5 day | Database |
+| 15 | ~~Add BRIN indexes for time-series tables~~ | ✅ Done | 0.5 day | Database |
 | 16 | Add GIN index on sales_draft_carts.items_json | Medium | 0.5 day | Database |
 | 17 | Implement full-text search for products + customers (tsvector + GIN) | High | 2 days | Database + Business Logic |
 | 18 | Add window-function running balance reconciliation job | High | 2 days | Database + Business Logic |

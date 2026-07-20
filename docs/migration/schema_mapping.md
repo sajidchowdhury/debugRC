@@ -271,6 +271,47 @@ and `07_views_triggers_constraints.sql` both define these indexes.
 | P3 | `customer_ledger` | `idx_cl_reference_covering` | `(reference_type, reference_id)` | `id, customer_id, branch_id, transaction_date, transaction_type, debit, credit, balance, journal_entry_id, created_by` | By-reference lookup |
 | P3 | `purchase_orders` | `idx_po_listing_covering` | `(branch_id, po_date DESC, id DESC)` | `supplier_id, po_code, total_amount, status` | PO listing |
 
+### 3.10 BRIN Indexes for Time-Series Tables
+
+PostgreSQL BRIN (Block Range Index) indexes store only min/max summaries per block range of pages,
+making them tiny (~0.1% of table size vs ~10% for B-tree) and ideal for chronologically-ordered columns.
+They complement B-tree indexes — B-tree handles equality/point lookups, BRIN handles date-range scans
+at near-zero storage cost. Migration `2025_01_20_000003_add_brin_indexes_time_series_tables.php`
+and `07_views_triggers_constraints.sql` both define these indexes.
+
+| # | Table | Index Name | Column | pages_per_range | Use Case |
+|---|---|---|---|---|---|
+| 1 | `sales_invoices` | `idx_si_created_at_brin` | `created_at` | 32 | Monthly revenue, daily listing |
+| 2 | `sales_invoices` | `idx_si_invoice_date_brin` | `invoice_date` | 32 | AR aging by invoice date |
+| 3 | `customer_payments` | `idx_cp_payment_date_brin` | `payment_date` | 32 | Daily collection report |
+| 4 | `customer_payments` | `idx_cp_created_at_brin` | `created_at` | 32 | Recent payments dashboard |
+| 5 | `supplier_payments` | `idx_sp_payment_date_brin` | `payment_date` | 32 | AP aging, payment history |
+| 6 | `supplier_payments` | `idx_sp_created_at_brin` | `created_at` | 32 | Recent payments dashboard |
+| 7 | `sales_returns` | `idx_sr_return_date_brin` | `return_date` | 32 | Returns report by period |
+| 8 | `purchase_receives` | `idx_pr_receive_date_brin` | `receive_date` | 32 | GRN listing, monthly purchase |
+| 9 | `purchase_returns` | `idx_prtn_return_date_brin` | `return_date` | 32 | Purchase return by period |
+| 10 | `purchase_orders` | `idx_po_po_date_brin` | `po_date` | 32 | PO listing by date |
+| 11 | `customer_ledger` | `idx_cl_transaction_date_brin` | `transaction_date` | 32 | AR aging, customer 360 |
+| 12 | `customer_ledger` | `idx_cl_created_at_brin` | `created_at` | 32 | Recent ledger entries |
+| 13 | `supplier_ledger` | `idx_sl_transaction_date_brin` | `transaction_date` | 32 | AP aging, supplier history |
+| 14 | `supplier_ledger` | `idx_sl_created_at_brin` | `created_at` | 32 | Recent ledger entries |
+| 15 | `employee_ledger` | `idx_el_transaction_date_brin` | `transaction_date` | 32 | Employee statement by period |
+| 16 | `branch_ledger` | `idx_bl_transaction_date_brin` | `transaction_date` | 32 | Intercompany by period |
+| 17 | `cash_ledger` | `idx_cashl_transaction_date_brin` | `transaction_date` | 32 | Daily cash position |
+| 18 | `branch_expenses` | `idx_be_expense_date_brin` | `expense_date` | 32 | Expense report by period |
+| 19 | `stock_transactions` | `idx_st_transaction_date_brin` | `transaction_date` | 64 | Product movement report |
+| 20 | `stock_transactions` | `idx_st_created_at_brin` | `created_at` | 64 | Recent stock movements |
+| 21 | `user_audit_log` | `idx_ual_created_at_brin` | `created_at` | 64 | Security audit by date range |
+| 22 | `notifications` | `idx_notif_created_at_brin` | `created_at` | 64 | Recent notifications |
+| 23 | `journal_posting_logs` | `idx_jpl_performed_at_brin` | `performed_at` | 64 | GL posting audit trail |
+| 24 | `daily_warehouse_stock_summary` | `idx_dwss_summary_date_brin` | `summary_date` | 32 | Stock summary by date range |
+| 25 | `other_incomes` | `idx_oi_income_date_brin` | `income_date` | 32 | Income report by period |
+| 26 | `other_expenses` | `idx_oe_expense_date_brin` | `expense_date` | 32 | Expense report by period |
+| 27 | `employee_transactions` | `idx_et_transaction_date_brin` | `transaction_date` | 32 | Employee transaction report |
+| 28 | `money_transfers` | `idx_mt_transfer_date_brin` | `transfer_date` | 32 | Transfer history by date |
+| 29 | `sales_challans` | `idx_sc_challan_date_brin` | `challan_date` | 32 | Challan listing by date |
+| 30 | `manual_journals` | `idx_mj_journal_date_brin` | `journal_date` | 32 | Manual journal listing |
+
 ---
 
 ## 4. PHP Code SQL Compatibility (Phase 2.4)

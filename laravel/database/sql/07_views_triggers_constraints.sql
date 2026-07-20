@@ -278,3 +278,136 @@ CREATE INDEX IF NOT EXISTS idx_cl_reference_covering
 CREATE INDEX IF NOT EXISTS idx_po_listing_covering
     ON purchase_orders (branch_id, po_date DESC, id DESC)
     INCLUDE (supplier_id, po_code, total_amount, status);
+
+-- ===================== BRIN INDEXES FOR TIME-SERIES / APPEND-MOSTLY TABLES =====================
+-- PostgreSQL BRIN (Block Range Index) indexes store only min/max summaries per block range,
+-- making them tiny (~0.1% of table size vs ~10% for B-tree) and ideal for chronologically-
+-- ordered columns. They complement B-tree indexes — B-tree handles equality/point lookups,
+-- BRIN handles date-range scans efficiently at near-zero cost.
+-- Mirrors migration 2025_01_20_000003_add_brin_indexes_time_series_tables.php.
+
+-- 1. CORE TRANSACTION TABLES — date-range reports & dashboards
+CREATE INDEX IF NOT EXISTS idx_si_created_at_brin
+    ON sales_invoices USING BRIN (created_at)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_si_invoice_date_brin
+    ON sales_invoices USING BRIN (invoice_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_cp_payment_date_brin
+    ON customer_payments USING BRIN (payment_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_cp_created_at_brin
+    ON customer_payments USING BRIN (created_at)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_sp_payment_date_brin
+    ON supplier_payments USING BRIN (payment_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_sp_created_at_brin
+    ON supplier_payments USING BRIN (created_at)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_sr_return_date_brin
+    ON sales_returns USING BRIN (return_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_pr_receive_date_brin
+    ON purchase_receives USING BRIN (receive_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_prtn_return_date_brin
+    ON purchase_returns USING BRIN (return_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_po_po_date_brin
+    ON purchase_orders USING BRIN (po_date)
+    WITH (pages_per_range = 32);
+
+-- 2. SUB-LEDGERS — AR/AP aging, running balance queries
+CREATE INDEX IF NOT EXISTS idx_cl_transaction_date_brin
+    ON customer_ledger USING BRIN (transaction_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_cl_created_at_brin
+    ON customer_ledger USING BRIN (created_at)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_sl_transaction_date_brin
+    ON supplier_ledger USING BRIN (transaction_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_sl_created_at_brin
+    ON supplier_ledger USING BRIN (created_at)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_el_transaction_date_brin
+    ON employee_ledger USING BRIN (transaction_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_bl_transaction_date_brin
+    ON branch_ledger USING BRIN (transaction_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_cashl_transaction_date_brin
+    ON cash_ledger USING BRIN (transaction_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_be_expense_date_brin
+    ON branch_expenses USING BRIN (expense_date)
+    WITH (pages_per_range = 32);
+
+-- 3. INVENTORY LEDGER — stock_transactions (pure append, largest table)
+CREATE INDEX IF NOT EXISTS idx_st_transaction_date_brin
+    ON stock_transactions USING BRIN (transaction_date)
+    WITH (pages_per_range = 64);
+
+CREATE INDEX IF NOT EXISTS idx_st_created_at_brin
+    ON stock_transactions USING BRIN (created_at)
+    WITH (pages_per_range = 64);
+
+-- 4. AUDIT & LOG TABLES — pure append-only, never updated
+CREATE INDEX IF NOT EXISTS idx_ual_created_at_brin
+    ON user_audit_log USING BRIN (created_at)
+    WITH (pages_per_range = 64);
+
+CREATE INDEX IF NOT EXISTS idx_notif_created_at_brin
+    ON notifications USING BRIN (created_at)
+    WITH (pages_per_range = 64);
+
+CREATE INDEX IF NOT EXISTS idx_jpl_performed_at_brin
+    ON journal_posting_logs USING BRIN (performed_at)
+    WITH (pages_per_range = 64);
+
+-- 5. DAILY SUMMARIES — snapshot tables with date dimension
+CREATE INDEX IF NOT EXISTS idx_dwss_summary_date_brin
+    ON daily_warehouse_stock_summary USING BRIN (summary_date)
+    WITH (pages_per_range = 32);
+
+-- 6. OTHER TRANSACTION TABLES — income/expense/employee/transfers
+CREATE INDEX IF NOT EXISTS idx_oi_income_date_brin
+    ON other_incomes USING BRIN (income_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_oe_expense_date_brin
+    ON other_expenses USING BRIN (expense_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_et_transaction_date_brin
+    ON employee_transactions USING BRIN (transaction_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_mt_transfer_date_brin
+    ON money_transfers USING BRIN (transfer_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_sc_challan_date_brin
+    ON sales_challans USING BRIN (challan_date)
+    WITH (pages_per_range = 32);
+
+CREATE INDEX IF NOT EXISTS idx_mj_journal_date_brin
+    ON manual_journals USING BRIN (journal_date)
+    WITH (pages_per_range = 32);

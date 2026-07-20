@@ -102,3 +102,30 @@ Stage Summary:
 - All indexes use IF NOT EXISTS for idempotency
 - Documentation updated in sales-module-documentation.md (sections 7.2 + 7.3) and schema_mapping.md (sections 3.8 + 3.9)
 - Tasks 13 and 14 both marked ✅ Done in phase plan
+
+---
+Task ID: 7
+Agent: Main Agent
+Task: Add BRIN indexes for time-series tables; push previous unpushed commits
+
+Work Log:
+- Pushed 32 previously unpushed commits to GitHub using PAT (ghp_sj6B2...)
+- Analyzed all 66+ tables in the ERP schema for time-series / append-mostly patterns
+- Designed 30 BRIN indexes across 22 tables organized in 6 categories
+- Category 1: Core transaction tables (10 indexes) — sales_invoices, customer_payments, supplier_payments, sales_returns, purchase_receives, purchase_returns, purchase_orders
+- Category 2: Sub-ledgers (8 indexes) — customer_ledger, supplier_ledger, employee_ledger, branch_ledger, cash_ledger, branch_expenses
+- Category 3: Inventory ledger (2 indexes) — stock_transactions with pages_per_range=64
+- Category 4: Audit & log tables (3 indexes) — user_audit_log, notifications, journal_posting_logs with pages_per_range=64
+- Category 5: Daily summaries (1 index) — daily_warehouse_stock_summary
+- Category 6: Other transaction tables (6 indexes) — other_incomes, other_expenses, employee_transactions, money_transfers, sales_challans, manual_journals
+- Created migration 2025_01_20_000003_add_brin_indexes_time_series_tables.php
+- Updated 07_views_triggers_constraints.sql with BRIN indexes section
+- Updated sales-module-documentation.md section 7.4 (planned → ✅ Implemented)
+- Updated schema_mapping.md section 3.10 (BRIN indexes reference table)
+- Marked Task 15 as ✅ Done in phase plan
+
+Stage Summary:
+- 30 BRIN indexes across 22 tables added
+- Dual-column strategy: both business date (*_date) and system timestamp (created_at) indexed
+- pages_per_range: 32 for medium tables, 64 for largest/append-only tables
+- Task 15 marked ✅ Done
