@@ -24,10 +24,20 @@ echo "╚═══════════════════════�
 # ---------------------------------------------------------------------------
 # Step 1: Fix storage permissions
 # ---------------------------------------------------------------------------
+# IMPORTANT: The storage/ directory is bind-mounted from the host.
+# On Windows/Mac, bind mounts may have root ownership that www-data can't
+# write to. We fix this by:
+#   1. Creating all required subdirectories
+#   2. Setting ownership to www-data (PHP-FPM runs as www-data)
+#   3. Creating an empty laravel.log if it doesn't exist
+# ---------------------------------------------------------------------------
 echo "▶ Step 1: Fixing storage permissions..."
 mkdir -p storage/logs storage/framework/cache/data storage/framework/sessions storage/framework/views bootstrap/cache
-chmod -R 775 storage bootstrap/cache
-chown -R www-data:www-data storage bootstrap/cache
+# Create the log file if it doesn't exist (ensures www-data can write)
+touch storage/logs/laravel.log 2>/dev/null || true
+chmod -R 777 storage bootstrap/cache 2>/dev/null || true
+chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
+chown www-data:www-data storage/logs/laravel.log 2>/dev/null || true
 echo "  ✓ Storage permissions set"
 
 # ---------------------------------------------------------------------------

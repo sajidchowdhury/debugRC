@@ -176,7 +176,6 @@ services:
     volumes:
       - ./laravel:/var/www/laravel:delegated
       - ./legacy:/var/www/legacy:delegated
-      - app_storage:/var/www/laravel/storage
       - app_vendor:/var/www/laravel/vendor
       - app_node_modules:/var/www/laravel/node_modules
     networks:
@@ -223,8 +222,6 @@ volumes:
     name: rcerp_redis_data
   mysql_archive_data:
     name: rcerp_mysql_archive_data
-  app_storage:
-    name: rcerp_app_storage
   app_vendor:
     name: rcerp_app_vendor
   app_node_modules:
