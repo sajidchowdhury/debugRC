@@ -3,8 +3,14 @@
 -- ============================================================
 
 -- The inventory ledger — single source of truth for all stock movements.
+-- NOTE: stock_transactions is PARTITION BY RANGE (transaction_date) as of Task 34.
+-- See migration 2025_01_21_000004 for the partitioned CREATE TABLE + monthly partitions.
+-- Self-referential FK (reversal_of_transaction_id) is enforced by trigger
+-- trg_st_reversal_fk because PG 12-17 does not support FK references TO
+-- partitioned tables.
+
 CREATE TABLE stock_transactions (
-    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id integer GENERATED ALWAYS AS IDENTITY,
     transaction_date date NOT NULL,
     warehouse_id integer NOT NULL REFERENCES warehouses(id),
     product_id integer NOT NULL REFERENCES products(id),
@@ -20,9 +26,23 @@ CREATE TABLE stock_transactions (
     reference_id integer NOT NULL,
     branch_demand_item_id integer,
     notes text,
+    is_reversed boolean DEFAULT false,
+    reversal_of_transaction_id integer,  -- FK enforced by trg_st_reversal_fk (trigger-based)
+    reversed_at timestamp(0),
+    reversed_by integer,
+    reverse_reason text,
     created_by integer,
-    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
-);
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id, transaction_date)
+) PARTITION BY RANGE (transaction_date);
+
+-- Monthly partitions (pg_partman auto-creates future months)
+-- Example: CREATE TABLE stock_transactions_2025_01 PARTITION OF stock_transactions
+--   FOR VALUES FROM ('2025-01-01') TO ('2025-02-01');
+-- Default partition catches out-of-range dates:
+--   CREATE TABLE stock_transactions_default PARTITION OF stock_transactions DEFAULT;
+
+-- Indexes (include transaction_date for partition pruning)
 CREATE INDEX idx_st_date_warehouse ON stock_transactions(transaction_date, warehouse_id);
 CREATE INDEX idx_st_product ON stock_transactions(product_id, transaction_date);
 CREATE INDEX idx_st_reference ON stock_transactions(reference_type, reference_id);

@@ -75,3 +75,29 @@ Stage Summary:
 - Original numrange approach replaced with composable 4-layer design (original was incorrect for partial payments)
 - btree_gist extension required and included in migration
 - Documentation version bumped to 1.4
+---
+Task ID: 34
+Agent: Main Agent
+Task: Set up table partitioning for sales_invoices + stock_transactions
+
+Work Log:
+- Explored both tables: schemas, indexes, FKs, RLS policies, triggers, services
+- Identified critical FK challenge: 7 child tables reference sales_invoices, PG doesn't support FK → partitioned tables
+- Designed RANGE partitioning by date (invoice_date, transaction_date) with monthly partitions
+- Created migration 2025_01_21_000004 with 16-step strategy per table:
+  1. Drop child FKs → replace with trigger-based enforcement (fn_fk_si_check, fn_fk_si_cascade_delete)
+  2. Rename old table → create partitioned table → copy data → fix identity sequence
+  3. Recreate indexes with partition key for pruning (e.g., idx_si_customer now includes invoice_date)
+  4. Recreate RLS policies on partitioned sales_invoices
+  5. Register with pg_partman for automatic monthly partition creation
+- Updated SQL schema files: 03_stock.sql, 04_sales.sql (PARTITION BY RANGE, PK includes date)
+- Removed declarative FKs from child table CREATE TABLE statements in 04_sales.sql
+- Updated SalesInvoice and StockTransaction model docblocks
+- Updated sales-module-documentation.md: v1.5, Task 34 ✅, §7.11 revised, §4.1 updated, Section 12 (15 subsections)
+
+Stage Summary:
+- Both tables now PARTITION BY RANGE on their date column with monthly partitions
+- Trigger-based FK enforcement replaces declarative FKs for partitioned table references
+- pg_partman automates future partition creation (6 months premade)
+- BRIN indexes removed (redundant with partition boundaries)
+- Documentation version bumped to 1.5

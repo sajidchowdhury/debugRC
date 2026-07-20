@@ -1,6 +1,6 @@
 # RC-ERP Sales Module — Complete Documentation & Gap Analysis
 
-> **Document Version**: 1.4 — Updated with EXCLUDE constraint for invoice_payment_allocations (Task 33 ✅)
+> **Document Version**: 1.5 — Updated with table partitioning for sales_invoices + stock_transactions (Task 34 ✅)
 > **Date**: 2025-07-21  
 > **Scope**: Legacy CodeIgniter/MySQL → Laravel 12/PostgreSQL migration  
 > **Focus**: Sales Entry, Challan/Godown Copy, Invoice, Payment Receive, Sales Return  
@@ -33,6 +33,7 @@
 9. [LISTEN/NOTIFY — Real-Time Update Implementation](#9-listennotify--real-time-update-implementation-task-31-)
 10. [CTE-Based Complex Queries — Implementation](#10-cte-based-complex-queries--implementation-task-32-)
 11. [EXCLUDE Constraint — invoice_payment_allocations (Task 33)](#11-exclude-constraint--invoice_payment_allocations-task-33)
+12. [Table Partitioning — sales_invoices + stock_transactions (Task 34)](#12-table-partitioning--sales_invoices--stock_transactions-task-34)
 
 ---
 
@@ -514,7 +515,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 
 | # | Table | MySQL Source | PG SQL File | Status |
 |---|-------|-------------|-------------|--------|
-| 1 | `sales_invoices` | Legacy | 04_sales.sql | ✅ Active |
+| 1 | `sales_invoices` | Legacy | 04_sales.sql | ✅ Active (PARTITION BY RANGE invoice_date, Task 34) |
 | 2 | `sales_invoice_items` | Legacy | 04_sales.sql | ✅ Active |
 | 3 | `sales_invoice_dispatchers` | Legacy | 04_sales.sql | ✅ Active (no UI code) |
 | 4 | `sales_invoice_dispatches` | Legacy | 04_sales.sql | ✅ Active |
@@ -531,7 +532,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | 15 | `products` | Legacy | 01_auth_and_master.sql | ✅ Active |
 | 16 | `product_price_history` | Legacy | 01_auth_and_master.sql | ✅ Active |
 | 17 | `warehouse_stock` | Legacy | 03_stock.sql | ✅ Active (composite PK) |
-| 18 | `stock_transactions` | Legacy | 03_stock.sql | ✅ Active |
+| 18 | `stock_transactions` | Legacy | 03_stock.sql | ✅ Active (PARTITION BY RANGE transaction_date, Task 34) |
 | 19 | `damage_invoices` | Legacy | 03_stock.sql | ✅ Active (with sales_return_id via P1-5) |
 | 20 | `damage_invoice_items` | Legacy | 03_stock.sql | ✅ Active |
 
@@ -1000,15 +1001,18 @@ DB::statement("SET app.branch_id = ?", [session('branch_id')]);
 
 ### 7.11 Table Partitioning — For Large Tables
 
+> **Status**: ✅ IMPLEMENTED (Task 34, migration `2025_01_21_000004`)
+
 As the system grows, these tables will become very large. Range partitioning by date:
 
 ```sql
 -- Partition sales_invoices by month
 CREATE TABLE sales_invoices (
-  id BIGINT GENERATED ALWAYS AS IDENTITY,
+  id integer GENERATED ALWAYS AS IDENTITY,
   invoice_date DATE NOT NULL,
   -- ... other columns ...
-  PRIMARY KEY (id, invoice_date)
+  PRIMARY KEY (id, invoice_date),
+  CONSTRAINT sales_invoices_code_unique UNIQUE (invoice_code, invoice_date)
 ) PARTITION BY RANGE (invoice_date);
 
 CREATE TABLE sales_invoices_2025_01 PARTITION OF sales_invoices
@@ -1016,19 +1020,35 @@ CREATE TABLE sales_invoices_2025_01 PARTITION OF sales_invoices
 CREATE TABLE sales_invoices_2025_02 PARTITION OF sales_invoices
   FOR VALUES FROM ('2025-02-01') TO ('2025-03-01');
 -- ... auto-create future partitions via pg_partman ...
+
+-- Partition stock_transactions by month
+CREATE TABLE stock_transactions (
+  id integer GENERATED ALWAYS AS IDENTITY,
+  transaction_date DATE NOT NULL,
+  -- ... other columns ...
+  PRIMARY KEY (id, transaction_date)
+) PARTITION BY RANGE (transaction_date);
+
+CREATE TABLE stock_transactions_2025_01 PARTITION OF stock_transactions
+  FOR VALUES FROM ('2025-01-01') TO ('2025-02-01');
+-- ... auto-create future partitions via pg_partman ...
 ```
 
-**Candidates for partitioning:**
-- `sales_invoices` (by invoice_date, monthly)
-- `stock_transactions` (by transaction_date, monthly)
+**Candidates for partitioning (implemented):**
+- `sales_invoices` (by invoice_date, monthly) ✅ DONE
+- `stock_transactions` (by transaction_date, monthly) ✅ DONE
+
+**Candidates for future partitioning:**
 - `customer_ledger` (by transaction_date, quarterly)
 - `journal_entry_lines` (by created_at, quarterly)
 
 **Why this matters for long-term**: Partitioning provides:
-- **Faster queries** — PostgreSQL scans only relevant partitions
+- **Faster queries** — PostgreSQL scans only relevant partitions (partition pruning)
 - **Faster maintenance** — VACUUM, REINDEX operate per-partition
 - **Easy archiving** — Detach old partitions instead of DELETE
 - **Parallel query** — Each partition can be scanned in parallel
+
+**Critical design decision**: PostgreSQL 12-17 does NOT support FK references FROM regular tables TO a partitioned table. This means child tables like `sales_invoice_items` (7 tables reference `sales_invoices`) cannot use declarative FK constraints. Instead, trigger-based enforcement (`fn_fk_si_check`, `fn_fk_si_cascade_delete`) provides equivalent referential integrity. See Section 12 for full implementation details.
 
 ### 7.12 EXCLUDE Constraints — Prevent Overlapping Allocations
 
@@ -1269,7 +1289,7 @@ LIMIT 30;
 | 31 | ~~Implement LISTEN/NOTIFY for real-time updates~~ ✅ DONE | Medium | 3 days | Database + Business Logic |
 | 32 | ~~Implement CTE-based complex queries (today's summary, AR aging)~~ ✅ DONE | Medium | 2 days | Business Logic |
 | 33 | ~~Add EXCLUDE constraint for invoice_payment_allocations~~ ✅ DONE | Low | 1 day | Database |
-| 34 | Set up table partitioning for sales_invoices + stock_transactions | Low | 2 days | Database |
+| 34 | ~~Set up table partitioning for sales_invoices + stock_transactions~~ ✅ DONE | Low | 2 days | Database |
 | 35 | Configure deferred FK constraints | Low | 1 day | Database |
 | 36 | Implement Sales API write endpoints (mobile) | Medium | 5 days | Business Logic + API |
 | 37 | Implement salesman commission tracking | Low | 3 days | Business Logic |
@@ -1898,6 +1918,335 @@ The `btree_gist` extension is **not** dropped in rollback, as other features may
 | `database/sql/05_purchase.sql` | Updated — added FK, CHECK, EXCLUDE to CREATE TABLE |
 | `app/Models/InvoicePaymentAllocation.php` | Updated — docblock with constraint documentation |
 | `docs/sales-module-documentation.md` | Updated — Task 33 ✅, Section 11, §7.12 revised, §4.1 updated |
+
+---
+
+## 12. Table Partitioning — sales_invoices + stock_transactions (Task 34)
+
+### 12.1 Overview
+
+Task 34 converts the two largest and most frequently queried tables in the ERP system from monolithic tables to PostgreSQL declarative range-partitioned tables with monthly partitions. This enables partition pruning for date-range queries, faster VACUUM per partition, easy archival of old data, and parallel query execution across partitions.
+
+**Partitioning strategy**: Both tables use `RANGE` partitioning by their date column:
+- `sales_invoices` → `PARTITION BY RANGE (invoice_date)`
+- `stock_transactions` → `PARTITION BY RANGE (transaction_date)`
+
+Monthly partitions cover 2025-01 through 2025-12, with a default partition for out-of-range dates and `pg_partman` configured to auto-create future months.
+
+### 12.2 PostgreSQL Partitioning Fundamentals
+
+Declarative partitioning (introduced in PG 10, matured in PG 12+) divides a logical table into physical partitions while presenting a single interface to queries. Key concepts:
+
+- **Partitioned table** — The logical parent. Has no storage of its own; all data lives in partitions.
+- **Partitions** — Physical child tables that store actual rows. Each has its own storage, indexes, and can be VACUUMed independently.
+- **Partition key** — The column used to route rows. Must be included in the PRIMARY KEY.
+- **Partition pruning** — The PG optimizer skips partitions that cannot contain matching rows based on WHERE clauses.
+- **Default partition** — Catches rows that don't match any defined partition boundary (prevents INSERT failures).
+
+### 12.3 The FK Constraint Challenge
+
+The single most important design challenge for partitioning `sales_invoices` is that **7 child tables reference it via foreign key**:
+
+| Child Table | FK Column | ON DELETE |
+|---|---|---|
+| `sales_invoice_items` | `sales_invoice_id` | CASCADE |
+| `sales_invoice_dispatchers` | `sales_invoice_id` | CASCADE |
+| `sales_invoice_dispatches` | `sales_invoice_id` | CASCADE |
+| `sales_challans` | `sales_invoice_id` | RESTRICT (implicit) |
+| `sales_returns` | `sales_invoice_id` | RESTRICT (implicit) |
+| `invoice_payment_allocations` | `invoice_id` | RESTRICT (implicit) |
+
+**PostgreSQL 12-17 does NOT support foreign key references FROM a regular table TO a partitioned table.** This is a fundamental limitation. The FK check would need to search across all partitions, which PG doesn't currently implement efficiently.
+
+**Solution**: Replace declarative FKs with **trigger-based referential integrity enforcement**. Two generic trigger functions handle the job:
+
+1. **`fn_fk_si_check(fk_col_name)`** — After INSERT on child table, verifies the referenced `sales_invoices` row exists (across all partitions).
+2. **`fn_fk_si_cascade_delete(child_table, fk_col_name)`** — After DELETE on `sales_invoices`, cascades the delete to child rows (for items, dispatchers, dispatches).
+
+For `stock_transactions`, only 1 self-referential FK exists (`reversal_of_transaction_id`), handled by `fn_st_reversal_fk_check()`.
+
+### 12.4 Migration Details
+
+**File**: `database/migrations/2025_01_21_000004_set_up_table_partitioning.php`
+
+**Migration strategy** (for each table):
+1. Drop FK constraints that reference the table (from child tables)
+2. Drop indexes on the old table
+3. Drop RLS policies (sales_invoices only)
+4. Rename old table to `_unpartitioned`
+5. Create new partitioned table with `PARTITION BY RANGE (date_column)`
+6. Create 12 monthly partitions (2025-01 through 2025-12)
+7. Create a default partition for out-of-range dates
+8. Copy data from old table using `INSERT ... SELECT ... ORDER BY date`
+9. Fix the IDENTITY sequence value
+10. Recreate FK constraints FROM the partitioned table (outbound FKs work fine)
+11. Recreate indexes with partition key included for pruning
+12. Recreate RLS policies
+13. Create trigger-based FK enforcement for child tables
+14. Register with pg_partman for automatic partition management
+15. Drop the backup table
+16. ANALYZE
+
+### 12.5 sales_invoices — Partitioned Schema
+
+```sql
+CREATE TABLE sales_invoices (
+    id integer GENERATED ALWAYS AS IDENTITY,
+    invoice_code varchar(30) NOT NULL,
+    invoice_date date NOT NULL,
+    customer_id integer NOT NULL,
+    salesman_id integer,
+    sales_person varchar(100),
+    branch_id integer NOT NULL,
+    sub_total numeric(14,2) DEFAULT 0,
+    discount_amount numeric(14,2) DEFAULT 0,
+    tax_amount numeric(14,2) DEFAULT 0,
+    transport_cost numeric(12,2) DEFAULT 0,
+    total_amount numeric(14,2) DEFAULT 0,
+    pre_challan_transport numeric(12,2),
+    pre_challan_total numeric(14,2),
+    paid_amount numeric(14,2) DEFAULT 0,
+    due_amount numeric(14,2) DEFAULT 0,
+    payment_mode varchar(20) DEFAULT 'cash' CHECK (payment_mode IN ('cash','bank','mobile_banking','cheque','adjustment')),
+    status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','cancelled','reversed')),
+    is_godown_prepared boolean NOT NULL DEFAULT false,
+    godown_prepared_at timestamp(0),
+    is_challan_issued boolean NOT NULL DEFAULT false,
+    challan_issued_at timestamp(0),
+    journal_entry_id integer REFERENCES journal_entries(id),
+    cogs_journal_entry_id integer REFERENCES journal_entries(id),
+    is_reversed boolean NOT NULL DEFAULT false,
+    reversed_at timestamp(0),
+    reversed_by integer,
+    reverse_reason text,
+    is_soft_hold boolean NOT NULL DEFAULT false,
+    call_a_day boolean NOT NULL DEFAULT false,
+    notes text,
+    created_by integer,
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    deleted_at timestamp(0),
+    deleted_by integer,
+    PRIMARY KEY (id, invoice_date),
+    CONSTRAINT sales_invoices_code_unique UNIQUE (invoice_code, invoice_date)
+) PARTITION BY RANGE (invoice_date);
+```
+
+**Key changes from the unpartitioned schema:**
+- PRIMARY KEY changed from `(id)` to `(id, invoice_date)` — partition key must be in PK
+- UNIQUE changed from `(invoice_code)` to `(invoice_code, invoice_date)` — UNIQUE must include partition key
+- Outbound FKs (customer_id → customers, branch_id → branches, journal_entry_id → journal_entries) still work as declarative constraints
+- Inbound FKs (from child tables) replaced with trigger-based enforcement
+
+### 12.6 stock_transactions — Partitioned Schema
+
+```sql
+CREATE TABLE stock_transactions (
+    id integer GENERATED ALWAYS AS IDENTITY,
+    transaction_date date NOT NULL,
+    warehouse_id integer NOT NULL REFERENCES warehouses(id),
+    product_id integer NOT NULL REFERENCES products(id),
+    qty numeric(14,4) NOT NULL,
+    rate numeric(12,2) NOT NULL DEFAULT 0,
+    total_value numeric(14,2) GENERATED ALWAYS AS (qty * rate) STORED,
+    reference_type varchar(30) NOT NULL CHECK (reference_type IN (
+        'purchase_receive','purchase_return','sales_challan','sales_return',
+        'stock_adjustment','stock_take','warehouse_transfer','damage',
+        'branch_demand','opening_balance'
+    )),
+    reference_id integer NOT NULL,
+    branch_demand_item_id integer,
+    notes text,
+    is_reversed boolean DEFAULT false,
+    reversal_of_transaction_id integer,
+    reversed_at timestamp(0),
+    reversed_by integer,
+    reverse_reason text,
+    created_by integer,
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id, transaction_date)
+) PARTITION BY RANGE (transaction_date);
+```
+
+**Key changes:**
+- PRIMARY KEY changed from `(id)` to `(id, transaction_date)`
+- Self-referential FK `reversal_of_transaction_id` removed from schema (enforced by trigger `trg_st_reversal_fk`)
+- `stock_transactions` is almost append-only (only `is_reversed` flag gets UPDATED, which doesn't move rows between partitions since `transaction_date` never changes)
+
+### 12.7 Trigger-Based FK Enforcement
+
+#### Generic Invoice FK Check
+
+```sql
+CREATE OR REPLACE FUNCTION fn_fk_si_check()
+RETURNS trigger AS $$
+DECLARE
+    fk_col text := TG_ARGV[0];
+    invoice_id_val integer;
+    invoice_exists boolean;
+BEGIN
+    EXECUTE format('SELECT ($1).%I', fk_col) USING NEW INTO invoice_id_val;
+    IF invoice_id_val IS NULL THEN RETURN NEW; END IF;
+    SELECT EXISTS (SELECT 1 FROM sales_invoices WHERE id = invoice_id_val) INTO invoice_exists;
+    IF NOT invoice_exists THEN
+        RAISE EXCEPTION 'Referential integrity: %=% does not exist in sales_invoices', fk_col, invoice_id_val;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+This function uses `TG_ARGV[0]` to accept the FK column name as a parameter, making it reusable across all 6 child tables with different FK column names (`sales_invoice_id`, `invoice_id`).
+
+#### Cascade Delete on Invoice Deletion
+
+```sql
+CREATE OR REPLACE FUNCTION fn_fk_si_cascade_delete()
+RETURNS trigger AS $$
+DECLARE
+    child_table text := TG_ARGV[0];
+    fk_col text := TG_ARGV[1];
+BEGIN
+    EXECUTE format('DELETE FROM %I WHERE %I = $1', child_table, fk_col) USING OLD.id;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+Applied to `sales_invoices` for the 3 CASCADE child tables (items, dispatchers, dispatches). The RESTRICT tables (challans, returns, allocations) rely on the application layer to prevent invoice deletion when children exist, consistent with the existing `invoiceHasPayments()` check.
+
+#### Stock Transaction Self-Referential FK
+
+```sql
+CREATE OR REPLACE FUNCTION fn_st_reversal_fk_check()
+RETURNS trigger AS $$
+BEGIN
+    IF NEW.reversal_of_transaction_id IS NOT NULL THEN
+        IF NOT EXISTS (SELECT 1 FROM stock_transactions WHERE id = NEW.reversal_of_transaction_id) THEN
+            RAISE EXCEPTION 'Referential integrity: reversal_of_transaction_id=% does not exist';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+### 12.8 Index Strategy for Partitioned Tables
+
+On partitioned tables, indexes created on the parent are automatically propagated to each partition. The key optimization is **including the partition key in index definitions** to enable partition pruning:
+
+| Table | Index | Key Columns | Why |
+|-------|-------|-------------|-----|
+| sales_invoices | idx_si_customer | (customer_id, **invoice_date**) | Date added for pruning on payment allocation queries |
+| sales_invoices | idx_si_branch | (branch_id, **invoice_date**) | Date added for listing page pruning |
+| sales_invoices | idx_si_customer_due_covering | (customer_id, is_reversed, **invoice_date**) INCLUDE (...) | Partial WHERE due_amount > 0 |
+| sales_invoices | idx_si_listing_covering | (branch_id, status, **invoice_date** DESC, id DESC) INCLUDE (...) | Already had invoice_date |
+| stock_transactions | idx_st_reference_covering | (reference_type, reference_id, **transaction_date**) INCLUDE (...) | Date added for pruning on reversal lookups |
+
+**BRIN indexes removed**: BRIN indexes are redundant on partitioned tables because each partition is already a bounded date range. The partition boundary itself serves the same role as a BRIN page-summary.
+
+### 12.9 pg_partman — Automatic Partition Management
+
+The `pg_partman` extension automates two critical tasks:
+
+1. **Creating future partitions** — Before each new month, pg_partman creates the next monthly partition automatically. No manual `CREATE TABLE ... PARTITION OF` statements needed.
+2. **Detaching old partitions** — After a configurable retention period, old partitions can be detached (moved to slow storage or dropped), providing cheap data archival.
+
+Configuration applied:
+
+```sql
+-- sales_invoices: auto-create 6 months ahead, starting from 2026-01
+SELECT partman.create_parent(
+    p_parent_table := 'public.sales_invoices',
+    p_control := 'invoice_date',
+    p_type := 'range',
+    p_interval := '1 month',
+    p_premake := 6,
+    p_start_partition := '2026-01-01'
+);
+
+-- stock_transactions: same configuration
+SELECT partman.create_parent(
+    p_parent_table := 'public.stock_transactions',
+    p_control := 'transaction_date',
+    p_type := 'range',
+    p_interval := '1 month',
+    p_premake := 6,
+    p_start_partition := '2026-01-01'
+);
+```
+
+The pg_partman background worker (configured via `pg_cron` or the `pg_partman_bgw` GUC) runs periodically to maintain partitions.
+
+### 12.10 RLS Compatibility
+
+Row-Level Security policies on `sales_invoices` are fully compatible with partitioning. RLS policies are defined on the partitioned parent and automatically apply to all partitions. The `branch_id` column used in RLS policies is independent of the partition key (`invoice_date`), so:
+
+- RLS filters rows by `branch_id` within each partition
+- Partition pruning filters partitions by `invoice_date`
+- Both mechanisms work together: PG first prunes partitions by date, then applies RLS within each partition
+
+### 12.11 Partition Pruning Examples
+
+```sql
+-- Example 1: Monthly sales report — scans only 1 partition
+SELECT * FROM sales_invoices
+WHERE invoice_date BETWEEN '2025-07-01' AND '2025-07-31'
+  AND branch_id = 1;
+-- Execution plan: Append → Seq Scan on sales_invoices_2025_07
+
+-- Example 2: Year-to-date summary — scans 7 partitions (Jan-Jul)
+SELECT * FROM sales_invoices
+WHERE invoice_date >= '2025-01-01'
+  AND status = 'confirmed';
+-- Execution plan: Append → Seq Scan on sales_invoices_2025_01..2025_07
+
+-- Example 3: Stock movement lookup — scans 1 partition
+SELECT * FROM stock_transactions
+WHERE transaction_date = '2025-07-15'
+  AND warehouse_id = 1;
+-- Execution plan: Append → Index Scan on stock_transactions_2025_07
+
+-- Example 4: find($id) without date — scans ALL partitions (anti-pattern!)
+SELECT * FROM sales_invoices WHERE id = 42;
+-- Execution plan: Append → Index Scan on ALL partitions
+-- Fix: include invoice_date in the WHERE clause for partition pruning
+```
+
+**Application impact**: Services that look up invoices by ID should also include `invoice_date` in the WHERE clause when possible. The `SalesInvoiceService::show()` method already receives the invoice object (with `invoice_date`) from route model binding, so this is typically not an issue. For raw queries using `DB::table('sales_invoices')->where('id', $id)`, the planner will search all partitions — acceptable for single-row lookups but not for batch queries.
+
+### 12.12 Row Movement Consideration
+
+When a row's partition key is UPDATED, PostgreSQL moves the row to the correct partition (row movement). For `sales_invoices`, this could happen if `invoice_date` is changed (which the application never does — invoice dates are immutable after creation). For `stock_transactions`, `transaction_date` is never updated.
+
+The only UPDATEs on `sales_invoices` are status transitions, flag changes, and amount updates — none of which touch `invoice_date`. So row movement will never occur in practice.
+
+### 12.13 Default Partition
+
+Each partitioned table has a `DEFAULT` partition that catches any rows with dates outside the defined monthly boundaries. This prevents INSERT failures for edge cases:
+
+- Data entry errors (e.g., invoice dated 2099-01-01)
+- Back-dated entries before 2025-01-01
+- Test data with unusual dates
+
+The default partition should be monitored. If it grows, it indicates either data quality issues or the need for additional explicit partitions.
+
+### 12.14 Rollback Considerations
+
+Rolling back partitioning is significantly more complex than implementing it. The migration's `down()` method uses `partman.undo_partition()` to merge partitions back into a single table, but it does **not** restore the declarative FK constraints on child tables (these must be manually re-added).
+
+**Recommended approach**: Test the partitioning migration on a staging database first. If rollback is needed in production, restore from a pre-migration backup rather than running `php artisan migrate:rollback`.
+
+### 12.15 Files Modified
+
+| File | Change |
+|------|--------|
+| `database/migrations/2025_01_21_000004_set_up_table_partitioning.php` | **New** — migration converting both tables to partitioned |
+| `database/sql/04_sales.sql` | Updated — sales_invoices as PARTITION BY RANGE, child FKs removed |
+| `database/sql/03_stock.sql` | Updated — stock_transactions as PARTITION BY RANGE, self-ref FK removed |
+| `app/Models/SalesInvoice.php` | Updated — docblock with partitioning documentation |
+| `app/Models/StockTransaction.php` | Updated — docblock with partitioning documentation |
+| `docs/sales-module-documentation.md` | Updated — Task 34 ✅, Section 12, §7.11 revised |
 
 ---
 

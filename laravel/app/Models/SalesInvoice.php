@@ -8,7 +8,7 @@ use App\Traits\AuditableMasterData;
 use App\Models\Scopes\BranchScope;
 
 /**
- * Sales Invoice — Phase 8.2.
+ * Sales Invoice — Phase 8.2 + Task 34 (partitioned).
  *
  * Workflow:
  *   draft → confirmed (godown prep, Phase 8.3) → challan_issued (stock OUT, Phase 8.3)
@@ -23,6 +23,16 @@ use App\Models\Scopes\BranchScope;
  *   - Cart cleared
  *
  * Credit limit: checked before finalize. If exceeded, requires override reason.
+ *
+ * PARTITIONING (Task 34):
+ *   Table is PARTITION BY RANGE (invoice_date), monthly partitions.
+ *   PRIMARY KEY is (id, invoice_date) — both columns needed for partition routing.
+ *   UNIQUE constraint is (invoice_code, invoice_date) — must include partition key.
+ *   Child table FKs use trigger-based enforcement (fn_fk_si_check) instead of
+ *   declarative FK because PG 12-17 does not support FK references TO partitioned tables.
+ *
+ * Performance note: For partition pruning, include invoice_date in WHERE clauses
+ * when querying by date range. Simple find($id) still works (PG routes automatically).
  *
  * @property int $id
  * @property string $invoice_code

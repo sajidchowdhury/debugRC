@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
 
 /**
- * Stock Transaction — the immutable inventory ledger (SSOT).
+ * Stock Transaction — the immutable inventory ledger (SSOT) + Task 34 (partitioned).
  *
  * Phase 6.1: Every stock movement (in or out) is recorded here as an
  * append-only row. The signed `qty` (positive = IN, negative = OUT) and
@@ -19,6 +19,17 @@ use Illuminate\Database\Eloquent\Builder;
  * Reversals: a reversal is a NEW row with opposite-sign qty and
  * reference_type='reversal'. The original is marked is_reversed=true.
  * Originals are never mutated (append-only ledger).
+ *
+ * PARTITIONING (Task 34):
+ *   Table is PARTITION BY RANGE (transaction_date), monthly partitions.
+ *   PRIMARY KEY is (id, transaction_date) — both columns needed for partition routing.
+ *   Self-referential FK (reversal_of_transaction_id) uses trigger-based enforcement
+ *   (trg_st_reversal_fk → fn_st_reversal_fk_check) because PG 12-17 does not
+ *   support FK references TO partitioned tables.
+ *
+ * Performance note: For partition pruning, include transaction_date in WHERE
+ * clauses when querying by date range. Simple find($id) still works (PG routes
+ * automatically via the partitioned PK).
  *
  * @property int $id
  * @property string $transaction_date

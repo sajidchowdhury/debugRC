@@ -1,9 +1,14 @@
 -- ============================================================
 -- RC_ERP PostgreSQL Schema — Part 4: Sales
 -- ============================================================
+-- NOTE: sales_invoices is PARTITION BY RANGE (invoice_date) as of Task 34.
+-- See migration 2025_01_21_000004 for the partitioned CREATE TABLE + monthly partitions.
+-- Declarative FKs from child tables are replaced with trigger-based enforcement
+-- (fn_fk_si_check + fn_fk_si_cascade_delete) because PG 12-17 does not support
+-- FK references TO partitioned tables.
 
 CREATE TABLE sales_invoices (
-    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id integer GENERATED ALWAYS AS IDENTITY,
     invoice_code varchar(30) NOT NULL,
     invoice_date date NOT NULL,
     customer_id integer NOT NULL,
@@ -13,7 +18,10 @@ CREATE TABLE sales_invoices (
     sub_total numeric(14,2) DEFAULT 0,
     discount_amount numeric(14,2) DEFAULT 0,
     tax_amount numeric(14,2) DEFAULT 0,
+    transport_cost numeric(12,2) DEFAULT 0,
     total_amount numeric(14,2) DEFAULT 0,
+    pre_challan_transport numeric(12,2),
+    pre_challan_total numeric(14,2),
     paid_amount numeric(14,2) DEFAULT 0,
     due_amount numeric(14,2) DEFAULT 0,
     payment_mode varchar(20) DEFAULT 'cash' CHECK (payment_mode IN ('cash','bank','mobile_banking','cheque','adjustment')),
@@ -38,19 +46,30 @@ CREATE TABLE sales_invoices (
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     deleted_at timestamp(0),
     deleted_by integer,
-    CONSTRAINT sales_invoices_code_unique UNIQUE (invoice_code)
-);
--- FIX: MySQL was missing these indexes — added for PG performance.
-CREATE INDEX idx_si_customer ON sales_invoices(customer_id);
+    PRIMARY KEY (id, invoice_date),
+    CONSTRAINT sales_invoices_code_unique UNIQUE (invoice_code, invoice_date)
+) PARTITION BY RANGE (invoice_date);
+
+-- Monthly partitions (pg_partman auto-creates future months)
+-- Example: CREATE TABLE sales_invoices_2025_01 PARTITION OF sales_invoices
+--   FOR VALUES FROM ('2025-01-01') TO ('2025-02-01');
+-- Default partition catches out-of-range dates:
+--   CREATE TABLE sales_invoices_default PARTITION OF sales_invoices DEFAULT;
+
+-- Indexes (include invoice_date for partition pruning)
+CREATE INDEX idx_si_customer ON sales_invoices(customer_id, invoice_date);
 CREATE INDEX idx_si_invoice_date ON sales_invoices(invoice_date);
 CREATE INDEX idx_si_salesman ON sales_invoices(salesman_id);
-CREATE INDEX idx_si_branch ON sales_invoices(branch_id);
+CREATE INDEX idx_si_branch ON sales_invoices(branch_id, invoice_date);
 CREATE INDEX idx_si_journal ON sales_invoices(journal_entry_id);
 CREATE INDEX idx_si_status ON sales_invoices(status);
 
+-- Child tables reference sales_invoices via trigger-based FK enforcement
+-- (declarative FK → partitioned table not supported in PG 12-17)
+
 CREATE TABLE sales_invoice_items (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    sales_invoice_id integer NOT NULL REFERENCES sales_invoices(id) ON DELETE CASCADE,
+    sales_invoice_id integer NOT NULL,  -- FK enforced by trg_fk_sii_si (trigger-based, see migration 2025_01_21_000004)
     product_id integer NOT NULL REFERENCES products(id),
     warehouse_id integer REFERENCES warehouses(id) ON DELETE SET NULL,
     qty numeric(14,4) NOT NULL,
@@ -66,7 +85,7 @@ CREATE INDEX idx_sii_warehouse ON sales_invoice_items(warehouse_id);
 
 CREATE TABLE sales_invoice_dispatchers (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    sales_invoice_id integer NOT NULL REFERENCES sales_invoices(id) ON DELETE CASCADE,
+    sales_invoice_id integer NOT NULL,  -- FK enforced by trg_fk_sid_si (trigger-based)
     employee_id integer NOT NULL REFERENCES employees(id),
     dispatch_role varchar(30) DEFAULT 'dispatcher'
 );
@@ -74,7 +93,7 @@ CREATE INDEX idx_sid_invoice ON sales_invoice_dispatchers(sales_invoice_id);
 
 CREATE TABLE sales_invoice_dispatches (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    sales_invoice_id integer NOT NULL REFERENCES sales_invoices(id) ON DELETE CASCADE,
+    sales_invoice_id integer NOT NULL,  -- FK enforced by trg_fk_sdis_si (trigger-based)
     product_id integer NOT NULL REFERENCES products(id),
     warehouse_id integer REFERENCES warehouses(id),
     qty numeric(14,4) NOT NULL,
@@ -90,7 +109,7 @@ CREATE TABLE sales_challans (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     challan_code varchar(30) NOT NULL,
     challan_date date NOT NULL,
-    sales_invoice_id integer NOT NULL REFERENCES sales_invoices(id),
+    sales_invoice_id integer NOT NULL,  -- FK enforced by trg_fk_sc_si (trigger-based)
     branch_id integer NOT NULL REFERENCES branches(id),
     transport_name varchar(100),
     transport_phone varchar(30),
@@ -133,7 +152,7 @@ CREATE TABLE sales_returns (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     return_code varchar(30) NOT NULL,
     return_date date NOT NULL,
-    sales_invoice_id integer NOT NULL REFERENCES sales_invoices(id),
+    sales_invoice_id integer NOT NULL,  -- FK enforced by trg_fk_sr_si (trigger-based)
     customer_id integer NOT NULL,
     branch_id integer NOT NULL REFERENCES branches(id),
     total_amount numeric(14,2) DEFAULT 0,
