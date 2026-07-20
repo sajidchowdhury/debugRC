@@ -324,6 +324,41 @@ Migration `2025_01_20_000004_add_gin_index_draft_carts_items_json.php` and
 |---|---|---|---|---|
 | `sales_draft_carts` | `idx_sdc_items_gin` | `items_json` | `jsonb_path_ops` | Cart item containment (@> queries: product/warehouse lookup) |
 
+### 3.12 Full-Text Search (tsvector + GIN) for Products & Customers
+
+PostgreSQL full-text search replaces LIKE '%term%' with index-accelerated `tsvector @@ plainto_tsquery`
+lookups. GENERATED tsvector columns are auto-maintained on INSERT/UPDATE. The `'simple'` dictionary
+(lowercase + whitespace split, no stemming) is used because product codes, Bengali names, and phone
+numbers must not be stemmed. GIN indexes enable sub-millisecond search on millions of rows.
+Migration `2025_01_20_000005_add_fulltext_search_products_customers.php` and
+`07_views_triggers_constraints.sql` both define these columns and indexes.
+
+**Products search_vector:**
+
+| Weight | Column | Rationale |
+|---|---|---|
+| A (highest) | `product_name` | Primary match — users search by name |
+| B | `product_code` | Secondary — code lookups |
+
+| Table | Index Name | Column | Dictionary | Use Case |
+|---|---|---|---|---|
+| `products` | `idx_products_search` | `search_vector` | simple + GIN | Product search (DataTables, POS, archive) |
+
+**Customers search_vector:**
+
+| Weight | Column | Rationale |
+|---|---|---|
+| A (highest) | `customer_name` | Primary match — users search by name/shop |
+| B | `customer_code` | Secondary — code lookups |
+| C | `phone`, `mobile` | Tertiary — phone number search |
+| D (lowest) | `address` | Area-based keyword match |
+
+| Table | Index Name | Column | Dictionary | Use Case |
+|---|---|---|---|---|
+| `customers` | `idx_customers_search` | `search_vector` | simple + GIN | Customer search (DataTables, POS, archive) |
+
+**Laravel integration**: `Product::scopeSearch()` and `Customer::scopeSearch()` use `search_vector @@ plainto_tsquery('simple', ?)` with `ts_rank()` ordering. Automatic ILIKE fallback when `search_vector` column doesn't exist. `BaseMasterDataController::$useFullTextSearch = true` on both controllers. `ArchiveService::searchCustomers()` refactored.
+
 ---
 
 ## 4. PHP Code SQL Compatibility (Phase 2.4)

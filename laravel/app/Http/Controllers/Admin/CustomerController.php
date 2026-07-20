@@ -48,6 +48,9 @@ class CustomerController extends BaseMasterDataController
         'phone',
     ];
 
+    /** Enable PostgreSQL full-text search (tsvector + GIN) for customer search. */
+    protected bool $useFullTextSearch = true;
+
     /**
      * Stats cards shown on the index hero.
      */

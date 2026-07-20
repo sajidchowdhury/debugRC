@@ -1448,42 +1448,129 @@ SELECT cron.schedule(
 
 **Why this matters for long-term**: pg_cron runs **inside the database** — no dependency on Laravel scheduler, queue workers, or supervisor. Even if the app server crashes, DB-level maintenance continues.
 
-### 7.15 Full-Text Search — Replace LIKE for Product/Customer Search
+### 7.15 Full-Text Search — ✅ Implemented (Task 17)
 
-Currently customer/product search uses `LIKE '%term%'` which cannot use indexes. PostgreSQL full-text search is vastly superior:
+PostgreSQL full-text search replaces all `LIKE '%term%'` / `ILIKE '%term%'` pattern-matching queries on the `products` and `customers` tables with index-accelerated `tsvector @@ plainto_tsquery` lookups. This is one of the most impactful performance optimizations in the ERP because product and customer search are the highest-frequency AJAX operations — every sales order creation triggers `search_product()` and `search_customer()` on every keystroke.
+
+**Why full-text search is superior to LIKE:**
+
+1. **Index-accelerated**: GIN indexes enable sub-millisecond lookups on millions of rows, vs. full sequential scan with `LIKE '%term%'` (leading wildcard prevents B-tree usage).
+2. **Ranking**: `ts_rank()` returns best matches first, so "cement" matches "Cement Rod 12mm" before "Steel Rod with Cement Base".
+3. **Weighted columns**: Product name outranks product code; customer name outranks code which outranks phone/address. This matches user expectation — you type a name, you get the name match first.
+4. **Scalability**: As product catalog grows from hundreds to tens of thousands, LIKE performance degrades linearly while full-text search stays constant-time via the GIN index.
+
+**Dictionary choice: `simple` vs `english`**
+
+We use the `'simple'` text search configuration instead of `'english'` because:
+
+- Product codes like "PRD-001" must match exactly — English stemming would destroy them
+- Customer names are often Bengali transliterations — no English stemming rules apply
+- Phone numbers must not be "stemmed" — "01711" should not become "0171"
+- The `'simple'` dictionary just lowercases and splits on whitespace, which is exactly what we need for identifier-heavy search
+
+If English-language product descriptions are added in the future, a separate `'english'` tsvector column can be added alongside for description-based search.
+
+Migration: `2025_01_20_000005_add_fulltext_search_products_customers.php`
+Schema: `07_views_triggers_constraints.sql` — FULL-TEXT SEARCH section added.
+
+#### Products: search_vector (2 columns, 2 weights)
 
 ```sql
--- Add tsvector columns
+-- GENERATED tsvector column — auto-maintained on every INSERT/UPDATE
 ALTER TABLE products ADD COLUMN search_vector tsvector
-  GENERATED ALWAYS AS (
-    setweight(to_tsvector('english', coalesce(product_name, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(product_code, '')), 'B')
-  ) STORED;
+    GENERATED ALWAYS AS (
+        setweight(to_tsvector('simple', coalesce(product_name, '')), 'A') ||
+        setweight(to_tsvector('simple', coalesce(product_code, '')), 'B')
+    ) STORED;
 
-ALTER TABLE customers ADD COLUMN search_vector tsvector
-  GENERATED ALWAYS AS (
-    setweight(to_tsvector('english', coalesce(customer_name, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(shop_name, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(mobile, '')), 'C')
-  ) STORED;
-
--- GIN indexes for fast search
+-- GIN index for fast @@ lookups
 CREATE INDEX idx_products_search ON products USING GIN (search_vector);
-CREATE INDEX idx_customers_search ON customers USING GIN (search_vector);
-
--- Search query
-SELECT * FROM products
-WHERE search_vector @@ plainto_tsquery('english', 'cement')
-ORDER BY ts_rank(search_vector, plainto_tsquery('english', 'cement')) DESC
-LIMIT 30;
 ```
 
-**Why this matters for long-term**: Full-text search supports:
-- **Stemming** ("running" matches "run")
-- **Ranking** (best matches first)
-- **Multi-language** (Bengali + English)
-- **Index-accelerated** (GIN index, no sequential scan)
-- **Scalability** (millions of rows, sub-millisecond)
+**Weight rationale**: `product_name` gets weight A (highest) because users typically search by name. `product_code` gets weight B because code lookups are secondary. This means searching for "cement" returns "Cement Rod" (name match) ranked higher than "CEM-001" (code match).
+
+**Example queries:**
+
+```sql
+-- Basic search (plain text, no special syntax)
+SELECT *, ts_rank(search_vector, plainto_tsquery('simple', 'cement')) AS rank
+FROM products
+WHERE search_vector @@ plainto_tsquery('simple', 'cement')
+ORDER BY rank DESC LIMIT 30;
+
+-- Search with additional filter (active only)
+SELECT *, ts_rank(search_vector, plainto_tsquery('simple', 'rod')) AS rank
+FROM products
+WHERE search_vector @@ plainto_tsquery('simple', 'rod')
+  AND is_active = true AND deleted_at IS NULL
+ORDER BY rank DESC LIMIT 30;
+```
+
+#### Customers: search_vector (5 columns, 4 weights)
+
+```sql
+-- GENERATED tsvector column — auto-maintained on every INSERT/UPDATE
+ALTER TABLE customers ADD COLUMN search_vector tsvector
+    GENERATED ALWAYS AS (
+        setweight(to_tsvector('simple', coalesce(customer_name, '')), 'A') ||
+        setweight(to_tsvector('simple', coalesce(customer_code, '')), 'B') ||
+        setweight(to_tsvector('simple', coalesce(phone, '')), 'C') ||
+        setweight(to_tsvector('simple', coalesce(mobile, '')), 'C') ||
+        setweight(to_tsvector('simple', coalesce(address, '')), 'D')
+    ) STORED;
+
+-- GIN index for fast @@ lookups
+CREATE INDEX idx_customers_search ON customers USING GIN (search_vector);
+```
+
+**Weight rationale**: `customer_name` gets weight A (primary match — users search by name/shop). `customer_code` gets weight B (secondary — code lookups). `phone` and `mobile` share weight C (tertiary — phone number search, useful for POS customer identification). `address` gets weight D (lowest — keyword match for area-based customer lookup).
+
+**Note on `shop_name`**: The legacy MySQL schema had a `shop_name` column, but the PostgreSQL migration consolidated it into `customer_name`. All legacy queries that searched `shop_name` now search `customer_name` at weight A.
+
+**Example queries:**
+
+```sql
+-- Search by name fragment
+SELECT *, ts_rank(search_vector, plainto_tsquery('simple', 'rahman')) AS rank
+FROM customers
+WHERE search_vector @@ plainto_tsquery('simple', 'rahman')
+ORDER BY rank DESC LIMIT 30;
+
+-- Search by phone number (partial match)
+SELECT *, ts_rank(search_vector, plainto_tsquery('simple', '01711')) AS rank
+FROM customers
+WHERE search_vector @@ plainto_tsquery('simple', '01711')
+  AND is_active = true AND deleted_at IS NULL
+ORDER BY rank DESC LIMIT 30;
+```
+
+#### Laravel Integration: Model Scopes + Controller Refactoring
+
+**Product and Customer models** each have a `scopeSearch()` method that automatically uses full-text search when the `search_vector` column exists, and falls back to ILIKE when it doesn't (e.g., before migration is run):
+
+```php
+// Product::search('cement') → uses tsvector @@ plainto_tsquery when available
+// Falls back to ILIKE on product_name, product_code when search_vector doesn't exist
+$products = Product::search('cement')->get();
+
+// Customer::search('rahman') → ranked results (name matches first)
+$customers = Customer::search('rahman', ranked: true)->limit(30)->get();
+```
+
+**BaseMasterDataController** was refactored to use `scopeSearch()` for DataTables and CSV export when `$useFullTextSearch = true` is set on the controller. Both `ProductController` and `CustomerController` enable this flag.
+
+**ArchiveService** was refactored to use `Customer::search()` instead of three separate ILIKE clauses.
+
+**Controllers changed:**
+
+| Controller | Change | Before | After |
+|---|---|---|---|
+| `ProductController` | `$useFullTextSearch = true` | ILIKE on 2 fields | `scopeSearch()` with tsvector |
+| `CustomerController` | `$useFullTextSearch = true` | ILIKE on 4 fields | `scopeSearch()` with tsvector |
+| `BaseMasterDataController` | `dataTablesResponse()` + `applyExportSearch()` | ILIKE loop | Full-text first, ILIKE fallback |
+| `ArchiveService` | `searchCustomers()` | 3× ILIKE | `Customer::search()` |
+
+**Backward compatibility**: The `scopeSearch()` method checks `information_schema.columns` for `search_vector` existence. If the migration hasn't been run yet, the search gracefully falls back to ILIKE. This means the code can be deployed before the migration runs without breaking anything.
 
 ---
 
@@ -1519,7 +1606,7 @@ LIMIT 30;
 | 14 | ~~Add covering indexes (INCLUDE) for high-frequency queries~~ | ✅ Done | 1 day | Database |
 | 15 | ~~Add BRIN indexes for time-series tables~~ | ✅ Done | 0.5 day | Database |
 | 16 | ~~Add GIN index on sales_draft_carts.items_json~~ | ✅ Done | 0.5 day | Database |
-| 17 | Implement full-text search for products + customers (tsvector + GIN) | High | 2 days | Database + Business Logic |
+| 17 | ~~Implement full-text search for products + customers (tsvector + GIN)~~ | ✅ Done | 2 days | Database + Business Logic |
 | 18 | Add window-function running balance reconciliation job | High | 2 days | Database + Business Logic |
 | 19 | Implement Row-Level Security (RLS) for branch isolation | High | 2 days | Database + Business Logic |
 | 20 | Replace document_sequences SELECT FOR UPDATE with advisory locks | Medium | 1 day | Business Logic |

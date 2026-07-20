@@ -93,10 +93,9 @@ class ArchiveService
      */
     public function searchCustomers(string $search, int $limit = 50): Collection
     {
-        // 1. PostgreSQL.
-        $pgResults = Customer::where('customer_name', 'ILIKE', "%{$search}%")
-            ->orWhere('customer_code', 'ILIKE', "%{$search}%")
-            ->orWhere('mobile', 'ILIKE', "%{$search}%")
+        // 1. PostgreSQL — use full-text search (tsvector + GIN) when available,
+        //    falls back to ILIKE via the Customer::scopeSearch() method.
+        $pgResults = Customer::search($search, ranked: true)
             ->orderBy('customer_name')
             ->limit($limit)
             ->get()

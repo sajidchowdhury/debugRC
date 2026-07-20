@@ -31,6 +31,9 @@ class ProductController extends BaseMasterDataController
 
     protected array $searchFields = ['product_code', 'product_name'];
 
+    /** Enable PostgreSQL full-text search (tsvector + GIN) for product search. */
+    protected bool $useFullTextSearch = true;
+
     /** Units enumerated in legacy app/views/products/_form_fields.php */
     protected array $units = ['Pcs', 'Carton', 'KG', 'Bag', 'Dobe', 'Set'];
 

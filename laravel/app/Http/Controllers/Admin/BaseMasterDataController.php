@@ -36,8 +36,20 @@ abstract class BaseMasterDataController extends Controller
 
     /**
      * Fields to search in the index DataTables query.
+     * Used as ILIKE fallback when full-text search is unavailable.
      */
     protected array $searchFields = [];
+
+    /**
+     * Whether to use PostgreSQL full-text search (tsvector @@ plainto_tsquery)
+     * instead of ILIKE for the DataTables search. Models that have a
+     * search_vector column should set this to true.
+     *
+     * When true, the model's scopeSearch() is used if it exists.
+     * When false (or when search_vector column doesn't exist yet),
+     * falls back to ILIKE on $searchFields.
+     */
+    protected bool $useFullTextSearch = false;
 
     /**
      * Get stats for the index page hero (override in subclass).
@@ -403,11 +415,17 @@ abstract class BaseMasterDataController extends Controller
         $total = $query->count();
 
         if ($search !== '' && $this->searchFields !== []) {
-            $query->where(function ($q) use ($search) {
-                foreach ($this->searchFields as $field) {
-                    $q->orWhere($field, 'ILIKE', "%{$search}%");
-                }
-            });
+            // Try full-text search first (tsvector + GIN)
+            if ($this->useFullTextSearch && method_exists($this->modelClass, 'scopeSearch')) {
+                $query->search($search, ranked: true);
+            } else {
+                // Fallback: ILIKE on configured search fields
+                $query->where(function ($q) use ($search) {
+                    foreach ($this->searchFields as $field) {
+                        $q->orWhere($field, 'ILIKE', "%{$search}%");
+                    }
+                });
+            }
         }
 
         $filtered = $query->count();
@@ -478,11 +496,17 @@ abstract class BaseMasterDataController extends Controller
             return;
         }
 
-        $query->where(function ($q) use ($search) {
-            foreach ($this->searchFields as $field) {
-                $q->orWhere($field, 'ILIKE', "%{$search}%");
-            }
-        });
+        // Try full-text search first (tsvector + GIN)
+        if ($this->useFullTextSearch && method_exists($this->modelClass, 'scopeSearch')) {
+            $query->search($search, ranked: false);
+        } else {
+            // Fallback: ILIKE on configured search fields
+            $query->where(function ($q) use ($search) {
+                foreach ($this->searchFields as $field) {
+                    $q->orWhere($field, 'ILIKE', "%{$search}%");
+                }
+            });
+        }
     }
 
     // ===================== PRINT (Phase 19) =====================

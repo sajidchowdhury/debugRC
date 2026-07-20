@@ -421,3 +421,36 @@ CREATE INDEX IF NOT EXISTS idx_mj_journal_date_brin
 
 CREATE INDEX IF NOT EXISTS idx_sdc_items_gin
     ON sales_draft_carts USING GIN (items_json jsonb_path_ops);
+
+-- ===================== FULL-TEXT SEARCH (TSVECTOR + GIN) =====================
+-- PostgreSQL full-text search replaces LIKE '%term%' / ILIKE '%term%' with
+-- index-accelerated tsvector @@ plainto_tsquery lookups. Benefits:
+--   1. GIN index: sub-millisecond on millions of rows (vs. sequential scan with LIKE)
+--   2. Ranking: ts_rank() returns best matches first
+--   3. Weighted columns: name > code > phone > address in relevance
+--   4. 'simple' dictionary: no stemming (preserves product codes, Bengali names, phone numbers)
+-- GENERATED ALWAYS AS ... STORED: auto-maintained by PG on every INSERT/UPDATE.
+-- Mirrors migration 2025_01_20_000005_add_fulltext_search_products_customers.php.
+
+-- PRODUCTS: search_vector (product_name=A, product_code=B)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS search_vector tsvector
+    GENERATED ALWAYS AS (
+        setweight(to_tsvector('simple', coalesce(product_name, '')), 'A') ||
+        setweight(to_tsvector('simple', coalesce(product_code, '')), 'B')
+    ) STORED;
+
+CREATE INDEX IF NOT EXISTS idx_products_search
+    ON products USING GIN (search_vector);
+
+-- CUSTOMERS: search_vector (customer_name=A, customer_code=B, phone/mobile=C, address=D)
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS search_vector tsvector
+    GENERATED ALWAYS AS (
+        setweight(to_tsvector('simple', coalesce(customer_name, '')), 'A') ||
+        setweight(to_tsvector('simple', coalesce(customer_code, '')), 'B') ||
+        setweight(to_tsvector('simple', coalesce(phone, '')), 'C') ||
+        setweight(to_tsvector('simple', coalesce(mobile, '')), 'C') ||
+        setweight(to_tsvector('simple', coalesce(address, '')), 'D')
+    ) STORED;
+
+CREATE INDEX IF NOT EXISTS idx_customers_search
+    ON customers USING GIN (search_vector);

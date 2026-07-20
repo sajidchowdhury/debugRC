@@ -151,3 +151,33 @@ Stage Summary:
 - Forward-looking: enables @> containment queries for product/warehouse cart lookups
 - Near-zero overhead: ~10% of JSONB data size, minimal write cost for cart lifecycle
 - Task 16 marked ✅ Done
+
+---
+Task ID: 9
+Agent: Main Agent
+Task: Implement full-text search for products + customers (tsvector + GIN)
+
+Work Log:
+- Analyzed all LIKE/ILIKE queries across laravel/ and legacy/ — found 12+ product search locations, 9+ customer search locations
+- Identified leading-wildcard LIKE '%term%' as the primary performance bottleneck (forces sequential scan)
+- Designed GENERATED tsvector columns with 'simple' dictionary (no stemming — preserves product codes, Bengali names, phone numbers)
+- Products: search_vector = weight A (product_name) + weight B (product_code)
+- Customers: search_vector = weight A (customer_name) + weight B (customer_code) + weight C (phone, mobile) + weight D (address)
+- Created migration 2025_01_20_000005_add_fulltext_search_products_customers.php
+- Added GIN indexes idx_products_search and idx_customers_search
+- Added scopeSearch() to Product and Customer models with automatic ILIKE fallback
+- Refactored BaseMasterDataController::dataTablesResponse() and applyExportSearch() to use full-text search
+- Added $useFullTextSearch = true to ProductController and CustomerController
+- Refactored ArchiveService::searchCustomers() to use Customer::search()
+- Updated 07_views_triggers_constraints.sql with FULL-TEXT SEARCH section
+- Updated sales-module-documentation.md section 7.15 (planned → ✅ Implemented)
+- Updated schema_mapping.md section 3.12 (full-text search reference)
+- Marked Task 17 as ✅ Done in phase plan
+
+Stage Summary:
+- 2 GENERATED tsvector columns + 2 GIN indexes on products and customers
+- 'simple' dictionary chosen over 'english' (no stemming for codes/phone/Bengali)
+- Weighted columns: name > code > phone > address
+- 4 Laravel files refactored: Product model, Customer model, BaseMasterDataController, ArchiveService
+- Backward-compatible: scopeSearch() falls back to ILIKE if search_vector doesn't exist
+- Task 17 marked ✅ Done
