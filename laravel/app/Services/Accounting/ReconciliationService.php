@@ -27,6 +27,10 @@ use Illuminate\Support\Facades\Log;
  *   - Period-scoped reconciliation (optional as_of_date parameter)
  *   - Summary counts (green/red/error per section)
  *   - Reconciliation history logging (for audit trail)
+ *
+ * G-4 FIX: All date filters are now parameterized (no string interpolation).
+ * Previously, $asOfDate was interpolated directly into SQL strings, creating
+ * a SQL injection vector. Now all queries use ? placeholders with bound params.
  */
 class ReconciliationService
 {
@@ -40,11 +44,15 @@ class ReconciliationService
     /**
      * Run all 6 reconciliation sections.
      *
-     * @param string|null $asOfDate Optional: reconcile as of a specific date (for historical)
+     * @param string|null $asOfDate Optional: reconcile as of a specific date (for historical).
+     *                              Must be Y-m-d format; validated before use.
      * @return array{ sections: array, all_green: bool, run_at: string, tolerance: float, summary: array }
      */
     public function reconcileAll(?string $asOfDate = null): array
     {
+        // G-4: Validate date format to prevent injection even with parameterized queries.
+        $asOfDate = $this->validateDate($asOfDate);
+
         $sections = [
             $this->reconcileAR($asOfDate),
             $this->reconcileAP($asOfDate),
@@ -102,39 +110,48 @@ class ReconciliationService
     public function reconcileAR(?string $asOfDate = null): array
     {
         try {
-            $dateFilter = $asOfDate ? "AND cl.transaction_date <= '{$asOfDate}'" : '';
-            $jeDateFilter = $asOfDate ? "AND je.entry_date <= '{$asOfDate}'" : '';
+            $asOfDate = $this->validateDate($asOfDate);
 
-            $subledger = (float) DB::selectOne("
+            // Sub-ledger: customer_ledger debit - credit (AR = customer owes us).
+            $subledgerSql = "
 SELECT COALESCE(SUM(cl.debit - cl.credit), 0) AS balance
 FROM customer_ledger cl
-WHERE COALESCE(cl.is_reversed, false) = false {$dateFilter}
-")->balance;
+WHERE COALESCE(cl.is_reversed, false) = false"
+                . ($asOfDate ? " AND cl.transaction_date <= ?" : '');
 
-            $glControl = (float) DB::selectOne("
+            $subledger = (float) DB::selectOne($subledgerSql, $asOfDate ? [$asOfDate] : [])->balance;
+
+            // GL control: AR ledger debit - credit.
+            $glSql = "
 SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS balance
 FROM ledgers l
 JOIN journal_lines jl ON jl.ledger_id = l.id
-JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false {$jeDateFilter}
-WHERE l.ledger_nature = 'ar' AND l.is_active = true
-")->balance;
+JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false"
+                . ($asOfDate ? " AND je.entry_date <= ?" : '')
+                . "
+WHERE l.ledger_nature = 'ar' AND l.is_active = true";
+
+            $glControl = (float) DB::selectOne($glSql, $asOfDate ? [$asOfDate] : [])->balance;
 
             $variance = abs($subledger - $glControl);
 
             // Drill-down: top 10 customers by outstanding balance.
             $drillDown = [];
             if ($variance > $this->tolerance) {
-                $drillDown = DB::select("
+                $drillSql = "
 SELECT c.id, c.customer_code, c.customer_name,
     COALESCE(SUM(cl.debit - cl.credit), 0) AS balance
 FROM customer_ledger cl
 JOIN customers c ON c.id = cl.customer_id
-WHERE COALESCE(cl.is_reversed, false) = false {$dateFilter}
+WHERE COALESCE(cl.is_reversed, false) = false"
+                    . ($asOfDate ? " AND cl.transaction_date <= ?" : '')
+                    . "
 GROUP BY c.id, c.customer_code, c.customer_name
 HAVING ABS(COALESCE(SUM(cl.debit - cl.credit), 0)) > 0.01
 ORDER BY ABS(COALESCE(SUM(cl.debit - cl.credit), 0)) DESC
-LIMIT 10
-");
+LIMIT 10";
+
+                $drillDown = DB::select($drillSql, $asOfDate ? [$asOfDate] : []);
             }
 
             return [
@@ -160,38 +177,47 @@ LIMIT 10
     public function reconcileAP(?string $asOfDate = null): array
     {
         try {
-            $dateFilter = $asOfDate ? "AND sl.transaction_date <= '{$asOfDate}'" : '';
-            $jeDateFilter = $asOfDate ? "AND je.entry_date <= '{$asOfDate}'" : '';
+            $asOfDate = $this->validateDate($asOfDate);
 
-            $subledger = (float) DB::selectOne("
+            // Sub-ledger: supplier_ledger credit - debit (AP = we owe supplier).
+            $subledgerSql = "
 SELECT COALESCE(SUM(sl.credit - sl.debit), 0) AS balance
 FROM supplier_ledger sl
-WHERE COALESCE(sl.is_reversed, false) = false {$dateFilter}
-")->balance;
+WHERE COALESCE(sl.is_reversed, false) = false"
+                . ($asOfDate ? " AND sl.transaction_date <= ?" : '');
 
-            $glControl = (float) DB::selectOne("
+            $subledger = (float) DB::selectOne($subledgerSql, $asOfDate ? [$asOfDate] : [])->balance;
+
+            // GL control: AP ledger credit - debit.
+            $glSql = "
 SELECT COALESCE(SUM(jl.credit - jl.debit), 0) AS balance
 FROM ledgers l
 JOIN journal_lines jl ON jl.ledger_id = l.id
-JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false {$jeDateFilter}
-WHERE l.ledger_nature = 'ap' AND l.is_active = true
-")->balance;
+JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false"
+                . ($asOfDate ? " AND je.entry_date <= ?" : '')
+                . "
+WHERE l.ledger_nature = 'ap' AND l.is_active = true";
+
+            $glControl = (float) DB::selectOne($glSql, $asOfDate ? [$asOfDate] : [])->balance;
 
             $variance = abs($subledger - $glControl);
 
             $drillDown = [];
             if ($variance > $this->tolerance) {
-                $drillDown = DB::select("
+                $drillSql = "
 SELECT s.id, s.supplier_code, s.supplier_name,
     COALESCE(SUM(sl.credit - sl.debit), 0) AS balance
 FROM supplier_ledger sl
 JOIN suppliers s ON s.id = sl.supplier_id
-WHERE COALESCE(sl.is_reversed, false) = false {$dateFilter}
+WHERE COALESCE(sl.is_reversed, false) = false"
+                    . ($asOfDate ? " AND sl.transaction_date <= ?" : '')
+                    . "
 GROUP BY s.id, s.supplier_code, s.supplier_name
 HAVING ABS(COALESCE(SUM(sl.credit - sl.debit), 0)) > 0.01
 ORDER BY ABS(COALESCE(SUM(sl.credit - sl.debit), 0)) DESC
-LIMIT 10
-");
+LIMIT 10";
+
+                $drillDown = DB::select($drillSql, $asOfDate ? [$asOfDate] : []);
             }
 
             return [
@@ -217,38 +243,47 @@ LIMIT 10
     public function reconcileEmployee(?string $asOfDate = null): array
     {
         try {
-            $dateFilter = $asOfDate ? "AND el.transaction_date <= '{$asOfDate}'" : '';
-            $jeDateFilter = $asOfDate ? "AND je.entry_date <= '{$asOfDate}'" : '';
+            $asOfDate = $this->validateDate($asOfDate);
 
-            $subledger = (float) DB::selectOne("
+            // Sub-ledger: employee_ledger credit - debit (we owe employee).
+            $subledgerSql = "
 SELECT COALESCE(SUM(el.credit - el.debit), 0) AS balance
 FROM employee_ledger el
-WHERE COALESCE(el.is_reversed, false) = false {$dateFilter}
-")->balance;
+WHERE COALESCE(el.is_reversed, false) = false"
+                . ($asOfDate ? " AND el.transaction_date <= ?" : '');
 
-            $glControl = (float) DB::selectOne("
+            $subledger = (float) DB::selectOne($subledgerSql, $asOfDate ? [$asOfDate] : [])->balance;
+
+            // GL control: employee_payable ledger credit - debit.
+            $glSql = "
 SELECT COALESCE(SUM(jl.credit - jl.debit), 0) AS balance
 FROM ledgers l
 JOIN journal_lines jl ON jl.ledger_id = l.id
-JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false {$jeDateFilter}
-WHERE l.ledger_nature = 'employee_payable' AND l.is_active = true
-")->balance;
+JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false"
+                . ($asOfDate ? " AND je.entry_date <= ?" : '')
+                . "
+WHERE l.ledger_nature = 'employee_payable' AND l.is_active = true";
+
+            $glControl = (float) DB::selectOne($glSql, $asOfDate ? [$asOfDate] : [])->balance;
 
             $variance = abs($subledger - ($glControl ?? 0));
 
             $drillDown = [];
             if ($variance > $this->tolerance) {
-                $drillDown = DB::select("
+                $drillSql = "
 SELECT e.id, e.employee_code, e.name,
     COALESCE(SUM(el.credit - el.debit), 0) AS balance
 FROM employee_ledger el
 JOIN employees e ON e.id = el.employee_id
-WHERE COALESCE(el.is_reversed, false) = false {$dateFilter}
+WHERE COALESCE(el.is_reversed, false) = false"
+                    . ($asOfDate ? " AND el.transaction_date <= ?" : '')
+                    . "
 GROUP BY e.id, e.employee_code, e.name
 HAVING ABS(COALESCE(SUM(el.credit - el.debit), 0)) > 0.01
 ORDER BY ABS(COALESCE(SUM(el.credit - el.debit), 0)) DESC
-LIMIT 10
-");
+LIMIT 10";
+
+                $drillDown = DB::select($drillSql, $asOfDate ? [$asOfDate] : []);
             }
 
             return [
@@ -274,19 +309,23 @@ LIMIT 10
     public function reconcileCashBank(?string $asOfDate = null): array
     {
         try {
-            $jeDateFilter = $asOfDate ? "AND je.entry_date <= '{$asOfDate}'" : '';
+            $asOfDate = $this->validateDate($asOfDate);
 
             $bankTotal = (float) DB::selectOne("
 SELECT COALESCE(SUM(b.balance), 0) AS balance FROM banks b WHERE b.is_active = true
 ")->balance;
 
-            $glControl = (float) DB::selectOne("
+            // GL control: cash_bank ledger debit - credit.
+            $glSql = "
 SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS balance
 FROM ledgers l
 JOIN journal_lines jl ON jl.ledger_id = l.id
-JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false {$jeDateFilter}
-WHERE l.ledger_nature = 'cash_bank' AND l.is_active = true
-")->balance;
+JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false"
+                . ($asOfDate ? " AND je.entry_date <= ?" : '')
+                . "
+WHERE l.ledger_nature = 'cash_bank' AND l.is_active = true";
+
+            $glControl = (float) DB::selectOne($glSql, $asOfDate ? [$asOfDate] : [])->balance;
 
             $variance = abs($bankTotal - $glControl);
 
@@ -325,19 +364,23 @@ LIMIT 10
     public function reconcileInventory(?string $asOfDate = null): array
     {
         try {
-            $jeDateFilter = $asOfDate ? "AND je.entry_date <= '{$asOfDate}'" : '';
+            $asOfDate = $this->validateDate($asOfDate);
 
             $stockValue = (float) DB::selectOne("
 SELECT COALESCE(SUM(qty * avg_cost), 0) AS value FROM warehouse_stock WHERE qty > 0
 ")->value;
 
-            $glControl = (float) DB::selectOne("
+            // GL control: inventory ledger debit - credit.
+            $glSql = "
 SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS balance
 FROM ledgers l
 JOIN journal_lines jl ON jl.ledger_id = l.id
-JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false {$jeDateFilter}
-WHERE l.ledger_nature = 'inventory' AND l.is_active = true
-")->balance;
+JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false"
+                . ($asOfDate ? " AND je.entry_date <= ?" : '')
+                . "
+WHERE l.ledger_nature = 'inventory' AND l.is_active = true";
+
+            $glControl = (float) DB::selectOne($glSql, $asOfDate ? [$asOfDate] : [])->balance;
 
             $variance = abs($stockValue - $glControl);
 
@@ -387,37 +430,41 @@ LIMIT 10
     public function reconcileCOGS(?string $asOfDate = null): array
     {
         try {
-            $jeDateFilter = $asOfDate ? "AND je.entry_date <= '{$asOfDate}'" : '';
-            $stDateFilter = $asOfDate ? "AND st.transaction_date <= '{$asOfDate}'" : '';
+            $asOfDate = $this->validateDate($asOfDate);
 
             // GL COGS balance (debit - credit).
-            $glCogs = (float) DB::selectOne("
+            $glSql = "
 SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS balance
 FROM ledgers l
 JOIN journal_lines jl ON jl.ledger_id = l.id
-JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false {$jeDateFilter}
-WHERE l.ledger_nature = 'cogs' AND l.is_active = true
-")->balance;
+JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false"
+                . ($asOfDate ? " AND je.entry_date <= ?" : '')
+                . "
+WHERE l.ledger_nature = 'cogs' AND l.is_active = true";
+
+            $glCogs = (float) DB::selectOne($glSql, $asOfDate ? [$asOfDate] : [])->balance;
 
             // Stock-out value from sales challans (the actual COGS).
-            $challanCogs = (float) DB::selectOne("
+            $challanSql = "
 SELECT COALESCE(SUM(ABS(st.qty) * st.rate), 0) AS cogs
 FROM stock_transactions st
 WHERE st.reference_type = 'sales_challan'
   AND st.is_reversed = false
-  AND st.qty < 0
-  {$stDateFilter}
-")->cogs;
+  AND st.qty < 0"
+                . ($asOfDate ? " AND st.transaction_date <= ?" : '');
+
+            $challanCogs = (float) DB::selectOne($challanSql, $asOfDate ? [$asOfDate] : [])->cogs;
 
             // Stock-in value from sales returns (reverses COGS).
-            $returnCogs = (float) DB::selectOne("
+            $returnSql = "
 SELECT COALESCE(SUM(st.qty * st.rate), 0) AS cogs
 FROM stock_transactions st
 WHERE st.reference_type = 'sales_return'
   AND st.is_reversed = false
-  AND st.qty > 0
-  {$stDateFilter}
-")->cogs;
+  AND st.qty > 0"
+                . ($asOfDate ? " AND st.transaction_date <= ?" : '');
+
+            $returnCogs = (float) DB::selectOne($returnSql, $asOfDate ? [$asOfDate] : [])->cogs;
 
             // Net stock-based COGS = challan COGS - return COGS.
             $stockCogs = $challanCogs - $returnCogs;
@@ -461,6 +508,41 @@ WHERE st.reference_type = 'sales_return'
             'cogs' => $this->reconcileCOGS(),
             default => null,
         };
+    }
+
+    /**
+     * Validate that $asOfDate is a valid Y-m-d date string.
+     *
+     * Defense-in-depth: even with parameterized queries, we validate
+     * the date format to reject malformed input early and provide
+     * clear error messages.
+     *
+     * @param string|null $date
+     * @return string|null Validated date or null
+     * @throws \InvalidArgumentException If date format is invalid
+     */
+    private function validateDate(?string $date): ?string
+    {
+        if ($date === null || $date === '') {
+            return null;
+        }
+
+        // Must match Y-m-d format exactly.
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            throw new \InvalidArgumentException(
+                "Invalid date format: '{$date}'. Expected Y-m-d (e.g. 2025-01-15)."
+            );
+        }
+
+        // Must be a real calendar date.
+        $parsed = date_create_from_format('Y-m-d', $date);
+        if (!$parsed || $parsed->format('Y-m-d') !== $date) {
+            throw new \InvalidArgumentException(
+                "Invalid date: '{$date}' is not a valid calendar date."
+            );
+        }
+
+        return $date;
     }
 
     /**
