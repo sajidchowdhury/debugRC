@@ -47,7 +47,7 @@ class User extends Authenticatable
         'failed_login_count',
         'locked_until',
         'credential_version',
-        'telegram_user_id',
+
         'api_token',
         'created_by',
         'deleted_by',
@@ -68,7 +68,7 @@ class User extends Authenticatable
         'deleted_at' => 'datetime',
         'failed_login_count' => 'integer',
         'credential_version' => 'integer',
-        'telegram_user_id' => 'integer',
+
     ];
 
     /**
@@ -200,12 +200,5 @@ class User extends Authenticatable
         return $query->whereNotNull('locked_until')->where('locked_until', '>', now());
     }
 
-    /**
-     * Scope: users with a linked Telegram account.
-     * Phase 14 — used by UserController::indexStats().
-     */
-    public function scopeWithTelegram(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
-    {
-        return $query->whereNotNull('telegram_user_id');
-    }
+
 }

@@ -136,7 +136,7 @@ return new class extends Migration
             'employee_ledger', 'supplier_ledger', 'customer_ledger',
             'document_sequences', 'journal_posting_logs',
             'journal_lines', 'journal_entries', 'ledgers',
-            'fcm_tokens', 'warehouses', 'bank_ledger_mappings', 'banks',
+            'warehouses', 'bank_ledger_mappings', 'banks',
             'suppliers', 'customers',
             'product_price_history', 'product_groups', 'product_categories', 'products',
             'user_menu_permissions', 'menus', 'users', 'employees', 'branches',

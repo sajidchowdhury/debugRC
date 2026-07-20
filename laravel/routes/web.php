@@ -68,6 +68,8 @@ Route::middleware('auth')->group(function () {
 
     Route::get('dashboard', [DashboardController::class, 'index'])
         ->name('dashboard');
+    Route::get('dashboard/sales-trend', [DashboardController::class, 'salesTrendAjax'])
+        ->name('dashboard.salesTrend');
 
     // ============================================================
     // Phase 4: Master Data Modules

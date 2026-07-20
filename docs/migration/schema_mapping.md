@@ -43,7 +43,7 @@
 |---|---|---|
 | `branches` | `id` | + FK from employees.branch_id |
 | `employees` | `id` | + FK to branches; role as VARCHAR+CHECK |
-| `users` | `id` | **Phase 0: totp_secret/totp_enabled DROPPED**; +username UNIQUE, +credential_version, +telegram_user_id |
+| `users` | `id` | **Phase 0: totp_secret/totp_enabled DROPPED**; +username UNIQUE, +credential_version; **telegram_user_id DROPPED (Migration 000007)** |
 | `menus` | `id` | |
 | `user_menu_permissions` | `id` | +UNIQUE(user_id, menu_id) |
 
@@ -59,7 +59,6 @@
 | `banks` | `id` | **balance: FLOAT→numeric(18,2)**; **updated_at: INT(YYYYMMDD)→date** |
 | `bank_ledger_mappings` | `id` | +UNIQUE(bank_id) for ON CONFLICT upsert |
 | `warehouses` | `id` | |
-| `fcm_tokens` | `id` | +UNIQUE(user_id, fcm_token) for ON CONFLICT upsert |
 
 ### Accounting Core (8 tables + 1 view + 1 trigger function)
 | Table | PK | Key Changes |
@@ -144,7 +143,7 @@
 | `other_incomes` | `id` | |
 | `other_expenses` | `id` | |
 | `employee_transactions` | `id` | transaction_type VARCHAR+CHECK (6 values) |
-| `notifications` | `id` | in-app + FCM push |
+| `notifications` | `id` | in-app + broadcast (Laravel Notification system) |
 
 ### Phase 0 / Auth Hardening (3 tables, from migrations not in dump)
 | Table | PK | Key Changes |
@@ -195,7 +194,6 @@ Note: MySQL `warehouse_stock.avg_cost` was a GENERATED column using `IF(total_qt
 |---|---|---|
 | `login_rate_limits` | `bucket_key` | PRIMARY KEY |
 | `investigation_activators` | `user_id` | UNIQUE |
-| `fcm_tokens` | `(user_id, fcm_token)` | UNIQUE |
 | `sales_draft_carts` | `(user_id, customer_id)` | UNIQUE |
 | `accounting_periods` | `branch_id` | UNIQUE |
 | `warehouse_stock` | `(warehouse_id, product_id)` | PRIMARY KEY |

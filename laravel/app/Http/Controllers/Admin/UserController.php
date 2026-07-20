@@ -78,7 +78,7 @@ class UserController extends BaseMasterDataController
             'employee.role'      => 'Role',
             'is_active'          => 'Active',
             'last_login'         => 'Last Login',
-            'telegram_user_id'   => 'Telegram User ID',
+
         ];
     }
 
@@ -123,7 +123,7 @@ class UserController extends BaseMasterDataController
             'username'         => ['required', 'string', 'max:50', "unique:users,username,{$id}"],
             'employee_id'      => ['required', 'exists:employees,id'],
             'is_active'        => ['boolean'],
-            'telegram_user_id' => ['nullable', 'integer'],
+
         ];
     }
 
@@ -136,7 +136,7 @@ class UserController extends BaseMasterDataController
             'active'       => User::active()->count(),
             'locked'       => User::locked()->count(),
             'total'        => User::withTrashed()->count(),
-            'telegram'     => User::whereNotNull('telegram_user_id')->count(),
+            'unread'       => DB::table('notifications')->whereNull('read_at')->count(),
         ];
     }
 

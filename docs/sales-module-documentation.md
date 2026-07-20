@@ -81,9 +81,8 @@
 | 8 | `ReconciliationService` | `services/Accounting/` (822+ lines) | 6-section GL tie-out (AR, AP, Employee, Cash/Bank, Inventory, COGS) |
 | 9 | `AccountingPeriodService` | `services/Accounting/` (249 lines) | Soft period close, year-end close |
 | 10 | `BranchIntercompanyService` | `services/Branch/` (664 lines) | FIFO demand settlement, inter-branch journals |
-| 11 | `SalesNotificationService` | `services/Notification/` (101 lines) | FCM push notifications to warehouse managers |
-| 12 | `SalesTelegramNotifier` | `services/Notification/` (436 lines) | Business-event Telegram alerts |
-| 13 | `FcmTokenService` | `services/Notification/` (49 lines) | Firebase token upsert |
+| 11 | `NotificationService` | `services/Notification/` (160 lines) | Laravel push notifications via database + broadcast channels |
+| 12 | `ERPNotification` | `Notifications/` (84 lines) | Unified notification class for all ERP events |
 
 ### 1.4 Views (33 sales-related views)
 
@@ -100,7 +99,7 @@
 - `guide.php` — Bengali/English sales guideline
 - `go_live_checklist.php` — Go-live checklist
 - `audit.php` — Sales audit log viewer
-- `RevenueOverview.php` — Executive KPI dashboard (Chart.js)
+- `RevenueOverview.php` — Executive KPI dashboard (Chart.js) — NOW: full Revenue Overview dashboard with 4 Chart.js charts
 - `SalesFunnelPipeline.php` — Pipeline/funnel dashboard
 - `CustomerPerformance.php` — Customer 360° intelligence
 
@@ -759,10 +758,10 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | # | Gap | Legacy Has | Laravel Status | Verified? |
 |---|-----|-----------|---------------|-----------|
 | G-12 | **Sales API write endpoints** | Full AJAX CRUD | Only read-only dashboard + lookups | ❌ Not implemented |
-| G-13 | **Telegram/FCM notifications** | Full notification suite (5 event types) | Schema + UI placeholders exist (fcm_tokens table, telegram_user_id in user CRUD) but NO dispatch code | ⚠️ VERIFIED — No Telegram bot API calls, no FCM push service |
+| G-13 | **Telegram/FCM notifications** | Full notification suite (5 event types) | ✅ REPLACED — Custom Telegram/FCM removed; Laravel native Notifiable + ERPNotification via database + broadcast channels. Migration 000007 drops fcm_tokens table + telegram_user_id column. NotificationService dispatches to role-based recipients. | ✅ VERIFIED & FIXED |
 | G-14 | **Sales guideline page** | Bengali/English user guide | Not implemented | ❌ Not implemented |
 | G-15 | **Go-live checklist** | Manager sign-off checklist | Not implemented | ❌ Not implemented |
-| G-16 | **Revenue Overview dashboard** | Chart.js KPI dashboard with filters | Basic report view only | ⚠️ Partial |
+| G-16 | **Revenue Overview dashboard** | Chart.js KPI dashboard with filters | ✅ FIXED — Full Revenue Overview dashboard: 6 KPI cards (today revenue, MTD revenue + growth %, MTD collection + rate, MTD outstanding, total outstanding, collection rate), 4 Chart.js charts (sales trend line with 7D/30D/90D toggle, receivable aging donut, branch revenue bar, revenue vs collection horizontal bar), 2 mini-tables (top 5 customers, top 5 products), AJAX trend refresh endpoint | ✅ VERIFIED & FIXED |
 | G-17 | **Sales Funnel/Pipeline dashboard** | Pipeline stages, win rate, velocity | Not implemented | ❌ Not implemented |
 | G-18 | **Customer Performance dashboard** | CLV, churn risk, segment breakdown | Basic report view only | ⚠️ Partial |
 | G-19 | **Blank godown copy print** | Handwrite template with blank cells | ✅ IMPLEMENTED — print_godown.blade.php has blank Picked Qty + Signature columns | ✅ VERIFIED — This was previously marked wrong |
@@ -1927,9 +1926,9 @@ $customers = Customer::search('rahman', ranked: true)->limit(30)->get();
 
 | # | Task | Priority | Effort | Type |
 |---|------|----------|--------|------|
-| 22 | Implement Telegram notifications (5 event types) | Medium | 2 days | Business Logic |
-| 23 | Implement FCM push notifications | Medium | 1 day | Business Logic |
-| 24 | Implement Revenue Overview dashboard (Chart.js KPIs) | Medium | 3 days | UI |
+| 22 | ~~Implement Telegram notifications (5 event types)~~ | ✅ Replaced by Laravel Notification system | Business Logic |
+| 23 | ~~Implement FCM push notifications~~ | ✅ Replaced by Laravel Notification system | Business Logic |
+| 24 | ~~Implement Revenue Overview dashboard (Chart.js KPIs)~~ | ✅ Done | UI |
 | 25 | Implement Sales Funnel/Pipeline dashboard | Medium | 3 days | UI |
 | 26 | Implement Customer Performance dashboard | Medium | 3 days | UI |
 | 27 | Implement blank godown copy print template | Low | 1 day | UI |
@@ -2031,9 +2030,9 @@ Core principles:
 | Audit trail | ✅ UserAudit + file dual-write | ✅ SalesAuditLogger + file dual-write | None |
 | Stale draft cleanup | ✅ Full (throttled, batched) | ✅ Full (scheduled, dry-run) | None |
 | Call It A Day | ✅ Batch operation | ✅ Batch operation (SalesInvoiceService::callItADay) | None |
-| Telegram notifications | ✅ 5 event types | ⚠️ Schema+UI placeholders exist, no dispatch code | MEDIUM |
-| FCM notifications | ✅ Push to warehouse managers | ⚠️ fcm_tokens table exists, no push service | MEDIUM |
-| Revenue Overview dashboard | ✅ Chart.js KPIs + filters | ⚠️ Basic report only | MEDIUM |
+| Telegram notifications | ✅ 5 event types | ✅ Laravel Notifiable + ERPNotification (database + broadcast channels) | Equal |
+| FCM notifications | ✅ Push to warehouse managers | ✅ Laravel broadcast channel (Reverb WebSocket) | Better |
+| Revenue Overview dashboard | ✅ Chart.js KPIs + filters | ✅ 6 KPIs + 4 Chart.js charts + AJAX trend refresh | Better |
 | Sales Funnel dashboard | ✅ Pipeline stages, win rate | ❌ Not implemented | MEDIUM |
 | Customer Performance | ✅ CLV, churn, segments | ⚠️ Basic report only | MEDIUM |
 | Sales API (mobile) | ❌ No API | ⚠️ Read-only (dashboard + lookups) | MEDIUM |

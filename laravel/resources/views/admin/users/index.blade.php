@@ -2,7 +2,7 @@
 
 @section('content')
 @php
-    $stats = $stats ?? ['active' => 0, 'locked' => 0, 'total' => 0, 'telegram' => 0];
+    $stats = $stats ?? ['active' => 0, 'locked' => 0, 'total' => 0];
     $showDeleted = $showDeleted ?? false;
 @endphp
 
@@ -93,11 +93,11 @@
                 <div class="card-body d-flex align-items-center">
                     <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
                          style="width:48px;height:48px;background:#0ea5e9;">
-                        <i class="fab fa-telegram"></i>
+                        <i class="fas fa-bell"></i>
                     </div>
                     <div>
-                        <div class="h4 mb-0">{{ number_format((int) ($stats['telegram'] ?? 0)) }}</div>
-                        <div class="text-muted small">Telegram linked</div>
+                        <div class="h4 mb-0">{{ number_format((int) ($stats['unread'] ?? 0)) }}</div>
+                        <div class="text-muted small">Unread notifications</div>
                     </div>
                 </div>
             </div>
@@ -131,9 +131,6 @@
                                     <a href="{{ route('admin.users.show', $user) }}" class="fw-semibold text-decoration-none text-reset">
                                         {{ $user->username }}
                                     </a>
-                                    @if ($user->telegram_user_id)
-                                        <span class="badge bg-info-subtle text-info" title="Telegram linked"><i class="fab fa-telegram"></i></span>
-                                    @endif
                                 </div>
                             </td>
                             <td>

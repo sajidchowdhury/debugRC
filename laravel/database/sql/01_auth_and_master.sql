@@ -65,7 +65,6 @@ CREATE TABLE users (
     failed_login_count integer NOT NULL DEFAULT 0,
     locked_until timestamp(0),
     credential_version integer NOT NULL DEFAULT 1,
-    telegram_user_id bigint,
     created_by integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -252,13 +251,3 @@ CREATE TABLE warehouses (
     CONSTRAINT warehouses_warehouse_code_unique UNIQUE (warehouse_code)
 );
 CREATE INDEX idx_warehouses_branch ON warehouses(branch_id);
-
-CREATE TABLE fcm_tokens (
-    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    fcm_token varchar(255) NOT NULL,
-    device_info text,
-    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fcm_unique_user_token UNIQUE (user_id, fcm_token)
-);

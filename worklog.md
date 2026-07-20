@@ -1,5 +1,36 @@
 
 ---
+Task ID: 22-24
+Agent: Main Agent
+Task: Remove Telegram/FCM notifications and implement Revenue Overview dashboard (Chart.js KPIs)
+
+Work Log:
+- Searched entire codebase for Telegram and FCM references
+- Removed Firebase/FCM code from notification.js (Firebase imports, FCM token request, onMessage handler)
+- Removed telegram_user_id from User model (fillable, casts, scopeWithTelegram)
+- Removed telegram_user_id validation rule from UserController
+- Replaced Telegram stat card with Unread Notifications stat card in UserController::indexStats()
+- Removed telegram_user_id from UserFactory
+- Removed TELEGRAM_BOT_TOKEN and TELEGRAM_ALERTS_ENABLED from .env.example
+- Removed Telegram user ID input fields from users/create and users/edit Blade views
+- Replaced Telegram stat card with Unread Notifications card in users/index view
+- Replaced Telegram stat card with Notification channel card in users/show view
+- Replaced Telegram linked badge with Laravel Notifications badge in employees/show and employees/account views
+- Created migration 2025_01_20_000007_drop_fcm_and_telegram_fields.php to DROP fcm_tokens table and telegram_user_id column
+- Updated 01_auth_and_master.sql: removed telegram_user_id column and fcm_tokens CREATE TABLE
+- Updated create_rcerp_schema.php: removed fcm_tokens from table drop list
+- Enhanced DashboardController with 6 revenue KPI methods (getRevenueKPIs, getSalesTrend, getBranchRevenue, getReceivableAging, getTopCustomers, getTopProducts)
+- Added AJAX endpoint /dashboard/sales-trend for chart refresh (7D/30D/90D toggle)
+- Created full Revenue Overview dashboard with Chart.js
+- Updated sales-module-documentation.md: G-13 and G-16 gaps VERIFIED & FIXED
+- Updated schema_mapping.md: removed fcm_tokens, marked telegram_user_id as dropped
+
+Stage Summary:
+- Telegram and FCM completely removed from Laravel codebase (replaced by Laravel native Notification system)
+- Revenue Overview dashboard fully implemented with Chart.js KPIs
+- Migration 000007 drops fcm_tokens table + telegram_user_id column
+
+---
 Task ID: 3
 Agent: Main Agent
 Task: Implement payment transaction types (discount, write_off, refund) with GL

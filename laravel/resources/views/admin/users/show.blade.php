@@ -130,17 +130,13 @@
                 <div class="card-body d-flex align-items-center">
                     <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
                          style="width:48px;height:48px;background:#0ea5e9;">
-                        <i class="fab fa-telegram"></i>
+                        <i class="fas fa-bell"></i>
                     </div>
                     <div>
                         <div class="h6 mb-0">
-                            @if ($item->telegram_user_id)
-                                <span class="text-info">{{ $item->telegram_user_id }}</span>
-                            @else
-                                <span class="text-muted">—</span>
-                            @endif
+                            <span class="text-muted">{{ $item->unreadNotificationsCount ?? 0 }}</span>
                         </div>
-                        <div class="text-muted small">Telegram user ID</div>
+                        <div class="text-muted small">Unread notifications</div>
                     </div>
                 </div>
             </div>
@@ -158,9 +154,6 @@
                         <dt class="col-sm-3 text-muted">Username</dt>
                         <dd class="col-sm-9">
                             <code>{{ $item->username }}</code>
-                            @if ($item->telegram_user_id)
-                                <span class="badge bg-info-subtle text-info ms-1"><i class="fab fa-telegram me-1"></i>Telegram linked</span>
-                            @endif
                         </dd>
 
                         <dt class="col-sm-3 text-muted">Employee</dt>

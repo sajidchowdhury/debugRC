@@ -63,12 +63,6 @@
                                 </div>
                                 @error('password') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
-                            <div class="col-md-6">
-                                <label class="form-label" for="telegram_user_id">Telegram user ID</label>
-                                <input type="number" id="telegram_user_id" name="telegram_user_id" class="form-control @error('telegram_user_id') is-invalid @enderror"
-                                       value="{{ old('telegram_user_id') }}">
-                                @error('telegram_user_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
-                            </div>
                             <div class="col-12">
                                 <div class="form-check">
                                     <input type="hidden" name="is_active" value="0">

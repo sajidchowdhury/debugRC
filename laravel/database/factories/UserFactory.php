@@ -45,7 +45,6 @@ class UserFactory extends Factory
             'failed_login_count'     => 0,
             'locked_until'           => null,
             'credential_version'     => 1,
-            'telegram_user_id'       => null,
             'created_by'             => null,
         ];
     }

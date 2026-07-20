@@ -165,13 +165,9 @@
                                 <div>{{ (int) $user->failed_login_count }}</div>
                             </div>
                             <div class="col-md-6">
-                                <div class="text-muted small mb-1">Telegram linked</div>
+                                <div class="text-muted small mb-1">Notification channel</div>
                                 <div>
-                                    @if ($user->telegram_user_id)
-                                        <span class="badge bg-info-subtle text-info"><i class="fab fa-telegram me-1"></i>{{ $user->telegram_user_id }}</span>
-                                    @else
-                                        <span class="text-muted">Not linked</span>
-                                    @endif
+                                    <span class="badge bg-primary-subtle text-primary"><i class="fas fa-bell me-1"></i>Laravel Notifications</span>
                                 </div>
                             </div>
                             <div class="col-12 mt-3">
