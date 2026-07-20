@@ -129,3 +129,25 @@ Stage Summary:
 - Dual-column strategy: both business date (*_date) and system timestamp (created_at) indexed
 - pages_per_range: 32 for medium tables, 64 for largest/append-only tables
 - Task 15 marked ✅ Done
+
+---
+Task ID: 8
+Agent: Main Agent
+Task: Add GIN index on sales_draft_carts.items_json
+
+Work Log:
+- Analyzed all 11 files referencing SalesDraftCart/items_json — found zero @> containment queries
+- Current usage: items_json treated as opaque blob (full read → PHP mutate → full write)
+- GIN index is forward-looking: enables future inventory reservation, multi-warehouse cart tracking
+- Chose jsonb_path_ops operator class (smaller/faster than default GIN, @> only)
+- Created migration 2025_01_20_000004_add_gin_index_draft_carts_items_json.php
+- Updated 07_views_triggers_constraints.sql with GIN INDEX section
+- Updated sales-module-documentation.md section 7.5 (planned → ✅ Implemented)
+- Updated schema_mapping.md section 3.11 (GIN index reference table)
+- Marked Task 16 as ✅ Done in phase plan
+
+Stage Summary:
+- GIN index idx_sdc_items_gin on sales_draft_carts.items_json with jsonb_path_ops
+- Forward-looking: enables @> containment queries for product/warehouse cart lookups
+- Near-zero overhead: ~10% of JSONB data size, minimal write cost for cart lifecycle
+- Task 16 marked ✅ Done

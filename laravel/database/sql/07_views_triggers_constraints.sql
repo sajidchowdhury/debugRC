@@ -411,3 +411,13 @@ CREATE INDEX IF NOT EXISTS idx_sc_challan_date_brin
 CREATE INDEX IF NOT EXISTS idx_mj_journal_date_brin
     ON manual_journals USING BRIN (journal_date)
     WITH (pages_per_range = 32);
+
+-- ===================== GIN INDEX FOR JSONB CART ITEMS =====================
+-- GIN (Generalized Inverted Index) on sales_draft_carts.items_json enables
+-- @> containment queries for cart item lookups (e.g., "which carts contain
+-- product X?"). jsonb_path_ops produces a smaller, faster index than default GIN
+-- at the cost of only supporting @> (not ? existence operators).
+-- Mirrors migration 2025_01_20_000004_add_gin_index_draft_carts_items_json.php.
+
+CREATE INDEX IF NOT EXISTS idx_sdc_items_gin
+    ON sales_draft_carts USING GIN (items_json jsonb_path_ops);

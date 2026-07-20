@@ -1219,17 +1219,48 @@ CREATE INDEX idx_mj_journal_date_brin
 
 **Total: 30 BRIN indexes** across 22 tables. At ~0.1% of table size, the total BRIN index footprint is negligible — estimated under 1 MB even for tables with millions of rows. Every date-range query (AR aging, AP aging, daily collection, monthly revenue, product movement, stock summary) now benefits from block-level pruning without the storage cost of additional B-tree indexes.
 
-### 7.5 JSONB Indexing — Cart + Configuration Queries
+### 7.5 JSONB Indexing — ✅ Implemented (Task 16)
+
+PostgreSQL GIN (Generalized Inverted Index) indexes are the standard approach for indexing JSONB columns. They support the `@>` containment operator, which checks whether a JSONB document contains a specific key/value pair or nested structure. For `sales_draft_carts.items_json`, this enables queries like "find all carts that contain product_id 42" without scanning every row's JSONB blob.
+
+**Operator class choice: `jsonb_path_ops`**
+
+The default GIN operator class for JSONB supports both containment (`@>`) and existence (`?`, `?|`, `?&`) operators, but at the cost of a larger index. The `jsonb_path_ops` operator class supports only `@>`, but produces an index that is approximately 30% smaller and faster for containment lookups. Since the expected query pattern for cart items is containment ("does this cart contain this product/warehouse?"), `jsonb_path_ops` is the optimal choice.
+
+**Current usage vs. forward-looking value**: Currently, `items_json` is treated as an opaque blob — the application reads the full JSONB array into PHP, mutates it, and writes it back. All WHERE clauses use scalar columns (`user_id`, `customer_id`). However, the GIN index is valuable now for several reasons:
+
+1. **Inventory reservation**: Future stock availability checks will query "which open carts contain product X?" to compute pipeline demand alongside warehouse stock. Without the GIN index, this requires a full table scan of all draft carts.
+2. **Multi-warehouse cart tracking**: As the cart system evolves to track warehouse assignment per item, queries like "find carts with items from warehouse 3" become natural containment checks.
+3. **Near-zero cost**: The GIN index on `jsonb_path_ops` is compact (~10% of JSONB data size) and has minimal write overhead for the cart usage pattern (create → update a few times → delete on invoice save).
+4. **Zero risk**: Adding the index does not change any existing query behavior. The PostgreSQL planner will simply start using it when a compatible `@>` query appears.
+
+Migration: `2025_01_20_000004_add_gin_index_draft_carts_items_json.php`
+Schema: `07_views_triggers_constraints.sql` — GIN INDEX section added.
 
 ```sql
--- GIN index for JSONB cart items (product lookups within cart)
-CREATE INDEX idx_sdc_items ON sales_draft_carts USING GIN (items_json jsonb_path_ops);
+-- GIN index for JSONB cart items — enables @> containment queries
+CREATE INDEX idx_sdc_items_gin
+    ON sales_draft_carts USING GIN (items_json jsonb_path_ops);
 
--- Example query this enables:
--- SELECT * FROM sales_draft_carts WHERE items_json @> '[{"product_id": 42}]';
+-- Example queries this enables:
+
+-- 1. Find all carts containing a specific product (inventory reservation)
+SELECT user_id, customer_id, items_json
+FROM sales_draft_carts
+WHERE items_json @> '[{"product_id": 42}]';
+
+-- 2. Find carts with items from a specific warehouse (warehouse workload)
+SELECT user_id, customer_id, items_json
+FROM sales_draft_carts
+WHERE items_json @> '[{"warehouse_id": 3}]';
+
+-- 3. Find carts with a specific product in a specific condition
+SELECT user_id, customer_id, items_json
+FROM sales_draft_carts
+WHERE items_json @> '[{"product_id": 42, "condition_state": "Damage"}]';
 ```
 
-**Why this matters for long-term**: As cart complexity grows (multi-warehouse, condition tracking), GIN indexes enable fast lookups within JSON structures without full table scans.
+**Index footprint**: GIN with `jsonb_path_ops` is approximately 30% smaller than default GIN. For a table with ~1,000 active draft carts averaging 5 items each, the index is estimated at under 100 KB. The index is effectively free to maintain — cart rows are created, updated a handful of times during the sales entry process, and then deleted when the invoice is finalized.
 
 ### 7.6 Advisory Locks — Replace SELECT FOR UPDATE for Code Generation
 
@@ -1487,7 +1518,7 @@ LIMIT 30;
 | 13 | ~~Add partial indexes (open invoices, unpaid, pending returns, active ledger)~~ | ✅ Done | 1 day | Database |
 | 14 | ~~Add covering indexes (INCLUDE) for high-frequency queries~~ | ✅ Done | 1 day | Database |
 | 15 | ~~Add BRIN indexes for time-series tables~~ | ✅ Done | 0.5 day | Database |
-| 16 | Add GIN index on sales_draft_carts.items_json | Medium | 0.5 day | Database |
+| 16 | ~~Add GIN index on sales_draft_carts.items_json~~ | ✅ Done | 0.5 day | Database |
 | 17 | Implement full-text search for products + customers (tsvector + GIN) | High | 2 days | Database + Business Logic |
 | 18 | Add window-function running balance reconciliation job | High | 2 days | Database + Business Logic |
 | 19 | Implement Row-Level Security (RLS) for branch isolation | High | 2 days | Database + Business Logic |

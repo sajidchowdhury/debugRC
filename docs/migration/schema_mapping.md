@@ -312,6 +312,18 @@ and `07_views_triggers_constraints.sql` both define these indexes.
 | 29 | `sales_challans` | `idx_sc_challan_date_brin` | `challan_date` | 32 | Challan listing by date |
 | 30 | `manual_journals` | `idx_mj_journal_date_brin` | `journal_date` | 32 | Manual journal listing |
 
+### 3.11 GIN Index for JSONB Cart Items
+
+PostgreSQL GIN (Generalized Inverted Index) on `sales_draft_carts.items_json` enables
+`@>` containment queries for cart item lookups. The `jsonb_path_ops` operator class is
+used — it supports only `@>` but produces an index ~30% smaller and faster than default GIN.
+Migration `2025_01_20_000004_add_gin_index_draft_carts_items_json.php` and
+`07_views_triggers_constraints.sql` both define this index.
+
+| Table | Index Name | Column | Operator Class | Use Case |
+|---|---|---|---|---|
+| `sales_draft_carts` | `idx_sdc_items_gin` | `items_json` | `jsonb_path_ops` | Cart item containment (@> queries: product/warehouse lookup) |
+
 ---
 
 ## 4. PHP Code SQL Compatibility (Phase 2.4)
