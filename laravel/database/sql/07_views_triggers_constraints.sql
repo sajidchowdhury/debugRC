@@ -186,3 +186,95 @@ CREATE INDEX IF NOT EXISTS idx_je_active
 CREATE INDEX IF NOT EXISTS idx_ledgers_active_by_type
     ON ledgers (account_type, ledger_code)
     WHERE is_active = true;
+
+-- ===================== COVERING INDEXES (INCLUDE) FOR HIGH-FREQ QUERIES =====================
+-- PostgreSQL covering indexes store INCLUDE columns in leaf pages only,
+-- enabling index-only scans — PG never visits the heap for these queries.
+-- Mirrors migration 2025_01_20_000002_add_covering_indexes_high_freq_queries.php.
+
+-- P0: Customer ledger balance (every invoice finalize + credit check)
+-- Query: SELECT SUM(debit) - SUM(credit) FROM customer_ledger WHERE customer_id = ? AND is_reversed = false
+CREATE INDEX IF NOT EXISTS idx_cl_balance_covering
+    ON customer_ledger (customer_id, is_reversed)
+    INCLUDE (debit, credit);
+
+-- P0: Outstanding invoices per customer (payment allocation AJAX)
+-- Query: SELECT id, invoice_code, invoice_date, total_amount, paid_amount, due_amount
+--        FROM sales_invoices WHERE customer_id = ? AND is_reversed = false AND due_amount > 0.01
+CREATE INDEX IF NOT EXISTS idx_si_customer_due_covering
+    ON sales_invoices (customer_id, is_reversed)
+    INCLUDE (id, invoice_code, invoice_date, total_amount, paid_amount, due_amount)
+    WHERE due_amount > 0;
+
+-- P1: Journal entries by reference (every reversal, cancel, show page)
+CREATE INDEX IF NOT EXISTS idx_je_reference_covering
+    ON journal_entries (reference_type, reference_id, is_reversed)
+    INCLUDE (id, entry_no, entry_date, branch_id, description, source, created_by);
+
+-- P1: Journal lines per-entry detail (every journal show page)
+CREATE INDEX IF NOT EXISTS idx_jl_entry_covering
+    ON journal_lines (journal_entry_id)
+    INCLUDE (id, ledger_id, debit, credit, entity_type, entity_id, memo);
+
+-- P1: Journal lines per-ledger reporting (GL report, trial balance)
+CREATE INDEX IF NOT EXISTS idx_jl_ledger_date_covering
+    ON journal_lines (ledger_id, journal_entry_id)
+    INCLUDE (debit, credit);
+
+-- P2: Sales invoices listing (DataTable with branch + status + date filters)
+CREATE INDEX IF NOT EXISTS idx_si_listing_covering
+    ON sales_invoices (branch_id, status, invoice_date DESC, id DESC)
+    INCLUDE (customer_id, invoice_code, total_amount, paid_amount, due_amount,
+             is_godown_prepared, is_challan_issued, is_reversed);
+
+-- P2: Customer payments listing
+CREATE INDEX IF NOT EXISTS idx_cp_listing_covering
+    ON customer_payments (branch_id, payment_date DESC, id DESC)
+    INCLUDE (customer_id, payment_code, payment_mode, amount, is_reversed);
+
+-- P2: Supplier payments listing
+CREATE INDEX IF NOT EXISTS idx_sp_listing_covering
+    ON supplier_payments (branch_id, payment_date DESC, id DESC)
+    INCLUDE (supplier_id, payment_code, payment_mode, amount, is_reversed);
+
+-- P2: Invoice payment allocations (paid-so-far per invoice)
+CREATE INDEX IF NOT EXISTS idx_ipa_invoice_covering
+    ON invoice_payment_allocations (invoice_id)
+    INCLUDE (payment_id, allocated_amount);
+
+-- P2: Warehouse stock reverse lookup (product → warehouses)
+CREATE INDEX IF NOT EXISTS idx_ws_product_covering
+    ON warehouse_stock (product_id, warehouse_id)
+    INCLUDE (qty, avg_cost);
+
+-- P2: Sales challans listing
+CREATE INDEX IF NOT EXISTS idx_sc_listing_covering
+    ON sales_challans (branch_id, challan_date DESC, id DESC)
+    INCLUDE (sales_invoice_id, challan_code, is_reversed, issue_cost, transport_cost);
+
+-- P3: Purchase receives listing
+CREATE INDEX IF NOT EXISTS idx_pr_listing_covering
+    ON purchase_receives (branch_id, receive_date DESC, id DESC)
+    INCLUDE (supplier_id, receive_code, total_amount, is_reversed, purchase_order_id);
+
+-- P3: Supplier ledger by reference
+CREATE INDEX IF NOT EXISTS idx_sl_reference_covering
+    ON supplier_ledger (reference_type, reference_id)
+    INCLUDE (id, supplier_id, branch_id, transaction_date, transaction_type,
+             debit, credit, balance, journal_entry_id, created_by);
+
+-- P3: Stock transactions by reference
+CREATE INDEX IF NOT EXISTS idx_st_reference_covering
+    ON stock_transactions (reference_type, reference_id)
+    INCLUDE (id, warehouse_id, product_id, qty, rate, transaction_date, created_by);
+
+-- P3: Customer ledger by reference
+CREATE INDEX IF NOT EXISTS idx_cl_reference_covering
+    ON customer_ledger (reference_type, reference_id)
+    INCLUDE (id, customer_id, branch_id, transaction_date, transaction_type,
+             debit, credit, balance, journal_entry_id, created_by);
+
+-- P3: Purchase orders listing
+CREATE INDEX IF NOT EXISTS idx_po_listing_covering
+    ON purchase_orders (branch_id, po_date DESC, id DESC)
+    INCLUDE (supplier_id, po_code, total_amount, status);

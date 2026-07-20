@@ -245,6 +245,34 @@ documented in that migration's comments.
 
 ---
 
+## 3.9 Covering Indexes (INCLUDE) for High-Frequency Queries (Phase 21)
+
+PostgreSQL covering indexes use the INCLUDE clause to store additional columns in
+the B-tree leaf pages, enabling **index-only scans** — PostgreSQL never needs to
+visit the heap (actual table pages). Migration `2025_01_20_000002_add_covering_indexes_high_freq_queries.php`
+and `07_views_triggers_constraints.sql` both define these indexes.
+
+| Priority | Table | Index Name | Key Columns | INCLUDE Columns | Use Case |
+|---|---|---|---|---|---|
+| P0 | `customer_ledger` | `idx_cl_balance_covering` | `(customer_id, is_reversed)` | `debit, credit` | Balance SUM per customer |
+| P0 | `sales_invoices` | `idx_si_customer_due_covering` | `(customer_id, is_reversed)` WHERE due_amount > 0 | `id, invoice_code, invoice_date, total_amount, paid_amount, due_amount` | Payment allocation AJAX |
+| P1 | `journal_entries` | `idx_je_reference_covering` | `(reference_type, reference_id, is_reversed)` | `id, entry_no, entry_date, branch_id, description, source, created_by` | Reversal/cancel/show |
+| P1 | `journal_lines` | `idx_jl_entry_covering` | `(journal_entry_id)` | `id, ledger_id, debit, credit, entity_type, entity_id, memo` | Journal show page |
+| P1 | `journal_lines` | `idx_jl_ledger_date_covering` | `(ledger_id, journal_entry_id)` | `debit, credit` | GL report / trial balance |
+| P2 | `sales_invoices` | `idx_si_listing_covering` | `(branch_id, status, invoice_date DESC, id DESC)` | `customer_id, invoice_code, total_amount, paid_amount, due_amount, is_godown_prepared, is_challan_issued, is_reversed` | Invoice listing DataTable |
+| P2 | `customer_payments` | `idx_cp_listing_covering` | `(branch_id, payment_date DESC, id DESC)` | `customer_id, payment_code, payment_mode, amount, is_reversed` | Payment listing |
+| P2 | `supplier_payments` | `idx_sp_listing_covering` | `(branch_id, payment_date DESC, id DESC)` | `supplier_id, payment_code, payment_mode, amount, is_reversed` | Payment listing |
+| P2 | `invoice_payment_allocations` | `idx_ipa_invoice_covering` | `(invoice_id)` | `payment_id, allocated_amount` | Paid-so-far per invoice |
+| P2 | `warehouse_stock` | `idx_ws_product_covering` | `(product_id, warehouse_id)` | `qty, avg_cost` | Product→warehouse lookup |
+| P2 | `sales_challans` | `idx_sc_listing_covering` | `(branch_id, challan_date DESC, id DESC)` | `sales_invoice_id, challan_code, is_reversed, issue_cost, transport_cost` | Challan listing |
+| P3 | `purchase_receives` | `idx_pr_listing_covering` | `(branch_id, receive_date DESC, id DESC)` | `supplier_id, receive_code, total_amount, is_reversed, purchase_order_id` | GRN listing |
+| P3 | `supplier_ledger` | `idx_sl_reference_covering` | `(reference_type, reference_id)` | `id, supplier_id, branch_id, transaction_date, transaction_type, debit, credit, balance, journal_entry_id, created_by` | By-reference lookup |
+| P3 | `stock_transactions` | `idx_st_reference_covering` | `(reference_type, reference_id)` | `id, warehouse_id, product_id, qty, rate, transaction_date, created_by` | By-reference lookup |
+| P3 | `customer_ledger` | `idx_cl_reference_covering` | `(reference_type, reference_id)` | `id, customer_id, branch_id, transaction_date, transaction_type, debit, credit, balance, journal_entry_id, created_by` | By-reference lookup |
+| P3 | `purchase_orders` | `idx_po_listing_covering` | `(branch_id, po_date DESC, id DESC)` | `supplier_id, po_code, total_amount, status` | PO listing |
+
+---
+
 ## 4. PHP Code SQL Compatibility (Phase 2.4)
 
 All production PHP code (core/, app/models/, app/helpers/, app/services/, app/controllers/) has been audited and fixed for PostgreSQL compatibility:

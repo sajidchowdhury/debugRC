@@ -77,3 +77,28 @@ Stage Summary:
 - Categories: Open Invoices (2), Unpaid Payments (4), Pending Returns (2), Active Ledger (5)
 - All indexes use IF NOT EXISTS for idempotency
 - Documentation updated in schema_mapping.md Section 3.8
+
+---
+Task ID: 6
+Agent: Main Agent
+Task: Add covering indexes (INCLUDE) for high-frequency queries
+
+Work Log:
+- Analyzed all controllers, services, models to identify exact WHERE/SELECT/ORDER BY columns for each high-frequency query
+- Identified 16 covering indexes across 4 priority tiers (P0-P3)
+- P0: customer_ledger balance (every invoice finalize), sales_invoices outstanding (payment allocation)
+- P1: journal_entries by reference, journal_lines per-entry + per-ledger
+- P2: listing pages (sales invoices, customer/supplier payments, invoice allocations, warehouse stock, challans)
+- P3: supporting lookups (purchase receives, supplier/customer ledger by reference, stock transactions, purchase orders)
+- Created Laravel migration 2025_01_20_000002_add_covering_indexes_high_freq_queries.php with up/down + ANALYZE
+- Updated 07_views_triggers_constraints.sql with matching covering index DDL
+- Updated docs/sales-module-documentation.md: Section 7.3 rewritten with implemented indexes, Task 14 marked ✅ Done
+- Updated docs/migration/schema_mapping.md: Section 3.9 added with full reference table
+- Also updated sales-module-documentation.md: Section 7.2 rewritten for Task 13 partial indexes, Task 13 marked ✅ Done
+
+Stage Summary:
+- 16 covering indexes added across 11 tables
+- Priority tiers: P0 (2), P1 (3), P2 (6), P3 (5)
+- All indexes use IF NOT EXISTS for idempotency
+- Documentation updated in sales-module-documentation.md (sections 7.2 + 7.3) and schema_mapping.md (sections 3.8 + 3.9)
+- Tasks 13 and 14 both marked ✅ Done in phase plan

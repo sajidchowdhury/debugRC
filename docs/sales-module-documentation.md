@@ -811,49 +811,217 @@ Currently `amount` on `sales_invoice_items` and `sales_return_items` is GENERATE
 
 **Why this matters for long-term**: GENERATED columns are **always correct** — no service can forget to update them, no bug can make them stale. This eliminates an entire class of data inconsistency bugs.
 
-### 7.2 Partial Indexes — Expand for Query Patterns
+### 7.2 Partial Indexes — ✅ Implemented (Task 13)
 
-Currently 5 partial indexes exist. Additional high-value candidates:
+13 partial indexes have been added via migration `2025_01_20_000001_add_partial_indexes_business_queries.php`
+and mirrored in `07_views_triggers_constraints.sql`. The original 5 master-data partial indexes
+(from migration `2025_01_14`) remain unchanged. Total: **18 partial indexes** across the system.
+
+#### Open Invoices (2 indexes)
+These cover the AR aging report, collections dashboard, and call-it-a-day list —
+the hottest queries in the system. Only confirmed invoices with an outstanding
+balance are indexed (typically ~15-30% of all invoice rows).
 
 ```sql
--- Open invoices (most queried subset)
-CREATE INDEX idx_si_open ON sales_invoices (branch_id, invoice_date)
-  WHERE status IN ('draft', 'confirmed') AND is_reversed = false;
+-- AR aging / collections dashboard
+CREATE INDEX idx_si_open_invoice
+  ON sales_invoices (customer_id, due_amount, invoice_date)
+  WHERE status = 'confirmed' AND is_reversed = false AND due_amount > 0;
 
--- Unpaid invoices (AR aging, collection priority)
-CREATE INDEX idx_si_unpaid ON sales_invoices (customer_id, due_amount)
-  WHERE due_amount > 0 AND is_reversed = false;
+-- Branch dashboard / call-it-a-day list
+CREATE INDEX idx_si_open_by_branch
+  ON sales_invoices (branch_id, invoice_date)
+  WHERE status = 'confirmed' AND is_reversed = false AND due_amount > 0;
+```
 
--- Pending returns (warehouse action needed)
-CREATE INDEX idx_sr_pending ON sales_returns (branch_id, return_date)
-  WHERE status = 'created' AND is_reversed = false;
+#### Unpaid / Active Payments (4 indexes)
+AR/AP dashboards list only non-reversed payments. A partial index covers the
+~95% of rows that are live, avoiding wasted index space on reversed records.
 
--- Non-reversed customer ledger (99% of queries)
-CREATE INDEX idx_cl_active ON customer_ledger (customer_id, transaction_date)
+```sql
+-- Customer payment history (AR)
+CREATE INDEX idx_cp_active
+  ON customer_payments (customer_id, payment_date)
   WHERE is_reversed = false;
 
--- Bank-mode payments (intercompany settlement queries)
-CREATE INDEX idx_cp_bank ON customer_payments (bank_id, payment_date)
-  WHERE payment_mode = 'bank' AND is_reversed = false;
+-- Supplier payment history (AP)
+CREATE INDEX idx_sp_active
+  ON supplier_payments (supplier_id, payment_date)
+  WHERE is_reversed = false;
+
+-- Daily collection report (branch-scoped)
+CREATE INDEX idx_cp_active_by_branch
+  ON customer_payments (branch_id, payment_date)
+  WHERE is_reversed = false;
+
+-- Daily payment report (branch-scoped)
+CREATE INDEX idx_sp_active_by_branch
+  ON supplier_payments (branch_id, payment_date)
+  WHERE is_reversed = false;
 ```
+
+#### Pending Returns (2 indexes)
+Sales returns in `created` status need manager review. Purchase returns that
+haven't been reversed are actively tracked in the returns dashboard.
+
+```sql
+-- Sales returns awaiting confirmation
+CREATE INDEX idx_sr_pending
+  ON sales_returns (branch_id, return_date)
+  WHERE status = 'created' AND is_reversed = false;
+
+-- Active purchase returns
+CREATE INDEX idx_prtn_pending
+  ON purchase_returns (supplier_id, branch_id)
+  WHERE is_reversed = false;
+```
+
+#### Active Ledger (5 indexes)
+Sub-ledger rows with open balances, unsettled intercompany, non-reversed journal
+entries, and the chart-of-accounts filter — all the queries that power the
+accounting dashboard and trial balance.
+
+```sql
+-- AR outstanding rows
+CREATE INDEX idx_cl_outstanding
+  ON customer_ledger (customer_id, transaction_date, balance)
+  WHERE balance > 0;
+
+-- AP outstanding rows
+CREATE INDEX idx_sl_outstanding
+  ON supplier_ledger (supplier_id, transaction_date, balance)
+  WHERE balance > 0;
+
+-- Unsettled intercompany transactions
+CREATE INDEX idx_bl_unsettled
+  ON branch_ledger (from_branch_id, to_branch_id, transaction_date)
+  WHERE is_settled = false;
+
+-- Non-reversed journal entries (GL reports, trial balance)
+CREATE INDEX idx_je_active
+  ON journal_entries (entry_date, branch_id, reference_type)
+  WHERE is_reversed = false;
+
+-- Chart of accounts by type (active only)
+CREATE INDEX idx_ledgers_active_by_type
+  ON ledgers (account_type, ledger_code)
+  WHERE is_active = true;
+```
+
+**Full reference table** is in `docs/migration/schema_mapping.md` Section 3.8.
 
 **Why this matters for long-term**: Partial indexes are **smaller** (only relevant rows) and **faster** (fewer pages to scan). As data grows, the gap between full and partial indexes widens dramatically.
 
-### 7.3 Covering Indexes (INCLUDE) — Avoid Heap Lookups
+### 7.3 Covering Indexes (INCLUDE) — ✅ Implemented (Task 14)
+
+16 covering indexes have been added via migration `2025_01_20_000002_add_covering_indexes_high_freq_queries.php`
+and mirrored in `07_views_triggers_constraints.sql`. Covering indexes use the INCLUDE clause to store
+additional columns in the B-tree leaf pages, enabling **index-only scans** — PostgreSQL never
+needs to visit the heap (actual table pages), which can be 5-10x faster on large tables.
+
+#### P0 — Critical Path (every invoice finalize + credit check)
 
 ```sql
--- Today's invoices DataTable: needs code, date, customer, total, status, paid, due
-CREATE INDEX idx_si_today ON sales_invoices (branch_id, invoice_date)
-  INCLUDE (invoice_code, customer_id, total_amount, status, paid_amount, due_amount, is_godown_prepared, is_challan_issued);
+-- Customer ledger balance: SUM(debit) - SUM(credit) per customer
+-- Without INCLUDE, PG must visit heap for debit/credit → full-page random I/O
+-- With INCLUDE, PG does an index-only scan → sequential leaf read
+CREATE INDEX idx_cl_balance_covering
+  ON customer_ledger (customer_id, is_reversed)
+  INCLUDE (debit, credit);
 
--- Customer balance lookup: needs latest running_balance
-CREATE INDEX idx_cl_balance ON customer_ledger (customer_id, id DESC)
-  INCLUDE (balance, is_reversed);
-
--- Stock availability: needs qty + avg_cost
-CREATE INDEX idx_ws_stock ON warehouse_stock (warehouse_id, product_id)
-  INCLUDE (qty, avg_cost);
+-- Outstanding invoices per customer (payment allocation AJAX)
+CREATE INDEX idx_si_customer_due_covering
+  ON sales_invoices (customer_id, is_reversed)
+  INCLUDE (id, invoice_code, invoice_date, total_amount, paid_amount, due_amount)
+  WHERE due_amount > 0;
 ```
+
+#### P1 — Per-Transaction Lookups (every reversal, cancel, show page)
+
+```sql
+-- Journal entries by reference (reversal, cancel, show page)
+CREATE INDEX idx_je_reference_covering
+  ON journal_entries (reference_type, reference_id, is_reversed)
+  INCLUDE (id, entry_no, entry_date, branch_id, description, source, created_by);
+
+-- Journal lines per-entry detail (every journal show page)
+CREATE INDEX idx_jl_entry_covering
+  ON journal_lines (journal_entry_id)
+  INCLUDE (id, ledger_id, debit, credit, entity_type, entity_id, memo);
+
+-- Journal lines per-ledger reporting (GL report, trial balance)
+CREATE INDEX idx_jl_ledger_date_covering
+  ON journal_lines (ledger_id, journal_entry_id)
+  INCLUDE (debit, credit);
+```
+
+#### P2 — Listing Pages (DataTable with branch + status + date filters)
+
+```sql
+-- Sales invoices listing (branch_id, status, date range → DataTable)
+CREATE INDEX idx_si_listing_covering
+  ON sales_invoices (branch_id, status, invoice_date DESC, id DESC)
+  INCLUDE (customer_id, invoice_code, total_amount, paid_amount, due_amount,
+           is_godown_prepared, is_challan_issued, is_reversed);
+
+-- Customer payments listing
+CREATE INDEX idx_cp_listing_covering
+  ON customer_payments (branch_id, payment_date DESC, id DESC)
+  INCLUDE (customer_id, payment_code, payment_mode, amount, is_reversed);
+
+-- Supplier payments listing
+CREATE INDEX idx_sp_listing_covering
+  ON supplier_payments (branch_id, payment_date DESC, id DESC)
+  INCLUDE (supplier_id, payment_code, payment_mode, amount, is_reversed);
+
+-- Invoice payment allocations (paid-so-far per invoice)
+CREATE INDEX idx_ipa_invoice_covering
+  ON invoice_payment_allocations (invoice_id)
+  INCLUDE (payment_id, allocated_amount);
+
+-- Warehouse stock reverse lookup (product → warehouses with qty + avg_cost)
+CREATE INDEX idx_ws_product_covering
+  ON warehouse_stock (product_id, warehouse_id)
+  INCLUDE (qty, avg_cost);
+
+-- Sales challans listing
+CREATE INDEX idx_sc_listing_covering
+  ON sales_challans (branch_id, challan_date DESC, id DESC)
+  INCLUDE (sales_invoice_id, challan_code, is_reversed, issue_cost, transport_cost);
+```
+
+#### P3 — Supporting Queries (by-reference lookups, secondary listings)
+
+```sql
+-- Purchase receives listing
+CREATE INDEX idx_pr_listing_covering
+  ON purchase_receives (branch_id, receive_date DESC, id DESC)
+  INCLUDE (supplier_id, receive_code, total_amount, is_reversed, purchase_order_id);
+
+-- Supplier ledger by reference (per purchase receive show/cancel)
+CREATE INDEX idx_sl_reference_covering
+  ON supplier_ledger (reference_type, reference_id)
+  INCLUDE (id, supplier_id, branch_id, transaction_date, transaction_type,
+           debit, credit, balance, journal_entry_id, created_by);
+
+-- Stock transactions by reference (per challan show / purchase cancel)
+CREATE INDEX idx_st_reference_covering
+  ON stock_transactions (reference_type, reference_id)
+  INCLUDE (id, warehouse_id, product_id, qty, rate, transaction_date, created_by);
+
+-- Customer ledger by reference (per payment/invoice show page)
+CREATE INDEX idx_cl_reference_covering
+  ON customer_ledger (reference_type, reference_id)
+  INCLUDE (id, customer_id, branch_id, transaction_date, transaction_type,
+           debit, credit, balance, journal_entry_id, created_by);
+
+-- Purchase orders listing
+CREATE INDEX idx_po_listing_covering
+  ON purchase_orders (branch_id, po_date DESC, id DESC)
+  INCLUDE (supplier_id, po_code, total_amount, status);
+```
+
+**Full reference table** is in `docs/migration/schema_mapping.md` Section 3.9.
 
 **Why this matters for long-term**: Covering indexes enable **index-only scans** — PostgreSQL never needs to visit the heap (actual table pages). For frequently queried columns, this can be 5-10x faster on large tables.
 
@@ -1140,8 +1308,8 @@ LIMIT 30;
 | # | Task | Priority | Effort | Type |
 |---|------|----------|--------|------|
 | 12 | ~~Add GENERATED columns for due_amount, issue_cost, cogs_amount, stock_value~~ | ✅ DONE | Database | 2025-01-20 — 3 GENERATED columns added: due_amount (sales_invoices = total_amount - paid_amount), cogs_amount (sales_challan_items = qty × issue_rate), stock_value (warehouse_stock = qty × avg_cost, new column). issue_cost on sales_challans CANNOT be GENERATED (PostgreSQL forbids subqueries in GENERATED expressions — cross-table aggregate). All 6 due_amount manual-write sites refactored to only update paid_amount/total_amount; 4 cogs_amount insert sites cleaned; 4 stock_value DB::raw() queries simplified to use column. Models updated: due_amount & cogs_amount removed from $fillable, stock_value cast added. Partial index on stock_value for non-zero rows. |
-| 13 | Add partial indexes (open invoices, unpaid, pending returns, active ledger) | High | 1 day | Database |
-| 14 | Add covering indexes (INCLUDE) for high-frequency queries | High | 1 day | Database |
+| 13 | ~~Add partial indexes (open invoices, unpaid, pending returns, active ledger)~~ | ✅ Done | 1 day | Database |
+| 14 | ~~Add covering indexes (INCLUDE) for high-frequency queries~~ | ✅ Done | 1 day | Database |
 | 15 | Add BRIN indexes for time-series tables | High | 0.5 day | Database |
 | 16 | Add GIN index on sales_draft_carts.items_json | Medium | 0.5 day | Database |
 | 17 | Implement full-text search for products + customers (tsvector + GIN) | High | 2 days | Database + Business Logic |
