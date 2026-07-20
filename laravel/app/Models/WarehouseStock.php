@@ -21,6 +21,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property int $product_id
  * @property string $qty
  * @property string $avg_cost
+ * @property string $stock_value (GENERATED: qty × avg_cost)
  */
 class WarehouseStock extends Model
 {
@@ -41,6 +42,7 @@ class WarehouseStock extends Model
     protected $casts = [
         'qty' => 'decimal:4',
         'avg_cost' => 'decimal:2',
+        'stock_value' => 'decimal:2', // GENERATED: qty * avg_cost
     ];
 
     /**
@@ -67,10 +69,12 @@ class WarehouseStock extends Model
 
     /**
      * Total stock value = qty × avg_cost.
+     * Now backed by the GENERATED stock_value column (Phase 1C-12).
+     * Kept as a convenience accessor for backward compatibility.
      */
     public function stockValue(): float
     {
-        return (float) $this->qty * (float) $this->avg_cost;
+        return (float) ($this->stock_value ?? ((float) $this->qty * (float) $this->avg_cost));
     }
 
     /**

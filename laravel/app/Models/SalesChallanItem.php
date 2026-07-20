@@ -38,13 +38,13 @@ class SalesChallanItem extends Model
 
     protected $fillable = [
         'sales_challan_id', 'product_id', 'warehouse_id',
-        'qty', 'issue_rate', 'cogs_amount',
+        'qty', 'issue_rate',
     ];
 
     protected $casts = [
         'qty' => 'decimal:4',
         'issue_rate' => 'decimal:2',
-        'cogs_amount' => 'decimal:2',
+        'cogs_amount' => 'decimal:2', // GENERATED: qty * issue_rate
         'sales_challan_id' => 'integer',
         'product_id' => 'integer',
         'warehouse_id' => 'integer',

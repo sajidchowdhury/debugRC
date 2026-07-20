@@ -159,7 +159,7 @@ class SalesInvoiceService
                 'transport_cost' => round($transport, 2),
                 'total_amount' => round($totalAmount, 2),
                 'paid_amount' => 0,
-                'due_amount' => round($totalAmount, 2),
+                // due_amount is GENERATED: total_amount - paid_amount (auto-computed by PostgreSQL)
                 'payment_mode' => 'cash',
                 'status' => 'draft',
                 'is_godown_prepared' => false,
@@ -591,7 +591,7 @@ class SalesInvoiceService
                     'discount_amount' => round($discount, 2),
                     'transport_cost' => round($transport, 2),
                     'total_amount' => round($newTotal, 2),
-                    'due_amount' => round($newTotal, 2) - (float) $invoice->paid_amount,
+                    // due_amount is GENERATED: auto-computed as total_amount - paid_amount
                     'is_soft_hold' => $data['is_soft_hold'] ?? false,
                     'notes' => $data['notes'] ?? null,
                     'journal_entry_id' => $newJournalEntryId,

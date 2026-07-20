@@ -367,7 +367,7 @@ LIMIT 10
             $asOfDate = $this->validateDate($asOfDate);
 
             $stockValue = (float) DB::selectOne("
-SELECT COALESCE(SUM(qty * avg_cost), 0) AS value FROM warehouse_stock WHERE qty > 0
+SELECT COALESCE(SUM(stock_value), 0) AS value FROM warehouse_stock WHERE qty > 0
 ")->value;
 
             // GL control: inventory ledger debit - credit.
@@ -389,11 +389,11 @@ WHERE l.ledger_nature = 'inventory' AND l.is_active = true";
             if ($variance > $this->tolerance) {
                 $drillDown = DB::select("
 SELECT p.id, p.product_code, p.product_name,
-    ws.qty, ws.avg_cost, (ws.qty * ws.avg_cost) AS stock_value
+    ws.qty, ws.avg_cost, ws.stock_value
 FROM warehouse_stock ws
 JOIN products p ON p.id = ws.product_id
 WHERE ws.qty > 0
-ORDER BY (ws.qty * ws.avg_cost) DESC
+ORDER BY ws.stock_value DESC
 LIMIT 10
 ");
             }

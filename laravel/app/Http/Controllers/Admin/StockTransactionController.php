@@ -75,8 +75,7 @@ class StockTransactionController extends Controller
             ->when($request->boolean('zero_stock') === false, fn($q) => $q->where('ws.qty', '>', 0))
             ->select(
                 'ws.warehouse_id', 'ws.product_id',
-                'ws.qty', 'ws.avg_cost',
-                DB::raw('ws.qty * ws.avg_cost as stock_value'),
+                'ws.qty', 'ws.avg_cost', 'ws.stock_value',
                 'p.product_code', 'p.product_name', 'p.unit',
                 'w.warehouse_name', 'b.branch_name'
             )
@@ -91,7 +90,7 @@ class StockTransactionController extends Controller
 
         $totals = [
             'total_qty' => DB::table('warehouse_stock')->where('qty', '>', 0)->sum('qty'),
-            'total_value' => DB::table('warehouse_stock')->where('qty', '>', 0)->selectRaw('SUM(qty * avg_cost) as v')->value('v'),
+            'total_value' => DB::table('warehouse_stock')->where('qty', '>', 0)->sum('stock_value'),
         ];
 
         return view('admin.stock.warehouse_stock', [

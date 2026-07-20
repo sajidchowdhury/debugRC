@@ -783,7 +783,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | ✅ | **Per-line COGS snapshot** | `sales_challan_items.issue_rate` captures exact avg_cost at time of OUT. |
 | ✅ | **Original cost lookup for returns** | Ensures COGS reversal matches exactly; avg_cost restored correctly. |
 | ✅ | **Linked damage write-offs** | Properly chains damage invoices to sales returns with correct reversal ordering. |
-| ✅ | **GENERATED STORED columns** | `sales_invoice_items.amount`, `sales_return_items.amount` — eliminates PHP calculation drift. |
+| ✅ | **GENERATED STORED columns** | `sales_invoice_items.amount`, `sales_return_items.amount`, `sales_invoices.due_amount`, `sales_challan_items.cogs_amount`, `warehouse_stock.stock_value` — eliminates PHP calculation drift |
 | ✅ | **Partial indexes** | Pipeline query, active customers, sparse FK lookups — faster than full indexes. |
 | ✅ | **DB-level triggers** | Balanced journal, negative stock prevention — data integrity at DB level. |
 | ✅ | **Materialized views** | AR aging, product movement, stock valuation — pre-computed for fast reporting. |
@@ -799,14 +799,15 @@ The user specifically requested to **"use the total power of PostgreSQL so we do
 
 ### 7.1 GENERATED Columns — Expand Usage
 
-Currently only `amount` on `sales_invoice_items` and `sales_return_items` is GENERATED. Additional candidates:
+Currently `amount` on `sales_invoice_items` and `sales_return_items` is GENERATED. Phase 1C-12 added 3 more:
 
-| Table | Column | Expression | Benefit |
-|-------|--------|-----------|---------|
-| `sales_invoices` | `due_amount` | `GREATEST(0, total_amount - paid_amount)` | Always in sync, never stale |
-| `sales_challans` | `issue_cost` | `(SELECT SUM(cogs_amount) FROM sales_challan_items WHERE sales_challan_id = sales_challans.id)` | Eliminates denormalization drift |
-| `sales_returns` | `cogs_amount` | `(SELECT SUM(qty * original_cost) FROM sales_return_items WHERE sales_return_id = sales_returns.id)` | Auto-computed, no service maintenance |
-| `warehouse_stock` | `stock_value` | `qty * avg_cost` | Always-current inventory valuation |
+| Table | Column | Expression | Status |
+|-------|--------|-----------|--------|
+| `sales_invoices` | `due_amount` | `total_amount - paid_amount` | ✅ DONE — Phase 1C-12 |
+| `sales_challan_items` | `cogs_amount` | `ROUND(qty * issue_rate, 2)` | ✅ DONE — Phase 1C-12 |
+| `warehouse_stock` | `stock_value` | `ROUND(qty * avg_cost, 2)` | ✅ DONE — Phase 1C-12 (new column) |
+| `sales_challans` | `issue_cost` | — | ❌ NOT POSSIBLE — PostgreSQL forbids subqueries in GENERATED expressions; cross-table aggregate |
+| `sales_returns` | `cogs_amount` | `(SELECT SUM(qty * original_cost) FROM sales_return_items ...)` | ❌ NOT POSSIBLE — same cross-table subquery restriction |
 
 **Why this matters for long-term**: GENERATED columns are **always correct** — no service can forget to update them, no bug can make them stale. This eliminates an entire class of data inconsistency bugs.
 
@@ -1138,7 +1139,7 @@ LIMIT 30;
 
 | # | Task | Priority | Effort | Type |
 |---|------|----------|--------|------|
-| 12 | Add GENERATED columns for due_amount, issue_cost, cogs_amount, stock_value | High | 2 days | Database |
+| 12 | ~~Add GENERATED columns for due_amount, issue_cost, cogs_amount, stock_value~~ | ✅ DONE | Database | 2025-01-20 — 3 GENERATED columns added: due_amount (sales_invoices = total_amount - paid_amount), cogs_amount (sales_challan_items = qty × issue_rate), stock_value (warehouse_stock = qty × avg_cost, new column). issue_cost on sales_challans CANNOT be GENERATED (PostgreSQL forbids subqueries in GENERATED expressions — cross-table aggregate). All 6 due_amount manual-write sites refactored to only update paid_amount/total_amount; 4 cogs_amount insert sites cleaned; 4 stock_value DB::raw() queries simplified to use column. Models updated: due_amount & cogs_amount removed from $fillable, stock_value cast added. Partial index on stock_value for non-zero rows. |
 | 13 | Add partial indexes (open invoices, unpaid, pending returns, active ledger) | High | 1 day | Database |
 | 14 | Add covering indexes (INCLUDE) for high-frequency queries | High | 1 day | Database |
 | 15 | Add BRIN indexes for time-series tables | High | 0.5 day | Database |

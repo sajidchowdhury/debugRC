@@ -77,7 +77,7 @@ class SalesInvoice extends Model
     protected $fillable = [
         'invoice_code', 'invoice_date', 'customer_id', 'salesman_id', 'sales_person',
         'branch_id', 'sub_total', 'discount_amount', 'transport_cost', 'pre_challan_transport', 'total_amount', 'pre_challan_total',
-        'paid_amount', 'due_amount', 'payment_mode', 'status',
+        'paid_amount', 'payment_mode', 'status',
         'is_godown_prepared', 'godown_prepared_at',
         'is_challan_issued', 'challan_issued_at',
         'journal_entry_id', 'cogs_journal_entry_id',
@@ -92,7 +92,7 @@ class SalesInvoice extends Model
         'transport_cost' => 'decimal:2',
         'total_amount' => 'decimal:2',
         'paid_amount' => 'decimal:2',
-        'due_amount' => 'decimal:2',
+        'due_amount' => 'decimal:2', // GENERATED: total_amount - paid_amount
         'is_godown_prepared' => 'boolean',
         'is_challan_issued' => 'boolean',
         'is_reversed' => 'boolean',

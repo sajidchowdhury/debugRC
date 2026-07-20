@@ -194,7 +194,7 @@ SQL)->balance;
         // Physical stock valuation.
         $stockValue = (float) DB::table('warehouse_stock')
             ->where('qty', '>', 0)
-            ->sum(DB::raw('qty * avg_cost'));
+            ->sum('stock_value');
 
         $drift = abs($glInventory - $stockValue);
 

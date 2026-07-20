@@ -210,7 +210,7 @@ class SalesChallanService
                     'warehouse_id' => $warehouseId,
                     'qty' => $qty,
                     'issue_rate' => $avgCost,
-                    'cogs_amount' => round($qty * $avgCost, 2),
+                    // cogs_amount is GENERATED: qty * issue_rate (auto-computed by PostgreSQL)
                     'created_at' => now(),
                 ]);
 
@@ -257,14 +257,13 @@ class SalesChallanService
                         'pre_challan_total' => (float) $invoice->total_amount,
                     ]);
 
-                // Update invoice transport_cost + total_amount + due_amount.
+                // Update invoice transport_cost + total_amount. due_amount is GENERATED — auto-updated by PostgreSQL.
                 $newTotal = (float) $invoice->sub_total - (float) $invoice->discount_amount + $newTransport;
                 DB::table('sales_invoices')
                     ->where('id', $invoiceId)
                     ->update([
                         'transport_cost' => round($newTransport, 2),
                         'total_amount' => round($newTotal, 2),
-                        'due_amount' => round($newTotal - (float) $invoice->paid_amount, 2),
                     ]);
 
                 // Post GL adjustment JE FIRST (Dr/Cr AR + Revenue, swapped by sign) to get journal_entry_id.
@@ -403,12 +402,12 @@ class SalesChallanService
 
             if ($invoiceRow && $invoiceRow->pre_challan_transport !== null) {
                 $restoredTotal = (float) $invoiceRow->pre_challan_total;
+                // due_amount is GENERATED — auto-updated by PostgreSQL when total_amount changes
                 DB::table('sales_invoices')
                     ->where('id', $challan->sales_invoice_id)
                     ->update([
                         'transport_cost' => (float) $invoiceRow->pre_challan_transport,
                         'total_amount' => $restoredTotal,
-                        'due_amount' => round($restoredTotal - (float) $invoiceRow->paid_amount, 2),
                         'pre_challan_transport' => null,
                         'pre_challan_total' => null,
                     ]);

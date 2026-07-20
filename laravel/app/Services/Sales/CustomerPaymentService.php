@@ -253,20 +253,20 @@ class CustomerPaymentService
             foreach ($allocations as $allocation) {
                 if ($transactionType === 'payment') {
                     // Refund allocation was a debit to paid_amount — reverse it (add back).
+                    // due_amount is GENERATED (total_amount - paid_amount) — auto-updated by PostgreSQL
                     DB::table('sales_invoices')
                         ->where('id', $allocation->invoice_id)
                         ->update([
                             'paid_amount' => DB::raw('paid_amount + ' . (float) $allocation->allocated_amount),
-                            'due_amount' => DB::raw('GREATEST(0, due_amount - ' . (float) $allocation->allocated_amount . ')'),
                             'updated_at' => now(),
                         ]);
                 } else {
                     // Normal allocation was a credit to paid_amount — reverse it (subtract).
+                    // due_amount is GENERATED (total_amount - paid_amount) — auto-updated by PostgreSQL
                     DB::table('sales_invoices')
                         ->where('id', $allocation->invoice_id)
                         ->update([
                             'paid_amount' => DB::raw('GREATEST(0, paid_amount - ' . (float) $allocation->allocated_amount . ')'),
-                            'due_amount' => DB::raw('due_amount + ' . (float) $allocation->allocated_amount),
                             'updated_at' => now(),
                         ]);
                 }
@@ -623,11 +623,11 @@ class CustomerPaymentService
                 'created_at' => now(),
             ]);
 
+            // due_amount is GENERATED (total_amount - paid_amount) — auto-updated by PostgreSQL
             DB::table('sales_invoices')
                 ->where('id', $invoiceId)
                 ->update([
                     'paid_amount' => DB::raw('GREATEST(0, paid_amount - ' . $amount . ')'),
-                    'due_amount' => DB::raw('due_amount + ' . $amount),
                     'updated_at' => now(),
                 ]);
         } else {
@@ -653,12 +653,11 @@ class CustomerPaymentService
                 'created_at' => now(),
             ]);
 
-            // Update invoice paid_amount + due_amount.
+            // Update invoice paid_amount. due_amount is GENERATED — auto-updated by PostgreSQL.
             DB::table('sales_invoices')
                 ->where('id', $invoiceId)
                 ->update([
                     'paid_amount' => DB::raw('paid_amount + ' . $amount),
-                    'due_amount' => DB::raw('GREATEST(0, due_amount - ' . $amount . ')'),
                     'updated_at' => now(),
                 ]);
         }
