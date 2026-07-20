@@ -1,5 +1,30 @@
 
 ---
+Task ID: 27
+Agent: Main Agent
+Task: Implement pg_cron for stale draft cleanup + materialized view refresh (Task 21)
+
+Work Log:
+- Checked existing state: pg_cron was only documented as "planned" in Section 7.14, not implemented
+- Created migration 2025_01_20_000009_add_pg_cron_scheduled_jobs.php with:
+  - CREATE EXTENSION pg_cron (with graceful fallback if unavailable)
+  - cancel_stale_sales_drafts() SQL function: pure-SQL stale draft cleanup (mirrors Artisan command)
+  - purge_old_notifications() SQL function: delete read notifications >90 days
+  - vacuum_analyze_high_write_tables() SQL function: ANALYZE 17 high-write tables
+  - 5 scheduled pg_cron jobs: stale drafts (daily 02:00), MV refresh (5 min), RB checks (hourly), notification purge (03:00), analyze (04:00)
+  - v_pg_cron_jobs monitoring view with last run status + duration
+- Updated 07_views_triggers_constraints.sql with PG_CRON section
+- Updated sales-module-documentation.md: Section 7.14 planned → ✅ Implemented, Section 5.6 expanded, Task 21 marked Done
+- Updated schema_mapping.md: Section 3.16 added with pg_cron reference tables
+- Committed (05e054b + 540f82f) and pushed to GitHub
+
+Stage Summary:
+- pg_cron fully implemented with 3 SQL functions + 5 scheduled jobs + monitoring view
+- Graceful fallback: if pg_cron extension unavailable, Laravel scheduler handles same jobs
+- Dual-scheduler approach: pg_cron (primary) + Laravel scheduler (fallback)
+- Task 21 marked ✅ Done
+
+---
 Task ID: 26
 Agent: Main Agent
 Task: Update docs/sales-module-documentation.md, commit, and push to GitHub
