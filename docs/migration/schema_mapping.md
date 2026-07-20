@@ -216,6 +216,35 @@ Note: `ledgers.parent_id` self-FK is **deferred to Phase 3** because legacy data
 
 ---
 
+## 3.8 Partial Indexes for Business Queries (Phase 20)
+
+PostgreSQL partial indexes (WHERE-clause indexes) only index rows matching a predicate,
+producing much smaller indexes and faster scans for the "active subset" queries the ERP
+runs on every page load. Migration `2025_01_20_000001_add_partial_indexes_business_queries.php`
+and `07_views_triggers_constraints.sql` both define these indexes.
+
+| Category | Table | Index Name | Columns | WHERE Predicate | Use Case |
+|---|---|---|---|---|---|
+| Open Invoices | `sales_invoices` | `idx_si_open_invoice` | `(customer_id, due_amount, invoice_date)` | `status = 'confirmed' AND is_reversed = false AND due_amount > 0` | AR aging, collections dashboard |
+| Open Invoices | `sales_invoices` | `idx_si_open_by_branch` | `(branch_id, invoice_date)` | `status = 'confirmed' AND is_reversed = false AND due_amount > 0` | Branch dashboard, call-it-a-day |
+| Unpaid Payments | `customer_payments` | `idx_cp_active` | `(customer_id, payment_date)` | `is_reversed = false` | AR payment history |
+| Unpaid Payments | `supplier_payments` | `idx_sp_active` | `(supplier_id, payment_date)` | `is_reversed = false` | AP payment history |
+| Unpaid Payments | `customer_payments` | `idx_cp_active_by_branch` | `(branch_id, payment_date)` | `is_reversed = false` | Daily collection report |
+| Unpaid Payments | `supplier_payments` | `idx_sp_active_by_branch` | `(branch_id, payment_date)` | `is_reversed = false` | Daily payment report |
+| Pending Returns | `sales_returns` | `idx_sr_pending` | `(branch_id, return_date)` | `status = 'created' AND is_reversed = false` | Returns awaiting confirmation |
+| Pending Returns | `purchase_returns` | `idx_prtn_pending` | `(supplier_id, branch_id)` | `is_reversed = false` | Active purchase returns |
+| Active Ledger | `customer_ledger` | `idx_cl_outstanding` | `(customer_id, transaction_date, balance)` | `balance > 0` | AR outstanding rows |
+| Active Ledger | `supplier_ledger` | `idx_sl_outstanding` | `(supplier_id, transaction_date, balance)` | `balance > 0` | AP outstanding rows |
+| Active Ledger | `branch_ledger` | `idx_bl_unsettled` | `(from_branch_id, to_branch_id, transaction_date)` | `is_settled = false` | Unsettled intercompany |
+| Active Ledger | `journal_entries` | `idx_je_active` | `(entry_date, branch_id, reference_type)` | `is_reversed = false` | GL reports, trial balance |
+| Active Ledger | `ledgers` | `idx_ledgers_active_by_type` | `(account_type, ledger_code)` | `is_active = true` | Chart of accounts filter |
+
+**Note:** Master-data partial indexes (`idx_branches_active`, `idx_products_active`, etc.)
+were added earlier in migration `2025_01_14_000001_add_performance_indexes.php` and are
+documented in that migration's comments.
+
+---
+
 ## 4. PHP Code SQL Compatibility (Phase 2.4)
 
 All production PHP code (core/, app/models/, app/helpers/, app/services/, app/controllers/) has been audited and fixed for PostgreSQL compatibility:

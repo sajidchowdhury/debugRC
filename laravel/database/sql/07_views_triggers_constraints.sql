@@ -124,3 +124,65 @@ CREATE INDEX IF NOT EXISTS idx_cl_customer_branch ON customer_ledger(customer_id
 CREATE INDEX IF NOT EXISTS idx_sl_supplier_branch ON supplier_ledger(supplier_id, branch_id);
 CREATE INDEX IF NOT EXISTS idx_je_date_branch ON journal_entries(entry_date, branch_id);
 CREATE INDEX IF NOT EXISTS idx_jl_ledger_entry ON journal_lines(ledger_id, journal_entry_id);
+
+-- ===================== PARTIAL INDEXES FOR BUSINESS QUERIES =====================
+-- PostgreSQL partial indexes (WHERE clause) index only the rows matching the
+-- predicate, producing much smaller indexes and faster scans for the common
+-- "active subset" queries the ERP runs on every page load.
+-- Mirrors migration 2025_01_20_000001_add_partial_indexes_business_queries.php.
+
+-- 1. OPEN INVOICES — confirmed sales with outstanding balance (AR aging, collections)
+CREATE INDEX IF NOT EXISTS idx_si_open_invoice
+    ON sales_invoices (customer_id, due_amount, invoice_date)
+    WHERE status = 'confirmed' AND is_reversed = false AND due_amount > 0;
+
+CREATE INDEX IF NOT EXISTS idx_si_open_by_branch
+    ON sales_invoices (branch_id, invoice_date)
+    WHERE status = 'confirmed' AND is_reversed = false AND due_amount > 0;
+
+-- 2. UNPAID / ACTIVE PAYMENTS — non-reversed payments (AR/AP dashboards)
+CREATE INDEX IF NOT EXISTS idx_cp_active
+    ON customer_payments (customer_id, payment_date)
+    WHERE is_reversed = false;
+
+CREATE INDEX IF NOT EXISTS idx_sp_active
+    ON supplier_payments (supplier_id, payment_date)
+    WHERE is_reversed = false;
+
+CREATE INDEX IF NOT EXISTS idx_cp_active_by_branch
+    ON customer_payments (branch_id, payment_date)
+    WHERE is_reversed = false;
+
+CREATE INDEX IF NOT EXISTS idx_sp_active_by_branch
+    ON supplier_payments (branch_id, payment_date)
+    WHERE is_reversed = false;
+
+-- 3. PENDING RETURNS — awaiting confirmation / processing
+CREATE INDEX IF NOT EXISTS idx_sr_pending
+    ON sales_returns (branch_id, return_date)
+    WHERE status = 'created' AND is_reversed = false;
+
+CREATE INDEX IF NOT EXISTS idx_prtn_pending
+    ON purchase_returns (supplier_id, branch_id)
+    WHERE is_reversed = false;
+
+-- 4. ACTIVE LEDGER — open sub-ledger rows & live GL entries
+CREATE INDEX IF NOT EXISTS idx_cl_outstanding
+    ON customer_ledger (customer_id, transaction_date, balance)
+    WHERE balance > 0;
+
+CREATE INDEX IF NOT EXISTS idx_sl_outstanding
+    ON supplier_ledger (supplier_id, transaction_date, balance)
+    WHERE balance > 0;
+
+CREATE INDEX IF NOT EXISTS idx_bl_unsettled
+    ON branch_ledger (from_branch_id, to_branch_id, transaction_date)
+    WHERE is_settled = false;
+
+CREATE INDEX IF NOT EXISTS idx_je_active
+    ON journal_entries (entry_date, branch_id, reference_type)
+    WHERE is_reversed = false;
+
+CREATE INDEX IF NOT EXISTS idx_ledgers_active_by_type
+    ON ledgers (account_type, ledger_code)
+    WHERE is_active = true;
