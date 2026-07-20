@@ -101,3 +101,23 @@ Stage Summary:
 - pg_partman automates future partition creation (6 months premade)
 - BRIN indexes removed (redundant with partition boundaries)
 - Documentation version bumped to 1.5
+---
+Task ID: 35
+Agent: Main Agent
+Task: Configure deferred FK constraints
+
+Work Log:
+- Explored all 151 declarative FK constraints + 7 trigger-based FKs across 6 SQL files + migrations
+- Identified 3 categories: INITIALLY DEFERRED (~80 FKs), INITIALLY IMMEDIATE (~60 FKs), NOT DEFERRABLE (~20 CASCADE FKs)
+- Created migration 2025_01_21_000005 using dynamic pg_constraint lookup:
+  - Phase 1: DEFERRABLE INITIALLY DEFERRED for multi-table atomic ops (JE + business record)
+  - Phase 2: DEFERRABLE INITIALLY IMMEDIATE for simple lookups (products, warehouses)
+  - Phase 3: NOT DEFERRABLE (documented only) for ON DELETE CASCADE FKs
+- Updated SQL schema file headers (03_stock.sql, 04_sales.sql, 05_purchase.sql) with DEFERRABLE notes
+- Updated sales-module-documentation.md: v1.6, Task 35 ✅, §7.13 revised, Section 13 (9 subsections)
+
+Stage Summary:
+- ~140 FKs configured DEFERRABLE (no service code changes needed)
+- ~20 CASCADE FKs remain NOT DEFERRABLE (must fire immediately)
+- Metadata-only migration (no data movement, fast execution)
+- Documentation version bumped to 1.6

@@ -1,6 +1,6 @@
 # RC-ERP Sales Module — Complete Documentation & Gap Analysis
 
-> **Document Version**: 1.5 — Updated with table partitioning for sales_invoices + stock_transactions (Task 34 ✅)
+> **Document Version**: 1.6 — Updated with deferred FK constraints (Task 35 ✅)
 > **Date**: 2025-07-21  
 > **Scope**: Legacy CodeIgniter/MySQL → Laravel 12/PostgreSQL migration  
 > **Focus**: Sales Entry, Challan/Godown Copy, Invoice, Payment Receive, Sales Return  
@@ -34,6 +34,7 @@
 10. [CTE-Based Complex Queries — Implementation](#10-cte-based-complex-queries--implementation-task-32-)
 11. [EXCLUDE Constraint — invoice_payment_allocations (Task 33)](#11-exclude-constraint--invoice_payment_allocations-task-33)
 12. [Table Partitioning — sales_invoices + stock_transactions (Task 34)](#12-table-partitioning--sales_invoices--stock_transactions-task-34)
+13. [Deferred FK Constraints — Configuration (Task 35)](#13-deferred-fk-constraints--configuration-task-35)
 
 ---
 
@@ -1158,15 +1159,26 @@ The DB-level trigger closes this window entirely.
 
 ### 7.13 Deferred Constraints — For Multi-Table Atomic Operations
 
+> **Status**: ✅ IMPLEMENTED (Task 35, migration `2025_01_21_000005`)
+
 Currently, some operations must INSERT rows in specific order due to FK constraints. Deferring constraints allows any order within a transaction:
 
 ```sql
+-- Example: Make FK deferrable (checks at COMMIT time)
 ALTER TABLE sales_invoice_items
-  ALTER CONSTRAINT sales_invoice_items_invoice_id_foreign
+  ALTER CONSTRAINT sales_invoice_items_product_id_fkey
   DEFERRABLE INITIALLY DEFERRED;
 ```
 
-**Why this matters for long-term**: Deferred constraints let PostgreSQL validate all FKs at COMMIT time rather than at each INSERT. This simplifies service code (no need to worry about insertion order) and enables batch operations.
+**Implementation categorization:**
+
+| Category | INITIALLY | When to use | Examples |
+|----------|-----------|-------------|----------|
+| **Multi-table atomic** | DEFERRED | Parent created in same transaction as child | FKs → journal_entries, customers, branches |
+| **Simple lookups** | IMMEDIATE | Parent always pre-exists | FKs → products, warehouses, employees |
+| **CASCADE** | NOT DEFERRABLE | Must fire immediately for cascade | FKs → parent with ON DELETE CASCADE |
+
+**Why this matters for long-term**: Deferred constraints let PostgreSQL validate all FKs at COMMIT time rather than at each INSERT. This simplifies service code (no need to worry about insertion order) and enables batch operations. See Section 13 for the complete implementation details.
 
 ### 7.14 pg_cron — Replace Laravel Scheduler for DB-Level Jobs
 
@@ -1290,7 +1302,7 @@ LIMIT 30;
 | 32 | ~~Implement CTE-based complex queries (today's summary, AR aging)~~ ✅ DONE | Medium | 2 days | Business Logic |
 | 33 | ~~Add EXCLUDE constraint for invoice_payment_allocations~~ ✅ DONE | Low | 1 day | Database |
 | 34 | ~~Set up table partitioning for sales_invoices + stock_transactions~~ ✅ DONE | Low | 2 days | Database |
-| 35 | Configure deferred FK constraints | Low | 1 day | Database |
+| 35 | ~~Configure deferred FK constraints~~ ✅ DONE | Low | 1 day | Database |
 | 36 | Implement Sales API write endpoints (mobile) | Medium | 5 days | Business Logic + API |
 | 37 | Implement salesman commission tracking | Low | 3 days | Business Logic |
 
@@ -2247,6 +2259,181 @@ Rolling back partitioning is significantly more complex than implementing it. Th
 | `app/Models/SalesInvoice.php` | Updated — docblock with partitioning documentation |
 | `app/Models/StockTransaction.php` | Updated — docblock with partitioning documentation |
 | `docs/sales-module-documentation.md` | Updated — Task 34 ✅, Section 12, §7.11 revised |
+
+---
+
+## 13. Deferred FK Constraints — Configuration (Task 35)
+
+### 13.1 Overview
+
+Task 35 configures all declarative foreign key constraints in the ERP system as `DEFERRABLE`, enabling PostgreSQL to validate FK relationships at COMMIT time rather than at each individual INSERT/UPDATE statement. This eliminates the requirement for service code to INSERT rows in parent-before-child order within transactions, simplifies batch operations, and enables bulk data imports without disabling constraints.
+
+Prior to this task, all 151 declarative FK constraints were `IMMEDIATE NOT DEFERRABLE` (the PostgreSQL default). This meant that every INSERT statement referencing a parent row required the parent to already exist at the moment of INSERT, even within the same transaction. Service code like `SalesInvoiceService::finalize()` had to carefully orchestrate the order: first insert the journal entry, then the invoice, then the invoice items — any deviation caused a constraint violation and transaction rollback.
+
+### 13.2 DEFERRABLE Constraint Modes
+
+PostgreSQL supports three modes for FK constraint checking:
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| **NOT DEFERRABLE** | Checks immediately after each INSERT/UPDATE. Cannot be deferred per-transaction. | ON DELETE CASCADE FKs that must fire immediately |
+| **DEFERRABLE INITIALLY IMMEDIATE** | Checks after each statement by default. Can be deferred per-transaction with `SET CONSTRAINTS ALL DEFERRED`. | Simple lookup FKs (parent always pre-exists) |
+| **DEFERRABLE INITIALLY DEFERRED** | Checks at COMMIT time by default. Can be made immediate per-transaction with `SET CONSTRAINTS ALL IMMEDIATE`. | Multi-table atomic operations (parent created in same transaction) |
+
+### 13.3 Categorization Strategy
+
+The 151 declarative FKs are divided into three categories:
+
+#### Category 1: DEFERRABLE INITIALLY DEFERRED (≈80 FKs)
+
+These FKs reference parent records that are frequently created in the **same transaction** as the child record. The most common pattern is:
+
+1. Service creates `journal_entry` (parent)
+2. Service creates business record (invoice, payment, challan, etc.) referencing the journal entry
+3. Service creates sub-ledger entries referencing the same journal entry
+
+With `INITIALLY DEFERRED`, steps 2 and 3 can execute in any order — the FK check is deferred until COMMIT, by which point the journal entry exists.
+
+**Key tables with INITIALLY DEFERRED FKs:**
+
+| Table | FK Columns | Parent Table | Why DEFERRED |
+|-------|-----------|--------------|-------------|
+| sales_invoices | journal_entry_id, cogs_journal_entry_id | journal_entries | JE + invoice created together |
+| sales_invoices | customer_id, branch_id | customers, branches | Created in same transaction during import |
+| sales_challans | journal_entry_id, adjustment_journal_entry_id | journal_entries | JE + challan created together |
+| sales_returns | journal_entry_id, cogs_journal_entry_id | journal_entries | JE + return created together |
+| customer_payments | journal_entry_id, intercompany_journal_entry_id | journal_entries | JE + payment created together |
+| supplier_payments | journal_entry_id | journal_entries | JE + payment created together |
+| money_transfers | journal_entry_id, intercompany_journal_entry_id | journal_entries | JE + transfer created together |
+| other_incomes | journal_entry_id | journal_entries | JE + income created together |
+| other_expenses | journal_entry_id | journal_entries | JE + expense created together |
+| employee_transactions | journal_entry_id | journal_entries | JE + transaction created together |
+| journal_lines | journal_entry_id | journal_entries | Lines + entry created together |
+| customer_ledger | journal_entry_id | journal_entries | Ledger + entry created together |
+| supplier_ledger | journal_entry_id | journal_entries | Ledger + entry created together |
+| employee_ledger | journal_entry_id | journal_entries | Ledger + entry created together |
+| branch_ledger | journal_entry_id | journal_entries | Ledger + entry created together |
+| cash_ledger | journal_entry_id | journal_entries | Ledger + entry created together |
+| manual_journals | journal_entry_id | journal_entries | Manual journal + entry together |
+| purchase_receives | journal_entry_id, supplier_id, branch_id, warehouse_id | journal_entries, suppliers, branches, warehouses | JE + receive together |
+| purchase_returns | journal_entry_id, supplier_id, branch_id, warehouse_id | journal_entries, suppliers, branches, warehouses | JE + return together |
+| stock_adjustments | journal_entry_id, branch_id, warehouse_id | journal_entries, branches, warehouses | JE + adjustment together |
+| stock_take_sessions | journal_entry_id, branch_id | journal_entries, branches | JE + session together |
+| warehouse_transfers | journal_entry_id, journal_entry_id_debtor, from/to branches, from/to warehouses | journal_entries, branches, warehouses | JE + transfer together |
+| damage_invoices | journal_entry_id, branch_id, warehouse_id | journal_entries, branches, warehouses | JE + damage together |
+| branch_demands | journal_entry_id, from/to branches | journal_entries, branches | JE + demand together |
+| stock_transactions | warehouse_id, product_id | warehouses, products | Partitioned table, DEFERRED for import flexibility |
+
+#### Category 2: DEFERRABLE INITIALLY IMMEDIATE (≈60 FKs)
+
+These FKs reference stable parent records that **always exist before the child is created** (products, warehouses, employees, users, categories). They behave identically to NOT DEFERRABLE by default but can be deferred explicitly for bulk imports:
+
+```sql
+-- Example: During bulk data import, defer all constraints
+SET CONSTRAINTS ALL DEFERRED;
+-- INSERT rows in any order
+COMMIT; -- All FKs checked here
+```
+
+**Key tables with INITIALLY IMMEDIATE FKs:**
+
+| Table | FK Columns | Parent Table | Why IMMEDIATE |
+|-------|-----------|--------------|-------------|
+| products | category_id, group_id | product_categories, product_groups | Categories always pre-exist |
+| warehouse_stock | warehouse_id, product_id | warehouses, products | Always pre-exist |
+| sales_invoice_items | product_id, warehouse_id | products, warehouses | Always pre-exist |
+| sales_invoice_dispatchers | employee_id | employees | Always pre-exist |
+| sales_invoice_dispatches | product_id | products | Always pre-exist |
+| sales_return_items | product_id, warehouse_id | products, warehouses | Always pre-exist |
+| customers | branch_id | branches | Always pre-exist |
+| suppliers | branch_id | branches | Always pre-exist |
+| purchase_order_items | product_id | products | Always pre-exist |
+| invoice_payment_allocations | payment_id | customer_payments | Always pre-exist |
+
+#### Category 3: NOT DEFERRABLE (≈20 FKs — ON DELETE CASCADE)
+
+ON DELETE CASCADE FKs need to fire immediately for correct cascade behavior. If a parent is deleted, the cascade must propagate at the moment of DELETE, not at COMMIT time. These remain NOT DEFERRABLE:
+
+| Table | FK Column | Parent | ON DELETE |
+|-------|-----------|--------|-----------|
+| sales_return_items | sales_return_id | sales_returns | CASCADE |
+| sales_challan_items | sales_challan_id | sales_challans | CASCADE |
+| stock_adjustment_items | stock_adjustment_id | stock_adjustments | CASCADE |
+| stock_take_warehouses | stock_take_session_id | stock_take_sessions | CASCADE |
+| stock_take_items | stock_take_session_id | stock_take_sessions | CASCADE |
+| warehouse_transfer_items | warehouse_transfer_id | warehouse_transfers | CASCADE |
+| damage_invoice_items | damage_invoice_id | damage_invoices | CASCADE |
+| branch_demand_items | branch_demand_id | branch_demands | CASCADE |
+| purchase_order_items | purchase_order_id | purchase_orders | CASCADE |
+| purchase_receive_items | purchase_receive_id | purchase_receives | CASCADE |
+| purchase_return_items | purchase_return_id | purchase_returns | CASCADE |
+| sales_draft_carts | user_id | users | CASCADE |
+
+**Exception**: `journal_lines.journal_entry_id` (CASCADE) and `journal_posting_logs.journal_entry_id` (CASCADE) are made DEFERRABLE because journal entries and their lines are always created together in a single transaction, and the CASCADE only fires on DELETE (which is rare for journal entries).
+
+### 13.4 Partitioned Table FKs
+
+FKs from partitioned tables (`sales_invoices`, `stock_transactions`) to regular tables are declarative and are configured DEFERRABLE. FKs from regular tables TO partitioned tables are trigger-based (from Task 34) and remain `DEFERRABLE INITIALLY IMMEDIATE` — these triggers already support per-transaction deferral via `SET CONSTRAINTS`.
+
+### 13.5 Per-Transaction Control
+
+The real power of DEFERRABLE constraints is per-transaction control:
+
+```sql
+-- Normal operation: constraints check immediately (default behavior)
+BEGIN;
+INSERT INTO sales_invoices (...) VALUES (...);  -- FK to journal_entries checked immediately
+-- If journal_entry doesn't exist yet → ERROR
+ROLLBACK;
+
+-- Deferred operation: constraints check at COMMIT
+BEGIN;
+SET CONSTRAINTS ALL DEFERRED;
+INSERT INTO sales_invoices (..., journal_entry_id, ...) VALUES (..., NULL, ...);
+INSERT INTO journal_entries (...) VALUES (...) RETURNING id;  -- Returns id=42
+UPDATE sales_invoices SET journal_entry_id = 42 WHERE id = ...;
+COMMIT;  -- All deferred FKs checked here → PASS
+```
+
+For `DEFERRABLE INITIALLY DEFERRED` FKs, the `SET CONSTRAINTS ALL DEFERRED` is redundant (they already defer), but it doesn't hurt. For `DEFERRABLE INITIALLY IMMEDIATE` FKs, the explicit `SET CONSTRAINTS` is required to switch them to deferred mode for that transaction.
+
+### 13.6 Application Impact
+
+**No service code changes required** — existing code continues to work because:
+
+1. `INITIALLY DEFERRED` FKs that currently INSERT in parent-before-child order will simply have their FK checks pass at COMMIT instead of at INSERT time. The same order still works; the check is just delayed.
+2. `INITIALLY IMMEDIATE` FKs behave identically to NOT DEFERRABLE by default.
+3. The `SET CONSTRAINTS` command is only needed when explicitly changing the deferral mode for a specific transaction.
+
+**Future benefit**: New service code can INSERT in any order within a transaction, removing the need for careful orchestration. For example, a future `BatchPaymentService` could INSERT all payments first, then all journal entries, then all allocations — without worrying about FK order.
+
+### 13.7 Migration Details
+
+**File**: `database/migrations/2025_01_21_000005_configure_deferred_fk_constraints.php`
+
+The migration uses a dynamic approach:
+
+1. Queries `pg_constraint` system catalog to find FK constraint names (many are auto-generated)
+2. Uses `ALTER TABLE ... ALTER CONSTRAINT <name> DEFERRABLE INITIALLY {DEFERRED|IMMEDIATE}` for each FK
+3. This is a **metadata-only operation** — no data is copied or moved. PostgreSQL simply changes the constraint's deferrability property.
+
+The `down()` method reverses all changes by finding all DEFERRABLE FKs and making them NOT DEFERRABLE again.
+
+### 13.8 Performance Considerations
+
+- **No runtime overhead**: DEFERRABLE constraints have zero performance impact for `INITIALLY IMMEDIATE` FKs (they behave identically to NOT DEFERRABLE by default).
+- **Minimal overhead for INITIALLY DEFERRED**: PostgreSQL defers the check to COMMIT, which requires tracking pending FK checks in a list. This list is typically very short (a few entries per transaction) and the check is O(1) per entry.
+- **Lock consideration**: `ALTER CONSTRAINT` takes an ACCESS EXCLUSIVE lock briefly, but since this is a metadata-only change, the lock is held for milliseconds per constraint.
+
+### 13.9 Files Modified
+
+| File | Change |
+|------|--------|
+| `database/migrations/2025_01_21_000005_configure_deferred_fk_constraints.php` | **New** — migration configuring all FKs as DEFERRABLE |
+| `database/sql/03_stock.sql` | Updated — header comment noting DEFERRABLE FKs |
+| `database/sql/04_sales.sql` | Updated — header comment noting DEFERRABLE FKs |
+| `database/sql/05_purchase.sql` | Updated — header comment noting DEFERRABLE FKs |
+| `docs/sales-module-documentation.md` | Updated — Task 35 ✅, Section 13, §7.13 revised |
 
 ---
 

@@ -6,6 +6,15 @@
 -- Declarative FKs from child tables are replaced with trigger-based enforcement
 -- (fn_fk_si_check + fn_fk_si_cascade_delete) because PG 12-17 does not support
 -- FK references TO partitioned tables.
+--
+-- DEFERRABLE FKs (Task 35, migration 2025_01_21_000005):
+--   All declarative FKs in this file are configured DEFERRABLE:
+--   - INITIALLY DEFERRED: FKs referencing journal_entries, customers, branches
+--     (parent often created in same transaction)
+--   - INITIALLY IMMEDIATE: FKs referencing products, warehouses, employees
+--     (parent always pre-exists)
+--   The DEFERRABLE clause is applied via ALTER CONSTRAINT in the migration,
+--   not inline in CREATE TABLE, for backward compatibility.
 
 CREATE TABLE sales_invoices (
     id integer GENERATED ALWAYS AS IDENTITY,

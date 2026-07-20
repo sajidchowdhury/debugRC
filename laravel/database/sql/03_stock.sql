@@ -1,6 +1,13 @@
 -- ============================================================
 -- RC_ERP PostgreSQL Schema — Part 3: Stock / Inventory
 -- ============================================================
+--
+-- DEFERRABLE FKs (Task 35, migration 2025_01_21_000005):
+--   All declarative FKs in this file are configured DEFERRABLE:
+--   - INITIALLY DEFERRED: FKs referencing journal_entries, branches, warehouses,
+--     suppliers (parent often created in same transaction)
+--   - INITIALLY IMMEDIATE: FKs referencing products (parent always pre-exists)
+--   The DEFERRABLE clause is applied via ALTER CONSTRAINT in the migration.
 
 -- The inventory ledger — single source of truth for all stock movements.
 -- NOTE: stock_transactions is PARTITION BY RANGE (transaction_date) as of Task 34.

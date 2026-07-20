@@ -1,6 +1,12 @@
 -- ============================================================
 -- RC_ERP PostgreSQL Schema — Part 5: Purchase
 -- ============================================================
+--
+-- DEFERRABLE FKs (Task 35, migration 2025_01_21_000005):
+--   All declarative FKs in this file are configured DEFERRABLE:
+--   - INITIALLY DEFERRED: FKs referencing journal_entries, branches, warehouses,
+--     suppliers, purchase_orders, purchase_receives
+--   - INITIALLY IMMEDIATE: FKs referencing products
 
 CREATE TABLE purchase_orders (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
