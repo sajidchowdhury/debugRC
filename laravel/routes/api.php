@@ -4,6 +4,11 @@ use App\Http\Controllers\Api\ApiDocController;
 use App\Http\Controllers\Api\V1\BranchApiController;
 use App\Http\Controllers\Api\V1\DashboardApiController;
 use App\Http\Controllers\Api\V1\LookupApiController;
+use App\Http\Controllers\Api\V1\Sales\SalesCartApiController;
+use App\Http\Controllers\Api\V1\Sales\SalesInvoiceApiController;
+use App\Http\Controllers\Api\V1\Sales\SalesChallanApiController;
+use App\Http\Controllers\Api\V1\Sales\SalesReturnApiController;
+use App\Http\Controllers\Api\V1\Sales\CustomerPaymentApiController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -84,4 +89,98 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
         ->middleware('api.rate:120');
     Route::get('lookups/ledgers', [LookupApiController::class, 'ledgers'])
         ->middleware('api.rate:120');
+
+    // ======================================================================
+    // Phase 8 — Sales Module API (mobile write endpoints)
+    // ======================================================================
+    // Role requirements: salesman, manager, admin, or superadmin.
+    // Write endpoints: 30 req/min (transactional — stricter rate limit).
+    // Read endpoints:   60 req/min (list/show — moderate rate limit).
+    // ======================================================================
+
+    // ---------- Sales Cart — 30/60 req/min ----------
+    Route::get('sales/cart', [SalesCartApiController::class, 'show'])
+        ->middleware('api.rate:60');
+    Route::post('sales/cart', [SalesCartApiController::class, 'store'])
+        ->middleware('api.rate:30');
+    Route::put('sales/cart', [SalesCartApiController::class, 'update'])
+        ->middleware('api.rate:30');
+    Route::delete('sales/cart/{productId}', [SalesCartApiController::class, 'destroy'])
+        ->where('productId', '[0-9]+')
+        ->middleware('api.rate:30');
+    Route::post('sales/cart/clear', [SalesCartApiController::class, 'clear'])
+        ->middleware('api.rate:30');
+    Route::post('sales/cart/validate', [SalesCartApiController::class, 'validateCart'])
+        ->middleware('api.rate:30');
+    Route::post('sales/cart/soft-hold', [SalesCartApiController::class, 'softHold'])
+        ->middleware('api.rate:30');
+    Route::get('sales/cart/availability', [SalesCartApiController::class, 'availability'])
+        ->middleware('api.rate:60');
+
+    // ---------- Sales Invoices — 30/60 req/min ----------
+    Route::get('sales/invoices', [SalesInvoiceApiController::class, 'index'])
+        ->middleware('api.rate:60');
+    Route::get('sales/invoices/credit-check', [SalesInvoiceApiController::class, 'creditCheck'])
+        ->middleware('api.rate:60');
+    Route::post('sales/invoices/call-it-a-day', [SalesInvoiceApiController::class, 'callItADay'])
+        ->middleware('api.rate:30');
+    Route::get('sales/invoices/{id}', [SalesInvoiceApiController::class, 'show'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:60');
+    Route::post('sales/invoices', [SalesInvoiceApiController::class, 'store'])
+        ->middleware('api.rate:30');
+    Route::put('sales/invoices/{id}', [SalesInvoiceApiController::class, 'update'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:30');
+    Route::post('sales/invoices/{id}/cancel', [SalesInvoiceApiController::class, 'cancel'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:30');
+
+    // ---------- Sales Challans — 30/60 req/min ----------
+    Route::get('sales/challans', [SalesChallanApiController::class, 'index'])
+        ->middleware('api.rate:60');
+    Route::post('sales/challans/godown', [SalesChallanApiController::class, 'godown'])
+        ->middleware('api.rate:30');
+    Route::post('sales/challans/issue', [SalesChallanApiController::class, 'issue'])
+        ->middleware('api.rate:30');
+    Route::get('sales/challans/{id}', [SalesChallanApiController::class, 'show'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:60');
+    Route::post('sales/challans/{id}/cancel', [SalesChallanApiController::class, 'cancel'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:30');
+
+    // ---------- Sales Returns — 30/60 req/min ----------
+    Route::get('sales/returns', [SalesReturnApiController::class, 'index'])
+        ->middleware('api.rate:60');
+    Route::get('sales/returns/invoice-details', [SalesReturnApiController::class, 'invoiceDetails'])
+        ->middleware('api.rate:60');
+    Route::get('sales/returns/{id}', [SalesReturnApiController::class, 'show'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:60');
+    Route::post('sales/returns', [SalesReturnApiController::class, 'store'])
+        ->middleware('api.rate:30');
+    Route::post('sales/returns/{id}/confirm', [SalesReturnApiController::class, 'confirm'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:30');
+    Route::post('sales/returns/{id}/reverse', [SalesReturnApiController::class, 'reverse'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:30');
+
+    // ---------- Customer Payments — 30/60 req/min ----------
+    Route::get('sales/payments', [CustomerPaymentApiController::class, 'index'])
+        ->middleware('api.rate:60');
+    Route::get('sales/payments/outstanding-invoices', [CustomerPaymentApiController::class, 'outstandingInvoices'])
+        ->middleware('api.rate:60');
+    Route::get('sales/payments/{id}', [CustomerPaymentApiController::class, 'show'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:60');
+    Route::post('sales/payments', [CustomerPaymentApiController::class, 'store'])
+        ->middleware('api.rate:30');
+    Route::post('sales/payments/{id}/confirm', [CustomerPaymentApiController::class, 'confirm'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:30');
+    Route::post('sales/payments/{id}/cancel', [CustomerPaymentApiController::class, 'cancel'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:30');
 });

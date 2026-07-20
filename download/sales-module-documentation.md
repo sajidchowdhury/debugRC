@@ -1,6 +1,6 @@
 # RC-ERP Sales Module — Complete Documentation & Gap Analysis
 
-> **Document Version**: 1.6 — Updated with deferred FK constraints (Task 35 ✅)
+> **Document Version**: 1.7 — Updated with Sales API write endpoints (Task 36 ✅)
 > **Date**: 2025-07-21  
 > **Scope**: Legacy CodeIgniter/MySQL → Laravel 12/PostgreSQL migration  
 > **Focus**: Sales Entry, Challan/Godown Copy, Invoice, Payment Receive, Sales Return  
@@ -35,6 +35,7 @@
 11. [EXCLUDE Constraint — invoice_payment_allocations (Task 33)](#11-exclude-constraint--invoice_payment_allocations-task-33)
 12. [Table Partitioning — sales_invoices + stock_transactions (Task 34)](#12-table-partitioning--sales_invoices--stock_transactions-task-34)
 13. [Deferred FK Constraints — Configuration (Task 35)](#13-deferred-fk-constraints--configuration-task-35)
+14. [Sales API Write Endpoints — Mobile Integration (Task 36)](#14-sales-api-write-endpoints--mobile-integration-task-36)
 
 ---
 
@@ -767,7 +768,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 
 | # | Gap | Legacy Has | Laravel Status | Verified? |
 |---|-----|-----------|---------------|-----------|
-| G-12 | **Sales API write endpoints** | Full AJAX CRUD | Only read-only dashboard + lookups | ❌ Not implemented |
+| G-12 | **Sales API write endpoints** | Full AJAX CRUD | ✅ 5 API controllers + 7 Form Requests + 9 API Resources + 35 routes | ✅ DONE — See §14 |
 | G-13 | **Telegram/FCM notifications** | Full notification suite (5 event types) | Schema + UI placeholders exist (fcm_tokens table, telegram_user_id in user CRUD) but NO dispatch code | ⚠️ VERIFIED — No Telegram bot API calls, no FCM push service |
 | G-14 | **Sales guideline page** | Bengali/English user guide | ✅ IMPLEMENTED — `SalesGuideController::guide()`, `admin/sales/guide.blade.php`, route `admin/sales/guide` (all sales-module roles) | ✅ VERIFIED — Blade view migrated from legacy guide.php with Bengali/English content, search filter, sticky nav; reuses existing sales-guide.css + sales-guide.js |
 | G-15 | **Go-live checklist** | Manager sign-off checklist | ✅ IMPLEMENTED — `GoLiveChecklistController::index()`, `admin/sales/checklist.blade.php`, route `admin/sales/go-live-checklist` (accountant, warehouse_manager, manager, admin) | ✅ VERIFIED — Blade view migrated from legacy go_live_checklist.php with 9 Bengali/English checklist sections, interactive checkboxes, sign-off area; reuses sales-guide.css + sales-guide.js |
@@ -1303,7 +1304,7 @@ LIMIT 30;
 | 33 | ~~Add EXCLUDE constraint for invoice_payment_allocations~~ ✅ DONE | Low | 1 day | Database |
 | 34 | ~~Set up table partitioning for sales_invoices + stock_transactions~~ ✅ DONE | Low | 2 days | Database |
 | 35 | ~~Configure deferred FK constraints~~ ✅ DONE | Low | 1 day | Database |
-| 36 | Implement Sales API write endpoints (mobile) | Medium | 5 days | Business Logic + API |
+| 36 | ~~Implement Sales API write endpoints (mobile)~~ ✅ DONE | Medium | 5 days | Business Logic + API |
 | 37 | Implement salesman commission tracking | Low | 3 days | Business Logic |
 
 ### UI Guidelines (All Phases)
@@ -2486,7 +2487,7 @@ The `down()` method reverses all changes by finding all DEFERRABLE FKs and makin
 | Revenue Overview dashboard | ✅ Chart.js KPIs + filters | ⚠️ Basic report only | MEDIUM |
 | Sales Funnel dashboard | ✅ Pipeline stages, win rate | ❌ Not implemented | MEDIUM |
 | Customer Performance | ✅ CLV, churn, segments | ⚠️ Basic report only | MEDIUM |
-| Sales API (mobile) | ❌ No API | ⚠️ Read-only (dashboard + lookups) | MEDIUM |
+| Sales API (mobile) | ❌ No API | ✅ 5 controllers, 7 Form Requests, 9 Resources, 35 routes (write + read) | ✅ DONE |
 | Sales guideline page | ✅ Bengali/English | ✅ IMPLEMENTED — SalesGuideController + guide.blade.php | LOW |
 | Go-live checklist | ✅ Manager sign-off | ✅ IMPLEMENTED — GoLiveChecklistController + checklist.blade.php | LOW |
 | CSV export | ✅ Invoices + challans | ❌ Not implemented | LOW |
@@ -2541,6 +2542,304 @@ The `down()` method reverses all changes by finding all DEFERRABLE FKs and makin
 | `salary_expense` | Debit | Salary entries |
 | `finance_cost` | Debit | Finance charges, write-offs |
 | `retained_earnings` | Credit | Year-end close |
+
+---
+
+## 14. Sales API Write Endpoints — Mobile Integration (Task 36)
+
+### 14.1 Overview
+
+Task 36 implements full REST API write endpoints for the Sales module, enabling mobile applications and AI sidecars to perform all sales operations programmatically. Prior to this task, the API surface was read-only (dashboard + lookups). Now mobile clients can create invoices, issue challans, receive payments, process returns, and manage the sales cart — all through authenticated, rate-limited, validated JSON endpoints.
+
+The implementation reuses the existing service layer (`SalesInvoiceService`, `SalesChallanService`, `SalesReturnService`, `CustomerPaymentService`, `SalesCartService`) without modification. The API controllers are thin wrappers that validate input via Form Requests, delegate to services, and return shaped responses via API Resources. This architecture ensures that business rules, GL posting, stock movement, and branch isolation are enforced identically whether the request comes from the web UI or the mobile API.
+
+### 14.2 Architecture
+
+```
+Mobile Client → Bearer Token → ApiAuth Middleware → API Controller → Form Request (validation)
+                                                                              ↓
+                                                            Sales Service (business logic)
+                                                                              ↓
+                                                    DB Transaction (atomic: GL + stock + ledger)
+                                                                              ↓
+                                                            API Resource (JSON shaping) → Response
+```
+
+**Key architectural decisions:**
+
+1. **Thin controllers, fat services**: All business logic lives in the service layer. API controllers only handle HTTP concerns (validation, response shaping, error mapping). This means a bug fix in `SalesInvoiceService::finalizeFromCart()` automatically fixes both web and mobile paths.
+
+2. **Form Requests for input validation**: 7 dedicated Form Request classes provide type-safe, documented validation rules. They replace the inline `$request->validate()` pattern used in web controllers, making validation rules discoverable and reusable.
+
+3. **API Resources for output shaping**: 9 API Resource classes transform Eloquent models into mobile-optimized JSON. They exclude internal audit fields (reversed_by, etc.) and include only what the mobile client needs, keeping payloads small.
+
+4. **Idempotency for transactional endpoints**: The invoice finalize endpoint requires a client-generated UUID (`idempotency_token`). If the same token is seen within 5 minutes, the cached result is returned without creating a duplicate invoice. This prevents duplicates from network retries or double-taps on mobile.
+
+5. **Auto-confirm pattern for payments**: The `auto_confirm` flag on the payment creation endpoint allows mobile clients to create and confirm a payment in a single request. This is the common pattern for cash payments where the draft state adds no value. For bank payments requiring verification, the client can create a draft and confirm separately.
+
+6. **Defense-in-depth branch isolation**: The `SalesAccess` service is called in every API controller method, ensuring branch isolation even when the service is invoked from a non-HTTP context (Artisan command, test, future webhook).
+
+### 14.3 File Inventory
+
+| Type | File | Purpose |
+|------|------|---------|
+| **Controller** | `app/Http/Controllers/Api/V1/Sales/SalesCartApiController.php` | Cart CRUD + validation + availability |
+| **Controller** | `app/Http/Controllers/Api/V1/Sales/SalesInvoiceApiController.php` | Invoice CRUD + finalize + cancel + call-it-a-day + credit-check |
+| **Controller** | `app/Http/Controllers/Api/V1/Sales/SalesChallanApiController.php` | Godown prep + challan issue + cancel |
+| **Controller** | `app/Http/Controllers/Api/V1/Sales/SalesReturnApiController.php` | Return create + confirm + reverse + invoice-details |
+| **Controller** | `app/Http/Controllers/Api/V1/Sales/CustomerPaymentApiController.php` | Payment create + confirm + cancel + outstanding-invoices |
+| **Form Request** | `app/Http/Requests/Api/V1/Sales/StoreCartRequest.php` | Add item to cart |
+| **Form Request** | `app/Http/Requests/Api/V1/Sales/UpdateCartRequest.php` | Update cart item |
+| **Form Request** | `app/Http/Requests/Api/V1/Sales/FinalizeInvoiceRequest.php` | Finalize cart → invoice |
+| **Form Request** | `app/Http/Requests/Api/V1/Sales/PrepareGodownRequest.php` | Prepare godown (warehouse assignments) |
+| **Form Request** | `app/Http/Requests/Api/V1/Sales/IssueChallanRequest.php` | Issue challan (stock OUT + COGS) |
+| **Form Request** | `app/Http/Requests/Api/V1/Sales/StoreReturnRequest.php` | Create sales return |
+| **Form Request** | `app/Http/Requests/Api/V1/Sales/StorePaymentRequest.php` | Create customer payment |
+| **Resource** | `app/Http/Resources/Api/V1/Sales/CartResource.php` | Cart JSON shape (items + validation) |
+| **Resource** | `app/Http/Resources/Api/V1/Sales/SalesInvoiceResource.php` | Invoice JSON shape (header + items + dispatches) |
+| **Resource** | `app/Http/Resources/Api/V1/Sales/SalesInvoiceItemResource.php` | Invoice line item |
+| **Resource** | `app/Http/Resources/Api/V1/Sales/SalesInvoiceDispatchResource.php` | Invoice dispatch line |
+| **Resource** | `app/Http/Resources/Api/V1/Sales/SalesChallanResource.php` | Challan JSON shape (header + items) |
+| **Resource** | `app/Http/Resources/Api/V1/Sales/SalesChallanItemResource.php` | Challan line item |
+| **Resource** | `app/Http/Resources/Api/V1/Sales/SalesReturnResource.php` | Return JSON shape (header + items) |
+| **Resource** | `app/Http/Resources/Api/V1/Sales/SalesReturnItemResource.php` | Return line item |
+| **Resource** | `app/Http/Resources/Api/V1/Sales/CustomerPaymentResource.php` | Payment JSON shape (header + allocations) |
+| **Resource** | `app/Http/Resources/Api/V1/Sales/PaymentAllocationResource.php` | Payment allocation line |
+| **Routes** | `routes/api.php` | 35 new routes added under `/api/v1/sales/*` |
+
+### 14.4 Endpoint Reference
+
+#### 14.4.1 Sales Cart Endpoints
+
+| Method | URI | Controller Method | Rate Limit | Description |
+|--------|-----|-------------------|------------|-------------|
+| GET | `/api/v1/sales/cart` | `show` | 60/min | Load cart for a customer (?customer_id=X) |
+| POST | `/api/v1/sales/cart` | `store` | 30/min | Add item to cart (product_id, qty, rate) |
+| PUT | `/api/v1/sales/cart` | `update` | 30/min | Update cart item (qty and/or rate) |
+| DELETE | `/api/v1/sales/cart/{productId}` | `destroy` | 30/min | Remove product from cart |
+| POST | `/api/v1/sales/cart/clear` | `clear` | 30/min | Clear entire cart |
+| POST | `/api/v1/sales/cart/validate` | `validateCart` | 30/min | Pre-finalize validation check |
+| POST | `/api/v1/sales/cart/soft-hold` | `softHold` | 30/min | Toggle soft-hold flag |
+| GET | `/api/v1/sales/cart/availability` | `availability` | 60/min | Check product stock (?product_id=X) |
+
+#### 14.4.2 Sales Invoice Endpoints
+
+| Method | URI | Controller Method | Rate Limit | Description |
+|--------|-----|-------------------|------------|-------------|
+| GET | `/api/v1/sales/invoices` | `index` | 60/min | List invoices (paginated, filterable) |
+| GET | `/api/v1/sales/invoices/{id}` | `show` | 60/min | Show invoice detail with items + dispatches |
+| POST | `/api/v1/sales/invoices` | `store` | 30/min | Finalize cart → draft invoice (idempotent) |
+| PUT | `/api/v1/sales/invoices/{id}` | `update` | 30/min | Update draft invoice (discount, transport, notes) |
+| POST | `/api/v1/sales/invoices/{id}/cancel` | `cancel` | 30/min | Cancel/reverse an invoice (requires reason >= 10 chars) |
+| POST | `/api/v1/sales/invoices/call-it-a-day` | `callItADay` | 30/min | Batch mark invoices as called |
+| GET | `/api/v1/sales/invoices/credit-check` | `creditCheck` | 60/min | Check customer credit limit (?customer_id=X&amount=Y) |
+
+#### 14.4.3 Sales Challan Endpoints
+
+| Method | URI | Controller Method | Rate Limit | Description |
+|--------|-----|-------------------|------------|-------------|
+| GET | `/api/v1/sales/challans` | `index` | 60/min | List challans (paginated, filterable) |
+| GET | `/api/v1/sales/challans/{id}` | `show` | 60/min | Show challan detail with items |
+| POST | `/api/v1/sales/challans/godown` | `godown` | 30/min | Prepare godown (assign warehouses to items) |
+| POST | `/api/v1/sales/challans/issue` | `issue` | 30/min | Issue challan (stock OUT + COGS GL) |
+| POST | `/api/v1/sales/challans/{id}/cancel` | `cancel` | 30/min | Cancel/reverse a challan (requires reason >= 10 chars) |
+
+#### 14.4.4 Sales Return Endpoints
+
+| Method | URI | Controller Method | Rate Limit | Description |
+|--------|-----|-------------------|------------|-------------|
+| GET | `/api/v1/sales/returns` | `index` | 60/min | List returns (paginated, filterable) |
+| GET | `/api/v1/sales/returns/{id}` | `show` | 60/min | Show return detail with items |
+| POST | `/api/v1/sales/returns` | `store` | 30/min | Create a return (status=created, no stock/GL) |
+| POST | `/api/v1/sales/returns/{id}/confirm` | `confirm` | 30/min | Confirm return (stock IN at ORIGINAL cost + GL reversal) |
+| POST | `/api/v1/sales/returns/{id}/reverse` | `reverse` | 30/min | Reverse a confirmed return (requires reason >= 10 chars) |
+| GET | `/api/v1/sales/returns/invoice-details` | `invoiceDetails` | 60/min | Get invoice items for return form (?sales_invoice_id=X) |
+
+#### 14.4.5 Customer Payment Endpoints
+
+| Method | URI | Controller Method | Rate Limit | Description |
+|--------|-----|-------------------|------------|-------------|
+| GET | `/api/v1/sales/payments` | `index` | 60/min | List payments (paginated, filterable) |
+| GET | `/api/v1/sales/payments/{id}` | `show` | 60/min | Show payment detail with allocations |
+| POST | `/api/v1/sales/payments` | `store` | 30/min | Create payment (draft or auto_confirm=true) |
+| POST | `/api/v1/sales/payments/{id}/confirm` | `confirm` | 30/min | Confirm draft payment (GL + ledger + allocations) |
+| POST | `/api/v1/sales/payments/{id}/cancel` | `cancel` | 30/min | Cancel/reverse a payment (requires reason >= 10 chars) |
+| GET | `/api/v1/sales/payments/outstanding-invoices` | `outstandingInvoices` | 60/min | Get customer's outstanding invoices (?customer_id=X) |
+
+### 14.5 Rate Limiting Strategy
+
+Sales API endpoints use a two-tier rate limiting scheme:
+
+| Tier | Rate | Applied To | Rationale |
+|------|------|-----------|-----------|
+| **Write** | 30 req/min | POST, PUT, DELETE endpoints | Transactional operations that modify data. Stricter limit prevents abuse on financial operations (duplicate invoice prevention, race condition mitigation). |
+| **Read** | 60 req/min | GET endpoints | List/show operations that only read data. Moderate limit balances mobile polling needs with server load. |
+| **Lookup** | 120 req/min | `/lookups/*`, `/dashboard/*` | Dropdown data and summary stats that are polled frequently by mobile clients. Highest limit since these are cheap, cached queries. |
+
+All rate limits are enforced per (API token hash, client IP) bucket via the `ApiRateLimit` middleware with Redis-backed atomic counters.
+
+### 14.6 Authentication & Authorization
+
+All Sales API endpoints require:
+
+1. **Bearer token authentication** (`ApiAuth` middleware): The client must send `Authorization: Bearer {token}` where the token is issued via `User::generateApiToken()` and stored SHA-256 hashed in `users.api_token`.
+
+2. **Branch isolation** (`SalesAccess` service): Every write operation validates that the authenticated user's branch matches the record's branch. Admin/superadmin users can override (cross-branch access is audited).
+
+3. **Role enforcement** (optional, via `api.auth:role` parameter): Specific endpoints can be restricted to certain roles. The current implementation allows all authenticated users with a valid API token to access sales endpoints, matching the web behavior where salesman, manager, admin, and superadmin all have access to the sales module.
+
+### 14.7 Idempotency Design
+
+The invoice finalize endpoint (`POST /api/v1/sales/invoices`) implements idempotency to prevent duplicate invoice creation:
+
+1. The mobile client generates a random UUID (`idempotency_token`) before each finalize attempt.
+2. On first submission, the invoice is created and the result is cached for 5 minutes using the token as the cache key.
+3. On duplicate submission (same token within 5 minutes), the cached result is returned with an `idempotent_replay: true` flag.
+4. After 5 minutes, the token expires and a new submission with the same token will attempt a fresh creation.
+
+This design handles:
+- Network timeouts where the client retries
+- Double-tap on the mobile submit button
+- App crashes after submission but before response processing
+
+### 14.8 Error Response Format
+
+All API errors follow a consistent JSON format:
+
+```json
+{
+  "message": "Human-readable error description"
+}
+```
+
+HTTP status codes:
+- **422 Unprocessable Entity**: Validation errors (missing required fields, invalid types)
+- **409 Conflict**: Business rule violations (insufficient stock, credit limit exceeded, wrong status for operation)
+- **401 Unauthorized**: Missing or invalid Bearer token
+- **403 Forbidden**: Valid token but wrong role for endpoint
+- **429 Too Many Requests**: Rate limit exceeded (includes `retry_after` field)
+- **404 Not Found**: Record not found (invoice, challan, payment, return)
+- **500 Internal Server Error**: Unexpected server errors
+
+### 14.9 Mobile Workflow Examples
+
+#### 14.9.1 Complete Sales Cycle (Cart → Invoice → Godown → Challan → Payment)
+
+```
+Step 1: Add items to cart
+  POST /api/v1/sales/cart
+  { customer_id: 1, product_id: 10, qty: 5, rate: 120.50 }
+
+Step 2: Validate cart
+  POST /api/v1/sales/cart/validate
+  { customer_id: 1 }
+  → { valid: true, message: "Cart is valid" }
+
+Step 3: Finalize into draft invoice
+  POST /api/v1/sales/invoices
+  { customer_id: 1, branch_id: 1, invoice_date: "2025-01-21",
+    idempotency_token: "550e8400-e29b-41d4-a716-446655440000" }
+  → { data: { id: 42, invoice_code: "INV-20250121-0001", status: "draft", ... } }
+
+Step 4: Prepare godown (assign warehouses)
+  POST /api/v1/sales/challans/godown
+  { sales_invoice_id: 42, assignments: [
+      { product_id: 10, warehouse_id: 2 }
+    ]}
+  → { message: "Godown prepared successfully" }
+
+Step 5: Issue challan (stock OUT + COGS GL)
+  POST /api/v1/sales/challans/issue
+  { sales_invoice_id: 42, transport_name: "Fast Cargo" }
+  → { data: { id: 17, challan_code: "CH-20250121-0001", ... } }
+
+Step 6: Record customer payment
+  POST /api/v1/sales/payments
+  { customer_id: 1, branch_id: 1, payment_mode: "cash",
+    transaction_type: "receive", amount: 602.50, payment_date: "2025-01-21",
+    auto_confirm: true, allocations: [
+      { invoice_id: 42, allocated_amount: 602.50 }
+    ]}
+  → { data: { id: 88, payment_code: "PAY-20250121-0001", confirmed: true, ... } }
+```
+
+#### 14.9.2 Sales Return Flow
+
+```
+Step 1: Get invoice details for return
+  GET /api/v1/sales/returns/invoice-details?sales_invoice_id=42
+  → { data: { items: [{ product_id: 10, qty: 5, rate: 120.50, original_cost: 85.00, ... }] } }
+
+Step 2: Create return (no stock movement yet)
+  POST /api/v1/sales/returns
+  { sales_invoice_id: 42, customer_id: 1, return_date: "2025-01-22",
+    items: [{ product_id: 10, qty: 2, rate: 120.50, warehouse_id: 2 }] }
+  → { data: { id: 7, return_code: "RET-20250122-0001", status: "created", ... } }
+
+Step 3: Confirm return (stock IN at ORIGINAL cost + GL reversal)
+  POST /api/v1/sales/returns/7/confirm
+  → { data: { id: 7, status: "confirmed", total_amount: 241.00, cogs_amount: 170.00, ... } }
+```
+
+### 14.10 Pagination & Filtering
+
+All list endpoints support:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `per_page` | int | 25 | Items per page (max 100) |
+| `page` | int | 1 | Page number |
+| `from_date` | date | — | Filter from date (inclusive) |
+| `to_date` | date | — | Filter to date (inclusive) |
+| `customer_id` | int | — | Filter by customer |
+| `branch_id` | int | — | Filter by branch (admin only; non-admins see only their branch) |
+| `status` | string | — | Filter by status (draft, confirmed, cancelled, reversed, created) |
+| `search` | string | — | Search by document code (ILIKE match) |
+
+Response includes `meta` object with pagination info:
+```json
+{
+  "data": [...],
+  "meta": {
+    "current_page": 1,
+    "last_page": 5,
+    "per_page": 25,
+    "total": 120
+  }
+}
+```
+
+### 14.11 Integration with Existing Systems
+
+The Sales API integrates seamlessly with the existing codebase:
+
+1. **Service layer reuse**: All 5 API controllers delegate to the same services used by the web controllers (`SalesInvoiceService`, `SalesChallanService`, `SalesReturnService`, `CustomerPaymentService`, `SalesCartService`). No code duplication, no logic drift.
+
+2. **BranchScope global scope**: The Eloquent `BranchScope` global scope applies automatically to all model queries, including those in the API controllers. Non-admin users see only their branch's records.
+
+3. **RLS (Row-Level Security)**: PostgreSQL RLS policies enforce branch isolation at the database level, providing a safety net even if the application-level checks are bypassed.
+
+4. **Audit logging**: The `SalesAuditLogger` service logs all business events (sale_created, payment_received, challan_issued, return_confirmed, etc.) regardless of whether the operation originated from the web UI or the API.
+
+5. **Document sequences**: The `DocumentSequenceService` generates unique codes (INV-20250121-0001, CH-20250121-0001, etc.) using advisory locks, ensuring no duplicate codes even with concurrent API and web submissions.
+
+6. **Stock consistency**: The `StockService` and `StockAvailabilityService` ensure stock movements are consistent across both access paths. Pipeline availability (physical - open dispatches) is cached with 5-minute TTL and invalidated on mutations.
+
+### 14.12 Future Enhancements
+
+The following enhancements are out of scope for Task 36 but should be considered for future iterations:
+
+1. **Webhook support**: Allow external systems to subscribe to sales events (invoice created, payment received) via webhooks instead of polling.
+
+2. **Batch operations**: Endpoints for bulk invoice creation (e.g., importing orders from an external system) and bulk payment allocation.
+
+3. **Offline-first support**: Enhanced idempotency with longer cache windows and conflict resolution for mobile clients that operate offline and sync later.
+
+4. **API versioning**: Currently all endpoints are under `/api/v1/`. When breaking changes are needed, introduce `/api/v2/` with versioned controllers.
+
+5. **OAuth2 / Laravel Sanctum**: Replace the simple bearer token with OAuth2 authorization code flow or Sanctum SPA authentication for better security and token rotation.
+
+6. **GraphQL**: Consider a GraphQL endpoint alongside REST for mobile clients that need flexible field selection and reduced over-fetching.
 
 ---
 
