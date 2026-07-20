@@ -684,6 +684,9 @@
                     <a href="{{ route('admin.sales-invoices.print-godown', $invoice->id) }}" class="btn btn-outline-secondary w-100" target="_blank">
                         <i class="fas fa-warehouse me-1"></i> Print Godown Copy
                     </a>
+                    <a href="{{ route('admin.sales-invoices.print-blank-godown', $invoice->id) }}" class="btn btn-outline-warning w-100" target="_blank">
+                        <i class="fas fa-pen me-1"></i> Print Blank Godown
+                    </a>
 
                     {{-- Draft: Cancel invoice --}}
                     @if ($invoice->isDraft())

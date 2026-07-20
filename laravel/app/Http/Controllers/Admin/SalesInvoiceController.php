@@ -411,6 +411,24 @@ class SalesInvoiceController extends Controller
     }
 
     /**
+     * Print blank godown copy — handwriting template for manual picking.
+     * Bengali/English bilingual, blank write-in cells, 17 items per page.
+     * Ported from legacy: challan/print_blank_godown_copy.php
+     */
+    public function printBlankGodown(int $id)
+    {
+        $invoice = SalesInvoice::with([
+            'items.product', 'items.warehouse',
+            'customer', 'branch', 'salesman', 'dispatchers',
+        ])->findOrFail($id);
+
+        return view('admin.sales-invoices.print_blank_godown', [
+            'title' => 'খালি গোডাউন / Blank Godown — ' . $invoice->invoice_code,
+            'invoice' => $invoice,
+        ]);
+    }
+
+    /**
      * AJAX: Get dispatchers for a branch (for finalize/edit dropdowns).
      */
     public function getBranchDispatchers(Request $request)
