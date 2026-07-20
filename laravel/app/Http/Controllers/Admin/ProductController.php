@@ -140,6 +140,15 @@ class ProductController extends BaseMasterDataController
             unset($validated['is_active']);
         }
 
+        // Only set condition_state when the request explicitly provides it;
+        // otherwise let the DB default ('Good') apply. This prevents a null
+        // value from overriding the NOT NULL DEFAULT 'Good' column constraint.
+        if ($request->filled('condition_state')) {
+            $validated['condition_state'] = $request->input('condition_state');
+        } else {
+            unset($validated['condition_state']);
+        }
+
         try {
             $product = Product::create($validated);
             return redirect()->route("{$this->routePrefix}.show", $product)
@@ -172,6 +181,14 @@ class ProductController extends BaseMasterDataController
             $validated['is_active'] = $request->boolean('is_active');
         } else {
             unset($validated['is_active']);
+        }
+
+        // Only set condition_state when the request explicitly provides it;
+        // otherwise preserve the existing value (or let DB default apply).
+        if ($request->filled('condition_state')) {
+            $validated['condition_state'] = $request->input('condition_state');
+        } else {
+            unset($validated['condition_state']);
         }
 
         // Phase 9: If is_active is being set to false, run deactivation safety check.
