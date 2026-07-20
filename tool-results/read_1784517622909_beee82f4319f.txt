@@ -1,0 +1,1785 @@
+     1→<?php
+     2→// app/models/ChallanModel.php
+     3→
+     4→require_once '../core/Database.php';
+     5→require_once 'SalesModel.php';
+     6→require_once __DIR__ . '/../services/Stock/StockService.php';
+     7→require_once __DIR__ . '/../services/Accounting/JournalPostingService.php';
+     8→
+     9→class ChallanModel extends SalesModel {
+    10→
+    11→    protected StockService $stock;
+    12→
+    13→    public function __construct() {
+    14→        parent::__construct();
+    15→        $this->stock = new StockService($this->db);
+    16→    }
+    17→
+    18→    /**
+    19→     * Challan/godown is always limited to the logged-in user's session branch
+    20→     * (warehouse staff must not open or list other branches' invoices).
+    21→     */
+    22→    public function assertInvoiceAccessible(int $invoiceBranchId): void
+    23→    {
+    24→        if ((int)$invoiceBranchId !== self::sessionBranchId()) {
+    25→            throw new Exception('You do not have access to invoices from another branch.');
+    26→        }
+    27→    }
+    28→
+    29→    /**
+    30→     * Resolve each dispatch line: demand qty = invoice line qty (cannot be reduced).
+    31→     * Validates warehouse, stock, and optional posted qty tampering.
+    32→     *
+    33→     * @param string $validationMode godown = pick warehouse (net available); finalize = trust godown + physical qty
+    34→     * @return array<int, array{item_id:int, product_id:int, product_name:string, warehouse_id:int, demand_qty:float, dispatched_ctn:float}>
+    35→     */
+    36→    protected function resolveDispatchLinesForInvoice(
+    37→        array $data,
+    38→        int $invoiceId,
+    39→        int $invoiceBranchId,
+    40→        string $validationMode = 'godown'
+    41→    ): array
+    42→    {
+    43→        $validationMode = $validationMode === 'finalize' ? 'finalize' : 'godown';
+    44→        if (empty($data['item_id']) || !is_array($data['item_id'])) {
+    45→            throw new Exception('No invoice lines to dispatch.');
+    46→        }
+    47→
+    48→        $lines = [];
+    49→        foreach ($data['item_id'] as $i => $rawItemId) {
+    50→            $itemId = (int)$rawItemId;
+    51→            if ($itemId <= 0) {
+    52→                continue;
+    53→            }
+    54→
+    55→            $this->db->query("
+    56→                SELECT sii.id, sii.product_id, sii.qty, p.product_name
+    57→                FROM sales_invoice_items sii
+    58→                JOIN products p ON p.id = sii.product_id
+    59→                WHERE sii.id = :iid AND sii.sales_invoice_id = :inv
+    60→            ");
+    61→            $this->db->bind(':iid', $itemId);
+    62→            $this->db->bind(':inv', $invoiceId);
+    63→            $row = $this->db->single();
+    64→            if (!$row) {
+    65→                throw new Exception(
+    66→                    'Invoice lines have changed. Refresh this page and try again.'
+    67→                );
+    68→            }
+    69→
+    70→            $demandQty = (float)$row['qty'];
+    71→            if ($demandQty <= 0) {
+    72→                throw new Exception('Invalid invoice quantity on line #' . ($i + 1) . '.');
+    73→            }
+    74→
+    75→            $postedQty = (float)($data['dispatched_qty'][$i] ?? $demandQty);
+    76→            if (abs($postedQty - $demandQty) > 0.0001) {
+    77→                throw new Exception(
+    78→                    'Dispatched quantity must match invoice demand ('
+    79→                    . number_format($demandQty, 2) . '). Partial dispatch is not allowed for '
+    80→                    . ($row['product_name'] ?? 'product') . '.'
+    81→                );
+    82→            }
+    83→
+    84→            $wid = (int)($data['warehouse_id'][$i] ?? 0);
+    85→            if ($wid <= 0) {
+    86→                throw new Exception(
+    87→                    'Select a warehouse for ' . ($row['product_name'] ?? 'each product') . '.'
+    88→                );
+    89→            }
+    90→
+    91→            $sessionBranchId = self::sessionBranchId();
+    92→            if (!$this->warehouseBelongsToBranch($wid, $sessionBranchId)) {
+    93→                throw new Exception('Warehouse does not belong to your branch.');
+    94→            }
+    95→
+    96→            $productId = (int)$row['product_id'];
+    97→            $productName = (string)($row['product_name'] ?? 'product');
+    98→
+    99→            if ($validationMode === 'finalize') {
+   100→                $this->db->query("
+   101→                    SELECT warehouse_id, ordered_qty
+   102→                    FROM sales_invoice_dispatches
+   103→                    WHERE sales_invoice_id = :inv AND product_id = :pid
+   104→                    LIMIT 1
+   105→                ");
+   106→                $this->db->bind(':inv', $invoiceId);
+   107→                $this->db->bind(':pid', $productId);
+   108→                $godownRow = $this->db->single();
+   109→                if (!$godownRow) {
+   110→                    throw new Exception(
+   111→                        'Godown setup missing for ' . $productName . '. Save godown copy again.'
+   112→                    );
+   113→                }
+   114→
+   115→                $godownWh = (int)$godownRow['warehouse_id'];
+   116→                if ($godownWh <= 0) {
+   117→                    throw new Exception('Godown warehouse not set for ' . $productName . '.');
+   118→                }
+   119→                if ($wid !== $godownWh) {
+   120→                    throw new Exception(
+   121→                        'Warehouse for ' . $productName . ' was fixed at godown and cannot be changed.'
+   122→                    );
+   123→                }
+   124→                $wid = $godownWh;
+   125→
+   126→                $godownOrdered = (float)$godownRow['ordered_qty'];
+   127→                if (abs($godownOrdered - $demandQty) > 0.0001) {
+   128→                    throw new Exception(
+   129→                        'Invoice quantity changed since godown was saved. Refresh and try again.'
+   130→                    );
+   131→                }
+   132→
+   133→                $physical = $this->getWarehousePhysicalStock($productId, $wid);
+   134→                if ($demandQty > $physical + 0.0001) {
+   135→                    throw new Exception(
+   136→                        'Not enough physical stock for ' . $productName
+   137→                        . ' in the selected warehouse (need '
+   138→                        . number_format($demandQty, 2) . ', on hand '
+   139→                        . number_format($physical, 2)
+   140→                        . '). Receive stock or reverse and re-assign godown.'
+   141→                    );
+   142→                }
+   143→            } else {
+   144→                $available = $this->Get_Warehouse_Available_Stock($productId, $wid, $invoiceId);
+   145→                if ($demandQty > $available + 0.0001) {
+   146→                    throw new Exception(
+   147→                        'Insufficient stock for ' . $productName
+   148→                        . '. Invoice demand: ' . number_format($demandQty, 2)
+   149→                        . ', available in warehouse: ' . number_format($available, 2)
+   150→                        . '. Choose another warehouse or receive stock first.'
+   151→                    );
+   152→                }
+   153→            }
+   154→
+   155→            $lines[] = [
+   156→                'item_id'         => $itemId,
+   157→                'product_id'      => (int)$row['product_id'],
+   158→                'product_name'    => (string)$row['product_name'],
+   159→                'warehouse_id'    => $wid,
+   160→                'demand_qty'      => $demandQty,
+   161→                'dispatched_ctn'  => (float)($data['dispatched_ctn'][$i] ?? 0),
+   162→            ];
+   163→        }
+   164→
+   165→        if ($lines === []) {
+   166→            throw new Exception('No invoice lines to dispatch.');
+   167→        }
+   168→
+   169→        return $lines;
+   170→    }
+   171→
+   172→    protected function assertGodownPreparedForChallan(int $invoiceId): void
+   173→    {
+   174→        $this->db->query("
+   175→            SELECT status FROM sales_invoices
+   176→            WHERE id = :id AND is_reversed = 0
+   177→        ");
+   178→        $this->db->bind(':id', $invoiceId);
+   179→        $row = $this->db->single();
+   180→        if (!$row) {
+   181→            throw new Exception('Invoice not found.');
+   182→        }
+   183→        if (($row['status'] ?? '') !== 'godown_issued') {
+   184→            throw new Exception(
+   185→                'Save godown copy first. Challan can only be created after godown setup is saved.'
+   186→            );
+   187→        }
+   188→
+   189→        $this->db->query("
+   190→            SELECT COUNT(*) AS c FROM sales_invoice_items WHERE sales_invoice_id = :id
+   191→        ");
+   192→        $this->db->bind(':id', $invoiceId);
+   193→        $itemCount = (int)($this->db->single()['c'] ?? 0);
+   194→
+   195→        $this->db->query("
+   196→            SELECT COUNT(*) AS c FROM sales_invoice_dispatches WHERE sales_invoice_id = :id
+   197→        ");
+   198→        $this->db->bind(':id', $invoiceId);
+   199→        $dispatchCount = (int)($this->db->single()['c'] ?? 0);
+   200→
+   201→        if ($itemCount <= 0 || $dispatchCount < $itemCount) {
+   202→            throw new Exception(
+   203→                'Godown dispatch records are missing. Save godown copy again before creating challan.'
+   204→            );
+   205→        }
+   206→    }
+   207→
+   208→    
+   209→       // ================= PREPARE GODOWN (Step 1) =================
+   210→    public function prepareGodown($data) {
+   211→        $this->db->beginTransaction();
+   212→        try {
+   213→            $invoice_id = (int)$data['invoice_id'];
+   214→
+   215→            $this->db->query("
+   216→                SELECT status, branch_id, customer_id, subtotal, discount, transport_cost, total_amount
+   217→                FROM sales_invoices
+   218→                WHERE id = :id AND is_reversed = 0
+   219→                FOR UPDATE
+   220→            ");
+   221→            $this->db->bind(':id', $invoice_id);
+   222→            $invoiceRow = $this->db->single();
+   223→
+   224→            if (!$invoiceRow) {
+   225→                throw new Exception('Invoice not found.');
+   226→            }
+   227→
+   228→            $this->assertInvoiceAccessible((int)$invoiceRow['branch_id']);
+   229→            $invoiceBranchId = (int)$invoiceRow['branch_id'];
+   230→
+   231→            $status = $invoiceRow['status'] ?? '';
+   232→            if (!in_array($status, ['draft', 'godown_issued'], true)) {
+   233→                throw new Exception('Godown can only be prepared for draft or godown-issued invoices.');
+   234→            }
+   235→
+   236→            $transportResult = $this->persistInvoiceTransportCost(
+   237→                $data,
+   238→                $invoiceRow,
+   239→                $invoice_id,
+   240→                'Transport/total updated at godown save'
+   241→            );
+   242→
+   243→            $dispatchMode = ($status === 'godown_issued') ? 'finalize' : 'godown';
+   244→            $dispatchLines = $this->resolveDispatchLinesForInvoice(
+   245→                $data,
+   246→                $invoice_id,
+   247→                $invoiceBranchId,
+   248→                $dispatchMode
+   249→            );
+   250→
+   251→            foreach ($dispatchLines as $line) {
+   252→                $this->db->query("UPDATE sales_invoice_items SET warehouse_id = :wid WHERE id = :id");
+   253→                $this->db->bind(':wid', $line['warehouse_id']);
+   254→                $this->db->bind(':id', $line['item_id']);
+   255→                $this->db->execute();
+   256→            }
+   257→
+   258→            // 2. Save dispatchers (junction table) - Clear & Insert
+   259→            $this->db->query("DELETE FROM sales_invoice_dispatchers WHERE sales_invoice_id = :iid");
+   260→            $this->db->bind(':iid', $invoice_id);
+   261→            $this->db->execute();
+   262→
+   263→            if (!empty($data['dispatcher_id']) && is_array($data['dispatcher_id'])) {
+   264→                foreach ($data['dispatcher_id'] as $emp_id) {
+   265→                    if (!empty($emp_id)) {
+   266→                        $this->db->query("INSERT INTO sales_invoice_dispatchers (sales_invoice_id, employee_id) 
+   267→                                        VALUES (:iid, :eid)");
+   268→                        $this->db->bind(':iid', $invoice_id);
+   269→                        $this->db->bind(':eid', (int)$emp_id);
+   270→                        $this->db->execute();
+   271→                    }
+   272→                }
+   273→            }
+   274→
+   275→            // 3. Clear previous dispatches and INSERT fresh (This solves your duplicate problem)
+   276→            $this->db->query("DELETE FROM sales_invoice_dispatches WHERE sales_invoice_id = :iid");
+   277→            $this->db->bind(':iid', $invoice_id);
+   278→            $this->db->execute();
+   279→
+   280→            foreach ($dispatchLines as $line) {
+   281→                $this->db->query("
+   282→                    INSERT INTO sales_invoice_dispatches
+   283→                    (sales_invoice_id, product_id, warehouse_id, ordered_qty, dispatched_qty, dispatched_ctn)
+   284→                    VALUES (:iid, :pid, :wid, :oqty, 0, :ctn)
+   285→                ");
+   286→                $this->db->bind(':iid', $invoice_id);
+   287→                $this->db->bind(':pid', $line['product_id']);
+   288→                $this->db->bind(':wid', $line['warehouse_id']);
+   289→                $this->db->bind(':oqty', $line['demand_qty']);
+   290→                $this->db->bind(':ctn', $line['dispatched_ctn']);
+   291→                $this->db->execute();
+   292→            }
+   293→
+   294→            // 4. Update invoice status
+   295→            $this->db->query("
+   296→                UPDATE sales_invoices
+   297→                SET status = 'godown_issued',
+   298→                    godown_issued_at = NOW()
+   299→                WHERE id = :id
+   300→            ");
+   301→            $this->db->bind(':id', $invoice_id);
+   302→            $this->db->execute();
+   303→
+   304→            $this->db->commit();
+   305→
+   306→            $message = 'Godown prepared successfully!';
+   307→            if (abs($transportResult['total_diff']) > 0.0001) {
+   308→                $message .= ' Invoice total updated to Tk '
+   309→                    . number_format($transportResult['new_total'], 2) . '.';
+   310→            }
+   311→
+   312→            return [
+   313→                'status'       => 'success',
+   314→                'message'      => $message,
+   315→                'new_total'    => $transportResult['new_total'],
+   316→                'transport'    => $transportResult['transport'],
+   317→                'total_diff'   => $transportResult['total_diff'],
+   318→            ];
+   319→
+   320→        } catch (Exception $e) {
+   321→            $this->db->rollback();
+   322→            return ['status' => 'error', 'message' => $e->getMessage()];
+   323→        }
+   324→    }
+   325→
+   326→
+   327→    public function finalizeChallan($data) {
+   328→        $this->db->beginTransaction();
+   329→        try {
+   330→            $invoice_id = (int)$data['invoice_id'];
+   331→
+   332→            // Double-finalization protection + branch scope
+   333→            $this->db->query("
+   334→                SELECT status, branch_id, customer_id, subtotal, discount, transport_cost, total_amount, invoice_code
+   335→                FROM sales_invoices WHERE id = :id AND is_reversed = 0 FOR UPDATE
+   336→            ");
+   337→            $this->db->bind(':id', $invoice_id);
+   338→            $invoiceRow = $this->db->single();
+   339→            if (!$invoiceRow) {
+   340→                throw new Exception('Invoice not found.');
+   341→            }
+   342→            $this->assertInvoiceAccessible((int)$invoiceRow['branch_id']);
+   343→            $invoiceBranchId = (int)$invoiceRow['branch_id'];
+   344→            $customerId = (int)$invoiceRow['customer_id'];
+   345→            if (($invoiceRow['status'] ?? '') === 'challan_completed') {
+   346→                throw new Exception("Challan already completed.");
+   347→            }
+   348→
+   349→            $this->assertGodownPreparedForChallan($invoice_id);
+   350→            $dispatchLines = $this->resolveDispatchLinesForInvoice(
+   351→                $data,
+   352→                $invoice_id,
+   353→                $invoiceBranchId,
+   354→                'finalize'
+   355→            );
+   356→
+   357→            $challan_code = $this->generateSalesChallanCode();
+   358→            $oldTransport = (float)$invoiceRow['transport_cost'];
+   359→            $oldTotal = (float)$invoiceRow['total_amount'];
+   360→
+   361→            $transportResult = $this->persistInvoiceTransportCost(
+   362→                $data,
+   363→                $invoiceRow,
+   364→                $invoice_id,
+   365→                'Transport/total adjustment on challan #' . $challan_code
+   366→            );
+   367→            $newTotal = $transportResult['new_total'];
+   368→            $totalDiff = $transportResult['total_diff'];
+   369→
+   370→            // Update Invoice status (transport/total already persisted above)
+   371→            if ($this->invoiceHasPreChallanColumns()) {
+   372→                $this->db->query("
+   373→                    UPDATE sales_invoices
+   374→                    SET status = 'challan_completed',
+   375→                        challan_completed_at = NOW(),
+   376→                        godown_issued_at = COALESCE(godown_issued_at, NOW()),
+   377→                        pre_challan_transport = :pre_tc,
+   378→                        pre_challan_total = :pre_total
+   379→                    WHERE id = :id
+   380→                ");
+   381→                $this->db->bind(':pre_tc', $oldTransport);
+   382→                $this->db->bind(':pre_total', $oldTotal);
+   383→            } else {
+   384→                $this->db->query("
+   385→                    UPDATE sales_invoices
+   386→                    SET status = 'challan_completed',
+   387→                        challan_completed_at = NOW(),
+   388→                        godown_issued_at = COALESCE(godown_issued_at, NOW())
+   389→                    WHERE id = :id
+   390→                ");
+   391→            }
+   392→            $this->db->bind(':id', $invoice_id);
+   393→            $this->db->execute();
+   394→
+   395→            // Create Challan
+   396→            $this->db->query("INSERT INTO sales_challans (sales_invoice_id, challan_code, challan_date, created_by) VALUES (:iid, :code, CURRENT_DATE, :user)");
+   397→            $this->db->bind(':iid', $invoice_id);
+   398→            $this->db->bind(':code', $challan_code);
+   399→            $this->db->bind(':user', $_SESSION['user_id'] ?? null);
+   400→            $this->db->execute();
+   401→            $challan_id = $this->db->lastInsertId();
+   402→            $cogsTotal = 0.0;
+   403→
+   404→            foreach ($dispatchLines as $line) {
+   405→                $qty = $line['demand_qty'];
+   406→                $pid = $line['product_id'];
+   407→                $wid = $line['warehouse_id'];
+   408→
+   409→                $this->db->query("SELECT avg_cost FROM warehouse_stock WHERE product_id = :pid AND warehouse_id = :wid");
+   410→                $this->db->bind(':pid', $pid);
+   411→                $this->db->bind(':wid', $wid);
+   412→                $avg_cost = round((float)($this->db->single()['avg_cost'] ?? 0), 4);
+   413→                if ($avg_cost <= 0) {
+   414→                    throw new Exception(
+   415→                        'Cannot complete challan: zero cost for product #' . $pid . ' in warehouse #' . $wid . '. Receive stock or set cost first.'
+   416→                    );
+   417→                }
+   418→
+   419→                $this->db->query("
+   420→                    UPDATE sales_invoice_dispatches
+   421→                    SET dispatched_qty = :dqty, dispatched_ctn = :ctn, dispatched_at = NOW(),
+   422→                        warehouse_id = :wid
+   423→                    WHERE sales_invoice_id = :iid AND product_id = :pid
+   424→                ");
+   425→                $this->db->bind(':dqty', $qty);
+   426→                $this->db->bind(':ctn', $line['dispatched_ctn']);
+   427→                $this->db->bind(':wid', $wid);
+   428→                $this->db->bind(':iid', $invoice_id);
+   429→                $this->db->bind(':pid', $pid);
+   430→                $this->db->execute();
+   431→                if ($this->db->rowCount() === 0) {
+   432→                    throw new Exception(
+   433→                        'Could not update dispatch row for product #' . $pid . '. Save godown copy again before challan.'
+   434→                    );
+   435→                }
+   436→
+   437→                $this->db->query("
+   438→                    UPDATE sales_invoice_items
+   439→                    SET warehouse_id = :wid
+   440→                    WHERE id = :item_id AND sales_invoice_id = :iid
+   441→                ");
+   442→                $this->db->bind(':wid', $wid);
+   443→                $this->db->bind(':item_id', $line['item_id']);
+   444→                $this->db->bind(':iid', $invoice_id);
+   445→                $this->db->execute();
+   446→
+   447→                $this->stock->updateWarehouseStock($wid, $pid, -$qty, $avg_cost);
+   448→
+   449→                $this->stock->logMovement([
+   450→                    'product_id'     => $pid,
+   451→                    'warehouse_id'   => $wid,
+   452→                    'qty'            => -$qty,
+   453→                    'rate'           => $avg_cost,
+   454→                    'reference_type' => 'sales_challan',
+   455→                    'reference_id'   => $challan_id,
+   456→                    'remarks'        => 'Sales Challan #' . $challan_code,
+   457→                ]);
+   458→
+   459→                $this->saveChallanIssueLine($challan_id, $pid, $wid, $qty, $avg_cost);
+   460→
+   461→                $cogsTotal += $qty * $avg_cost;
+   462→            }
+   463→
+   464→            $journalService = new JournalPostingService($this->db);
+   465→            $adjustmentJournalId = null;
+   466→
+   467→            if (abs($totalDiff) > 0.0001) {
+   468→                $adjResult = $journalService->postSalesInvoiceTotalAdjustment($invoice_id, $totalDiff, [
+   469→                    'invoice_code' => $invoiceRow['invoice_code'] ?? null,
+   470→                    'customer_id'  => $customerId,
+   471→                    'branch_id'    => $invoiceBranchId,
+   472→                    'entry_date'   => date('Y-m-d'),
+   473→                    'challan_code' => $challan_code,
+   474→                    'challan_id'   => (int)$challan_id,
+   475→                ]);
+   476→                if (($adjResult['status'] ?? '') === 'error') {
+   477→                    throw new Exception('Transport/total GL adjustment failed: ' . ($adjResult['message'] ?? ''));
+   478→                }
+   479→                $adjustmentJournalId = !empty($adjResult['journal_entry_id'])
+   480→                    ? (int)$adjResult['journal_entry_id']
+   481→                    : null;
+   482→            }
+   483→
+   484→            $this->updateChallanTransportMeta($challan_id, $totalDiff, $adjustmentJournalId);
+   485→
+   486→            $cogsResult = $journalService->postSalesChallanCOGS($challan_id, [
+   487→                'challan_code'  => $challan_code,
+   488→                'challan_date'  => date('Y-m-d'),
+   489→                'cogs_amount'   => round($cogsTotal, 2),
+   490→                'branch_id'     => $invoiceBranchId,
+   491→            ]);
+   492→            if (($cogsResult['status'] ?? '') === 'error') {
+   493→                throw new Exception('COGS journal posting failed: ' . ($cogsResult['message'] ?? ''));
+   494→            }
+   495→            $cogsPosted = round($cogsTotal, 2);
+   496→            if ($cogsPosted > 0.0001 && empty($cogsResult['journal_entry_id'])) {
+   497→                throw new Exception('COGS journal was not created although stock was issued (amount ' . $cogsPosted . ').');
+   498→            }
+   499→            if (!empty($cogsResult['journal_entry_id'])) {
+   500→                $this->setChallanJournalEntryId($challan_id, (int)$cogsResult['journal_entry_id']);
+   501→            }
+   502→
+   503→            $this->db->commit();
+   504→            return [
+   505→                'status' => 'success',
+   506→                'message' => 'Challan completed! No: ' . $challan_code,
+   507→                'challan_code' => $challan_code,
+   508→                'challan_id' => $challan_id,
+   509→                'invoice_id' => $invoice_id,
+   510→                'transport_adjustment' => $totalDiff,
+   511→                'new_total' => $newTotal,
+   512→                'journal_entry_id' => $cogsResult['journal_entry_id'] ?? null,
+   513→                'cogs_amount' => round($cogsTotal, 2),
+   514→            ];
+   515→
+   516→        } catch (Exception $e) {
+   517→            $this->db->rollback();
+   518→            return ['status' => 'error', 'message' => $e->getMessage()];
+   519→        }
+   520→    }
+   521→
+   522→    /**
+   523→     * Phase 4: Reverse a completed sales challan — restore stock, rollback invoice status.
+   524→     * Phase 5: reversing journal when journal_entry_id is set on challan.
+   525→     */
+   526→    public function reverseChallan(int $invoiceId, string $reason): array
+   527→    {
+   528→        $reason = trim($reason);
+   529→        if ($invoiceId <= 0 || strlen($reason) < 5) {
+   530→            return ['status' => 'error', 'message' => 'Invoice ID and reversal reason (min 5 chars) are required.'];
+   531→        }
+   532→
+   533→        $this->db->beginTransaction();
+   534→        try {
+   535→            $userId = (int)($_SESSION['user_id'] ?? 1);
+   536→
+   537→            $this->db->query("
+   538→                SELECT si.* FROM sales_invoices si
+   539→                WHERE si.id = :id AND si.is_reversed = 0 FOR UPDATE
+   540→            ");
+   541→            $this->db->bind(':id', $invoiceId);
+   542→            $invoice = $this->db->single();
+   543→
+   544→            if (!$invoice) {
+   545→                throw new Exception('Invoice not found.');
+   546→            }
+   547→            $this->assertInvoiceAccessible((int)$invoice['branch_id']);
+   548→
+   549→            if (($invoice['status'] ?? '') !== 'challan_completed') {
+   550→                throw new Exception('Only completed challans can be reversed.');
+   551→            }
+   552→
+   553→            $this->db->query("
+   554→                SELECT COUNT(*) AS c FROM sales_returns
+   555→                WHERE sales_invoice_id = :iid AND status = 'completed' AND COALESCE(is_reversed, 0) = 0
+   556→            ");
+   557→            $this->db->bind(':iid', $invoiceId);
+   558→            if ((int)($this->db->single()['c'] ?? 0) > 0) {
+   559→                throw new Exception('Cannot reverse challan: completed sales returns exist for this invoice.');
+   560→            }
+   561→
+   562→            $this->db->query("
+   563→                SELECT * FROM sales_challans
+   564→                WHERE sales_invoice_id = :iid AND COALESCE(is_reversed, 0) = 0
+   565→                ORDER BY id DESC LIMIT 1
+   566→            ");
+   567→            $this->db->bind(':iid', $invoiceId);
+   568→            $challan = $this->db->single();
+   569→            if (!$challan) {
+   570→                throw new Exception('Active challan record not found.');
+   571→            }
+   572→
+   573→            $challanId = (int)$challan['id'];
+   574→            $challanCode = $challan['challan_code'];
+   575→            $transportAdjustment = (float)($challan['transport_adjustment'] ?? 0);
+   576→            if (abs($transportAdjustment) < 0.0001) {
+   577→                $transportAdjustment = round(
+   578→                    (float)$invoice['total_amount'] - (float)($invoice['pre_challan_total'] ?? 0),
+   579→                    2
+   580→                );
+   581→            }
+   582→
+   583→            $ledgerAdjustment = $this->sumChallanInvoiceAdjustments(
+   584→                (int)$invoice['customer_id'],
+   585→                $invoiceId,
+   586→                $challanCode
+   587→            );
+   588→            if (abs($ledgerAdjustment) > 0.0001) {
+   589→                $transportAdjustment = $ledgerAdjustment;
+   590→            }
+   591→
+   592→            $itemsReversed = $this->restoreStockFromChallanIssue(
+   593→                $challanId,
+   594→                $challanCode,
+   595→                $invoiceId,
+   596→                (int)$invoice['branch_id'],
+   597→                $reason,
+   598→                (int)($challan['journal_entry_id'] ?? 0)
+   599→            );
+   600→
+   601→            $journalService = new JournalPostingService($this->db);
+   602→
+   603→            if (abs($transportAdjustment) > 0.0001) {
+   604→                $this->reverseChallanTransportLedger(
+   605→                    (int)$invoice['customer_id'],
+   606→                    $invoiceId,
+   607→                    $transportAdjustment,
+   608→                    (int)$invoice['branch_id'],
+   609→                    $challanCode,
+   610→                    $reason
+   611→                );
+   612→
+   613→                $adjJournalId = (int)($challan['adjustment_journal_entry_id'] ?? 0);
+   614→                if ($adjJournalId <= 0) {
+   615→                    $adjJournalId = (int)($this->findChallanAdjustmentJournalId(
+   616→                        $invoiceId,
+   617→                        $challanCode,
+   618→                        $journalService
+   619→                    ) ?? 0);
+   620→                }
+   621→                if ($adjJournalId > 0) {
+   622→                    $adjRev = $journalService->reverseLinkedJournal(
+   623→                        $adjJournalId,
+   624→                        'Challan reversal transport adjustment: ' . $reason
+   625→                    );
+   626→                    if (($adjRev['status'] ?? '') === 'error') {
+   627→                        throw new Exception(
+   628→                            'Failed to reverse transport adjustment journal: ' . ($adjRev['message'] ?? '')
+   629→                        );
+   630→                    }
+   631→                }
+   632→            }
+   633→
+   634→            $restoreTransport = $invoice['pre_challan_transport'] ?? null;
+   635→            $restoreTotal = $invoice['pre_challan_total'] ?? null;
+   636→            if ($restoreTransport === null || $restoreTotal === null) {
+   637→                $subtotal = (float)($invoice['subtotal'] ?? 0);
+   638→                $discount = (float)($invoice['discount'] ?? 0);
+   639→                $restoreTransport = round((float)($invoice['transport_cost'] ?? 0) - $transportAdjustment, 2);
+   640→                $restoreTotal = round($subtotal + (float)$restoreTransport - $discount, 2);
+   641→            } else {
+   642→                $restoreTransport = (float)$restoreTransport;
+   643→                $restoreTotal = (float)$restoreTotal;
+   644→            }
+   645→
+   646→            $this->db->query("
+   647→                UPDATE sales_challans
+   648→                SET is_reversed = 1,
+   649→                    reversed_at = NOW(),
+   650→                    reversed_by = :uid,
+   651→                    reverse_reason = :reason
+   652→                WHERE id = :id
+   653→            ");
+   654→            $this->db->bind(':uid', $userId);
+   655→            $this->db->bind(':reason', $reason);
+   656→            $this->db->bind(':id', $challanId);
+   657→            $this->db->execute();
+   658→
+   659→            if ($this->invoiceHasPreChallanColumns()) {
+   660→                $this->db->query("
+   661→                    UPDATE sales_invoices
+   662→                    SET status = 'godown_issued',
+   663→                        challan_completed_at = NULL,
+   664→                        transport_cost = :tc,
+   665→                        total_amount = :total,
+   666→                        pre_challan_transport = NULL,
+   667→                        pre_challan_total = NULL
+   668→                    WHERE id = :id
+   669→                ");
+   670→            } else {
+   671→                $this->db->query("
+   672→                    UPDATE sales_invoices
+   673→                    SET status = 'godown_issued',
+   674→                        challan_completed_at = NULL,
+   675→                        transport_cost = :tc,
+   676→                        total_amount = :total
+   677→                    WHERE id = :id
+   678→                ");
+   679→            }
+   680→            $this->db->bind(':tc', (float)$restoreTransport);
+   681→            $this->db->bind(':total', (float)$restoreTotal);
+   682→            $this->db->bind(':id', $invoiceId);
+   683→            $this->db->execute();
+   684→
+   685→            $journalEntryId = null;
+   686→            if (!empty($challan['journal_entry_id'])) {
+   687→                $rev = $journalService->reverseLinkedJournal((int)$challan['journal_entry_id'], $reason);
+   688→                if (!empty($rev['journal_entry_id'])) {
+   689→                    $journalEntryId = (int)$rev['journal_entry_id'];
+   690→                }
+   691→            }
+   692→
+   693→            $this->db->commit();
+   694→
+   695→            return [
+   696→                'status'                 => 'success',
+   697→                'message'                => 'Challan reversed. Stock, transport/AR, and COGS rolled back; invoice returned to godown issued.',
+   698→                'invoice_id'             => $invoiceId,
+   699→                'invoice_code'           => $invoice['invoice_code'],
+   700→                'challan_id'             => $challanId,
+   701→                'challan_code'           => $challanCode,
+   702→                'items_reversed'         => $itemsReversed,
+   703→                'journal_entry_id'       => $journalEntryId,
+   704→                'transport_restored'   => (float)$restoreTransport,
+   705→                'total_restored'       => (float)$restoreTotal,
+   706→                'transport_adjustment' => $transportAdjustment,
+   707→            ];
+   708→        } catch (Exception $e) {
+   709→            $this->db->rollback();
+   710→            return ['status' => 'error', 'message' => $e->getMessage()];
+   711→        }
+   712→    }
+   713→
+   714→    /**
+   715→     * Restore stock at original challan issue rates (sales_challan_items or stock_transactions).
+   716→     */
+   717→    protected function restoreStockFromChallanIssue(
+   718→        int $challanId,
+   719→        string $challanCode,
+   720→        int $invoiceId,
+   721→        int $branchId,
+   722→        string $reason,
+   723→        int $cogsJournalId = 0
+   724→    ): int {
+   725→        $issueLines = $this->loadChallanIssueLinesForRestore($challanId, $invoiceId, $cogsJournalId);
+   726→        $itemsReversed = 0;
+   727→
+   728→        foreach ($issueLines as $line) {
+   729→            $pid = (int)($line['product_id'] ?? 0);
+   730→            $wid = (int)($line['warehouse_id'] ?? 0);
+   731→            $qty = (float)($line['qty'] ?? 0);
+   732→            if ($qty <= 0 || $wid <= 0 || $pid <= 0) {
+   733→                continue;
+   734→            }
+   735→
+   736→            if (!$this->warehouseBelongsToBranch($wid, $branchId)) {
+   737→                throw new Exception('Warehouse branch mismatch during challan reversal.');
+   738→            }
+   739→
+   740→            $issueRate = $this->resolveChallanIssueRate(
+   741→                $challanId,
+   742→                $invoiceId,
+   743→                $pid,
+   744→                $wid,
+   745→                $qty,
+   746→                $cogsJournalId,
+   747→                isset($line['issue_rate']) ? (float)$line['issue_rate'] : null
+   748→            );
+   749→
+   750→            $this->stock->updateWarehouseStock($wid, $pid, $qty, $issueRate);
+   751→            $this->stock->logMovement([
+   752→                'product_id'     => $pid,
+   753→                'warehouse_id'   => $wid,
+   754→                'qty'            => $qty,
+   755→                'rate'           => $issueRate,
+   756→                'reference_type' => 'sales_challan_reversal',
+   757→                'reference_id'   => $challanId,
+   758→                'remarks'        => "Reversal of Challan #{$challanCode}: {$reason}",
+   759→            ]);
+   760→            $itemsReversed++;
+   761→
+   762→            $this->db->query("
+   763→                UPDATE sales_invoice_dispatches
+   764→                SET dispatched_qty = 0, dispatched_ctn = 0, dispatched_at = NULL
+   765→                WHERE sales_invoice_id = :iid AND product_id = :pid
+   766→            ");
+   767→            $this->db->bind(':iid', $invoiceId);
+   768→            $this->db->bind(':pid', $pid);
+   769→            $this->db->execute();
+   770→        }
+   771→
+   772→        return $itemsReversed;
+   773→    }
+   774→
+   775→    /**
+   776→     * @return list<array{product_id:int, warehouse_id:int, qty:float, issue_rate?:float}>
+   777→     */
+   778→    protected function loadChallanIssueLinesForRestore(int $challanId, int $invoiceId, int $cogsJournalId): array
+   779→    {
+   780→        if ($this->hasChallanIssueItemsTable()) {
+   781→            $items = $this->fetchChallanIssueItems($challanId);
+   782→            if ($items !== []) {
+   783→                return $items;
+   784→            }
+   785→        }
+   786→
+   787→        $fromTx = $this->fetchIssueLinesFromStockTransactions($challanId);
+   788→        if ($fromTx !== []) {
+   789→            return $fromTx;
+   790→        }
+   791→
+   792→        return $this->fetchLegacyDispatchIssueLines($challanId, $invoiceId, $cogsJournalId);
+   793→    }
+   794→
+   795→    /**
+   796→     * @return list<array{product_id:int, warehouse_id:int, qty:float, issue_rate:float}>
+   797→     */
+   798→    protected function fetchChallanIssueItems(int $challanId): array
+   799→    {
+   800→        $this->db->query("
+   801→            SELECT product_id, warehouse_id, qty, issue_rate
+   802→            FROM sales_challan_items
+   803→            WHERE sales_challan_id = :cid
+   804→            ORDER BY id ASC
+   805→        ");
+   806→        $this->db->bind(':cid', $challanId);
+   807→        $rows = $this->db->resultSet() ?: [];
+   808→
+   809→        return array_map(static function (array $row): array {
+   810→            return [
+   811→                'product_id'   => (int)$row['product_id'],
+   812→                'warehouse_id' => (int)$row['warehouse_id'],
+   813→                'qty'          => (float)$row['qty'],
+   814→                'issue_rate'   => (float)$row['issue_rate'],
+   815→            ];
+   816→        }, $rows);
+   817→    }
+   818→
+   819→    /**
+   820→     * @return list<array{product_id:int, warehouse_id:int, qty:float, issue_rate:float}>
+   821→     */
+   822→    protected function fetchIssueLinesFromStockTransactions(int $challanId): array
+   823→    {
+   824→        $this->db->query("
+   825→            SELECT product_id, warehouse_id, qty, rate
+   826→            FROM stock_transactions
+   827→            WHERE reference_type = 'sales_challan'
+   828→              AND reference_id = :cid
+   829→              AND qty < -0.0001
+   830→            ORDER BY id ASC
+   831→        ");
+   832→        $this->db->bind(':cid', $challanId);
+   833→        $rows = $this->db->resultSet() ?: [];
+   834→        $lines = [];
+   835→
+   836→        foreach ($rows as $row) {
+   837→            $lines[] = [
+   838→                'product_id'   => (int)$row['product_id'],
+   839→                'warehouse_id' => (int)$row['warehouse_id'],
+   840→                'qty'          => abs((float)($row['qty'] ?? 0)),
+   841→                'issue_rate'   => (float)($row['rate'] ?? 0),
+   842→            ];
+   843→        }
+   844→
+   845→        return $lines;
+   846→    }
+   847→
+   848→    /**
+   849→     * @return list<array{product_id:int, warehouse_id:int, qty:float}>
+   850→     */
+   851→    protected function fetchLegacyDispatchIssueLines(int $challanId, int $invoiceId, int $cogsJournalId): array
+   852→    {
+   853→        $this->db->query("
+   854→            SELECT product_id, warehouse_id, dispatched_qty AS qty
+   855→            FROM sales_invoice_dispatches
+   856→            WHERE sales_invoice_id = :iid AND COALESCE(dispatched_qty, 0) > 0
+   857→        ");
+   858→        $this->db->bind(':iid', $invoiceId);
+   859→        $rows = $this->db->resultSet() ?: [];
+   860→        $lines = [];
+   861→
+   862→        foreach ($rows as $row) {
+   863→            $qty = (float)($row['qty'] ?? 0);
+   864→            if ($qty <= 0) {
+   865→                continue;
+   866→            }
+   867→            $lines[] = [
+   868→                'product_id'   => (int)$row['product_id'],
+   869→                'warehouse_id' => (int)$row['warehouse_id'],
+   870→                'qty'          => $qty,
+   871→            ];
+   872→        }
+   873→
+   874→        if ($lines === [] && $cogsJournalId > 0) {
+   875→            throw new Exception(
+   876→                'Cannot reverse challan: no issue lines found. Restore stock_transactions or run migration 040_sales_challan_issue_cost.sql.'
+   877→            );
+   878→        }
+   879→
+   880→        return $lines;
+   881→    }
+   882→
+   883→    protected function resolveChallanIssueRate(
+   884→        int $challanId,
+   885→        int $invoiceId,
+   886→        int $productId,
+   887→        int $warehouseId,
+   888→        float $qty,
+   889→        int $cogsJournalId,
+   890→        ?float $knownRate = null
+   891→    ): float {
+   892→        if ($knownRate !== null && $knownRate > 0) {
+   893→            return round($knownRate, 4);
+   894→        }
+   895→
+   896→        if ($this->hasChallanIssueItemsTable()) {
+   897→            $this->db->query("
+   898→                SELECT issue_rate FROM sales_challan_items
+   899→                WHERE sales_challan_id = :cid
+   900→                  AND product_id = :pid
+   901→                  AND warehouse_id = :wid
+   902→                ORDER BY id DESC
+   903→                LIMIT 1
+   904→            ");
+   905→            $this->db->bind(':cid', $challanId);
+   906→            $this->db->bind(':pid', $productId);
+   907→            $this->db->bind(':wid', $warehouseId);
+   908→            $stored = (float)($this->db->single()['issue_rate'] ?? 0);
+   909→            if ($stored > 0) {
+   910→                return round($stored, 4);
+   911→            }
+   912→        }
+   913→
+   914→        $this->db->query("
+   915→            SELECT rate FROM stock_transactions
+   916→            WHERE reference_type = 'sales_challan'
+   917→              AND reference_id = :cid
+   918→              AND product_id = :pid
+   919→              AND warehouse_id = :wid
+   920→              AND qty < -0.0001
+   921→            ORDER BY id DESC
+   922→            LIMIT 1
+   923→        ");
+   924→        $this->db->bind(':cid', $challanId);
+   925→        $this->db->bind(':pid', $productId);
+   926→        $this->db->bind(':wid', $warehouseId);
+   927→        $txRate = (float)($this->db->single()['rate'] ?? 0);
+   928→        if ($txRate > 0) {
+   929→            return round($txRate, 4);
+   930→        }
+   931→
+   932→        if ($cogsJournalId > 0) {
+   933→            $lineCount = count($this->fetchChallanIssueItems($challanId))
+   934→                + count($this->fetchIssueLinesFromStockTransactions($challanId));
+   935→            if ($lineCount <= 1) {
+   936→                $cogsAmount = $this->sumJournalCogsDebit($cogsJournalId);
+   937→                if ($cogsAmount > 0 && $qty > 0) {
+   938→                    return round($cogsAmount / $qty, 4);
+   939→                }
+   940→            }
+   941→        }
+   942→
+   943→        throw new Exception(
+   944→            'Cannot resolve original issue cost for product #' . $productId
+   945→            . ' (challan #' . $challanId . '). Re-post from stock history or run migration 040.'
+   946→        );
+   947→    }
+   948→
+   949→    protected function sumJournalCogsDebit(int $journalEntryId): float
+   950→    {
+   951→        $this->db->query("
+   952→            SELECT COALESCE(SUM(jel.debit - jel.credit), 0) AS cogs
+   953→            FROM journal_entry_lines jel
+   954→            INNER JOIN ledgers l ON l.id = jel.ledger_id
+   955→            WHERE jel.journal_entry_id = :jid
+   956→              AND l.ledger_nature = 'cogs'
+   957→        ");
+   958→        $this->db->bind(':jid', $journalEntryId);
+   959→        $row = $this->db->single();
+   960→
+   961→        return max(0.0, round((float)($row['cogs'] ?? 0), 2));
+   962→    }
+   963→
+   964→    protected function saveChallanIssueLine(
+   965→        int $challanId,
+   966→        int $productId,
+   967→        int $warehouseId,
+   968→        float $qty,
+   969→        float $issueRate
+   970→    ): void {
+   971→        if (!$this->hasChallanIssueItemsTable()) {
+   972→            return;
+   973→        }
+   974→
+   975→        $issueRate = round($issueRate, 4);
+   976→        $cogsAmount = round($qty * $issueRate, 2);
+   977→
+   978→        $this->db->query("
+   979→            INSERT INTO sales_challan_items
+   980→            (sales_challan_id, product_id, warehouse_id, qty, issue_rate, cogs_amount)
+   981→            VALUES (:cid, :pid, :wid, :qty, :rate, :cogs)
+   982→        ");
+   983→        $this->db->bind(':cid', $challanId);
+   984→        $this->db->bind(':pid', $productId);
+   985→        $this->db->bind(':wid', $warehouseId);
+   986→        $this->db->bind(':qty', $qty);
+   987→        $this->db->bind(':rate', $issueRate);
+   988→        $this->db->bind(':cogs', $cogsAmount);
+   989→        $this->db->execute();
+   990→    }
+   991→
+   992→    protected function hasChallanIssueItemsTable(): bool
+   993→    {
+   994→        static $cached = null;
+   995→        if ($cached !== null) {
+   996→            return $cached;
+   997→        }
+   998→
+   999→        try {
+  1000→            $this->db->query("SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'sales_challan_items'");
+  1001→            $cached = (bool)$this->db->single();
+  1002→        } catch (Throwable $e) {
+  1003→            $cached = false;
+  1004→        }
+  1005→
+  1006→        return $cached;
+  1007→    }
+  1008→
+  1009→    /**
+  1010→     * Undo customer_ledger transport/total adjustment posted at challan finalize only.
+  1011→     * Godown transport adjustments remain active (invoice stays at godown totals).
+  1012→     */
+  1013→    protected function reverseChallanTransportLedger(
+  1014→        int $customerId,
+  1015→        int $invoiceId,
+  1016→        float $adjustmentDelta,
+  1017→        int $branchId,
+  1018→        string $challanCode,
+  1019→        string $reason
+  1020→    ): void {
+  1021→        if (abs($adjustmentDelta) < 0.0001) {
+  1022→            return;
+  1023→        }
+  1024→
+  1025→        $prevBalance = $this->getCustomerRunningBalance($customerId);
+  1026→        $newBalance = $prevBalance - $adjustmentDelta;
+  1027→
+  1028→        $this->insertCustomerLedgerEntry([
+  1029→            'customer_id'      => $customerId,
+  1030→            'reference_type'   => 'reversal',
+  1031→            'reference_id'     => $invoiceId,
+  1032→            'debit'            => $adjustmentDelta < 0 ? abs($adjustmentDelta) : 0,
+  1033→            'credit'           => $adjustmentDelta > 0 ? $adjustmentDelta : 0,
+  1034→            'running_balance'  => $newBalance,
+  1035→            'branch_id'        => $branchId,
+  1036→            'remarks'          => "Reversal of transport/total on challan #{$challanCode} — {$reason}",
+  1037→            'is_reversed'      => 1,
+  1038→        ]);
+  1039→
+  1040→        $needle = '%adjustment on challan #' . $challanCode . '%';
+  1041→        $this->db->query("
+  1042→            UPDATE customer_ledger
+  1043→            SET is_reversed = 1
+  1044→            WHERE customer_id = :cid
+  1045→              AND reference_type = 'invoice_adjustment'
+  1046→              AND reference_id = :iid
+  1047→              AND COALESCE(is_reversed, 0) = 0
+  1048→              AND remarks LIKE :needle
+  1049→        ");
+  1050→        $this->db->bind(':cid', $customerId);
+  1051→        $this->db->bind(':iid', $invoiceId);
+  1052→        $this->db->bind(':needle', $needle);
+  1053→        $this->db->execute();
+  1054→    }
+  1055→
+  1056→    /**
+  1057→     * Net AR delta from challan-time invoice_adjustment rows (excludes godown saves).
+  1058→     */
+  1059→    protected function sumChallanInvoiceAdjustments(int $customerId, int $invoiceId, string $challanCode): float
+  1060→    {
+  1061→        $needle = '%adjustment on challan #' . $challanCode . '%';
+  1062→        $this->db->query("
+  1063→            SELECT COALESCE(SUM(debit - credit), 0) AS delta
+  1064→            FROM customer_ledger
+  1065→            WHERE customer_id = :cid
+  1066→              AND reference_type = 'invoice_adjustment'
+  1067→              AND reference_id = :iid
+  1068→              AND COALESCE(is_reversed, 0) = 0
+  1069→              AND remarks LIKE :needle
+  1070→        ");
+  1071→        $this->db->bind(':cid', $customerId);
+  1072→        $this->db->bind(':iid', $invoiceId);
+  1073→        $this->db->bind(':needle', $needle);
+  1074→
+  1075→        return round((float)($this->db->single()['delta'] ?? 0), 2);
+  1076→    }
+  1077→
+  1078→    /**
+  1079→     * Resolve transport adjustment GL for this challan (not another invoice/challan cycle).
+  1080→     */
+  1081→    protected function findChallanAdjustmentJournalId(
+  1082→        int $invoiceId,
+  1083→        string $challanCode,
+  1084→        JournalPostingService $journalService
+  1085→    ): ?int {
+  1086→        $needle = '%Challan #' . $challanCode . '%';
+  1087→        $this->db->query("
+  1088→            SELECT id FROM journal_entries
+  1089→            WHERE reference_type = 'sales_invoice_adjustment'
+  1090→              AND reference_id = :iid
+  1091→              AND COALESCE(is_reversed, 0) = 0
+  1092→              AND description LIKE :needle
+  1093→            ORDER BY id DESC
+  1094→            LIMIT 1
+  1095→        ");
+  1096→        $this->db->bind(':iid', $invoiceId);
+  1097→        $this->db->bind(':needle', $needle);
+  1098→        $row = $this->db->single();
+  1099→
+  1100→        if (!empty($row['id'])) {
+  1101→            return (int)$row['id'];
+  1102→        }
+  1103→
+  1104→        return $journalService->findActiveJournalIdByReference('sales_invoice_adjustment', $invoiceId);
+  1105→    }
+  1106→
+  1107→    protected function updateChallanTransportMeta(
+  1108→        int $challanId,
+  1109→        float $transportAdjustment,
+  1110→        ?int $adjustmentJournalId
+  1111→    ): void {
+  1112→        if (!$this->challanHasTransportMetaColumns()) {
+  1113→            return;
+  1114→        }
+  1115→
+  1116→        $this->db->query("
+  1117→            UPDATE sales_challans
+  1118→            SET transport_adjustment = :adj,
+  1119→                adjustment_journal_entry_id = :jid
+  1120→            WHERE id = :id
+  1121→        ");
+  1122→        $this->db->bind(':adj', round($transportAdjustment, 2));
+  1123→        $this->db->bind(':jid', $adjustmentJournalId);
+  1124→        $this->db->bind(':id', $challanId);
+  1125→        $this->db->execute();
+  1126→    }
+  1127→
+  1128→    protected function challanHasTransportMetaColumns(): bool
+  1129→    {
+  1130→        static $cached = null;
+  1131→        if ($cached !== null) {
+  1132→            return $cached;
+  1133→        }
+  1134→
+  1135→        try {
+  1136→            $this->db->query("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'sales_challans' AND column_name = 'transport_adjustment'");
+  1137→            $cached = (bool)$this->db->single();
+  1138→        } catch (Throwable $e) {
+  1139→            $cached = false;
+  1140→        }
+  1141→
+  1142→        return $cached;
+  1143→    }
+  1144→
+  1145→    protected function invoiceHasPreChallanColumns(): bool
+  1146→    {
+  1147→        static $cached = null;
+  1148→        if ($cached !== null) {
+  1149→            return $cached;
+  1150→        }
+  1151→
+  1152→        try {
+  1153→            $this->db->query("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'sales_invoices' AND column_name = 'pre_challan_total'");
+  1154→            $cached = (bool)$this->db->single();
+  1155→        } catch (Throwable $e) {
+  1156→            $cached = false;
+  1157→        }
+  1158→
+  1159→        return $cached;
+  1160→    }
+  1161→
+  1162→    /**
+  1163→     * Save transport from challan form and recalculate invoice total (+ customer ledger if changed).
+  1164→     *
+  1165→     * @return array{transport:float,new_total:float,total_diff:float}
+  1166→     */
+  1167→    protected function persistInvoiceTransportCost(
+  1168→        array $data,
+  1169→        array $invoiceRow,
+  1170→        int $invoiceId,
+  1171→        string $ledgerRemark
+  1172→    ): array {
+  1173→        $newTransport = max(0, (float)($data['transport_cost'] ?? 0));
+  1174→        $subtotal = (float)($invoiceRow['subtotal'] ?? 0);
+  1175→        $discount = (float)($invoiceRow['discount'] ?? 0);
+  1176→        $oldTotal = (float)($invoiceRow['total_amount'] ?? 0);
+  1177→        $newTotal = round($subtotal + $newTransport - $discount, 2);
+  1178→        $totalDiff = round($newTotal - $oldTotal, 2);
+  1179→
+  1180→        $this->db->query("
+  1181→            UPDATE sales_invoices
+  1182→            SET transport_cost = :tc,
+  1183→                total_amount = :total
+  1184→            WHERE id = :id
+  1185→        ");
+  1186→        $this->db->bind(':tc', $newTransport);
+  1187→        $this->db->bind(':total', $newTotal);
+  1188→        $this->db->bind(':id', $invoiceId);
+  1189→        $this->db->execute();
+  1190→
+  1191→        if (abs($totalDiff) > 0.0001) {
+  1192→            $this->applyCustomerLedgerDelta(
+  1193→                (int)($invoiceRow['customer_id'] ?? 0),
+  1194→                $invoiceId,
+  1195→                $totalDiff,
+  1196→                $ledgerRemark,
+  1197→                (int)($invoiceRow['branch_id'] ?? 0)
+  1198→            );
+  1199→        }
+  1200→
+  1201→        return [
+  1202→            'transport'   => $newTransport,
+  1203→            'new_total'   => $newTotal,
+  1204→            'total_diff'  => $totalDiff,
+  1205→        ];
+  1206→    }
+  1207→
+  1208→    /** Adjust customer AR when invoice total changes (e.g. transport at challan). */
+  1209→    protected function applyCustomerLedgerDelta(
+  1210→        int $customerId,
+  1211→        int $invoiceId,
+  1212→        float $delta,
+  1213→        string $remarks,
+  1214→        int $branchId = 0
+  1215→    ): void {
+  1216→        if (abs($delta) < 0.0001) {
+  1217→            return;
+  1218→        }
+  1219→
+  1220→        $prevBalance = $this->getCustomerRunningBalance($customerId);
+  1221→        $newBalance = $prevBalance + $delta;
+  1222→
+  1223→        $this->insertCustomerLedgerEntry([
+  1224→            'customer_id'      => $customerId,
+  1225→            'reference_type'   => 'invoice_adjustment',
+  1226→            'reference_id'     => $invoiceId,
+  1227→            'debit'            => $delta > 0 ? $delta : 0,
+  1228→            'credit'           => $delta < 0 ? abs($delta) : 0,
+  1229→            'running_balance'  => $newBalance,
+  1230→            'branch_id'        => $branchId,
+  1231→            'remarks'          => $remarks,
+  1232→        ]);
+  1233→    }
+  1234→
+  1235→
+  1236→    public function getInvoiceForGodownCopy($invoice_id) {
+  1237→        // Main invoice
+  1238→        $this->db->query("
+  1239→            SELECT si.*, c.shop_name, c.mobile, c.address,
+  1240→                   b.branch_name, b.address AS branch_address, b.phone AS branch_phone,
+  1241→                   b.id as branch_id,
+  1242→                   e.name as salesman_name
+  1243→            FROM sales_invoices si
+  1244→            JOIN customers c ON si.customer_id = c.id
+  1245→            JOIN branches b ON si.branch_id = b.id
+  1246→            JOIN employees e ON si.salesman_id = e.id
+  1247→            WHERE si.id = :id AND si.is_reversed = 0
+  1248→        ");
+  1249→        $this->db->bind(':id', $invoice_id);
+  1250→        $invoice = $this->db->single();
+  1251→
+  1252→        if (!$invoice) return false;
+  1253→
+  1254→        try {
+  1255→            $this->assertInvoiceAccessible((int)$invoice['branch_id']);
+  1256→        } catch (Exception $e) {
+  1257→            return false;
+  1258→        }
+  1259→
+  1260→        // Items with warehouse & available stock
+  1261→        $this->db->query("
+  1262→            SELECT 
+  1263→                sii.*,
+  1264→                p.product_name, 
+  1265→                p.unit,
+  1266→                p.pcs_per_carton,
+  1267→                w.warehouse_name,
+  1268→                COALESCE((SELECT ws.qty FROM warehouse_stock ws WHERE ws.product_id = sii.product_id LIMIT 1), 0) as current_stock,
+  1269→                COALESCE(sid.dispatched_qty, 0) as dispatched_qty,
+  1270→                COALESCE(sid.dispatched_ctn, 0) as dispatched_ctn,
+  1271→                COALESCE(sid.warehouse_id, sii.warehouse_id) AS resolved_warehouse_id,
+  1272→                GREATEST(0, 
+  1273→                    COALESCE((SELECT SUM(ws.qty) FROM warehouse_stock ws WHERE ws.product_id = sii.product_id), 0) - 
+  1274→                    COALESCE((SELECT SUM(COALESCE(d.ordered_qty,0) - COALESCE(d.dispatched_qty,0))
+  1275→                              FROM sales_invoice_dispatches d 
+  1276→                              JOIN sales_invoices inv ON inv.id = d.sales_invoice_id
+  1277→                              WHERE d.product_id = sii.product_id 
+  1278→                                AND inv.status NOT IN ('challan_completed', 'reversed')
+  1279→                                AND inv.is_reversed = 0), 0)
+  1280→                ) as available_qty
+  1281→            FROM sales_invoice_items sii
+  1282→            JOIN products p ON sii.product_id = p.id
+  1283→            LEFT JOIN warehouses w ON w.id = sii.warehouse_id
+  1284→            LEFT JOIN sales_invoice_dispatches sid 
+  1285→                   ON sid.sales_invoice_id = sii.sales_invoice_id 
+  1286→                  AND sid.product_id = sii.product_id
+  1287→            WHERE sii.sales_invoice_id = :id
+  1288→            ORDER BY sii.id
+  1289→        ");
+  1290→        $this->db->bind(':id', $invoice_id);
+  1291→        $invoice['items'] = $this->db->resultSet();
+  1292→
+  1293→        // Dispatchers for prints
+  1294→        $this->db->query("
+  1295→            SELECT e.id, e.name 
+  1296→            FROM sales_invoice_dispatchers sd
+  1297→            JOIN employees e ON sd.employee_id = e.id
+  1298→            WHERE sd.sales_invoice_id = :id
+  1299→            ORDER BY e.name
+  1300→        ");
+  1301→        $this->db->bind(':id', $invoice_id);
+  1302→        $invoice['dispatchers'] = $this->db->resultSet();
+  1303→
+  1304→        $this->db->query("
+  1305→            SELECT challan_code, challan_date, created_at
+  1306→            FROM sales_challans
+  1307→            WHERE sales_invoice_id = :id
+  1308→            ORDER BY id DESC
+  1309→            LIMIT 1
+  1310→        ");
+  1311→        $this->db->bind(':id', $invoice_id);
+  1312→        $challan = $this->db->single();
+  1313→        if ($challan) {
+  1314→            $invoice['challan_code'] = $challan['challan_code'] ?? null;
+  1315→            $invoice['challan_date'] = $challan['challan_date'] ?? null;
+  1316→            $invoice['challan_created_at'] = $challan['created_at'] ?? null;
+  1317→        }
+  1318→
+  1319→        return $invoice;
+  1320→    }
+  1321→
+  1322→    // Unchanged methods below (copy from your original file)
+  1323→    public function getPendingForChallan($branch_id = 0) {
+  1324→        $branch_id = (int)$branch_id > 0 ? (int)$branch_id : self::sessionBranchId();
+  1325→
+  1326→        $this->db->query("
+  1327→            SELECT 
+  1328→                si.id, si.invoice_code, si.invoice_date, si.total_amount, si.status,
+  1329→                c.shop_name, c.mobile, e.name as salesman_name,
+  1330→                si.created_at, si.godown_issued_at, si.challan_completed_at
+  1331→            FROM sales_invoices si
+  1332→            JOIN customers c ON si.customer_id = c.id
+  1333→            JOIN employees e ON si.salesman_id = e.id
+  1334→            WHERE si.branch_id = :branch_id 
+  1335→              AND si.is_reversed = 0 
+  1336→              AND si.status IN ('draft', 'godown_issued')
+  1337→            ORDER BY si.created_at DESC
+  1338→        ");
+  1339→        $this->db->bind(':branch_id', $branch_id);
+  1340→        return $this->db->resultSet();
+  1341→
+  1342→     }
+  1343→    protected function getWarehousePhysicalStock(int $productId, int $warehouseId): float
+  1344→    {
+  1345→        $this->db->query("
+  1346→            SELECT COALESCE(qty, 0) AS qty
+  1347→            FROM warehouse_stock
+  1348→            WHERE product_id = :pid AND warehouse_id = :wid
+  1349→        ");
+  1350→        $this->db->bind(':pid', $productId);
+  1351→        $this->db->bind(':wid', $warehouseId);
+  1352→        $row = $this->db->single();
+  1353→
+  1354→        return (float)($row['qty'] ?? 0);
+  1355→    }
+  1356→
+  1357→    public function getWarehousesForProduct($product_id, $branch_id = 0, ?int $excludeInvoiceId = null) {
+  1358→        $branch_id = self::sessionBranchId();
+  1359→        require_once __DIR__ . '/../services/Stock/StockAvailabilityService.php';
+  1360→        $svc = new StockAvailabilityService($this->db);
+  1361→        $rows = $svc->getWarehouseWiseStock((int)$product_id, $branch_id, $excludeInvoiceId);
+  1362→
+  1363→        foreach ($rows as &$row) {
+  1364→            $avail = (float)($row['available_qty'] ?? 0);
+  1365→            $row['physical_stock'] = (float)($row['physical_qty'] ?? 0);
+  1366→            $row['warehouse_name'] = ($row['warehouse_name'] ?? '')
+  1367→                . ' (Avail: ' . number_format($avail, 2, '.', '') . ')';
+  1368→        }
+  1369→        unset($row);
+  1370→
+  1371→        return $rows;
+  1372→     }
+  1373→    public function getDispatchers() { 
+  1374→        
+  1375→        $this->db->query("
+  1376→            SELECT id, name FROM employees 
+  1377→            WHERE role = 'dispatcher' AND is_active = 1
+  1378→            ORDER BY name
+  1379→        ");
+  1380→        return $this->db->resultSet();
+  1381→     }
+  1382→
+  1383→
+  1384→     public function getFilteredChallans($filters = []) {
+  1385→        $bindings = [];
+  1386→        $search = trim($filters['search'] ?? '');
+  1387→        $where = $this->buildChallanListWhere(
+  1388→            $filters,
+  1389→            $bindings,
+  1390→            $search !== '' ? $search : null
+  1391→        );
+  1392→
+  1393→        $sql = self::CHALLAN_LIST_SELECT . self::CHALLAN_LIST_FROM;
+  1394→        if (!empty($where)) {
+  1395→            $sql .= ' WHERE ' . implode(' AND ', $where);
+  1396→        }
+  1397→
+  1398→        if (!empty($filters['smart_sort'])) {
+  1399→            $sql .= " ORDER BY CASE si.status
+  1400→                WHEN 'draft' THEN 1
+  1401→                WHEN 'godown_issued' THEN 2
+  1402→                WHEN 'challan_completed' THEN 3
+  1403→                ELSE 4 END, si.created_at DESC";
+  1404→        } else {
+  1405→            $sql .= " ORDER BY si.created_at DESC";
+  1406→        }
+  1407→
+  1408→        $this->db->query($sql);
+  1409→        foreach ($bindings as $param => $value) {
+  1410→            $this->db->bind($param, $value);
+  1411→        }
+  1412→
+  1413→        return $this->db->resultSet();
+  1414→    }
+  1415→
+  1416→    private const CHALLAN_LIST_FROM = "
+  1417→        FROM sales_invoices si
+  1418→        JOIN customers c ON si.customer_id = c.id
+  1419→        JOIN branches b ON si.branch_id = b.id
+  1420→        JOIN employees e ON si.salesman_id = e.id
+  1421→    ";
+  1422→
+  1423→    private const CHALLAN_LIST_SELECT = "
+  1424→        SELECT
+  1425→            si.id,
+  1426→            si.invoice_code,
+  1427→            si.invoice_date,
+  1428→            si.total_amount,
+  1429→            si.status,
+  1430→            si.godown_issued_at,
+  1431→            si.challan_completed_at,
+  1432→            c.shop_name,
+  1433→            c.customer_name,
+  1434→            c.mobile,
+  1435→            c.address,
+  1436→            b.branch_name,
+  1437→            e.name AS salesman_name
+  1438→    ";
+  1439→
+  1440→    /**
+  1441→     * Extended status keys for warehouse list filters.
+  1442→     */
+  1443→    private function applyChallanStatusFilter(string $status, array &$where, array &$bindings): void
+  1444→    {
+  1445→        $status = trim($status);
+  1446→        if ($status === '' || $status === 'all') {
+  1447→            return;
+  1448→        }
+  1449→
+  1450→        switch ($status) {
+  1451→            case 'open':
+  1452→                $where[] = "si.status IN ('draft', 'godown_issued')";
+  1453→                return;
+  1454→            case 'needs_godown':
+  1455→                $where[] = "si.status = 'draft'";
+  1456→                return;
+  1457→            case 'needs_challan':
+  1458→                $where[] = "si.status = 'godown_issued'";
+  1459→                return;
+  1460→            default:
+  1461→                $where[] = "si.status = :status";
+  1462→                $bindings[':status'] = $status;
+  1463→        }
+  1464→    }
+  1465→
+  1466→    private function buildChallanListWhere(array $filters, array &$bindings, ?string $dtSearch = null): array
+  1467→    {
+  1468→        $where = [];
+  1469→        $where[] = "si.branch_id = :branch_id";
+  1470→        $bindings[':branch_id'] = self::sessionBranchId();
+  1471→
+  1472→        $hasDateFilter = false;
+  1473→        if (!empty($filters['date_from'])) {
+  1474→            $where[] = "si.invoice_date >= :date_from";
+  1475→            $bindings[':date_from'] = $filters['date_from'];
+  1476→            $hasDateFilter = true;
+  1477→        }
+  1478→        if (!empty($filters['date_to'])) {
+  1479→            $where[] = "si.invoice_date <= :date_to";
+  1480→            $bindings[':date_to'] = $filters['date_to'];
+  1481→            $hasDateFilter = true;
+  1482→        }
+  1483→        if (!$hasDateFilter && empty($filters['skip_default_today'])) {
+  1484→            $where[] = "si.invoice_date = CURRENT_DATE";
+  1485→        }
+  1486→
+  1487→        $searchTerm = trim($dtSearch ?? $filters['search'] ?? '');
+  1488→        if ($searchTerm !== '') {
+  1489→            $term = '%' . $searchTerm . '%';
+  1490→            $where[] = "(
+  1491→                si.invoice_code LIKE :t1
+  1492→                OR c.shop_name LIKE :t2
+  1493→                OR c.customer_name LIKE :t3
+  1494→                OR c.mobile LIKE :t4
+  1495→                OR c.address LIKE :t5
+  1496→                OR e.name LIKE :t6
+  1497→            )";
+  1498→            $bindings[':t1'] = $term;
+  1499→            $bindings[':t2'] = $term;
+  1500→            $bindings[':t3'] = $term;
+  1501→            $bindings[':t4'] = $term;
+  1502→            $bindings[':t5'] = $term;
+  1503→            $bindings[':t6'] = $term;
+  1504→        }
+  1505→
+  1506→        $this->applyChallanStatusFilter((string)($filters['status'] ?? 'all'), $where, $bindings);
+  1507→
+  1508→        $where[] = "si.is_reversed = 0";
+  1509→        return $where;
+  1510→    }
+  1511→
+  1512→    /**
+  1513→     * Status counts for the current date/search scope (ignores status filter).
+  1514→     */
+  1515→    public function getChallanFilterSummary(array $filters): array
+  1516→    {
+  1517→        $summaryFilters = $filters;
+  1518→        unset($summaryFilters['status'], $summaryFilters['smart_sort']);
+  1519→
+  1520→        $bindings = [];
+  1521→        $where = $this->buildChallanListWhere(
+  1522→            array_merge($summaryFilters, ['status' => 'all']),
+  1523→            $bindings,
+  1524→            trim($filters['search'] ?? '') !== '' ? trim($filters['search']) : null
+  1525→        );
+  1526→        $whereSql = empty($where) ? '' : ' WHERE ' . implode(' AND ', $where);
+  1527→
+  1528→        $this->db->query("
+  1529→            SELECT si.status, COUNT(*) AS cnt
+  1530→            " . self::CHALLAN_LIST_FROM . $whereSql . "
+  1531→            GROUP BY si.status
+  1532→        ");
+  1533→        foreach ($bindings as $param => $value) {
+  1534→            $this->db->bind($param, $value);
+  1535→        }
+  1536→        $rows = $this->db->resultSet();
+  1537→
+  1538→        $byStatus = [
+  1539→            'draft'             => 0,
+  1540→            'godown_issued'     => 0,
+  1541→            'challan_completed' => 0,
+  1542→        ];
+  1543→        $total = 0;
+  1544→        foreach ($rows as $row) {
+  1545→            $key = $row['status'] ?? '';
+  1546→            $cnt = (int)($row['cnt'] ?? 0);
+  1547→            $total += $cnt;
+  1548→            if (isset($byStatus[$key])) {
+  1549→                $byStatus[$key] = $cnt;
+  1550→            }
+  1551→        }
+  1552→
+  1553→        return [
+  1554→            'total'          => $total,
+  1555→            'draft'          => $byStatus['draft'],
+  1556→            'godown_issued'  => $byStatus['godown_issued'],
+  1557→            'challan_completed' => $byStatus['challan_completed'],
+  1558→            'open'           => $byStatus['draft'] + $byStatus['godown_issued'],
+  1559→            'needs_godown'   => $byStatus['draft'],
+  1560→            'needs_challan'  => $byStatus['godown_issued'],
+  1561→        ];
+  1562→    }
+  1563→
+  1564→    public function countChallansScoped(): int
+  1565→    {
+  1566→        $bindings = [];
+  1567→        $where = $this->buildChallanListWhere(['skip_default_today' => true], $bindings, null);
+  1568→        $sql = "SELECT COUNT(*) AS cnt " . self::CHALLAN_LIST_FROM;
+  1569→        if (!empty($where)) {
+  1570→            $sql .= " WHERE " . implode(" AND ", $where);
+  1571→        }
+  1572→        $this->db->query($sql);
+  1573→        foreach ($bindings as $param => $value) {
+  1574→            $this->db->bind($param, $value);
+  1575→        }
+  1576→        return (int)($this->db->single()['cnt'] ?? 0);
+  1577→    }
+  1578→
+  1579→    public function getChallansDatatable(
+  1580→        array $filters,
+  1581→        int $start,
+  1582→        int $length,
+  1583→        int $orderColumnIndex,
+  1584→        string $orderDir,
+  1585→        string $searchValue = ''
+  1586→    ): array {
+  1587→        if (!empty($filters['smart_sort'])) {
+  1588→            $orderBy = "CASE si.status
+  1589→                WHEN 'draft' THEN 1
+  1590→                WHEN 'godown_issued' THEN 2
+  1591→                WHEN 'challan_completed' THEN 3
+  1592→                ELSE 4 END, si.created_at";
+  1593→            $orderDir = 'DESC';
+  1594→        } else {
+  1595→            $orderMap = [
+  1596→                0 => 'si.invoice_code',
+  1597→                1 => 'si.invoice_date',
+  1598→                2 => 'c.shop_name',
+  1599→                3 => 'e.name',
+  1600→                4 => 'si.status',
+  1601→                5 => 'si.total_amount',
+  1602→            ];
+  1603→            $orderBy = $orderMap[$orderColumnIndex] ?? 'si.created_at';
+  1604→            $orderDir = strtoupper($orderDir) === 'ASC' ? 'ASC' : 'DESC';
+  1605→        }
+  1606→
+  1607→        $countBindings = [];
+  1608→        $countWhere = $this->buildChallanListWhere(
+  1609→            $filters,
+  1610→            $countBindings,
+  1611→            $searchValue !== '' ? $searchValue : null
+  1612→        );
+  1613→        $countWhereSql = empty($countWhere) ? '' : ' WHERE ' . implode(' AND ', $countWhere);
+  1614→
+  1615→        $this->db->query("SELECT COUNT(*) AS cnt " . self::CHALLAN_LIST_FROM . $countWhereSql);
+  1616→        foreach ($countBindings as $param => $value) {
+  1617→            $this->db->bind($param, $value);
+  1618→        }
+  1619→        $recordsFiltered = (int)($this->db->single()['cnt'] ?? 0);
+  1620→
+  1621→        $sql = self::CHALLAN_LIST_SELECT . self::CHALLAN_LIST_FROM . $countWhereSql
+  1622→            . " ORDER BY {$orderBy} {$orderDir} LIMIT :start, :length";
+  1623→        $this->db->query($sql);
+  1624→        foreach ($countBindings as $param => $value) {
+  1625→            $this->db->bind($param, $value);
+  1626→        }
+  1627→        $this->db->bind(':start', $start);
+  1628→        $this->db->bind(':length', $length);
+  1629→        $rows = $this->db->resultSet();
+  1630→
+  1631→        return [
+  1632→            'total'    => $this->countChallansScoped(),
+  1633→            'filtered' => $recordsFiltered,
+  1634→            'data'     => $rows,
+  1635→        ];
+  1636→    }
+  1637→
+  1638→    /**
+  1639→     * Link a posted journal entry to a sales challan (Phase 5 COGS posting).
+  1640→     */
+  1641→    public function setChallanJournalEntryId(int $challanId, ?int $journalEntryId): bool
+  1642→    {
+  1643→        $this->db->query("UPDATE sales_challans SET journal_entry_id = :jid WHERE id = :id");
+  1644→        $this->db->bind(':jid', $journalEntryId);
+  1645→        $this->db->bind(':id', $challanId);
+  1646→        return $this->db->execute();
+  1647→    }
+  1648→
+  1649→    /**
+  1650→     * Build Telegram alert payload after challan finalize.
+  1651→     *
+  1652→     * @return array<string, mixed>|null
+  1653→     */
+  1654→    public function getChallanTelegramPayload(
+  1655→        int $challanId,
+  1656→        int $invoiceId,
+  1657→        string $challanCode,
+  1658→        ?float $totalAmount = null
+  1659→    ): ?array {
+  1660→        if ($invoiceId <= 0) {
+  1661→            return null;
+  1662→        }
+  1663→
+  1664→        $this->db->query("
+  1665→            SELECT
+  1666→                si.id AS invoice_id,
+  1667→                si.invoice_code,
+  1668→                si.total_amount,
+  1669→                si.salesman_id,
+  1670→                si.sales_person,
+  1671→                COALESCE(NULLIF(TRIM(c.shop_name), ''), NULLIF(TRIM(c.customer_name), ''), 'Customer') AS customer_name,
+  1672→                b.id AS branch_id,
+  1673→                b.branch_name
+  1674→            FROM sales_invoices si
+  1675→            JOIN customers c ON c.id = si.customer_id
+  1676→            JOIN branches b ON b.id = si.branch_id
+  1677→            WHERE si.id = :iid AND si.is_reversed = 0
+  1678→            LIMIT 1
+  1679→        ");
+  1680→        $this->db->bind(':iid', $invoiceId, PDO::PARAM_INT);
+  1681→        $invoice = $this->db->single();
+  1682→        if (!$invoice) {
+  1683→            return null;
+  1684→        }
+  1685→
+  1686→        $this->db->query("
+  1687→            SELECT COUNT(*) AS c
+  1688→            FROM sales_invoice_items
+  1689→            WHERE sales_invoice_id = :iid
+  1690→              AND COALESCE(dispatched_qty, ordered_qty, 0) > 0
+  1691→        ");
+  1692→        $this->db->bind(':iid', $invoiceId, PDO::PARAM_INT);
+  1693→        $itemCount = (int)($this->db->single()['c'] ?? 0);
+  1694→
+  1695→        $warehouseLabel = '—';
+  1696→        if ($challanId > 0) {
+  1697→            $this->db->query("
+  1698→                SELECT string_agg(DISTINCT w.warehouse_name::text, ', ' ORDER BY w.warehouse_name::text) AS names
+  1699→                FROM sales_challan_items sci
+  1700→                JOIN warehouses w ON w.id = sci.warehouse_id
+  1701→                WHERE sci.sales_challan_id = :cid
+  1702→            ");
+  1703→            $this->db->bind(':cid', $challanId, PDO::PARAM_INT);
+  1704→            $names = trim((string)($this->db->single()['names'] ?? ''));
+  1705→            if ($names !== '') {
+  1706→                $warehouseLabel = $names;
+  1707→            }
+  1708→        }
+  1709→
+  1710→        if ($warehouseLabel === '—') {
+  1711→            $this->db->query("
+  1712→                SELECT string_agg(DISTINCT w.warehouse_name::text, ', ' ORDER BY w.warehouse_name::text) AS names
+  1713→                FROM sales_invoice_dispatches sid
+  1714→                JOIN warehouses w ON w.id = sid.warehouse_id
+  1715→                WHERE sid.sales_invoice_id = :iid
+  1716→            ");
+  1717→            $this->db->bind(':iid', $invoiceId, PDO::PARAM_INT);
+  1718→            $names = trim((string)($this->db->single()['names'] ?? ''));
+  1719→            if ($names !== '') {
+  1720→                $warehouseLabel = $names;
+  1721→            }
+  1722→        }
+  1723→
+  1724→        $publicBase = defined('PUBLIC_URL') ? rtrim(PUBLIC_URL, '/') . '/' : rtrim(BASE_URL, '/') . '/';
+  1725→        $resolvedTotal = $totalAmount ?? (float)($invoice['total_amount'] ?? 0);
+  1726→
+  1727→        return [
+  1728→            'challan_id'      => $challanId,
+  1729→            'challan_code'    => $challanCode,
+  1730→            'invoice_id'      => $invoiceId,
+  1731→            'invoice_code'    => (string)($invoice['invoice_code'] ?? ''),
+  1732→            'customer_name'   => (string)($invoice['customer_name'] ?? ''),
+  1733→            'item_count'      => $itemCount,
+  1734→            'total_amount'    => $resolvedTotal,
+  1735→            'branch_id'       => (int)($invoice['branch_id'] ?? 0),
+  1736→            'branch_name'     => (string)($invoice['branch_name'] ?? ''),
+  1737→            'warehouse_label' => $warehouseLabel,
+  1738→            'formatted_at'    => date('d M Y, h:i A'),
+  1739→            'view_url'        => $publicBase . 'Challan/challan_copy/' . $invoiceId,
+  1740→        ];
+  1741→    }
+  1742→
+  1743→    /**
+  1744→     * Challan detail for GL audit surface (Phase 5A).
+  1745→     *
+  1746→     * @return array<string, mixed>|null
+  1747→     */
+  1748→    public function getChallanForDetail(int $challanId): ?array
+  1749→    {
+  1750→        if ($challanId <= 0) {
+  1751→            return null;
+  1752→        }
+  1753→
+  1754→        $this->db->query("
+  1755→            SELECT sc.*,
+  1756→                   si.id AS invoice_id,
+  1757→                   si.invoice_code,
+  1758→                   si.branch_id,
+  1759→                   si.status AS invoice_status,
+  1760→                   c.shop_name,
+  1761→                   c.customer_name,
+  1762→                   b.branch_name
+  1763→            FROM sales_challans sc
+  1764→            INNER JOIN sales_invoices si ON si.id = sc.sales_invoice_id
+  1765→            INNER JOIN customers c ON c.id = si.customer_id
+  1766→            INNER JOIN branches b ON b.id = si.branch_id
+  1767→            WHERE sc.id = :id
+  1768→            LIMIT 1
+  1769→        ");
+  1770→        $this->db->bind(':id', $challanId, PDO::PARAM_INT);
+  1771→        $row = $this->db->single();
+  1772→        if (!$row) {
+  1773→            return null;
+  1774→        }
+  1775→
+  1776→        try {
+  1777→            $this->assertInvoiceAccessible((int)$row['branch_id']);
+  1778→        } catch (Exception $e) {
+  1779→            return null;
+  1780→        }
+  1781→
+  1782→        return $row;
+  1783→    }
+  1784→
+  1785→}

@@ -1,0 +1,655 @@
+     1→     1→<?php
+     2→     2→
+     3→     3→namespace App\Services\Sales;
+     4→     4→
+     5→     5→use App\Models\SalesInvoice;
+     6→     6→use App\Models\SalesChallan;
+     7→     7→use App\Services\Stock\StockService;
+     8→     8→use App\Services\Stock\StockAvailabilityService;
+     9→     9→use App\Services\Accounting\JournalPostingService;
+    10→    10→use Illuminate\Support\Facades\DB;
+    11→    11→use Illuminate\Support\Facades\Log;
+    12→    12→
+    13→    13→/**
+    14→    14→ * Sales Challan Service — Phase 8.3.
+    15→    15→ *
+    16→    16→ * Two-step flow (from Phase 8.2 draft invoice):
+    17→    17→ *   1. prepareGodown: assign warehouse_id to invoice items + dispatches.
+    18→    18→ *      Invoice status: draft → confirmed, is_godown_prepared=true.
+    19→    19→ *      NO stock movement, NO GL — just warehouse assignment.
+    20→    20→ *
+    21→    21→ *   2. issueChallan: stock OUT via StockService at avg_cost + GL Dr COGS / Cr Inventory.
+    22→    22→ *      Creates sales_challan, moves stock, posts COGS journal.
+    23→    23→ *      Invoice: is_challan_issued=true.
+    24→    24→ *
+    25→    25→ *   3. cancelChallan: reverse stock + GL (append-only reversal).
+    26→    26→ *
+    27→    27→ * Rate semantics (per avg_cost_rule.md §3):
+    28→    28→ *   Stock OUT at current avg_cost (cost flows out at average, avg unchanged on OUT).
+    29→    29→ *   The COGS = Σ (qty × avg_cost) for all dispatch lines.
+    30→    30→ *
+    31→    31→ * GL posting (re-derived from double-entry):
+    32→    32→ *   Dr COGS (nature: cogs)
+    33→    33→ *   Cr Inventory (nature: inventory)
+    34→    34→ */
+    35→    35→class SalesChallanService
+    36→    36→{
+    37→    37→    public function __construct(
+    38→    38→        private StockService $stockService,
+    39→    39→        private JournalPostingService $journalPosting,
+    40→    40→        private SalesAccess $salesAccess,
+    41→    41→        private SalesAuditLogger $auditLogger,
+    42→    42→        private StockAvailabilityService $availabilityService
+    43→    43→    ) {}
+    44→    44→
+    45→    45→    /**
+    46→    46→     * Step 1: Prepare godown — assign warehouse_id to invoice items + dispatches.
+    47→    47→     * No stock movement, no GL.
+    48→    48→     *
+    49→    49→     * @param int $invoiceId
+    50→    50→     * @param array $warehouseAssignments [product_id => warehouse_id]
+    51→    51→     * @param int $preparedBy
+    52→    52→     * @return SalesInvoice
+    53→    53→     * @throws \RuntimeException If invoice not draft or already godown-prepared.
+    54→    54→     */
+    55→    55→    public function prepareGodown(int $invoiceId, array $warehouseAssignments, int $preparedBy): SalesInvoice
+    56→    56→    {
+    57→    57→        return DB::transaction(function () use ($invoiceId, $warehouseAssignments, $preparedBy) {
+    58→    58→            $invoice = SalesInvoice::with('items', 'dispatches')->lockForUpdate()->find($invoiceId);
+    59→    59→
+    60→    60→            if (!$invoice) {
+    61→    61→                throw new \RuntimeException("Invoice {$invoiceId} not found.");
+    62→    62→            }
+    63→    63→            if (!$invoice->isDraft()) {
+    64→    64→                throw new \RuntimeException("Only draft invoices can be godown-prepared (current: {$invoice->status}).");
+    65→    65→            }
+    66→    66→
+    67→    67→            // Assign warehouse_id to each invoice item.
+    68→    68→            foreach ($invoice->items as $item) {
+    69→    69→                $wid = $warehouseAssignments[$item->product_id] ?? null;
+    70→    70→                if (!$wid) {
+    71→    71→                    throw new \RuntimeException("Warehouse not assigned for product {$item->product_id}.");
+    72→    72→                }
+    73→    73→
+    74→    74→                // Check availability in the assigned warehouse.
+    75→    75→                $available = $this->stockService->getWarehouseQty((int) $wid, $item->product_id);
+    76→    76→                if ((float) $item->qty > $available + 0.0001) {
+    77→    77→                    throw new \RuntimeException(
+    78→    78→                        "Insufficient stock in warehouse {$wid} for product {$item->product_id}: "
+    79→    79→                        . "available {$available}, required {$item->qty}"
+    80→    80→                    );
+    81→    81→                }
+    82→    82→
+    83→    83→                DB::table('sales_invoice_items')
+    84→    84→                    ->where('id', $item->id)
+    85→    85→                    ->update(['warehouse_id' => (int) $wid]);
+    86→    86→
+    87→    87→                DB::table('sales_invoice_dispatches')
+    88→    88→                    ->where('sales_invoice_id', $invoiceId)
+    89→    89→                    ->where('product_id', $item->product_id)
+    90→    90→                    ->update(['warehouse_id' => (int) $wid]);
+    91→    91→            }
+    92→    92→
+    93→    93→            // Update invoice status.
+    94→    94→            DB::table('sales_invoices')
+    95→    95→                ->where('id', $invoiceId)
+    96→    96→                ->update([
+    97→    97→                    'status' => 'confirmed',
+    98→    98→                    'is_godown_prepared' => true,
+    99→    99→                    'godown_prepared_at' => now(),
+   100→   100→                    'updated_at' => now(),
+   101→   101→                ]);
+   102→   102→
+   103→   103→            // P1-3: Audit log — godown_prepared.
+   104→   104→            $this->auditLogger->godownPrepared(
+   105→   105→                $preparedBy, $invoiceId, $invoice->invoice_code, (int) $invoice->branch_id
+   106→   106→            );
+   107→   107→
+   108→   108→            return SalesInvoice::with(['items.product', 'dispatches', 'customer', 'branch'])->find($invoiceId);
+   109→   109→        });
+   110→   110→    }
+   111→   111→
+   112→   112→    /**
+   113→   113→     * Step 2: Issue challan — stock OUT + GL Dr COGS / Cr Inventory.
+   114→   114→     *
+   115→   115→     * @param int $invoiceId
+   116→   116→     * @param array $data {
+   117→   117→     *     transport_name: string|null,
+   118→   118→     *     vehicle_number: string|null,
+   119→   119→     *     driver_name: string|null,
+   120→   120→     *     transport_cost: float,
+   121→   121→     *     notes: string|null,
+   122→   122→     *     created_by: int,
+   123→   123→     * }
+   124→   124→     * @return SalesChallan
+   125→   125→     * @throws \RuntimeException If not godown-prepared or already challan-issued.
+   126→   126→     */
+   127→   127→    public function issueChallan(int $invoiceId, array $data): SalesChallan
+   128→   128→    {
+   129→   129→        return DB::transaction(function () use ($invoiceId, $data) {
+   130→   130→            $invoice = SalesInvoice::with(['items', 'dispatches'])->lockForUpdate()->find($invoiceId);
+   131→   131→
+   132→   132→            if (!$invoice) {
+   133→   133→                throw new \RuntimeException("Invoice {$invoiceId} not found.");
+   134→   134→            }
+   135→   135→
+   136→   136→            // P0-8: Defense-in-depth branch isolation check.
+   137→   137→            $this->salesAccess->assertBranchAccessible((int) $invoice->branch_id);
+   138→   138→
+   139→   139→            if (!$invoice->is_godown_prepared) {
+   140→   140→                throw new \RuntimeException("Invoice must be godown-prepared before issuing challan.");
+   141→   141→            }
+   142→   142→            if ($invoice->is_challan_issued) {
+   143→   143→                throw new \RuntimeException("Challan already issued for this invoice.");
+   144→   144→            }
+   145→   145→
+   146→   146→            $challanCode = $this->generateChallanCode();
+   147→   147→            $challanDate = now()->format('Y-m-d');
+   148→   148→            $cogsTotal = 0.0;
+   149→   149→
+   150→   150→            // Create the challan header.
+   151→   151→            $challanId = DB::table('sales_challans')->insertGetId([
+   152→   152→                'challan_code' => $challanCode,
+   153→   153→                'challan_date' => $challanDate,
+   154→   154→                'sales_invoice_id' => $invoiceId,
+   155→   155→                'branch_id' => $invoice->branch_id,
+   156→   156→                'transport_name' => $data['transport_name'] ?? null,
+   157→   157→                'transport_phone' => $data['transport_phone'] ?? null,
+   158→   158→                'vehicle_number' => $data['vehicle_number'] ?? null,
+   159→   159→                'driver_name' => $data['driver_name'] ?? null,
+   160→   160→                'transport_cost' => $data['transport_cost'] ?? 0,
+   161→   161→                'is_reversed' => false,
+   162→   162→                'is_dispatch_soft_hold' => false,
+   163→   163→                'created_by' => $data['created_by'] ?? null,
+   164→   164→                'created_at' => now(),
+   165→   165→                'updated_at' => now(),
+   166→   166→            ]);
+   167→   167→
+   168→   168→            // Process each dispatch line: stock OUT at avg_cost.
+   169→   169→            foreach ($invoice->items as $item) {
+   170→   170→                $warehouseId = $item->warehouse_id;
+   171→   171→                $productId = $item->product_id;
+   172→   172→                $qty = (float) $item->qty;
+   173→   173→
+   174→   174→                if (!$warehouseId) {
+   175→   175→                    throw new \RuntimeException("Product {$productId} has no warehouse assigned. Run godown prep first.");
+   176→   176→                }
+   177→   177→
+   178→   178→                // Get current avg_cost (this is the COGS rate).
+   179→   179→                $avgCost = $this->stockService->getWarehouseAvgCost($warehouseId, $productId);
+   180→   180→                if ($avgCost <= 0) {
+   181→   181→                    throw new \RuntimeException(
+   182→   182→                        "Cannot issue challan: zero avg_cost for product {$productId} in warehouse {$warehouseId}. "
+   183→   183→                        . "Receive stock or set cost first."
+   184→   184→                    );
+   185→   185→                }
+   186→   186→
+   187→   187→                // Stock OUT via StockService (reference_type='sales_challan', rate=avg_cost).
+   188→   188→                $this->stockService->applyTransaction([
+   189→   189→                    'warehouse_id' => $warehouseId,
+   190→   190→                    'product_id' => $productId,
+   191→   191→                    'qty' => -$qty, // negative = OUT
+   192→   192→                    'rate' => $avgCost, // current avg_cost (cost flows out, avg unchanged on OUT)
+   193→   193→                    'reference_type' => 'sales_challan',
+   194→   194→                    'reference_id' => $challanId,
+   195→   195→                    'notes' => 'Sales Challan ' . $challanCode,
+   196→   196→                    'transaction_date' => $challanDate,
+   197→   197→                    'created_by' => $data['created_by'] ?? null,
+   198→   198→                ]);
+   199→   199→
+   200→   200→                // P0-5: Persist per-line issue cost snapshot (sales_challan_items).
+   201→   201→                // This denormalized record captures the avg_cost at the moment of stock OUT
+   202→   202→                // so that reversals and reports can use the ORIGINAL per-line rate.
+   203→   203→                DB::table('sales_challan_items')->insert([
+   204→   204→                    'sales_challan_id' => $challanId,
+   205→   205→                    'product_id' => $productId,
+   206→   206→                    'warehouse_id' => $warehouseId,
+   207→   207→                    'qty' => $qty,
+   208→   208→                    'issue_rate' => $avgCost,
+   209→   209→                    'cogs_amount' => round($qty * $avgCost, 2),
+   210→   210→                    'created_at' => now(),
+   211→   211→                ]);
+   212→   212→
+   213→   213→                // Update dispatch row: dispatched_qty = ordered_qty, qty mirrors for GENERATED amount.
+   214→   214→                DB::table('sales_invoice_dispatches')
+   215→   215→                    ->where('sales_invoice_id', $invoiceId)
+   216→   216→                    ->where('product_id', $productId)
+   217→   217→                    ->update([
+   218→   218→                        'qty' => DB::raw('ordered_qty'),
+   219→   219→                        'dispatched_qty' => DB::raw('ordered_qty'),
+   220→   220→                        'warehouse_id' => $warehouseId,
+   221→   221→                    ]);
+   222→   222→
+   223→   223→                $cogsTotal += $qty * $avgCost;
+   224→   224→            }
+   225→   225→
+   226→   226→            // Post GL: Dr COGS / Cr Inventory (single journal for all lines).
+   227→   227→            $journalEntryId = $this->postCogsGL($challanId, $challanCode, $challanDate, $invoice->branch_id, $cogsTotal, $data['created_by'] ?? null);
+   228→   228→
+   229→   229→            // Update challan with journal_entry_id + issue_cost.
+   230→   230→            DB::table('sales_challans')
+   231→   231→                ->where('id', $challanId)
+   232→   232→                ->update([
+   233→   233→                    'journal_entry_id' => $journalEntryId,
+   234→   234→                    'issue_cost' => round($cogsTotal, 2),
+   235→   235→                    'updated_at' => now(),
+   236→   236→                ]);
+   237→   237→
+   238→   238→            // P2-3: Transport snapshot + adjustment.
+   239→   239→            // If the challan form's transport_cost differs from the invoice's
+   240→   240→            // original transport_cost, snapshot the original values + post an
+   241→   241→            // adjustment (customer_ledger + GL) for the delta.
+   242→   242→            $newTransport = (float) ($data['transport_cost'] ?? 0);
+   243→   243→            $oldTransport = (float) $invoice->transport_cost;
+   244→   244→            $transportAdjustment = round($newTransport - $oldTransport, 2);
+   245→   245→            $adjustmentJournalEntryId = null;
+   246→   246→
+   247→   247→            if (abs($transportAdjustment) > 0.01) {
+   248→   248→                // Snapshot original values on the invoice.
+   249→   249→                DB::table('sales_invoices')
+   250→   250→                    ->where('id', $invoiceId)
+   251→   251→                    ->update([
+   252→   252→                        'pre_challan_transport' => $oldTransport,
+   253→   253→                        'pre_challan_total' => (float) $invoice->total_amount,
+   254→   254→                    ]);
+   255→   255→
+   256→   256→                // Update invoice transport_cost + total_amount + due_amount.
+   257→   257→                $newTotal = (float) $invoice->sub_total - (float) $invoice->discount_amount + $newTransport;
+   258→   258→                DB::table('sales_invoices')
+   259→   259→                    ->where('id', $invoiceId)
+   260→   260→                    ->update([
+   261→   261→                        'transport_cost' => round($newTransport, 2),
+   262→   262→                        'total_amount' => round($newTotal, 2),
+   263→   263→                        'due_amount' => round($newTotal - (float) $invoice->paid_amount, 2),
+   264→   264→                    ]);
+   265→   265→
+   266→   266→                // Post customer_ledger 'invoice_adjustment' entry for the delta.
+   267→   267→                $this->postTransportAdjustmentLedger($invoice, $transportAdjustment, $challanCode, $data['created_by'] ?? null);
+   268→   268→
+   269→   269→                // Post GL adjustment JE (Dr/Cr AR + Revenue, swapped by sign).
+   270→   270→                $adjustmentJournalEntryId = $this->postTransportAdjustmentGL(
+   271→   271→                    $invoiceId, $challanCode, $challanDate, (int) $invoice->branch_id,
+   272→   272→                    $transportAdjustment, (int) $invoice->customer_id,
+   273→   273→                    $data['created_by'] ?? null
+   274→   274→                );
+   275→   275→            }
+   276→   276→
+   277→   277→            // Store transport_adjustment + adjustment_journal_entry_id on the challan.
+   278→   278→            DB::table('sales_challans')
+   279→   279→                ->where('id', $challanId)
+   280→   280→                ->update([
+   281→   281→                    'transport_adjustment' => $transportAdjustment,
+   282→   282→                    'adjustment_journal_entry_id' => $adjustmentJournalEntryId,
+   283→   283→                ]);
+   284→   284→
+   285→   285→            // Update invoice: is_challan_issued=true.
+   286→   286→            DB::table('sales_invoices')
+   287→   287→                ->where('id', $invoiceId)
+   288→   288→                ->update([
+   289→   289→                    'is_challan_issued' => true,
+   290→   290→                    'challan_issued_at' => now(),
+   291→   291→                    'cogs_journal_entry_id' => $journalEntryId,
+   292→   292→                    'updated_at' => now(),
+   293→   293→                ]);
+   294→   294→
+   295→   295→            // P1-3: Audit log — challan_issued.
+   296→   296→            $this->auditLogger->challanIssued(
+   297→   297→                $data['created_by'] ?? auth()->id() ?? 0,
+   298→   298→                $challanId, $challanCode, $invoiceId, (int) $invoice->branch_id,
+   299→   299→                $cogsTotal, $journalEntryId
+   300→   300→            );
+   301→   301→
+   302→   302→            // P2-7: Invalidate pipeline cache (dispatched_qty changed).
+   303→   303→            $this->availabilityService->invalidatePipelineForInvoice($invoiceId);
+   304→   304→
+   305→   305→            return SalesChallan::with(['salesInvoice.items.product', 'items.product', 'items.warehouse', 'branch', 'journalEntry.lines.ledger'])
+   306→   306→                ->find($challanId);
+   307→   307→        });
+   308→   308→    }
+   309→   309→
+   310→   310→    /**
+   311→   311→     * Step 3: Cancel a challan — reverse stock + GL (append-only reversal).
+   312→   312→     *
+   313→   313→     * @param int $challanId
+   314→   314→     * @param int $cancelledBy
+   315→   315→     * @param string $reason
+   316→   316→     * @return SalesChallan
+   317→   317→     */
+   318→   318→    public function cancelChallan(int $challanId, int $cancelledBy, string $reason = ''): SalesChallan
+   319→   319→    {
+   320→   320→        return DB::transaction(function () use ($challanId, $cancelledBy, $reason) {
+   321→   321→            $challan = SalesChallan::with('salesInvoice.items')->lockForUpdate()->find($challanId);
+   322→   322→
+   323→   323→            if (!$challan) {
+   324→   324→                throw new \RuntimeException("Challan {$challanId} not found.");
+   325→   325→            }
+   326→   326→            if ($challan->is_reversed) {
+   327→   327→                throw new \RuntimeException("Challan is already cancelled.");
+   328→   328→            }
+   329→   329→
+   330→   330→            // Reverse GL (COGS journal).
+   331→   331→            if ($challan->journal_entry_id) {
+   332→   332→                $this->journalPosting->reverseJournalEntry(
+   333→   333→                    $challan->journal_entry_id, $cancelledBy,
+   334→   334→                    "Challan cancelled: {$reason}"
+   335→   335→                );
+   336→   336→            }
+   337→   337→
+   338→   338→            // Reverse each stock movement.
+   339→   339→            $stockTxs = DB::table('stock_transactions')
+   340→   340→                ->where('reference_type', 'sales_challan')
+   341→   341→                ->where('reference_id', $challanId)
+   342→   342→                ->where('is_reversed', false)
+   343→   343→                ->get();
+   344→   344→
+   345→   345→            foreach ($stockTxs as $tx) {
+   346→   346→                $this->stockService->reverseTransaction(
+   347→   347→                    $tx->id, $cancelledBy,
+   348→   348→                    "Challan cancelled: {$reason}"
+   349→   349→                );
+   350→   350→            }
+   351→   351→
+   352→   352→            // Reset dispatch rows: dispatched_qty = 0, qty mirrors for GENERATED amount.
+   353→   353→            DB::table('sales_invoice_dispatches')
+   354→   354→                ->where('sales_invoice_id', $challan->sales_invoice_id)
+   355→   355→                ->update([
+   356→   356→                    'qty' => 0,
+   357→   357→                    'dispatched_qty' => 0,
+   358→   358→                ]);
+   359→   359→
+   360→   360→            // Mark challan as reversed.
+   361→   361→            DB::table('sales_challans')
+   362→   362→                ->where('id', $challanId)
+   363→   363→                ->update([
+   364→   364→                    'is_reversed' => true,
+   365→   365→                    'reversed_at' => now(),
+   366→   366→                    'reversed_by' => $cancelledBy,
+   367→   367→                    'reverse_reason' => $reason,
+   368→   368→                ]);
+   369→   369→
+   370→   370→            // P2-3: Reverse transport adjustment (if any).
+   371→   371→            // If the challan had a transport_adjustment, reverse the adjustment
+   372→   372→            // GL JE + restore the invoice's original transport_cost + total_amount
+   373→   373→            // from the pre_challan snapshot.
+   374→   374→            if ($challan->adjustment_journal_entry_id) {
+   375→   375→                $this->journalPosting->reverseJournalEntry(
+   376→   376→                    $challan->adjustment_journal_entry_id, $cancelledBy,
+   377→   377→                    "Challan cancelled: transport adjustment reversed — {$reason}"
+   378→   378→                );
+   379→   379→            }
+   380→   380→
+   381→   381→            // Restore invoice transport snapshot (if snapshot exists).
+   382→   382→            $invoiceRow = DB::table('sales_invoices')
+   383→   383→                ->where('id', $challan->sales_invoice_id)
+   384→   384→                ->first(['pre_challan_transport', 'pre_challan_total', 'paid_amount']);
+   385→   385→
+   386→   386→            if ($invoiceRow && $invoiceRow->pre_challan_transport !== null) {
+   387→   387→                $restoredTotal = (float) $invoiceRow->pre_challan_total;
+   388→   388→                DB::table('sales_invoices')
+   389→   389→                    ->where('id', $challan->sales_invoice_id)
+   390→   390→                    ->update([
+   391→   391→                        'transport_cost' => (float) $invoiceRow->pre_challan_transport,
+   392→   392→                        'total_amount' => $restoredTotal,
+   393→   393→                        'due_amount' => round($restoredTotal - (float) $invoiceRow->paid_amount, 2),
+   394→   394→                        'pre_challan_transport' => null,
+   395→   395→                        'pre_challan_total' => null,
+   396→   396→                    ]);
+   397→   397→            }
+   398→   398→
+   399→   399→            // P2-2: Reset invoice back to DRAFT state (fully editable).
+   400→   400→            // Legacy reverseChallan resets invoice to 'godown_issued' state,
+   401→   401→            // but Laravel's edit flow requires status='draft'. Since cancelling
+   402→   402→            // a challan invalidates the godown assignment (warehouse_id on items
+   403→   403→            // was set during godown prep, and the items may need re-picking),
+   404→   404→            // we reset the invoice all the way back to draft.
+   405→   405→            DB::table('sales_invoices')
+   406→   406→                ->where('id', $challan->sales_invoice_id)
+   407→   407→                ->update([
+   408→   408→                    'status' => 'draft',
+   409→   409→                    'is_challan_issued' => false,
+   410→   410→                    'challan_issued_at' => null,
+   411→   411→                    'cogs_journal_entry_id' => null,
+   412→   412→                    'is_godown_prepared' => false,
+   413→   413→                    'godown_prepared_at' => null,
+   414→   414→                    'updated_at' => now(),
+   415→   415→                ]);
+   416→   416→
+   417→   417→            // P2-2: Reset warehouse_id on invoice items + dispatches (godown
+   418→   418→            // assignment is invalidated — user must re-run godown prep).
+   419→   419→            DB::table('sales_invoice_items')
+   420→   420→                ->where('sales_invoice_id', $challan->sales_invoice_id)
+   421→   421→                ->update(['warehouse_id' => null]);
+   422→   422→
+   423→   423→            DB::table('sales_invoice_dispatches')
+   424→   424→                ->where('sales_invoice_id', $challan->sales_invoice_id)
+   425→   425→                ->update(['warehouse_id' => null]);
+   426→   426→
+   427→   427→            // P1-3: Audit log — challan_reversed.
+   428→   428→            $this->auditLogger->challanReversed(
+   429→   429→                $cancelledBy,
+   430→   430→                $challanId, $challan->challan_code, $challan->sales_invoice_id,
+   431→   431→                (int) $challan->branch_id, $reason
+   432→   432→            );
+   433→   433→
+   434→   434→            // P2-7: Invalidate pipeline cache (dispatched_qty reset to 0).
+   435→   435→            $this->availabilityService->invalidatePipelineForInvoice($challan->sales_invoice_id);
+   436→   436→
+   437→   437→            return SalesChallan::find($challanId);
+   438→   438→        });
+   439→   439→    }
+   440→   440→
+   441→   441→    /**
+   442→   442→     * Post GL: Dr COGS / Cr Inventory.
+   443→   443→     *
+   444→   444→     * @return int journal_entry_id
+   445→   445→     */
+   446→   446→    private function postCogsGL(int $challanId, string $challanCode, string $challanDate, int $branchId, float $cogsAmount, ?int $createdBy): int
+   447→   447→    {
+   448→   448→        if ($cogsAmount < 0.01) {
+   449→   449→            return 0; // No COGS for zero-value
+   450→   450→        }
+   451→   451→
+   452→   452→        $cogsLedgerId = $this->journalPosting->lookupLedgerByNature('cogs');
+   453→   453→        $inventoryLedgerId = $this->journalPosting->lookupLedgerByNature('inventory');
+   454→   454→
+   455→   455→        if (!$cogsLedgerId) {
+   456→   456→            throw new \RuntimeException('COGS ledger not found (nature: cogs).');
+   457→   457→        }
+   458→   458→        if (!$inventoryLedgerId) {
+   459→   459→            throw new \RuntimeException('Inventory ledger not found (nature: inventory).');
+   460→   460→        }
+   461→   461→
+   462→   462→        return $this->journalPosting->createJournalEntry([
+   463→   463→            'entry_date' => $challanDate,
+   464→   464→            'reference_type' => 'sales_challan',
+   465→   465→            'reference_id' => $challanId,
+   466→   466→            'branch_id' => $branchId,
+   467→   467→            'description' => 'Sales Challan COGS ' . $challanCode,
+   468→   468→            'source' => 'sales_challan',
+   469→   469→            'created_by' => $createdBy,
+   470→   470→        ], [
+   471→   471→            [
+   472→   472→                'ledger_id' => $cogsLedgerId,
+   473→   473→                'debit' => $cogsAmount, 'credit' => 0,
+   474→   474→                'entity_type' => 'sales_challan', 'entity_id' => $challanId,
+   475→   475→                'memo' => 'Challan ' . $challanCode . ' — COGS',
+   476→   476→            ],
+   477→   477→            [
+   478→   478→                'ledger_id' => $inventoryLedgerId,
+   479→   479→                'debit' => 0, 'credit' => $cogsAmount,
+   480→   480→                'entity_type' => 'sales_challan', 'entity_id' => $challanId,
+   481→   481→                'memo' => 'Challan ' . $challanCode . ' — Inventory issued',
+   482→   482→            ],
+   483→   483→        ]);
+   484→   484→    }
+   485→   485→
+   486→   486→    /**
+   487→   487→     * Generate atomic challan code: CH-YYYYMMDD-NNNN.
+   488→   488→     */
+   489→   489→    private function generateChallanCode(): string
+   490→   490→    {
+   491→   491→        $datePart = now()->format('Ymd');
+   492→   492→        $periodKey = now()->format('Y-m');
+   493→   493→        $docType = 'sales_challan';
+   494→   494→
+   495→   495→        return DB::transaction(function () use ($docType, $periodKey, $datePart) {
+   496→   496→            $seqRow = DB::table('document_sequences')
+   497→   497→                ->where('doc_type', $docType)
+   498→   498→                ->where('branch_id', 0)
+   499→   499→                ->where('period_key', $periodKey)
+   500→   500→                ->lockForUpdate()
+   501→   501→                ->first();
+   502→   502→
+   503→   503→            $nextNumber = $seqRow ? ((int) $seqRow->last_number + 1) : 1;
+   504→   504→
+   505→   505→            if ($seqRow) {
+   506→   506→                DB::table('document_sequences')->where('id', $seqRow->id)
+   507→   507→                    ->update(['last_number' => $nextNumber, 'updated_at' => now()]);
+   508→   508→            } else {
+   509→   509→                DB::table('document_sequences')->insert([
+   510→   510→                    'doc_type' => $docType, 'branch_id' => 0,
+   511→   511→                    'period_key' => $periodKey, 'last_number' => $nextNumber,
+   512→   512→                    'updated_at' => now(),
+   513→   513→                ]);
+   514→   514→            }
+   515→   515→
+   516→   516→            return "CH-{$datePart}-" . str_pad((string) $nextNumber, 4, '0', STR_PAD_LEFT);
+   517→   517→        });
+   518→   518→    }
+   519→   519→
+   520→   520→    /**
+   521→   521→     * Get per-line issue-cost items for a challan (P0-5).
+   522→   522→     *
+   523→   523→     * Returns the snapshot of avg_cost at the moment each line's stock was
+   524→   524→     * issued OUT. Used by:
+   525→   525→     *   - GrossMargin report (per-product COGS breakdown)
+   526→   526→     *   - challan_reversal_smoke test (verify issue_rate > 0)
+   527→   527→     *   - Audit / display on challan show page
+   528→   528→     *
+   529→   529→     * @param int $challanId
+   530→   530→     * @return \Illuminate\Support\Collection
+   531→   531→     */
+   532→   532→    public function getChallanLineItems(int $challanId)
+   533→   533→    {
+   534→   534→        return DB::table('sales_challan_items as sci')
+   535→   535→            ->join('products as p', 'p.id', '=', 'sci.product_id')
+   536→   536→            ->join('warehouses as w', 'w.id', '=', 'sci.warehouse_id')
+   537→   537→            ->where('sci.sales_challan_id', $challanId)
+   538→   538→            ->select(
+   539→   539→                'sci.id',
+   540→   540→                'sci.product_id',
+   541→   541→                'p.product_name',
+   542→   542→                'p.product_code',
+   543→   543→                'sci.warehouse_id',
+   544→   544→                'w.warehouse_name',
+   545→   545→                'sci.qty',
+   546→   546→                'sci.issue_rate',
+   547→   547→                'sci.cogs_amount',
+   548→   548→                'sci.created_at'
+   549→   549→            )
+   550→   550→            ->orderBy('sci.id')
+   551→   551→            ->get();
+   552→   552→    }
+   553→   553→
+   554→   554→    /**
+   555→   555→     * P2-3: Post customer_ledger 'invoice_adjustment' entry for transport delta.
+   556→   556→     *
+   557→   557→     * @param SalesInvoice $invoice
+   558→   558→     * @param float $adjustment Signed delta (positive = transport increased → customer owes more)
+   559→   559→     * @param string $challanCode
+   560→   560→     * @param int|null $createdBy
+   561→   561→     */
+   562→   562→    private function postTransportAdjustmentLedger($invoice, float $adjustment, string $challanCode, ?int $createdBy): void
+   563→   563→    {
+   564→   564→        $currentBalance = (float) DB::table('customer_ledger')
+   565→   565→            ->where('customer_id', $invoice->customer_id)
+   566→   566→            ->orderByDesc('id')
+   567→   567→            ->value('balance');
+   568→   568→
+   569→   569→        // Positive adjustment = customer owes more (debit); negative = owes less (credit).
+   570→   570→        $debit = $adjustment > 0 ? abs($adjustment) : 0;
+   571→   571→        $credit = $adjustment < 0 ? abs($adjustment) : 0;
+   572→   572→        $newBalance = $currentBalance + $adjustment;
+   573→   573→
+   574→   574→        DB::table('customer_ledger')->insert([
+   575→   575→            'customer_id' => $invoice->customer_id,
+   576→   576→            'branch_id' => $invoice->branch_id,
+   577→   577→            'transaction_date' => now()->format('Y-m-d'),
+   578→   578→            'transaction_type' => 'invoice_adjustment',
+   579→   579→            'reference_type' => 'sales_invoice',
+   580→   580→            'reference_id' => $invoice->id,
+   581→   581→            'debit' => $debit,
+   582→   582→            'credit' => $credit,
+   583→   583→            'balance' => $newBalance,
+   584→   584→            'description' => 'Challan ' . $challanCode . ' — transport adjustment ' . ($adjustment >= 0 ? '+' : '') . number_format($adjustment, 2),
+   585→   585→            'created_by' => $createdBy,
+   586→   586→            'created_at' => now(),
+   587→   587→        ]);
+   588→   588→    }
+   589→   589→
+   590→   590→    /**
+   591→   591→     * P2-3: Post GL adjustment journal for transport delta.
+   592→   592→     *
+   593→   593→     * If transport increased (positive adjustment):
+   594→   594→     *   Dr AR / Cr Transport Revenue
+   595→   595→     * If transport decreased (negative adjustment):
+   596→   596→     *   Dr Transport Revenue / Cr AR  (i.e., Cr AR / Dr Transport Revenue swapped)
+   597→   597→     *
+   598→   598→     * @return int|null journal_entry_id (null if no transport_revenue ledger configured)
+   599→   599→     */
+   600→   600→    private function postTransportAdjustmentGL(
+   601→   601→        int $invoiceId, string $challanCode, string $challanDate, int $branchId,
+   602→   602→        float $adjustment, int $customerId, ?int $createdBy
+   603→   603→    ): ?int {
+   604→   604→        $amount = abs($adjustment);
+   605→   605→        if ($amount < 0.01) {
+   606→   606→            return null;
+   607→   607→        }
+   608→   608→
+   609→   609→        $arLedgerId = $this->journalPosting->lookupLedgerByNature('ar');
+   610→   610→        if (!$arLedgerId) {
+   611→   611→            throw new \RuntimeException('Accounts Receivable ledger not found (nature: ar).');
+   612→   612→        }
+   613→   613→
+   614→   614→        $transportLedgerId = $this->journalPosting->lookupLedgerByNature('transport_revenue');
+   615→   615→        if (!$transportLedgerId) {
+   616→   616→            // Fall back to sales_revenue if transport_revenue not configured.
+   617→   617→            $transportLedgerId = $this->journalPosting->lookupLedgerByNature('sales_revenue');
+   618→   618→        }
+   619→   619→        if (!$transportLedgerId) {
+   620→   620→            throw new \RuntimeException('Transport Revenue / Sales Revenue ledger not found.');
+   621→   621→        }
+   622→   622→
+   623→   623→        // Positive adjustment: Dr AR / Cr Transport Revenue
+   624→   624→        // Negative adjustment: Dr Transport Revenue / Cr AR (swapped)
+   625→   625→        $isIncrease = $adjustment > 0;
+   626→   626→
+   627→   627→        $lines = [
+   628→   628→            [
+   629→   629→                'ledger_id' => $arLedgerId,
+   630→   630→                'debit' => $isIncrease ? $amount : 0,
+   631→   631→                'credit' => $isIncrease ? 0 : $amount,
+   632→   632→                'entity_type' => 'customer', 'entity_id' => $customerId,
+   633→   633→                'memo' => 'Challan ' . $challanCode . ' — transport adjustment AR',
+   634→   634→            ],
+   635→   635→            [
+   636→   636→                'ledger_id' => $transportLedgerId,
+   637→   637→                'debit' => $isIncrease ? 0 : $amount,
+   638→   638→                'credit' => $isIncrease ? $amount : 0,
+   639→   639→                'entity_type' => 'sales_invoice', 'entity_id' => $invoiceId,
+   640→   640→                'memo' => 'Challan ' . $challanCode . ' — transport adjustment revenue',
+   641→   641→            ],
+   642→   642→        ];
+   643→   643→
+   644→   644→        return $this->journalPosting->createJournalEntry([
+   645→   645→            'entry_date' => $challanDate,
+   646→   646→            'reference_type' => 'sales_invoice',
+   647→   647→            'reference_id' => $invoiceId,
+   648→   648→            'branch_id' => $branchId,
+   649→   649→            'description' => 'Transport adjustment — Challan ' . $challanCode,
+   650→   650→            'source' => 'sales_challan',
+   651→   651→            'created_by' => $createdBy,
+   652→   652→        ], $lines);
+   653→   653→    }
+   654→   654→}
+   655→   655→

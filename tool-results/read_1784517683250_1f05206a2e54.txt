@@ -1,0 +1,748 @@
+     1→@extends('layouts.admin')
+     2→
+     3→@section('content')
+     4→@php
+     5→    $statusBadge = function (bool $large = false) use ($invoice): string {
+     6→        $cls = $large ? ' fs-5' : ' fs-6';
+     7→        return [
+     8→            'draft'     => '<span class="badge bg-warning-subtle text-warning' . $cls . '"><i class="fas fa-pen-to-square me-1"></i>Draft</span>',
+     9→            'confirmed' => '<span class="badge bg-success-subtle text-success' . $cls . '"><i class="fas fa-circle-check me-1"></i>Confirmed</span>',
+    10→            'cancelled' => '<span class="badge bg-secondary-subtle text-secondary' . $cls . '"><i class="fas fa-ban me-1"></i>Cancelled</span>',
+    11→            'reversed'  => '<span class="badge bg-danger-subtle text-danger' . $cls . '"><i class="fas fa-rotate-left me-1"></i>Reversed</span>',
+    12→        ][$invoice->status] ?? '<span class="badge bg-light text-dark' . $cls . '">' . e($invoice->status) . '</span>';
+    13→    };
+    14→
+    15→    // GL journal lines totals
+    16→    $glDebitTotal = 0.0;
+    17→    $glCreditTotal = 0.0;
+    18→    if ($invoice->journalEntry && $invoice->journalEntry->lines) {
+    19→        foreach ($invoice->journalEntry->lines as $line) {
+    20→            $glDebitTotal  += (float) $line->debit;
+    21→            $glCreditTotal += (float) $line->credit;
+    22→        }
+    23→    }
+    24→
+    25→    // Dispatch totals
+    26→    $totalOrdered    = 0.0;
+    27→    $totalDispatched = 0.0;
+    28→    foreach ($invoice->dispatches as $d) {
+    29→        $totalOrdered    += (float) $d->ordered_qty;
+    30→        $totalDispatched += (float) $d->dispatched_qty;
+    31→    }
+    32→
+    33→    // Reverse-by user name lookup (best effort)
+    34→    $reversedByName = null;
+    35→    if ($invoice->reversed_by) {
+    36→        $u = \App\Models\Employee::find($invoice->reversed_by);
+    37→        if ($u) {
+    38→            $reversedByName = $u->name ?? ('Employee #' . $invoice->reversed_by);
+    39→        } else {
+    40→            $reversedByName = 'User #' . $invoice->reversed_by;
+    41→        }
+    42→    }
+    43→
+    44→    // Created-by user name lookup (best effort)
+    45→    $createdByName = null;
+    46→    if ($invoice->created_by) {
+    47→        $u = \App\Models\Employee::find($invoice->created_by);
+    48→        if ($u) {
+    49→            $createdByName = $u->name ?? ('Employee #' . $invoice->created_by);
+    50→        } else {
+    51→            $createdByName = 'User #' . $invoice->created_by;
+    52→        }
+    53→    }
+    54→@endphp
+    55→
+    56→<div class="container-fluid py-2">
+    57→    {{-- Hero header (purple/indigo) --}}
+    58→    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
+    59→            style="background: linear-gradient(135deg,#7c3aed,#4f46e5);">
+    60→        <div>
+    61→            <h1 class="h4 mb-1">
+    62→                <i class="fas fa-file-invoice-dollar me-2"></i>Invoice {{ $invoice->invoice_code }}
+    63→                {!! $statusBadge() !!}
+    64→            </h1>
+    65→            <p class="mb-0 small opacity-75">
+    66→                @if ($invoice->customer){{ $invoice->customer->customer_name }}@endif
+    67→                @if ($invoice->branch) · {{ $invoice->branch->branch_name }}@endif
+    68→                · {{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}
+    69→            </p>
+    70→        </div>
+    71→        <div class="d-flex gap-2">
+    72→            <button type="button" class="btn btn-outline-light btn-sm" onclick="window.print()">
+    73→                <i class="fas fa-print me-1"></i> Print
+    74→            </button>
+    75→            <a href="{{ route('admin.sales-invoices.index') }}" class="btn btn-outline-light btn-sm">
+    76→                <i class="fas fa-arrow-left me-1"></i> Back to list
+    77→            </a>
+    78→        </div>
+    79→    </header>
+    80→
+    81→    {{-- Reversal / Cancel alert --}}
+    82→    @if ($invoice->is_reversed || $invoice->isCancelled())
+    83→        <div class="alert alert-danger d-flex align-items-start mb-3" role="alert">
+    84→            <i class="fas fa-rotate-left me-2 fa-lg text-danger"></i>
+    85→            <div class="w-100">
+    86→                <strong>This invoice has been {{ $invoice->status === 'cancelled' ? 'cancelled' : 'reversed' }}.</strong>
+    87→                @if ($invoice->reversed_at)
+    88→                    <div class="small text-muted mt-1">
+    89→                        <i class="fas fa-clock me-1"></i>
+    90→                        {{ \Carbon\Carbon::parse($invoice->reversed_at)->format('d M Y, H:i') }}
+    91→                        @if ($reversedByName)
+    92→                            · <i class="fas fa-user me-1"></i>{{ $reversedByName }}
+    93→                        @endif
+    94→                    </div>
+    95→                @endif
+    96→                @if (!empty($invoice->reverse_reason))
+    97→                    <div class="mt-1">
+    98→                        <span class="text-muted">Reason:</span>
+    99→                        <em>{{ $invoice->reverse_reason }}</em>
+   100→                    </div>
+   101→                @endif
+   102→            </div>
+   103→        </div>
+   104→    @endif
+   105→
+   106→    <div class="row g-3">
+   107→        {{-- Left: main details --}}
+   108→        <div class="col-lg-8">
+   109→            {{-- Invoice details card --}}
+   110→            <div class="card border-0 shadow-sm mb-3">
+   111→                <div class="card-header bg-white">
+   112→                    <h2 class="h6 mb-0">
+   113→                        <i class="fas fa-circle-info me-1" style="color:#7c3aed;"></i> Invoice details
+   114→                    </h2>
+   115→                </div>
+   116→                <div class="card-body">
+   117→                    <dl class="row mb-0">
+   118→                        <dt class="col-sm-3 text-muted">Invoice code</dt>
+   119→                        <dd class="col-sm-9">
+   120→                            <span class="badge bg-secondary-subtle text-secondary">{{ $invoice->invoice_code }}</span>
+   121→                        </dd>
+   122→
+   123→                        <dt class="col-sm-3 text-muted">Invoice date</dt>
+   124→                        <dd class="col-sm-9">{{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}</dd>
+   125→
+   126→                        <dt class="col-sm-3 text-muted">Customer</dt>
+   127→                        <dd class="col-sm-9">
+   128→                            @if ($invoice->customer)
+   129→                                <strong>{{ $invoice->customer->customer_name }}</strong>
+   130→                                <span class="text-muted">({{ $invoice->customer->customer_code }})</span>
+   131→                            @else
+   132→                                <span class="text-muted">—</span>
+   133→                            @endif
+   134→                        </dd>
+   135→
+   136→                        <dt class="col-sm-3 text-muted">Branch</dt>
+   137→                        <dd class="col-sm-9">
+   138→                            @if ($invoice->branch)
+   139→                                {{ $invoice->branch->branch_name }}
+   140→                                <span class="text-muted small">({{ $invoice->branch->branch_code }})</span>
+   141→                            @else
+   142→                                <span class="text-muted">—</span>
+   143→                            @endif
+   144→                        </dd>
+   145→
+   146→                        <dt class="col-sm-3 text-muted">Salesman</dt>
+   147→                        <dd class="col-sm-9">
+   148→                            @if ($invoice->salesman)
+   149→                                {{ $invoice->salesman->name ?? '—' }}
+   150→                                @if (!empty($invoice->sales_person))
+   151→                                    <span class="text-muted small">· {{ $invoice->sales_person }}</span>
+   152→                                @endif
+   153→                            @elseif (!empty($invoice->sales_person))
+   154→                                {{ $invoice->sales_person }}
+   155→                            @else
+   156→                                <span class="text-muted">—</span>
+   157→                            @endif
+   158→                        </dd>
+   159→
+   160→                        <dt class="col-sm-3 text-muted">Payment mode</dt>
+   161→                        <dd class="col-sm-9">
+   162→                            <span class="badge bg-light text-dark">{{ ucfirst($invoice->payment_mode ?: '—') }}</span>
+   163→                        </dd>
+   164→
+   165→                        <dt class="col-sm-3 text-muted">Sub-total</dt>
+   166→                        <dd class="col-sm-9">Tk {{ number_format((float) $invoice->sub_total, 2) }}</dd>
+   167→
+   168→                        <dt class="col-sm-3 text-muted">Discount</dt>
+   169→                        <dd class="col-sm-9 text-danger">− Tk {{ number_format((float) $invoice->discount_amount, 2) }}</dd>
+   170→
+   171→                        <dt class="col-sm-3 text-muted">Transport cost</dt>
+   172→                        <dd class="col-sm-9">+ Tk {{ number_format((float) $invoice->transport_cost, 2) }}</dd>
+   173→
+   174→                        <dt class="col-sm-3 text-muted">Total amount</dt>
+   175→                        <dd class="col-sm-9">
+   176→                            <strong class="fs-5" style="color:#7c3aed;">Tk {{ number_format((float) $invoice->total_amount, 2) }}</strong>
+   177→                        </dd>
+   178→
+   179→                        <dt class="col-sm-3 text-muted">Paid</dt>
+   180→                        <dd class="col-sm-9 text-success">Tk {{ number_format((float) $invoice->paid_amount, 2) }}</dd>
+   181→
+   182→                        <dt class="col-sm-3 text-muted">Due</dt>
+   183→                        <dd class="col-sm-9">
+   184→                            @if ((float) $invoice->due_amount > 0.01)
+   185→                                <span class="text-danger fw-semibold">Tk {{ number_format((float) $invoice->due_amount, 2) }}</span>
+   186→                            @else
+   187→                                <span class="text-success">Tk 0.00 (fully paid)</span>
+   188→                            @endif
+   189→                        </dd>
+   190→
+   191→                        <dt class="col-sm-3 text-muted">Status</dt>
+   192→                        <dd class="col-sm-9">{!! $statusBadge() !!}</dd>
+   193→
+   194→                        <dt class="col-sm-3 text-muted">Soft hold</dt>
+   195→                        <dd class="col-sm-9">
+   196→                            @if ($invoice->is_soft_hold)
+   197→                                <span class="badge bg-danger-subtle text-danger"><i class="fas fa-hand me-1"></i>Yes</span>
+   198→                            @else
+   199→                                <span class="text-muted">No</span>
+   200→                            @endif
+   201→                        </dd>
+   202→
+   203→                        <dt class="col-sm-3 text-muted">Notes</dt>
+   204→                        <dd class="col-sm-9">{!! nl2br(e($invoice->notes ?: '—')) !!}</dd>
+   205→
+   206→                        <dt class="col-sm-3 text-muted">Created by</dt>
+   207→                        <dd class="col-sm-9 small text-muted">
+   208→                            @if ($createdByName){{ $createdByName }}@else— @endif
+   209→                            @if ($invoice->created_at) · {{ $invoice->created_at->format('d M Y, H:i') }}@endif
+   210→                        </dd>
+   211→                    </dl>
+   212→                </div>
+   213→            </div>
+   214→
+   215→            {{-- Items table --}}
+   216→            <div class="card border-0 shadow-sm mb-3">
+   217→                <div class="card-header bg-white d-flex align-items-center justify-content-between">
+   218→                    <h2 class="h6 mb-0">
+   219→                        <i class="fas fa-table-list me-1" style="color:#7c3aed;"></i> Items
+   220→                        <span class="badge bg-primary-subtle text-primary ms-1">{{ $invoice->items->count() }}</span>
+   221→                    </h2>
+   222→                </div>
+   223→                <div class="card-body p-0">
+   224→                    <div class="table-responsive">
+   225→                        <table class="table table-sm table-striped table-hover align-middle mb-0">
+   226→                            <thead class="table-light">
+   227→                                <tr>
+   228→                                    <th>Product</th>
+   229→                                    <th class="text-end">Qty</th>
+   230→                                    <th class="text-end">Rate (Tk)</th>
+   231→                                    <th class="text-end">Amount (Tk)</th>
+   232→                                </tr>
+   233→                            </thead>
+   234→                            <tbody>
+   235→                                @forelse ($invoice->items as $item)
+   236→                                    <tr>
+   237→                                        <td>
+   238→                                            @if ($item->product)
+   239→                                                <span class="fw-semibold">{{ $item->product->product_name }}</span>
+   240→                                                <div class="small text-muted">{{ $item->product->product_code }}</div>
+   241→                                            @else
+   242→                                                <span class="text-muted">Product #{{ $item->product_id }}</span>
+   243→                                            @endif
+   244→                                        </td>
+   245→                                        <td class="text-end">{{ number_format((float) $item->qty, 4) }}</td>
+   246→                                        <td class="text-end">{{ number_format((float) $item->rate, 2) }}</td>
+   247→                                        <td class="text-end">{{ number_format((float) $item->amount, 2) }}</td>
+   248→                                    </tr>
+   249→                                @empty
+   250→                                    <tr>
+   251→                                        <td colspan="4" class="text-center text-muted py-4">No items.</td>
+   252→                                    </tr>
+   253→                                @endforelse
+   254→                            </tbody>
+   255→                            <tfoot>
+   256→                                <tr class="table-light fw-bold">
+   257→                                    <td colspan="3" class="text-end">Sub-total</td>
+   258→                                    <td class="text-end">Tk {{ number_format((float) $invoice->sub_total, 2) }}</td>
+   259→                                </tr>
+   260→                                <tr class="table-light">
+   261→                                    <td colspan="3" class="text-end text-danger">− Discount</td>
+   262→                                    <td class="text-end text-danger">Tk {{ number_format((float) $invoice->discount_amount, 2) }}</td>
+   263→                                </tr>
+   264→                                <tr class="table-light">
+   265→                                    <td colspan="3" class="text-end">+ Transport</td>
+   266→                                    <td class="text-end">Tk {{ number_format((float) $invoice->transport_cost, 2) }}</td>
+   267→                                </tr>
+   268→                                <tr class="fw-bold" style="background-color:#ede9fe;">
+   269→                                    <td colspan="3" class="text-end" style="color:#4f46e5;">Total amount</td>
+   270→                                    <td class="text-end" style="color:#4f46e5;">Tk {{ number_format((float) $invoice->total_amount, 2) }}</td>
+   271→                                </tr>
+   272→                            </tfoot>
+   273→                        </table>
+   274→                    </div>
+   275→                </div>
+   276→            </div>
+   277→
+   278→            {{-- Dispatches table --}}
+   279→            @if ($invoice->dispatches->isNotEmpty())
+   280→                <div class="card border-0 shadow-sm mb-3">
+   281→                    <div class="card-header bg-white">
+   282→                        <h2 class="h6 mb-0">
+   283→                            <i class="fas fa-truck me-1" style="color:#7c3aed;"></i> Dispatches
+   284→                            <span class="badge bg-primary-subtle text-primary ms-1">{{ $invoice->dispatches->count() }}</span>
+   285→                            <span class="small text-muted ms-2">
+   286→                                {{ number_format($totalDispatched, 4) }} / {{ number_format($totalOrdered, 4) }} dispatched
+   287→                            </span>
+   288→                        </h2>
+   289→                    </div>
+   290→                    <div class="card-body p-0">
+   291→                        <div class="table-responsive">
+   292→                            <table class="table table-sm table-striped table-hover align-middle mb-0">
+   293→                                <thead class="table-light">
+   294→                                    <tr>
+   295→                                        <th>Product</th>
+   296→                                        <th class="text-end">Ordered Qty</th>
+   297→                                        <th class="text-end">Dispatched Qty</th>
+   298→                                        <th class="text-end">Remaining</th>
+   299→                                        <th>Warehouse</th>
+   300→                                        <th>Status</th>
+   301→                                    </tr>
+   302→                                </thead>
+   303→                                <tbody>
+   304→                                    @foreach ($invoice->dispatches as $d)
+   305→                                        @php
+   306→                                            $remaining = max(0, (float) $d->ordered_qty - (float) $d->dispatched_qty);
+   307→                                            $fullyDispatched = $remaining <= 0.0001 && (float) $d->ordered_qty > 0;
+   308→                                        @endphp
+   309→                                        <tr class="{{ $fullyDispatched ? 'table-success' : '' }}">
+   310→                                            <td>
+   311→                                                @if ($d->product)
+   312→                                                    <span class="fw-semibold">{{ $d->product->product_name }}</span>
+   313→                                                    <div class="small text-muted">{{ $d->product->product_code }}</div>
+   314→                                                @else
+   315→                                                    <span class="text-muted">Product #{{ $d->product_id }}</span>
+   316→                                                @endif
+   317→                                            </td>
+   318→                                            <td class="text-end">{{ number_format((float) $d->ordered_qty, 4) }}</td>
+   319→                                            <td class="text-end">{{ number_format((float) $d->dispatched_qty, 4) }}</td>
+   320→                                            <td class="text-end">
+   321→                                                @if ($remaining > 0.0001)
+   322→                                                    <span class="text-danger fw-semibold">{{ number_format($remaining, 4) }}</span>
+   323→                                                @else
+   324→                                                    <span class="text-success fw-semibold">0.0000</span>
+   325→                                                @endif
+   326→                                            </td>
+   327→                                            <td>
+   328→                                                @if (!empty($d->warehouse_id))
+   329→                                                    <span class="small">Wh #{{ $d->warehouse_id }}</span>
+   330→                                                @else
+   331→                                                    <span class="text-muted small">— not assigned —</span>
+   332→                                                @endif
+   333→                                            </td>
+   334→                                            <td>
+   335→                                                @if ($fullyDispatched)
+   336→                                                    <span class="badge bg-success-subtle text-success">
+   337→                                                        <i class="fas fa-circle-check me-1"></i>Dispatched
+   338→                                                    </span>
+   339→                                                @elseif ((float) $d->dispatched_qty > 0)
+   340→                                                    <span class="badge bg-warning-subtle text-warning">
+   341→                                                        <i class="fas fa-circle-half-stroke me-1"></i>Partial
+   342→                                                    </span>
+   343→                                                @else
+   344→                                                    <span class="badge bg-info-subtle text-info">
+   345→                                                        <i class="fas fa-clock me-1"></i>Pending
+   346→                                                    </span>
+   347→                                                @endif
+   348→                                            </td>
+   349→                                        </tr>
+   350→                                    @endforeach
+   351→                                </tbody>
+   352→                            </table>
+   353→                        </div>
+   354→                    </div>
+   355→                </div>
+   356→            @endif
+   357→
+   358→            {{-- GL Journal Entry card --}}
+   359→            @if ($invoice->journalEntry)
+   360→                @php $je = $invoice->journalEntry; @endphp
+   361→                <div class="card border-0 shadow-sm mb-3">
+   362→                    <div class="card-header bg-white d-flex align-items-center justify-content-between">
+   363→                        <h2 class="h6 mb-0">
+   364→                            <i class="fas fa-book me-1" style="color:#7c3aed;"></i> GL Journal Entry
+   365→                        </h2>
+   366→                        @if (!empty($je->is_reversed))
+   367→                            <span class="badge bg-danger-subtle text-danger">
+   368→                                <i class="fas fa-rotate-left me-1"></i>Reversed
+   369→                            </span>
+   370→                        @endif
+   371→                    </div>
+   372→                    <div class="card-body">
+   373→                        <dl class="row mb-3">
+   374→                            <dt class="col-sm-3 text-muted">JE #</dt>
+   375→                            <dd class="col-sm-9">
+   376→                                <span class="badge bg-secondary-subtle text-secondary">{{ $je->entry_no }}</span>
+   377→                            </dd>
+   378→                            <dt class="col-sm-3 text-muted">Entry date</dt>
+   379→                            <dd class="col-sm-9">
+   380→                                @if ($je->entry_date)
+   381→                                    {{ \Carbon\Carbon::parse($je->entry_date)->format('d M Y') }}
+   382→                                @else
+   383→                                    <span class="text-muted">—</span>
+   384→                                @endif
+   385→                            </dd>
+   386→                            <dt class="col-sm-3 text-muted">Description</dt>
+   387→                            <dd class="col-sm-9">{!! nl2br(e($je->description ?: '—')) !!}</dd>
+   388→                        </dl>
+   389→
+   390→                        @if ($je->lines && $je->lines->isNotEmpty())
+   391→                            <div class="table-responsive">
+   392→                                <table class="table table-sm table-striped table-hover align-middle mb-0">
+   393→                                    <thead class="table-light">
+   394→                                        <tr>
+   395→                                            <th>Ledger</th>
+   396→                                            <th class="text-end">Debit (Tk)</th>
+   397→                                            <th class="text-end">Credit (Tk)</th>
+   398→                                            <th>Memo</th>
+   399→                                        </tr>
+   400→                                    </thead>
+   401→                                    <tbody>
+   402→                                        @foreach ($je->lines as $line)
+   403→                                            <tr>
+   404→                                                <td>
+   405→                                                    @if ($line->ledger)
+   406→                                                        <span class="fw-semibold">{{ $line->ledger->ledger_name }}</span>
+   407→                                                        <div class="small text-muted">{{ $line->ledger->ledger_code }}</div>
+   408→                                                    @else
+   409→                                                        <span class="text-muted">Ledger #{{ $line->ledger_id }}</span>
+   410→                                                    @endif
+   411→                                                </td>
+   412→                                                <td class="text-end">
+   413→                                                    @if ((float) $line->debit > 0)
+   414→                                                        {{ number_format((float) $line->debit, 2) }}
+   415→                                                    @else
+   416→                                                        <span class="text-muted">—</span>
+   417→                                                    @endif
+   418→                                                </td>
+   419→                                                <td class="text-end">
+   420→                                                    @if ((float) $line->credit > 0)
+   421→                                                        {{ number_format((float) $line->credit, 2) }}
+   422→                                                    @else
+   423→                                                        <span class="text-muted">—</span>
+   424→                                                    @endif
+   425→                                                </td>
+   426→                                                <td class="small">{{ $line->memo ?: '—' }}</td>
+   427→                                            </tr>
+   428→                                        @endforeach
+   429→                                    </tbody>
+   430→                                    <tfoot>
+   431→                                        <tr class="table-light fw-bold">
+   432→                                            <td class="text-end">Totals</td>
+   433→                                            <td class="text-end">Tk {{ number_format($glDebitTotal, 2) }}</td>
+   434→                                            <td class="text-end">Tk {{ number_format($glCreditTotal, 2) }}</td>
+   435→                                            <td>
+   436→                                                @if (abs($glDebitTotal - $glCreditTotal) < 0.01)
+   437→                                                    <span class="badge bg-success-subtle text-success">
+   438→                                                        <i class="fas fa-check me-1"></i>Balanced
+   439→                                                    </span>
+   440→                                                @else
+   441→                                                    <span class="badge bg-danger-subtle text-danger">
+   442→                                                        <i class="fas fa-triangle-exclamation me-1"></i>Unbalanced
+   443→                                                    </span>
+   444→                                                @endif
+   445→                                            </td>
+   446→                                        </tr>
+   447→                                    </tfoot>
+   448→                                </table>
+   449→                            </div>
+   450→                        @else
+   451→                            <p class="text-muted small mb-0">No journal lines.</p>
+   452→                        @endif
+   453→                    </div>
+   454→                </div>
+   455→            @endif
+   456→
+   457→            {{-- Customer Ledger Entries card --}}
+   458→            @if ($customerLedgerEntries->isNotEmpty())
+   459→                <div class="card border-0 shadow-sm mb-3">
+   460→                    <div class="card-header bg-white">
+   461→                        <h2 class="h6 mb-0">
+   462→                            <i class="fas fa-user-tag me-1" style="color:#7c3aed;"></i> Customer Ledger Entries
+   463→                            <span class="badge bg-primary-subtle text-primary ms-1">{{ $customerLedgerEntries->count() }}</span>
+   464→                        </h2>
+   465→                    </div>
+   466→                    <div class="card-body p-0">
+   467→                        <div class="table-responsive">
+   468→                            <table class="table table-sm table-striped table-hover align-middle mb-0">
+   469→                                <thead class="table-light">
+   470→                                    <tr>
+   471→                                        <th>Date</th>
+   472→                                        <th>Type</th>
+   473→                                        <th class="text-end">Debit (Tk)</th>
+   474→                                        <th class="text-end">Credit (Tk)</th>
+   475→                                        <th class="text-end">Balance (Tk)</th>
+   476→                                        <th>Description</th>
+   477→                                    </tr>
+   478→                                </thead>
+   479→                                <tbody>
+   480→                                    @foreach ($customerLedgerEntries as $le)
+   481→                                        <tr>
+   482→                                            <td class="text-nowrap small">
+   483→                                                @if (!empty($le->transaction_date))
+   484→                                                    {{ \Carbon\Carbon::parse($le->transaction_date)->format('d M Y') }}
+   485→                                                @else
+   486→                                                    <span class="text-muted">—</span>
+   487→                                                @endif
+   488→                                            </td>
+   489→                                            <td>
+   490→                                                <span class="badge bg-light text-dark">{{ $le->transaction_type }}</span>
+   491→                                            </td>
+   492→                                            <td class="text-end">
+   493→                                                @if ((float) $le->debit > 0)
+   494→                                                    {{ number_format((float) $le->debit, 2) }}
+   495→                                                @else
+   496→                                                    <span class="text-muted">—</span>
+   497→                                                @endif
+   498→                                            </td>
+   499→                                            <td class="text-end">
+   500→                                                @if ((float) $le->credit > 0)
+   501→                                                    {{ number_format((float) $le->credit, 2) }}
+   502→                                                @else
+   503→                                                    <span class="text-muted">—</span>
+   504→                                                @endif
+   505→                                            </td>
+   506→                                            <td class="text-end fw-semibold">{{ number_format((float) $le->balance, 2) }}</td>
+   507→                                            <td class="small">{{ $le->description ?: '—' }}</td>
+   508→                                        </tr>
+   509→                                    @endforeach
+   510→                                </tbody>
+   511→                            </table>
+   512→                        </div>
+   513→                    </div>
+   514→                </div>
+   515→            @endif
+   516→        </div>
+   517→
+   518→        {{-- Right: aside --}}
+   519→        <div class="col-lg-4">
+   520→            {{-- Status card (large) --}}
+   521→            <div class="card border-0 shadow-sm mb-3">
+   522→                <div class="card-header bg-white">
+   523→                    <h2 class="h6 mb-0"><i class="fas fa-flag me-1" style="color:#7c3aed;"></i> Status</h2>
+   524→                </div>
+   525→                <div class="card-body text-center">
+   526→                    <div class="mb-2">{!! $statusBadge(true) !!}</div>
+   527→                    <div class="small text-muted">
+   528→                        @switch($invoice->status)
+   529→                            @case('draft')
+   530→                                Draft invoice — GL posted, stock not yet moved. Can be cancelled.
+   531→                                @break
+   532→                            @case('confirmed')
+   533→                                Confirmed invoice — ready for godown preparation (Phase 8.3).
+   534→                                @break
+   535→                            @case('cancelled')
+   536→                                Cancelled — GL & customer ledger reversed. No further action.
+   537→                                @break
+   538→                            @case('reversed')
+   539→                                Reversed — GL & customer ledger reversed.
+   540→                                @break
+   541→                        @endswitch
+   542→                    </div>
+   543→                </div>
+   544→            </div>
+   545→
+   546→            {{-- Workflow progress card --}}
+   547→            <div class="card border-0 shadow-sm mb-3">
+   548→                <div class="card-header bg-white">
+   549→                    <h2 class="h6 mb-0"><i class="fas fa-list-check me-1" style="color:#7c3aed;"></i> Workflow progress</h2>
+   550→                </div>
+   551→                <div class="card-body">
+   552→                    <ul class="list-unstyled mb-0">
+   553→                        {{-- Step 1: Invoice Created --}}
+   554→                        <li class="d-flex align-items-start mb-3">
+   555→                            <span class="rounded-circle d-flex align-items-center justify-content-center me-3 text-white flex-shrink-0"
+   556→                                  style="width:32px;height:32px;background:#16a34a;">
+   557→                                <i class="fas fa-check"></i>
+   558→                            </span>
+   559→                            <div>
+   560→                                <div class="fw-semibold">Invoice Created</div>
+   561→                                <div class="small text-muted">
+   562→                                    {{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}
+   563→                                    · GL + customer ledger posted
+   564→                                </div>
+   565→                            </div>
+   566→                        </li>
+   567→
+   568→                        {{-- Step 2: Godown Prepared --}}
+   569→                        <li class="d-flex align-items-start mb-3">
+   570→                            <span class="rounded-circle d-flex align-items-center justify-content-center me-3 text-white flex-shrink-0"
+   571→                                  style="width:32px;height:32px;background:{{ $invoice->is_godown_prepared ? '#16a34a' : '#cbd5e1' }};">
+   572→                                @if ($invoice->is_godown_prepared)
+   573→                                    <i class="fas fa-check"></i>
+   574→                                @else
+   575→                                    <i class="fas fa-warehouse" style="color:#64748b;"></i>
+   576→                                @endif
+   577→                            </span>
+   578→                            <div>
+   579→                                <div class="fw-semibold">Godown Prepared</div>
+   580→                                <div class="small">
+   581→                                    @if ($invoice->is_godown_prepared)
+   582→                                        <span class="badge bg-success-subtle text-success">Done</span>
+   583→                                        @if (!empty($invoice->godown_prepared_at))
+   584→                                            <span class="text-muted ms-1">
+   585→                                                {{ \Carbon\Carbon::parse($invoice->godown_prepared_at)->format('d M Y') }}
+   586→                                            </span>
+   587→                                        @endif
+   588→                                    @else
+   589→                                        <span class="badge bg-warning-subtle text-warning">Pending</span>
+   590→                                        <span class="text-muted ms-1 small">Phase 8.3</span>
+   591→                                    @endif
+   592→                                </div>
+   593→                            </div>
+   594→                        </li>
+   595→
+   596→                        {{-- Step 3: Challan Issued --}}
+   597→                        <li class="d-flex align-items-start mb-3">
+   598→                            <span class="rounded-circle d-flex align-items-center justify-content-center me-3 text-white flex-shrink-0"
+   599→                                  style="width:32px;height:32px;background:{{ $invoice->is_challan_issued ? '#16a34a' : '#cbd5e1' }};">
+   600→                                @if ($invoice->is_challan_issued)
+   601→                                    <i class="fas fa-check"></i>
+   602→                                @else
+   603→                                    <i class="fas fa-truck" style="color:#64748b;"></i>
+   604→                                @endif
+   605→                            </span>
+   606→                            <div>
+   607→                                <div class="fw-semibold">Challan Issued</div>
+   608→                                <div class="small">
+   609→                                    @if ($invoice->is_challan_issued)
+   610→                                        <span class="badge bg-success-subtle text-success">Done</span>
+   611→                                        @if (!empty($invoice->challan_issued_at))
+   612→                                            <span class="text-muted ms-1">
+   613→                                                {{ \Carbon\Carbon::parse($invoice->challan_issued_at)->format('d M Y') }}
+   614→                                            </span>
+   615→                                        @endif
+   616→                                    @else
+   617→                                        <span class="badge bg-warning-subtle text-warning">Pending</span>
+   618→                                        <span class="text-muted ms-1 small">Phase 8.3 · stock OUT</span>
+   619→                                    @endif
+   620→                                </div>
+   621→                            </div>
+   622→                        </li>
+   623→
+   624→                        {{-- Step 4: Payment Received --}}
+   625→                        <li class="d-flex align-items-start">
+   626→                            <span class="rounded-circle d-flex align-items-center justify-content-center me-3 text-white flex-shrink-0"
+   627→                                  style="width:32px;height:32px;background:{{ (float) $invoice->due_amount < 0.01 ? '#16a34a' : '#cbd5e1' }};">
+   628→                                @if ((float) $invoice->due_amount < 0.01)
+   629→                                    <i class="fas fa-check"></i>
+   630→                                @else
+   631→                                    <i class="fas fa-taka-sign" style="color:#64748b;"></i>
+   632→                                @endif
+   633→                            </span>
+   634→                            <div>
+   635→                                <div class="fw-semibold">Payment Received</div>
+   636→                                <div class="small">
+   637→                                    @if ((float) $invoice->due_amount < 0.01)
+   638→                                        <span class="badge bg-success-subtle text-success">Done</span>
+   639→                                        <span class="text-muted ms-1 small">Tk {{ number_format((float) $invoice->paid_amount, 2) }}</span>
+   640→                                    @else
+   641→                                        <span class="badge bg-warning-subtle text-warning">Pending</span>
+   642→                                        <span class="text-muted ms-1 small">Phase 8.4 · due Tk {{ number_format((float) $invoice->due_amount, 2) }}</span>
+   643→                                    @endif
+   644→                                </div>
+   645→                            </div>
+   646→                        </li>
+   647→                    </ul>
+   648→                </div>
+   649→            </div>
+   650→
+   651→            {{-- Actions card --}}
+   652→            <div class="card border-0 shadow-sm mb-3">
+   653→                <div class="card-header bg-white">
+   654→                    <h2 class="h6 mb-0"><i class="fas fa-bolt me-1" style="color:#7c3aed;"></i> Actions</h2>
+   655→                </div>
+   656→                <div class="card-body d-grid gap-2">
+   657→                    {{-- Draft: Edit invoice (P1-1) --}}
+   658→                    @if ($invoice->isDraft())
+   659→                        <a href="{{ route('admin.sales-invoices.edit', $invoice->id) }}" class="btn btn-primary w-100">
+   660→                            <i class="fas fa-pen-to-square me-1"></i> Edit Invoice
+   661→                        </a>
+   662→                        <div class="alert alert-info small mb-0">
+   663→                            <i class="fas fa-circle-info me-1"></i>
+   664→                            Editing a draft invoice reverses the old GL + customer ledger and posts a new one. Items, qty, rate, discount, and transport can be changed.
+   665→                        </div>
+   666→                    @endif
+   667→
+   668→                    {{-- P1-6: Print buttons --}}
+   669→                    <a href="{{ route('admin.sales-invoices.print-invoice', $invoice->id) }}" class="btn btn-outline-primary w-100" target="_blank">
+   670→                        <i class="fas fa-print me-1"></i> Print Invoice
+   671→                    </a>
+   672→                    <a href="{{ route('admin.sales-invoices.print-godown', $invoice->id) }}" class="btn btn-outline-secondary w-100" target="_blank">
+   673→                        <i class="fas fa-warehouse me-1"></i> Print Godown Copy
+   674→                    </a>
+   675→
+   676→                    {{-- Draft: Cancel invoice --}}
+   677→                    @if ($invoice->isDraft())
+   678→                        <form method="POST" action="{{ route('admin.sales-invoices.cancel', $invoice->id) }}" id="cancelForm">
+   679→                            @csrf
+   680→                            <input type="hidden" name="cancel_reason" id="cancelReasonInput" value="">
+   681→                            <button type="button" class="btn btn-outline-danger w-100" id="cancelBtn">
+   682→                                <i class="fas fa-ban me-1"></i> Cancel Invoice
+   683→                            </button>
+   684→                        </form>
+   685→                        <div class="alert alert-warning small mb-0">
+   686→                            <i class="fas fa-triangle-exclamation me-1"></i>
+   687→                            Cancelling a draft invoice reverses the GL entry and customer ledger. Stock has not moved yet.
+   688→                        </div>
+   689→                    @endif
+   690→
+   691→                    {{-- Confirmed: info --}}
+   692→                    @if ($invoice->isConfirmed())
+   693→                        <div class="alert alert-info small mb-0">
+   694→                            <i class="fas fa-circle-info me-1"></i>
+   695→                            This invoice is <strong>confirmed</strong>. Godown preparation &amp; challan issue will be available in Phase 8.3.
+   696→                        </div>
+   697→                    @endif
+   698→
+   699→                    {{-- Cancelled / reversed --}}
+   700→                    @if ($invoice->isCancelled() || $invoice->isReversed())
+   701→                        <div class="alert alert-secondary small mb-0">
+   702→                            <i class="fas fa-ban me-1"></i>
+   703→                            This invoice is {{ $invoice->status }} and cannot be modified further.
+   704→                        </div>
+   705→                    @endif
+   706→                </div>
+   707→            </div>
+   708→        </div>
+   709→    </div>
+   710→</div>
+   711→
+   712→@push('scripts')
+   713→<script>
+   714→$(function () {
+   715→    // ====== Cancel Invoice (SweetAlert2 prompt for reason — required) ======
+   716→    $('#cancelBtn').on('click', function (e) {
+   717→        e.preventDefault();
+   718→        Swal.fire({
+   719→            icon: 'warning',
+   720→            title: 'Cancel this invoice?',
+   721→            html: '<p class="text-muted small mb-2">This action reverses the GL entry and customer ledger. It cannot be undone. Please provide a reason:</p>' +
+   722→                  '<textarea id="swalCancelReason" class="form-control" rows="3" placeholder="Reason for cancellation" maxlength="500"></textarea>',
+   723→            showCancelButton: true,
+   724→            confirmButtonText: '<i class="fas fa-ban"></i> Cancel Invoice',
+   725→            cancelButtonText: 'Keep Invoice',
+   726→            confirmButtonColor: '#dc3545',
+   727→            reverseButtons: true,
+   728→            focusConfirm: false,
+   729→            preConfirm: function () {
+   730→                var reason = $('#swalCancelReason').val();
+   731→                if (!reason || !reason.trim()) {
+   732→                    Swal.showValidationMessage('A cancellation reason is required.');
+   733→                    return false;
+   734→                }
+   735→                return reason.trim();
+   736→            }
+   737→        }).then(function (result) {
+   738→            if (result.isConfirmed && result.value) {
+   739→                $('#cancelReasonInput').val(result.value);
+   740→                $('#cancelForm').submit();
+   741→            }
+   742→        });
+   743→    });
+   744→});
+   745→</script>
+   746→@endpush
+   747→@endsection
+   748→

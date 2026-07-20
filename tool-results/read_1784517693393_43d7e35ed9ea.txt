@@ -1,0 +1,520 @@
+     1→@extends('layouts.admin')
+     2→
+     3→@section('content')
+     4→@php
+     5→    $challan = $challan ?? null;
+     6→    $stockMovements = $stockMovements ?? collect();
+     7→
+     8→    // Status badge helper
+     9→    $statusBadge = function (bool $large = false) use ($challan): string {
+    10→        $cls = $large ? ' fs-5' : ' fs-6';
+    11→        if ($challan->is_reversed) {
+    12→            return '<span class="badge bg-danger-subtle text-danger' . $cls . '">'
+    13→                . '<i class="fas fa-rotate-left me-1"></i>Reversed</span>';
+    14→        }
+    15→        return '<span class="badge bg-success-subtle text-success' . $cls . '">'
+    16→            . '<i class="fas fa-circle-check me-1"></i>Active</span>';
+    17→    };
+    18→
+    19→    // GL journal lines totals
+    20→    $glDebitTotal = 0.0;
+    21→    $glCreditTotal = 0.0;
+    22→    if ($challan->journalEntry && $challan->journalEntry->lines) {
+    23→        foreach ($challan->journalEntry->lines as $line) {
+    24→            $glDebitTotal  += (float) $line->debit;
+    25→            $glCreditTotal += (float) $line->credit;
+    26→        }
+    27→    }
+    28→
+    29→    // Reverse-by user name lookup (best effort)
+    30→    $reversedByName = null;
+    31→    if ($challan->reversed_by) {
+    32→        $u = \App\Models\Employee::find($challan->reversed_by);
+    33→        if ($u) {
+    34→            $reversedByName = $u->name ?? ('Employee #' . $challan->reversed_by);
+    35→        } else {
+    36→            $reversedByName = 'User #' . $challan->reversed_by;
+    37→        }
+    38→    }
+    39→
+    40→    // Created-by user name lookup (best effort)
+    41→    $createdByName = null;
+    42→    if ($challan->created_by) {
+    43→        $u = \App\Models\Employee::find($challan->created_by);
+    44→        if ($u) {
+    45→            $createdByName = $u->name ?? ('Employee #' . $challan->created_by);
+    46→        } else {
+    47→            $createdByName = 'User #' . $challan->created_by;
+    48→        }
+    49→    }
+    50→
+    51→    $inv = $challan->salesInvoice;
+    52→    $cogsTotal = (float) ($challan->issue_cost ?? 0);
+    53→@endphp
+    54→
+    55→<div class="container-fluid py-2">
+    56→    {{-- Hero header --}}
+    57→    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
+    58→            style="background: linear-gradient(135deg,#7c3aed,#4f46e5);">
+    59→        <div>
+    60→            <h1 class="h4 mb-1">
+    61→                <i class="fas fa-truck me-2"></i>Challan {{ $challan->challan_code }}
+    62→                {!! $statusBadge() !!}
+    63→            </h1>
+    64→            <p class="mb-0 small opacity-75">
+    65→                @if ($inv)<a href="{{ route('admin.sales-invoices.show', $inv) }}" class="text-white text-decoration-underline">{{ $inv->invoice_code }}</a>@endif
+    66→                @if ($inv && $inv->customer) · {{ $inv->customer->customer_name }}@endif
+    67→                @if ($challan->branch) · {{ $challan->branch->branch_name }}@endif
+    68→                · {{ \Carbon\Carbon::parse($challan->challan_date)->format('d M Y') }}
+    69→            </p>
+    70→        </div>
+    71→        <div class="d-flex gap-2">
+    72→            <a href="{{ route('admin.sales-challans.print-challan', $challan->id) }}" class="btn btn-outline-light btn-sm" target="_blank">
+    73→                <i class="fas fa-print me-1"></i> Print Challan
+    74→            </a>
+    75→            <a href="{{ route('admin.sales-challans.index') }}" class="btn btn-outline-light btn-sm">
+    76→                <i class="fas fa-arrow-left me-1"></i> Back to list
+    77→            </a>
+    78→        </div>
+    79→    </header>
+    80→
+    81→    {{-- Reversal alert --}}
+    82→    @if ($challan->is_reversed)
+    83→        <div class="alert alert-danger d-flex align-items-start mb-3" role="alert">
+    84→            <i class="fas fa-rotate-left me-2 fa-lg text-danger"></i>
+    85→            <div class="w-100">
+    86→                <strong>This challan has been reversed.</strong>
+    87→                Stock movements and the GL journal entry have been reversed.
+    88→                @if ($challan->reversed_at)
+    89→                    <div class="small text-muted mt-1">
+    90→                        <i class="fas fa-clock me-1"></i>
+    91→                        {{ \Carbon\Carbon::parse($challan->reversed_at)->format('d M Y, H:i') }}
+    92→                        @if ($reversedByName)
+    93→                            · <i class="fas fa-user me-1"></i>{{ $reversedByName }}
+    94→                        @endif
+    95→                    </div>
+    96→                @endif
+    97→                @if (!empty($challan->reverse_reason))
+    98→                    <div class="mt-1">
+    99→                        <span class="text-muted">Reason:</span>
+   100→                        <em>{{ $challan->reverse_reason }}</em>
+   101→                    </div>
+   102→                @endif
+   103→            </div>
+   104→        </div>
+   105→    @endif
+   106→
+   107→    <div class="row g-3">
+   108→        {{-- Left column --}}
+   109→        <div class="col-lg-8">
+   110→            {{-- Challan details card --}}
+   111→            <div class="card border-0 shadow-sm mb-3">
+   112→                <div class="card-header bg-white">
+   113→                    <h2 class="h6 mb-0">
+   114→                        <i class="fas fa-circle-info me-1" style="color:#7c3aed;"></i> Challan details
+   115→                    </h2>
+   116→                </div>
+   117→                <div class="card-body">
+   118→                    <dl class="row mb-0">
+   119→                        <dt class="col-sm-3 text-muted">Challan code</dt>
+   120→                        <dd class="col-sm-9">
+   121→                            <span class="badge bg-secondary-subtle text-secondary">{{ $challan->challan_code }}</span>
+   122→                        </dd>
+   123→
+   124→                        <dt class="col-sm-3 text-muted">Challan date</dt>
+   125→                        <dd class="col-sm-9">
+   126→                            {{ \Carbon\Carbon::parse($challan->challan_date)->format('d M Y') }}
+   127→                        </dd>
+   128→
+   129→                        <dt class="col-sm-3 text-muted">Invoice</dt>
+   130→                        <dd class="col-sm-9">
+   131→                            @if ($inv)
+   132→                                <a href="{{ route('admin.sales-invoices.show', $inv) }}"
+   133→                                   class="text-decoration-none fw-semibold">
+   134→                                    {{ $inv->invoice_code }}
+   135→                                </a>
+   136→                                <span class="text-muted small">({{ \Carbon\Carbon::parse($inv->invoice_date)->format('d M Y') }})</span>
+   137→                            @else
+   138→                                <span class="text-muted">—</span>
+   139→                            @endif
+   140→                        </dd>
+   141→
+   142→                        <dt class="col-sm-3 text-muted">Customer</dt>
+   143→                        <dd class="col-sm-9">
+   144→                            @if ($inv && $inv->customer)
+   145→                                <strong>{{ $inv->customer->customer_name }}</strong>
+   146→                                <span class="text-muted">({{ $inv->customer->customer_code }})</span>
+   147→                            @else
+   148→                                <span class="text-muted">—</span>
+   149→                            @endif
+   150→                        </dd>
+   151→
+   152→                        <dt class="col-sm-3 text-muted">Branch</dt>
+   153→                        <dd class="col-sm-9">
+   154→                            @if ($challan->branch)
+   155→                                {{ $challan->branch->branch_name }}
+   156→                                <span class="text-muted small">({{ $challan->branch->branch_code }})</span>
+   157→                            @else
+   158→                                <span class="text-muted">—</span>
+   159→                            @endif
+   160→                        </dd>
+   161→
+   162→                        <dt class="col-sm-3 text-muted">Transport name</dt>
+   163→                        <dd class="col-sm-9">{{ $challan->transport_name ?: '—' }}</dd>
+   164→
+   165→                        <dt class="col-sm-3 text-muted">Transport phone</dt>
+   166→                        <dd class="col-sm-9">{{ $challan->transport_phone ?: '—' }}</dd>
+   167→
+   168→                        <dt class="col-sm-3 text-muted">Vehicle number</dt>
+   169→                        <dd class="col-sm-9">{{ $challan->vehicle_number ?: '—' }}</dd>
+   170→
+   171→                        <dt class="col-sm-3 text-muted">Driver name</dt>
+   172→                        <dd class="col-sm-9">{{ $challan->driver_name ?: '—' }}</dd>
+   173→
+   174→                        <dt class="col-sm-3 text-muted">Transport cost</dt>
+   175→                        <dd class="col-sm-9">
+   176→                            Tk {{ number_format((float) ($challan->transport_cost ?? 0), 2) }}
+   177→                        </dd>
+   178→
+   179→                        <dt class="col-sm-3 text-muted">COGS total</dt>
+   180→                        <dd class="col-sm-9">
+   181→                            <strong class="fs-5" style="color:#7c3aed;">
+   182→                                Tk {{ number_format($cogsTotal, 2) }}
+   183→                            </strong>
+   184→                        </dd>
+   185→
+   186→                        @if ($createdByName)
+   187→                            <dt class="col-sm-3 text-muted">Issued by</dt>
+   188→                            <dd class="col-sm-9">{{ $createdByName }}</dd>
+   189→                        @endif
+   190→                    </dl>
+   191→                </div>
+   192→            </div>
+   193→
+   194→            {{-- Invoice items table --}}
+   195→            @if ($inv && $inv->items && $inv->items->isNotEmpty())
+   196→                <div class="card border-0 shadow-sm mb-3">
+   197→                    <div class="card-header bg-white">
+   198→                        <h2 class="h6 mb-0">
+   199→                            <i class="fas fa-list me-1" style="color:#7c3aed;"></i> Invoice items
+   200→                        </h2>
+   201→                    </div>
+   202→                    <div class="card-body p-0">
+   203→                        <div class="table-responsive">
+   204→                            <table class="table table-sm table-striped table-hover align-middle mb-0">
+   205→                                <thead class="table-light">
+   206→                                    <tr>
+   207→                                        <th>Product</th>
+   208→                                        <th>Warehouse</th>
+   209→                                        <th class="text-end">Qty</th>
+   210→                                        <th class="text-end">Rate (Tk)</th>
+   211→                                        <th class="text-end">Amount (Tk)</th>
+   212→                                    </tr>
+   213→                                </thead>
+   214→                                <tbody>
+   215→                                    @foreach ($inv->items as $item)
+   216→                                        <tr>
+   217→                                            <td>
+   218→                                                @if ($item->product)
+   219→                                                    <div class="fw-semibold">{{ $item->product->product_name }}</div>
+   220→                                                    <div class="small text-muted">{{ $item->product->product_code }}</div>
+   221→                                                @else
+   222→                                                    <span class="text-muted">Product #{{ $item->product_id }}</span>
+   223→                                                @endif
+   224→                                            </td>
+   225→                                            <td class="small">
+   226→                                                @if ($item->warehouse)
+   227→                                                    {{ $item->warehouse->warehouse_name }}
+   228→                                                @else
+   229→                                                    <span class="text-muted">—</span>
+   230→                                                @endif
+   231→                                            </td>
+   232→                                            <td class="text-end">{{ number_format((float) $item->qty, 2) }}</td>
+   233→                                            <td class="text-end">{{ number_format((float) $item->rate, 2) }}</td>
+   234→                                            <td class="text-end fw-semibold">
+   235→                                                {{ number_format((float) $item->qty * (float) $item->rate, 2) }}
+   236→                                            </td>
+   237→                                        </tr>
+   238→                                    @endforeach
+   239→                                </tbody>
+   240→                            </table>
+   241→                        </div>
+   242→                    </div>
+   243→                </div>
+   244→            @endif
+   245→
+   246→            {{-- Stock movements card --}}
+   247→            @if ($stockMovements->isNotEmpty())
+   248→                <div class="card border-0 shadow-sm mb-3">
+   249→                    <div class="card-header bg-white d-flex align-items-center justify-content-between">
+   250→                        <h2 class="h6 mb-0">
+   251→                            <i class="fas fa-boxes-stacked me-1" style="color:#7c3aed;"></i> Stock movements
+   252→                        </h2>
+   253→                        <span class="badge bg-primary-subtle text-primary">
+   254→                            {{ $stockMovements->count() }} tx(s)
+   255→                        </span>
+   256→                    </div>
+   257→                    <div class="card-body p-0">
+   258→                        <div class="table-responsive">
+   259→                            <table class="table table-sm table-striped table-hover align-middle mb-0">
+   260→                                <thead class="table-light">
+   261→                                    <tr>
+   262→                                        <th>Date</th>
+   263→                                        <th>TX #</th>
+   264→                                        <th>Product</th>
+   265→                                        <th>Warehouse</th>
+   266→                                        <th class="text-end">Qty (OUT)</th>
+   267→                                        <th class="text-end">Rate (avg_cost)</th>
+   268→                                        <th class="text-end">Value (Tk)</th>
+   269→                                        <th class="text-center">Reversed?</th>
+   270→                                    </tr>
+   271→                                </thead>
+   272→                                <tbody>
+   273→                                    @foreach ($stockMovements as $mv)
+   274→                                        @php
+   275→                                            $mvQty = (float) ($mv->qty ?? 0);
+   276→                                            $mvCost = (float) ($mv->avg_cost ?? $mv->unit_cost ?? 0);
+   277→                                            $mvValue = abs($mvQty) * $mvCost;
+   278→                                            $mvReversed = !empty($mv->is_reversed);
+   279→                                        @endphp
+   280→                                        <tr class="{{ $mvReversed ? 'table-danger' : '' }}">
+   281→                                            <td class="small text-nowrap">
+   282→                                                @if (!empty($mv->transaction_date))
+   283→                                                    {{ \Carbon\Carbon::parse($mv->transaction_date)->format('d M Y') }}
+   284→                                                @elseif (!empty($mv->created_at))
+   285→                                                    {{ \Carbon\Carbon::parse($mv->created_at)->format('d M Y') }}
+   286→                                                @else
+   287→                                                    —
+   288→                                                @endif
+   289→                                            </td>
+   290→                                            <td class="small">
+   291→                                                @if (!empty($mv->transaction_no))
+   292→                                                    <span class="badge bg-secondary-subtle text-secondary">
+   293→                                                        {{ $mv->transaction_no }}
+   294→                                                    </span>
+   295→                                                @else
+   296→                                                    <span class="text-muted">#{{ $mv->id }}</span>
+   297→                                                @endif
+   298→                                            </td>
+   299→                                            <td>
+   300→                                                <span class="fw-semibold">{{ $mv->product_name }}</span>
+   301→                                                <div class="small text-muted">{{ $mv->product_code }}</div>
+   302→                                            </td>
+   303→                                            <td class="small">{{ $mv->warehouse_name }}</td>
+   304→                                            <td class="text-end text-danger fw-semibold">
+   305→                                                − {{ number_format(abs($mvQty), 2) }}
+   306→                                            </td>
+   307→                                            <td class="text-end">{{ number_format($mvCost, 2) }}</td>
+   308→                                            <td class="text-end fw-semibold">
+   309→                                                {{ number_format($mvValue, 2) }}
+   310→                                            </td>
+   311→                                            <td class="text-center">
+   312→                                                @if ($mvReversed)
+   313→                                                    <span class="badge bg-danger-subtle text-danger">
+   314→                                                        <i class="fas fa-rotate-left me-1"></i>Yes
+   315→                                                    </span>
+   316→                                                @else
+   317→                                                    <span class="text-muted">No</span>
+   318→                                                @endif
+   319→                                            </td>
+   320→                                        </tr>
+   321→                                    @endforeach
+   322→                                </tbody>
+   323→                            </table>
+   324→                        </div>
+   325→                    </div>
+   326→                </div>
+   327→            @endif
+   328→
+   329→            {{-- GL Journal Entry card --}}
+   330→            @if ($challan->journalEntry)
+   331→                @php $je = $challan->journalEntry; @endphp
+   332→                <div class="card border-0 shadow-sm mb-3">
+   333→                    <div class="card-header bg-white d-flex align-items-center justify-content-between">
+   334→                        <h2 class="h6 mb-0">
+   335→                            <i class="fas fa-book me-1" style="color:#7c3aed;"></i> GL Journal Entry
+   336→                        </h2>
+   337→                        @if (!empty($je->is_reversed))
+   338→                            <span class="badge bg-danger-subtle text-danger">
+   339→                                <i class="fas fa-rotate-left me-1"></i>Reversed
+   340→                            </span>
+   341→                        @endif
+   342→                    </div>
+   343→                    <div class="card-body">
+   344→                        <dl class="row mb-3">
+   345→                            <dt class="col-sm-3 text-muted">JE #</dt>
+   346→                            <dd class="col-sm-9">
+   347→                                <span class="badge bg-secondary-subtle text-secondary">{{ $je->entry_no }}</span>
+   348→                            </dd>
+   349→                            <dt class="col-sm-3 text-muted">Entry date</dt>
+   350→                            <dd class="col-sm-9">
+   351→                                @if ($je->entry_date)
+   352→                                    {{ \Carbon\Carbon::parse($je->entry_date)->format('d M Y') }}
+   353→                                @else
+   354→                                    <span class="text-muted">—</span>
+   355→                                @endif
+   356→                            </dd>
+   357→                            <dt class="col-sm-3 text-muted">Description</dt>
+   358→                            <dd class="col-sm-9">{!! nl2br(e($je->description ?: '—')) !!}</dd>
+   359→                        </dl>
+   360→
+   361→                        @if ($je->lines && $je->lines->isNotEmpty())
+   362→                            <div class="table-responsive">
+   363→                                <table class="table table-sm table-striped table-hover align-middle mb-0">
+   364→                                    <thead class="table-light">
+   365→                                        <tr>
+   366→                                            <th>Ledger</th>
+   367→                                            <th class="text-end">Debit (Tk)</th>
+   368→                                            <th class="text-end">Credit (Tk)</th>
+   369→                                            <th>Memo</th>
+   370→                                        </tr>
+   371→                                    </thead>
+   372→                                    <tbody>
+   373→                                        @foreach ($je->lines as $line)
+   374→                                            <tr>
+   375→                                                <td>
+   376→                                                    @if ($line->ledger)
+   377→                                                        <span class="fw-semibold">{{ $line->ledger->ledger_name }}</span>
+   378→                                                        <div class="small text-muted">{{ $line->ledger->ledger_code }}</div>
+   379→                                                    @else
+   380→                                                        <span class="text-muted">Ledger #{{ $line->ledger_id }}</span>
+   381→                                                    @endif
+   382→                                                </td>
+   383→                                                <td class="text-end">
+   384→                                                    @if ((float) $line->debit > 0)
+   385→                                                        {{ number_format((float) $line->debit, 2) }}
+   386→                                                    @else
+   387→                                                        <span class="text-muted">—</span>
+   388→                                                    @endif
+   389→                                                </td>
+   390→                                                <td class="text-end">
+   391→                                                    @if ((float) $line->credit > 0)
+   392→                                                        {{ number_format((float) $line->credit, 2) }}
+   393→                                                    @else
+   394→                                                        <span class="text-muted">—</span>
+   395→                                                    @endif
+   396→                                                </td>
+   397→                                                <td class="small">{{ $line->memo ?: '—' }}</td>
+   398→                                            </tr>
+   399→                                        @endforeach
+   400→                                    </tbody>
+   401→                                    <tfoot>
+   402→                                        <tr class="table-light fw-bold">
+   403→                                            <td class="text-end">Totals</td>
+   404→                                            <td class="text-end">Tk {{ number_format($glDebitTotal, 2) }}</td>
+   405→                                            <td class="text-end">Tk {{ number_format($glCreditTotal, 2) }}</td>
+   406→                                            <td>
+   407→                                                @if (abs($glDebitTotal - $glCreditTotal) < 0.01)
+   408→                                                    <span class="badge bg-success-subtle text-success">
+   409→                                                        <i class="fas fa-check me-1"></i>Balanced
+   410→                                                    </span>
+   411→                                                @else
+   412→                                                    <span class="badge bg-danger-subtle text-danger">
+   413→                                                        <i class="fas fa-triangle-exclamation me-1"></i>Unbalanced
+   414→                                                    </span>
+   415→                                                @endif
+   416→                                            </td>
+   417→                                        </tr>
+   418→                                    </tfoot>
+   419→                                </table>
+   420→                            </div>
+   421→                        @else
+   422→                            <p class="text-muted small mb-0">No journal lines.</p>
+   423→                        @endif
+   424→                    </div>
+   425→                </div>
+   426→            @endif
+   427→        </div>
+   428→
+   429→        {{-- Right column: status + actions --}}
+   430→        <div class="col-lg-4">
+   431→            <div class="card border-0 shadow-sm sticky-top" style="top:80px;">
+   432→                <div class="card-header bg-white">
+   433→                    <h2 class="h6 mb-0">
+   434→                        <i class="fas fa-gauge-high me-1" style="color:#7c3aed;"></i> Status &amp; actions
+   435→                    </h2>
+   436→                </div>
+   437→                <div class="card-body">
+   438→                    <div class="d-flex flex-column align-items-start gap-2 mb-3">
+   439→                        <div class="text-muted small">Current status</div>
+   440→                        <div>{!! $statusBadge(true) !!}</div>
+   441→                    </div>
+   442→
+   443→                    <hr>
+   444→
+   445→                    <div class="d-grid gap-2">
+   446→                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="window.print()">
+   447→                            <i class="fas fa-print me-1"></i> Print challan
+   448→                        </button>
+   449→                        <a href="{{ route('admin.sales-challans.index') }}" class="btn btn-outline-secondary btn-sm">
+   450→                            <i class="fas fa-list me-1"></i> All challans
+   451→                        </a>
+   452→                        @if ($inv)
+   453→                            <a href="{{ route('admin.sales-invoices.show', $inv) }}" class="btn btn-outline-secondary btn-sm">
+   454→                                <i class="fas fa-file-invoice-dollar me-1"></i> View invoice
+   455→                            </a>
+   456→                        @endif
+   457→                    </div>
+   458→
+   459→                    @if (! $challan->is_reversed)
+   460→                        <hr>
+   461→                        <div class="alert alert-warning small mb-2">
+   462→                            <i class="fas fa-triangle-exclamation me-1"></i>
+   463→                            Cancelling this challan will reverse the stock OUT movements and reverse the GL journal
+   464→                            entry. A reason is required.
+   465→                        </div>
+   466→                        <form method="POST" action="{{ route('admin.sales-challans.cancel', $challan) }}" id="cancelForm">
+   467→                            @csrf
+   468→                            <input type="hidden" name="cancel_reason" id="cancelReasonInput" value="">
+   469→                            <button type="button" class="btn btn-danger w-100" id="cancelBtn">
+   470→                                <i class="fas fa-ban me-1"></i> Cancel Challan
+   471→                            </button>
+   472→                        </form>
+   473→                    @else
+   474→                        <hr>
+   475→                        <div class="alert alert-secondary small mb-0">
+   476→                            <i class="fas fa-lock me-1"></i>
+   477→                            This challan is reversed — no further actions available.
+   478→                        </div>
+   479→                    @endif
+   480→                </div>
+   481→            </div>
+   482→        </div>
+   483→    </div>
+   484→</div>
+   485→
+   486→@push('scripts')
+   487→<script>
+   488→$(function () {
+   489→    $('#cancelBtn').on('click', function () {
+   490→        Swal.fire({
+   491→            icon: 'warning',
+   492→            title: 'Cancel this challan?',
+   493→            html: '<p class="mb-2">This will <strong>reverse stock movements</strong> and <strong>reverse the GL journal entry</strong>.</p>' +
+   494→                  '<p class="mb-2 text-muted small">A reason is required (max 500 chars).</p>' +
+   495→                  '<textarea id="cancelReason" class="form-control" placeholder="Enter cancellation reason..." maxlength="500" rows="3"></textarea>',
+   496→            showCancelButton: true,
+   497→            confirmButtonColor: '#dc3545',
+   498→            cancelButtonColor: '#6c757d',
+   499→            confirmButtonText: '<i class="fas fa-ban"></i> Yes, cancel challan',
+   500→            cancelButtonText: 'Keep challan',
+   501→            preConfirm: function () {
+   502→                var reason = $('#cancelReason').val().trim();
+   503→                if (!reason) {
+   504→                    Swal.showValidationMessage('A cancellation reason is required.');
+   505→                    return false;
+   506→                }
+   507→                return reason;
+   508→            }
+   509→        }).then(function (res) {
+   510→            if (res.isConfirmed) {
+   511→                $('#cancelReasonInput').val(res.value);
+   512→                $('#cancelForm').submit();
+   513→            }
+   514→        });
+   515→    });
+   516→});
+   517→</script>
+   518→@endpush
+   519→@endsection
+   520→

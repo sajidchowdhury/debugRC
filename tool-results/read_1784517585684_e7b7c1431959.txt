@@ -1,0 +1,806 @@
+     1→<?php
+     2→// app/controllers/SalesController.php
+     3→
+     4→require_once '../core/BaseController.php';
+     5→require_once '../app/models/SalesModel.php';
+     6→require_once '../core/UserAudit.php';
+     7→require_once '../core/Logger.php';
+     8→require_once '../app/helpers/Helper.php';
+     9→require_once __DIR__ . '/../services/Sales/SalesCartService.php';
+    10→require_once __DIR__ . '/../services/Sales/SalesInvoiceService.php';
+    11→require_once __DIR__ . '/../services/Sales/SalesPaymentService.php';
+    12→require_once __DIR__ . '/../services/Notification/FcmTokenService.php';
+    13→require_once __DIR__ . '/../services/Notification/SalesNotificationService.php';
+    14→require_once __DIR__ . '/../services/Notification/SalesTelegramNotifier.php';
+    15→require_once __DIR__ . '/../services/Accounting/ReconciliationService.php';
+    16→require_once __DIR__ . '/../helpers/SalesGlAuditHelper.php';
+    17→
+    18→class SalesController extends BaseController {
+    19→
+    20→    private SalesModel $model;
+    21→    private SalesCartService $cartService;
+    22→    private SalesInvoiceService $invoiceService;
+    23→    private SalesPaymentService $paymentService;
+    24→    private UserAudit $userAudit;
+    25→    private SalesNotificationService $salesNotifications;
+    26→    private FcmTokenService $fcmTokens;
+    27→
+    28→    public function __construct() {
+    29→        $this->requireLogin();
+    30→        $this->model = new SalesModel();
+    31→        $this->cartService = new SalesCartService($this->model->getDatabase());
+    32→        $this->invoiceService = new SalesInvoiceService($this->model->getDatabase());
+    33→        $this->paymentService = new SalesPaymentService($this->model->getDatabase());
+    34→        $this->userAudit = new UserAudit();
+    35→        $this->salesNotifications = new SalesNotificationService();
+    36→        $this->fcmTokens = new FcmTokenService();
+    37→    }
+    38→
+    39→    private function auditLog(string $action, ?int $entityId, array $details = []): void
+    40→    {
+    41→        $this->userAudit->log($_SESSION['user_id'] ?? 0, $action, $entityId, $details);
+    42→    }
+    43→
+    44→    private function filterSalesAuditLogs(int $limit = 300): array
+    45→    {
+    46→        $all = $this->userAudit->getRecentLogs(500);
+    47→        $prefixes = ['sale_', 'godown_', 'challan_', 'payment_'];
+    48→        $filtered = [];
+    49→        foreach ($all as $entry) {
+    50→            $action = $entry['action'] ?? '';
+    51→            foreach ($prefixes as $p) {
+    52→                if (stripos($action, $p) === 0) {
+    53→                    $filtered[] = $entry;
+    54→                    break;
+    55→                }
+    56→            }
+    57→            if (count($filtered) >= $limit) {
+    58→                break;
+    59→            }
+    60→        }
+    61→        return $filtered;
+    62→    }
+    63→
+    64→ 
+    65→    // ====================== SALES INVOICE ======================
+    66→
+    67→    public function create() {
+    68→        $sessionBranchId = Helper::sessionBranchId();
+    69→        $sessionBranch = $this->model->getBranch($sessionBranchId);
+    70→
+    71→        $data = [
+    72→            'title' => 'Create Sales Invoice',
+    73→            'can_override_branch' => $this->model->canOverrideBranch(),
+    74→            'session_branch_id' => $sessionBranchId,
+    75→            'session_branch_name' => $sessionBranch['branch_name'] ?? 'Branch',
+    76→        ];
+    77→        $this->view('sales/create', $data);
+    78→    }
+    79→
+    80→    // Search endpoints
+    81→    public function search_customer() {
+    82→        $this->guardJsonApi('sales.search_customer', 90, 60);
+    83→        $term = $_GET['term'] ?? '';
+    84→        $this->sendJson($this->model->searchCustomers($term));
+    85→    }
+    86→
+    87→    public function search_product() {
+    88→        $this->guardJsonApi('sales.search_product', 90, 60);
+    89→        $term = $_GET['term'] ?? '';
+    90→        $branch_id = $this->model->resolveBranchIdForRead((int)($_GET['branch_id'] ?? 0));
+    91→        $this->sendJson($this->model->searchProductsWithStock($term, $branch_id));
+    92→    }
+    93→
+    94→    /**
+    95→     * Exact product_code match for barcode scanners.
+    96→     */
+    97→    public function product_by_code() {
+    98→        $this->guardJsonApi('sales.product_by_code', 120, 60);
+    99→        $code = trim((string)($_GET['code'] ?? ''));
+   100→        $branch_id = $this->model->resolveBranchIdForRead((int)($_GET['branch_id'] ?? 0));
+   101→
+   102→        if ($code === '') {
+   103→            $this->sendJson(['status' => 'error', 'message' => 'Product code required']);
+   104→            return;
+   105→        }
+   106→
+   107→        $product = $this->model->getProductByExactCode($code, $branch_id);
+   108→        if (!$product) {
+   109→            $this->sendJson(['status' => 'not_found', 'message' => 'No product with this code']);
+   110→            return;
+   111→        }
+   112→
+   113→        $this->sendJson(['status' => 'success', 'data' => $product]);
+   114→    }
+   115→
+   116→
+   117→
+   118→    public function get_branch() {
+   119→        $this->guardJsonApi('sales.get_branch', 60, 60);
+   120→        if (!empty($_GET['for_stock'])) {
+   121→            $this->sendJson($this->model->getAllBranches());
+   122→            return;
+   123→        }
+   124→
+   125→        $showAll = isset($_GET['all']) && $_GET['all'] == 1;
+   126→
+   127→        if ($showAll && $this->model->canOverrideBranch()) {
+   128→            $this->sendJson($this->model->getAllBranches());
+   129→        } else {
+   130→            $branch_id = Helper::sessionBranchId();
+   131→            $branch = $this->model->getBranch($branch_id);
+   132→            $this->sendJson($branch ? [$branch] : []);
+   133→        }
+   134→    }
+   135→
+   136→    /**
+   137→     * Branch-level available stock for a product (logged-in / selected branch).
+   138→     */
+   139→    public function product_stock_at_branch() {
+   140→        $this->guardJsonApi('sales.product_stock', 120, 60);
+   141→        $product_id = (int)($_GET['product_id'] ?? 0);
+   142→        $branch_id  = (int)($_GET['branch_id'] ?? 0);
+   143→
+   144→        if ($product_id <= 0) {
+   145→            $this->sendJson(['status' => 'error', 'message' => 'Product required']);
+   146→            return;
+   147→        }
+   148→
+   149→        $this->sendJson($this->model->getProductAvailableAtBranch($product_id, $branch_id));
+   150→    }
+   151→
+   152→    public function get_warehouse_stock() {
+   153→        $this->guardJsonApi('sales.warehouse_stock', 120, 60);
+   154→        $product_id = (int)($_GET['product_id'] ?? 0);
+   155→        $branch_id  = $this->model->resolveBranchIdForRead((int)($_GET['branch_id'] ?? 0));
+   156→
+   157→        $this->sendJson(
+   158→            $this->model->getWarehouseStockForProduct($product_id, $branch_id)
+   159→        );
+   160→    }
+   161→    public function get_employees() {
+   162→        $this->guardJsonApi('sales.get_employees', 60, 60);
+   163→        $this->sendJson($this->model->getSalesEmployees());
+   164→    }
+   165→
+   166→    // Customer Due Details
+   167→    public function customer_details() {
+   168→        $this->guardJsonApi('sales.customer_details', 120, 60);
+   169→        $customer_id = $_GET['customer_id'] ?? 0;
+   170→        if (empty($customer_id)) {
+   171→            $this->sendJson([]);
+   172→        }
+   173→
+   174→        $data = $this->model->getCustomerDetails($customer_id);
+   175→        $this->sendJson($data ?: [
+   176→            'customer_name' => '', 'shop_name' => '', 'address' => '',
+   177→            'mobile' => '', 'credit_limit' => 0, 'recent_due' => 0, 'due_left' => 0
+   178→        ]);
+   179→    }
+   180→
+   181→    // Cart Operations
+   182→    public function add_to_cart() {
+   183→        $this->validateCSRF();
+   184→        $this->sendJson($this->cartService->addToCart($_POST));
+   185→    }
+   186→
+   187→    public function load_cart() {
+   188→        $this->validateCSRF();
+   189→        $customer_id = $_POST['customer_id'] ?? 0;
+   190→        $branch_id = (int)($_POST['branch_id'] ?? $_SESSION['branch_id'] ?? 0);
+   191→        $excludeInvoiceId = !empty($_POST['exclude_invoice_id']) ? (int)$_POST['exclude_invoice_id'] : null;
+   192→        $this->sendJson($this->cartService->loadCart($customer_id, $branch_id, $excludeInvoiceId));
+   193→    }
+   194→
+   195→    public function validate_cart() {
+   196→        $this->validateCSRF();
+   197→        $this->sendJson($this->cartService->validateCartForSubmit($_POST));
+   198→    }
+   199→
+   200→    public function hydrate_edit_cart() {
+   201→        $this->validateCSRF();
+   202→        $invoiceId = (int)($_POST['invoice_id'] ?? 0);
+   203→        $customerId = (int)($_POST['customer_id'] ?? 0);
+   204→
+   205→        if ($invoiceId <= 0 || $customerId <= 0) {
+   206→            $this->sendJson(['status' => 'error', 'message' => 'Invalid invoice or customer.']);
+   207→        }
+   208→
+   209→        $invoice = $this->invoiceService->getInvoiceForEdit($invoiceId);
+   210→        if (!$invoice) {
+   211→            $this->sendJson(['status' => 'error', 'message' => 'Invoice not found or cannot be edited']);
+   212→        }
+   213→
+   214→        $blockReason = $this->invoiceService->getSalesEditBlockReason($invoice);
+   215→        if ($blockReason !== '') {
+   216→            $this->sendJson(['status' => 'error', 'message' => $blockReason]);
+   217→        }
+   218→
+   219→        if ((int)($invoice['customer_id'] ?? 0) !== $customerId) {
+   220→            $this->sendJson(['status' => 'error', 'message' => 'Customer does not match this invoice.']);
+   221→        }
+   222→
+   223→        $this->sendJson($this->cartService->hydrateEditCart($customerId, $invoice['items'] ?? []));
+   224→    }
+   225→
+   226→    public function list_draft_carts() {
+   227→        $this->guardJsonApi('sales.list_draft_carts', 60, 60);
+   228→        $this->sendJson($this->cartService->listDraftCarts());
+   229→    }
+   230→
+   231→    public function clear_tab_cart() {
+   232→        $this->validateCSRF();
+   233→        $this->sendJson($this->cartService->clearTabCart($_POST));
+   234→    }
+   235→
+   236→    public function delete_tab_cart() {
+   237→        $this->validateCSRF();
+   238→        $this->sendJson($this->cartService->deleteTabCart($_POST));
+   239→    }
+   240→
+   241→    public function delete_from_cart() {
+   242→        $this->validateCSRF();
+   243→        $this->sendJson($this->cartService->deleteFromCart($_POST));
+   244→    }
+   245→
+   246→    public function update_cart_item() {
+   247→        $this->validateCSRF();
+   248→        $this->sendJson($this->cartService->updateCartItem($_POST));
+   249→    }
+   250→
+   251→    public function save_fcm_token() {
+   252→        $this->validateCSRF();
+   253→        $this->guardJsonApi('sales.save_fcm_token', 30, 60);
+   254→
+   255→        try {
+   256→            $input = $this->getJsonInput();
+   257→            $token = trim($input['token'] ?? $_POST['token'] ?? '');
+   258→            $deviceInfo = trim($input['device_info'] ?? '');
+   259→            $userId = (int)($_SESSION['user_id'] ?? 0);
+   260→
+   261→            $this->sendJson($this->fcmTokens->saveToken($userId, $token, $deviceInfo));
+   262→        } catch (Throwable $e) {
+   263→            Logger::error('FCM token save error', ['error' => $e->getMessage()]);
+   264→            $this->sendJson([
+   265→                'status'  => 'error',
+   266→                'message' => $this->safeClientMessage($e, 'Could not save device token.'),
+   267→            ], 500);
+   268→        }
+   269→    }
+   270→
+   271→    // Finalize / Update
+   272→    public function final_sales() {
+   273→        $this->requireRouteAccess();
+   274→        $this->validateCSRF();
+   275→        try {
+   276→            $result = $this->invoiceService->finalizeSales($_POST);
+   277→
+   278→            if ($result['status'] === 'success') {
+   279→                $this->auditLog('sale_created', (int)($result['invoice_id'] ?? 0), [
+   280→                    'invoice_code'     => $result['invoice_code'] ?? null,
+   281→                    'customer_id'      => (int)($_POST['customer_id'] ?? 0),
+   282→                    'total_amount'     => $_POST['total_amount'] ?? 0,
+   283→                    'journal_entry_id' => $result['journal_entry_id'] ?? null,
+   284→                ]);
+   285→
+   286→                $this->salesNotifications->notifyNewSalesInvoice(
+   287→                    (int)$result['invoice_id'],
+   288→                    $result['invoice_code'] ?? '',
+   289→                    (float)($_POST['total_amount'] ?? 0)
+   290→                );
+   291→
+   292→                SalesTelegramNotifier::safe(function () use ($result) {
+   293→                    (new SalesTelegramNotifier())->notifyInvoiceCreated((int)$result['invoice_id']);
+   294→                });
+   295→            }
+   296→
+   297→            if ($result['status'] === 'success' && !empty($result['credit_limit_override_used'])) {
+   298→                $this->auditLog('sale_credit_limit_override', (int)($_POST['customer_id'] ?? 0), [
+   299→                    'invoice_code'    => $result['invoice_code'] ?? null,
+   300→                    'invoice_id'      => (int)($result['invoice_id'] ?? 0),
+   301→                    'override_reason' => $result['override_reason'] ?? '',
+   302→                    'total_amount'    => $_POST['total_amount'] ?? 0,
+   303→                ]);
+   304→            }
+   305→
+   306→            $this->sendJson($result);
+   307→        } catch (Throwable $e) {
+   308→            $this->sendJson([
+   309→                'status'  => 'error',
+   310→                'message' => $this->safeClientMessage($e, 'Could not finalize invoice.'),
+   311→            ], 500);
+   312→        }
+   313→    }
+   314→
+   315→    public function update($id = null) {
+   316→        if ($_SERVER['REQUEST_METHOD'] === 'POST' && $id) {
+   317→            $this->requireRouteAccess();
+   318→            $this->validateCSRF();
+   319→            $result = $this->invoiceService->updateExistingInvoice($id, $_POST);
+   320→
+   321→            if ($result['status'] === 'success') {
+   322→                $this->auditLog('sale_updated', (int)$id, [
+   323→                    'total_amount' => $_POST['total_amount'] ?? null,
+   324→                ]);
+   325→            }
+   326→
+   327→            if ($result['status'] === 'success' && !empty($result['credit_limit_override_used'])) {
+   328→                $this->auditLog('sale_credit_limit_override', (int)($_POST['customer_id'] ?? 0), [
+   329→                    'invoice_id'      => (int)$id,
+   330→                    'action'          => 'invoice_edit',
+   331→                    'override_reason' => $result['override_reason'] ?? '',
+   332→                ]);
+   333→            }
+   334→
+   335→            $this->sendJson($result);
+   336→        } else {
+   337→            $this->sendJson(['status' => 'error', 'message' => 'Invalid request']);
+   338→        }
+   339→    }
+   340→
+   341→    // Today & Management
+   342→public function today() {
+   343→    $defaultTo = date('Y-m-d');
+   344→    $defaultFrom = date('Y-m-d', strtotime('-6 days'));
+   345→
+   346→    $filters = [
+   347→        'date_from'      => $_GET['date_from'] ?? $defaultFrom,
+   348→        'date_to'        => $_GET['date_to'] ?? $defaultTo,
+   349→        'challan_status' => $_GET['challan_status'] ?? 'all',
+   350→        'date_preset'    => $_GET['preset'] ?? 'week',
+   351→        'search'         => trim($_GET['q'] ?? ''),
+   352→        'smart_sort'     => ($_GET['smart_sort'] ?? '1') !== '0',
+   353→    ];
+   354→
+   355→    $sessionBranchId = Helper::sessionBranchId();
+   356→    $sessionBranch = $this->model->getBranch($sessionBranchId);
+   357→
+   358→    $data = [
+   359→        'title'               => "Today's Sales",
+   360→        'filters'             => $filters,
+   361→        'session_branch_name' => $sessionBranch['branch_name'] ?? 'Branch',
+   362→    ];
+   363→
+   364→    $this->view('sales/today', $data);
+   365→}
+   366→
+   367→    public function today_filter_summary() {
+   368→        $this->guardJsonApi('sales.today_filter_summary', 120, 60);
+   369→        $defaultTo = date('Y-m-d');
+   370→        $defaultFrom = date('Y-m-d', strtotime('-6 days'));
+   371→        $filters = [
+   372→            'date_from' => $_GET['date_from'] ?? $defaultFrom,
+   373→            'date_to'   => $_GET['date_to'] ?? $defaultTo,
+   374→            'search'    => trim($_GET['search'] ?? ''),
+   375→            'skip_default_today' => true,
+   376→        ];
+   377→        $this->sendJson($this->invoiceService->getTodayFilterSummary($filters));
+   378→    }
+   379→
+   380→    /**
+   381→     * Cancel stale draft invoices (releases pipeline). Admin/manager only — optional cron; not used on Today's Sales UI.
+   382→     */
+   383→    public function cancel_stale_drafts()
+   384→    {
+   385→        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+   386→            $this->sendJson(['status' => 'error', 'message' => 'POST required']);
+   387→            return;
+   388→        }
+   389→        $this->guardJsonApi('sales.cancel_stale_drafts', 30, 60);
+   390→        $days = isset($_POST['days']) ? max(1, (int)$_POST['days']) : null;
+   391→        $branchId = Helper::sessionBranchId() ?: null;
+   392→        $result = $this->model->cancelStaleDraftInvoices($days, $branchId);
+   393→        $result['remaining'] = $this->model->countStaleDraftInvoices($days, $branchId);
+   394→        $this->sendJson($result);
+   395→    }
+   396→
+   397→    /**
+   398→     * DataTables server-side JSON for sales/today (Phase 6).
+   399→     */
+   400→    public function datatable_invoices() {
+   401→        $this->guardJsonApi('sales.datatable_invoices', 180, 60);
+   402→        $draw   = (int)($_GET['draw'] ?? 1);
+   403→        $start  = (int)($_GET['start'] ?? 0);
+   404→        $length = (int)($_GET['length'] ?? 25);
+   405→        if ($length < 1 || $length > 200) {
+   406→            $length = 25;
+   407→        }
+   408→
+   409→        $orderColumnIndex = (int)($_GET['order'][0]['column'] ?? 2);
+   410→        $orderDir         = $_GET['order'][0]['dir'] ?? 'desc';
+   411→        $searchValue      = trim($_GET['search']['value'] ?? '');
+   412→
+   413→        $defaultTo = date('Y-m-d');
+   414→        $defaultFrom = date('Y-m-d', strtotime('-6 days'));
+   415→
+   416→        $filters = [
+   417→            'date_from'      => $_GET['date_from'] ?? $defaultFrom,
+   418→            'date_to'        => $_GET['date_to'] ?? $defaultTo,
+   419→            'challan_status' => $_GET['challan_status'] ?? 'all',
+   420→            'smart_sort'     => ($_GET['smart_sort'] ?? '1') !== '0',
+   421→            'skip_default_today' => true,
+   422→        ];
+   423→
+   424→        header('Content-Type: application/json; charset=utf-8');
+   425→
+   426→        try {
+   427→            $result = $this->invoiceService->getTodayInvoicesDatatable(
+   428→                $filters,
+   429→                $start,
+   430→                $length,
+   431→                $orderColumnIndex,
+   432→                $orderDir,
+   433→                $searchValue
+   434→            );
+   435→
+   436→            echo json_encode([
+   437→                'draw'            => $draw,
+   438→                'recordsTotal'    => $result['total'],
+   439→                'recordsFiltered' => $result['filtered'],
+   440→                'data'            => $result['data'],
+   441→            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+   442→        } catch (Throwable $e) {
+   443→            Logger::error('datatable_invoices failed', ['message' => $e->getMessage()]);
+   444→            http_response_code(500);
+   445→            echo json_encode([
+   446→                'draw'            => $draw,
+   447→                'recordsTotal'    => 0,
+   448→                'recordsFiltered' => 0,
+   449→                'data'            => [],
+   450→                'error'           => $this->safeClientMessage($e, 'Could not load invoices.'),
+   451→            ], JSON_UNESCAPED_UNICODE);
+   452→        }
+   453→        exit;
+   454→    }
+   455→
+   456→    public function call_it_a_day() {
+   457→        $this->validateCSRF();
+   458→        $invoice_ids = $_POST['invoice_ids'] ?? [];
+   459→        if (!is_array($invoice_ids)) $invoice_ids = [$invoice_ids];
+   460→
+   461→        $branch_id = Helper::sessionBranchId();
+   462→        $result = $this->invoiceService->callItADay($invoice_ids, $branch_id);
+   463→        if (($result['status'] ?? '') === 'success') {
+   464→            $this->auditLog('sale_call_a_day', null, [
+   465→                'invoice_ids' => $invoice_ids,
+   466→                'count'       => count($invoice_ids),
+   467→            ]);
+   468→        }
+   469→        $this->sendJson($result);
+   470→    }
+   471→
+   472→    public function delete_invoice() {
+   473→        $this->requireRouteAccess();
+   474→        $this->validateCSRF();
+   475→        $id = (int)($_POST['id'] ?? 0);
+   476→        if (!$id) {
+   477→            $this->sendJson(['status' => 'error', 'message' => 'Invalid invoice ID']);
+   478→        }
+   479→        $result = $this->invoiceService->deleteInvoice($id);
+   480→        if (($result['status'] ?? '') === 'success') {
+   481→            $this->auditLog('sale_deleted', $id, [
+   482→                'message' => $result['message'] ?? '',
+   483→            ]);
+   484→        }
+   485→        $this->sendJson($result);
+   486→    }
+   487→
+   488→    // Edit Mode
+   489→    public function edit($id = null) {
+   490→        if (!$id) $this->redirect('sales/today');
+   491→
+   492→        $invoice = $this->invoiceService->getInvoiceForEdit($id);
+   493→        if (!$invoice || $invoice['status'] !== 'draft') {
+   494→            $this->abortPage('Only draft invoices can be edited.');
+   495→        }
+   496→
+   497→        $editBlockedReason = $this->invoiceService->getSalesEditBlockReason($invoice);
+   498→
+   499→        $sessionBranchId = Helper::sessionBranchId();
+   500→        $sessionBranch = $this->model->getBranch($sessionBranchId);
+   501→
+   502→        $data = [
+   503→            'title'                 => 'Edit Invoice #' . $invoice['invoice_code'],
+   504→            'invoice'               => $invoice,
+   505→            'items'                 => $invoice['items'] ?? [],
+   506→            'edit_blocked_reason'   => $editBlockedReason,
+   507→            'can_override_branch'   => $this->model->canOverrideBranch(),
+   508→            'session_branch_id'     => $sessionBranchId,
+   509→            'session_branch_name'   => $sessionBranch['branch_name'] ?? 'Branch',
+   510→        ];
+   511→        $this->view('sales/edit', $data);
+   512→    }
+   513→
+   514→    public function get_invoice_for_edit($id = null) {
+   515→        $this->guardJsonApi('sales.get_invoice_for_edit', 120, 60);
+   516→        if (!$id) {
+   517→            $this->sendJson(['status' => 'error', 'message' => 'Invalid ID']);
+   518→        }
+   519→
+   520→        $invoice = $this->invoiceService->getInvoiceForEdit($id);
+   521→        if (!$invoice) {
+   522→            $this->sendJson(['status' => 'error', 'message' => 'Invoice not found or cannot be edited']);
+   523→        }
+   524→
+   525→        $blockReason = $this->invoiceService->getSalesEditBlockReason($invoice);
+   526→        if ($blockReason !== '') {
+   527→            $this->sendJson(['status' => 'error', 'message' => $blockReason]);
+   528→        }
+   529→
+   530→        $this->sendJson([
+   531→            'status'          => 'success',
+   532→            'customer_id'     => (int)$invoice['customer_id'],
+   533→            'branch_id'       => (int)$invoice['branch_id'],
+   534→            'salesman_id'     => (int)$invoice['salesman_id'],
+   535→            'sales_person'    => (int)($invoice['sales_person'] ?? 0),
+   536→            'invoice_date'    => $invoice['invoice_date'] ?? null,
+   537→            'narration'       => $invoice['narration'] ?? '',
+   538→            'transport_cost'  => (float)($invoice['transport_cost'] ?? 0),
+   539→            'discount'        => (float)($invoice['discount'] ?? 0),
+   540→            'invoice_code'    => $invoice['invoice_code'] ?? '',
+   541→            'items'           => $invoice['items'] ?? [],
+   542→        ]);
+   543→    }
+   544→
+   545→    // Receipt & Payment
+   546→    public function receive_modal($id = null) {
+   547→        if (!$id) {
+   548→            echo "<p class='text-danger p-4'>Invalid Invoice ID</p>";
+   549→            exit;
+   550→        }
+   551→
+   552→        $ctx = $this->paymentService->getPaymentReceiptData((int)$id);
+   553→        if (!$ctx) {
+   554→            echo "<p class='text-danger p-4'>Invoice not found!</p>";
+   555→            exit;
+   556→        }
+   557→
+   558→        $invoice = $ctx['invoice'];
+   559→        $invoice['receive_amount'] = $ctx['paid_total'];
+   560→        $payments = $ctx['payments'] ?? [];
+   561→        $paidTotal = $ctx['paid_total'];
+   562→        $balanceDue = $ctx['balance_due'];
+   563→
+   564→        require_once '../app/models/BankModel.php';
+   565→        $bankModel = new BankModel();
+   566→        $banks = $bankModel->getAllActiveBanks();
+   567→
+   568→        include '../app/views/sales/receive_modal.php';
+   569→        exit;
+   570→    }
+   571→
+   572→    public function save_payment() {
+   573→        $this->requireRouteAccess();
+   574→        try {
+   575→            $this->validateCSRF();
+   576→            $result = $this->paymentService->recordCustomerPayment($_POST);
+   577→            if (($result['status'] ?? '') === 'success') {
+   578→                $this->auditLog('payment_received', (int)($result['payment_id'] ?? 0), [
+   579→                    'payment_code'     => $result['payment_code'] ?? null,
+   580→                    'invoice_id'       => (int)($_POST['invoice_id'] ?? 0),
+   581→                    'customer_id'      => (int)($_POST['customer_id'] ?? 0),
+   582→                    'amount'           => (float)($_POST['receive_amount'] ?? 0),
+   583→                    'payment_mode'     => $_POST['payment_mode'] ?? null,
+   584→                    'journal_entry_id' => $result['journal_entry_id'] ?? null,
+   585→                ]);
+   586→
+   587→                $paymentId = (int)($result['payment_id'] ?? 0);
+   588→                $invoiceId = (int)($result['invoice_id'] ?? $_POST['invoice_id'] ?? 0);
+   589→                SalesTelegramNotifier::safe(function () use ($paymentId, $invoiceId) {
+   590→                    (new SalesTelegramNotifier())->notifyTodayInvoicePayment($paymentId, $invoiceId);
+   591→                });
+   592→
+   593→                $result['success'] = true;
+   594→            }
+   595→            $this->sendJson($result);
+   596→        } catch (Throwable $e) {
+   597→            Logger::error('save_payment failed', ['message' => $e->getMessage()]);
+   598→            $this->sendJson([
+   599→                'status'  => 'error',
+   600→                'message' => $this->safeClientMessage($e, 'Payment could not be saved.'),
+   601→            ], 500);
+   602→        }
+   603→    }
+   604→
+   605→    public function reverse_payment() {
+   606→        $this->requireRouteAccess();
+   607→        $this->validateCSRF();
+   608→        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+   609→            $this->sendJson(['status' => 'error', 'message' => 'Invalid request method.']);
+   610→            return;
+   611→        }
+   612→
+   613→        $payment_id = (int)($_POST['payment_id'] ?? 0);
+   614→        $reason = trim($_POST['reason'] ?? '');
+   615→
+   616→        $result = $this->paymentService->reverseCustomerPayment($payment_id, $reason);
+   617→        if (($result['status'] ?? '') === 'success') {
+   618→            $this->auditLog('payment_reversed', $payment_id, [
+   619→                'payment_code' => $result['payment_code'] ?? null,
+   620→                'amount'       => $result['amount'] ?? null,
+   621→                'invoice_ids'  => $result['invoice_ids'] ?? [],
+   622→                'reason'       => $reason,
+   623→            ]);
+   624→            $result['success'] = true;
+   625→        }
+   626→        $this->sendJson($result);
+   627→    }
+   628→
+   629→    /**
+   630→     * Bangla end-user guideline for the sales ecosystem (menu names in English).
+   631→     * URL: sales/guide — shareable link for all logged-in users.
+   632→     */
+   633→    public function guide() {
+   634→        $this->view('sales/guide', [
+   635→            'title' => 'Sales Guideline',
+   636→        ]);
+   637→    }
+   638→
+   639→    /**
+   640→     * Go-live checklist for managers, finance, warehouse, and IT.
+   641→     * URL: sales/go_live_checklist
+   642→     */
+   643→    public function go_live_checklist() {
+   644→        $this->view('sales/go_live_checklist', [
+   645→            'title' => 'Sales Go-Live Checklist',
+   646→        ]);
+   647→    }
+   648→
+   649→    public function audit() {
+   650→        $this->view('sales/audit', [
+   651→            'title' => 'Sales Audit Logs',
+   652→            'logs'  => $this->filterSalesAuditLogs(300),
+   653→        ]);
+   654→    }
+   655→
+   656→    /**
+   657→     * Legacy URL — redirects to Reconciliation hub (Phase 4B).
+   658→     * URL: sales/reconcile
+   659→     */
+   660→    public function reconcile() {
+   661→        $this->requireRouteAccess();
+   662→        $qs = $_SERVER['QUERY_STRING'] ?? '';
+   663→        $target = BASE_URL . 'Reconciliation/index' . ($qs !== '' ? '?' . $qs : '');
+   664→        header('Location: ' . $target);
+   665→        exit;
+   666→    }
+   667→
+   668→    public function print_receipt($id = null) {
+   669→        if (!$id) {
+   670→            $this->abortPage('Invalid invoice.');
+   671→        }
+   672→
+   673→        $ctx = $this->paymentService->getPaymentReceiptData((int)$id);
+   674→        if (!$ctx) {
+   675→            $this->abortPage('Invoice not found or access denied.');
+   676→        }
+   677→
+   678→        $invoice = $ctx['invoice'];
+   679→        $this->view('sales/print_receipt', [
+   680→            'title'              => 'Payment Receipt — ' . ($invoice['invoice_code'] ?? ''),
+   681→            'invoice'            => $invoice,
+   682→            'payments'           => $ctx['payments'],
+   683→            'paid_total'         => $ctx['paid_total'],
+   684→            'balance_due'        => $ctx['balance_due'],
+   685→            'is_fully_paid'      => $ctx['is_fully_paid'],
+   686→            'branch_id'          => (int)($invoice['branch_id'] ?? 1),
+   687→            'highlight_payment_id' => (int)($_GET['payment_id'] ?? 0),
+   688→        ]);
+   689→    }
+   690→
+   691→    public function invoice_copy($id = null) {
+   692→        if (!$id) {
+   693→            $this->abortPage('Invoice ID required.');
+   694→        }
+   695→
+   696→        $invoice = $this->invoiceService->getInvoiceById($id);
+   697→        if (!$invoice) {
+   698→            $this->abortPage('Invoice not found.');
+   699→        }
+   700→
+   701→        $items = $this->invoiceService->getInvoiceItems($id);
+   702→        $due   = $this->paymentService->getCustomerDueBreakdown($invoice['customer_id'], $id);
+   703→
+   704→        $itemsPerPage = 17;
+   705→        $itemPages = array_chunk($items, $itemsPerPage);
+   706→        if (empty($itemPages)) {
+   707→            $itemPages = [[]];
+   708→        }
+   709→
+   710→        $subTotal = 0.0;
+   711→        foreach ($items as $item) {
+   712→            $subTotal += (float)($item['qty'] ?? 0) * (float)($item['rate'] ?? 0);
+   713→        }
+   714→
+   715→        $data = [
+   716→            'title'         => 'Invoice #' . $invoice['invoice_code'],
+   717→            'invoice'       => $invoice,
+   718→            'items'         => $items,
+   719→            'item_pages'    => $itemPages,
+   720→            'items_per_page'=> $itemsPerPage,
+   721→            'due'           => $due,
+   722→            'subtotal'      => $subTotal,
+   723→            'transport'     => (float)($invoice['transport_cost'] ?? 0),
+   724→            'discount'      => (float)($invoice['discount'] ?? 0),
+   725→            'grand_total'   => (float)($invoice['total_amount'] ?? 0),
+   726→            'branch_id'     => (int)($invoice['branch_id'] ?? 1),
+   727→        ];
+   728→        $this->view('sales/invoice_copy', $data);
+   729→    }
+   730→
+   731→    /**
+   732→     * Posted invoice GL audit detail (Phase 5A).
+   733→     * URL: sales/show/{id}
+   734→     */
+   735→    public function show($id = null)
+   736→    {
+   737→        if (!$id) {
+   738→            $this->abortPage('Invoice ID required.');
+   739→        }
+   740→
+   741→        $invoice = $this->invoiceService->getInvoiceById((int)$id);
+   742→        if (!$invoice) {
+   743→            $this->abortPage('Invoice not found.');
+   744→        }
+   745→
+   746→        $invoiceId = (int)$invoice['id'];
+   747→        $this->view('sales/show', [
+   748→            'title'          => 'Invoice — ' . ($invoice['invoice_code'] ?? ''),
+   749→            'invoice'        => $invoice,
+   750→            'journal_blocks' => SalesGlAuditHelper::invoiceJournalBlocks($invoice),
+   751→            'challans'       => SalesGlAuditHelper::getInvoiceChallans($invoiceId),
+   752→            'payments'       => SalesGlAuditHelper::getInvoicePayments($invoiceId),
+   753→        ]);
+   754→    }
+   755→
+   756→    public function export() {
+   757→    $this->requireRouteAccess();
+   758→    $filters = [
+   759→        'date_from'       => $_GET['date_from'] ?? null,
+   760→        'date_to'         => $_GET['date_to'] ?? null,
+   761→        'search'          => trim($_GET['search'] ?? ''),
+   762→        'challan_status'  => $_GET['challan_status'] ?? 'all',
+   763→        'smart_sort'      => ($_GET['smart_sort'] ?? '1') !== '0',
+   764→        'skip_default_today' => true,
+   765→    ];
+   766→
+   767→    $invoices = $this->invoiceService->getFilteredTodayInvoices($filters);
+   768→
+   769→    if (empty($invoices)) {
+   770→        $_SESSION['error'] = "No records found!";
+   771→        $this->redirect('sales/today');
+   772→        return;
+   773→    }
+   774→
+   775→    header('Content-Type: text/csv; charset=utf-8');
+   776→    header('Content-Disposition: attachment; filename="Today_Invoices_' . date('Y-m-d_H-i') . '.csv"');
+   777→    header('Pragma: no-cache');
+   778→
+   779→    $output = fopen('php://output', 'w');
+   780→    fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
+   781→
+   782→    fputcsv($output, [
+   783→        'Invoice Code', 'Date', 'Customer', 'Mobile', 'Branch', 
+   784→        'Sales Person', 'Total Amount', 'Status', 'Challan Status'
+   785→    ]);
+   786→
+   787→    foreach ($invoices as $inv) {
+   788→        fputcsv($output, [
+   789→            $inv['invoice_code'],
+   790→            $inv['invoice_date'],
+   791→            $inv['shop_name'] ?? $inv['customer_name'],
+   792→            $inv['mobile'],
+   793→            $inv['branch_name'],
+   794→            $inv['salesman_name'],
+   795→            $inv['total_amount'],
+   796→            $inv['status'],
+   797→            $inv['call_a_day'] ? 'Called' : 'Today'
+   798→        ]);
+   799→    }
+   800→
+   801→    fclose($output);
+   802→    exit;
+   803→}
+   804→
+   805→
+   806→}

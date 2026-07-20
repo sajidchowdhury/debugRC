@@ -1,0 +1,1198 @@
+     1→@extends('layouts.admin')
+     2→
+     3→@section('content')
+     4→@php
+     5→    // Pre-render the initial cart payload (if a customer is pre-selected)
+     6→    // so the JS can boot from server data without an extra round-trip.
+     7→    $initialCart = null;
+     8→    if (!empty($cartData)) {
+     9→        $initialCart = [
+    10→            'cart' => [
+    11→                'id'            => $cartData['cart']->id ?? null,
+    12→                'is_soft_hold'  => (bool) ($cartData['cart']->is_soft_hold ?? false),
+    13→                'customer_id'   => $cartData['cart']->customer_id ?? null,
+    14→                'branch_id'     => $cartData['cart']->branch_id ?? null,
+    15→                'updated_at'    => optional($cartData['cart']->updated_at ?? null)->toIso8601String(),
+    16→            ],
+    17→            'items'      => $cartData['items'] ?? [],
+    18→            'subtotal'   => (float) ($cartData['subtotal'] ?? 0),
+    19→            'validation' => $cartData['validation'] ?? [
+    20→                'valid' => true, 'message' => 'Cart is empty',
+    21→                'stock_errors' => [], 'rate_errors' => [],
+    22→            ],
+    23→        ];
+    24→    }
+    25→
+    26→    $branchName = session('branch_name', 'No Branch');
+    27→@endphp
+    28→
+    29→<div class="container-fluid py-2" id="salesCartApp"
+    30→     data-branch-id="{{ (int) $branchId }}"
+    31→     data-customer-id="{{ $selectedCustomerId ?? '' }}">
+    32→
+    33→    {{-- ===================== HERO HEADER ===================== --}}
+    34→    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
+    35→            style="background:linear-gradient(135deg,#7c3aed,#4f46e5);">
+    36→        <div>
+    37→            <h1 class="h3 mb-1">
+    38→                <i class="fas fa-cart-shopping me-2"></i>{{ $title ?? 'Sales Cart' }}
+    39→            </h1>
+    40→            <p class="mb-0 opacity-75">
+    41→                <i class="fas fa-building me-1"></i> Branch: {{ $branchName }}
+    42→                <span class="mx-2 opacity-50">•</span>
+    43→                <i class="fas fa-receipt me-1"></i> Build a draft invoice before godown dispatch.
+    44→            </p>
+    45→        </div>
+    46→        <div class="d-flex flex-wrap gap-1">
+    47→            <a href="{{ route('admin.customers.index') }}" class="btn btn-outline-light btn-sm" target="_blank">
+    48→                <i class="fas fa-users me-1"></i> Customers
+    49→            </a>
+    50→            <a href="{{ route('admin.products.index') }}" class="btn btn-outline-light btn-sm" target="_blank">
+    51→                <i class="fas fa-boxes-stacked me-1"></i> Products
+    52→            </a>
+    53→        </div>
+    54→    </header>
+    55→
+    56→    {{-- ===================== CUSTOMER SELECTOR ===================== --}}
+    57→    <div class="card border-0 shadow-sm mb-3">
+    58→        <div class="card-body">
+    59→            <div class="row g-2 align-items-end">
+    60→                <div class="col-12 col-md-8">
+    61→                    <label for="customerSelect" class="form-label small fw-semibold mb-1">
+    62→                        <i class="fas fa-user-tag me-1 text-primary"></i> Customer
+    63→                    </label>
+    64→                    <select id="customerSelect" class="form-select select2" style="width:100%;">
+    65→                        <option value="">— Select a customer —</option>
+    66→                        @foreach ($customers as $customer)
+    67→                            <option value="{{ $customer->id }}"
+    68→                                @if ((int) ($selectedCustomerId ?? 0) === (int) $customer->id) selected @endif>
+    69→                                {{ $customer->customer_name }}
+    70→                                @if (!empty($customer->customer_code)) [{{ $customer->customer_code }}] @endif
+    71→                            </option>
+    72→                        @endforeach
+    73→                    </select>
+    74→                </div>
+    75→                <div class="col-12 col-md-4">
+    76→                    <div class="d-flex gap-2">
+    77→                        <button type="button" id="btnLoadCart" class="btn btn-primary flex-grow-1">
+    78→                            <i class="fas fa-sync me-1"></i> Load Cart
+    79→                        </button>
+    80→                        <a href="{{ route('admin.sales.cart') }}" class="btn btn-outline-secondary" title="Reset">
+    81→                            <i class="fas fa-rotate-left"></i>
+    82→                        </a>
+    83→                    </div>
+    84→                </div>
+    85→            </div>
+    86→        </div>
+    87→    </div>
+    88→
+    89→    {{-- ===================== EMPTY STATE (no customer) ===================== --}}
+    90→    <div id="emptyState" class="card border-0 shadow-sm @if (!empty($selectedCustomerId)) d-none @endif">
+    91→        <div class="card-body text-center py-5">
+    92→            <div class="display-6 text-muted mb-3">
+    93→                <i class="fas fa-cart-arrow-down"></i>
+    94→            </div>
+    95→            <h4 class="text-muted">Select a customer to start building an invoice.</h4>
+    96→            <p class="text-muted mb-0">The cart is auto-saved per salesman + customer until you finalize the invoice.</p>
+    97→        </div>
+    98→    </div>
+    99→
+   100→    {{-- ===================== MAIN TWO-COLUMN WORKSPACE ===================== --}}
+   101→    <div id="workspace" class="row g-3 @if (empty($selectedCustomerId)) d-none @endif">
+   102→
+   103→        {{-- ============== LEFT COLUMN (main, col-8) ============== --}}
+   104→        <div class="col-12 col-lg-8">
+   105→
+   106→            {{-- ---------- Add Product card ---------- --}}
+   107→            <div class="card border-0 shadow-sm mb-3">
+   108→                <div class="card-header bg-white border-bottom d-flex align-items-center">
+   109→                    <i class="fas fa-plus-circle me-2 text-primary"></i>
+   110→                    <strong>Add Product</strong>
+   111→                </div>
+   112→                <div class="card-body">
+   113→                    <div class="row g-2 align-items-end">
+   114→                        <div class="col-12 col-md-5">
+   115→                            <label for="addProduct" class="form-label small fw-semibold mb-1">Product</label>
+   116→                            <select id="addProduct" class="form-select select2" style="width:100%;">
+   117→                                <option value="">— Search product —</option>
+   118→                                @foreach ($products as $product)
+   119→                                    <option value="{{ $product->id }}"
+   120→                                            data-code="{{ $product->product_code ?? '' }}"
+   121→                                            data-name="{{ $product->product_name }}"
+   122→                                            data-default-rate="{{ $product->sales_rate ?? 0 }}">
+   123→                                        {{ $product->product_name }}
+   124→                                        @if (!empty($product->product_code)) [{{ $product->product_code }}] @endif
+   125→                                    </option>
+   126→                                @endforeach
+   127→                            </select>
+   128→                        </div>
+   129→                        <div class="col-6 col-md-2">
+   130→                            <label for="addQty" class="form-label small fw-semibold mb-1">Qty</label>
+   131→                            <input type="number" id="addQty" class="form-control" min="0.001" step="0.001" value="1">
+   132→                        </div>
+   133→                        <div class="col-6 col-md-3">
+   134→                            <label for="addRate" class="form-label small fw-semibold mb-1">Rate</label>
+   135→                            <input type="number" id="addRate" class="form-control" min="0" step="0.01" placeholder="0.00">
+   136→                            <div id="rateHint" class="form-text small text-muted mt-1">&nbsp;</div>
+   137→                        </div>
+   138→                        <div class="col-12 col-md-2">
+   139→                            <button type="button" id="btnAddToCart" class="btn btn-success w-100">
+   140→                                <i class="fas fa-cart-plus me-1"></i> Add
+   141→                            </button>
+   142→                        </div>
+   143→                    </div>
+   144→                    <div class="row g-2 mt-2 align-items-center">
+   145→                        <div class="col-12 col-md-4">
+   146→                            <div class="border rounded-3 bg-light px-3 py-2 d-flex align-items-center gap-2 h-100">
+   147→                                <i class="fas fa-warehouse text-secondary"></i>
+   148→                                <div>
+   149→                                    <div class="small text-muted lh-1">Available (branch)</div>
+   150→                                    <div id="addAvailTotal" class="fw-bold lh-1">—</div>
+   151→                                </div>
+   152→                            </div>
+   153→                        </div>
+   154→                        <div class="col-12 col-md-8">
+   155→                            <div class="small text-muted">Warehouse breakdown appears in the right-hand Availability card.</div>
+   156→                        </div>
+   157→                    </div>
+   158→                </div>
+   159→            </div>
+   160→
+   161→            {{-- ---------- Cart Items table ---------- --}}
+   162→            <div class="card border-0 shadow-sm mb-3">
+   163→                <div class="card-header bg-white border-bottom d-flex align-items-center justify-content-between">
+   164→                    <span>
+   165→                        <i class="fas fa-list me-2 text-primary"></i>
+   166→                        <strong>Cart Items</strong>
+   167→                        <span id="itemsCountBadge" class="badge bg-secondary ms-2">0</span>
+   168→                    </span>
+   169→                    <span class="text-muted small">Inline edits auto-save (300ms debounce)</span>
+   170→                </div>
+   171→                <div class="card-body p-0">
+   172→                    <div class="table-responsive">
+   173→                        <table class="table table-sm table-hover align-middle mb-0">
+   174→                            <thead class="table-light">
+   175→                                <tr>
+   176→                                    <th style="min-width:220px;">Product</th>
+   177→                                    <th style="width:110px;">Qty</th>
+   178→                                    <th style="width:140px;">Rate</th>
+   179→                                    <th class="text-end" style="width:120px;">Total</th>
+   180→                                    <th class="text-end" style="width:110px;">Available</th>
+   181→                                    <th class="text-center" style="width:80px;">Action</th>
+   182→                                </tr>
+   183→                            </thead>
+   184→                            <tbody id="cartItemsBody">
+   185→                                {{-- rendered by JS --}}
+   186→                            </tbody>
+   187→                            <tfoot class="table-light">
+   188→                                <tr>
+   189→                                    <th colspan="3" class="text-end">Subtotal</th>
+   190→                                    <th class="text-end" id="cartSubtotalCell">0.00</th>
+   191→                                    <th colspan="2"></th>
+   192→                                </tr>
+   193→                            </tfoot>
+   194→                        </table>
+   195→                    </div>
+   196→                    <div id="cartEmptyRow" class="text-center text-muted py-4 border-top">
+   197→                        <i class="fas fa-inbox me-1"></i> Cart is empty — add a product above.
+   198→                    </div>
+   199→                </div>
+   200→            </div>
+   201→
+   202→            {{-- ---------- Cart actions ---------- --}}
+   203→            <div class="card border-0 shadow-sm mb-3">
+   204→                <div class="card-body d-flex flex-wrap gap-2 align-items-center">
+   205→                    <button type="button" id="btnClear" class="btn btn-outline-danger">
+   206→                        <i class="fas fa-trash me-1"></i> Clear Cart
+   207→                    </button>
+   208→                    <button type="button" id="btnSoftHold" class="btn btn-outline-warning">
+   209→                        <i class="fas fa-pause-circle me-1"></i>
+   210→                        <span id="softHoldBtnLabel">Soft Hold</span>
+   211→                    </button>
+   212→                    <button type="button" id="btnValidate" class="btn btn-outline-info">
+   213→                        <i class="fas fa-check-double me-1"></i> Validate Cart
+   214→                    </button>
+   215→                    <button type="button" id="btnFinalize"
+   216→                            class="btn btn-primary ms-auto"
+   217→                            data-bs-toggle="tooltip" data-bs-placement="top"
+   218→                            title="Create a draft sales invoice from this cart (GL posted)">
+   219→                        <i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice
+   220→                    </button>
+   221→                </div>
+   222→            </div>
+   223→        </div>
+   224→
+   225→        {{-- ============== RIGHT COLUMN (aside, col-4) ============== --}}
+   226→        <div class="col-12 col-lg-4">
+   227→
+   228→            {{-- ---------- Cart Summary card ---------- --}}
+   229→            <div class="card border-0 shadow-sm mb-3">
+   230→                <div class="card-header bg-white border-bottom">
+   231→                    <i class="fas fa-receipt me-2 text-primary"></i>
+   232→                    <strong>Summary</strong>
+   233→                </div>
+   234→                <div class="card-body">
+   235→                    <dl class="row mb-0 small">
+   236→                        <dt class="col-5 text-muted fw-normal">Customer</dt>
+   237→                        <dd class="col-7 text-end fw-semibold" id="sumCustomer">—</dd>
+   238→
+   239→                        <dt class="col-5 text-muted fw-normal">Branch</dt>
+   240→                        <dd class="col-7 text-end" id="sumBranch">{{ $branchName }}</dd>
+   241→
+   242→                        <dt class="col-5 text-muted fw-normal">Items</dt>
+   243→                        <dd class="col-7 text-end" id="sumItems">0</dd>
+   244→
+   245→                        <dt class="col-5 text-muted fw-normal">Soft-hold</dt>
+   246→                        <dd class="col-7 text-end">
+   247→                            <span id="sumSoftHold" class="badge bg-secondary">No</span>
+   248→                        </dd>
+   249→                    </dl>
+   250→                    <hr class="my-2">
+   251→                    <div class="d-flex justify-content-between align-items-center">
+   252→                        <span class="text-muted">Subtotal</span>
+   253→                        <span id="sumSubtotal" class="fs-4 fw-bold text-primary">0.00</span>
+   254→                    </div>
+   255→                </div>
+   256→            </div>
+   257→
+   258→            {{-- ---------- Validation status card ---------- --}}
+   259→            <div class="card border-0 shadow-sm mb-3">
+   260→                <div class="card-header bg-white border-bottom d-flex align-items-center justify-content-between">
+   261→                    <span>
+   262→                        <i class="fas fa-clipboard-check me-2 text-primary"></i>
+   263→                        <strong>Validation</strong>
+   264→                    </span>
+   265→                    <span id="validationBadge" class="badge bg-secondary">Not checked</span>
+   266→                </div>
+   267→                <div class="card-body">
+   268→                    <p id="validationMessage" class="small text-muted mb-2">Click “Validate Cart” to run the hard gate.</p>
+   269→
+   270→                    <div id="stockErrorsBox" class="d-none">
+   271→                        <div class="small fw-semibold text-danger mb-1">
+   272→                            <i class="fas fa-triangle-exclamation me-1"></i>Stock Shortfalls
+   273→                        </div>
+   274→                        <ul id="stockErrorsList" class="list-unstyled small mb-2 ps-3"></ul>
+   275→                    </div>
+   276→
+   277→                    <div id="rateErrorsBox" class="d-none">
+   278→                        <div class="small fw-semibold text-warning mb-1">
+   279→                            <i class="fas fa-tag me-1"></i>Rate Out of Range
+   280→                        </div>
+   281→                        <ul id="rateErrorsList" class="list-unstyled small mb-0 ps-3"></ul>
+   282→                    </div>
+   283→                </div>
+   284→            </div>
+   285→
+   286→            {{-- ---------- Availability card ---------- --}}
+   287→            <div class="card border-0 shadow-sm mb-3">
+   288→                <div class="card-header bg-white border-bottom d-flex align-items-center justify-content-between">
+   289→                    <span>
+   290→                        <i class="fas fa-warehouse me-2 text-primary"></i>
+   291→                        <strong>Availability</strong>
+   292→                    </span>
+   293→                    <span id="availProductBadge" class="badge bg-secondary">No product</span>
+   294→                </div>
+   295→                <div class="card-body">
+   296→                    <div id="availEmpty" class="text-center text-muted small py-3">
+   297→                        <i class="fas fa-magnifying-glass me-1"></i> Select a product in “Add Product” to see per-warehouse availability.
+   298→                    </div>
+   299→                    <div id="availTableWrap" class="d-none">
+   300→                        <div class="table-responsive">
+   301→                            <table class="table table-sm mb-0">
+   302→                                <thead class="table-light">
+   303→                                    <tr>
+   304→                                        <th>Warehouse</th>
+   305→                                        <th class="text-end">Physical</th>
+   306→                                        <th class="text-end">Pipeline</th>
+   307→                                        <th class="text-end">Available</th>
+   308→                                    </tr>
+   309→                                </thead>
+   310→                                <tbody id="availTableBody"></tbody>
+   311→                                <tfoot class="table-light">
+   312→                                    <tr>
+   313→                                        <th>Total</th>
+   314→                                        <th class="text-end" id="availTotalPhysical">0.00</th>
+   315→                                        <th class="text-end" id="availTotalPipeline">0.00</th>
+   316→                                        <th class="text-end" id="availTotalAvailable">0.00</th>
+   317→                                    </tr>
+   318→                                </tfoot>
+   319→                            </table>
+   320→                        </div>
+   321→                    </div>
+   322→                </div>
+   323→            </div>
+   324→        </div>
+   325→    </div>
+   326→</div>
+   327→@endsection
+   328→
+   329→@push('scripts')
+   330→<script>
+   331→(function () {
+   332→    'use strict';
+   333→
+   334→    // -------- Bootstrap data from server --------
+   335→    var BRANCH_ID   = parseInt(document.getElementById('salesCartApp').dataset.branchId || '0', 10);
+   336→    var INITIAL_CID = document.getElementById('salesCartApp').dataset.customerId;
+   337→    var INITIAL_CART = @json($initialCart);
+   338→    var CSRF_TOKEN  = window.CSRF_TOKEN;
+   339→
+   340→    // -------- AJAX base helpers --------
+   341→    function ajaxPost(url, payload) {
+   342→        return $.ajax({
+   343→            url: url,
+   344→            method: 'POST',
+   345→            contentType: 'application/json',
+   346→            dataType: 'json',
+   347→            data: JSON.stringify(payload || {}),
+   348→            headers: { 'X-CSRF-TOKEN': CSRF_TOKEN, 'X-Requested-With': 'XMLHttpRequest' }
+   349→        });
+   350→    }
+   351→    function ajaxGet(url, params) {
+   352→        return $.ajax({
+   353→            url: url,
+   354→            method: 'GET',
+   355→            dataType: 'json',
+   356→            data: params || {},
+   357→            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+   358→        });
+   359→    }
+   360→
+   361→    // -------- Endpoint roots (use route() values injected below) --------
+   362→    var ENDPOINTS = {
+   363→        load:         "{{ route('admin.sales.cart.load') }}",
+   364→        add:          "{{ route('admin.sales.cart.add') }}",
+   365→        update:       "{{ route('admin.sales.cart.update') }}",
+   366→        remove:       "{{ route('admin.sales.cart.remove') }}",
+   367→        clear:        "{{ route('admin.sales.cart.clear') }}",
+   368→        validate:     "{{ route('admin.sales.cart.validate') }}",
+   369→        softHold:     "{{ route('admin.sales.cart.softHold') }}",
+   370→        availability: "{{ route('admin.sales.cart.availability') }}",
+   371→        finalize:     "{{ route('admin.sales.finalize') }}",
+   372→        creditCheck:  "{{ route('admin.sales.credit-check') }}",
+   373→        invoiceShow:  "{{ route('admin.sales-invoices.index') }}",
+   374→    };
+   375→
+   376→    // -------- State --------
+   377→    var state = {
+   378→        customerId: INITIAL_CID ? parseInt(INITIAL_CID, 10) : null,
+   379→        cart: INITIAL_CART,         // {cart, items, subtotal, validation} or null
+   380→        softHold: !!(INITIAL_CART && INITIAL_CART.cart && INITIAL_CART.cart.is_soft_hold),
+   381→        validation: INITIAL_CART ? INITIAL_CART.validation : null,
+   382→        availBreakdown: [],         // last availability response
+   383→        availProductId: null,
+   384→        debounceTimers: {}          // productId -> setTimeout handle
+   385→    };
+   386→
+   387→    // -------- Money / qty formatting --------
+   388→    function fmtMoney(v) {
+   389→        var n = parseFloat(v || 0);
+   390→        return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+   391→    }
+   392→    function fmtQty(v) {
+   393→        var n = parseFloat(v || 0);
+   394→        return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 4 });
+   395→    }
+   396→    function escHtml(s) {
+   397→        if (s === null || s === undefined) return '';
+   398→        return String(s).replace(/[&<>"']/g, function (c) {
+   399→            return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+   400→        });
+   401→    }
+   402→
+   403→    // -------- Toast / alert helper --------
+   404→    function toast(message, type) {
+   405→        type = type || 'info';
+   406→        Swal.fire({
+   407→            toast: true,
+   408→            position: 'top-end',
+   409→            icon: type === 'error' ? 'error' : (type === 'success' ? 'success' : 'info'),
+   410→            title: message,
+   411→            showConfirmButton: false,
+   412→            timer: 2500,
+   413→            timerProgressBar: true
+   414→        });
+   415→    }
+   416→
+   417→    // ============================================================
+   418→    // ============== RENDERING ===================================
+   419→    // ============================================================
+   420→
+   421→    function renderAll() {
+   422→        renderCartTable();
+   423→        renderSummary();
+   424→        renderValidation(state.validation);
+   425→        // Finalize button enabled state depends on cart + validation
+   426→        var valid   = state.validation ? !!state.validation.valid : false;
+   427→        var hasItems = state.cart && state.cart.items && state.cart.items.length > 0;
+   428→        var btnFinalize = document.getElementById('btnFinalize');
+   429→        btnFinalize.disabled = !(hasItems && valid);
+   430→    }
+   431→
+   432→    function renderCartTable() {
+   433→        var $body = $('#cartItemsBody');
+   434→        $body.empty();
+   435→
+   436→        var items = (state.cart && state.cart.items) ? state.cart.items : [];
+   437→        $('#itemsCountBadge').text(items.length);
+   438→        $('#cartEmptyRow').toggle(items.length === 0);
+   439→
+   440→        items.forEach(function (item) {
+   441→            var productId = parseInt(item.product_id, 10);
+   442→            var qty   = parseFloat(item.qty || 0);
+   443→            var rate  = parseFloat(item.rate || 0);
+   444→            var total = parseFloat(item.total || (qty * rate));
+   445→            var avail = item.available_qty !== undefined ? parseFloat(item.available_qty) : null;
+   446→            var minR  = item.min_rate !== null && item.min_rate !== undefined ? parseFloat(item.min_rate) : null;
+   447→            var maxR  = item.max_rate !== null && item.max_rate !== undefined ? parseFloat(item.max_rate) : null;
+   448→
+   449→            var availClass = '';
+   450→            if (avail !== null) {
+   451→                if (qty > avail + 0.0001) availClass = 'text-danger fw-bold';
+   452→                else if (qty > avail * 0.9) availClass = 'text-warning';
+   453→                else availClass = 'text-success';
+   454→            }
+   455→
+   456→            var row =
+   457→                '<tr data-product-id="' + productId + '">' +
+   458→                    '<td>' +
+   459→                        '<div class="fw-semibold">' + escHtml(item.product_name) + '</div>' +
+   460→                        '<div class="small text-muted">#' + productId + '</div>' +
+   461→                    '</td>' +
+   462→                    '<td>' +
+   463→                        '<input type="number" class="form-control form-control-sm cart-qty" min="0.001" step="0.001" value="' + qty + '">' +
+   464→                    '</td>' +
+   465→                    '<td>' +
+   466→                        '<input type="number" class="form-control form-control-sm cart-rate" min="0" step="0.01" value="' + rate.toFixed(2) + '">' +
+   467→                        (minR !== null
+   468→                            ? '<div class="form-text small text-muted">Min ' + fmtMoney(minR) + ' / Max ' + fmtMoney(maxR) + '</div>'
+   469→                            : '') +
+   470→                    '</td>' +
+   471→                    '<td class="text-end fw-semibold cart-total">' + fmtMoney(total) + '</td>' +
+   472→                    '<td class="text-end ' + availClass + ' cart-avail">' +
+   473→                        (avail !== null ? fmtQty(avail) : '—') +
+   474→                    '</td>' +
+   475→                    '<td class="text-center">' +
+   476→                        '<button type="button" class="btn btn-sm btn-outline-danger cart-remove" title="Remove">' +
+   477→                            '<i class="fas fa-trash"></i>' +
+   478→                        '</button>' +
+   479→                    '</td>' +
+   480→                '</tr>';
+   481→            $body.append(row);
+   482→        });
+   483→
+   484→        // Subtotal cell
+   485→        $('#cartSubtotalCell').text(fmtMoney(state.cart ? state.cart.subtotal : 0));
+   486→    }
+   487→
+   488→    function renderSummary() {
+   489→        var items = (state.cart && state.cart.items) ? state.cart.items : [];
+   490→        var customerName = '—';
+   491→        if (state.customerId) {
+   492→            var $opt = $('#customerSelect option[value="' + state.customerId + '"]');
+   493→            if ($opt.length) customerName = $opt.text().trim();
+   494→        }
+   495→        $('#sumCustomer').text(customerName);
+   496→        $('#sumItems').text(items.length);
+   497→        $('#sumSubtotal').text(fmtMoney(state.cart ? state.cart.subtotal : 0));
+   498→
+   499→        var $badge = $('#sumSoftHold');
+   500→        if (state.softHold) {
+   501→            $badge.removeClass('bg-secondary').addClass('bg-warning text-dark').text('Yes');
+   502→            $('#softHoldBtnLabel').text('Release Hold');
+   503→            $('#btnSoftHold').removeClass('btn-outline-warning').addClass('btn-warning');
+   504→        } else {
+   505→            $badge.removeClass('bg-warning text-dark').addClass('bg-secondary').text('No');
+   506→            $('#softHoldBtnLabel').text('Soft Hold');
+   507→            $('#btnSoftHold').removeClass('btn-warning').addClass('btn-outline-warning');
+   508→        }
+   509→    }
+   510→
+   511→    function renderValidation(validation) {
+   512→        var $badge = $('#validationBadge');
+   513→        var $msg   = $('#validationMessage');
+   514→        var $stockBox = $('#stockErrorsBox');
+   515→        var $rateBox  = $('#rateErrorsBox');
+   516→
+   517→        $stockBox.addClass('d-none').find('ul').empty();
+   518→        $rateBox.addClass('d-none').find('ul').empty();
+   519→
+   520→        if (!validation) {
+   521→            $badge.removeClass('bg-success bg-danger').addClass('bg-secondary').text('Not checked');
+   522→            $msg.html('Click <strong>“Validate Cart”</strong> to run the hard gate.');
+   523→            return;
+   524→        }
+   525→
+   526→        if (validation.valid) {
+   527→            $badge.removeClass('bg-secondary bg-danger').addClass('bg-success').text('Valid');
+   528→            $msg.html('<i class="fas fa-circle-check text-success me-1"></i>' + escHtml(validation.message || 'Cart is valid'));
+   529→        } else {
+   530→            $badge.removeClass('bg-secondary bg-success').addClass('bg-danger').text('Invalid');
+   531→            $msg.html('<i class="fas fa-circle-xmark text-danger me-1"></i>' + escHtml(validation.message || 'Cart has issues'));
+   532→        }
+   533→
+   534→        (validation.stock_errors || []).forEach(function (e) {
+   535→            $('#stockErrorsList').append(
+   536→                '<li class="text-danger mb-1">' +
+   537→                    '<strong>' + escHtml(e.product_name) + '</strong> — ' +
+   538→                    'requested <strong>' + fmtQty(e.requested) + '</strong>, ' +
+   539→                    'available ' + fmtQty(e.available) + ' ' +
+   540→                    '(short ' + fmtQty(e.shortfall) + ')' +
+   541→                '</li>'
+   542→            );
+   543→        });
+   544→        if ((validation.stock_errors || []).length) $stockBox.removeClass('d-none');
+   545→
+   546→        (validation.rate_errors || []).forEach(function (e) {
+   547→            $('#rateErrorsList').append(
+   548→                '<li class="text-warning mb-1">' +
+   549→                    '<strong>' + escHtml(e.product_name) + '</strong> — ' +
+   550→                    'rate ' + fmtMoney(e.rate) + ' (allowed ' + fmtMoney(e.min_rate) + '–' + fmtMoney(e.max_rate) + ')' +
+   551→                '</li>'
+   552→            );
+   553→        });
+   554→        if ((validation.rate_errors || []).length) $rateBox.removeClass('d-none');
+   555→    }
+   556→
+   557→    function renderAvailability(payload) {
+   558→        var $empty = $('#availEmpty');
+   559→        var $wrap  = $('#availTableWrap');
+   560→        var $body  = $('#availTableBody');
+   561→        var $badge = $('#availProductBadge');
+   562→
+   563→        if (!payload || !payload.product_id) {
+   564→            $empty.removeClass('d-none');
+   565→            $wrap.addClass('d-none');
+   566→            $badge.removeClass('bg-info text-dark bg-secondary').addClass('bg-secondary').text('No product');
+   567→            $('#addAvailTotal').text('—');
+   568→            return;
+   569→        }
+   570→
+   571→        var breakdown = payload.warehouse_breakdown || [];
+   572→        var $opt = $('#addProduct option[value="' + payload.product_id + '"]');
+   573→        var label = $opt.length ? $opt.text().trim() : ('#' + payload.product_id);
+   574→
+   575→        $badge.removeClass('bg-secondary').addClass('bg-info text-dark').text(label.substring(0, 28));
+   576→        $empty.addClass('d-none');
+   577→        $wrap.removeClass('d-none');
+   578→
+   579→        $body.empty();
+   580→        var totalPhysical = 0, totalPipeline = 0, totalAvailable = 0;
+   581→        breakdown.forEach(function (w) {
+   582→            var phys = parseFloat(w.physical_qty || 0);
+   583→            var pipe = parseFloat(w.pipeline_qty || 0);
+   584→            var avl  = parseFloat(w.available_qty || 0);
+   585→            totalPhysical += phys;
+   586→            totalPipeline += pipe;
+   587→            totalAvailable += avl;
+   588→            $body.append(
+   589→                '<tr>' +
+   590→                    '<td>' + escHtml(w.warehouse_name) + '</td>' +
+   591→                    '<td class="text-end">' + fmtQty(phys) + '</td>' +
+   592→                    '<td class="text-end text-warning">' + fmtQty(pipe) + '</td>' +
+   593→                    '<td class="text-end fw-semibold text-success">' + fmtQty(avl) + '</td>' +
+   594→                '</tr>'
+   595→            );
+   596→        });
+   597→        $('#availTotalPhysical').text(fmtQty(totalPhysical));
+   598→        $('#availTotalPipeline').text(fmtQty(totalPipeline));
+   599→        $('#availTotalAvailable').text(fmtQty(totalAvailable));
+   600→        $('#addAvailTotal').text(fmtQty(payload.available_qty) + ' ' + (breakdown.length === 1 ? 'warehouse' : 'warehouses'));
+   601→    }
+   602→
+   603→    // ============================================================
+   604→    // ============== ACTIONS =====================================
+   605→    // ============================================================
+   606→
+   607→    function setWorkspaceVisible(customerSelected) {
+   608→        if (customerSelected) {
+   609→            $('#workspace').removeClass('d-none');
+   610→            $('#emptyState').addClass('d-none');
+   611→        } else {
+   612→            $('#workspace').addClass('d-none');
+   613→            $('#emptyState').removeClass('d-none');
+   614→        }
+   615→    }
+   616→
+   617→    function loadCart(customerId) {
+   618→        if (!customerId) {
+   619→            state.customerId = null;
+   620→            state.cart = null;
+   621→            state.validation = null;
+   622→            setWorkspaceVisible(false);
+   623→            renderAll();
+   624→            return;
+   625→        }
+   626→        state.customerId = parseInt(customerId, 10);
+   627→        ajaxPost(ENDPOINTS.load, { customer_id: state.customerId })
+   628→            .done(function (data) {
+   629→                state.cart = data;
+   630→                state.softHold = !!(data.cart && data.cart.is_soft_hold);
+   631→                state.validation = data.validation || null;
+   632→                setWorkspaceVisible(true);
+   633→                renderAll();
+   634→            })
+   635→            .fail(function (xhr) {
+   636→                toast('Failed to load cart: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
+   637→            });
+   638→    }
+   639→
+   640→    function addToCart() {
+   641→        if (!state.customerId) { toast('Select a customer first.', 'error'); return; }
+   642→        var productId = parseInt($('#addProduct').val(), 10);
+   643→        var qty  = parseFloat($('#addQty').val());
+   644→        var rate = parseFloat($('#addRate').val());
+   645→        if (!productId || !(qty > 0) || !(rate >= 0)) {
+   646→            toast('Pick a product, qty > 0, rate >= 0.', 'error');
+   647→            return;
+   648→        }
+   649→        ajaxPost(ENDPOINTS.add, {
+   650→            customer_id: state.customerId,
+   651→            product_id:  productId,
+   652→            qty:         qty,
+   653→            rate:        rate
+   654→        })
+   655→            .done(function (resp) {
+   656→                if (resp.status === 'success') {
+   657→                    toast(resp.message || 'Item added', 'success');
+   658→                    if (resp.cart) {
+   659→                        state.cart = resp.cart;
+   660→                        state.validation = resp.cart.validation || state.validation;
+   661→                        renderAll();
+   662→                    } else {
+   663→                        loadCart(state.customerId);
+   664→                    }
+   665→                    // Reset add form
+   666→                    $('#addProduct').val('').trigger('change');
+   667→                    $('#addQty').val(1);
+   668→                    $('#addRate').val('');
+   669→                    $('#rateHint').html('&nbsp;');
+   670→                    renderAvailability(null);
+   671→                } else {
+   672→                    toast(resp.message || 'Could not add item.', 'error');
+   673→                }
+   674→            })
+   675→            .fail(function (xhr) {
+   676→                toast('Add failed: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
+   677→            });
+   678→    }
+   679→
+   680→    function updateItem(productId, qty, rate) {
+   681→        if (!state.customerId) return;
+   682→        if (!(qty > 0)) { toast('Qty must be > 0.', 'error'); return; }
+   683→        var payload = {
+   684→            customer_id: state.customerId,
+   685→            product_id:  productId,
+   686→            qty:         qty
+   687→        };
+   688→        if (rate !== null && rate !== undefined && !isNaN(rate)) payload.rate = rate;
+   689→
+   690→        ajaxPost(ENDPOINTS.update, payload)
+   691→            .done(function (resp) {
+   692→                if (resp.status === 'success' && resp.cart) {
+   693→                    state.cart = resp.cart;
+   694→                    state.validation = resp.cart.validation || state.validation;
+   695→                    renderAll();
+   696→                } else {
+   697→                    toast(resp.message || 'Update failed.', 'error');
+   698→                }
+   699→            })
+   700→            .fail(function (xhr) {
+   701→                toast('Update failed: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
+   702→                loadCart(state.customerId); // resync on failure
+   703→            });
+   704→    }
+   705→
+   706→    function removeItem(productId) {
+   707→        if (!state.customerId) return;
+   708→        Swal.fire({
+   709→            title: 'Remove item?',
+   710→            text: 'This will remove the product from the cart.',
+   711→            icon: 'warning',
+   712→            showCancelButton: true,
+   713→            confirmButtonColor: '#d33',
+   714→            confirmButtonText: 'Yes, remove it'
+   715→        }).then(function (result) {
+   716→            if (!result.isConfirmed) return;
+   717→            ajaxPost(ENDPOINTS.remove, { customer_id: state.customerId, product_id: productId })
+   718→                .done(function (resp) {
+   719→                    if (resp.status === 'success') {
+   720→                        toast(resp.message || 'Item removed', 'success');
+   721→                        if (resp.cart) {
+   722→                            state.cart = resp.cart;
+   723→                            state.validation = resp.cart.validation || state.validation;
+   724→                            renderAll();
+   725→                        } else {
+   726→                            loadCart(state.customerId);
+   727→                        }
+   728→                    } else {
+   729→                        toast(resp.message || 'Remove failed.', 'error');
+   730→                    }
+   731→                })
+   732→                .fail(function (xhr) {
+   733→                    toast('Remove failed: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
+   734→                });
+   735→        });
+   736→    }
+   737→
+   738→    function clearCart() {
+   739→        if (!state.customerId) return;
+   740→        Swal.fire({
+   741→            title: 'Clear entire cart?',
+   742→            text: 'All items will be removed. This cannot be undone.',
+   743→            icon: 'warning',
+   744→            showCancelButton: true,
+   745→            confirmButtonColor: '#d33',
+   746→            confirmButtonText: 'Yes, clear it'
+   747→        }).then(function (result) {
+   748→            if (!result.isConfirmed) return;
+   749→            ajaxPost(ENDPOINTS.clear, { customer_id: state.customerId })
+   750→                .done(function (resp) {
+   751→                    if (resp.status === 'success') {
+   752→                        toast(resp.message || 'Cart cleared', 'success');
+   753→                        state.softHold = false;
+   754→                        loadCart(state.customerId);
+   755→                    } else {
+   756→                        toast(resp.message || 'Clear failed.', 'error');
+   757→                    }
+   758→                })
+   759→                .fail(function (xhr) {
+   760→                    toast('Clear failed: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
+   761→                });
+   762→        });
+   763→    }
+   764→
+   765→    function validateCart() {
+   766→        if (!state.customerId) { toast('Select a customer first.', 'error'); return; }
+   767→        ajaxPost(ENDPOINTS.validate, { customer_id: state.customerId })
+   768→            .done(function (validation) {
+   769→                state.validation = validation;
+   770→                renderValidation(validation);
+   771→                var btnFinalize = document.getElementById('btnFinalize');
+   772→                var hasItems = state.cart && state.cart.items && state.cart.items.length > 0;
+   773→                btnFinalize.disabled = !(hasItems && validation.valid);
+   774→                if (validation.valid) {
+   775→                    toast('Cart is valid — ready to finalize.', 'success');
+   776→                } else {
+   777→                    toast(validation.message || 'Cart has issues.', 'error');
+   778→                }
+   779→            })
+   780→            .fail(function (xhr) {
+   781→                toast('Validation failed: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
+   782→            });
+   783→    }
+   784→
+   785→    function toggleSoftHold() {
+   786→        if (!state.customerId) return;
+   787→        var next = !state.softHold;
+   788→        ajaxPost(ENDPOINTS.softHold, { customer_id: state.customerId, soft_hold: next })
+   789→            .done(function (resp) {
+   790→                if (resp.status === 'success') {
+   791→                    state.softHold = next;
+   792→                    renderSummary();
+   793→                    toast(resp.message || 'Soft-hold updated', 'success');
+   794→                } else {
+   795→                    toast(resp.message || 'Soft-hold failed.', 'error');
+   796→                }
+   797→            })
+   798→            .fail(function (xhr) {
+   799→                toast('Soft-hold failed: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
+   800→            });
+   801→    }
+   802→
+   803→    function checkAvailability(productId) {
+   804→        if (!productId) {
+   805→            renderAvailability(null);
+   806→            return;
+   807→        }
+   808→        ajaxGet(ENDPOINTS.availability, { product_id: productId })
+   809→            .done(function (payload) {
+   810→                state.availBreakdown = payload.warehouse_breakdown || [];
+   811→                state.availProductId = productId;
+   812→                renderAvailability(payload);
+   813→            })
+   814→            .fail(function (xhr) {
+   815→                toast('Availability check failed: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
+   816→                renderAvailability(null);
+   817→            });
+   818→    }
+   819→
+   820→    // -------- Debounced update for table inputs --------
+   821→    function debouncedUpdate(productId, field, value) {
+   822→        if (state.debounceTimers[productId]) {
+   823→            clearTimeout(state.debounceTimers[productId]);
+   824→        }
+   825→        state.debounceTimers[productId] = setTimeout(function () {
+   826→            // Build payload from current row state
+   827→            var $row = $('#cartItemsBody tr[data-product-id="' + productId + '"]');
+   828→            if (!$row.length) return;
+   829→            var qty  = parseFloat($row.find('.cart-qty').val());
+   830→            var rate = parseFloat($row.find('.cart-rate').val());
+   831→            updateItem(productId, qty, rate);
+   832→        }, 300);
+   833→    }
+   834→
+   835→    // ============================================================
+   836→    // ============== EVENT WIRING (DOM ready) ====================
+   837→    // ============================================================
+   838→    $(function () {
+   839→        // --- Initialize Select2 ---
+   840→        $('#customerSelect').select2({ theme: 'bootstrap-5', placeholder: '— Select a customer —', allowClear: true });
+   841→        $('#addProduct').select2({ theme: 'bootstrap-5', placeholder: '— Search product —', allowClear: true });
+   842→
+   843→        // --- Tooltips ---
+   844→        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+   845→        tooltipTriggerList.map(function (el) { return new bootstrap.Tooltip(el); });
+   846→
+   847→        // --- Customer change ---
+   848→        $('#customerSelect').on('change', function () {
+   849→            var cid = $(this).val();
+   850→            if (cid) {
+   851→                // Update URL so refresh preserves selection
+   852→                if (window.history && history.replaceState) {
+   853→                    var newUrl = window.location.pathname + '?customer_id=' + parseInt(cid, 10);
+   854→                    history.replaceState(null, '', newUrl);
+   855→                }
+   856→                loadCart(cid);
+   857→            } else {
+   858→                if (window.history && history.replaceState) {
+   859→                    history.replaceState(null, '', window.location.pathname);
+   860→                }
+   861→                loadCart(null);
+   862→            }
+   863→        });
+   864→
+   865→        $('#btnLoadCart').on('click', function () {
+   866→            loadCart($('#customerSelect').val());
+   867→        });
+   868→
+   869→        // --- Add Product interactions ---
+   870→        $('#addProduct').on('change', function () {
+   871→            var $opt = $(this).find('option:selected');
+   872→            var defaultRate = $opt.data('default-rate');
+   873→            var productId = parseInt($(this).val(), 10);
+   874→
+   875→            if (!productId) {
+   876→                $('#addRate').val('');
+   877→                $('#rateHint').html('&nbsp;');
+   878→                renderAvailability(null);
+   879→                return;
+   880→            }
+   881→            // Auto-fill rate with default_rate
+   882→            if (defaultRate !== undefined && defaultRate !== '') {
+   883→                $('#addRate').val(parseFloat(defaultRate).toFixed(2));
+   884→            }
+   885→            // Rate hint — show min/max range from the cart if present, else default-rate only
+   886→            var hint = 'Default: ' + fmtMoney(defaultRate);
+   887→            $('#rateHint').html('<i class="fas fa-info-circle me-1"></i>' + hint);
+   888→
+   889→            // Check availability (branch-wide)
+   890→            checkAvailability(productId);
+   891→        });
+   892→
+   893→        $('#btnAddToCart').on('click', addToCart);
+   894→        // Enter-key support
+   895→        $('#addQty, #addRate').on('keydown', function (e) {
+   896→            if (e.key === 'Enter') { e.preventDefault(); addToCart(); }
+   897→        });
+   898→
+   899→        // --- Cart table inline edits ---
+   900→        $(document).on('input change', '.cart-qty, .cart-rate', function () {
+   901→            var $row = $(this).closest('tr');
+   902→            var productId = parseInt($row.data('product-id'), 10);
+   903→
+   904→            // Optimistic local update of total cell
+   905→            var qty  = parseFloat($row.find('.cart-qty').val()) || 0;
+   906→            var rate = parseFloat($row.find('.cart-rate').val()) || 0;
+   907→            $row.find('.cart-total').text(fmtMoney(qty * rate));
+   908→
+   909→            // Debounced server update
+   910→            debouncedUpdate(productId);
+   911→        });
+   912→
+   913→        $(document).on('click', '.cart-remove', function () {
+   914→            var productId = parseInt($(this).closest('tr').data('product-id'), 10);
+   915→            removeItem(productId);
+   916→        });
+   917→
+   918→        // --- Cart action buttons ---
+   919→        $('#btnClear').on('click', clearCart);
+   920→        $('#btnSoftHold').on('click', toggleSoftHold);
+   921→        $('#btnValidate').on('click', validateCart);
+   922→        $('#btnFinalize').on('click', function () {
+   923→            finalizeInvoice();
+   924→        });
+   925→
+   926→        // ============================================================
+   927→        // ============== FINALIZE INVOICE FLOW (P0-6) ================
+   928→        // ============================================================
+   929→        //
+   930→        // Multi-step flow:
+   931→        //   1. Pre-flight: cart must be non-empty + validated.
+   932→        //   2. Open a SweetAlert "Finalize Invoice" dialog with editable
+   933→        //      fields (invoice_date, discount, transport, notes, override).
+   934→        //   3. On confirm: pre-check credit limit via GET /credit-check.
+   935→        //      If exceeded and user didn't tick override → re-prompt.
+   936→        //   4. POST /finalize with all fields.
+   937→        //   5. On success: redirect to the new invoice's show page.
+   938→        //      On error: show SweetAlert error, re-enable button.
+   939→        //
+   940→        // The button is disabled during the AJAX request to mitigate
+   941→        // double-submit (P2-6 will add a proper idempotency token).
+   942→
+   943→        function finalizeInvoice() {
+   944→            // --- Step 1: pre-flight checks ---
+   945→            if (!state.cart || !state.cart.items || state.cart.items.length === 0) {
+   946→                Swal.fire({
+   947→                    icon: 'warning',
+   948→                    title: 'Cart is empty',
+   949→                    text: 'Add at least one product before finalizing.',
+   950→                    confirmButtonColor: '#7c3aed'
+   951→                });
+   952→                return;
+   953→            }
+   954→
+   955→            var valid = state.validation ? !!state.validation.valid : false;
+   956→            if (!valid) {
+   957→                Swal.fire({
+   958→                    icon: 'warning',
+   959→                    title: 'Cart validation failed',
+   960→                    text: 'Click "Validate Cart" and resolve any stock/rate errors before finalizing.',
+   961→                    confirmButtonColor: '#7c3aed'
+   962→                });
+   963→                return;
+   964→            }
+   965→
+   966→            var customerId = state.customerId;
+   967→            if (!customerId) {
+   968→                Swal.fire({
+   969→                    icon: 'warning',
+   970→                    title: 'No customer selected',
+   971→                    text: 'Please select a customer first.',
+   972→                    confirmButtonColor: '#7c3aed'
+   973→                });
+   974→                return;
+   975→            }
+   976→
+   977→            var subtotal = parseFloat((state.cart && state.cart.subtotal) || 0);
+   978→            var today = new Date().toISOString().split('T')[0];
+   979→
+   980→            // P2-6: Generate idempotency token (UUID v4) for this finalize attempt.
+   981→            // Prevents duplicate invoice creation on double-click or refresh-after-submit.
+   982→            var idempotencyToken = (function() {
+   983→                if (window.crypto && window.crypto.randomUUID) {
+   984→                    return window.crypto.randomUUID();
+   985→                }
+   986→                // Fallback UUID v4 generator (older browsers).
+   987→                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+   988→                    var r = Math.random() * 16 | 0;
+   989→                    var v = c === 'x' ? r : (r & 0x3 | 0x8);
+   990→                    return v.toString(16);
+   991→                });
+   992→            })();
+   993→
+   994→            // --- Step 2: open the finalize dialog ---
+   995→            Swal.fire({
+   996→                title: '<i class="fas fa-file-invoice-dollar me-2"></i>Finalize Invoice',
+   997→                html:
+   998→                    '<div class="text-start">' +
+   999→                    '<div class="mb-2"><label class="form-label small fw-semibold">Invoice Date</label>' +
+  1000→                    '<input type="date" id="finInvoiceDate" class="form-control form-control-sm" value="' + today + '"></div>' +
+  1001→
+  1002→                    '<div class="row g-2 mb-2">' +
+  1003→                    '<div class="col-6"><label class="form-label small fw-semibold">Discount (Tk)</label>' +
+  1004→                    '<input type="number" id="finDiscount" class="form-control form-control-sm" min="0" step="0.01" value="0"></div>' +
+  1005→                    '<div class="col-6"><label class="form-label small fw-semibold">Transport (Tk)</label>' +
+  1006→                    '<input type="number" id="finTransport" class="form-control form-control-sm" min="0" step="0.01" value="0"></div>' +
+  1007→                    '</div>' +
+  1008→
+  1009→                    '<div class="mb-2"><label class="form-label small fw-semibold">Sales Person (optional)</label>' +
+  1010→                    '<input type="text" id="finSalesPerson" class="form-control form-control-sm" maxlength="100" placeholder="Free-text name"></div>' +
+  1011→
+  1012→                    '<div class="mb-2"><label class="form-label small fw-semibold">Notes (optional)</label>' +
+  1013→                    '<textarea id="finNotes" class="form-control form-control-sm" rows="2" maxlength="1000"></textarea></div>' +
+  1014→
+  1015→                    '<div class="form-check mb-2">' +
+  1016→                    '<input type="checkbox" id="finSoftHold" class="form-check-input">' +
+  1017→                    '<label for="finSoftHold" class="form-check-label small">Mark as soft-hold (awaiting godown)</label>' +
+  1018→                    '</div>' +
+  1019→
+  1020→                    '<div class="form-check mb-1">' +
+  1021→                    '<input type="checkbox" id="finOverride" class="form-check-input">' +
+  1022→                    '<label for="finOverride" class="form-check-label small text-warning">Override credit limit (if exceeded)</label>' +
+  1023→                    '</div>' +
+  1024→                    '<input type="text" id="finOverrideReason" class="form-control form-control-sm mb-2" maxlength="500" placeholder="Override reason (min 10 chars if overriding)" disabled>' +
+  1025→
+  1026→                    '<hr class="my-2"><div class="d-flex justify-content-between">' +
+  1027→                    '<span class="text-muted small">Subtotal</span>' +
+  1028→                    '<span class="fw-semibold">Tk ' + fmtMoney(subtotal) + '</span>' +
+  1029→                    '</div>' +
+  1030→                    '<div class="d-flex justify-content-between" id="finTotalRow">' +
+  1031→                    '<span class="text-muted small">Estimated Total</span>' +
+  1032→                    '<span class="fw-bold text-primary" id="finTotal">Tk ' + fmtMoney(subtotal) + '</span>' +
+  1033→                    '</div>' +
+  1034→                    '</div>',
+  1035→                showCancelButton: true,
+  1036→                confirmButtonText: '<i class="fas fa-check me-1"></i> Finalize',
+  1037→                cancelButtonText: 'Cancel',
+  1038→                confirmButtonColor: '#7c3aed',
+  1039→                cancelButtonColor: '#6b7280',
+  1040→                width: 540,
+  1041→                showLoaderOnConfirm: true,
+  1042→                didOpen: function () {
+  1043→                    // Wire up live total recalculation.
+  1044→                    var $popup = $(Swal.getPopup());
+  1045→                    var recalc = function () {
+  1046→                        var d = parseFloat($popup.find('#finDiscount').val()) || 0;
+  1047→                        var t = parseFloat($popup.find('#finTransport').val()) || 0;
+  1048→                        var total = subtotal - d + t;
+  1049→                        $popup.find('#finTotal').text('Tk ' + fmtMoney(total));
+  1050→                    };
+  1051→                    $popup.on('input', '#finDiscount, #finTransport', recalc);
+  1052→
+  1053→                    // Toggle override reason field.
+  1054→                    $popup.on('change', '#finOverride', function () {
+  1055→                        $popup.find('#finOverrideReason').prop('disabled', !this.checked);
+  1056→                        if (!this.checked) {
+  1057→                            $popup.find('#finOverrideReason').val('');
+  1058→                        }
+  1059→                    });
+  1060→                },
+  1061→                preConfirm: function () {
+  1062→                    var $popup = $(Swal.getPopup());
+  1063→                    var invoiceDate = $popup.find('#finInvoiceDate').val();
+  1064→                    var discount = parseFloat($popup.find('#finDiscount').val()) || 0;
+  1065→                    var transport = parseFloat($popup.find('#finTransport').val()) || 0;
+  1066→                    var salesPerson = $popup.find('#finSalesPerson').val().trim();
+  1067→                    var notes = $popup.find('#finNotes').val().trim();
+  1068→                    var isSoftHold = $popup.find('#finSoftHold').is(':checked');
+  1069→                    var override = $popup.find('#finOverride').is(':checked');
+  1070→                    var overrideReason = $popup.find('#finOverrideReason').val().trim();
+  1071→
+  1072→                    if (!invoiceDate) {
+  1073→                        Swal.showValidationMessage('Invoice date is required.');
+  1074→                        return false;
+  1075→                    }
+  1076→                    if (discount < 0 || transport < 0) {
+  1077→                        Swal.showValidationMessage('Discount and transport cannot be negative.');
+  1078→                        return false;
+  1079→                    }
+  1080→                    if (discount > subtotal + 0.01) {
+  1081→                        Swal.showValidationMessage('Discount cannot exceed subtotal (Tk ' + fmtMoney(subtotal) + ').');
+  1082→                        return false;
+  1083→                    }
+  1084→                    if (override && overrideReason.length < 10) {
+  1085→                        Swal.showValidationMessage('Override reason must be at least 10 characters.');
+  1086→                        return false;
+  1087→                    }
+  1088→
+  1089→                    var total = subtotal - discount + transport;
+  1090→
+  1091→                    // Disable the finalize button during the async request.
+  1092→                    var $btn = $('#btnFinalize').prop('disabled', true).html(
+  1093→                        '<span class="spinner-border spinner-border-sm me-1"></span> Finalizing…'
+  1094→                    );
+  1095→
+  1096→                    // Step 3: pre-check credit limit.
+  1097→                    return ajaxGet(ENDPOINTS.creditCheck, {
+  1098→                        customer_id: customerId,
+  1099→                        amount: total
+  1100→                    }).then(function (credit) {
+  1101→                        if (credit.exceeds && !override) {
+  1102→                            Swal.showValidationMessage(
+  1103→                                'Credit limit exceeded!\n\n' +
+  1104→                                'Current balance: Tk ' + fmtMoney(credit.current_balance) + '\n' +
+  1105→                                'Credit limit: Tk ' + fmtMoney(credit.credit_limit) + '\n' +
+  1106→                                'New balance: Tk ' + fmtMoney(credit.new_balance) + '\n\n' +
+  1107→                                'Tick "Override credit limit" and provide a reason (min 10 chars) to proceed.'
+  1108→                            );
+  1109→                            $btn.prop('disabled', false).html(
+  1110→                                '<i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice'
+  1111→                            );
+  1112→                            return false;
+  1113→                        }
+  1114→
+  1115→                        // Step 4: POST to finalize endpoint.
+  1116→                        return ajaxPost(ENDPOINTS.finalize, {
+  1117→                            customer_id: customerId,
+  1118→                            branch_id: BRANCH_ID,
+  1119→                            invoice_date: invoiceDate,
+  1120→                            sales_person: salesPerson || null,
+  1121→                            discount_amount: discount,
+  1122→                            transport_cost: transport,
+  1123→                            notes: notes,
+  1124→                            is_soft_hold: isSoftHold,
+  1125→                            credit_limit_override: override,
+  1126→                            override_reason: override ? overrideReason : '',
+  1127→                            idempotency_token: idempotencyToken
+  1128→                        }).then(function (resp) {
+  1129→                            return resp;
+  1130→                        }).catch(function (xhr) {
+  1131→                            var msg = (xhr.responseJSON && xhr.responseJSON.message)
+  1132→                                ? xhr.responseJSON.message
+  1133→                                : 'Finalize failed (HTTP ' + xhr.status + ').';
+  1134→                            // Re-enable button on error.
+  1135→                            $btn.prop('disabled', false).html(
+  1136→                                '<i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice'
+  1137→                            );
+  1138→                            Swal.showValidationMessage(msg);
+  1139→                            return false;
+  1140→                        });
+  1141→                    }).catch(function (xhr) {
+  1142→                        // Credit check itself failed — proceed anyway (fail-open).
+  1143→                        var msg = (xhr.responseJSON && xhr.responseJSON.message)
+  1144→                            ? xhr.responseJSON.message
+  1145→                            : 'Credit check failed (HTTP ' + xhr.status + ').';
+  1146→                        $btn.prop('disabled', false).html(
+  1147→                            '<i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice'
+  1148→                        );
+  1149→                        Swal.showValidationMessage('Credit check failed: ' + msg);
+  1150→                        return false;
+  1151→                    });
+  1152→                }
+  1153→            }).then(function (result) {
+  1154→                // Step 5: handle success / cancel.
+  1155→                if (result.isConfirmed && result.value && result.value.status === 'success') {
+  1156→                    var resp = result.value;
+  1157→                    Swal.fire({
+  1158→                        icon: 'success',
+  1159→                        title: 'Invoice Created',
+  1160→                        html: '<strong>' + escHtml(resp.invoice_code) + '</strong><br>' +
+  1161→                              '<span class="text-muted small">' + escHtml(resp.message) + '</span>',
+  1162→                        confirmButtonColor: '#7c3aed',
+  1163→                        confirmButtonText: '<i class="fas fa-eye me-1"></i> View Invoice',
+  1164→                        showCancelButton: true,
+  1165→                        cancelButtonText: 'Stay on Cart'
+  1166→                    }).then(function (view) {
+  1167→                        if (view.isConfirmed && resp.redirect) {
+  1168→                            window.location.href = resp.redirect;
+  1169→                        } else {
+  1170→                            // Reset button + clear cart from UI (it was consumed).
+  1171→                            $('#btnFinalize').prop('disabled', false).html(
+  1172→                                '<i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice'
+  1173→                            );
+  1174→                            // Reload the cart page to reflect the now-empty cart.
+  1175→                            window.location.reload();
+  1176→                        }
+  1177→                    });
+  1178→                } else {
+  1179→                    // Re-enable button if dialog was cancelled or failed.
+  1180→                    $('#btnFinalize').prop('disabled', false).html(
+  1181→                        '<i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice'
+  1182→                    );
+  1183→                }
+  1184→            });
+  1185→        }
+  1186→
+  1187→        // --- Initial render ---
+  1188→        if (state.cart) {
+  1189→            setWorkspaceVisible(true);
+  1190→            renderAll();
+  1191→        } else {
+  1192→            setWorkspaceVisible(false);
+  1193→        }
+  1194→    });
+  1195→})();
+  1196→</script>
+  1197→@endpush
+  1198→

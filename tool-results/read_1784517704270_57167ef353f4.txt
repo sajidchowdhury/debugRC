@@ -1,0 +1,761 @@
+     1→@extends('layouts.admin')
+     2→
+     3→@section('content')
+     4→@php
+     5→    $r = $return;
+     6→
+     7→    // Phase 8.5 status badges: created=warning, confirmed=info, reversed=danger.
+     8→    $statusBadge = function (bool $large = false) use ($r): string {
+     9→        $cls = $large ? ' fs-5' : ' fs-6';
+    10→        return [
+    11→            'created'   => '<span class="badge bg-warning text-dark' . $cls . '"><i class="fas fa-pen-to-square me-1"></i>Created</span>',
+    12→            'confirmed' => '<span class="badge bg-info text-dark' . $cls . '"><i class="fas fa-circle-check me-1"></i>Confirmed</span>',
+    13→            'reversed'  => '<span class="badge bg-danger' . $cls . '"><i class="fas fa-rotate-left me-1"></i>Reversed</span>',
+    14→        ][$r->status] ?? '<span class="badge bg-light text-dark' . $cls . '">' . e($r->status) . '</span>';
+    15→    };
+    16→
+    17→    // Revenue reversal journal entry + lines.
+    18→    $revJe          = $r->journalEntry;
+    19→    $revJeLines     = $revJe ? $revJe->lines : collect();
+    20→    $revDebitTotal  = $revJeLines->sum(fn ($l) => (float) $l->debit);
+    21→    $revCreditTotal = $revJeLines->sum(fn ($l) => (float) $l->credit);
+    22→
+    23→    // COGS reversal journal entry + lines.
+    24→    $cogsJe          = $r->cogsJournalEntry;
+    25→    $cogsJeLines     = $cogsJe ? $cogsJe->lines : collect();
+    26→    $cogsDebitTotal  = $cogsJeLines->sum(fn ($l) => (float) $l->debit);
+    27→    $cogsCreditTotal = $cogsJeLines->sum(fn ($l) => (float) $l->credit);
+    28→
+    29→    // Warehouse lookup for stock-movements table (st only joins products, not warehouses).
+    30→    $warehouseMap = \App\Models\Warehouse::pluck('warehouse_name', 'id');
+    31→
+    32→    $hasStockMovements   = !empty($stockMovements) && is_countable($stockMovements) && count($stockMovements) > 0;
+    33→    $hasCustomerLedger   = !empty($customerLedgerEntries) && is_countable($customerLedgerEntries) && count($customerLedgerEntries) > 0;
+    34→
+    35→    // Derived: gross margin reversal (revenue − cogs).
+    36→    $grossMargin = (float) $r->total_amount - (float) $r->cogs_amount;
+    37→@endphp
+    38→
+    39→<div class="container-fluid py-2">
+    40→    {{-- Hero header (orange gradient) --}}
+    41→    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
+    42→            style="background: linear-gradient(135deg,#ea580c,#d97706);">
+    43→        <div>
+    44→            <h1 class="h4 mb-1">
+    45→                <i class="fas fa-rotate-left me-2"></i>Return {{ $r->return_code }}
+    46→                {!! $statusBadge() !!}
+    47→            </h1>
+    48→            <p class="mb-0 small opacity-75">
+    49→                @if ($r->customer){{ $r->customer->customer_name }}@endif
+    50→                @if ($r->branch) · {{ $r->branch->branch_name }}@endif
+    51→                · {{ \Carbon\Carbon::parse($r->return_date)->format('d M Y') }}
+    52→            </p>
+    53→        </div>
+    54→        <div class="d-flex gap-2">
+    55→            <a href="{{ route('admin.sales-returns.print-slip', $r->id) }}" class="btn btn-outline-light btn-sm" target="_blank">
+    56→                <i class="fas fa-print me-1"></i> Print Slip
+    57→            </a>
+    58→            <a href="{{ route('admin.sales-returns.index') }}" class="btn btn-outline-light btn-sm">
+    59→                <i class="fas fa-arrow-left me-1"></i> Back to list
+    60→            </a>
+    61→        </div>
+    62→    </header>
+    63→
+    64→    {{-- Reversal alert --}}
+    65→    @if ($r->is_reversed)
+    66→        <div class="alert alert-danger d-flex align-items-start mb-3" role="alert">
+    67→            <i class="fas fa-rotate-left me-2 fa-lg"></i>
+    68→            <div>
+    69→                <strong>This return has been reversed.</strong>
+    70→                <div class="mt-1">
+    71→                    @if ($r->reversed_at)
+    72→                        <span class="me-3"><i class="fas fa-clock me-1"></i>
+    73→                            {{ \Carbon\Carbon::parse($r->reversed_at)->format('d M Y H:i') }}
+    74→                        </span>
+    75→                    @endif
+    76→                    @if ($r->reversed_by)
+    77→                        <span class="me-3"><i class="fas fa-user me-1"></i>User #{{ $r->reversed_by }}</span>
+    78→                    @endif
+    79→                </div>
+    80→                @if ($r->reverse_reason)
+    81→                    <div class="mt-1"><span class="text-muted">Reason:</span>
+    82→                        <em>{{ $r->reverse_reason }}</em>
+    83→                    </div>
+    84→                @endif
+    85→                <div class="small text-muted mt-1">
+    86→                    Stock movements, both GL journals (revenue + COGS), and customer ledger entries have been reversed.
+    87→                </div>
+    88→            </div>
+    89→        </div>
+    90→    @endif
+    91→
+    92→    <div class="row g-3">
+    93→        {{-- Left: main details --}}
+    94→        <div class="col-lg-8">
+    95→            {{-- Return details card --}}
+    96→            <div class="card border-0 shadow-sm mb-3">
+    97→                <div class="card-header bg-white">
+    98→                    <h2 class="h6 mb-0"><i class="fas fa-circle-info me-1 text-warning"></i> Return details</h2>
+    99→                </div>
+   100→                <div class="card-body">
+   101→                    <dl class="row mb-0">
+   102→                        <dt class="col-sm-3 text-muted">Return code</dt>
+   103→                        <dd class="col-sm-9">
+   104→                            <span class="badge bg-secondary-subtle text-secondary">{{ $r->return_code }}</span>
+   105→                        </dd>
+   106→
+   107→                        <dt class="col-sm-3 text-muted">Return date</dt>
+   108→                        <dd class="col-sm-9">{{ \Carbon\Carbon::parse($r->return_date)->format('d M Y') }}</dd>
+   109→
+   110→                        <dt class="col-sm-3 text-muted">Invoice</dt>
+   111→                        <dd class="col-sm-9">
+   112→                            @if ($r->salesInvoice)
+   113→                                <a href="{{ route('admin.sales-invoices.show', $r->salesInvoice) }}"
+   114→                                   class="text-decoration-none">
+   115→                                    <span class="badge bg-secondary-subtle text-secondary">
+   116→                                        {{ $r->salesInvoice->invoice_code }}
+   117→                                    </span>
+   118→                                </a>
+   119→                            @else
+   120→                                <span class="text-muted">—</span>
+   121→                            @endif
+   122→                        </dd>
+   123→
+   124→                        <dt class="col-sm-3 text-muted">Customer</dt>
+   125→                        <dd class="col-sm-9">
+   126→                            @if ($r->customer)
+   127→                                <strong>{{ $r->customer->customer_name }}</strong>
+   128→                                <span class="text-muted">({{ $r->customer->customer_code }})</span>
+   129→                            @else
+   130→                                <span class="text-muted">—</span>
+   131→                            @endif
+   132→                        </dd>
+   133→
+   134→                        <dt class="col-sm-3 text-muted">Branch</dt>
+   135→                        <dd class="col-sm-9">
+   136→                            @if ($r->branch)
+   137→                                {{ $r->branch->branch_name }}
+   138→                                <span class="text-muted small">({{ $r->branch->branch_code }})</span>
+   139→                            @else
+   140→                                <span class="text-muted">—</span>
+   141→                            @endif
+   142→                        </dd>
+   143→
+   144→                        <dt class="col-sm-3 text-muted">Reason</dt>
+   145→                        <dd class="col-sm-9">{!! nl2br(e($r->reason ?: '—')) !!}</dd>
+   146→
+   147→                        <dt class="col-sm-3 text-muted">Revenue total</dt>
+   148→                        <dd class="col-sm-9">
+   149→                            <strong class="text-warning fs-5">Tk {{ number_format((float) $r->total_amount, 2) }}</strong>
+   150→                            <span class="text-muted small">(Dr Sales Return / Cr AR)</span>
+   151→                        </dd>
+   152→
+   153→                        <dt class="col-sm-3 text-muted">COGS total</dt>
+   154→                        <dd class="col-sm-9">
+   155→                            <strong class="text-danger fs-5">Tk {{ number_format((float) $r->cogs_amount, 2) }}</strong>
+   156→                            <span class="text-muted small">(Dr Inventory / Cr COGS @ original avg_cost)</span>
+   157→                        </dd>
+   158→
+   159→                        <dt class="col-sm-3 text-muted">Created by</dt>
+   160→                        <dd class="col-sm-9 small text-muted">
+   161→                            @if ($r->created_by) User #{{ $r->created_by }} @else — @endif
+   162→                            @if ($r->created_at) · {{ $r->created_at->format('d M Y H:i') }} @endif
+   163→                        </dd>
+   164→                    </dl>
+   165→                </div>
+   166→            </div>
+   167→
+   168→            {{-- Items table --}}
+   169→            <div class="card border-0 shadow-sm mb-3">
+   170→                <div class="card-header bg-white">
+   171→                    <h2 class="h6 mb-0">
+   172→                        <i class="fas fa-table-list me-1 text-warning"></i> Items
+   173→                        <span class="badge bg-warning-subtle text-warning ms-1">{{ $r->items->count() }}</span>
+   174→                    </h2>
+   175→                </div>
+   176→                <div class="card-body p-0">
+   177→                    <div class="table-responsive">
+   178→                        <table class="table table-sm table-striped table-hover align-middle mb-0">
+   179→                            <thead class="table-light">
+   180→                                <tr>
+   181→                                    <th>Product</th>
+   182→                                    <th>Warehouse</th>
+   183→                                    <th class="text-end">Qty</th>
+   184→                                    <th class="text-end">Sales Rate (Tk)</th>
+   185→                                    <th class="text-end" style="background:#fff7ed;">
+   186→                                        <span class="text-warning" title="ORIGINAL avg_cost from the challan">
+   187→                                            <i class="fas fa-circle-exclamation me-1"></i>Original Cost (Tk)
+   188→                                        </span>
+   189→                                    </th>
+   190→                                    <th class="text-end">Revenue (Tk)</th>
+   191→                                    <th class="text-end">COGS (Tk)</th>
+   192→                                </tr>
+   193→                            </thead>
+   194→                            <tbody>
+   195→                                @forelse ($r->items as $item)
+   196→                                    @php
+   197→                                        $itemRevenue = (float) $item->qty * (float) $item->rate;
+   198→                                        $itemCogs    = (float) $item->qty * (float) $item->original_cost;
+   199→                                    @endphp
+   200→                                    <tr>
+   201→                                        <td>
+   202→                                            @if ($item->product)
+   203→                                                <span class="fw-semibold">{{ $item->product->product_name }}</span>
+   204→                                                <div class="small text-muted">{{ $item->product->product_code }}</div>
+   205→                                            @else
+   206→                                                <span class="text-muted">Product #{{ $item->product_id }}</span>
+   207→                                            @endif
+   208→                                        </td>
+   209→                                        <td>
+   210→                                            @if ($item->warehouse)
+   211→                                                {{ $item->warehouse->warehouse_name }}
+   212→                                                <div class="small text-muted">{{ $item->warehouse->warehouse_code }}</div>
+   213→                                            @else
+   214→                                                <span class="text-muted">—</span>
+   215→                                            @endif
+   216→                                        </td>
+   217→                                        <td class="text-end">{{ number_format((float) $item->qty, 4) }}</td>
+   218→                                        <td class="text-end">{{ number_format((float) $item->rate, 2) }}</td>
+   219→                                        <td class="text-end fw-bold text-warning" style="background:#fff7ed;">
+   220→                                            {{ number_format((float) $item->original_cost, 2) }}
+   221→                                        </td>
+   222→                                        <td class="text-end">{{ number_format($itemRevenue, 2) }}</td>
+   223→                                        <td class="text-end text-muted">{{ number_format($itemCogs, 2) }}</td>
+   224→                                    </tr>
+   225→                                @empty
+   226→                                    <tr>
+   227→                                        <td colspan="7" class="text-center text-muted py-4">No items.</td>
+   228→                                    </tr>
+   229→                                @endforelse
+   230→                            </tbody>
+   231→                            <tfoot>
+   232→                                <tr class="table-warning fw-bold">
+   233→                                    <td colspan="5" class="text-end">Totals</td>
+   234→                                    <td class="text-end">Tk {{ number_format((float) $r->total_amount, 2) }}</td>
+   235→                                    <td class="text-end">Tk {{ number_format((float) $r->cogs_amount, 2) }}</td>
+   236→                                </tr>
+   237→                            </tfoot>
+   238→                        </table>
+   239→                    </div>
+   240→                </div>
+   241→            </div>
+   242→
+   243→            {{-- Stock Movements card (only if confirmed/reversed + has movements) --}}
+   244→            @if (($r->isConfirmed() || $r->is_reversed) && $hasStockMovements)
+   245→                <div class="card border-0 shadow-sm mb-3">
+   246→                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+   247→                        <h2 class="h6 mb-0">
+   248→                            <i class="fas fa-boxes-stacked me-1 text-warning"></i> Stock movements
+   249→                            <span class="badge bg-warning-subtle text-warning ms-1">{{ count($stockMovements) }}</span>
+   250→                        </h2>
+   251→                        <span class="small text-muted">IN at original avg_cost from the challan</span>
+   252→                    </div>
+   253→                    <div class="card-body p-0">
+   254→                        <div class="table-responsive">
+   255→                            <table class="table table-sm table-striped table-hover align-middle mb-0">
+   256→                                <thead class="table-light">
+   257→                                    <tr>
+   258→                                        <th>Date</th>
+   259→                                        <th>TX#</th>
+   260→                                        <th>Product</th>
+   261→                                        <th>Warehouse</th>
+   262→                                        <th class="text-end">Qty</th>
+   263→                                        <th class="text-end">Rate (Tk)</th>
+   264→                                        <th class="text-end">Value (Tk)</th>
+   265→                                        <th class="text-center">Reversed?</th>
+   266→                                    </tr>
+   267→                                </thead>
+   268→                                <tbody>
+   269→                                    @foreach ($stockMovements as $st)
+   270→                                        @php
+   271→                                            $qty = (float) $st->qty;
+   272→                                            // Returns = stock IN → qty is positive. Highlight in green.
+   273→                                            $qtyClass = $qty >= 0 ? 'text-success fw-bold' : 'text-danger fw-bold';
+   274→                                            $whName = $warehouseMap[$st->warehouse_id] ?? ('#' . $st->warehouse_id);
+   275→                                        @endphp
+   276→                                        <tr class="{{ !empty($st->is_reversed) ? 'table-warning' : '' }}">
+   277→                                            <td class="text-nowrap small">
+   278→                                                {{ \Carbon\Carbon::parse($st->transaction_date)->format('d M Y') }}
+   279→                                            </td>
+   280→                                            <td><span class="badge bg-light text-dark">#{{ $st->id }}</span></td>
+   281→                                            <td>
+   282→                                                <span class="fw-semibold">{{ $st->product_name }}</span>
+   283→                                                <div class="small text-muted">{{ $st->product_code }}</div>
+   284→                                            </td>
+   285→                                            <td>
+   286→                                                <span class="small">{{ $whName }}</span>
+   287→                                            </td>
+   288→                                            <td class="text-end {{ $qtyClass }}">
+   289→                                                {{ $qty > 0 ? '+' : '' }}{{ number_format($qty, 4) }}
+   290→                                                <span class="badge bg-success-subtle text-success ms-1">IN</span>
+   291→                                            </td>
+   292→                                            <td class="text-end text-warning fw-bold" title="Original avg_cost from challan">
+   293→                                                {{ number_format((float) $st->rate, 2) }}
+   294→                                            </td>
+   295→                                            <td class="text-end">{{ number_format((float) $st->total_value, 2) }}</td>
+   296→                                            <td class="text-center">
+   297→                                                @if (!empty($st->is_reversed))
+   298→                                                    <span class="badge bg-danger">
+   299→                                                        <i class="fas fa-rotate-left me-1"></i>Yes
+   300→                                                    </span>
+   301→                                                @else
+   302→                                                    <span class="badge bg-light text-muted">—</span>
+   303→                                                @endif
+   304→                                            </td>
+   305→                                        </tr>
+   306→                                    @endforeach
+   307→                                </tbody>
+   308→                            </table>
+   309→                        </div>
+   310→                    </div>
+   311→                </div>
+   312→            @endif
+   313→
+   314→            {{-- Revenue Reversal GL card (only if confirmed + has JE) --}}
+   315→            @if ($r->isConfirmed() && $revJe)
+   316→                <div class="card border-0 shadow-sm mb-3">
+   317→                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+   318→                        <h2 class="h6 mb-0">
+   319→                            <i class="fas fa-book me-1 text-primary"></i> Revenue Reversal GL
+   320→                            <span class="badge bg-primary-subtle text-primary ms-1">Dr Sales Return / Cr AR</span>
+   321→                        </h2>
+   322→                        @if ($revJe->is_reversed)
+   323→                            <span class="badge bg-danger">
+   324→                                <i class="fas fa-rotate-left me-1"></i>Entry reversed
+   325→                            </span>
+   326→                        @endif
+   327→                    </div>
+   328→                    <div class="card-body">
+   329→                        <dl class="row mb-3 small">
+   330→                            <dt class="col-sm-2 text-muted">JE#</dt>
+   331→                            <dd class="col-sm-4">
+   332→                                <span class="badge bg-secondary-subtle text-secondary">{{ $revJe->entry_no }}</span>
+   333→                            </dd>
+   334→                            <dt class="col-sm-2 text-muted">Entry date</dt>
+   335→                            <dd class="col-sm-4">{{ \Carbon\Carbon::parse($revJe->entry_date)->format('d M Y') }}</dd>
+   336→                            <dt class="col-sm-2 text-muted">Description</dt>
+   337→                            <dd class="col-sm-10">{{ $revJe->description ?: '—' }}</dd>
+   338→                        </dl>
+   339→
+   340→                        <div class="table-responsive">
+   341→                            <table class="table table-sm table-striped table-hover align-middle mb-0">
+   342→                                <thead class="table-light">
+   343→                                    <tr>
+   344→                                        <th>Ledger</th>
+   345→                                        <th class="text-end">Debit (Tk)</th>
+   346→                                        <th class="text-end">Credit (Tk)</th>
+   347→                                        <th>Memo</th>
+   348→                                    </tr>
+   349→                                </thead>
+   350→                                <tbody>
+   351→                                    @foreach ($revJeLines as $line)
+   352→                                        <tr>
+   353→                                            <td>
+   354→                                                @if ($line->ledger)
+   355→                                                    <span class="fw-semibold">{{ $line->ledger->ledger_name }}</span>
+   356→                                                    <div class="small text-muted">{{ $line->ledger->ledger_code }}</div>
+   357→                                                @else
+   358→                                                    <span class="text-muted">Ledger #{{ $line->ledger_id }}</span>
+   359→                                                @endif
+   360→                                            </td>
+   361→                                            <td class="text-end">
+   362→                                                {{ (float) $line->debit > 0 ? number_format((float) $line->debit, 2) : '—' }}
+   363→                                            </td>
+   364→                                            <td class="text-end">
+   365→                                                {{ (float) $line->credit > 0 ? number_format((float) $line->credit, 2) : '—' }}
+   366→                                            </td>
+   367→                                            <td class="small">{{ $line->memo ?: '—' }}</td>
+   368→                                        </tr>
+   369→                                    @endforeach
+   370→                                </tbody>
+   371→                                <tfoot>
+   372→                                    <tr class="table-light fw-bold">
+   373→                                        <td class="text-end">Total</td>
+   374→                                        <td class="text-end">{{ number_format($revDebitTotal, 2) }}</td>
+   375→                                        <td class="text-end">{{ number_format($revCreditTotal, 2) }}</td>
+   376→                                        <td>
+   377→                                            @if (abs($revDebitTotal - $revCreditTotal) < 0.01)
+   378→                                                <span class="badge bg-success">
+   379→                                                    <i class="fas fa-check me-1"></i>Balanced
+   380→                                                </span>
+   381→                                            @else
+   382→                                                <span class="badge bg-danger">
+   383→                                                    <i class="fas fa-triangle-exclamation me-1"></i>Out by
+   384→                                                    {{ number_format(abs($revDebitTotal - $revCreditTotal), 2) }}
+   385→                                                </span>
+   386→                                            @endif
+   387→                                        </td>
+   388→                                    </tr>
+   389→                                </tfoot>
+   390→                            </table>
+   391→                        </div>
+   392→                    </div>
+   393→                </div>
+   394→            @endif
+   395→
+   396→            {{-- COGS Reversal GL card (only if confirmed + has JE) --}}
+   397→            @if ($r->isConfirmed() && $cogsJe)
+   398→                <div class="card border-0 shadow-sm mb-3">
+   399→                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+   400→                        <h2 class="h6 mb-0">
+   401→                            <i class="fas fa-book me-1 text-danger"></i> COGS Reversal GL
+   402→                            <span class="badge bg-danger-subtle text-danger ms-1">Dr Inventory / Cr COGS</span>
+   403→                        </h2>
+   404→                        @if ($cogsJe->is_reversed)
+   405→                            <span class="badge bg-danger">
+   406→                                <i class="fas fa-rotate-left me-1"></i>Entry reversed
+   407→                            </span>
+   408→                        @endif
+   409→                    </div>
+   410→                    <div class="card-body">
+   411→                        <dl class="row mb-3 small">
+   412→                            <dt class="col-sm-2 text-muted">JE#</dt>
+   413→                            <dd class="col-sm-4">
+   414→                                <span class="badge bg-secondary-subtle text-secondary">{{ $cogsJe->entry_no }}</span>
+   415→                            </dd>
+   416→                            <dt class="col-sm-2 text-muted">Entry date</dt>
+   417→                            <dd class="col-sm-4">{{ \Carbon\Carbon::parse($cogsJe->entry_date)->format('d M Y') }}</dd>
+   418→                            <dt class="col-sm-2 text-muted">Description</dt>
+   419→                            <dd class="col-sm-10">{{ $cogsJe->description ?: '—' }}</dd>
+   420→                        </dl>
+   421→
+   422→                        <div class="table-responsive">
+   423→                            <table class="table table-sm table-striped table-hover align-middle mb-0">
+   424→                                <thead class="table-light">
+   425→                                    <tr>
+   426→                                        <th>Ledger</th>
+   427→                                        <th class="text-end">Debit (Tk)</th>
+   428→                                        <th class="text-end">Credit (Tk)</th>
+   429→                                        <th>Memo</th>
+   430→                                    </tr>
+   431→                                </thead>
+   432→                                <tbody>
+   433→                                    @foreach ($cogsJeLines as $line)
+   434→                                        <tr>
+   435→                                            <td>
+   436→                                                @if ($line->ledger)
+   437→                                                    <span class="fw-semibold">{{ $line->ledger->ledger_name }}</span>
+   438→                                                    <div class="small text-muted">{{ $line->ledger->ledger_code }}</div>
+   439→                                                @else
+   440→                                                    <span class="text-muted">Ledger #{{ $line->ledger_id }}</span>
+   441→                                                @endif
+   442→                                            </td>
+   443→                                            <td class="text-end">
+   444→                                                {{ (float) $line->debit > 0 ? number_format((float) $line->debit, 2) : '—' }}
+   445→                                            </td>
+   446→                                            <td class="text-end">
+   447→                                                {{ (float) $line->credit > 0 ? number_format((float) $line->credit, 2) : '—' }}
+   448→                                            </td>
+   449→                                            <td class="small">{{ $line->memo ?: '—' }}</td>
+   450→                                        </tr>
+   451→                                    @endforeach
+   452→                                </tbody>
+   453→                                <tfoot>
+   454→                                    <tr class="table-light fw-bold">
+   455→                                        <td class="text-end">Total</td>
+   456→                                        <td class="text-end">{{ number_format($cogsDebitTotal, 2) }}</td>
+   457→                                        <td class="text-end">{{ number_format($cogsCreditTotal, 2) }}</td>
+   458→                                        <td>
+   459→                                            @if (abs($cogsDebitTotal - $cogsCreditTotal) < 0.01)
+   460→                                                <span class="badge bg-success">
+   461→                                                    <i class="fas fa-check me-1"></i>Balanced
+   462→                                                </span>
+   463→                                            @else
+   464→                                                <span class="badge bg-danger">
+   465→                                                    <i class="fas fa-triangle-exclamation me-1"></i>Out by
+   466→                                                    {{ number_format(abs($cogsDebitTotal - $cogsCreditTotal), 2) }}
+   467→                                                </span>
+   468→                                            @endif
+   469→                                        </td>
+   470→                                    </tr>
+   471→                                </tfoot>
+   472→                            </table>
+   473→                        </div>
+   474→                    </div>
+   475→                </div>
+   476→            @endif
+   477→
+   478→            {{-- Customer Ledger Entries card (only if confirmed + has entries) --}}
+   479→            @if ($r->isConfirmed() && $hasCustomerLedger)
+   480→                <div class="card border-0 shadow-sm mb-3">
+   481→                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+   482→                        <h2 class="h6 mb-0">
+   483→                            <i class="fas fa-users me-1 text-primary"></i> Customer ledger entries
+   484→                            <span class="badge bg-primary-subtle text-primary ms-1">{{ count($customerLedgerEntries) }}</span>
+   485→                        </h2>
+   486→                        <span class="small text-muted">Credit = customer owes less</span>
+   487→                    </div>
+   488→                    <div class="card-body p-0">
+   489→                        <div class="table-responsive">
+   490→                            <table class="table table-sm table-striped table-hover align-middle mb-0">
+   491→                                <thead class="table-light">
+   492→                                    <tr>
+   493→                                        <th>Date</th>
+   494→                                        <th>Type</th>
+   495→                                        <th class="text-end">Debit (Tk)</th>
+   496→                                        <th class="text-end">Credit (Tk)</th>
+   497→                                        <th class="text-end">Balance (Tk)</th>
+   498→                                        <th>Description</th>
+   499→                                    </tr>
+   500→                                </thead>
+   501→                                <tbody>
+   502→                                    @foreach ($customerLedgerEntries as $cl)
+   503→                                        <tr>
+   504→                                            <td class="text-nowrap small">
+   505→                                                {{ \Carbon\Carbon::parse($cl->transaction_date)->format('d M Y') }}
+   506→                                            </td>
+   507→                                            <td>
+   508→                                                <span class="badge bg-light text-dark">{{ ucfirst(str_replace('_', ' ', $cl->transaction_type)) }}</span>
+   509→                                            </td>
+   510→                                            <td class="text-end">
+   511→                                                {{ (float) $cl->debit > 0 ? number_format((float) $cl->debit, 2) : '—' }}
+   512→                                            </td>
+   513→                                            <td class="text-end text-success">
+   514→                                                {{-- Returns credit the customer (they owe less) → highlight credit in green. --}}
+   515→                                                {{ (float) $cl->credit > 0 ? number_format((float) $cl->credit, 2) : '—' }}
+   516→                                            </td>
+   517→                                            <td class="text-end">{{ number_format((float) $cl->balance, 2) }}</td>
+   518→                                            <td class="small">{{ $cl->description ?: '—' }}</td>
+   519→                                        </tr>
+   520→                                    @endforeach
+   521→                                </tbody>
+   522→                            </table>
+   523→                        </div>
+   524→                    </div>
+   525→                </div>
+   526→            @endif
+   527→        </div>
+   528→
+   529→        {{-- Right: actions aside --}}
+   530→        <div class="col-lg-4">
+   531→            {{-- Status & actions card --}}
+   532→            <div class="card border-0 shadow-sm mb-3">
+   533→                <div class="card-header bg-white">
+   534→                    <h2 class="h6 mb-0"><i class="fas fa-gear me-1 text-secondary"></i> Status &amp; actions</h2>
+   535→                </div>
+   536→                <div class="card-body">
+   537→                    <div class="text-center mb-3">
+   538→                        <div class="text-muted small mb-1">Current status</div>
+   539→                        <div class="mb-2">{!! $statusBadge(true) !!}</div>
+   540→                        <div class="text-muted small">
+   541→                            @if ($r->salesInvoice)
+   542→                                <i class="fas fa-link me-1"></i>Against invoice
+   543→                                <a href="{{ route('admin.sales-invoices.show', $r->salesInvoice) }}"
+   544→                                   class="text-decoration-none">{{ $r->salesInvoice->invoice_code }}</a>
+   545→                            @endif
+   546→                        </div>
+   547→                    </div>
+   548→
+   549→                    {{-- CONFIRM (created only) --}}
+   550→                    @if ($r->isCreated())
+   551→                        <form method="POST" action="{{ route('admin.sales-returns.confirm', $r) }}"
+   552→                              id="confirmForm">
+   553→                            @csrf
+   554→                            <button type="button" class="btn btn-info w-100 mb-2" id="confirmBtn">
+   555→                                <i class="fas fa-circle-check me-1"></i> Confirm Return
+   556→                            </button>
+   557→                        </form>
+   558→                        <div class="alert alert-warning small mb-3">
+   559→                            <i class="fas fa-triangle-exclamation me-1"></i>
+   560→                            Confirming will <strong>restore stock at the original avg_cost</strong> (NOT current),
+   561→                            <strong>post two GL journals</strong> (Dr Sales Return / Cr AR + Dr Inventory / Cr COGS),
+   562→                            and <strong>credit the customer ledger</strong> (customer owes less).
+   563→                        </div>
+   564→                    @endif
+   565→
+   566→                    {{-- REVERSE (confirmed only) --}}
+   567→                    @if ($r->isConfirmed())
+   568→                        <form method="POST" action="{{ route('admin.sales-returns.reverse', $r) }}"
+   569→                              id="reverseForm">
+   570→                            @csrf
+   571→                            <input type="hidden" name="reverse_reason" id="reverseReasonField" value="">
+   572→                            <button type="button" class="btn btn-outline-danger w-100" id="reverseBtn">
+   573→                                <i class="fas fa-rotate-left me-1"></i> Reverse Return
+   574→                            </button>
+   575→                        </form>
+   576→                        <div class="alert alert-danger small mt-2 mb-0">
+   577→                            <i class="fas fa-triangle-exclamation me-1"></i>
+   578→                            Reversing will <strong>undo stock movements</strong> (stock OUT at original cost),
+   579→                            <strong>reverse both GL journal entries</strong>, and
+   580→                            <strong>reverse customer ledger entries</strong>. A reason is required.
+   581→                        </div>
+   582→                    @endif
+   583→
+   584→                    @if ($r->isCreated())
+   585→                        <div class="alert alert-secondary small mt-3 mb-0">
+   586→                            <i class="fas fa-pen-to-square me-1"></i>
+   587→                            This return is in <strong>created</strong> state — no stock movement, no GL, no customer ledger
+   588→                            posted yet. Confirm to apply.
+   589→                        </div>
+   590→                    @endif
+   591→
+   592→                    @if ($r->isConfirmed())
+   593→                        <div class="alert alert-info small mt-3 mb-0">
+   594→                            <i class="fas fa-circle-check me-1"></i>
+   595→                            <strong>Stock restored at original cost.</strong> Both GL journals posted. Customer ledger credited.
+   596→                        </div>
+   597→                    @endif
+   598→
+   599→                    @if ($r->isReversed())
+   600→                        <div class="alert alert-secondary small mb-0">
+   601→                            <i class="fas fa-ban me-1"></i>
+   602→                            This return is reversed and cannot be modified further.
+   603→                        </div>
+   604→                    @endif
+   605→                </div>
+   606→            </div>
+   607→
+   608→            {{-- Revenue vs COGS summary card --}}
+   609→            <div class="card border-0 shadow-sm mb-3">
+   610→                <div class="card-header bg-white">
+   611→                    <h2 class="h6 mb-0"><i class="fas fa-scale-balanced me-1 text-warning"></i> Revenue vs COGS</h2>
+   612→                </div>
+   613→                <div class="card-body">
+   614→                    <div class="d-flex justify-content-between py-2 border-bottom">
+   615→                        <span class="text-muted">
+   616→                            <i class="fas fa-arrow-down me-1 text-warning"></i>Revenue reversal
+   617→                        </span>
+   618→                        <strong class="text-warning">Tk {{ number_format((float) $r->total_amount, 2) }}</strong>
+   619→                    </div>
+   620→                    <div class="d-flex justify-content-between py-2 border-bottom">
+   621→                        <span class="text-muted">
+   622→                            <i class="fas fa-arrow-down me-1 text-danger"></i>COGS reversal
+   623→                        </span>
+   624→                        <strong class="text-danger">Tk {{ number_format((float) $r->cogs_amount, 2) }}</strong>
+   625→                    </div>
+   626→                    <div class="d-flex justify-content-between py-2">
+   627→                        <span class="text-muted">
+   628→                            <i class="fas fa-equals me-1 text-success"></i>Gross margin reversed
+   629→                        </span>
+   630→                        <strong class="text-success">Tk {{ number_format($grossMargin, 2) }}</strong>
+   631→                    </div>
+   632→                    <div class="small text-muted mt-2 pt-2 border-top">
+   633→                        <i class="fas fa-circle-info me-1"></i>
+   634→                        Margin = revenue − COGS. Negative margin reversal means the original sale was loss-making;
+   635→                        positive means profit-making.
+   636→                    </div>
+   637→                </div>
+   638→            </div>
+   639→
+   640→            {{-- Quick facts card --}}
+   641→            <div class="card border-0 shadow-sm">
+   642→                <div class="card-header bg-white">
+   643→                    <h2 class="h6 mb-0"><i class="fas fa-circle-info me-1 text-muted"></i> Quick facts</h2>
+   644→                </div>
+   645→                <div class="card-body small">
+   646→                    <div class="d-flex justify-content-between py-1 border-bottom">
+   647→                        <span class="text-muted">Items</span>
+   648→                        <strong>{{ $r->items->count() }}</strong>
+   649→                    </div>
+   650→                    <div class="d-flex justify-content-between py-1 border-bottom">
+   651→                        <span class="text-muted">Revenue total</span>
+   652→                        <strong>Tk {{ number_format((float) $r->total_amount, 2) }}</strong>
+   653→                    </div>
+   654→                    <div class="d-flex justify-content-between py-1 border-bottom">
+   655→                        <span class="text-muted">COGS total</span>
+   656→                        <strong>Tk {{ number_format((float) $r->cogs_amount, 2) }}</strong>
+   657→                    </div>
+   658→                    <div class="d-flex justify-content-between py-1 border-bottom">
+   659→                        <span class="text-muted">Stock movements</span>
+   660→                        <strong>{{ is_countable($stockMovements) ? count($stockMovements) : 0 }}</strong>
+   661→                    </div>
+   662→                    <div class="d-flex justify-content-between py-1 border-bottom">
+   663→                        <span class="text-muted">Customer ledger</span>
+   664→                        <strong>{{ is_countable($customerLedgerEntries) ? count($customerLedgerEntries) : 0 }}</strong>
+   665→                    </div>
+   666→                    <div class="d-flex justify-content-between py-1 border-bottom">
+   667→                        <span class="text-muted">Revenue GL journal</span>
+   668→                        @if ($revJe)
+   669→                            <strong>{{ $revJe->entry_no }}</strong>
+   670→                        @else
+   671→                            <span class="text-muted">Not posted</span>
+   672→                        @endif
+   673→                    </div>
+   674→                    <div class="d-flex justify-content-between py-1 border-bottom">
+   675→                        <span class="text-muted">COGS GL journal</span>
+   676→                        @if ($cogsJe)
+   677→                            <strong>{{ $cogsJe->entry_no }}</strong>
+   678→                        @else
+   679→                            <span class="text-muted">Not posted</span>
+   680→                        @endif
+   681→                    </div>
+   682→                    <div class="d-flex justify-content-between py-1">
+   683→                        <span class="text-muted">Reversed</span>
+   684→                        @if ($r->is_reversed)
+   685→                            <span class="badge bg-danger">Yes</span>
+   686→                        @else
+   687→                            <span class="text-muted">No</span>
+   688→                        @endif
+   689→                    </div>
+   690→                </div>
+   691→            </div>
+   692→        </div>
+   693→    </div>
+   694→</div>
+   695→
+   696→@push('scripts')
+   697→<script>
+   698→$(function () {
+   699→    // ====== Confirm (created → confirmed) ======
+   700→    $('#confirmBtn').on('click', function () {
+   701→        Swal.fire({
+   702→            icon: 'warning',
+   703→            title: 'Confirm this sales return?',
+   704→            html: '<p class="text-start">Confirming will <strong>restore stock at the ORIGINAL avg_cost</strong> ' +
+   705→                  '(not current avg_cost), <strong>post two GL journals</strong> ' +
+   706→                  '(Dr Sales Return / Cr AR + Dr Inventory / Cr COGS), ' +
+   707→                  'and <strong>credit the customer ledger</strong> (customer owes less).</p>' +
+   708→                  '<p class="text-start text-muted small mb-0">This action cannot be undone from the return — ' +
+   709→                  'reversing will undo all postings.</p>',
+   710→            showCancelButton: true,
+   711→            confirmButtonText: '<i class="fas fa-check"></i> Confirm Return',
+   712→            confirmButtonColor: '#0ea5e9',
+   713→            cancelButtonText: 'Keep draft',
+   714→            reverseButtons: true
+   715→        }).then(function (result) {
+   716→            if (result.isConfirmed) {
+   717→                var $btn = $('#confirmBtn');
+   718→                $btn.prop('disabled', true)
+   719→                    .html('<i class="fas fa-spinner fa-spin me-1"></i> Confirming…');
+   720→                $('#confirmForm').submit();
+   721→            }
+   722→        });
+   723→    });
+   724→
+   725→    // ====== Reverse (confirmed → reversed) ======
+   726→    $('#reverseBtn').on('click', function () {
+   727→        Swal.fire({
+   728→            icon: 'warning',
+   729→            title: 'Reverse this confirmed return?',
+   730→            html: '<p class="text-start">This will <strong>reverse stock movements</strong> (stock OUT at original cost), ' +
+   731→                  '<strong>reverse both GL journal entries</strong> (revenue + COGS), and ' +
+   732→                  '<strong>reverse customer ledger entries</strong>. A reason is required.</p>',
+   733→            input: 'textarea',
+   734→            inputLabel: 'Reverse reason (required)',
+   735→            inputPlaceholder: 'Why is this return being reversed?',
+   736→            showCancelButton: true,
+   737→            confirmButtonText: '<i class="fas fa-rotate-left"></i> Reverse Return',
+   738→            confirmButtonColor: '#dc3545',
+   739→            cancelButtonText: 'Keep',
+   740→            reverseButtons: true,
+   741→            inputValidator: function (value) {
+   742→                if (!value || !value.trim()) {
+   743→                    return 'A reverse reason is required.';
+   744→                }
+   745→                return null;
+   746→            }
+   747→        }).then(function (result) {
+   748→            if (result.isConfirmed) {
+   749→                $('#reverseReasonField').val(result.value.trim());
+   750→                var $btn = $('#reverseBtn');
+   751→                $btn.prop('disabled', true)
+   752→                    .html('<i class="fas fa-spinner fa-spin me-1"></i> Reversing…');
+   753→                $('#reverseForm').submit();
+   754→            }
+   755→        });
+   756→    });
+   757→});
+   758→</script>
+   759→@endpush
+   760→@endsection
+   761→
