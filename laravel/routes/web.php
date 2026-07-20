@@ -470,6 +470,11 @@ Route::middleware('auth')->group(function () {
             ->name('edit')->middleware(['role:salesman,manager,admin', 'branch.isolation']);
         Route::put('{id}', [SalesInvoiceController::class, 'update'])
             ->name('update')->middleware(['role:salesman,manager,admin', 'branch.isolation']);
+        // Dispatcher assignment (AJAX)
+        Route::post('{id}/dispatchers', [SalesInvoiceController::class, 'assignDispatchers'])
+            ->name('dispatchers.assign')->middleware(['role:salesman,manager,admin,warehouse_manager', 'branch.isolation']);
+        Route::get('branch-dispatchers', [SalesInvoiceController::class, 'getBranchDispatchers'])
+            ->name('branch-dispatchers')->middleware('role:salesman,manager,admin,warehouse_manager');
         // P1-6: Print views
         Route::get('{id}/print-invoice', [SalesInvoiceController::class, 'printInvoice'])
             ->name('print-invoice')->middleware('role:salesman,accountant,manager,admin');

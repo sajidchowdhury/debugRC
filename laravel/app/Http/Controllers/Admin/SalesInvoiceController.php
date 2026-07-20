@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\SalesInvoice;
+use App\Models\Employee;
 use App\Services\Sales\SalesInvoiceService;
 use App\Services\Sales\SalesCartService;
 use App\Services\Sales\SalesAuditLogger;
@@ -84,6 +85,8 @@ class SalesInvoiceController extends Controller
             'credit_limit_override' => 'nullable|boolean',
             'override_reason' => 'nullable|string|max:500',
             'idempotency_token' => 'required|string|uuid',
+            'dispatcher_ids'   => 'nullable|array',
+            'dispatcher_ids.*' => 'integer|exists:employees,id',
         ]);
 
         // P2-6: Idempotency check — if this token was already processed,
@@ -113,6 +116,7 @@ class SalesInvoiceController extends Controller
                 'credit_limit_override' => $validated['credit_limit_override'] ?? false,
                 'override_reason' => $validated['override_reason'] ?? '',
                 'created_by' => auth()->id(),
+                'dispatcher_ids' => $validated['dispatcher_ids'] ?? [],
             ]);
 
             $response = [
@@ -138,7 +142,7 @@ class SalesInvoiceController extends Controller
      */
     public function edit(int $id)
     {
-        $invoice = SalesInvoice::with(['items.product', 'customer', 'branch'])
+        $invoice = SalesInvoice::with(['items.product', 'customer', 'branch', 'dispatchers'])
             ->findOrFail($id);
 
         // Guard: only draft invoices can be edited.
@@ -162,10 +166,21 @@ class SalesInvoiceController extends Controller
         // Load products for the add-item dropdown (active products).
         $products = \App\Models\Product::active()->with(['category'])->orderBy('product_name')->limit(500)->get();
 
+        // Load dispatchers for the multi-select (active dispatcher-role employees for this branch).
+        $dispatchers = Employee::dispatchers()
+            ->where('branch_id', (int) $invoice->branch_id)
+            ->orderBy('name')
+            ->get();
+
+        // Currently assigned dispatcher IDs (for pre-selecting in the dropdown).
+        $assignedDispatcherIds = $invoice->dispatchers->pluck('id')->toArray();
+
         return view('admin.sales-invoices.edit', [
             'title' => 'Edit Invoice ' . $invoice->invoice_code,
             'invoice' => $invoice,
             'products' => $products,
+            'dispatchers' => $dispatchers,
+            'assignedDispatcherIds' => $assignedDispatcherIds,
         ]);
     }
 
@@ -189,6 +204,8 @@ class SalesInvoiceController extends Controller
             'is_soft_hold' => 'nullable|boolean',
             'credit_limit_override' => 'nullable|boolean',
             'override_reason' => 'nullable|string|max:500',
+            'dispatcher_ids'   => 'nullable|array',
+            'dispatcher_ids.*' => 'integer|exists:employees,id',
         ]);
 
         try {
@@ -203,6 +220,7 @@ class SalesInvoiceController extends Controller
                 'credit_limit_override' => $validated['credit_limit_override'] ?? false,
                 'override_reason' => $validated['override_reason'] ?? '',
                 'updated_by' => auth()->id(),
+                'dispatcher_ids' => $validated['dispatcher_ids'] ?? [],
             ]);
 
             return redirect()->route('admin.sales-invoices.show', $invoice)
@@ -368,7 +386,7 @@ class SalesInvoiceController extends Controller
      */
     public function printInvoice(int $id)
     {
-        $invoice = SalesInvoice::with(['items.product', 'customer', 'branch', 'salesman'])
+        $invoice = SalesInvoice::with(['items.product', 'customer', 'branch', 'salesman', 'dispatchers'])
             ->findOrFail($id);
 
         return view('admin.sales-invoices.print_invoice', [
@@ -391,10 +409,59 @@ class SalesInvoiceController extends Controller
         ]);
     }
 
+    /**
+     * AJAX: Get dispatchers for a branch (for finalize/edit dropdowns).
+     */
+    public function getBranchDispatchers(Request $request)
+    {
+        $request->validate([
+            'branch_id' => 'required|integer|exists:branches,id',
+        ]);
+
+        $branchId = (int) $request->input('branch_id');
+
+        $dispatchers = Employee::dispatchers()
+            ->where('branch_id', $branchId)
+            ->orderBy('name')
+            ->get(['id', 'employee_code', 'name', 'phone']);
+
+        return response()->json($dispatchers);
+    }
+
+    /**
+     * Assign dispatchers to an invoice (AJAX endpoint).
+     * Accepts dispatcher_ids array — replaces existing assignments.
+     */
+    public function assignDispatchers(Request $request, int $id)
+    {
+        $validated = $request->validate([
+            'dispatcher_ids' => 'nullable|array',
+            'dispatcher_ids.*' => 'integer|exists:employees,id',
+        ]);
+
+        try {
+            $this->invoiceService->assignDispatchers($id, $validated['dispatcher_ids'] ?? []);
+
+            $invoice = SalesInvoice::with('dispatchers')->find($id);
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Dispatchers updated.',
+                'dispatchers' => $invoice->dispatchers->map(fn($d) => [
+                    'id' => $d->id,
+                    'name' => $d->name,
+                    'dispatch_role' => $d->pivot->dispatch_role,
+                ]),
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 400);
+        }
+    }
+
     public function show(int $id)
     {
         $invoice = SalesInvoice::with([
-            'items.product', 'dispatches.product', 'customer', 'branch', 'salesman',
+            'items.product', 'dispatches.product', 'customer', 'branch', 'salesman', 'dispatchers',
             'journalEntry.lines.ledger'
         ])->findOrFail($id);
 

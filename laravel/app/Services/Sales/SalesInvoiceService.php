@@ -4,6 +4,7 @@ namespace App\Services\Sales;
 
 use App\Models\SalesInvoice;
 use App\Models\SalesDraftCart;
+use App\Models\Employee;
 use App\Services\Stock\StockAvailabilityService;
 use App\Services\Stock\StockService;
 use App\Services\Accounting\JournalPostingService;
@@ -26,6 +27,7 @@ use Illuminate\Support\Facades\Log;
  *   8. Post GL: Dr Accounts Receivable / Cr Sales Revenue
  *      (+ Dr Discount / Cr Transport if applicable)
  *   9. Clear the cart
+ *   10. Assign dispatchers (if provided)
  *
  * The invoice is a DRAFT at this point — no stock movement yet.
  * Stock moves on challan issue (Phase 8.3).
@@ -59,6 +61,7 @@ class SalesInvoiceService
      *     credit_limit_override: bool,
      *     override_reason: string|null,
      *     created_by: int,
+     *     dispatcher_ids: int[]|null,
      * }
      * @return SalesInvoice
      * @throws \RuntimeException If cart empty, stock insufficient, credit limit exceeded without override, or GL posting fails.
@@ -229,6 +232,35 @@ class SalesInvoiceService
             // Step 10: Clear the cart.
             $this->cartService->clearCart($data['created_by'] ?? auth()->id(), $customerId);
 
+            // Step 11: Assign dispatchers (if provided).
+            $dispatcherIds = $data['dispatcher_ids'] ?? [];
+            if (!empty($dispatcherIds)) {
+                $syncData = [];
+                foreach ($dispatcherIds as $empId) {
+                    $syncData[(int) $empId] = ['dispatch_role' => 'dispatcher'];
+                }
+                // Validate dispatchers belong to same branch + have dispatcher role.
+                $validIds = Employee::whereIn('id', $dispatcherIds)
+                    ->where('role', 'dispatcher')
+                    ->where('is_active', true)
+                    ->where('branch_id', $branchId)
+                    ->pluck('id')
+                    ->toArray();
+
+                $validSyncData = array_intersect_key($syncData, array_flip($validIds));
+                if (!empty($validSyncData)) {
+                    DB::table('sales_invoice_dispatchers')->insert(
+                        collect($validSyncData)->map(function ($pivot, $empId) use ($invoiceId) {
+                            return [
+                                'sales_invoice_id' => $invoiceId,
+                                'employee_id' => (int) $empId,
+                                'dispatch_role' => $pivot['dispatch_role'],
+                            ];
+                        })->values()->toArray()
+                    );
+                }
+            }
+
             // Audit log for credit limit override.
             if ($isOverride && $creditCheck['exceeds']) {
                 DB::table('user_audit_log')->insert([
@@ -261,7 +293,7 @@ class SalesInvoiceService
             // P2-7: Invalidate pipeline cache (new dispatches were added).
             $this->availabilityService->invalidatePipelineForInvoice($invoiceId);
 
-            return SalesInvoice::with(['items.product', 'customer', 'branch', 'journalEntry.lines.ledger'])
+            return SalesInvoice::with(['items.product', 'customer', 'branch', 'dispatchers', 'journalEntry.lines.ledger'])
                 ->find($invoiceId);
         });
     }
@@ -504,6 +536,29 @@ class SalesInvoiceService
             }
             DB::table('sales_invoice_dispatches')->insert($dispatchRows);
 
+            // Step 5b: Re-assign dispatchers (old were deleted in Step 2).
+            $dispatcherIds = $data['dispatcher_ids'] ?? [];
+            if (!empty($dispatcherIds)) {
+                $validIds = Employee::whereIn('id', $dispatcherIds)
+                    ->where('role', 'dispatcher')
+                    ->where('is_active', true)
+                    ->where('branch_id', $branchId)
+                    ->pluck('id')
+                    ->toArray();
+
+                $dispatcherRows = [];
+                foreach ($validIds as $empId) {
+                    $dispatcherRows[] = [
+                        'sales_invoice_id' => $invoiceId,
+                        'employee_id' => (int) $empId,
+                        'dispatch_role' => 'dispatcher',
+                    ];
+                }
+                if (!empty($dispatcherRows)) {
+                    DB::table('sales_invoice_dispatchers')->insert($dispatcherRows);
+                }
+            }
+
             // Step 6: Post GL FIRST to get new journal_entry_id.
             $newJournalEntryId = $this->postInvoiceGL(
                 $invoiceId, $invoice->invoice_code, $customerId, $branchId,
@@ -593,9 +648,65 @@ class SalesInvoiceService
             // P2-7: Invalidate pipeline cache (dispatches were deleted + re-inserted).
             $this->availabilityService->invalidatePipelineForInvoice($invoiceId);
 
-            return SalesInvoice::with(['items.product', 'customer', 'branch', 'journalEntry.lines.ledger'])
+            return SalesInvoice::with(['items.product', 'customer', 'branch', 'dispatchers', 'journalEntry.lines.ledger'])
                 ->find($invoiceId);
         });
+    }
+
+    /**
+     * Assign dispatchers to an invoice (many-to-many via sales_invoice_dispatchers).
+     *
+     * Validates that all employee_ids belong to the dispatcher role and are
+     * in the same branch as the invoice (defense-in-depth branch isolation).
+     * Uses sync() to replace existing assignments — idempotent.
+     *
+     * @param int $invoiceId
+     * @param array $dispatcherIds  Array of employee IDs to assign
+     * @param string $role          Pivot dispatch_role (default: 'dispatcher')
+     * @return void
+     * @throws \RuntimeException If invoice not found, not editable, or invalid employee IDs.
+     */
+    public function assignDispatchers(int $invoiceId, array $dispatcherIds, string $role = 'dispatcher'): void
+    {
+        $invoice = SalesInvoice::find($invoiceId);
+        if (!$invoice) {
+            throw new \RuntimeException("Invoice {$invoiceId} not found.");
+        }
+
+        // P0-8: Branch isolation — only assign dispatchers from same branch.
+        $branchId = (int) $invoice->branch_id;
+
+        // Deduplicate + normalize.
+        $dispatcherIds = array_unique(array_map('intval', array_filter($dispatcherIds)));
+
+        if (!empty($dispatcherIds)) {
+            // Validate: all employees exist, are active, have dispatcher role, and belong to invoice's branch.
+            $validDispatchers = Employee::whereIn('id', $dispatcherIds)
+                ->where('role', 'dispatcher')
+                ->where('is_active', true)
+                ->where('branch_id', $branchId)
+                ->pluck('id')
+                ->toArray();
+
+            $invalid = array_diff($dispatcherIds, $validDispatchers);
+            if (!empty($invalid)) {
+                Log::warning('SalesInvoiceService::assignDispatchers — invalid dispatcher IDs ignored', [
+                    'invoice_id' => $invoiceId,
+                    'invalid_ids' => $invalid,
+                    'branch_id' => $branchId,
+                ]);
+            }
+
+            $dispatcherIds = $validDispatchers;
+        }
+
+        // Build sync data with pivot attributes.
+        $syncData = [];
+        foreach ($dispatcherIds as $empId) {
+            $syncData[$empId] = ['dispatch_role' => $role];
+        }
+
+        $invoice->dispatchers()->sync($syncData);
     }
 
     /**

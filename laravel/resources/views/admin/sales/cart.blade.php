@@ -371,6 +371,7 @@
         finalize:     "{{ route('admin.sales.finalize') }}",
         creditCheck:  "{{ route('admin.sales.credit-check') }}",
         invoiceShow:  "{{ route('admin.sales-invoices.index') }}",
+        branchDispatchers: "{{ route('admin.sales-invoices.branch-dispatchers') }}",
     };
 
     // -------- State --------
@@ -1009,6 +1010,11 @@
                     '<div class="mb-2"><label class="form-label small fw-semibold">Sales Person (optional)</label>' +
                     '<input type="text" id="finSalesPerson" class="form-control form-control-sm" maxlength="100" placeholder="Free-text name"></div>' +
 
+                    '<div class="mb-2"><label class="form-label small fw-semibold">Dispatchers</label>' +
+                    '<select id="finDispatchers" class="form-select form-select-sm select2" multiple data-placeholder="Select dispatchers…">' +
+                    '<option value="" disabled>Loading…</option></select>' +
+                    '<div class="small text-muted mt-1">Assign delivery personnel for this invoice.</div></div>' +
+
                     '<div class="mb-2"><label class="form-label small fw-semibold">Notes (optional)</label>' +
                     '<textarea id="finNotes" class="form-control form-control-sm" rows="2" maxlength="1000"></textarea></div>' +
 
@@ -1057,6 +1063,33 @@
                             $popup.find('#finOverrideReason').val('');
                         }
                     });
+
+                    // Load dispatchers for current branch via AJAX.
+                    var $sel = $popup.find('#finDispatchers');
+                    $sel.empty().append('<option value="" disabled>Loading…</option>');
+                    $.get(ENDPOINTS.branchDispatchers, { branch_id: BRANCH_ID }, function (data) {
+                        $sel.empty();
+                        if (data && data.length) {
+                            data.forEach(function (emp) {
+                                $sel.append(
+                                    '<option value="' + emp.id + '">' +
+                                    escHtml(emp.name) + (emp.employee_code ? ' (' + escHtml(emp.employee_code) + ')' : '') +
+                                    '</option>'
+                                );
+                            });
+                        } else {
+                            $sel.append('<option value="" disabled>No dispatchers available</option>');
+                        }
+                        // Initialize Select2 on the dynamic select.
+                        $sel.select2({
+                            width: '100%',
+                            placeholder: 'Select dispatchers…',
+                            allowClear: true,
+                            dropdownParent: $popup,
+                        });
+                    }).fail(function () {
+                        $sel.empty().append('<option value="" disabled>Failed to load dispatchers</option>');
+                    });
                 },
                 preConfirm: function () {
                     var $popup = $(Swal.getPopup());
@@ -1068,6 +1101,7 @@
                     var isSoftHold = $popup.find('#finSoftHold').is(':checked');
                     var override = $popup.find('#finOverride').is(':checked');
                     var overrideReason = $popup.find('#finOverrideReason').val().trim();
+                    var dispatcherIds = $popup.find('#finDispatchers').val() || [];
 
                     if (!invoiceDate) {
                         Swal.showValidationMessage('Invoice date is required.');
@@ -1124,7 +1158,8 @@
                             is_soft_hold: isSoftHold,
                             credit_limit_override: override,
                             override_reason: override ? overrideReason : '',
-                            idempotency_token: idempotencyToken
+                            idempotency_token: idempotencyToken,
+                            dispatcher_ids: dispatcherIds
                         }).then(function (resp) {
                             return resp;
                         }).catch(function (xhr) {

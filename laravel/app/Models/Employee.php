@@ -63,4 +63,21 @@ class Employee extends Model
     {
         return $query->where('is_active', true)->whereNull('deleted_at');
     }
+
+    /**
+     * Scope: employees with dispatcher role.
+     */
+    public function scopeDispatchers(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
+    {
+        return $query->where('role', 'dispatcher')->active();
+    }
+
+    /**
+     * Invoices this employee is assigned to as a dispatcher.
+     */
+    public function dispatchedInvoices(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(SalesInvoice::class, 'sales_invoice_dispatchers', 'employee_id', 'sales_invoice_id')
+            ->withPivot('dispatch_role');
+    }
 }

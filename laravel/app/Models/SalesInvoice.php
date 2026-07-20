@@ -133,6 +133,16 @@ class SalesInvoice extends Model
         return $this->belongsTo(Employee::class, 'salesman_id');
     }
 
+    /**
+     * Human dispatchers assigned to this invoice (many-to-many via sales_invoice_dispatchers).
+     * NOT to be confused with dispatches() which tracks the product pipeline.
+     */
+    public function dispatchers(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(Employee::class, 'sales_invoice_dispatchers', 'sales_invoice_id', 'employee_id')
+            ->withPivot('dispatch_role');
+    }
+
     public function journalEntry(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'journal_entry_id');

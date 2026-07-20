@@ -157,6 +157,18 @@
                             @endif
                         </dd>
 
+                        @if ($invoice->dispatchers && $invoice->dispatchers->count() > 0)
+                        <dt class="col-sm-3 text-muted">Dispatchers</dt>
+                        <dd class="col-sm-9">
+                            @foreach ($invoice->dispatchers as $idx => $dispatcher)
+                                @if ($idx > 0)<span class="text-muted">, </span>@endif
+                                <span class="badge bg-info-subtle text-info">
+                                    <i class="fas fa-truck me-1"></i>{{ $dispatcher->name }}
+                                </span>
+                            @endforeach
+                        </dd>
+                        @endif
+
                         <dt class="col-sm-3 text-muted">Payment mode</dt>
                         <dd class="col-sm-9">
                             <span class="badge bg-light text-dark">{{ ucfirst($invoice->payment_mode ?: '—') }}</span>

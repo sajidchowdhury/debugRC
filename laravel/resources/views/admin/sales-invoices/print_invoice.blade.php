@@ -55,6 +55,10 @@
                     <div class="meta-label">Sales Person</div>
                     <div class="meta-value">{{ $invoice->sales_person }}</div>
                 @endif
+                @if ($invoice->dispatchers && $invoice->dispatchers->count() > 0)
+                    <div class="meta-label mt-1">Dispatchers</div>
+                    <div class="meta-value">{{ $invoice->dispatchers->pluck('name')->join(', ') }}</div>
+                @endif
             </div>
         </div>
 

@@ -144,6 +144,19 @@
                             <label class="form-label small fw-semibold">Sales Person (optional)</label>
                             <input type="text" name="sales_person" value="{{ old('sales_person', $invoice->sales_person ?? '') }}" class="form-control form-control-sm" maxlength="100">
                         </div>
+                        @if (!empty($dispatchers) && $dispatchers->count() > 0)
+                        <div class="mb-2">
+                            <label class="form-label small fw-semibold">Dispatchers</label>
+                            <select name="dispatcher_ids[]" class="form-select form-select-sm select2" multiple data-placeholder="Select dispatchers…">
+                                @foreach ($dispatchers as $d)
+                                    <option value="{{ $d->id }}" {{ in_array($d->id, $assignedDispatcherIds ?? []) ? 'selected' : '' }}>
+                                        {{ $d->name }} @if ($d->employee_code) ({{ $d->employee_code }}) @endif
+                                    </option>
+                                @endforeach
+                            </select>
+                            <div class="small text-muted mt-1">Assign delivery personnel for this invoice.</div>
+                        </div>
+                        @endif
                         <div class="row g-2 mb-2">
                             <div class="col-6">
                                 <label class="form-label small fw-semibold">Discount (Tk)</label>
