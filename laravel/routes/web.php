@@ -36,6 +36,7 @@ use App\Http\Controllers\Admin\SalesReturnController;
 use App\Http\Controllers\Admin\SalesGuideController;
 use App\Http\Controllers\Admin\GoLiveChecklistController;
 use App\Http\Controllers\Admin\AccountingPeriodController;
+use App\Http\Controllers\SseController;
 use App\Http\Controllers\Admin\NotificationController;
 use App\Http\Controllers\Admin\SystemPolicyController;
 use App\Http\Controllers\Admin\ArchiveController;
@@ -681,6 +682,15 @@ Route::middleware('auth')->group(function () {
     Route::get('admin/system-health', [SystemHealthController::class, 'index'])
         ->name('admin.system-health.index')
         ->middleware('role:admin');
+
+    // ============================================================
+    // Phase 1E (Task 31): SSE (Server-Sent Events) for LISTEN/NOTIFY
+    // Real-time event streaming from PostgreSQL → Redis → Browser
+    // ============================================================
+    Route::prefix('sse')->name('sse.')->group(function () {
+        Route::get('events', [SseController::class, 'events'])->name('events');
+        Route::get('status', [SseController::class, 'status'])->name('status');
+    });
 });
 
 // ===================== HEALTH CHECK =====================

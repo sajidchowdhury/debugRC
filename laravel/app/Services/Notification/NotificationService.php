@@ -5,6 +5,7 @@ namespace App\Services\Notification;
 use App\Models\NotificationRule;
 use App\Models\User;
 use App\Notifications\ERPNotification;
+use App\Services\Notification\ListenNotifyService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -26,6 +27,10 @@ use Illuminate\Support\Facades\Log;
  */
 class NotificationService
 {
+    public function __construct(
+        private ?ListenNotifyService $listenNotify = null
+    ) {}
+
     /**
      * Event metadata: icon, color, and title template per event.
      */
@@ -107,6 +112,38 @@ class NotificationService
                 'recipients' => $recipients->count(),
                 'channels' => $channels,
             ]);
+
+            // Phase 1E (Task 31): Emit pg_notify for real-time LISTEN/NOTIFY.
+            // This allows the ListenNotifyWorker to pick up application-level
+            // notification events and push them to SSE clients immediately,
+            // bypassing the 30-second AJAX polling delay.
+            if ($this->listenNotify) {
+                try {
+                    $this->listenNotify->emitNotify('rcerp_notification_dispatched', [
+                        'table' => 'notifications',
+                        'action' => 'INSERT',
+                        'id' => 0, // No specific row ID
+                        'branch_id' => $recipients->first()?->employee?->branch_id,
+                        'changes' => [
+                            'event' => $event,
+                            'rule_id' => $rule->id,
+                            'rule_name' => $rule->name,
+                            'recipient_count' => $recipients->count(),
+                            'title' => $title,
+                            'body' => $body,
+                            'reference_type' => $referenceType,
+                            'reference_id' => $referenceId,
+                            'icon' => $meta['icon'],
+                            'color' => $meta['color'],
+                        ],
+                    ]);
+                } catch (\Throwable $e) {
+                    Log::warning('NotificationService: pg_notify emission failed', [
+                        'event' => $event,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
         }
 
         return $sentCount;

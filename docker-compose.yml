@@ -183,6 +183,114 @@ services:
     working_dir: /var/www/laravel
 
   # ---------------------------------------------------------------------------
+  # Queue Worker — Redis-based Laravel queue processor
+  # ---------------------------------------------------------------------------
+  # Processes queued jobs (notifications, CSV exports, etc.) from the Redis
+  # queue. Runs as a separate container to avoid blocking PHP-FPM requests.
+  # Uses the same Docker image as rcerp_app but overrides the command.
+  #
+  # Restart policy: unless-stopped (auto-restarts on failure).
+  # Health check: checks if the PHP process is running.
+  # ---------------------------------------------------------------------------
+  rcerp_queue_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rcerp_queue_worker
+    restart: unless-stopped
+    depends_on:
+      rcerp_postgres:
+        condition: service_healthy
+      rcerp_redis:
+        condition: service_healthy
+    environment:
+      # Same Laravel config as rcerp_app
+      APP_NAME: "Remote Center ERP"
+      APP_ENV: local
+      APP_KEY: base64:2cn8GO0r6OSab790IzGrvPj+siQVQDNsjsWbkzNxRC4=
+      APP_DEBUG: "true"
+      APP_TIMEZONE: Asia/Dhaka
+      APP_URL: http://localhost:8080
+
+      DB_CONNECTION: pgsql
+      DB_HOST: rcerp_postgres
+      DB_PORT: "5432"
+      DB_DATABASE: ${POSTGRES_DB:-rcerp}
+      DB_USERNAME: ${POSTGRES_USER:-rcerp_app}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-rcerp_secret}
+
+      REDIS_CLIENT: predis
+      REDIS_HOST: rcerp_redis
+      REDIS_PASSWORD: null
+      REDIS_PORT: "6379"
+
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+    command: php artisan queue:work --sleep=3 --tries=3 --max-time=3600
+    volumes:
+      - ./laravel:/var/www/laravel:delegated
+      - app_vendor:/var/www/laravel/vendor
+    networks:
+      - rcerp_network
+    working_dir: /var/www/laravel
+
+  # ---------------------------------------------------------------------------
+  # LISTEN/NOTIFY Worker — PostgreSQL real-time event bridge
+  # ---------------------------------------------------------------------------
+  # Phase 1E (Task 31): Long-running artisan command that:
+  #   1. Opens a dedicated PostgreSQL connection
+  #   2. LISTENs on rcerp_* channels for pg_notify() events
+  #   3. Publishes received events to Redis Pub/Sub
+  #   4. Forwards events to NotificationService for rule-based dispatch
+  #
+  # The SSE Controller (/sse/events) subscribes to Redis Pub/Sub and
+  # streams events to browser clients via Server-Sent Events.
+  #
+  # Architecture: DB Trigger → pg_notify → This Worker → Redis Pub/Sub → SSE → Browser
+  # ---------------------------------------------------------------------------
+  rcerp_listen_notify:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rcerp_listen_notify
+    restart: unless-stopped
+    depends_on:
+      rcerp_postgres:
+        condition: service_healthy
+      rcerp_redis:
+        condition: service_healthy
+    environment:
+      # Same Laravel config as rcerp_app
+      APP_NAME: "Remote Center ERP"
+      APP_ENV: local
+      APP_KEY: base64:2cn8GO0r6OSab790IzGrvPj+siQVQDNsjsWbkzNxRC4=
+      APP_DEBUG: "true"
+      APP_TIMEZONE: Asia/Dhaka
+      APP_URL: http://localhost:8080
+
+      DB_CONNECTION: pgsql
+      DB_HOST: rcerp_postgres
+      DB_PORT: "5432"
+      DB_DATABASE: ${POSTGRES_DB:-rcerp}
+      DB_USERNAME: ${POSTGRES_USER:-rcerp_app}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-rcerp_secret}
+
+      REDIS_CLIENT: predis
+      REDIS_HOST: rcerp_redis
+      REDIS_PASSWORD: null
+      REDIS_PORT: "6379"
+
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+    command: php artisan listen-notify:worker
+    volumes:
+      - ./laravel:/var/www/laravel:delegated
+      - app_vendor:/var/www/laravel/vendor
+    networks:
+      - rcerp_network
+    working_dir: /var/www/laravel
+
+  # ---------------------------------------------------------------------------
   # Nginx — Reverse Proxy (serves at http://localhost:8080)
   # ---------------------------------------------------------------------------
   # Depends on rcerp_app with condition: service_started (not service_healthy)
