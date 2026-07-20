@@ -1,0 +1,822 @@
+     1→<?php
+     2→// app/services/Accounting/ReconciliationService.php — Phase 2/5 GL vs sub-ledger reconciliation
+     3→
+     4→require_once __DIR__ . '/../../helpers/Helper.php';
+     5→
+     6→class ReconciliationService extends Helper
+     7→{
+     8→    private float $tolerance;
+     9→    private const PARTY_MISMATCH_LIMIT = 20;
+    10→
+    11→    /** @var array<string, string> GL nature → normal balance for sub-ledger comparison */
+    12→    private const NATURE_NORMAL = [
+    13→        'customer_receivable' => 'debit',
+    14→        'supplier_payable'    => 'credit',
+    15→        'employee_payable'    => 'debit',
+    16→        'inventory'           => 'debit',
+    17→        'cogs'                => 'debit',
+    18→        'cash_bank'           => 'debit',
+    19→    ];
+    20→
+    21→    public function __construct(?Database $db = null, ?float $tolerance = null)
+    22→    {
+    23→        parent::__construct($db);
+    24→        $this->tolerance = $tolerance ?? $this->defaultTolerance();
+    25→    }
+    26→
+    27→    private function defaultTolerance(): float
+    28→    {
+    29→        if (defined('GL_RECONCILIATION_TOLERANCE')) {
+    30→            return max(0.0001, (float)GL_RECONCILIATION_TOLERANCE);
+    31→        }
+    32→        return 0.02;
+    33→    }
+    34→
+    35→    /**
+    36→     * Phase 2 AR snapshot (backward compatible).
+    37→     */
+    38→    public function getSalesArReport(?int $branchId = null): array
+    39→    {
+    40→        $full = $this->runFullReport($branchId);
+    41→        $ar = $full['ar'];
+    42→
+    43→        return [
+    44→            'branch_id'               => $ar['branch_id'],
+    45→            'branch_name'             => $ar['branch_name'],
+    46→            'customer_ledger_net'     => $ar['customer_ledger_net'],
+    47→            'gl_ar_net'               => $ar['gl_ar_net'],
+    48→            'ar_difference'           => $ar['difference'],
+    49→            'ar_within_tolerance'     => $ar['within_tolerance'],
+    50→            'ledger_mismatch_count'   => $ar['ledger_mismatch_count'],
+    51→            'ledger_mismatches'       => $ar['ledger_mismatches'],
+    52→            'null_branch_ledger_rows' => $ar['null_branch_ledger_rows'],
+    53→            'ar_ledger_ids'           => $ar['ar_ledger_ids'],
+    54→            'tolerance'               => $this->tolerance,
+    55→            'ran_at'                  => $full['ran_at'],
+    56→        ];
+    57→    }
+    58→
+    59→    /**
+    60→     * Full reconciliation: AR, AP, employee, cash/bank, inventory, COGS tie-out.
+    61→     */
+    62→    public function runFullReport(?int $branchId = null, ?string $fromDate = null, ?string $toDate = null): array
+    63→    {
+    64→        $branchId = $branchId ?? self::sessionBranchId();
+    65→        $branchFilter = ($branchId > 0) ? $branchId : null;
+    66→        $fromDate = $fromDate ?: date('Y-m-01');
+    67→        $toDate = $toDate ?: date('Y-m-d');
+    68→
+    69→        $ar = $this->buildArSection($branchFilter);
+    70→        $ap = $this->buildApSection($branchFilter);
+    71→        $employee = $this->buildEmployeeSection($branchFilter);
+    72→        $cashBank = $this->buildCashBankSection($branchFilter);
+    73→        $inventory = $this->buildInventorySection($branchFilter);
+    74→        $cogs = $this->buildCogsSection($branchFilter, $fromDate, $toDate);
+    75→
+    76→        $issues = [];
+    77→        if (!$ar['within_tolerance']) {
+    78→            $issues[] = 'AR sub-ledger vs GL difference ' . number_format($ar['difference'], 2);
+    79→        }
+    80→        if ($ar['ledger_mismatch_count'] > 0) {
+    81→            $issues[] = $ar['ledger_mismatch_count'] . ' customer ledger balance mismatch(es)';
+    82→        }
+    83→        if (!$ap['within_tolerance']) {
+    84→            $issues[] = 'AP sub-ledger vs GL difference ' . number_format($ap['difference'], 2);
+    85→        }
+    86→        if ($ap['ledger_mismatch_count'] > 0) {
+    87→            $issues[] = $ap['ledger_mismatch_count'] . ' supplier ledger balance mismatch(es)';
+    88→        }
+    89→        if (!$employee['within_tolerance']) {
+    90→            $issues[] = 'Employee sub-ledger vs GL difference ' . number_format($employee['difference'], 2);
+    91→        }
+    92→        if ($employee['ledger_mismatch_count'] > 0) {
+    93→            $issues[] = $employee['ledger_mismatch_count'] . ' employee ledger balance mismatch(es)';
+    94→        }
+    95→        if (!$cashBank['within_tolerance']) {
+    96→            $issues[] = 'Cash/bank register vs GL difference ' . number_format($cashBank['difference'], 2);
+    97→        }
+    98→        if ($cashBank['mapping_mismatch_count'] > 0) {
+    99→            $issues[] = $cashBank['mapping_mismatch_count'] . ' bank GL mapping mismatch(es)';
+   100→        }
+   101→        if (!$inventory['within_tolerance']) {
+   102→            $issues[] = 'Inventory GL vs stock valuation difference ' . number_format($inventory['difference'], 2);
+   103→        }
+   104→        if (!$cogs['within_tolerance']) {
+   105→            $issues[] = 'COGS GL vs stock OUT difference ' . number_format($cogs['difference'], 2) . ' (period)';
+   106→        }
+   107→
+   108→        return [
+   109→            'branch_id'   => $branchFilter,
+   110→            'branch_name' => $this->resolveBranchName($branchFilter),
+   111→            'from_date'   => $fromDate,
+   112→            'to_date'     => $toDate,
+   113→            'tolerance'   => $this->tolerance,
+   114→            'ran_at'      => date('Y-m-d H:i:s'),
+   115→            'ar'          => $ar,
+   116→            'ap'          => $ap,
+   117→            'employee'    => $employee,
+   118→            'cash_bank'   => $cashBank,
+   119→            'inventory'   => $inventory,
+   120→            'cogs'        => $cogs,
+   121→            'has_issues'  => $issues !== [],
+   122→            'issues'      => $issues,
+   123→        ];
+   124→    }
+   125→
+   126→    private function buildArSection(?int $branchId): array
+   127→    {
+   128→        $customerNet = $this->sumCustomerLedgerNetBalances($branchId);
+   129→        $glArNet = $this->sumGlArControlBalance($branchId);
+   130→        $diff = round($customerNet - $glArNet, 2);
+   131→        $mismatches = $this->getCustomerLedgerBalanceMismatches(
+   132→            $this->tolerance,
+   133→            $branchId,
+   134→            self::PARTY_MISMATCH_LIMIT
+   135→        );
+   136→
+   137→        return [
+   138→            'branch_id'               => $branchId,
+   139→            'branch_name'             => $this->resolveBranchName($branchId),
+   140→            'customer_ledger_net'     => round($customerNet, 2),
+   141→            'gl_ar_net'               => round($glArNet, 2),
+   142→            'difference'              => $diff,
+   143→            'within_tolerance'        => abs($diff) <= $this->tolerance,
+   144→            'ledger_mismatch_count'   => count($mismatches),
+   145→            'ledger_mismatches'       => $mismatches,
+   146→            'null_branch_ledger_rows' => $this->countNullBranchLedgerRows($branchId),
+   147→            'ar_ledger_ids'           => $this->getLedgerIdsByNature('customer_receivable'),
+   148→        ];
+   149→    }
+   150→
+   151→    private function buildApSection(?int $branchId): array
+   152→    {
+   153→        $supplierNet = $this->sumSupplierLedgerNetBalances($branchId);
+   154→        $glApNet = $this->sumGlControlByNature('supplier_payable', $branchId);
+   155→        $diff = round($supplierNet - $glApNet, 2);
+   156→        $mismatches = $this->getSupplierLedgerBalanceMismatches(
+   157→            $this->tolerance,
+   158→            $branchId,
+   159→            self::PARTY_MISMATCH_LIMIT
+   160→        );
+   161→
+   162→        return [
+   163→            'branch_id'             => $branchId,
+   164→            'supplier_ledger_net'   => round($supplierNet, 2),
+   165→            'gl_ap_net'             => round($glApNet, 2),
+   166→            'difference'            => $diff,
+   167→            'within_tolerance'      => abs($diff) <= $this->tolerance,
+   168→            'ledger_mismatch_count' => count($mismatches),
+   169→            'ledger_mismatches'     => $mismatches,
+   170→            'ap_ledger_ids'         => $this->getLedgerIdsByNature('supplier_payable'),
+   171→        ];
+   172→    }
+   173→
+   174→    private function buildEmployeeSection(?int $branchId): array
+   175→    {
+   176→        $employeeNet = $this->sumEmployeeLedgerNetBalances($branchId);
+   177→        $glEmployeeNet = $this->sumGlControlByNature('employee_payable', $branchId);
+   178→        $diff = round($employeeNet - $glEmployeeNet, 2);
+   179→        $mismatches = $this->getEmployeeLedgerBalanceMismatches(
+   180→            $this->tolerance,
+   181→            $branchId,
+   182→            self::PARTY_MISMATCH_LIMIT
+   183→        );
+   184→
+   185→        return [
+   186→            'branch_id'             => $branchId,
+   187→            'employee_ledger_net'   => round($employeeNet, 2),
+   188→            'gl_employee_net'       => round($glEmployeeNet, 2),
+   189→            'difference'            => $diff,
+   190→            'within_tolerance'      => abs($diff) <= $this->tolerance,
+   191→            'ledger_mismatch_count' => count($mismatches),
+   192→            'ledger_mismatches'     => $mismatches,
+   193→            'employee_ledger_ids'   => $this->getLedgerIdsByNature('employee_payable'),
+   194→            'note'                  => 'Positive sub-ledger balance = employee owes company (Dr employee payable).',
+   195→        ];
+   196→    }
+   197→
+   198→    private function buildCashBankSection(?int $branchId): array
+   199→    {
+   200→        $banksTotal = $this->sumActiveBankBalances();
+   201→        $glCashNet = $this->sumGlControlByNature('cash_bank', $branchId);
+   202→        $branchScoped = $branchId !== null && $branchId > 0;
+   203→        $mappingMismatches = $this->getBankMappingMismatches(self::PARTY_MISMATCH_LIMIT);
+   204→
+   205→        $diff = $branchScoped ? 0.0 : round($banksTotal - $glCashNet, 2);
+   206→        $withinTolerance = $branchScoped
+   207→            ? ($mappingMismatches === [])
+   208→            : (abs($diff) <= $this->tolerance && $mappingMismatches === []);
+   209→
+   210→        return [
+   211→            'branch_id'               => $branchId,
+   212→            'banks_total_balance'     => round($banksTotal, 2),
+   213→            'gl_cash_bank_net'        => round($glCashNet, 2),
+   214→            'difference'              => $diff,
+   215→            'within_tolerance'        => $withinTolerance,
+   216→            'mapping_mismatch_count'    => count($mappingMismatches),
+   217→            'mapping_mismatches'      => $mappingMismatches,
+   218→            'cash_bank_ledger_ids'    => $this->getLedgerIdsByNature('cash_bank'),
+   219→            'branch_scoped_note'      => $branchScoped
+   220→                ? 'Bank register is company-wide; GL cash_bank is branch-scoped — compare totals on combined (all branches) report.'
+   221→                : null,
+   222→        ];
+   223→    }
+   224→
+   225→    private function buildInventorySection(?int $branchId): array
+   226→    {
+   227→        $stockValue = $this->sumWarehouseStockValue($branchId);
+   228→        $glInventory = $this->sumGlControlByNature('inventory', $branchId);
+   229→        $diff = round($stockValue - $glInventory, 2);
+   230→        $ledgerIds = $this->getLedgerIdsByNature('inventory');
+   231→
+   232→        return [
+   233→            'warehouse_stock_value' => round($stockValue, 2),
+   234→            'gl_inventory_net'      => round($glInventory, 2),
+   235→            'difference'            => $diff,
+   236→            'within_tolerance'      => abs($diff) <= $this->tolerance,
+   237→            'inventory_ledger_ids'  => $ledgerIds,
+   238→            'note'                  => 'GL inventory is cumulative balance; stock is current on-hand at avg cost.',
+   239→        ];
+   240→    }
+   241→
+   242→    private function buildCogsSection(?int $branchId, string $fromDate, string $toDate): array
+   243→    {
+   244→        $stockCogs = $this->sumChallanStockCogs($branchId, $fromDate, $toDate);
+   245→        $glCogs = $this->sumChallanGlCogs($branchId, $fromDate, $toDate);
+   246→        $diff = round($stockCogs - $glCogs, 2);
+   247→
+   248→        return [
+   249→            'from_date'          => $fromDate,
+   250→            'to_date'            => $toDate,
+   251→            'stock_cogs_amount'  => round($stockCogs, 2),
+   252→            'gl_cogs_amount'     => round($glCogs, 2),
+   253→            'difference'         => $diff,
+   254→            'within_tolerance'   => abs($diff) <= $this->tolerance,
+   255→            'timing_note'        => 'Stock uses challan_date; GL uses journal entry_date. Small drift is normal across month-end.',
+   256→        ];
+   257→    }
+   258→
+   259→    private function sumWarehouseStockValue(?int $branchId): float
+   260→    {
+   261→        $branchSql = '';
+   262→        if ($branchId !== null && $branchId > 0) {
+   263→            $branchSql = ' AND w.branch_id = ' . (int)$branchId;
+   264→        }
+   265→
+   266→        $this->db->query("
+   267→            SELECT COALESCE(SUM(ws.qty * ws.avg_cost), 0) AS val
+   268→            FROM warehouse_stock ws
+   269→            INNER JOIN warehouses w ON w.id = ws.warehouse_id
+   270→            WHERE w.is_active = 1 {$branchSql}
+   271→        ");
+   272→
+   273→        return (float)($this->db->single()['val'] ?? 0);
+   274→    }
+   275→
+   276→    private function sumGlControlByNature(string $nature, ?int $branchId): float
+   277→    {
+   278→        $ledgerIds = $this->getLedgerIdsByNature($nature);
+   279→        if ($ledgerIds === []) {
+   280→            return 0.0;
+   281→        }
+   282→
+   283→        $idList = implode(',', array_map('intval', $ledgerIds));
+   284→        $branchSql = '';
+   285→        if ($branchId !== null && $branchId > 0) {
+   286→            $branchSql = ' AND je.branch_id = ' . (int)$branchId;
+   287→        }
+   288→
+   289→        $this->db->query("
+   290→            SELECT
+   291→                COALESCE(SUM(jl.debit), 0) AS total_debit,
+   292→                COALESCE(SUM(jl.credit), 0) AS total_credit
+   293→            FROM journal_lines jl
+   294→            INNER JOIN journal_entries je ON je.id = jl.journal_entry_id
+   295→            WHERE jl.ledger_id IN ({$idList})
+   296→              AND COALESCE(je.is_reversed, 0) = 0
+   297→              {$branchSql}
+   298→        ");
+   299→        $row = $this->db->single() ?: [];
+   300→        $debit = (float)($row['total_debit'] ?? 0);
+   301→        $credit = (float)($row['total_credit'] ?? 0);
+   302→        $normal = self::NATURE_NORMAL[$nature] ?? 'debit';
+   303→
+   304→        return $normal === 'credit' ? ($credit - $debit) : ($debit - $credit);
+   305→    }
+   306→
+   307→    /** @deprecated use sumGlControlByNature */
+   308→    private function sumGlLedgerNetByNature(string $nature, ?int $branchId): float
+   309→    {
+   310→        return $this->sumGlControlByNature($nature, $branchId);
+   311→    }
+   312→
+   313→    private function sumChallanStockCogs(?int $branchId, string $fromDate, string $toDate): float
+   314→    {
+   315→        $branchSql = '';
+   316→        if ($branchId !== null && $branchId > 0) {
+   317→            $branchSql = ' AND si.branch_id = ' . (int)$branchId;
+   318→        }
+   319→
+   320→        $this->db->query("
+   321→            SELECT COALESCE(SUM(ABS(st.qty) * st.rate), 0) AS amt
+   322→            FROM stock_transactions st
+   323→            INNER JOIN sales_challans sc ON st.reference_type = 'sales_challan'
+   324→                AND st.reference_id = sc.id
+   325→            INNER JOIN sales_invoices si ON si.id = sc.sales_invoice_id
+   326→            WHERE st.qty < -0.0001
+   327→              AND COALESCE(sc.is_reversed, 0) = 0
+   328→              AND sc.challan_date BETWEEN :from_d AND :to_d
+   329→              {$branchSql}
+   330→        ");
+   331→        $this->db->bind(':from_d', $fromDate);
+   332→        $this->db->bind(':to_d', $toDate);
+   333→
+   334→        return (float)($this->db->single()['amt'] ?? 0);
+   335→    }
+   336→
+   337→    private function sumChallanGlCogs(?int $branchId, string $fromDate, string $toDate): float
+   338→    {
+   339→        $cogsIds = $this->getLedgerIdsByNature('cogs');
+   340→        if ($cogsIds === []) {
+   341→            return 0.0;
+   342→        }
+   343→
+   344→        $idList = implode(',', array_map('intval', $cogsIds));
+   345→        $branchSql = '';
+   346→        if ($branchId !== null && $branchId > 0) {
+   347→            $branchSql = ' AND je.branch_id = ' . (int)$branchId;
+   348→        }
+   349→
+   350→        $this->db->query("
+   351→            SELECT COALESCE(SUM(jl.debit), 0) AS cogs_debit
+   352→            FROM journal_lines jl
+   353→            INNER JOIN journal_entries je ON je.id = jl.journal_entry_id
+   354→            WHERE jl.ledger_id IN ({$idList})
+   355→              AND je.reference_type = 'sales_challan'
+   356→              AND COALESCE(je.is_reversed, 0) = 0
+   357→              AND je.entry_date BETWEEN :from_d AND :to_d
+   358→              {$branchSql}
+   359→        ");
+   360→        $this->db->bind(':from_d', $fromDate);
+   361→        $this->db->bind(':to_d', $toDate);
+   362→
+   363→        return (float)($this->db->single()['cogs_debit'] ?? 0);
+   364→    }
+   365→
+   366→    private function resolveBranchName(?int $branchId): string
+   367→    {
+   368→        if ($branchId === null || $branchId <= 0) {
+   369→            return 'All branches';
+   370→        }
+   371→
+   372→        $this->db->query('SELECT branch_name FROM branches WHERE id = :id LIMIT 1');
+   373→        $this->db->bind(':id', $branchId);
+   374→        $row = $this->db->single();
+   375→
+   376→        return $row['branch_name'] ?? ('Branch #' . $branchId);
+   377→    }
+   378→
+   379→    private function sumCustomerLedgerNetBalances(?int $branchId): float
+   380→    {
+   381→        $branchSql = '';
+   382→        if ($branchId !== null && $branchId > 0) {
+   383→            $branchSql = ' AND (cl.branch_id = ' . (int)$branchId . ' OR cl.branch_id IS NULL)';
+   384→        }
+   385→
+   386→        $this->db->query("
+   387→            SELECT COALESCE(SUM(lb.last_balance), 0) AS total
+   388→            FROM (
+   389→                SELECT cl1.customer_id, cl1.running_balance AS last_balance
+   390→                FROM customer_ledger cl1
+   391→                INNER JOIN (
+   392→                    SELECT customer_id, MAX(id) AS max_id
+   393→                    FROM customer_ledger cl
+   394→                    WHERE COALESCE(cl.is_reversed, 0) = 0 {$branchSql}
+   395→                    GROUP BY customer_id
+   396→                ) latest ON cl1.id = latest.max_id
+   397→                WHERE COALESCE(cl1.is_reversed, 0) = 0
+   398→            ) lb
+   399→        ");
+   400→
+   401→        return (float)($this->db->single()['total'] ?? 0);
+   402→    }
+   403→
+   404→    private function sumSupplierLedgerNetBalances(?int $branchId): float
+   405→    {
+   406→        $branchSql = '';
+   407→        if ($branchId !== null && $branchId > 0) {
+   408→            $branchSql = ' AND (sl.branch_id = ' . (int)$branchId . ' OR sl.branch_id IS NULL)';
+   409→        }
+   410→
+   411→        $this->db->query("
+   412→            SELECT COALESCE(SUM(lb.last_balance), 0) AS total
+   413→            FROM (
+   414→                SELECT sl1.supplier_id, sl1.running_balance AS last_balance
+   415→                FROM supplier_ledger sl1
+   416→                INNER JOIN (
+   417→                    SELECT supplier_id, MAX(id) AS max_id
+   418→                    FROM supplier_ledger sl
+   419→                    WHERE COALESCE(sl.is_reversed, 0) = 0 {$branchSql}
+   420→                    GROUP BY supplier_id
+   421→                ) latest ON sl1.id = latest.max_id
+   422→                WHERE COALESCE(sl1.is_reversed, 0) = 0
+   423→            ) lb
+   424→        ");
+   425→
+   426→        return (float)($this->db->single()['total'] ?? 0);
+   427→    }
+   428→
+   429→    private function sumEmployeeLedgerNetBalances(?int $branchId): float
+   430→    {
+   431→        $branchJoin = '';
+   432→        if ($branchId !== null && $branchId > 0) {
+   433→            $branchJoin = ' INNER JOIN employees e ON e.id = lb.employee_id AND e.branch_id = ' . (int)$branchId;
+   434→        }
+   435→
+   436→        $this->db->query("
+   437→            SELECT COALESCE(SUM(lb.last_balance), 0) AS total
+   438→            FROM (
+   439→                SELECT el1.employee_id, el1.running_balance AS last_balance
+   440→                FROM employee_ledger el1
+   441→                INNER JOIN (
+   442→                    SELECT employee_id, MAX(id) AS max_id
+   443→                    FROM employee_ledger
+   444→                    WHERE COALESCE(is_reversed, 0) = 0
+   445→                    GROUP BY employee_id
+   446→                ) latest ON el1.id = latest.max_id
+   447→                WHERE COALESCE(el1.is_reversed, 0) = 0
+   448→            ) lb
+   449→            {$branchJoin}
+   450→        ");
+   451→
+   452→        return (float)($this->db->single()['total'] ?? 0);
+   453→    }
+   454→
+   455→    private function sumActiveBankBalances(): float
+   456→    {
+   457→        $this->db->query('
+   458→            SELECT COALESCE(SUM(COALESCE(balance, 0)), 0) AS total
+   459→            FROM banks
+   460→            WHERE COALESCE(is_active, 1) = 1
+   461→        ');
+   462→
+   463→        return (float)($this->db->single()['total'] ?? 0);
+   464→    }
+   465→
+   466→    /**
+   467→     * @return array<int, array<string, mixed>>
+   468→     */
+   469→    private function getBankMappingMismatches(int $limit): array
+   470→    {
+   471→        $limit = max(1, min(100, $limit));
+   472→
+   473→        try {
+   474→            $this->db->query("SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'bank_ledger_mappings'");
+   475→            if (!$this->db->single()) {
+   476→                return [];
+   477→            }
+   478→        } catch (Exception $e) {
+   479→            return [];
+   480→        }
+   481→
+   482→        $this->db->query("
+   483→            SELECT
+   484→                b.id AS bank_id,
+   485→                b.bank_name,
+   486→                COALESCE(b.balance, 0) AS bank_balance,
+   487→                blm.ledger_id AS mapped_ledger_id,
+   488→                l.ledger_name AS mapped_ledger_name,
+   489→                COALESCE(gl.net_bal, 0) AS gl_net,
+   490→                CASE
+   491→                    WHEN blm.ledger_id IS NULL THEN ABS(COALESCE(b.balance, 0))
+   492→                    ELSE ABS(COALESCE(b.balance, 0) - COALESCE(gl.net_bal, 0))
+   493→                END AS difference,
+   494→                CASE WHEN blm.ledger_id IS NULL THEN 1 ELSE 0 END AS is_unmapped
+   495→            FROM banks b
+   496→            LEFT JOIN bank_ledger_mappings blm ON blm.bank_id = b.id
+   497→            LEFT JOIN ledgers l ON l.id = blm.ledger_id
+   498→            LEFT JOIN (
+   499→                SELECT jl.ledger_id,
+   500→                       SUM(jl.debit) - SUM(jl.credit) AS net_bal
+   501→                FROM journal_lines jl
+   502→                INNER JOIN journal_entries je ON je.id = jl.journal_entry_id
+   503→                WHERE COALESCE(je.is_reversed, 0) = 0
+   504→                GROUP BY jl.ledger_id
+   505→            ) gl ON gl.ledger_id = blm.ledger_id
+   506→            WHERE COALESCE(b.is_active, 1) = 1
+   507→            HAVING difference > :tol OR is_unmapped = 1
+   508→            ORDER BY difference DESC
+   509→            LIMIT {$limit}
+   510→        ");
+   511→        $this->db->bind(':tol', $this->tolerance);
+   512→
+   513→        return $this->db->resultSet() ?: [];
+   514→    }
+   515→
+   516→    private function sumGlArControlBalance(?int $branchId): float
+   517→    {
+   518→        return $this->sumGlControlByNature('customer_receivable', $branchId);
+   519→    }
+   520→
+   521→    /** @return int[] */
+   522→    private function getLedgerIdsByNature(string $nature): array
+   523→    {
+   524→        $this->db->query("
+   525→            SELECT id FROM ledgers
+   526→            WHERE ledger_nature = :nature AND is_active = 1
+   527→        ");
+   528→        $this->db->bind(':nature', $nature);
+   529→        $rows = $this->db->resultSet();
+   530→        $ids = [];
+   531→        foreach ($rows as $row) {
+   532→            $ids[] = (int)$row['id'];
+   533→        }
+   534→        return $ids;
+   535→    }
+   536→
+   537→    /** @return int[] @deprecated use getLedgerIdsByNature */
+   538→    private function getArLedgerIds(): array
+   539→    {
+   540→        return $this->getLedgerIdsByNature('customer_receivable');
+   541→    }
+   542→
+   543→    private function countNullBranchLedgerRows(?int $branchId): int
+   544→    {
+   545→        $branchSql = '';
+   546→        if ($branchId !== null && $branchId > 0) {
+   547→            $branchSql = ' AND (branch_id = ' . (int)$branchId . ' OR branch_id IS NULL)';
+   548→        }
+   549→
+   550→        $this->db->query("
+   551→            SELECT COUNT(*) AS c FROM customer_ledger
+   552→            WHERE branch_id IS NULL {$branchSql}
+   553→        ");
+   554→
+   555→        return (int)($this->db->single()['c'] ?? 0);
+   556→    }
+   557→
+   558→    /**
+   559→     * Run reconciliation for all active branches (or one branch / all combined).
+   560→     *
+   561→     * @return array<int, array>
+   562→     */
+   563→    public function runScheduledReconciliation(?int $branchFilter = null, ?string $fromDate = null, ?string $toDate = null): array
+   564→    {
+   565→        $fromDate = $fromDate ?: date('Y-m-01');
+   566→        $toDate = $toDate ?: date('Y-m-d');
+   567→        $reports = [];
+   568→
+   569→        if ($branchFilter !== null && $branchFilter > 0) {
+   570→            $reports[] = $this->runFullReport($branchFilter, $fromDate, $toDate);
+   571→            $this->emitAlertsForReport($reports[0]);
+   572→            return $reports;
+   573→        }
+   574→
+   575→        $reports[] = $this->runFullReport(null, $fromDate, $toDate);
+   576→
+   577→        $this->db->query('SELECT id FROM branches WHERE COALESCE(is_active, 1) = 1 ORDER BY id ASC');
+   578→        foreach ($this->db->resultSet() as $row) {
+   579→            $bid = (int)$row['id'];
+   580→            if ($bid <= 0) {
+   581→                continue;
+   582→            }
+   583→            $reports[] = $this->runFullReport($bid, $fromDate, $toDate);
+   584→        }
+   585→
+   586→        foreach ($reports as $report) {
+   587→            $this->emitAlertsForReport($report);
+   588→        }
+   589→
+   590→        return $reports;
+   591→    }
+   592→
+   593→    private function emitAlertsForReport(array $report): void
+   594→    {
+   595→        if (empty($report['has_issues'])) {
+   596→            return;
+   597→        }
+   598→
+   599→        self::writeAlert('GL reconciliation issues', [
+   600→            'branch_id'   => $report['branch_id'] ?? null,
+   601→            'branch_name' => $report['branch_name'] ?? null,
+   602→            'issues'      => $report['issues'] ?? [],
+   603→            'from_date'   => $report['from_date'] ?? null,
+   604→            'to_date'     => $report['to_date'] ?? null,
+   605→        ]);
+   606→    }
+   607→
+   608→    /**
+   609→     * Phase 5.4 — log + optional email when sales audit has hard failures.
+   610→     */
+   611→    public static function notifyAuditFailures(int $failCount, int $warnCount, array $context = []): void
+   612→    {
+   613→        if ($failCount <= 0) {
+   614→            return;
+   615→        }
+   616→
+   617→        $payload = array_merge([
+   618→            'fail' => $failCount,
+   619→            'warn' => $warnCount,
+   620→        ], $context);
+   621→
+   622→        self::writeAlert("Sales audit checklist: {$failCount} failure(s)", $payload);
+   623→
+   624→        if (defined('RECON_ALERT_EMAIL') && RECON_ALERT_EMAIL !== '') {
+   625→            $to = RECON_ALERT_EMAIL;
+   626→            $subject = APP_NAME . ' — Sales audit failures (' . $failCount . ')';
+   627→            $body = "Sales audit reported {$failCount} failure(s) and {$warnCount} warning(s).\n\n"
+   628→                . json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+   629→            @mail($to, $subject, $body, 'Content-Type: text/plain; charset=UTF-8');
+   630→        }
+   631→    }
+   632→
+   633→    /**
+   634→     * Write alert when audit/reconciliation finds failures (Phase 5.4).
+   635→     */
+   636→    public static function writeAlert(string $message, array $context = []): void
+   637→    {
+   638→        $path = self::alertLogPath();
+   639→        $logDir = dirname($path);
+   640→        if (!is_dir($logDir)) {
+   641→            @mkdir($logDir, 0755, true);
+   642→        }
+   643→
+   644→        $line = json_encode([
+   645→            'timestamp' => date('Y-m-d H:i:s'),
+   646→            'message'   => $message,
+   647→            'context'   => $context,
+   648→        ], JSON_UNESCAPED_UNICODE);
+   649→
+   650→        @file_put_contents($path, $line . PHP_EOL, FILE_APPEND | LOCK_EX);
+   651→    }
+   652→
+   653→    /**
+   654→     * Absolute path to the reconciliation / audit alert log.
+   655→     */
+   656→    public static function alertLogPath(): string
+   657→    {
+   658→        $logDir = defined('APP_ROOT') ? APP_ROOT . '/logs' : dirname(__DIR__, 3) . '/logs';
+   659→
+   660→        return $logDir . '/reconciliation_alerts.log';
+   661→    }
+   662→
+   663→    /**
+   664→     * Read the most recent alert log entries (newest first) for UI / CLI review.
+   665→     *
+   666→     * @return array<int, array{timestamp: string, message: string, context: array<string, mixed>}>
+   667→     */
+   668→    public static function readRecentAlerts(int $limit = 30): array
+   669→    {
+   670→        $limit = max(1, min(200, $limit));
+   671→        $path = self::alertLogPath();
+   672→        if (!is_readable($path)) {
+   673→            return [];
+   674→        }
+   675→
+   676→        $lines = @file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+   677→        if ($lines === false || $lines === []) {
+   678→            return [];
+   679→        }
+   680→
+   681→        $entries = [];
+   682→        for ($i = count($lines) - 1; $i >= 0 && count($entries) < $limit; $i--) {
+   683→            $decoded = json_decode($lines[$i], true);
+   684→            if (!is_array($decoded)) {
+   685→                continue;
+   686→            }
+   687→
+   688→            $entries[] = [
+   689→                'timestamp' => (string)($decoded['timestamp'] ?? ''),
+   690→                'message'   => (string)($decoded['message'] ?? ''),
+   691→                'context'   => is_array($decoded['context'] ?? null) ? $decoded['context'] : [],
+   692→            ];
+   693→        }
+   694→
+   695→        return $entries;
+   696→    }
+   697→
+   698→    /**
+   699→     * Branch-scoped reports with issues — used for consolidated Telegram (skip combined "all branches" row).
+   700→     *
+   701→     * @param array<int, array<string, mixed>> $reports
+   702→     * @return array<int, array<string, mixed>>
+   703→     */
+   704→    public static function filterBranchIssueReports(array $reports): array
+   705→    {
+   706→        return array_values(array_filter($reports, static function (array $report): bool {
+   707→            if (empty($report['has_issues'])) {
+   708→                return false;
+   709→            }
+   710→
+   711→            $branchId = $report['branch_id'] ?? null;
+   712→
+   713→            return $branchId !== null && (int)$branchId > 0;
+   714→        }));
+   715→    }
+   716→
+   717→    /** @return array<string, array{id: string, icon: string, label: string}> */
+   718→    public static function sectionDefinitions(): array
+   719→    {
+   720→        return [
+   721→            'ar'        => ['id' => 'recon-ar', 'icon' => 'fa-hand-holding-dollar', 'label' => 'Accounts receivable'],
+   722→            'ap'        => ['id' => 'recon-ap', 'icon' => 'fa-truck-field', 'label' => 'Accounts payable'],
+   723→            'employee'  => ['id' => 'recon-employee', 'icon' => 'fa-user-tie', 'label' => 'Employee payable'],
+   724→            'cash_bank' => ['id' => 'recon-cash', 'icon' => 'fa-building-columns', 'label' => 'Cash / bank'],
+   725→            'inventory' => ['id' => 'recon-inventory', 'icon' => 'fa-boxes-stacked', 'label' => 'Inventory'],
+   726→            'cogs'      => ['id' => 'recon-cogs', 'icon' => 'fa-chart-line', 'label' => 'COGS tie-out'],
+   727→        ];
+   728→    }
+   729→
+   730→    /**
+   731→     * @return 'ok'|'warn'|'fail'
+   732→     */
+   733→    public static function sectionStatus(string $key, array $report): string
+   734→    {
+   735→        switch ($key) {
+   736→            case 'ar':
+   737→                $s = $report['ar'] ?? [];
+   738→                if (empty($s['within_tolerance'])) {
+   739→                    return 'fail';
+   740→                }
+   741→                if (((int)($s['ledger_mismatch_count'] ?? 0)) > 0 || ((int)($s['null_branch_ledger_rows'] ?? 0)) > 0) {
+   742→                    return 'warn';
+   743→                }
+   744→                return 'ok';
+   745→            case 'ap':
+   746→                $s = $report['ap'] ?? [];
+   747→                if (empty($s['within_tolerance'])) {
+   748→                    return 'fail';
+   749→                }
+   750→                if (((int)($s['ledger_mismatch_count'] ?? 0)) > 0) {
+   751→                    return 'warn';
+   752→                }
+   753→                return 'ok';
+   754→            case 'employee':
+   755→                $s = $report['employee'] ?? [];
+   756→                if (empty($s['within_tolerance'])) {
+   757→                    return 'fail';
+   758→                }
+   759→                if (((int)($s['ledger_mismatch_count'] ?? 0)) > 0) {
+   760→                    return 'warn';
+   761→                }
+   762→                return 'ok';
+   763→            case 'cash_bank':
+   764→                $s = $report['cash_bank'] ?? [];
+   765→                if (((int)($s['mapping_mismatch_count'] ?? 0)) > 0) {
+   766→                    return empty($s['within_tolerance']) ? 'fail' : 'warn';
+   767→                }
+   768→                return !empty($s['within_tolerance']) ? 'ok' : 'fail';
+   769→            case 'inventory':
+   770→                return !empty(($report['inventory'] ?? [])['within_tolerance']) ? 'ok' : 'fail';
+   771→            case 'cogs':
+   772→                return !empty(($report['cogs'] ?? [])['within_tolerance']) ? 'ok' : 'fail';
+   773→            default:
+   774→                return 'ok';
+   775→        }
+   776→    }
+   777→
+   778→    public static function sectionStatusLabel(string $status): string
+   779→    {
+   780→        return match ($status) {
+   781→            'ok'   => 'Within tolerance',
+   782→            'warn' => 'Review details',
+   783→            'fail' => 'Out of tolerance',
+   784→            default => 'Unknown',
+   785→        };
+   786→    }
+   787→
+   788→    /**
+   789→     * @return 'ok'|'warn'|'fail'
+   790→     */
+   791→    public static function overallStatus(array $report): string
+   792→    {
+   793→        $worst = 'ok';
+   794→        foreach (array_keys(self::sectionDefinitions()) as $key) {
+   795→            $st = self::sectionStatus($key, $report);
+   796→            if ($st === 'fail') {
+   797→                return 'fail';
+   798→            }
+   799→            if ($st === 'warn') {
+   800→                $worst = 'warn';
+   801→            }
+   802→        }
+   803→        return $worst;
+   804→    }
+   805→
+   806→    /**
+   807→     * @return array<int, array<string, mixed>>
+   808→     */
+   809→    public static function sectionSummaries(array $report): array
+   810→    {
+   811→        $out = [];
+   812→        foreach (self::sectionDefinitions() as $key => $def) {
+   813→            $status = self::sectionStatus($key, $report);
+   814→            $out[] = array_merge($def, [
+   815→                'key'          => $key,
+   816→                'status'       => $status,
+   817→                'status_label' => self::sectionStatusLabel($status),
+   818→            ]);
+   819→        }
+   820→        return $out;
+   821→    }
+   822→}

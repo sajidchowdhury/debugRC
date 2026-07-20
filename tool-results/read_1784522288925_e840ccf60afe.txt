@@ -1,0 +1,448 @@
+     1→   200→        Route::get('audit', [LedgerController::class, 'audit'])->name('audit')->middleware('role:admin,accountant');
+     2→   201→        Route::post('{ledger}/restore', [LedgerController::class, 'restore'])->name('restore')->where(['ledger' => '[0-9]+'])->middleware('role:admin');
+     3→   202→        Route::post('{ledger}/toggle', [LedgerController::class, 'toggle'])->name('toggle')->where(['ledger' => '[0-9]+'])->middleware('role:admin');
+     4→   203→    });
+     5→   204→    // Read access (index, show): admin, accountant (accounting-domain master data)
+     6→   205→    Route::resource('admin/ledgers', LedgerController::class)
+     7→   206→        ->only(['index', 'show'])->where(['ledger' => '[0-9]+'])
+     8→   207→        ->names('admin.ledgers')
+     9→   208→        ->middleware('role:admin,accountant');
+    10→   209→    // Write access (create, store, edit, update, destroy): admin only
+    11→   210→    Route::resource('admin/ledgers', LedgerController::class)
+    12→   211→        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['ledger' => '[0-9]+'])
+    13→   212→        ->names('admin.ledgers')
+    14→   213→        ->middleware('role:admin');
+    15→   214→
+    16→   215→    // --- Branches (RBAC: admin for write, admin/manager/warehouse_manager for read) ---
+    17→   216→    Route::prefix('admin/branches')->name('admin.branches.')->group(function () {
+    18→   217→        Route::get('export', [BranchController::class, 'export'])->name('export')->middleware('role:admin,manager,warehouse_manager');
+    19→   218→        // Phase 19: Print directory (same RBAC as export)
+    20→   219→        Route::get('print', [BranchController::class, 'print'])->name('print')->middleware('role:admin,manager,warehouse_manager');
+    21→   220→        Route::get('audit', [BranchController::class, 'audit'])->name('audit')->middleware('role:admin');
+    22→   221→        Route::post('{branch}/restore', [BranchController::class, 'restore'])->name('restore')->middleware('role:admin');
+    23→   222→        Route::post('{branch}/toggle', [BranchController::class, 'toggle'])->name('toggle')->middleware('role:admin');
+    24→   223→    });
+    25→   224→    // Read access (index, show): admin, manager, warehouse_manager
+    26→   225→    Route::resource('admin/branches', BranchController::class)
+    27→   226→        ->only(['index', 'show'])->where(['branch' => '[0-9]+'])
+    28→   227→        ->names('admin.branches')
+    29→   228→        ->middleware('role:admin,manager,warehouse_manager');
+    30→   229→    // Write access (create, store, edit, update, destroy): admin only
+    31→   230→    Route::resource('admin/branches', BranchController::class)
+    32→   231→        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['branch' => '[0-9]+'])
+    33→   232→        ->names('admin.branches')
+    34→   233→        ->middleware('role:admin');
+    35→   234→
+    36→   235→    // --- Warehouses (RBAC: admin for write, admin/manager/warehouse_manager for read) ---
+    37→   236→    Route::prefix('admin/warehouses')->name('admin.warehouses.')->group(function () {
+    38→   237→        Route::get('export', [WarehouseController::class, 'export'])->name('export')->middleware('role:admin,manager,warehouse_manager');
+    39→   238→        // Phase 19: Print directory (same RBAC as export)
+    40→   239→        Route::get('print', [WarehouseController::class, 'print'])->name('print')->middleware('role:admin,manager,warehouse_manager');
+    41→   240→        Route::get('audit', [WarehouseController::class, 'audit'])->name('audit')->middleware('role:admin');
+    42→   241→        Route::post('{warehouse}/restore', [WarehouseController::class, 'restore'])->name('restore')->middleware('role:admin');
+    43→   242→        Route::post('{warehouse}/toggle', [WarehouseController::class, 'toggle'])->name('toggle')->middleware('role:admin');
+    44→   243→    });
+    45→   244→    // Read access (index, show): admin, manager, warehouse_manager
+    46→   245→    Route::resource('admin/warehouses', WarehouseController::class)
+    47→   246→        ->only(['index', 'show'])->where(['warehouse' => '[0-9]+'])
+    48→   247→        ->names('admin.warehouses')
+    49→   248→        ->middleware('role:admin,manager,warehouse_manager');
+    50→   249→    // Write access (create, store, edit, update, destroy): admin only
+    51→   250→    Route::resource('admin/warehouses', WarehouseController::class)
+    52→   251→        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['warehouse' => '[0-9]+'])
+    53→   252→        ->names('admin.warehouses')
+    54→   253→        ->middleware('role:admin');
+    55→   254→
+    56→   255→    // --- Users (RBAC: admin for write, admin/manager for read) ---
+    57→   256→    // Phase 14: User administration — login accounts tied to Employees.
+    58→   257→    Route::prefix('admin/users')->name('admin.users.')->group(function () {
+    59→   258→        Route::get('export', [UserController::class, 'export'])->name('export')->middleware('role:admin,manager');
+    60→   259→        // Phase 19: Print directory (same RBAC as export)
+    61→   260→        Route::get('print', [UserController::class, 'print'])->name('print')->middleware('role:admin,manager');
+    62→   261→        Route::get('audit', [UserController::class, 'audit'])->name('audit')->middleware('role:admin');
+    63→   262→        Route::post('{user}/restore', [UserController::class, 'restore'])->name('restore')->where(['user' => '[0-9]+'])->middleware('role:admin');
+    64→   263→        Route::post('{user}/toggle', [UserController::class, 'toggle'])->name('toggle')->where(['user' => '[0-9]+'])->middleware('role:admin');
+    65→   264→        Route::post('{user}/unlock', [UserController::class, 'unlock'])->name('unlock')->where(['user' => '[0-9]+'])->middleware('role:admin');
+    66→   265→        Route::post('{user}/reset-password', [UserController::class, 'resetPassword'])->name('resetPassword')->where(['user' => '[0-9]+'])->middleware('role:admin');
+    67→   266→        Route::get('{user}/security', [UserController::class, 'securityAudit'])->name('security')->where(['user' => '[0-9]+'])->middleware('role:admin');
+    68→   267→    });
+    69→   268→    // Read access (index, show): admin, manager
+    70→   269→    Route::resource('admin/users', UserController::class)
+    71→   270→        ->only(['index', 'show'])->where(['user' => '[0-9]+'])
+    72→   271→        ->names('admin.users')
+    73→   272→        ->middleware('role:admin,manager');
+    74→   273→    // Write access (create, store, edit, update, destroy): admin only
+    75→   274→    Route::resource('admin/users', UserController::class)
+    76→   275→        ->only(['create', 'store', 'edit', 'update', 'destroy'])->where(['user' => '[0-9]+'])
+    77→   276→        ->names('admin.users')
+    78→   277→        ->middleware('role:admin');
+    79→   278→
+    80→   279→    // ============================================================
+    81→   280→    // Phase 5: Reports + Reconciliation
+    82→   281→    // ============================================================
+    83→   282→
+    84→   283→    // Reports hub
+    85→   284→    Route::get('admin/reports', [ReportController::class, 'index'])->name('admin.reports.index');
+    86→   285→
+    87→   286→    // Reconciliation hub
+    88→   287→    Route::get('admin/reconciliation', [ReconciliationController::class, 'index'])->name('admin.reconciliation.index');
+    89→   288→    Route::get('admin/reconciliation/refresh', [ReconciliationController::class, 'refresh'])->name('admin.reconciliation.refresh');
+    90→   289→    Route::get('admin/reconciliation/section/{sectionId}', [ReconciliationController::class, 'section'])->name('admin.reconciliation.section');
+    91→   290→
+    92→   291→    // Financial reports (18 reports)
+    93→   292→    Route::prefix('admin/reports')->name('admin.reports.')->group(function () {
+    94→   293→        // Finance & Control
+    95→   294→        Route::get('trial-balance', [ReportController::class, 'trialBalance'])->name('trialBalance');
+    96→   295→        Route::get('profit-and-loss', [ReportController::class, 'profitAndLoss'])->name('profitAndLoss');
+    97→   296→        Route::get('balance-sheet', [ReportController::class, 'balanceSheet'])->name('balanceSheet');
+    98→   297→        Route::get('cash-flow', [ReportController::class, 'cashFlow'])->name('cashFlow');
+    99→   298→        Route::get('general-ledger', [ReportController::class, 'generalLedger'])->name('generalLedger');
+   100→   299→        Route::get('journal-entries', [ReportController::class, 'journalEntries'])->name('journalEntries');
+   101→   300→        Route::get('daily-cash-book', [ReportController::class, 'dailyCashBook'])->name('dailyCashBook');
+   102→   301→        Route::get('branch-intercompany', [ReportController::class, 'branchIntercompany'])->name('branchIntercompany');
+   103→   302→        Route::get('branch-wise-ledger', [ReportController::class, 'branchWiseLedger'])->name('branchWiseLedger');
+   104→   303→
+   105→   304→        // Sales & Revenue
+   106→   305→        Route::get('revenue-overview', [ReportController::class, 'revenueOverview'])->name('revenueOverview');
+   107→   306→        Route::get('gross-margin', [ReportController::class, 'grossMargin'])->name('grossMargin');
+   108→   307→        Route::get('customer-performance', [ReportController::class, 'customerPerformance'])->name('customerPerformance');
+   109→   308→
+   110→   309→        // Purchase & Payables
+   111→   310→        Route::get('supplier-wise-purchase', [ReportController::class, 'supplierWisePurchase'])->name('supplierWisePurchase');
+   112→   311→        Route::get('receivable-aging', [ReportController::class, 'receivableAging'])->name('receivableAging');
+   113→   312→        Route::get('payable-aging', [ReportController::class, 'payableAging'])->name('payableAging');
+   114→   313→
+   115→   314→        // Inventory & Stock
+   116→   315→        Route::get('product-stock-analysis', [ReportController::class, 'productStockAnalysis'])->name('productStockAnalysis');
+   117→   316→        Route::get('product-movement', [ReportController::class, 'productMovement'])->name('productMovement');
+   118→   317→
+   119→   318→        // Operations
+   120→   319→        Route::get('sales-audit-checklist', [ReportController::class, 'salesAuditChecklist'])->name('salesAuditChecklist');
+   121→   320→        Route::get('purchase-audit', [ReportController::class, 'purchaseAudit'])->name('purchaseAudit');
+   122→   321→        Route::get('stocktake-variance', [ReportController::class, 'stocktakeVariance'])->name('stocktakeVariance');
+   123→   322→        Route::get('branch-demand-weekly', [ReportController::class, 'branchDemandWeekly'])->name('branchDemandWeekly');
+   124→   323→    });
+   125→   324→
+   126→   325→    // ============================================================
+   127→   326→    // Phase 6.1: Stock Transactions (SSOT) + Warehouse Stock
+   128→   327→    // ============================================================
+   129→   328→    Route::prefix('admin/stock')->name('admin.stock.')->group(function () {
+   130→   329→        Route::get('transactions', [StockTransactionController::class, 'index'])->name('transactions');
+   131→   330→        Route::get('warehouse-stock', [StockTransactionController::class, 'warehouseStock'])->name('warehouse_stock');
+   132→   331→        Route::get('transactions/{id}', [StockTransactionController::class, 'show'])->name('show');
+   133→   332→        Route::get('availability', [StockTransactionController::class, 'checkAvailability'])->name('availability');
+   134→   333→        Route::get('warehouse-breakdown', [StockTransactionController::class, 'warehouseBreakdown'])->name('warehouse_breakdown');
+   135→   334→        // Phase 6.2: drift viewer
+   136→   335→        Route::get('drift', [StockTransactionController::class, 'drift'])->name('drift');
+   137→   336→        Route::post('drift/{id}', [StockTransactionController::class, 'updateDrift'])->name('drift.update');
+   138→   337→    });
+   139→   338→
+   140→   339→    // ============================================================
+   141→   340→    // Phase 6.3: Stock Adjustments (two-phase: draft → confirm → cancel)
+   142→   341→    // ============================================================
+   143→   342→    Route::prefix('admin/stock-adjustments')->name('admin.stock-adjustments.')->group(function () {
+   144→   343→        Route::get('audit', [StockAdjustmentController::class, 'audit'])->name('audit');
+   145→   344→        Route::get('product-rate', [StockAdjustmentController::class, 'getProductRate'])->name('product-rate');
+   146→   345→        Route::get('{id}/confirm', fn() => redirect()->route('admin.stock-adjustments.index'))->name('confirm-form');
+   147→   346→        Route::post('{id}/confirm', [StockAdjustmentController::class, 'confirm'])->name('confirm');
+   148→   347→        Route::post('{id}/cancel', [StockAdjustmentController::class, 'cancel'])->name('cancel');
+   149→   348→    });
+   150→   349→    Route::resource('admin/stock-adjustments', StockAdjustmentController::class)
+   151→   350→        ->only(['index', 'create', 'store', 'show'])
+   152→   351→        ->names('admin.stock-adjustments');
+   153→   352→
+   154→   353→    // ============================================================
+   155→   354→    // Phase 6.4: Stock Take (sessions + per-warehouse counts + variance posting)
+   156→   355→    // ============================================================
+   157→   356→    Route::prefix('admin/stock-take')->name('admin.stock-take.')->group(function () {
+   158→   357→        Route::get('{session}/warehouses/{warehouse}/setup', [StockTakeController::class, 'setupCounts'])->name('setup');
+   159→   358→        Route::get('{session}/warehouses/{warehouse}/count', [StockTakeController::class, 'count'])->name('count');
+   160→   359→        Route::post('{session}/warehouses/{warehouse}/count', [StockTakeController::class, 'saveCounts'])->name('saveCounts');
+   161→   360→        Route::post('{session}/post', [StockTakeController::class, 'post'])->name('post');
+   162→   361→        Route::post('{session}/cancel', [StockTakeController::class, 'cancel'])->name('cancel');
+   163→   362→    });
+   164→   363→    Route::resource('admin/stock-take', StockTakeController::class)
+   165→   364→        ->only(['index', 'create', 'store', 'show'])
+   166→   365→        ->names('admin.stock-take');
+   167→   366→
+   168→   367→    // ============================================================
+   169→   368→    // Phase 6.5: Warehouse Transfers (same-branch = no GL, cross-branch = intercompany GL)
+   170→   369→    // ============================================================
+   171→   370→    Route::prefix('admin/warehouse-transfers')->name('admin.warehouse-transfers.')->group(function () {
+   172→   371→        Route::get('product-stock', [WarehouseTransferController::class, 'getProductStock'])->name('product-stock');
+   173→   372→        Route::post('{id}/confirm', [WarehouseTransferController::class, 'confirm'])->name('confirm');
+   174→   373→        Route::post('{id}/cancel', [WarehouseTransferController::class, 'cancel'])->name('cancel');
+   175→   374→    });
+   176→   375→    Route::resource('admin/warehouse-transfers', WarehouseTransferController::class)
+   177→   376→        ->only(['index', 'create', 'store', 'show'])
+   178→   377→        ->names('admin.warehouse-transfers');
+   179→   378→
+   180→   379→    // ============================================================
+   181→   380→    // Phase 6.6: Damages (stock OUT + GL Dr Damage Loss / Cr Inventory)
+   182→   381→    // ============================================================
+   183→   382→    Route::prefix('admin/damages')->name('admin.damages.')->group(function () {
+   184→   383→        Route::get('product-stock', [DamageController::class, 'getProductStock'])->name('product-stock');
+   185→   384→        Route::post('{id}/confirm', [DamageController::class, 'confirm'])->name('confirm');
+   186→   385→        Route::post('{id}/cancel', [DamageController::class, 'cancel'])->name('cancel');
+   187→   386→    });
+   188→   387→    Route::resource('admin/damages', DamageController::class)
+   189→   388→        ->only(['index', 'create', 'store', 'show'])
+   190→   389→        ->names('admin.damages');
+   191→   390→
+   192→   391→    // ============================================================
+   193→   392→    // Phase 7.1: Purchase Orders (draft document, no stock/GL)
+   194→   393→    // ============================================================
+   195→   394→    Route::prefix('admin/purchase-orders')->name('admin.purchase-orders.')->group(function () {
+   196→   395→        Route::post('{id}/mark-sent', [PurchaseOrderController::class, 'markAsSent'])->name('markSent');
+   197→   396→        Route::post('{id}/cancel', [PurchaseOrderController::class, 'cancel'])->name('cancel');
+   198→   397→    });
+   199→   398→    Route::resource('admin/purchase-orders', PurchaseOrderController::class)
+   200→   399→        ->only(['index', 'create', 'store', 'show', 'edit', 'update'])
+   201→   400→        ->names('admin.purchase-orders');
+   202→   401→
+   203→   402→    // ============================================================
+   204→   403→    // Phase 7.2: Purchase Receive / GRN (stock IN + GL + supplier_ledger + PO update)
+   205→   404→    // ============================================================
+   206→   405→    Route::prefix('admin/purchase-receives')->name('admin.purchase-receives.')->group(function () {
+   207→   406→        Route::get('po-details', [PurchaseReceiveController::class, 'getPoDetails'])->name('po-details');
+   208→   407→        Route::post('{id}/confirm', [PurchaseReceiveController::class, 'confirm'])->name('confirm');
+   209→   408→        Route::post('{id}/cancel', [PurchaseReceiveController::class, 'cancel'])->name('cancel');
+   210→   409→    });
+   211→   410→    Route::resource('admin/purchase-receives', PurchaseReceiveController::class)
+   212→   411→        ->only(['index', 'create', 'store', 'show'])
+   213→   412→        ->names('admin.purchase-receives');
+   214→   413→
+   215→   414→    // ============================================================
+   216→   415→    // Phase 7.3: Purchase Returns (stock OUT at original rate + Dr AP / Cr Inventory + supplier_ledger debit)
+   217→   416→    // ============================================================
+   218→   417→    Route::prefix('admin/purchase-returns')->name('admin.purchase-returns.')->group(function () {
+   219→   418→        Route::get('receive-details', [PurchaseReturnController::class, 'getReceiveDetails'])->name('receive-details');
+   220→   419→        Route::post('{id}/confirm', [PurchaseReturnController::class, 'confirm'])->name('confirm');
+   221→   420→        Route::post('{id}/cancel', [PurchaseReturnController::class, 'cancel'])->name('cancel');
+   222→   421→    });
+   223→   422→    Route::resource('admin/purchase-returns', PurchaseReturnController::class)
+   224→   423→        ->only(['index', 'create', 'store', 'show'])
+   225→   424→        ->names('admin.purchase-returns');
+   226→   425→
+   227→   426→    // ============================================================
+   228→   427→    // Phase 8.1: Sales Cart Service (per-user-per-customer draft cart)
+   229→   428→    // P0-7: RBAC — all cart operations are salesman/manager/admin.
+   230→   429→    // (Legacy: search_customer, add_to_cart, validate_cart, final_sales
+   231→   430→    //  were all admin,manager,salesman per route_roles.php.)
+   232→   431→    // ============================================================
+   233→   432→    Route::prefix('admin/sales')->name('admin.sales.')
+   234→   433→        ->middleware(['role:salesman,manager,admin', 'branch.isolation'])
+   235→   434→        ->group(function () {
+   236→   435→        Route::get('cart', [SalesCartController::class, 'index'])->name('cart');
+   237→   436→        Route::post('cart/load', [SalesCartController::class, 'load'])->name('cart.load');
+   238→   437→        Route::post('cart/add', [SalesCartController::class, 'add'])->name('cart.add');
+   239→   438→        Route::post('cart/update', [SalesCartController::class, 'update'])->name('cart.update');
+   240→   439→        Route::post('cart/remove', [SalesCartController::class, 'remove'])->name('cart.remove');
+   241→   440→        Route::post('cart/clear', [SalesCartController::class, 'clear'])->name('cart.clear');
+   242→   441→        Route::post('cart/validate', [SalesCartController::class, 'validateCart'])->name('cart.validate');
+   243→   442→        Route::post('cart/soft-hold', [SalesCartController::class, 'softHold'])->name('cart.softHold');
+   244→   443→        Route::get('cart/availability', [SalesCartController::class, 'checkAvailability'])->name('cart.availability');
+   245→   444→
+   246→   445→        // Phase 8.2: Invoice finalize
+   247→   446→        Route::post('finalize', [SalesInvoiceController::class, 'finalize'])->name('finalize');
+   248→   447→        Route::get('cart-data', [SalesInvoiceController::class, 'getCartData'])->name('cart-data');
+   249→   448→        Route::get('credit-check', [SalesInvoiceController::class, 'checkCreditLimit'])->name('credit-check');
+   250→   449→
+   251→   450→        // P1-2: Manual stale-draft cancellation (manager+admin only)
+   252→   451→        Route::post('cancel-stale-drafts', [SalesInvoiceController::class, 'cancelStaleDrafts'])
+   253→   452→            ->name('cancel-stale-drafts')->middleware('role:manager,admin');
+   254→   453→
+   255→   454→        // P1-3: Sales audit trail (accountant+manager+admin read-only)
+   256→   455→        Route::get('audit', [SalesInvoiceController::class, 'auditTrail'])
+   257→   456→            ->name('audit')->middleware('role:accountant,manager,admin');
+   258→   457→    });
+   259→   458→
+   260→   459→    // ============================================================
+   261→   460→    // Phase 8.2: Sales Invoices (list + show + cancel + edit)
+   262→   461→    // P0-7: RBAC — index/show allow accountant (read); cancel is
+   263→   462→    // salesman/manager/admin (legacy delete_invoice).
+   264→   463→    // P1-1: edit/update — salesman/manager/admin (legacy edit/update).
+   265→   464→    // ============================================================
+   266→   465→    Route::prefix('admin/sales-invoices')->name('admin.sales-invoices.')->group(function () {
+   267→   466→        Route::post('{id}/cancel', [SalesInvoiceController::class, 'cancel'])
+   268→   467→            ->name('cancel')->middleware(['role:salesman,manager,admin', 'branch.isolation']);
+   269→   468→        // P1-1: Edit draft invoice (GET form + PUT update)
+   270→   469→        Route::get('{id}/edit', [SalesInvoiceController::class, 'edit'])
+   271→   470→            ->name('edit')->middleware(['role:salesman,manager,admin', 'branch.isolation']);
+   272→   471→        Route::put('{id}', [SalesInvoiceController::class, 'update'])
+   273→   472→            ->name('update')->middleware(['role:salesman,manager,admin', 'branch.isolation']);
+   274→   473→        // P1-6: Print views
+   275→   474→        Route::get('{id}/print-invoice', [SalesInvoiceController::class, 'printInvoice'])
+   276→   475→            ->name('print-invoice')->middleware('role:salesman,accountant,manager,admin');
+   277→   476→        Route::get('{id}/print-godown', [SalesInvoiceController::class, 'printGodown'])
+   278→   477→            ->name('print-godown')->middleware('role:warehouse_manager,manager,admin');
+   279→   478→    });
+   280→   479→    // index + show — accountant included (read access)
+   281→   480→    Route::resource('admin/sales-invoices', SalesInvoiceController::class)
+   282→   481→        ->only(['index', 'show'])->where(['warehouse' => '[0-9]+'])
+   283→   482→        ->names('admin.sales-invoices')
+   284→   483→        ->middleware('role:salesman,accountant,manager,admin');
+   285→   484→
+   286→   485→    // ============================================================
+   287→   486→    // Phase 8.3: Sales Challans (godown prep + stock OUT + COGS GL)
+   288→   487→    // P0-7: RBAC — godown/issue are warehouse_manager/dispatcher;
+   289→   488→    // cancel (reverse) is manager/admin only (legacy reverse_challan).
+   290→   489→    // ============================================================
+   291→   490→    Route::prefix('admin/sales-challans')->name('admin.sales-challans.')->group(function () {
+   292→   491→        // Godown prep + challan issue — warehouse_manager, dispatcher, manager, admin
+   293→   492→        Route::get('godown/{invoiceId}', [SalesChallanController::class, 'godown'])
+   294→   493→            ->name('godown')->middleware('role:warehouse_manager,dispatcher,manager,admin');
+   295→   494→        Route::post('godown/{invoiceId}', [SalesChallanController::class, 'storeGodown'])
+   296→   495→            ->name('storeGodown')->middleware(['role:warehouse_manager,dispatcher,manager,admin', 'branch.isolation']);
+   297→   496→        Route::get('issue/{invoiceId}', [SalesChallanController::class, 'challanForm'])
+   298→   497→            ->name('challan-form')->middleware('role:warehouse_manager,dispatcher,manager,admin');
+   299→   498→        Route::post('issue/{invoiceId}', [SalesChallanController::class, 'issueChallan'])
+   300→   499→            ->name('issueChallan')->middleware(['role:warehouse_manager,dispatcher,manager,admin', 'branch.isolation']);
+   301→   500→        // Challan reverse — manager, admin only (legacy reverse_challan)
+   302→   501→        Route::post('{id}/cancel', [SalesChallanController::class, 'cancel'])
+   303→   502→            ->name('cancel')->middleware(['role:manager,admin', 'branch.isolation']);
+   304→   503→        // P1-6: Print challan
+   305→   504→        Route::get('{id}/print-challan', [SalesChallanController::class, 'printChallan'])
+   306→   505→            ->name('print-challan')->middleware('role:warehouse_manager,dispatcher,accountant,manager,admin');
+   307→   506→    });
+   308→   507→    // index — warehouse_manager, dispatcher, manager, admin (legacy ChallanController::index)
+   309→   508→    Route::resource('admin/sales-challans', SalesChallanController::class)
+   310→   509→        ->only(['index'])
+   311→   510→        ->names('admin.sales-challans')
+   312→   511→        ->middleware('role:warehouse_manager,dispatcher,manager,admin');
+   313→   512→    // show — accountant included (legacy details: admin,manager,accountant,warehouse_manager)
+   314→   513→    Route::resource('admin/sales-challans', SalesChallanController::class)
+   315→   514→        ->only(['show'])
+   316→   515→        ->names('admin.sales-challans')
+   317→   516→        ->middleware('role:accountant,warehouse_manager,manager,admin');
+   318→   517→
+   319→   518→    // ============================================================
+   320→   519→    // Phase 8.4: Customer Payments (Dr Bank/Cash / Cr AR + intercompany)
+   321→   520→    // P0-7: RBAC — create/store/index/show allow salesman+accountant;
+   322→   521→    // cancel (reverse payment) is accountant/manager/admin only
+   323→   522→    // (legacy reverse_payment).
+   324→   523→    // ============================================================
+   325→   524→    Route::prefix('admin/customer-payments')->name('admin.customer-payments.')->group(function () {
+   326→   525→        Route::get('outstanding-invoices', [CustomerPaymentController::class, 'getOutstandingInvoices'])
+   327→   526→            ->name('outstanding-invoices')->middleware('role:salesman,accountant,manager,admin');
+   328→   527→        // Payment reverse — accountant, manager, admin (legacy reverse_payment)
+   329→   528→        Route::post('{id}/cancel', [CustomerPaymentController::class, 'cancel'])
+   330→   529→            ->name('cancel')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+   331→   530→        // P1-6: Print payment receipt
+   332→   531→        Route::get('{id}/print-receipt', [CustomerPaymentController::class, 'printReceipt'])
+   333→   532→            ->name('print-receipt')->middleware('role:salesman,accountant,manager,admin');
+   334→   533→    });
+   335→   534→    // store carries branch_id in the request body → branch.isolation
+   336→   535→    Route::resource('admin/customer-payments', CustomerPaymentController::class)
+   337→   536→        ->only(['index', 'create', 'show'])
+   338→   537→        ->names('admin.customer-payments')
+   339→   538→        ->middleware('role:salesman,accountant,manager,admin');
+   340→   539→    Route::resource('admin/customer-payments', CustomerPaymentController::class)
+   341→   540→        ->only(['store'])
+   342→   541→        ->names('admin.customer-payments')
+   343→   542→        ->middleware(['role:salesman,accountant,manager,admin', 'branch.isolation']);
+   344→   543→
+   345→   544→    // ============================================================
+   346→   545→    // Phase 8.5: Sales Returns (stock IN at ORIGINAL avg_cost + GL)
+   347→   546→    // P0-7: RBAC — create/store is salesman/manager/admin; confirm is
+   348→   547→    // warehouse_manager/accountant/manager/admin (two-step return);
+   349→   548→    // reverse is accountant/manager/admin only (legacy SalesReturn::reverse).
+   350→   549→    // ============================================================
+   351→   550→    Route::prefix('admin/sales-returns')->name('admin.sales-returns.')->group(function () {
+   352→   551→        // Return create flow — salesman, manager, admin
+   353→   552→        Route::get('invoice-details', [SalesReturnController::class, 'getInvoiceDetails'])
+   354→   553→            ->name('invoice-details')->middleware('role:salesman,manager,admin');
+   355→   554→        // Return confirm — warehouse_manager, accountant, manager, admin (legacy confirm_store)
+   356→   555→        Route::post('{id}/confirm', [SalesReturnController::class, 'confirm'])
+   357→   556→            ->name('confirm')->middleware(['role:warehouse_manager,accountant,manager,admin', 'branch.isolation']);
+   358→   557→        // Return reverse — accountant, manager, admin (legacy SalesReturn::reverse)
+   359→   558→        Route::post('{id}/reverse', [SalesReturnController::class, 'reverse'])
+   360→   559→            ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+   361→   560→        // P1-6: Print return slip
+   362→   561→        Route::get('{id}/print-slip', [SalesReturnController::class, 'printSlip'])
+   363→   562→            ->name('print-slip')->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
+   364→   563→    });
+   365→   564→    // index — broadest (legacy: admin,manager,salesman,accountant,warehouse_manager)
+   366→   565→    Route::resource('admin/sales-returns', SalesReturnController::class)
+   367→   566→        ->only(['index'])
+   368→   567→        ->names('admin.sales-returns')
+   369→   568→        ->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
+   370→   569→    // create, store — salesman, manager, admin (legacy create/store)
+   371→   570→    // store carries branch_id (resolved from invoice) → branch.isolation
+   372→   571→    Route::resource('admin/sales-returns', SalesReturnController::class)
+   373→   572→        ->only(['create'])
+   374→   573→        ->names('admin.sales-returns')
+   375→   574→        ->middleware('role:salesman,manager,admin');
+   376→   575→    Route::resource('admin/sales-returns', SalesReturnController::class)
+   377→   576→        ->only(['store'])
+   378→   577→        ->names('admin.sales-returns')
+   379→   578→        ->middleware(['role:salesman,manager,admin', 'branch.isolation']);
+   380→   579→    // show — accountant, warehouse_manager, manager, admin (legacy details)
+   381→   580→    Route::resource('admin/sales-returns', SalesReturnController::class)
+   382→   581→        ->only(['show'])
+   383→   582→        ->names('admin.sales-returns')
+   384→   583→        ->middleware('role:accountant,warehouse_manager,manager,admin');
+   385→   584→
+   386→   585→    // ============================================================
+   387→   586→    // Phase 9.5: Accounting Period Close + Year-End
+   388→   587→    // ============================================================
+   389→   588→    Route::prefix('admin/accounting')->name('admin.accounting.')->group(function () {
+   390→   589→        Route::get('period-close', [AccountingPeriodController::class, 'index'])->name('period-close');
+   391→   590→        Route::post('period-close', [AccountingPeriodController::class, 'close'])->name('period-close.store');
+   392→   591→        Route::post('period-reopen', [AccountingPeriodController::class, 'reopen'])->name('period-reopen');
+   393→   592→        Route::post('year-end-close', [AccountingPeriodController::class, 'yearEndClose'])->name('year-end-close');
+   394→   593→    });
+   395→   594→
+   396→   595→    // ============================================================
+   397→   596→    // Phase 10: Notifications (rules + inbox + AJAX)
+   398→   597→    // ============================================================
+   399→   598→    Route::prefix('admin/notifications')->name('admin.notifications.')->group(function () {
+   400→   599→        Route::get('rules', [NotificationController::class, 'rules'])->name('rules');
+   401→   600→        Route::post('rules', [NotificationController::class, 'storeRule'])->name('storeRule');
+   402→   601→        Route::post('rules/{id}/toggle', [NotificationController::class, 'toggleRule'])->name('toggleRule');
+   403→   602→        Route::delete('rules/{id}', [NotificationController::class, 'destroyRule'])->name('destroyRule');
+   404→   603→        Route::get('inbox', [NotificationController::class, 'inbox'])->name('inbox');
+   405→   604→        Route::post('inbox/{id}/read', [NotificationController::class, 'markRead'])->name('markRead');
+   406→   605→        Route::post('inbox/read-all', [NotificationController::class, 'markAllRead'])->name('markAllRead');
+   407→   606→        Route::get('unread-count', [NotificationController::class, 'unreadCount'])->name('unreadCount');
+   408→   607→        Route::get('recent', [NotificationController::class, 'recent'])->name('recent');
+   409→   608→    });
+   410→   609→
+   411→   610→    // ============================================================
+   412→   611→    // Phase 11: System Policy & Compliance Framework
+   413→   612→    // ============================================================
+   414→   613→    Route::prefix('admin/compliance')->name('admin.compliance.')->group(function () {
+   415→   614→        Route::get('/', [SystemPolicyController::class, 'index'])->name('index');
+   416→   615→        Route::post('/activate', [SystemPolicyController::class, 'activate'])->name('activate');
+   417→   616→        Route::post('/deactivate', [SystemPolicyController::class, 'deactivate'])->name('deactivate');
+   418→   617→    });
+   419→   618→
+   420→   619→    // ============================================================
+   421→   620→    // Phase 12: Archive Layer (historical search across PG + legacy MySQL)
+   422→   621→    // ============================================================
+   423→   622→    Route::prefix('admin/archive')->name('admin.archive.')->group(function () {
+   424→   623→        Route::get('/', [ArchiveController::class, 'index'])->name('index');
+   425→   624→        Route::get('customer-ledger/{customerId}', [ArchiveController::class, 'customerLedger'])->name('customer-ledger');
+   426→   625→        Route::get('supplier-ledger/{supplierId}', [ArchiveController::class, 'supplierLedger'])->name('supplier-ledger');
+   427→   626→    });
+   428→   627→
+   429→   628→    // ============================================================
+   430→   629→    // Phase 20-AUDIT-HEALTH: Global Audit Log Viewer + System Health
+   431→   630→    // ============================================================
+   432→   631→
+   433→   632→    // Global audit log viewer — cross-module audit entries with filtering + CSV export.
+   434→   633→    Route::prefix('admin/audit')->name('admin.audit.')->middleware('role:admin')->group(function () {
+   435→   634→        Route::get('/', [GlobalAuditController::class, 'index'])->name('index');
+   436→   635→        Route::get('/export', [GlobalAuditController::class, 'export'])->name('export');
+   437→   636→        Route::get('/{id}', [GlobalAuditController::class, 'show'])->name('show')->where(['id' => '[0-9]+']);
+   438→   637→    });
+   439→   638→
+   440→   639→    // System health monitoring dashboard.
+   441→   640→    Route::get('admin/system-health', [SystemHealthController::class, 'index'])
+   442→   641→        ->name('admin.system-health.index')
+   443→   642→        ->middleware('role:admin');
+   444→   643→});
+   445→   644→
+   446→   645→// ===================== HEALTH CHECK =====================
+   447→   646→// The /up route is handled by Laravel's built-in health check (configured in bootstrap/app.php).
+   448→   647→
