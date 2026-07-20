@@ -978,3 +978,208 @@ $$;
 CREATE INDEX IF NOT EXISTS idx_doc_seq_covering
     ON document_sequences (doc_type, branch_id, period_key)
     INCLUDE (last_number, id);
+
+-- ============================================================
+-- PG_CRON — Database-Level Scheduled Jobs
+-- ============================================================
+-- Replaces Laravel scheduler for critical maintenance jobs, ensuring
+-- they run even if the app server is down. Requires pg_cron extension
+-- (shared_preload_libraries = 'pg_cron' in postgresql.conf).
+--
+-- Prerequisite: CREATE EXTENSION IF NOT EXISTS pg_cron;
+-- ============================================================
+
+-- Function: Cancel stale draft invoices (pure SQL version of artisan command)
+CREATE OR REPLACE FUNCTION cancel_stale_sales_drafts(
+    p_days_threshold integer DEFAULT 14,
+    p_max_per_run    integer DEFAULT 200,
+    p_branch_id      integer DEFAULT NULL
+)
+RETURNS TABLE(
+    cancelled_count integer,
+    skipped_count   integer,
+    error_count     integer,
+    details         jsonb
+) AS $$
+DECLARE
+    v_draft RECORD;
+    v_cancelled integer := 0;
+    v_skipped   integer := 0;
+    v_errors    integer := 0;
+    v_error_list jsonb := '[]'::jsonb;
+    v_system_user_id integer := 1;
+BEGIN
+    FOR v_draft IN
+        SELECT si.id, si.invoice_code, si.created_at, si.total_amount, si.branch_id
+        FROM sales_invoices si
+        WHERE si.status = 'draft'
+            AND si.is_reversed = false
+            AND si.is_godown_prepared = false
+            AND si.is_challan_issued = false
+            AND si.created_at < (CURRENT_DATE - (p_days_threshold || ' days')::interval)
+            AND si.deleted_at IS NULL
+            AND (p_branch_id IS NULL OR si.branch_id = p_branch_id)
+        ORDER BY si.id ASC
+        LIMIT p_max_per_run
+    LOOP
+        BEGIN
+            UPDATE sales_invoices
+            SET status = 'cancelled',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = v_draft.id
+                AND status = 'draft';
+
+            IF FOUND THEN
+                INSERT INTO user_audit_log (user_id, action, target_user_id, branch_id, details, ip_address, user_agent, created_at)
+                VALUES (
+                    v_system_user_id,
+                    'stale_drafts_cancelled',
+                    NULL,
+                    v_draft.branch_id,
+                    jsonb_build_object(
+                        'invoice_id', v_draft.id,
+                        'invoice_code', v_draft.invoice_code,
+                        'days_threshold', p_days_threshold,
+                        'trigger', 'pg_cron'
+                    ),
+                    NULL,
+                    'pg_cron:cancel_stale_sales_drafts',
+                    CURRENT_TIMESTAMP
+                );
+                v_cancelled := v_cancelled + 1;
+            ELSE
+                v_skipped := v_skipped + 1;
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            v_errors := v_errors + 1;
+            v_error_list := v_error_list || jsonb_build_object(
+                'invoice_id', v_draft.id,
+                'invoice_code', v_draft.invoice_code,
+                'error', SQLERRM
+            );
+        END;
+    END LOOP;
+
+    RETURN QUERY SELECT
+        v_cancelled,
+        v_skipped,
+        v_errors,
+        jsonb_build_object(
+            'cancelled', v_cancelled,
+            'skipped', v_skipped,
+            'errors', v_errors,
+            'error_details', v_error_list,
+            'days_threshold', p_days_threshold,
+            'max_per_run', p_max_per_run,
+            'branch_filter', p_branch_id,
+            'ran_at', CURRENT_TIMESTAMP
+        );
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function: Purge old read notifications
+CREATE OR REPLACE FUNCTION purge_old_notifications(
+    p_days_to_keep integer DEFAULT 90
+)
+RETURNS integer AS $$
+DECLARE
+    v_deleted integer;
+BEGIN
+    DELETE FROM notifications
+    WHERE read_at IS NOT NULL
+        AND created_at < (CURRENT_DATE - (p_days_to_keep || ' days')::interval);
+    GET DIAGNOSTICS v_deleted = ROW_COUNT;
+    RETURN v_deleted;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function: ANALYZE high-write tables (keeps query planner stats fresh)
+CREATE OR REPLACE FUNCTION vacuum_analyze_high_write_tables()
+RETURNS void AS $$
+BEGIN
+    ANALYZE sales_invoices;
+    ANALYZE sales_invoice_items;
+    ANALYZE customer_payments;
+    ANALYZE customer_ledger;
+    ANALYZE stock_transactions;
+    ANALYZE journal_entries;
+    ANALYZE journal_lines;
+    ANALYZE notifications;
+    ANALYZE user_audit_log;
+    ANALYZE sales_challans;
+    ANALYZE sales_challan_items;
+    ANALYZE sales_returns;
+    ANALYZE sales_return_items;
+    ANALYZE purchase_orders;
+    ANALYZE purchase_receives;
+    ANALYZE supplier_payments;
+    ANALYZE supplier_ledger;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Schedule: Cancel stale draft invoices — daily at 02:00
+SELECT cron.schedule(
+    'cancel-stale-drafts',
+    '0 2 * * *',
+    $$SELECT cancel_stale_sales_drafts(14, 200, NULL)$$
+);
+
+-- Schedule: Refresh all financial report MVs — every 5 minutes
+SELECT cron.schedule(
+    'refresh-report-views',
+    '*/5 * * * *',
+    $$SELECT refresh_all_report_views()$$
+);
+
+-- Schedule: Refresh running-balance check MVs — hourly
+SELECT cron.schedule(
+    'refresh-rb-checks',
+    '0 * * * *',
+    $$REFRESH MATERIALIZED VIEW CONCURRENTLY mv_customer_ledger_balance_check;
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_supplier_ledger_balance_check;
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_employee_ledger_balance_check;
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_cash_ledger_balance_check$$
+);
+
+-- Schedule: Purge old read notifications — daily at 03:00
+SELECT cron.schedule(
+    'purge-old-notifications',
+    '0 3 * * *',
+    $$SELECT purge_old_notifications(90)$$
+);
+
+-- Schedule: ANALYZE high-write tables — daily at 04:00
+SELECT cron.schedule(
+    'analyze-high-write-tables',
+    '0 4 * * *',
+    $$SELECT vacuum_analyze_high_write_tables()$$
+);
+
+-- Monitoring view: Check scheduled jobs and their last runs
+CREATE OR REPLACE VIEW v_pg_cron_jobs AS
+SELECT
+    j.jobid,
+    j.schedule,
+    j.command,
+    j.nodename,
+    j.nodeport,
+    j.database,
+    j.username,
+    j.active,
+    j.jobname,
+    r.runid AS last_run_id,
+    r.job_pid AS last_pid,
+    r.start_time AS last_start,
+    r.end_time AS last_end,
+    r.status AS last_status,
+    r.return_message AS last_return_message,
+    EXTRACT(EPOCH FROM (r.end_time - r.start_time))::numeric(10,3) AS last_duration_seconds
+FROM cron.job j
+LEFT JOIN LATERAL (
+    SELECT runid, job_pid, start_time, end_time, status, return_message
+    FROM cron.job_run_details
+    WHERE jobid = j.jobid
+    ORDER BY start_time DESC
+    LIMIT 1
+) r ON true
+ORDER BY j.jobid;

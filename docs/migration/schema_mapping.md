@@ -467,6 +467,36 @@ Example: crc32("sales_invoice:0:2025-01") = -1876234567 (int4)
 
 Collision probability: ~0.00009% with 20 active doc_types. Worst case: two unrelated sequences serialize briefly — no data corruption possible.
 
+### 3.16 pg_cron — Database-Level Scheduled Jobs
+
+Task 21: Added pg_cron for DB-level scheduled maintenance jobs. Runs inside PostgreSQL even if Laravel app server is down. Graceful fallback — if pg_cron extension is unavailable, Laravel scheduler handles the same jobs.
+
+Migration: `2025_01_20_000009_add_pg_cron_scheduled_jobs.php`. SQL: `07_views_triggers_constraints.sql` — PG_CRON section.
+
+**SQL Functions Created:**
+
+| Function | Parameters | Returns | Purpose |
+|---|---|---|---|
+| `cancel_stale_sales_drafts(days, max, branch)` | days=14, max=200, branch=NULL | TABLE(cancelled, skipped, errors, details) | Pure-SQL stale draft cleanup (mirrors Artisan `sales:cancel-stale-drafts`) |
+| `purge_old_notifications(days)` | days=90 | integer (deleted count) | Delete read notifications older than N days |
+| `vacuum_analyze_high_write_tables()` | none | void | ANALYZE 17 highest-write tables for query planner stats |
+
+**Scheduled pg_cron Jobs:**
+
+| Job Name | Schedule | Command | Purpose |
+|---|---|---|---|
+| `cancel-stale-drafts` | Daily 02:00 | `SELECT cancel_stale_sales_drafts(14, 200, NULL)` | Cancel draft invoices >14 days with no godown/challan |
+| `refresh-report-views` | Every 5 min | `SELECT refresh_all_report_views()` | Refresh 7 financial report MVs |
+| `refresh-rb-checks` | Hourly | `REFRESH CONCURRENTLY mv_*_balance_check` | Refresh 4 running-balance check MVs |
+| `purge-old-notifications` | Daily 03:00 | `SELECT purge_old_notifications(90)` | Delete read notifications >90 days |
+| `analyze-high-write-tables` | Daily 04:00 | `SELECT vacuum_analyze_high_write_tables()` | ANALYZE 17 high-write tables |
+
+**Monitoring View:** `v_pg_cron_jobs` — shows all scheduled jobs with last run status, duration, and return message.
+
+**Laravel Fallback Scheduler:**
+- `sales:cancel-stale-drafts` — daily at 02:00 (in `routes/console.php`)
+- `reports:refresh` — every 5 minutes (in `routes/console.php`)
+
 ---
 
 ## 4. PHP Code SQL Compatibility (Phase 2.4)

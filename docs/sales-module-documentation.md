@@ -708,13 +708,19 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | Dashboard | / | auth | index, sales-trend (AJAX 7D/30D/90D) |
 | Reports/Funnel | admin/reports | role:manager,admin | sales-funnel (funnel KPIs, conversion, trend, forecast, salesman, opportunities) |
 
-### 5.6 Artisan Commands
+### 5.6 Artisan Commands + pg_cron
 
-| Command | Schedule | Purpose |
-|---------|----------|---------|
-| `sales:cancel-stale-drafts` | Daily 02:00 | Cancel drafts >14 days (configurable, dry-run, max 200/run) |
+| Command / pg_cron Job | Schedule | Purpose |
+|----------------------|----------|---------|
+| `sales:cancel-stale-drafts` | Daily 02:00 | Cancel drafts >14 days (configurable, dry-run, max 200/run). **Fallback** for pg_cron `cancel-stale-drafts` job |
 | `sales:pen-test` | On-demand | 5 automated security tests (RBAC, BranchScope, excluded roles, mass assignment) |
-| `reports:refresh` | Every 5 min | Refresh materialized views |
+| `reports:refresh` | Every 5 min | Refresh materialized views. **Fallback** for pg_cron `refresh-report-views` job |
+| `reconcile:running-balance` | On-demand | Verify running balances in 4 sub-ledgers (refreshes MVs + snapshots) |
+| pg_cron: `cancel-stale-drafts` | Daily 02:00 | DB-level stale draft cleanup via `cancel_stale_sales_drafts()` function |
+| pg_cron: `refresh-report-views` | Every 5 min | DB-level MV refresh via `refresh_all_report_views()` function |
+| pg_cron: `refresh-rb-checks` | Hourly | DB-level running-balance MV refresh (4 MVs) |
+| pg_cron: `purge-old-notifications` | Daily 03:00 | Delete read notifications >90 days via `purge_old_notifications()` |
+| pg_cron: `analyze-high-write-tables` | Daily 04:00 | ANALYZE 17 high-write tables via `vacuum_analyze_high_write_tables()` |
 
 ### 5.7 Middleware Stack
 
@@ -1745,28 +1751,35 @@ ALTER TABLE sales_invoice_items
 
 **Why this matters for long-term**: Deferred constraints let PostgreSQL validate all FKs at COMMIT time rather than at each INSERT. This simplifies service code (no need to worry about insertion order) and enables batch operations.
 
-### 7.14 pg_cron — Replace Laravel Scheduler for DB-Level Jobs
+### 7.14 pg_cron — ✅ Implemented (Task 21)
 
-```sql
--- Install pg_cron extension
-CREATE EXTENSION pg_cron;
+pg_cron replaces the Laravel scheduler for critical DB-level maintenance jobs, ensuring they run even if the Laravel queue worker, supervisor, or app server crashes. The migration (`2025_01_20_000009`) enables the extension, creates 3 SQL functions, schedules 5 cron jobs, and adds a monitoring view.
 
--- Schedule stale draft cleanup (runs even if Laravel queue is down)
-SELECT cron.schedule(
-  'cancel-stale-drafts',
-  '0 2 * * *',
-  $$SELECT cancel_stale_sales_drafts(14)$$
-);
+**Scheduled jobs:**
 
--- Schedule materialized view refresh
-SELECT cron.schedule(
-  'refresh-ar-aging',
-  '*/5 * * * *',
-  $$REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ar_aging$$
-);
-```
+| Job Name | Schedule | Command | Purpose |
+|----------|----------|---------|---------|
+| `cancel-stale-drafts` | Daily 02:00 | `SELECT cancel_stale_sales_drafts(14, 200, NULL)` | Cancel draft invoices >14 days old with no godown/challan |
+| `refresh-report-views` | Every 5 min | `SELECT refresh_all_report_views()` | Refresh 7 financial report MVs (AR aging, AP aging, stock valuation, etc.) |
+| `refresh-rb-checks` | Hourly | `REFRESH CONCURRENTLY mv_*_balance_check` (4 MVs) | Refresh 4 running-balance verification MVs for drift detection |
+| `purge-old-notifications` | Daily 03:00 | `SELECT purge_old_notifications(90)` | Delete read notifications older than 90 days (prevents table bloat) |
+| `analyze-high-write-tables` | Daily 04:00 | `SELECT vacuum_analyze_high_write_tables()` | ANALYZE 17 highest-write tables for accurate query planner stats |
 
-**Why this matters for long-term**: pg_cron runs **inside the database** — no dependency on Laravel scheduler, queue workers, or supervisor. Even if the app server crashes, DB-level maintenance continues.
+**SQL functions created:**
+
+| Function | Parameters | Returns | Purpose |
+|----------|-----------|---------|---------|
+| `cancel_stale_sales_drafts(days, max, branch)` | days=14, max=200, branch=NULL | TABLE(cancelled, skipped, errors, details) | Pure-SQL stale draft cleanup (mirrors Artisan command, used by pg_cron) |
+| `purge_old_notifications(days)` | days=90 | integer (deleted count) | Delete read notifications older than N days |
+| `vacuum_analyze_high_write_tables()` | none | void | ANALYZE 17 high-write tables (sales_invoices, customer_ledger, stock_transactions, etc.) |
+
+**Monitoring:** `SELECT * FROM v_pg_cron_jobs` shows all scheduled jobs with their last run status, duration, and return message.
+
+**Graceful fallback:** If pg_cron extension is not available (e.g., managed hosting without `shared_preload_libraries` access), the migration logs a warning and skips silently. The Laravel scheduler in `routes/console.php` continues to handle the same jobs as fallback:
+- `sales:cancel-stale-drafts` — daily at 02:00
+- `reports:refresh` — every 5 minutes
+
+**Why this matters for long-term**: pg_cron runs **inside the database** — no dependency on Laravel scheduler, queue workers, or supervisor. Even if the app server crashes, DB-level maintenance continues. The dual-scheduler approach (pg_cron primary + Laravel fallback) provides maximum reliability.
 
 ### 7.15 Full-Text Search — ✅ Implemented (Task 17)
 
@@ -1930,7 +1943,7 @@ $customers = Customer::search('rahman', ranked: true)->limit(30)->get();
 | 18 | ~~Add window-function running balance reconciliation job~~ | ✅ Done | 2 days | Database + Business Logic |
 | 19 | ~~Implement Row-Level Security (RLS) for branch isolation~~ | ✅ Done | 2 days | Database + Business Logic |
 | 20 | ~~Replace document_sequences SELECT FOR UPDATE with advisory locks~~ | ✅ Done | 1 day | Business Logic |
-| 21 | Add pg_cron for stale draft cleanup + materialized view refresh | Medium | 1 day | Database |
+| 21 | ~~Add pg_cron for stale draft cleanup + materialized view refresh~~ | ✅ Done | Database |
 
 ### Phase 1D: Notifications & Reports (Week 4-5)
 
