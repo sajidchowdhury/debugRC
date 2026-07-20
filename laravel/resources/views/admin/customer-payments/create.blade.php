@@ -271,9 +271,6 @@
             </div>
         </div>
 
-        {{-- Hidden: single-invoice selector (used if user clicks "Pay full" on a row) --}}
-        <input type="hidden" name="invoice_id" id="singleInvoiceId" value="">
-
         {{-- Submit --}}
         <div class="card border-0 shadow-sm">
             <div class="card-body d-flex gap-2 justify-content-end">
@@ -304,7 +301,6 @@ $(function () {
     var $allocError    = $('#allocError');
     var $allocErrorMsg = $('#allocErrorMsg');
     var $allocStatus   = $('#allocationStatus');
-    var $singleInv     = $('#singleInvoiceId');
 
     // ====== Select2 init ======
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
@@ -499,17 +495,6 @@ $(function () {
                 confirmButtonText: 'OK'
             });
             return false;
-        }
-
-        // If exactly one invoice is fully allocated to the payment amount, set single-invoice hint.
-        if (anyAllocated) {
-            var allocatedRows = $tbody.find('tr').filter(function () {
-                var v = parseFloat($(this).find('.alloc-input').val());
-                return !isNaN(v) && v > 0;
-            });
-            if (allocatedRows.length === 1) {
-                $singleInv.val($(allocatedRows[0]).data('invoice-id'));
-            }
         }
 
         $('#submitBtn').prop('disabled', true)

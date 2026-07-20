@@ -19,8 +19,8 @@ use Illuminate\Support\Facades\Log;
  *      - Bank mode: Dr Bank Ledger (via bank_ledger_mappings) / Cr AR
  *      - Cash mode: Dr Cash Ledger / Cr AR
  *   2. Customer ledger: credit entry (customer owes less)
- *   3. Invoice allocation (if specified): invoice_payment_allocations
- *   4. Invoice paid_amount + due_amount updated
+ *   3. Multi-invoice allocation: invoice_payment_allocations (one row per invoice)
+ *   4. Invoice paid_amount + due_amount updated per allocation
  *   5. Intercompany settlement (if bank-mode + cross-branch bank): branch_ledger
  *
  * GL posting (re-derived from double-entry):
@@ -50,7 +50,8 @@ class CustomerPaymentService
      *     payment_date: string (Y-m-d),
      *     reference_no: string|null,
      *     notes: string|null,
-     *     invoice_id: int|null (specific invoice to allocate against),
+     *     invoice_id: int|null (specific invoice to allocate against — DEPRECATED, use allocations array),
+     *     allocations: array|null (multi-invoice: [{invoice_id, allocated_amount}, …]),
      *     created_by: int,
      * }
      * @return CustomerPayment
@@ -92,15 +93,19 @@ class CustomerPaymentService
     /**
      * Phase 2: Confirm a draft payment — GL + customer_ledger + allocation + intercompany.
      *
+     * Supports multi-invoice allocation: pass an array of {invoice_id, allocated_amount}
+     * to split a single payment across multiple invoices. If no allocations are provided,
+     * the payment remains as an unallocated customer credit.
+     *
      * @param int $paymentId
      * @param int $confirmedBy
-     * @param int|null $invoiceId (invoice to allocate against)
+     * @param array $allocations  Array of ['invoice_id' => int, 'allocated_amount' => float]
      * @return CustomerPayment
-     * @throws \RuntimeException If not draft, or GL/ledger posting fails.
+     * @throws \RuntimeException If not draft, or GL/ledger posting fails, or allocations exceed payment amount.
      */
-    public function confirmPayment(int $paymentId, int $confirmedBy, ?int $invoiceId = null): CustomerPayment
+    public function confirmPayment(int $paymentId, int $confirmedBy, array $allocations = []): CustomerPayment
     {
-        return DB::transaction(function () use ($paymentId, $confirmedBy, $invoiceId) {
+        return DB::transaction(function () use ($paymentId, $confirmedBy, $allocations) {
             $payment = CustomerPayment::lockForUpdate()->find($paymentId);
 
             if (!$payment) {
@@ -130,9 +135,26 @@ class CustomerPaymentService
                 'created_by' => $confirmedBy,
             ]);
 
-            // 3. Invoice allocation (if specified).
-            if ($invoiceId) {
-                $this->allocateToInvoice($paymentId, $invoiceId, $amount, $confirmedBy);
+            // 3. Multi-invoice allocation (if provided).
+            $totalAllocated = 0.0;
+            $firstInvoiceId = null;
+            foreach ($allocations as $alloc) {
+                $invoiceId = (int) ($alloc['invoice_id'] ?? 0);
+                $allocatedAmount = (float) ($alloc['allocated_amount'] ?? 0);
+                if ($invoiceId > 0 && $allocatedAmount > 0.001) {
+                    $this->allocateToInvoice($paymentId, $invoiceId, $allocatedAmount, $confirmedBy);
+                    $totalAllocated += $allocatedAmount;
+                    if ($firstInvoiceId === null) {
+                        $firstInvoiceId = $invoiceId;
+                    }
+                }
+            }
+
+            // Validate: total allocations must not exceed payment amount.
+            if ($totalAllocated > $amount + 0.01) {
+                throw new \RuntimeException(
+                    "Total allocations ({$totalAllocated}) exceed payment amount ({$amount})."
+                );
             }
 
             // 4. Intercompany settlement (if bank-mode).
@@ -155,7 +177,7 @@ class CustomerPaymentService
                 $confirmedBy,
                 $paymentId, $payment->payment_code, (int) $payment->customer_id,
                 (int) $payment->branch_id, (float) $payment->amount,
-                $payment->payment_mode, $invoiceId
+                $payment->payment_mode, $firstInvoiceId
             );
 
             return CustomerPayment::with([

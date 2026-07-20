@@ -747,7 +747,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | # | Gap | Legacy Has | Laravel Status | Verified? | Impact |
 |---|-----|-----------|---------------|-----------|--------|
 | G-5 | **Invoice dispatchers not assigned** | `sales_invoice_dispatchers` populated in finalize/edit flow | ✅ FIXED — Full UI + service implementation: dispatchers() relationship, assignDispatchers() method, Select2 multi-select in cart/edit, badge display in show/print, branch isolation + role validation | ✅ VERIFIED & FIXED |
-| G-6 | **Multi-payment allocation** | One payment can be allocated to multiple invoices | `confirmPayment()` accepts single invoiceId only | ⚠️ VERIFIED — Service has `?int $invoiceId` param, no loop for multi-allocation | Cannot split payment across invoices |
+| G-6 | **Multi-payment allocation** | One payment can be allocated to multiple invoices | ✅ FIXED — confirmPayment() now accepts allocations array [{invoice_id, allocated_amount}]; controller reads alloc_invoice_id[] + alloc_amount[] from form; UI already had multi-invoice allocation table | ✅ VERIFIED & FIXED |
 | G-7 | **Payment transaction types** | receive/payment/discount/write_off | Column exists (CHECK constraint) but only 'receive' is set by service | ⚠️ VERIFIED — `transaction_type` column added by P2-5 but service hardcodes 'receive' | Discount, write-off, refund features missing |
 | G-8 | **Discount GL posting on payment** | `postCustomerDiscount()` in JournalPostingService | discount_amount field exists but no GL posted on confirm | ❌ VERIFIED — No discount GL in CustomerPaymentService::confirmPayment() | Discounts not reflected in GL |
 | G-9 | **Salesman commission tracking** | salesman_id tracked on invoices | No commission calculation service | ❌ Not implemented | Commission reports not possible |
@@ -1128,7 +1128,7 @@ LIMIT 30;
 | # | Task | Priority | Effort | Type |
 |---|------|----------|--------|------|
 | 6 | Implement invoice dispatchers assignment (UI + service) | ✅ DONE | Business Logic + UI | 2025-01-20 — Full implementation: dispatchers() belongsToMany, assignDispatchers() with branch/role validation, Select2 multi-select in cart+edit, badge display in show+print, AJAX endpoints + routes |
-| 7 | Implement multi-invoice payment allocation | ⚠️ High | 3 days | Business Logic + UI |
+| 7 | Implement multi-invoice payment allocation | ✅ DONE | Business Logic + UI | 2025-01-20 — confirmPayment() now accepts allocations[] array; controller reads parallel arrays from UI; single-invoice legacy code removed |
 | 8 | Implement payment transaction types (discount, write_off, refund) with GL | ⚠️ High | 3 days | Business Logic |
 | 9 | Implement discount_amount GL posting on payment confirm | ⚠️ High | 1 day | Business Logic |
 | 10 | Implement Call It A Day batch operation | ⚠️ High | 1 day | Business Logic |
@@ -1236,7 +1236,7 @@ Core principles:
 | Payment receive (modal) | ✅ Cash/Bank, partial/full | ✅ Full page + allocation | None |
 | Payment reversal | ✅ Full (GL + intercompany) | ✅ Full | None |
 | Payment receipt print | ✅ Full | ✅ Full | None |
-| Multi-invoice allocation | ✅ CustomerTransactionController | ❌ Single invoice only | HIGH |
+| Multi-invoice allocation | ✅ CustomerTransactionController | ✅ allocations[] array in confirmPayment() | None |
 | Payment types (discount/write-off) | ✅ transaction_type column | ❌ Only 'receive' set | HIGH |
 | Invoice dispatchers | ✅ Assigned in godown flow | ✅ Assigned in finalize/edit flow (UI + service) | None |
 | Sales return create | ✅ Two-phase | ✅ Two-phase | None |

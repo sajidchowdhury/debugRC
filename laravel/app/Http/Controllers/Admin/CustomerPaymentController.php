@@ -97,6 +97,11 @@ class CustomerPaymentController extends Controller
             'payment_date' => 'required|date',
             'reference_no' => 'nullable|string|max:100',
             'notes' => 'nullable|string|max:500',
+            // Multi-invoice allocation arrays
+            'alloc_invoice_id' => 'nullable|array',
+            'alloc_invoice_id.*' => 'integer|exists:sales_invoices,id',
+            'alloc_amount' => 'nullable|array',
+            'alloc_amount.*' => 'numeric|min:0',
         ]);
 
         try {
@@ -113,12 +118,30 @@ class CustomerPaymentController extends Controller
                 'created_by' => auth()->id(),
             ]);
 
+            // Build allocations array from the parallel invoice_id + amount arrays.
+            $allocations = [];
+            $invoiceIds = $validated['alloc_invoice_id'] ?? [];
+            $amounts = $validated['alloc_amount'] ?? [];
+            foreach ($invoiceIds as $idx => $invoiceId) {
+                $allocatedAmount = (float) ($amounts[$idx] ?? 0);
+                if ($invoiceId > 0 && $allocatedAmount > 0.001) {
+                    $allocations[] = [
+                        'invoice_id' => (int) $invoiceId,
+                        'allocated_amount' => $allocatedAmount,
+                    ];
+                }
+            }
+
             // Auto-confirm (payments are typically immediate).
-            $invoiceId = $request->input('invoice_id') ? (int) $request->input('invoice_id') : null;
-            $payment = $this->paymentService->confirmPayment($payment->id, auth()->id(), $invoiceId);
+            $payment = $this->paymentService->confirmPayment($payment->id, auth()->id(), $allocations);
+
+            $allocCount = count($allocations);
+            $allocMsg = $allocCount > 0
+                ? " Allocated across {$allocCount} invoice(s)."
+                : '';
 
             return redirect()->route('admin.customer-payments.show', $payment)
-                ->with('success', "Payment {$payment->payment_code} recorded. GL posted + customer ledger updated.");
+                ->with('success', "Payment {$payment->payment_code} recorded. GL posted + customer ledger updated.{$allocMsg}");
         } catch (\Throwable $e) {
             return back()->withInput()->with('error', $e->getMessage());
         }
