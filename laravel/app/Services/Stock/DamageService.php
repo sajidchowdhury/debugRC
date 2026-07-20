@@ -3,6 +3,7 @@
 namespace App\Services\Stock;
 
 use App\Models\DamageInvoice;
+use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -298,36 +299,16 @@ class DamageService
 
     /**
      * Generate atomic damage code: DMG-YYYYMMDD-NNNN.
+     * Uses DocumentSequenceService with advisory locks (Task 20).
      */
     private function generateDamageCode(): string
     {
-        $datePart = now()->format('Ymd');
-        $periodKey = now()->format('Y-m');
-        $docType = 'damage';
-
-        return DB::transaction(function () use ($docType, $periodKey, $datePart) {
-            $seqRow = DB::table('document_sequences')
-                ->where('doc_type', $docType)
-                ->where('branch_id', 0)
-                ->where('period_key', $periodKey)
-                ->lockForUpdate()
-                ->first();
-
-            $nextNumber = $seqRow ? ((int) $seqRow->last_number + 1) : 1;
-
-            if ($seqRow) {
-                DB::table('document_sequences')->where('id', $seqRow->id)
-                    ->update(['last_number' => $nextNumber, 'updated_at' => now()]);
-            } else {
-                DB::table('document_sequences')->insert([
-                    'doc_type' => $docType, 'branch_id' => 0,
-                    'period_key' => $periodKey, 'last_number' => $nextNumber,
-                    'updated_at' => now(),
-                ]);
-            }
-
-            return "DMG-{$datePart}-" . str_pad((string) $nextNumber, 4, '0', STR_PAD_LEFT);
-        });
+        return DocumentSequenceService::nextCode(
+            docType:  'damage',
+            prefix:   'DMG',
+            datePart: now()->format('Ymd'),
+            padLength: 4,
+        );
     }
 
     private function validateCreateInput(array $data): void

@@ -3,6 +3,7 @@
 namespace App\Services\Sales;
 
 use App\Models\CustomerPayment;
+use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
@@ -792,12 +793,13 @@ class CustomerPaymentService
 
     /**
      * Generate atomic payment code: PREFIX-YYYYMMDD-NNNN.
+     * Uses DocumentSequenceService with advisory locks (Task 20).
      *
      * Prefixes by transaction_type:
-     *   receive  → PAY
-     *   discount → DISC
+     *   receive   → PAY
+     *   discount  → DISC
      *   write_off → WOFF
-     *   payment  → RFND
+     *   payment   → RFND
      */
     private function generatePaymentCode(string $transactionType = 'receive'): string
     {
@@ -808,33 +810,13 @@ class CustomerPaymentService
             'payment' => 'RFND',
         ];
         $prefix = $prefixes[$transactionType] ?? 'PAY';
-        $datePart = now()->format('Ymd');
-        $periodKey = now()->format('Y-m');
-        $docType = 'customer_payment_' . $transactionType;
 
-        return DB::transaction(function () use ($docType, $periodKey, $prefix, $datePart) {
-            $seqRow = DB::table('document_sequences')
-                ->where('doc_type', $docType)
-                ->where('branch_id', 0)
-                ->where('period_key', $periodKey)
-                ->lockForUpdate()
-                ->first();
-
-            $nextNumber = $seqRow ? ((int) $seqRow->last_number + 1) : 1;
-
-            if ($seqRow) {
-                DB::table('document_sequences')->where('id', $seqRow->id)
-                    ->update(['last_number' => $nextNumber, 'updated_at' => now()]);
-            } else {
-                DB::table('document_sequences')->insert([
-                    'doc_type' => $docType, 'branch_id' => 0,
-                    'period_key' => $periodKey, 'last_number' => $nextNumber,
-                    'updated_at' => now(),
-                ]);
-            }
-
-            return "{$prefix}-{$datePart}-" . str_pad((string) $nextNumber, 4, '0', STR_PAD_LEFT);
-        });
+        return DocumentSequenceService::nextCode(
+            docType:  'customer_payment_' . $transactionType,
+            prefix:   $prefix,
+            datePart: now()->format('Ymd'),
+            padLength: 4,
+        );
     }
 
     // ============================================================

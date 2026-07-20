@@ -4,6 +4,7 @@ namespace App\Services\Stock;
 
 use App\Models\StockTakeSession;
 use App\Models\StockTakeItem;
+use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -429,35 +430,15 @@ class StockTakeService
 
     /**
      * Generate atomic session code: ST-YYYYMMDD-NNNN.
+     * Uses DocumentSequenceService with advisory locks (Task 20).
      */
     private function generateSessionCode(): string
     {
-        $datePart = now()->format('Ymd');
-        $periodKey = now()->format('Y-m');
-        $docType = 'stock_take';
-
-        return DB::transaction(function () use ($docType, $periodKey, $datePart) {
-            $seqRow = DB::table('document_sequences')
-                ->where('doc_type', $docType)
-                ->where('branch_id', 0)
-                ->where('period_key', $periodKey)
-                ->lockForUpdate()
-                ->first();
-
-            $nextNumber = $seqRow ? ((int) $seqRow->last_number + 1) : 1;
-
-            if ($seqRow) {
-                DB::table('document_sequences')->where('id', $seqRow->id)
-                    ->update(['last_number' => $nextNumber, 'updated_at' => now()]);
-            } else {
-                DB::table('document_sequences')->insert([
-                    'doc_type' => $docType, 'branch_id' => 0,
-                    'period_key' => $periodKey, 'last_number' => $nextNumber,
-                    'updated_at' => now(),
-                ]);
-            }
-
-            return "ST-{$datePart}-" . str_pad((string) $nextNumber, 4, '0', STR_PAD_LEFT);
-        });
+        return DocumentSequenceService::nextCode(
+            docType:  'stock_take',
+            prefix:   'ST',
+            datePart: now()->format('Ymd'),
+            padLength: 4,
+        );
     }
 }

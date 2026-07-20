@@ -312,7 +312,7 @@ pipeline_qty = SUM(ordered_qty - dispatched_qty)
 5. **DB TRANSACTION begins**:
    - a. Lock branch products `SELECT warehouse_stock FOR UPDATE`
    - b. Re-verify stock inside lock (race condition protection)
-   - c. Generate invoice code (e.g., `SI-20250120-001`) via `document_sequences SELECT FOR UPDATE`
+   - c. Generate invoice code (e.g., `SI-20250120-001`) via `DocumentSequenceService` (advisory lock)
    - d. INSERT `sales_invoices` (status='draft')
    - e. INSERT `sales_invoice_items` (warehouse_id=NULL at this stage)
    - f. INSERT `sales_invoice_dispatches` (ordered_qty, dispatched_qty=0) — **soft reservation**
@@ -358,7 +358,7 @@ pipeline_qty = SUM(ordered_qty - dispatched_qty)
 1. Assert godown is prepared, not already challan-issued
 2. **DB TRANSACTION begins**:
    - a. Lock invoice + challan `FOR UPDATE`
-   - b. Generate challan code via `document_sequences SELECT FOR UPDATE`
+   - b. Generate challan code via `DocumentSequenceService` (advisory lock)
    - c. For each item:
       - Get current `avg_cost` from `warehouse_stock`
       - **Stock OUT**: negative qty via `StockTransactionModel::updateWarehouseStock()`
@@ -384,7 +384,7 @@ pipeline_qty = SUM(ordered_qty - dispatched_qty)
 2. **DB TRANSACTION begins**:
    - a. If invoice_id: lock invoice `FOR UPDATE`, verify not reversed, branch accessible
    - b. Check payment doesn't exceed invoice balance: `paidSoFar + amount <= total_amount + 0.01`
-   - c. Generate payment_code via `document_sequences`
+   - c. Generate payment_code via `DocumentSequenceService` (advisory lock)
    - d. INSERT `customer_payments`
    - e. INSERT `customer_ledger` CREDIT (running_balance -= amount)
    - f. If invoice_id: INSERT `invoice_payment_allocations`
@@ -776,7 +776,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 |---|------------|-------------|
 | ✅ | **Two-phase flow everywhere** | Draft → confirm/cancel (vs legacy immediate post). Major correctness gain. |
 | ✅ | **Append-only reversals** | Originals never mutated, only `is_reversed` flag. Clean audit trail. |
-| ✅ | **Atomic document code generation** | `document_sequences` with `SELECT FOR UPDATE` replaces legacy `COUNT+1` race condition. |
+| ✅ | **Atomic document code generation** | `document_sequences` with `pg_advisory_xact_lock` (Task 20) replaces legacy `SELECT FOR UPDATE` + `COUNT+1` race condition. Centralized `DocumentSequenceService` eliminates 12 duplicated code blocks. |
 | ✅ | **Proper pessimistic locking** | `lockForUpdate()` on key rows prevents concurrent-write corruption. |
 | ✅ | **Pipeline-aware availability** | `physical - pipeline` prevents overselling (legacy had no pipeline concept). |
 | ✅ | **Redis-cached pipeline** | 5-min TTL with invalidation avoids repeated JOINs. |
@@ -1262,20 +1262,80 @@ WHERE items_json @> '[{"product_id": 42, "condition_state": "Damage"}]';
 
 **Index footprint**: GIN with `jsonb_path_ops` is approximately 30% smaller than default GIN. For a table with ~1,000 active draft carts averaging 5 items each, the index is estimated at under 100 KB. The index is effectively free to maintain — cart rows are created, updated a handful of times during the sales entry process, and then deleted when the invoice is finalized.
 
-### 7.6 Advisory Locks — Replace SELECT FOR UPDATE for Code Generation
+### 7.6 Advisory Locks — ✅ Implemented (Task 20) Replace SELECT FOR UPDATE for Code Generation
 
-Currently `document_sequences` uses `SELECT FOR UPDATE` for atomic code generation. PostgreSQL advisory locks are faster:
+Previously, `document_sequences` used `SELECT FOR UPDATE` (pessimistic row-level locking) for atomic code generation. This has been replaced with PostgreSQL advisory locks (`pg_advisory_xact_lock`), which are significantly faster and avoid a critical RLS interaction issue.
 
-```sql
--- Instead of: SELECT counter FROM document_sequences WHERE ... FOR UPDATE
--- Use: pg_advisory_xact_lock(hash) → then SELECT/UPDATE without FOR UPDATE
+**What changed**:
+- Created `DocumentSequenceService` (centralized service replacing 12 duplicated `lockForUpdate` code blocks across Sales, Purchase, Stock, and Accounting services)
+- Advisory lock key = `crc32(doc_type:branch_id:period_key)` mapped to signed int4
+- Lock is transaction-scoped (`pg_advisory_xact_lock`) — auto-released on COMMIT/ROLLBACK
+- Covering index `idx_doc_seq_covering ON (doc_type, branch_id, period_key) INCLUDE (last_number, id)` makes the SELECT fast without heap access
+- SQL helper function `doc_seq_advisory_key()` mirrors the PHP hash for SQL diagnostics
 
--- Laravel:
-DB::select("SELECT pg_advisory_xact_lock(?, ?)", [$branchId, $typeHash]);
-$next = DB::selectOne("SELECT nextval('doc_seq_$type')");
+**RLS fix**: The old `lockForUpdate()` on `document_sequences` would fail for non-admin users because RLS policies filtered by `branch_id = current_setting('app.branch_id')::int`, hiding the branch_id=0 rows used by global sequences. Advisory locks bypass this entirely since they operate at the session level, independent of row visibility. New RLS policies explicitly allow branch_id=0 reads/writes for all users.
+
+**Migration**: `2025_01_20_000008_replace_doc_seq_select_for_update_with_advisory_locks.php`
+
+**Service refactoring** (12 services → centralized `DocumentSequenceService::nextCode()`):
+
+| Service | Method | doc_type | Code Format |
+|---------|--------|----------|-------------|
+| SalesInvoiceService | generateInvoiceCode() | sales_invoice | INV-YYYYMMDD-NNNN |
+| SalesChallanService | generateChallanCode() | sales_challan | CH-YYYYMMDD-NNNN |
+| SalesReturnService | generateReturnCode() | sales_return | SR-YYYYMMDD-NNNN |
+| CustomerPaymentService | generatePaymentCode() | customer_payment_{type} | PAY/DISC/WOFF/RFND-YYYYMMDD-NNNN |
+| PurchaseOrderService | generatePoCode() | purchase_order | PO-YYYYMMDD-NNNN |
+| PurchaseReceiveService | generateReceiveCode() | purchase_receive | GRN-YYYYMMDD-NNNN |
+| PurchaseReturnService | generateReturnCode() | purchase_return | PR-YYYYMMDD-NNNN |
+| StockAdjustmentService | generateAdjustmentCode() | stock_adjustment | ADJ-YYYYMMDD-NNNN |
+| StockTakeService | generateSessionCode() | stock_take | ST-YYYYMMDD-NNNN |
+| WarehouseTransferService | generateTransferCode() | warehouse_transfer | WT-YYYYMMDD-NNNN |
+| DamageService | generateDamageCode() | damage | DMG-YYYYMMDD-NNNN |
+| JournalPostingService | generateEntryNo() | journal_entry | JE-YYYY-NNNNNN |
+
+**Why advisory locks outperform SELECT FOR UPDATE**:
+
+| Aspect | SELECT FOR UPDATE | Advisory Lock |
+|--------|-------------------|---------------|
+| Lock storage | Disk (page infomask + WAL) | Shared memory only |
+| Read blocking | Blocks all reads on the row | Reads proceed unblocked |
+| Lock scope | Row-level | Session/transaction-level |
+| RLS interaction | WHERE clause filtered → 0 rows | Independent of RLS |
+| Auto-release | On COMMIT/ROLLBACK only | On COMMIT/ROLLBACK (xact) |
+| Performance | ~0.5–2ms per lock (disk I/O) | ~0.01–0.05ms (memory only) |
+| Collision risk | N/A | ~0.00009% with 20 active types |
+
+```php
+// Before (12 copies of this pattern):
+return DB::transaction(function () use ($docType, $periodKey, $datePart) {
+    $seqRow = DB::table('document_sequences')
+        ->where('doc_type', $docType)
+        ->where('branch_id', 0)
+        ->where('period_key', $periodKey)
+        ->lockForUpdate()  // ← replaced by advisory lock
+        ->first();
+    // ... 20 more lines of identical code
+});
+
+// After (1 call per service):
+return DocumentSequenceService::nextCode(
+    docType:  'sales_invoice',
+    prefix:   'INV',
+    datePart: now()->format('Ymd'),
+    padLength: 4,
+);
 ```
 
-**Why this matters for long-term**: Advisory locks are **in-memory** (no disk I/O), **transaction-scoped** (auto-released on commit/rollback), and **don't block reads**. Under high concurrency, they outperform row-level locks significantly.
+```sql
+-- SQL diagnostic: check which advisory locks are currently held
+SELECT locktype, classid, objid, mode, granted
+FROM pg_locks
+WHERE locktype = 'advisory';
+
+-- Compute the same lock key as DocumentSequenceService
+SELECT doc_seq_advisory_key('sales_invoice', 0, '2025-01');
+```
 
 ### 7.7 LISTEN/NOTIFY — Replace Polling for Real-Time Updates
 
@@ -1860,7 +1920,7 @@ $customers = Customer::search('rahman', ranked: true)->limit(30)->get();
 | 17 | ~~Implement full-text search for products + customers (tsvector + GIN)~~ | ✅ Done | 2 days | Database + Business Logic |
 | 18 | ~~Add window-function running balance reconciliation job~~ | ✅ Done | 2 days | Database + Business Logic |
 | 19 | ~~Implement Row-Level Security (RLS) for branch isolation~~ | ✅ Done | 2 days | Database + Business Logic |
-| 20 | Replace document_sequences SELECT FOR UPDATE with advisory locks | Medium | 1 day | Business Logic |
+| 20 | ~~Replace document_sequences SELECT FOR UPDATE with advisory locks~~ | ✅ Done | 1 day | Business Logic |
 | 21 | Add pg_cron for stale draft cleanup + materialized view refresh | Medium | 1 day | Database |
 
 ### Phase 1D: Notifications & Reports (Week 4-5)

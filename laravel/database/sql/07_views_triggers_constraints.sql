@@ -690,12 +690,14 @@ CREATE POLICY rls_journal_entries_update ON journal_entries FOR UPDATE USING (cu
 CREATE POLICY rls_journal_entries_delete ON journal_entries FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
 CREATE POLICY rls_journal_entries_admin ON journal_entries FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
 
+-- document_sequences: global sequences (branch_id=0) must be accessible to ALL branches
+-- for atomic code generation. Advisory locks (Task 20) replace SELECT FOR UPDATE,
+-- so RLS policies must allow branch_id=0 reads/writes for all authenticated users.
 ALTER TABLE document_sequences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE document_sequences FORCE ROW LEVEL SECURITY;
-CREATE POLICY rls_document_sequences_select ON document_sequences FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
-CREATE POLICY rls_document_sequences_insert ON document_sequences FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
-CREATE POLICY rls_document_sequences_update ON document_sequences FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
-CREATE POLICY rls_document_sequences_delete ON document_sequences FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_document_sequences_global_select ON document_sequences FOR SELECT USING (branch_id = 0);
+CREATE POLICY rls_document_sequences_global_insert ON document_sequences FOR INSERT WITH CHECK (branch_id = 0);
+CREATE POLICY rls_document_sequences_global_update ON document_sequences FOR UPDATE USING (branch_id = 0) WITH CHECK (branch_id = 0);
 CREATE POLICY rls_document_sequences_admin ON document_sequences FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
 
 ALTER TABLE customer_ledger ENABLE ROW LEVEL SECURITY;
@@ -930,3 +932,49 @@ CREATE POLICY rls_branch_demands_insert ON branch_demands FOR INSERT WITH CHECK 
 CREATE POLICY rls_branch_demands_update ON branch_demands FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
 CREATE POLICY rls_branch_demands_delete ON branch_demands FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
 CREATE POLICY rls_branch_demands_admin ON branch_demands FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+-- ============================================================
+-- ADVISORY LOCKS FOR DOCUMENT SEQUENCE GENERATION (Task 20)
+-- ============================================================
+--
+-- PostgreSQL advisory locks replace SELECT FOR UPDATE on document_sequences.
+-- The PHP service (DocumentSequenceService) uses pg_advisory_xact_lock()
+-- to serialize concurrent code generation for the same doc_type/branch_id/period_key.
+--
+-- Key construction (PHP side):
+--   $lockKey = crc32("{$docType}:{$branchId}:{$periodKey}") converted to signed int4
+--
+-- SQL helper function for diagnostics:
+--   doc_seq_advisory_key(doc_type, branch_id, period_key) → int4
+--
+-- Benefits over SELECT FOR UPDATE:
+--   1. No disk I/O — locks live in shared memory
+--   2. Non-blocking reads — other sessions can SELECT without waiting
+--   3. Transaction-scoped auto-release on COMMIT/ROLLBACK
+--   4. No RLS conflict — advisory locks are independent of RLS policies
+--
+-- Covering index for fast lookups under advisory lock:
+--   idx_doc_seq_covering ON (doc_type, branch_id, period_key) INCLUDE (last_number, id)
+--
+-- RLS compatibility: document_sequences uses branch_id=0 (global sequences).
+-- The policies above allow all users to read/insert/update branch_id=0 rows,
+-- which is required because advisory locks don't depend on row visibility.
+
+-- Helper function: compute advisory lock key from doc_type/branch_id/period_key.
+-- Mirrors DocumentSequenceService::computeLockKey() in PHP for SQL diagnostics.
+CREATE OR REPLACE FUNCTION doc_seq_advisory_key(
+    p_doc_type  varchar,
+    p_branch_id integer DEFAULT 0,
+    p_period_key varchar DEFAULT ''
+) RETURNS integer
+LANGUAGE sql IMMUTABLE STRICT
+AS $$
+    SELECT (
+        ('x' || left(md5(p_doc_type || ':' || p_branch_id::text || ':' || p_period_key), 8))::bit(32)::int
+    );
+$$;
+
+-- Covering index: satisfies advisory-lock read pattern entirely from index.
+CREATE INDEX IF NOT EXISTS idx_doc_seq_covering
+    ON document_sequences (doc_type, branch_id, period_key)
+    INCLUDE (last_number, id);

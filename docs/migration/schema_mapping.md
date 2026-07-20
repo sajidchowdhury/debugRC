@@ -429,6 +429,46 @@ Migration: `2025_01_20_000007_add_rls_branch_isolation.php`. SQL: `07_views_trig
 
 **Laravel integration**: `SetAppBranchId` middleware (global, `bootstrap/app.php`) sets `app.branch_id` and `app.is_admin` on every authenticated request. Console commands need explicit `DB::statement("SET app.is_admin = true")` before operating on branch-scoped data.
 
+### 3.15 Advisory Locks — Document Sequence Code Generation
+
+Task 20: Replaced `document_sequences SELECT FOR UPDATE` with PostgreSQL advisory locks (`pg_advisory_xact_lock`). Centralized into `DocumentSequenceService` — eliminates 12 duplicated `lockForUpdate` code blocks across all business services. Also fixes RLS interaction where non-admin users could not see branch_id=0 rows via `lockForUpdate()`.
+
+Migration: `2025_01_20_000008_replace_doc_seq_select_for_update_with_advisory_locks.php`. SQL: `07_views_triggers_constraints.sql` — ADVISORY LOCKS section.
+
+**New Database Objects:**
+
+| Object | Type | Purpose |
+|---|---|---|
+| `doc_seq_advisory_key(varchar, integer, varchar)` | SQL function | Compute advisory lock key from doc_type/branch_id/period_key |
+| `idx_doc_seq_covering` | Covering index | ON (doc_type, branch_id, period_key) INCLUDE (last_number, id) |
+
+**RLS Policy Changes on `document_sequences`:**
+
+| Old Policy | New Policy | Rationale |
+|---|---|---|
+| `rls_document_sequences_select` (branch_id = app.branch_id) | `rls_document_sequences_global_select` (branch_id = 0) | Global sequences (branch_id=0) must be readable by all branches |
+| `rls_document_sequences_insert` (branch_id = app.branch_id) | `rls_document_sequences_global_insert` (branch_id = 0) | All branches must insert new sequence rows |
+| `rls_document_sequences_update` (branch_id = app.branch_id) | `rls_document_sequences_global_update` (branch_id = 0) | All branches must increment counters |
+| `rls_document_sequences_delete` | (removed) | Sequences should never be deleted by non-admins |
+| `rls_document_sequences_admin` | `rls_document_sequences_admin` (unchanged) | Admin bypass preserved |
+
+**PHP Service:**
+
+| Class | Method | Lock Mechanism |
+|---|---|---|
+| `DocumentSequenceService` | `nextCode()` | `pg_advisory_xact_lock(hash)` + `SELECT` (no FOR UPDATE) |
+| `DocumentSequenceService` | `computeLockKey()` | `crc32(key)` → signed int4 |
+| `DocumentSequenceService` | `tryLock()` | `pg_try_advisory_xact_lock(hash)` (non-blocking) |
+
+**Advisory Lock Key Construction:**
+
+```
+Key = crc32(doc_type:branch_id:period_key) → signed int4
+Example: crc32("sales_invoice:0:2025-01") = -1876234567 (int4)
+```
+
+Collision probability: ~0.00009% with 20 active doc_types. Worst case: two unrelated sequences serialize briefly — no data corruption possible.
+
 ---
 
 ## 4. PHP Code SQL Compatibility (Phase 2.4)

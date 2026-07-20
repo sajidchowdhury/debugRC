@@ -40,7 +40,7 @@ class JournalPostingService
      * Create a balanced journal entry with the given lines.
      *
      * Validates: Dr=Cr, lines non-empty, period open, ledger active.
-     * Generates atomic entry_no via document_sequences (SELECT FOR UPDATE).
+     * Generates atomic entry_no via DocumentSequenceService (advisory locks — Task 20).
      * Logs the posting to journal_posting_logs.
      *
      * @param array $entry {
@@ -336,40 +336,20 @@ class JournalPostingService
 
     /**
      * Generate an atomic journal entry number: JE-YYYY-NNNNNN.
-     * Uses document_sequences with SELECT FOR UPDATE (fixes legacy COUNT+1 race).
+     * Uses DocumentSequenceService with advisory locks (Task 20).
+     * Journal entries use year-scoped sequences (periodKey = year) with 6-digit padding.
      */
     private function generateEntryNo(): string
     {
         $year = now()->format('Y');
-        $periodKey = $year;
-        $docType = 'journal_entry';
 
-        return DB::transaction(function () use ($docType, $periodKey, $year) {
-            $seqRow = DB::table('document_sequences')
-                ->where('doc_type', $docType)
-                ->where('branch_id', 0)
-                ->where('period_key', $periodKey)
-                ->lockForUpdate()
-                ->first();
-
-            $nextNumber = $seqRow ? ((int) $seqRow->last_number + 1) : 1;
-
-            if ($seqRow) {
-                DB::table('document_sequences')
-                    ->where('id', $seqRow->id)
-                    ->update(['last_number' => $nextNumber, 'updated_at' => now()]);
-            } else {
-                DB::table('document_sequences')->insert([
-                    'doc_type' => $docType,
-                    'branch_id' => 0,
-                    'period_key' => $periodKey,
-                    'last_number' => $nextNumber,
-                    'updated_at' => now(),
-                ]);
-            }
-
-            return "JE-{$year}-" . str_pad((string) $nextNumber, 6, '0', STR_PAD_LEFT);
-        });
+        return DocumentSequenceService::nextCode(
+            docType:  'journal_entry',
+            prefix:   'JE',
+            datePart: $year,
+            padLength: 6,
+            periodKey: $year,
+        );
     }
 
     // ============================================================

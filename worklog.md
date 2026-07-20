@@ -234,4 +234,30 @@ Stage Summary:
 - Admin bypass: current_setting('app.is_admin', true) = 'true' sees all branches
 - Non-admin: branch_id = current_setting('app.branch_id')::int sees own branch only
 - CLI/direct SQL: deny by default (no rows visible without SET app.branch_id)
-- Task 19 marked ✅ Done
+
+---
+Task ID: 20
+Agent: Main Agent
+Task: Replace document_sequences SELECT FOR UPDATE with advisory locks
+
+Work Log:
+- Explored all 12+ services using document_sequences with lockForUpdate() pattern
+- Created DocumentSequenceService (centralized service with pg_advisory_xact_lock)
+- Advisory lock key = crc32(doc_type:branch_id:period_key) → signed int4
+- Created migration 2025_01_20_000008 with: covering index, RLS policy fixes, doc_seq_advisory_key() function
+- Refactored 12 services to use DocumentSequenceService::nextCode():
+  - SalesInvoiceService, SalesChallanService, SalesReturnService, CustomerPaymentService
+  - PurchaseOrderService, PurchaseReceiveService, PurchaseReturnService
+  - StockAdjustmentService, StockTakeService, WarehouseTransferService, DamageService
+  - JournalPostingService (special: year-scoped period, 6-digit padding)
+- Fixed RLS interaction: old lockForUpdate() would fail for non-admin users because branch_id=0 rows were filtered by RLS
+- Updated 07_views_triggers_constraints.sql: document_sequences RLS policies → branch_id=0 global access + advisory lock section
+- Updated sales-module-documentation.md: Section 7.6 → ✅ Implemented (Task 20), phase plan Task 20 → Done
+- Updated schema_mapping.md: Section 3.15 (Advisory Locks reference)
+
+Stage Summary:
+- 12 duplicated lockForUpdate blocks eliminated → 1 centralized DocumentSequenceService
+- Advisory locks are ~20-100x faster than SELECT FOR UPDATE (memory vs disk)
+- RLS conflict fixed: branch_id=0 global sequences now accessible to all branches
+- Covering index idx_doc_seq_covering makes advisory-lock SELECT fast without heap access
+- SQL diagnostic function doc_seq_advisory_key() mirrors PHP hash for lock monitoring

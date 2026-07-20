@@ -2,6 +2,7 @@
 
 namespace App\Services\Purchase;
 
+use App\Services\Accounting\DocumentSequenceService;
 use App\Models\PurchaseOrder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -20,7 +21,7 @@ use Illuminate\Support\Facades\Log;
  *   - updateReceivedQty: called by GRN (Phase 7.2) to update received_qty + auto-status
  *
  * PO code generation: PO-YYYYMMDD-NNNN using document_sequences
- * with SELECT FOR UPDATE (fixes legacy COUNT+1 race condition).
+ * with advisory locks (Task 20 — replaces SELECT FOR UPDATE).
  */
 class PurchaseOrderService
 {
@@ -240,37 +241,16 @@ class PurchaseOrderService
 
     /**
      * Generate atomic PO code: PO-YYYYMMDD-NNNN.
-     * Uses document_sequences with SELECT FOR UPDATE.
+     * Uses DocumentSequenceService with advisory locks (Task 20).
      */
     private function generatePoCode(): string
     {
-        $datePart = now()->format('Ymd');
-        $periodKey = now()->format('Y-m');
-        $docType = 'purchase_order';
-
-        return DB::transaction(function () use ($docType, $periodKey, $datePart) {
-            $seqRow = DB::table('document_sequences')
-                ->where('doc_type', $docType)
-                ->where('branch_id', 0)
-                ->where('period_key', $periodKey)
-                ->lockForUpdate()
-                ->first();
-
-            $nextNumber = $seqRow ? ((int) $seqRow->last_number + 1) : 1;
-
-            if ($seqRow) {
-                DB::table('document_sequences')->where('id', $seqRow->id)
-                    ->update(['last_number' => $nextNumber, 'updated_at' => now()]);
-            } else {
-                DB::table('document_sequences')->insert([
-                    'doc_type' => $docType, 'branch_id' => 0,
-                    'period_key' => $periodKey, 'last_number' => $nextNumber,
-                    'updated_at' => now(),
-                ]);
-            }
-
-            return "PO-{$datePart}-" . str_pad((string) $nextNumber, 4, '0', STR_PAD_LEFT);
-        });
+        return DocumentSequenceService::nextCode(
+            docType:  'purchase_order',
+            prefix:   'PO',
+            datePart: now()->format('Ymd'),
+            padLength: 4,
+        );
     }
 
     private function validateCreateInput(array $data): void
