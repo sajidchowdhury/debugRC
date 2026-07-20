@@ -1,6 +1,6 @@
 # RC-ERP Sales Module — Complete Documentation & Gap Analysis
 
-> **Document Version**: 1.7 — Updated with Sales API write endpoints (Task 36 ✅)
+> **Document Version**: 1.8 — Updated with Salesman Commission Tracking (Task 37 ✅)
 > **Date**: 2025-07-21  
 > **Scope**: Legacy CodeIgniter/MySQL → Laravel 12/PostgreSQL migration  
 > **Focus**: Sales Entry, Challan/Godown Copy, Invoice, Payment Receive, Sales Return  
@@ -36,6 +36,7 @@
 12. [Table Partitioning — sales_invoices + stock_transactions (Task 34)](#12-table-partitioning--sales_invoices--stock_transactions-task-34)
 13. [Deferred FK Constraints — Configuration (Task 35)](#13-deferred-fk-constraints--configuration-task-35)
 14. [Sales API Write Endpoints — Mobile Integration (Task 36)](#14-sales-api-write-endpoints--mobile-integration-task-36)
+15. [Salesman Commission Tracking (Task 37)](#15-salesman-commission-tracking-task-37)
 
 ---
 
@@ -760,7 +761,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | G-6 | **Multi-payment allocation** | One payment can be allocated to multiple invoices | `confirmPayment()` accepts single invoiceId only | ⚠️ VERIFIED — Service has `?int $invoiceId` param, no loop for multi-allocation | Cannot split payment across invoices |
 | G-7 | **Payment transaction types** | receive/payment/discount/write_off | Column exists (CHECK constraint) but only 'receive' is set by service | ⚠️ VERIFIED — `transaction_type` column added by P2-5 but service hardcodes 'receive' | Discount, write-off, refund features missing |
 | G-8 | **Discount GL posting on payment** | `postCustomerDiscount()` in JournalPostingService | discount_amount field exists but no GL posted on confirm | ❌ VERIFIED — No discount GL in CustomerPaymentService::confirmPayment() | Discounts not reflected in GL |
-| G-9 | **Salesman commission tracking** | salesman_id tracked on invoices | No commission calculation service | ❌ Not implemented | Commission reports not possible |
+| G-9 | **Salesman commission tracking** | salesman_id tracked on invoices | No commission calculation service | ✅ IMPLEMENTED — CommissionService + 5 tables + 4 rule types + API endpoints | Commission tracking fully operational |
 | G-10 | **Call It A Day** batch operation | `callItADay()` in SalesInvoiceOperationsTrait | Not implemented in Laravel service | ❌ VERIFIED — Zero matches for callItADay/call_it_a_day in Laravel codebase | End-of-day workflow missing |
 | G-11 | **Customer 360 hub** | `CustomerController::show()` with summary, ledger, invoices, payments | Basic show view (name, contact, credit limit) — NO ledger/invoice/payment tabs | ⚠️ VERIFIED — customers/show.blade.php (197 lines) is a static detail page; comment says "placeholder for future customer-ledger widget" | No unified customer view |
 
@@ -1305,7 +1306,7 @@ LIMIT 30;
 | 34 | ~~Set up table partitioning for sales_invoices + stock_transactions~~ ✅ DONE | Low | 2 days | Database |
 | 35 | ~~Configure deferred FK constraints~~ ✅ DONE | Low | 1 day | Database |
 | 36 | ~~Implement Sales API write endpoints (mobile)~~ ✅ DONE | Medium | 5 days | Business Logic + API |
-| 37 | Implement salesman commission tracking | Low | 3 days | Business Logic |
+| 37 | ~~Implement salesman commission tracking~~ ✅ DONE | Low | 3 days | Business Logic |
 
 ### UI Guidelines (All Phases)
 
@@ -2493,11 +2494,11 @@ The `down()` method reverses all changes by finding all DEFERRABLE FKs and makin
 | CSV export | ✅ Invoices + challans | ❌ Not implemented | LOW |
 | Real-time notifications (LISTEN/NOTIFY) | ❌ Polling only | ✅ IMPLEMENTED — PG triggers + Redis Pub/Sub + SSE + polling fallback | Better |
 | CTE-based complex queries | ❌ Multiple queries + PHP loops | ✅ IMPLEMENTED — 4 CTE functions (today's summary, AR aging, GL running balance, gross margin) | Better |
-| Salesman commission | ❌ Not in legacy | ❌ Not implemented | LOW |
+| Salesman commission | ❌ Not in legacy | ✅ IMPLEMENTED — 4 rule types (flat/tiered/product_group/target_bonus), 5 tables, CommissionService, API endpoints, GL posting | Better |
 
 ---
 
-> **Last Verified**: 2025-07-21 — Task 31 (LISTEN/NOTIFY) and Task 32 (CTE queries) implemented and documented.
+> **Last Verified**: 2025-07-21 — Task 37 (Salesman Commission Tracking) implemented and documented.
 
 ## Appendix B: Key Formulas Reference
 
@@ -2517,6 +2518,11 @@ The `down()` method reverses all changes by finding all DEFERRABLE FKs and makin
 | Inventory valuation | `SUM(warehouse_stock.qty × warehouse_stock.avg_cost)` | ReconciliationService |
 | Return COGS reversal | `qty × original_cost` (not current avg_cost) | SalesReturnService |
 | Transport adjustment delta | `challan_transport - invoice_transport` | SalesChallanService |
+| Commission (flat) | `allocated_amount * rate / 100` | CommissionService |
+| Commission (tiered) | `SUM(portion_in_tier * tier_rate / 100)` (incremental model) | CommissionService |
+| Commission (product_group) | `SUM(item_allocated * group_rate / 100)` (weighted by item proportion) | CommissionService |
+| Commission (target_bonus) | `allocated * base_rate / 100 + excess * bonus_rate / 100` | CommissionService |
+| Commission reversal (return) | `-original_commission * (return_total / invoice_total)` (proportional) | CommissionService |
 
 ## Appendix C: GL Account Mapping (Nature-Based)
 
@@ -2541,6 +2547,7 @@ The `down()` method reverses all changes by finding all DEFERRABLE FKs and makin
 | `operating_expense` | Debit | Operating expense entries |
 | `salary_expense` | Debit | Salary entries |
 | `finance_cost` | Debit | Finance charges, write-offs |
+| `commission_expense` | Debit | Salesman commission (Task 37) |
 | `retained_earnings` | Credit | Year-end close |
 
 ---
@@ -2843,6 +2850,440 @@ The following enhancements are out of scope for Task 36 but should be considered
 
 ---
 
-> **End of Sales Module Documentation**  
-> This document should be used as the reference for all Phase 1 sales module implementation.  
-> Refer to the gap analysis (Section 6) for prioritization and the PostgreSQL plan (Section 7) for database optimization strategy.
+## 15. Salesman Commission Tracking (Task 37)
+
+### 15.1 Overview
+
+Task 37 implements a comprehensive salesman commission tracking system for the ERP sales module. Prior to this task, the `salesman_id` column existed on `sales_invoices` but there was no mechanism to calculate, track, or report commission owed to salesmen. The commission system fills this gap with four distinct rule types, automatic calculation on payment allocation, reversal on returns, and GL integration at period confirmation.
+
+The implementation follows the established architectural patterns: thin API controllers delegating to a fat service layer (`CommissionService`), PostgreSQL-level constraints for data integrity, trigger-based FK enforcement for partitioned table references, and RLS policies for branch isolation. This is a **new feature** — the legacy CodeIgniter system had no commission tracking, making the Laravel implementation superior in this domain.
+
+### 15.2 Design Principles
+
+1. **Commission on payment, not invoice creation**: A salesman only earns commission on invoices that have been paid. Draft, cancelled, or reversed invoices generate no commission. This is the standard practice for commission systems — it ensures commission reflects actual revenue collected, not just invoiced amounts that may never be paid.
+
+2. **Proportional calculation**: When a partial payment is allocated to an invoice, the commission is calculated proportionally. For a 1,000 invoice with 1.5% commission rate: a 600 payment earns 9.00 commission, and the remaining 400 earns 6.00 when paid. This ensures commission tracks actual cash flow.
+
+3. **Time-bounded rules**: Commission rules have `effective_from` and `effective_to` dates. When a rate changes, the old rule is closed and a new one is inserted. Historical entries always reference the rule that was active at calculation time, preserving accuracy even after rate changes.
+
+4. **Return reversals**: When a sales return is confirmed, a negative commission entry is created proportionally. If a customer returns items worth 20% of an invoice, 20% of the original commission is reversed. This ensures net commission reflects actual net revenue.
+
+5. **GL integration at confirmation**: Commission entries are not posted to GL immediately. Instead, they accumulate in `calculated` status and are batch-confirmed at month-end. On confirmation, a journal entry posts Dr Commission Expense / Cr Employee Payable per salesman.
+
+### 15.3 Commission Rule Types
+
+The system supports four commission rule types, each with distinct calculation logic:
+
+#### 15.3.1 Flat Rate
+
+The simplest structure: a single percentage rate applied to every payment allocation. The formula is straightforward: `commission = allocated_amount * rate / 100`.
+
+Example: Salesman has a flat 1.5% commission rate. Invoice INV-2025-001 for 10,000 receives a payment of 6,000:
+- Commission base = 6,000 (the allocated amount)
+- Commission rate = 1.5%
+- Commission amount = 6,000 * 1.5 / 100 = 90.00
+
+#### 15.3.2 Tiered (Progressive)
+
+Progressive rates based on cumulative sales volume within a period (monthly). The incremental model applies each tier's rate only to the portion of sales within that tier, not to the entire cumulative amount.
+
+Example: Salesman has tiered rates:
+- Tier 1: 0 to 50,000 at 1.0%
+- Tier 2: 50,000 to 100,000 at 1.5%
+- Tier 3: above 100,000 at 2.0%
+
+If cumulative sales this month are 80,000 before a 30,000 payment:
+- Portion in Tier 2: 100,000 - 80,000 = 20,000 at 1.5% = 300.00
+- Portion in Tier 3: 110,000 - 100,000 = 10,000 at 2.0% = 200.00
+- Total commission for this payment = 500.00
+
+This is the standard progressive/incremental model used in most ERP commission systems. It incentivizes salesmen to push beyond each tier threshold.
+
+#### 15.3.3 Product Group
+
+Different commission rates per product group. This is used when certain product categories have higher margins and warrant higher commission. Items in groups not explicitly listed use the rule's default rate.
+
+Example: Salesman has product group rates:
+- Default rate: 1.0%
+- Electronics (group_id=2): 2.5%
+- Furniture (group_id=5): 0.8%
+
+For a 10,000 invoice with 7,000 in electronics and 3,000 in furniture, receiving a 5,000 payment:
+- Electronics portion: 5,000 * (7,000/10,000) = 3,500 at 2.5% = 87.50
+- Furniture portion: 5,000 * (3,000/10,000) = 1,500 at 0.8% = 12.00
+- Total commission = 99.50
+
+The calculation distributes the payment proportionally across invoice items based on their share of the invoice total, then applies the group-specific rate to each portion.
+
+#### 15.3.4 Target Bonus
+
+Base rate on all sales, with an additional bonus rate when a sales target is exceeded within a period. This combines the simplicity of flat rate with the motivation of a target-based incentive.
+
+Example: Salesman has base rate 1.0%, monthly target 100,000, bonus rate 2.0%:
+- If monthly sales = 80,000 (target not met): commission = 80,000 * 1.0% = 800.00
+- If monthly sales = 120,000 (target exceeded): commission = 100,000 * 1.0% + 20,000 * 2.0% = 1,000 + 400 = 1,400.00
+- The bonus rate applies only to sales ABOVE the target, not retroactively to all sales.
+
+The target period can be monthly, quarterly, or yearly. When the cumulative sales in the period cross the target threshold, only the excess portion gets the bonus rate.
+
+### 15.4 Database Schema
+
+#### 15.4.1 commission_rules
+
+```sql
+CREATE TABLE commission_rules (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    salesman_id integer NOT NULL REFERENCES employees(id),
+    rule_type varchar(20) NOT NULL CHECK (rule_type IN ('flat','tiered','product_group','target_bonus')),
+    rate numeric(8,4) NOT NULL DEFAULT 0,
+    effective_from date NOT NULL DEFAULT CURRENT_DATE,
+    effective_to date,
+    is_active boolean NOT NULL DEFAULT true,
+    branch_id integer REFERENCES branches(id),
+    notes text,
+    created_by integer,
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT commission_rules_unique_active EXCLUDE (
+        salesman_id WITH =,
+        gist(
+            CASE WHEN is_active AND effective_to IS NULL
+                 THEN daterange(effective_from, NULL, '[)')
+                 ELSE daterange(NULL, NULL, '[]')
+            END WITH &&
+        )
+    ) WHERE (is_active AND effective_to IS NULL)
+);
+```
+
+**EXCLUDE constraint**: Uses GiST with `btree_gist` to enforce that only one active open-ended rule exists per salesman at a time. Inactive or expired rules (with `effective_to` set) do not participate in the constraint check, allowing historical rules to coexist.
+
+**branch_id**: When NULL, the rule applies to all branches. When set, the rule applies only to invoices from that branch. A salesman can have different rates for different branches (e.g., higher commission for a new branch to incentivize growth).
+
+**rate (numeric(8,4))**: Four decimal places for precision (e.g., 1.5000 = 1.5%). This allows fine-grained rates like 0.1250% without rounding errors.
+
+#### 15.4.2 commission_rule_tiers
+
+```sql
+CREATE TABLE commission_rule_tiers (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    commission_rule_id integer NOT NULL REFERENCES commission_rules(id) ON DELETE CASCADE,
+    threshold numeric(14,2) NOT NULL DEFAULT 0,
+    rate numeric(8,4) NOT NULL DEFAULT 0,
+    sort_order integer NOT NULL DEFAULT 0,
+    CONSTRAINT commission_rule_tiers_threshold_unique UNIQUE (commission_rule_id, threshold)
+);
+```
+
+Each tier has a `threshold` (cumulative sales amount where the tier starts) and a `rate` (commission percentage for the portion of sales in this tier). Tiers are ordered by threshold ascending. The UNIQUE constraint on `(commission_rule_id, threshold)` prevents duplicate thresholds for the same rule.
+
+#### 15.4.3 commission_rule_product_groups
+
+```sql
+CREATE TABLE commission_rule_product_groups (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    commission_rule_id integer NOT NULL REFERENCES commission_rules(id) ON DELETE CASCADE,
+    product_group_id integer NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE,
+    rate numeric(8,4) NOT NULL DEFAULT 0,
+    CONSTRAINT commission_rule_pg_unique UNIQUE (commission_rule_id, product_group_id)
+);
+```
+
+Maps product groups to commission rates. Each product group can have one rate per rule. Products in groups not listed use the rule's default `rate`. The CASCADE delete ensures cleanup when a rule or product group is removed.
+
+#### 15.4.4 commission_rule_targets
+
+```sql
+CREATE TABLE commission_rule_targets (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    commission_rule_id integer NOT NULL REFERENCES commission_rules(id) ON DELETE CASCADE,
+    target_amount numeric(14,2) NOT NULL DEFAULT 0,
+    bonus_rate numeric(8,4) NOT NULL DEFAULT 0,
+    period varchar(10) NOT NULL DEFAULT 'monthly' CHECK (period IN ('monthly','quarterly','yearly')),
+    CONSTRAINT commission_rule_targets_rule_unique UNIQUE (commission_rule_id, period)
+);
+```
+
+Defines sales targets with bonus rates. The `period` determines how the cumulative sales are measured (monthly, quarterly, or yearly). The UNIQUE constraint allows one target per period type per rule.
+
+#### 15.4.5 commission_entries
+
+```sql
+CREATE TABLE commission_entries (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    salesman_id integer NOT NULL REFERENCES employees(id),
+    branch_id integer NOT NULL REFERENCES branches(id),
+    sales_invoice_id integer,  -- FK enforced by trigger trg_fk_ce_si
+    commission_rule_id integer NOT NULL REFERENCES commission_rules(id),
+    allocation_id integer REFERENCES invoice_payment_allocations(id) ON DELETE SET NULL,
+    sales_return_id integer REFERENCES sales_returns(id) ON DELETE SET NULL,
+    invoice_total numeric(14,2) DEFAULT 0,
+    commission_base numeric(14,2) DEFAULT 0,
+    commission_rate numeric(8,4) DEFAULT 0,
+    commission_amount numeric(14,2) NOT NULL DEFAULT 0,
+    status varchar(20) NOT NULL DEFAULT 'calculated'
+        CHECK (status IN ('calculated','confirmed','paid','reversed')),
+    entry_date date NOT NULL DEFAULT CURRENT_DATE,
+    journal_entry_id integer REFERENCES journal_entries(id),
+    reversed_by_entry_id integer REFERENCES commission_entries(id),
+    is_reversed boolean NOT NULL DEFAULT false,
+    reversed_at timestamp(0),
+    reversed_by integer,
+    reverse_reason text,
+    commission_period varchar(7),  -- Set by trigger: '2025-01'
+    notes text,
+    created_by integer,
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+**Source tracking**: Each entry must reference either an `allocation_id` (positive entry from payment) or a `sales_return_id` (negative entry from return), but not both. This is enforced by the `trg_ce_validate_source` trigger.
+
+**Partitioned table FK**: The `sales_invoice_id` column references `sales_invoices` (partitioned). Since PG 12-17 does not support declarative FKs to partitioned tables, this is enforced via the `trg_fk_ce_si` constraint trigger, following the exact pattern established in Task 34.
+
+**commission_period**: Automatically set from `entry_date` by the `fn_ce_set_period` trigger, formatted as `YYYY-MM`. This enables efficient period-based queries and batch confirmation.
+
+**Self-referential FK**: `reversed_by_entry_id` references `commission_entries(id)`, creating a link from a reversal entry to the original entry being reversed.
+
+### 15.5 Status Workflow
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│              COMMISSION ENTRY LIFECYCLE                       │
+│                                                              │
+│  ① CALCULATED (auto-generated)                               │
+│  │  Trigger: Payment allocated to invoice                    │
+│  │  Service: CommissionService::calculateOnAllocation()      │
+│  │  No GL posting yet                                        │
+│  │                                                           │
+│  ↓  (month-end batch)                                        │
+│                                                              │
+│  ② CONFIRMED (admin approves)                                │
+│  │  Trigger: CommissionService::confirmPeriod()              │
+│  │  GL: Dr Commission Expense / Cr Employee Payable          │
+│  │  journal_entry_id is set                                  │
+│  │                                                           │
+│  ↓  (employee is paid)                                       │
+│                                                              │
+│  ③ PAID                                                      │
+│  │  Trigger: CommissionService::markAsPaid()                 │
+│  │  After employee_transactions (type=repayment) is created  │
+│  │                                                           │
+│  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─  │
+│                                                              │
+│  ④ REVERSED (any status → reversed)                          │
+│     Trigger: Payment reversal or return                      │
+│     CommissionService::reverseOnPaymentReversal()            │
+│     CommissionService::reverseOnReturn()                     │
+│     Creates negative entry for return; marks original        │
+│     entry as reversed for payment reversal                   │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 15.6 Commission Calculation Triggers
+
+Commission is calculated at two points in the sales workflow:
+
+1. **Payment allocation** (`CommissionService::calculateOnAllocation()`): Called when a `CustomerPaymentService::confirmPayment()` creates an `InvoicePaymentAllocation`. The service finds the active commission rule for the invoice's salesman, calculates the commission based on rule type, and creates a `commission_entry` with `status = 'calculated'`.
+
+2. **Sales return** (`CommissionService::reverseOnReturn()`): Called when `SalesReturnService::confirm()` confirms a return. The service finds the original commission entries for the invoice, calculates the proportional reversal, and creates a negative `commission_entry`.
+
+Additionally, when a payment is reversed (`CommissionService::reverseOnPaymentReversal()`), the original commission entry is marked as `reversed` and a negative reversal entry is created.
+
+### 15.7 Period Confirmation (Month-End Batch)
+
+At month-end, an admin calls `CommissionService::confirmPeriod($period)` to confirm all `calculated` entries for a period. The process:
+
+1. Groups entries by salesman
+2. For each salesman, calculates the net commission (positive entries - return reversals)
+3. If net commission > 0, posts a GL journal entry: Dr Commission Expense / Cr Employee Payable
+4. Updates all entries to `status = 'confirmed'` with the `journal_entry_id`
+
+This batch approach ensures GL entries are posted in aggregate per salesman per period, rather than per individual allocation. It also gives managers a chance to review before posting to GL.
+
+### 15.8 Trigger-Based FK Enforcement
+
+The `commission_entries` table references `sales_invoices` (partitioned). Following the pattern from Task 34, this FK is enforced via a constraint trigger:
+
+```sql
+CREATE OR REPLACE FUNCTION fn_fk_ce_si_check()
+RETURNS trigger AS $$
+BEGIN
+    IF NEW.sales_invoice_id IS NOT NULL THEN
+        IF NOT EXISTS (SELECT 1 FROM sales_invoices WHERE id = NEW.sales_invoice_id) THEN
+            RAISE EXCEPTION 'Referential integrity: sales_invoice_id=% does not exist in sales_invoices', NEW.sales_invoice_id;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_fk_ce_si
+    AFTER INSERT ON commission_entries
+    DEFERRABLE INITIALLY IMMEDIATE
+    FOR EACH ROW
+    EXECUTE FUNCTION fn_fk_ce_si_check();
+```
+
+This is the same pattern used for `sales_invoice_items`, `sales_invoice_dispatchers`, `sales_invoice_dispatches`, `sales_challans`, and `sales_returns` — all child tables of the partitioned `sales_invoices`.
+
+### 15.9 Database Triggers
+
+Four triggers are created on `commission_entries`:
+
+| Trigger | Function | Purpose |
+|---------|----------|---------|
+| `trg_fk_ce_si` | `fn_fk_ce_si_check()` | FK enforcement for `sales_invoice_id` → `sales_invoices` (partitioned) |
+| `trg_ce_set_period` | `fn_ce_set_period()` | Auto-set `commission_period` from `entry_date` (format: `YYYY-MM`) |
+| `trg_ce_updated_at` | `fn_ce_updated_at()` | Auto-update `updated_at` on row modification |
+| `trg_ce_validate_source` | `fn_ce_validate_source()` | Ensure exactly one of `allocation_id` or `sales_return_id` is set |
+
+### 15.10 RLS Policies
+
+Row-Level Security is enabled on both `commission_rules` and `commission_entries`:
+
+**commission_rules**: Visible if `branch_id IS NULL` (global rules) or `branch_id` matches the session branch. Admin/superadmin users bypass RLS and see all rules.
+
+**commission_entries**: Visible only for entries matching the session `branch_id`. Admin/superadmin users bypass RLS and see all entries.
+
+This provides defense-in-depth branch isolation: the application layer (`BranchScope` global scope) filters queries first, and RLS provides a database-level safety net.
+
+### 15.11 DEFERRABLE FK Configuration
+
+All FKs in the commission tables are configured DEFERRABLE per the Task 35 pattern:
+
+**DEFERRABLE INITIALLY DEFERRED** (often created in same transaction as parent):
+- `commission_entries.salesman_id` → `employees(id)`
+- `commission_entries.branch_id` → `branches(id)`
+- `commission_entries.journal_entry_id` → `journal_entries(id)`
+- `commission_entries.commission_rule_id` → `commission_rules(id)`
+- `commission_entries.allocation_id` → `invoice_payment_allocations(id)`
+- `commission_entries.sales_return_id` → `sales_returns(id)`
+- `commission_rules.salesman_id` → `employees(id)`
+- `commission_rules.branch_id` → `branches(id)`
+
+**DEFERRABLE INITIALLY IMMEDIATE** (parent always pre-exists):
+- `commission_rule_product_groups.product_group_id` → `product_groups(id)`
+
+### 15.12 Default Seeding
+
+The migration seeds a default `flat` commission rule with `rate = 0` for every active salesman who does not already have a rule. This ensures:
+
+1. Every salesman has a commission rule — the service never returns NULL
+2. The 0% rate means no commission is earned until explicitly configured
+3. New salesmen automatically get a default rule when the migration runs
+
+### 15.13 API Endpoints
+
+All commission endpoints are under `/api/v1/sales/commission/*`:
+
+#### 15.13.1 Commission Rules
+
+| Method | URI | Controller Method | Auth | Rate Limit | Description |
+|--------|-----|-------------------|------|------------|-------------|
+| GET | `/api/v1/sales/commission/rules` | `listRules` | Any | 60/min | List rules (filterable by salesman, type, active, branch) |
+| GET | `/api/v1/sales/commission/rules/{id}` | `showRule` | Any | 60/min | Show rule with tiers/groups/targets |
+| POST | `/api/v1/sales/commission/rules` | `storeRule` | Admin | 30/min | Create a new commission rule |
+| POST | `/api/v1/sales/commission/rules/{id}/deactivate` | `deactivateRule` | Admin | 30/min | Deactivate (close) a rule |
+
+#### 15.13.2 Commission Entries
+
+| Method | URI | Controller Method | Auth | Rate Limit | Description |
+|--------|-----|-------------------|------|------------|-------------|
+| GET | `/api/v1/sales/commission/entries` | `listEntries` | Any | 60/min | List entries (filterable by salesman, period, status, date) |
+
+#### 15.13.3 Commission Summaries
+
+| Method | URI | Controller Method | Auth | Rate Limit | Description |
+|--------|-----|-------------------|------|------------|-------------|
+| GET | `/api/v1/sales/commission/salesman-summary` | `salesmanSummary` | Any | 60/min | Per-salesman summary (?salesman_id=X&period=YYYY-MM) |
+| GET | `/api/v1/sales/commission/branch-summary` | `branchSummary` | Any | 60/min | All salesmen summary (?period=YYYY-MM&branch_id=X) |
+
+#### 15.13.4 Commission Confirmation
+
+| Method | URI | Controller Method | Auth | Rate Limit | Description |
+|--------|-----|-------------------|------|------------|-------------|
+| POST | `/api/v1/sales/commission/confirm-period` | `confirmPeriod` | Admin | 30/min | Confirm all calculated entries for a period |
+
+### 15.14 Service Layer
+
+**`CommissionService`** (`app/Services/Sales/CommissionService.php`) handles all commission logic:
+
+| Method | Purpose |
+|--------|---------|
+| `createRule(array $data)` | Create a commission rule (auto-closes existing active rule) |
+| `getActiveRule(int $salesmanId, string $date, ?int $branchId)` | Find the active rule for a salesman on a date |
+| `calculateOnAllocation(InvoicePaymentAllocation $allocation)` | Calculate + create entry when payment is allocated |
+| `reverseOnReturn(SalesReturn $return)` | Create negative entry when return is confirmed |
+| `reverseOnPaymentReversal(InvoicePaymentAllocation $allocation)` | Reverse entry when payment is reversed |
+| `confirmPeriod(string $period, int $confirmedBy)` | Batch-confirm all calculated entries + post GL |
+| `markAsPaid(int $salesmanId, string $period)` | Mark entries as paid after employee payment |
+| `getSalesmanSummary(int $salesmanId, string $period)` | Per-salesman report |
+| `getBranchSummary(?int $branchId, string $period)` | Per-branch report |
+
+### 15.15 Eloquent Models
+
+| Model | Table | Key Relationships |
+|-------|-------|-------------------|
+| `CommissionRule` | `commission_rules` | salesman(), branch(), tiers(), productGroups(), targets(), entries() |
+| `CommissionRuleTier` | `commission_rule_tiers` | rule() |
+| `CommissionRuleProductGroup` | `commission_rule_product_groups` | rule(), productGroup() |
+| `CommissionRuleTarget` | `commission_rule_targets` | rule() |
+| `CommissionEntry` | `commission_entries` | salesman(), branch(), salesInvoice(), commissionRule(), allocation(), salesReturn(), journalEntry(), reversedByEntry() |
+
+**Employee model additions** (Task 37):
+- `commissionRule()` — HasOne: currently active rule
+- `commissionRules()` — HasMany: all rules including historical
+- `commissionEntries()` — HasMany: all commission entries
+- `scopeSalesmen()` — Scope: employees with `role = 'salesman'`
+
+### 15.16 Index Strategy
+
+| Table | Index | Columns | Purpose |
+|-------|-------|---------|---------|
+| `commission_rules` | `idx_cr_salesman` | (salesman_id, is_active, effective_from) | Active rule lookup |
+| `commission_rules` | `idx_cr_branch` | (branch_id) | Branch filtering |
+| `commission_rule_tiers` | `idx_crt_rule` | (commission_rule_id) | Tier loading |
+| `commission_rule_product_groups` | `idx_crpg_rule` | (commission_rule_id) | Group loading |
+| `commission_rule_product_groups` | `idx_crpg_group` | (product_group_id) | Reverse lookup |
+| `commission_rule_targets` | `idx_cxrt_rule` | (commission_rule_id) | Target loading |
+| `commission_entries` | `idx_ce_salesman` | (salesman_id, entry_date) | Per-salesman queries |
+| `commission_entries` | `idx_ce_branch` | (branch_id, entry_date) | Per-branch queries |
+| `commission_entries` | `idx_ce_invoice` | (sales_invoice_id) | Invoice audit trail |
+| `commission_entries` | `idx_ce_allocation` | (allocation_id) | Payment reversal lookup |
+| `commission_entries` | `idx_ce_return` | (sales_return_id) | Return reversal lookup |
+| `commission_entries` | `idx_ce_rule` | (commission_rule_id) | Rule audit |
+| `commission_entries` | `idx_ce_status` | (status) | Batch confirmation filter |
+| `commission_entries` | `idx_ce_period` | (commission_period, salesman_id) | Period summary queries |
+| `commission_entries` | `idx_ce_journal` | (journal_entry_id) | GL audit |
+
+### 15.17 GL Integration
+
+On period confirmation, the `CommissionService` posts GL entries per salesman:
+
+```
+Dr Commission Expense (nature: operating_expense)
+   Cr Employee Payable (nature: employee_payable)
+```
+
+The journal entry is created via `JournalPostingService::postCommissionExpense()`, ensuring the same double-entry pattern used throughout the ERP. The `journal_entry_id` is stored on each confirmed `commission_entry` for full audit trail.
+
+For net-zero salesmen (where positive commission from payments exactly offsets negative commission from returns), no GL entry is posted — the entries are simply marked as `confirmed`.
+
+### 15.18 Files Modified
+
+| File | Change |
+|------|--------|
+| `database/migrations/2025_01_22_000001_create_commission_tracking.php` | **New** — migration creating 5 tables + 4 triggers + RLS policies + seed |
+| `database/sql/04_sales.sql` | Updated — added commission tables section + header comment |
+| `app/Models/CommissionRule.php` | **New** — Eloquent model with rule type helpers |
+| `app/Models/CommissionRuleTier.php` | **New** — Tiered rate model |
+| `app/Models/CommissionRuleProductGroup.php` | **New** — Product group rate model |
+| `app/Models/CommissionRuleTarget.php` | **New** — Target bonus model |
+| `app/Models/CommissionEntry.php` | **New** — Commission ledger model with status helpers |
+| `app/Models/Employee.php` | Updated — added commissionRule(), commissionRules(), commissionEntries(), scopeSalesmen() |
+| `app/Services/Sales/CommissionService.php` | **New** — full commission calculation, reversal, confirmation, and reporting service |
+| `app/Http/Controllers/Api/V1/Sales/CommissionApiController.php` | **New** — REST API controller for commission rules, entries, summaries, and confirmation |
+| `routes/api.php` | Updated — added 7 commission endpoints under `/api/v1/sales/commission/*` |
+| `docs/sales-module-documentation.md` | Updated — Task 37 ✅, Section 15, G-9 updated, Appendix A/B/C updated |

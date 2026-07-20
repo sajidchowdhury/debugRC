@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\V1\Sales\SalesInvoiceApiController;
 use App\Http\Controllers\Api\V1\Sales\SalesChallanApiController;
 use App\Http\Controllers\Api\V1\Sales\SalesReturnApiController;
 use App\Http\Controllers\Api\V1\Sales\CustomerPaymentApiController;
+use App\Http\Controllers\Api\V1\Sales\CommissionApiController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -183,4 +184,37 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
     Route::post('sales/payments/{id}/cancel', [CustomerPaymentApiController::class, 'cancel'])
         ->where('id', '[0-9]+')
         ->middleware('api.rate:30');
+
+    // ======================================================================
+    // Task 37 — Commission Tracking API
+    // ======================================================================
+    // Admin/manager endpoints for commission rule management and reporting.
+    // Write endpoints: 30 req/min. Read endpoints: 60 req/min.
+    // ======================================================================
+
+    // ---------- Commission Rules — 30/60 req/min ----------
+    Route::get('sales/commission/rules', [CommissionApiController::class, 'listRules'])
+        ->middleware('api.rate:60');
+    Route::get('sales/commission/rules/{id}', [CommissionApiController::class, 'showRule'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:60');
+    Route::post('sales/commission/rules', [CommissionApiController::class, 'storeRule'])
+        ->middleware('api.auth:admin', 'api.rate:30');
+    Route::post('sales/commission/rules/{id}/deactivate', [CommissionApiController::class, 'deactivateRule'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.auth:admin', 'api.rate:30');
+
+    // ---------- Commission Entries — 60 req/min (read-only) ----------
+    Route::get('sales/commission/entries', [CommissionApiController::class, 'listEntries'])
+        ->middleware('api.rate:60');
+
+    // ---------- Commission Summaries — 60 req/min ----------
+    Route::get('sales/commission/salesman-summary', [CommissionApiController::class, 'salesmanSummary'])
+        ->middleware('api.rate:60');
+    Route::get('sales/commission/branch-summary', [CommissionApiController::class, 'branchSummary'])
+        ->middleware('api.rate:60');
+
+    // ---------- Commission Confirmation — 30 req/min (admin only) ----------
+    Route::post('sales/commission/confirm-period', [CommissionApiController::class, 'confirmPeriod'])
+        ->middleware('api.auth:admin', 'api.rate:30');
 });
