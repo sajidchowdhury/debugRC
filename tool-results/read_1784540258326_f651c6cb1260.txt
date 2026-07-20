@@ -1,0 +1,994 @@
+   796→## 7. PostgreSQL Power Features — Optimization Plan
+   797→
+   798→The user specifically requested to **"use the total power of PostgreSQL so we don't have to fall in any issue in long term."** Below is a comprehensive plan for PostgreSQL-specific optimizations that go beyond what's currently implemented.
+   799→
+   800→### 7.1 GENERATED Columns — Expand Usage
+   801→
+   802→Currently `amount` on `sales_invoice_items` and `sales_return_items` is GENERATED. Phase 1C-12 added 3 more:
+   803→
+   804→| Table | Column | Expression | Status |
+   805→|-------|--------|-----------|--------|
+   806→| `sales_invoices` | `due_amount` | `total_amount - paid_amount` | ✅ DONE — Phase 1C-12 |
+   807→| `sales_challan_items` | `cogs_amount` | `ROUND(qty * issue_rate, 2)` | ✅ DONE — Phase 1C-12 |
+   808→| `warehouse_stock` | `stock_value` | `ROUND(qty * avg_cost, 2)` | ✅ DONE — Phase 1C-12 (new column) |
+   809→| `sales_challans` | `issue_cost` | — | ❌ NOT POSSIBLE — PostgreSQL forbids subqueries in GENERATED expressions; cross-table aggregate |
+   810→| `sales_returns` | `cogs_amount` | `(SELECT SUM(qty * original_cost) FROM sales_return_items ...)` | ❌ NOT POSSIBLE — same cross-table subquery restriction |
+   811→
+   812→**Why this matters for long-term**: GENERATED columns are **always correct** — no service can forget to update them, no bug can make them stale. This eliminates an entire class of data inconsistency bugs.
+   813→
+   814→### 7.2 Partial Indexes — ✅ Implemented (Task 13)
+   815→
+   816→13 partial indexes have been added via migration `2025_01_20_000001_add_partial_indexes_business_queries.php`
+   817→and mirrored in `07_views_triggers_constraints.sql`. The original 5 master-data partial indexes
+   818→(from migration `2025_01_14`) remain unchanged. Total: **18 partial indexes** across the system.
+   819→
+   820→#### Open Invoices (2 indexes)
+   821→These cover the AR aging report, collections dashboard, and call-it-a-day list —
+   822→the hottest queries in the system. Only confirmed invoices with an outstanding
+   823→balance are indexed (typically ~15-30% of all invoice rows).
+   824→
+   825→```sql
+   826→-- AR aging / collections dashboard
+   827→CREATE INDEX idx_si_open_invoice
+   828→  ON sales_invoices (customer_id, due_amount, invoice_date)
+   829→  WHERE status = 'confirmed' AND is_reversed = false AND due_amount > 0;
+   830→
+   831→-- Branch dashboard / call-it-a-day list
+   832→CREATE INDEX idx_si_open_by_branch
+   833→  ON sales_invoices (branch_id, invoice_date)
+   834→  WHERE status = 'confirmed' AND is_reversed = false AND due_amount > 0;
+   835→```
+   836→
+   837→#### Unpaid / Active Payments (4 indexes)
+   838→AR/AP dashboards list only non-reversed payments. A partial index covers the
+   839→~95% of rows that are live, avoiding wasted index space on reversed records.
+   840→
+   841→```sql
+   842→-- Customer payment history (AR)
+   843→CREATE INDEX idx_cp_active
+   844→  ON customer_payments (customer_id, payment_date)
+   845→  WHERE is_reversed = false;
+   846→
+   847→-- Supplier payment history (AP)
+   848→CREATE INDEX idx_sp_active
+   849→  ON supplier_payments (supplier_id, payment_date)
+   850→  WHERE is_reversed = false;
+   851→
+   852→-- Daily collection report (branch-scoped)
+   853→CREATE INDEX idx_cp_active_by_branch
+   854→  ON customer_payments (branch_id, payment_date)
+   855→  WHERE is_reversed = false;
+   856→
+   857→-- Daily payment report (branch-scoped)
+   858→CREATE INDEX idx_sp_active_by_branch
+   859→  ON supplier_payments (branch_id, payment_date)
+   860→  WHERE is_reversed = false;
+   861→```
+   862→
+   863→#### Pending Returns (2 indexes)
+   864→Sales returns in `created` status need manager review. Purchase returns that
+   865→haven't been reversed are actively tracked in the returns dashboard.
+   866→
+   867→```sql
+   868→-- Sales returns awaiting confirmation
+   869→CREATE INDEX idx_sr_pending
+   870→  ON sales_returns (branch_id, return_date)
+   871→  WHERE status = 'created' AND is_reversed = false;
+   872→
+   873→-- Active purchase returns
+   874→CREATE INDEX idx_prtn_pending
+   875→  ON purchase_returns (supplier_id, branch_id)
+   876→  WHERE is_reversed = false;
+   877→```
+   878→
+   879→#### Active Ledger (5 indexes)
+   880→Sub-ledger rows with open balances, unsettled intercompany, non-reversed journal
+   881→entries, and the chart-of-accounts filter — all the queries that power the
+   882→accounting dashboard and trial balance.
+   883→
+   884→```sql
+   885→-- AR outstanding rows
+   886→CREATE INDEX idx_cl_outstanding
+   887→  ON customer_ledger (customer_id, transaction_date, balance)
+   888→  WHERE balance > 0;
+   889→
+   890→-- AP outstanding rows
+   891→CREATE INDEX idx_sl_outstanding
+   892→  ON supplier_ledger (supplier_id, transaction_date, balance)
+   893→  WHERE balance > 0;
+   894→
+   895→-- Unsettled intercompany transactions
+   896→CREATE INDEX idx_bl_unsettled
+   897→  ON branch_ledger (from_branch_id, to_branch_id, transaction_date)
+   898→  WHERE is_settled = false;
+   899→
+   900→-- Non-reversed journal entries (GL reports, trial balance)
+   901→CREATE INDEX idx_je_active
+   902→  ON journal_entries (entry_date, branch_id, reference_type)
+   903→  WHERE is_reversed = false;
+   904→
+   905→-- Chart of accounts by type (active only)
+   906→CREATE INDEX idx_ledgers_active_by_type
+   907→  ON ledgers (account_type, ledger_code)
+   908→  WHERE is_active = true;
+   909→```
+   910→
+   911→**Full reference table** is in `docs/migration/schema_mapping.md` Section 3.8.
+   912→
+   913→**Why this matters for long-term**: Partial indexes are **smaller** (only relevant rows) and **faster** (fewer pages to scan). As data grows, the gap between full and partial indexes widens dramatically.
+   914→
+   915→### 7.3 Covering Indexes (INCLUDE) — ✅ Implemented (Task 14)
+   916→
+   917→16 covering indexes have been added via migration `2025_01_20_000002_add_covering_indexes_high_freq_queries.php`
+   918→and mirrored in `07_views_triggers_constraints.sql`. Covering indexes use the INCLUDE clause to store
+   919→additional columns in the B-tree leaf pages, enabling **index-only scans** — PostgreSQL never
+   920→needs to visit the heap (actual table pages), which can be 5-10x faster on large tables.
+   921→
+   922→#### P0 — Critical Path (every invoice finalize + credit check)
+   923→
+   924→```sql
+   925→-- Customer ledger balance: SUM(debit) - SUM(credit) per customer
+   926→-- Without INCLUDE, PG must visit heap for debit/credit → full-page random I/O
+   927→-- With INCLUDE, PG does an index-only scan → sequential leaf read
+   928→CREATE INDEX idx_cl_balance_covering
+   929→  ON customer_ledger (customer_id, is_reversed)
+   930→  INCLUDE (debit, credit);
+   931→
+   932→-- Outstanding invoices per customer (payment allocation AJAX)
+   933→CREATE INDEX idx_si_customer_due_covering
+   934→  ON sales_invoices (customer_id, is_reversed)
+   935→  INCLUDE (id, invoice_code, invoice_date, total_amount, paid_amount, due_amount)
+   936→  WHERE due_amount > 0;
+   937→```
+   938→
+   939→#### P1 — Per-Transaction Lookups (every reversal, cancel, show page)
+   940→
+   941→```sql
+   942→-- Journal entries by reference (reversal, cancel, show page)
+   943→CREATE INDEX idx_je_reference_covering
+   944→  ON journal_entries (reference_type, reference_id, is_reversed)
+   945→  INCLUDE (id, entry_no, entry_date, branch_id, description, source, created_by);
+   946→
+   947→-- Journal lines per-entry detail (every journal show page)
+   948→CREATE INDEX idx_jl_entry_covering
+   949→  ON journal_lines (journal_entry_id)
+   950→  INCLUDE (id, ledger_id, debit, credit, entity_type, entity_id, memo);
+   951→
+   952→-- Journal lines per-ledger reporting (GL report, trial balance)
+   953→CREATE INDEX idx_jl_ledger_date_covering
+   954→  ON journal_lines (ledger_id, journal_entry_id)
+   955→  INCLUDE (debit, credit);
+   956→```
+   957→
+   958→#### P2 — Listing Pages (DataTable with branch + status + date filters)
+   959→
+   960→```sql
+   961→-- Sales invoices listing (branch_id, status, date range → DataTable)
+   962→CREATE INDEX idx_si_listing_covering
+   963→  ON sales_invoices (branch_id, status, invoice_date DESC, id DESC)
+   964→  INCLUDE (customer_id, invoice_code, total_amount, paid_amount, due_amount,
+   965→           is_godown_prepared, is_challan_issued, is_reversed);
+   966→
+   967→-- Customer payments listing
+   968→CREATE INDEX idx_cp_listing_covering
+   969→  ON customer_payments (branch_id, payment_date DESC, id DESC)
+   970→  INCLUDE (customer_id, payment_code, payment_mode, amount, is_reversed);
+   971→
+   972→-- Supplier payments listing
+   973→CREATE INDEX idx_sp_listing_covering
+   974→  ON supplier_payments (branch_id, payment_date DESC, id DESC)
+   975→  INCLUDE (supplier_id, payment_code, payment_mode, amount, is_reversed);
+   976→
+   977→-- Invoice payment allocations (paid-so-far per invoice)
+   978→CREATE INDEX idx_ipa_invoice_covering
+   979→  ON invoice_payment_allocations (invoice_id)
+   980→  INCLUDE (payment_id, allocated_amount);
+   981→
+   982→-- Warehouse stock reverse lookup (product → warehouses with qty + avg_cost)
+   983→CREATE INDEX idx_ws_product_covering
+   984→  ON warehouse_stock (product_id, warehouse_id)
+   985→  INCLUDE (qty, avg_cost);
+   986→
+   987→-- Sales challans listing
+   988→CREATE INDEX idx_sc_listing_covering
+   989→  ON sales_challans (branch_id, challan_date DESC, id DESC)
+   990→  INCLUDE (sales_invoice_id, challan_code, is_reversed, issue_cost, transport_cost);
+   991→```
+   992→
+   993→#### P3 — Supporting Queries (by-reference lookups, secondary listings)
+   994→
+   995→```sql
+   996→-- Purchase receives listing
+   997→CREATE INDEX idx_pr_listing_covering
+   998→  ON purchase_receives (branch_id, receive_date DESC, id DESC)
+   999→  INCLUDE (supplier_id, receive_code, total_amount, is_reversed, purchase_order_id);
+  1000→
+  1001→-- Supplier ledger by reference (per purchase receive show/cancel)
+  1002→CREATE INDEX idx_sl_reference_covering
+  1003→  ON supplier_ledger (reference_type, reference_id)
+  1004→  INCLUDE (id, supplier_id, branch_id, transaction_date, transaction_type,
+  1005→           debit, credit, balance, journal_entry_id, created_by);
+  1006→
+  1007→-- Stock transactions by reference (per challan show / purchase cancel)
+  1008→CREATE INDEX idx_st_reference_covering
+  1009→  ON stock_transactions (reference_type, reference_id)
+  1010→  INCLUDE (id, warehouse_id, product_id, qty, rate, transaction_date, created_by);
+  1011→
+  1012→-- Customer ledger by reference (per payment/invoice show page)
+  1013→CREATE INDEX idx_cl_reference_covering
+  1014→  ON customer_ledger (reference_type, reference_id)
+  1015→  INCLUDE (id, customer_id, branch_id, transaction_date, transaction_type,
+  1016→           debit, credit, balance, journal_entry_id, created_by);
+  1017→
+  1018→-- Purchase orders listing
+  1019→CREATE INDEX idx_po_listing_covering
+  1020→  ON purchase_orders (branch_id, po_date DESC, id DESC)
+  1021→  INCLUDE (supplier_id, po_code, total_amount, status);
+  1022→```
+  1023→
+  1024→**Full reference table** is in `docs/migration/schema_mapping.md` Section 3.9.
+  1025→
+  1026→**Why this matters for long-term**: Covering indexes enable **index-only scans** — PostgreSQL never needs to visit the heap (actual table pages). For frequently queried columns, this can be 5-10x faster on large tables.
+  1027→
+  1028→### 7.4 BRIN Indexes — ✅ Implemented (Task 15)
+  1029→
+  1030→PostgreSQL BRIN (Block Range Index) indexes store only min/max summaries per block range of pages, making them extraordinarily compact — typically ~0.1% of table size versus ~10% for B-tree indexes. They are ideal for columns with natural physical correlation (i.e., rows are appended in roughly increasing order), which is the case for all date/timestamp columns in this ERP. BRIN indexes complement existing B-tree indexes: B-tree handles equality/point lookups efficiently, while BRIN handles date-range scans (e.g., "last 30 days", "this month") at near-zero storage and maintenance cost.
+  1031→
+  1032→**Design principles applied:**
+  1033→
+  1034→1. **Only on chronologically-correlated columns** — `created_at`, `*_date` columns where new rows are appended in increasing order. BRIN is useless on columns with random physical ordering (e.g., `customer_id`).
+  1035→2. **pages_per_range tuning** — 32 for medium tables (~256 KB per range), 64 for very-large or pure-append tables (stock_transactions, audit logs) where coarser summaries still provide excellent correlation.
+  1036→3. **Complementary to B-tree** — Existing B-tree indexes on `invoice_date`, `payment_date`, `entry_date` handle point lookups; BRIN accelerates the much more common date-range queries used by every dashboard and report.
+  1037→4. **Dual-column strategy** — Both `*_date` (business date) and `created_at` (system timestamp) are indexed separately because queries use either or both, and each has independent correlation.
+  1038→
+  1039→Migration: `2025_01_20_000003_add_brin_indexes_time_series_tables.php`
+  1040→Schema: `07_views_triggers_constraints.sql` — BRIN INDEXES section added.
+  1041→
+  1042→#### 1. Core Transaction Tables (10 indexes)
+  1043→
+  1044→These are the highest-traffic tables in the ERP. Every listing page and dashboard filters by date range — today, this week, this month, or a custom range. BRIN allows PostgreSQL to skip entire block ranges of old data that fall outside the query window.
+  1045→
+  1046→```sql
+  1047→-- sales_invoices: AR aging, collections dashboard, monthly revenue
+  1048→CREATE INDEX idx_si_created_at_brin
+  1049→    ON sales_invoices USING BRIN (created_at)
+  1050→    WITH (pages_per_range = 32);
+  1051→
+  1052→CREATE INDEX idx_si_invoice_date_brin
+  1053→    ON sales_invoices USING BRIN (invoice_date)
+  1054→    WITH (pages_per_range = 32);
+  1055→
+  1056→-- customer_payments: daily collection report, payment history
+  1057→CREATE INDEX idx_cp_payment_date_brin
+  1058→    ON customer_payments USING BRIN (payment_date)
+  1059→    WITH (pages_per_range = 32);
+  1060→
+  1061→CREATE INDEX idx_cp_created_at_brin
+  1062→    ON customer_payments USING BRIN (created_at)
+  1063→    WITH (pages_per_range = 32);
+  1064→
+  1065→-- supplier_payments: AP aging, payment history
+  1066→CREATE INDEX idx_sp_payment_date_brin
+  1067→    ON supplier_payments USING BRIN (payment_date)
+  1068→    WITH (pages_per_range = 32);
+  1069→
+  1070→CREATE INDEX idx_sp_created_at_brin
+  1071→    ON supplier_payments USING BRIN (created_at)
+  1072→    WITH (pages_per_range = 32);
+  1073→
+  1074→-- sales_returns: returns report by period
+  1075→CREATE INDEX idx_sr_return_date_brin
+  1076→    ON sales_returns USING BRIN (return_date)
+  1077→    WITH (pages_per_range = 32);
+  1078→
+  1079→-- purchase_receives: GRN listing by date, monthly purchase summary
+  1080→CREATE INDEX idx_pr_receive_date_brin
+  1081→    ON purchase_receives USING BRIN (receive_date)
+  1082→    WITH (pages_per_range = 32);
+  1083→
+  1084→-- purchase_returns: return date range queries
+  1085→CREATE INDEX idx_prtn_return_date_brin
+  1086→    ON purchase_returns USING BRIN (return_date)
+  1087→    WITH (pages_per_range = 32);
+  1088→
+  1089→-- purchase_orders: PO listing by date
+  1090→CREATE INDEX idx_po_po_date_brin
+  1091→    ON purchase_orders USING BRIN (po_date)
+  1092→    WITH (pages_per_range = 32);
+  1093→```
+  1094→
+  1095→#### 2. Sub-Ledgers (8 indexes)
+  1096→
+  1097→Sub-ledger rows are appended chronologically per entity. The AR aging report scans `customer_ledger WHERE transaction_date >= ?`, the AP aging scans `supplier_ledger WHERE transaction_date >= ?`, and the employee statement queries `employee_ledger WHERE transaction_date BETWEEN ? AND ?`. BRIN on `transaction_date` allows the planner to skip months or years of historical blocks instantly, while BRIN on `created_at` supports system-level queries (e.g., "entries created in the last hour for reconciliation").
+  1098→
+  1099→```sql
+  1100→-- customer_ledger: AR aging, customer 360 ledger tab
+  1101→CREATE INDEX idx_cl_transaction_date_brin
+  1102→    ON customer_ledger USING BRIN (transaction_date)
+  1103→    WITH (pages_per_range = 32);
+  1104→
+  1105→CREATE INDEX idx_cl_created_at_brin
+  1106→    ON customer_ledger USING BRIN (created_at)
+  1107→    WITH (pages_per_range = 32);
+  1108→
+  1109→-- supplier_ledger: AP aging, supplier payment history
+  1110→CREATE INDEX idx_sl_transaction_date_brin
+  1111→    ON supplier_ledger USING BRIN (transaction_date)
+  1112→    WITH (pages_per_range = 32);
+  1113→
+  1114→CREATE INDEX idx_sl_created_at_brin
+  1115→    ON supplier_ledger USING BRIN (created_at)
+  1116→    WITH (pages_per_range = 32);
+  1117→
+  1118→-- employee_ledger: employee advance/loan/salary statement
+  1119→CREATE INDEX idx_el_transaction_date_brin
+  1120→    ON employee_ledger USING BRIN (transaction_date)
+  1121→    WITH (pages_per_range = 32);
+  1122→
+  1123→-- branch_ledger: intercompany settlement by period
+  1124→CREATE INDEX idx_bl_transaction_date_brin
+  1125→    ON branch_ledger USING BRIN (transaction_date)
+  1126→    WITH (pages_per_range = 32);
+  1127→
+  1128→-- cash_ledger: daily cash position, branch cash history
+  1129→CREATE INDEX idx_cashl_transaction_date_brin
+  1130→    ON cash_ledger USING BRIN (transaction_date)
+  1131→    WITH (pages_per_range = 32);
+  1132→
+  1133→-- branch_expenses: expense report by period
+  1134→CREATE INDEX idx_be_expense_date_brin
+  1135→    ON branch_expenses USING BRIN (expense_date)
+  1136→    WITH (pages_per_range = 32);
+  1137→```
+  1138→
+  1139→#### 3. Inventory Ledger (2 indexes) — pages_per_range = 64
+  1140→
+  1141→`stock_transactions` is the largest append-only table in the ERP. Every stock movement — sales challan, purchase receive, return, adjustment, transfer — appends a row. The product movement report queries "last 30 days of stock movements for product X", which is a date-range scan that benefits enormously from BRIN. Using `pages_per_range = 64` because this table grows fastest and coarser block ranges still maintain excellent physical correlation.
+  1142→
+  1143→```sql
+  1144→CREATE INDEX idx_st_transaction_date_brin
+  1145→    ON stock_transactions USING BRIN (transaction_date)
+  1146→    WITH (pages_per_range = 64);
+  1147→
+  1148→CREATE INDEX idx_st_created_at_brin
+  1149→    ON stock_transactions USING BRIN (created_at)
+  1150→    WITH (pages_per_range = 64);
+  1151→```
+  1152→
+  1153→#### 4. Audit & Log Tables (3 indexes) — pages_per_range = 64
+  1154→
+  1155→Audit logs and notification tables are pure append-only — rows are never updated, only inserted. This makes them the ideal BRIN use case with perfect physical correlation. Using `pages_per_range = 64` because these tables accumulate indefinitely and the coarser granularity is acceptable for date-range queries like "show audit events from the last 7 days".
+  1156→
+  1157→```sql
+  1158→-- user_audit_log: security audit trail queries by date range
+  1159→CREATE INDEX idx_ual_created_at_brin
+  1160→    ON user_audit_log USING BRIN (created_at)
+  1161→    WITH (pages_per_range = 64);
+  1162→
+  1163→-- notifications: "show recent notifications" (last 7 days)
+  1164→CREATE INDEX idx_notif_created_at_brin
+  1165→    ON notifications USING BRIN (created_at)
+  1166→    WITH (pages_per_range = 64);
+  1167→
+  1168→-- journal_posting_logs: audit trail for GL posting actions
+  1169→CREATE INDEX idx_jpl_performed_at_brin
+  1170→    ON journal_posting_logs USING BRIN (performed_at)
+  1171→    WITH (pages_per_range = 64);
+  1172→```
+  1173→
+  1174→#### 5. Daily Summaries (1 index)
+  1175→
+  1176→`daily_warehouse_stock_summary` stores one row per warehouse×product×day. Queries always filter by `summary_date` range (e.g., "stock movement summary for the last 30 days"). Rows are strictly ordered by date, making BRIN extremely effective.
+  1177→
+  1178→```sql
+  1179→CREATE INDEX idx_dwss_summary_date_brin
+  1180→    ON daily_warehouse_stock_summary USING BRIN (summary_date)
+  1181→    WITH (pages_per_range = 32);
+  1182→```
+  1183→
+  1184→#### 6. Other Transaction Tables (6 indexes)
+  1185→
+  1186→Income, expense, employee transactions, money transfers, sales challans, and manual journals each have their own business date columns and are appended chronologically. These support their respective listing and reporting pages.
+  1187→
+  1188→```sql
+  1189→-- other_incomes: income report by period
+  1190→CREATE INDEX idx_oi_income_date_brin
+  1191→    ON other_incomes USING BRIN (income_date)
+  1192→    WITH (pages_per_range = 32);
+  1193→
+  1194→-- other_expenses: expense report by period
+  1195→CREATE INDEX idx_oe_expense_date_brin
+  1196→    ON other_expenses USING BRIN (expense_date)
+  1197→    WITH (pages_per_range = 32);
+  1198→
+  1199→-- employee_transactions: employee statement by period
+  1200→CREATE INDEX idx_et_transaction_date_brin
+  1201→    ON employee_transactions USING BRIN (transaction_date)
+  1202→    WITH (pages_per_range = 32);
+  1203→
+  1204→-- money_transfers: transfer history by date
+  1205→CREATE INDEX idx_mt_transfer_date_brin
+  1206→    ON money_transfers USING BRIN (transfer_date)
+  1207→    WITH (pages_per_range = 32);
+  1208→
+  1209→-- sales_challans: challan listing by date
+  1210→CREATE INDEX idx_sc_challan_date_brin
+  1211→    ON sales_challans USING BRIN (challan_date)
+  1212→    WITH (pages_per_range = 32);
+  1213→
+  1214→-- manual_journals: manual journal listing by date
+  1215→CREATE INDEX idx_mj_journal_date_brin
+  1216→    ON manual_journals USING BRIN (journal_date)
+  1217→    WITH (pages_per_range = 32);
+  1218→```
+  1219→
+  1220→**Total: 30 BRIN indexes** across 22 tables. At ~0.1% of table size, the total BRIN index footprint is negligible — estimated under 1 MB even for tables with millions of rows. Every date-range query (AR aging, AP aging, daily collection, monthly revenue, product movement, stock summary) now benefits from block-level pruning without the storage cost of additional B-tree indexes.
+  1221→
+  1222→### 7.5 JSONB Indexing — ✅ Implemented (Task 16)
+  1223→
+  1224→PostgreSQL GIN (Generalized Inverted Index) indexes are the standard approach for indexing JSONB columns. They support the `@>` containment operator, which checks whether a JSONB document contains a specific key/value pair or nested structure. For `sales_draft_carts.items_json`, this enables queries like "find all carts that contain product_id 42" without scanning every row's JSONB blob.
+  1225→
+  1226→**Operator class choice: `jsonb_path_ops`**
+  1227→
+  1228→The default GIN operator class for JSONB supports both containment (`@>`) and existence (`?`, `?|`, `?&`) operators, but at the cost of a larger index. The `jsonb_path_ops` operator class supports only `@>`, but produces an index that is approximately 30% smaller and faster for containment lookups. Since the expected query pattern for cart items is containment ("does this cart contain this product/warehouse?"), `jsonb_path_ops` is the optimal choice.
+  1229→
+  1230→**Current usage vs. forward-looking value**: Currently, `items_json` is treated as an opaque blob — the application reads the full JSONB array into PHP, mutates it, and writes it back. All WHERE clauses use scalar columns (`user_id`, `customer_id`). However, the GIN index is valuable now for several reasons:
+  1231→
+  1232→1. **Inventory reservation**: Future stock availability checks will query "which open carts contain product X?" to compute pipeline demand alongside warehouse stock. Without the GIN index, this requires a full table scan of all draft carts.
+  1233→2. **Multi-warehouse cart tracking**: As the cart system evolves to track warehouse assignment per item, queries like "find carts with items from warehouse 3" become natural containment checks.
+  1234→3. **Near-zero cost**: The GIN index on `jsonb_path_ops` is compact (~10% of JSONB data size) and has minimal write overhead for the cart usage pattern (create → update a few times → delete on invoice save).
+  1235→4. **Zero risk**: Adding the index does not change any existing query behavior. The PostgreSQL planner will simply start using it when a compatible `@>` query appears.
+  1236→
+  1237→Migration: `2025_01_20_000004_add_gin_index_draft_carts_items_json.php`
+  1238→Schema: `07_views_triggers_constraints.sql` — GIN INDEX section added.
+  1239→
+  1240→```sql
+  1241→-- GIN index for JSONB cart items — enables @> containment queries
+  1242→CREATE INDEX idx_sdc_items_gin
+  1243→    ON sales_draft_carts USING GIN (items_json jsonb_path_ops);
+  1244→
+  1245→-- Example queries this enables:
+  1246→
+  1247→-- 1. Find all carts containing a specific product (inventory reservation)
+  1248→SELECT user_id, customer_id, items_json
+  1249→FROM sales_draft_carts
+  1250→WHERE items_json @> '[{"product_id": 42}]';
+  1251→
+  1252→-- 2. Find carts with items from a specific warehouse (warehouse workload)
+  1253→SELECT user_id, customer_id, items_json
+  1254→FROM sales_draft_carts
+  1255→WHERE items_json @> '[{"warehouse_id": 3}]';
+  1256→
+  1257→-- 3. Find carts with a specific product in a specific condition
+  1258→SELECT user_id, customer_id, items_json
+  1259→FROM sales_draft_carts
+  1260→WHERE items_json @> '[{"product_id": 42, "condition_state": "Damage"}]';
+  1261→```
+  1262→
+  1263→**Index footprint**: GIN with `jsonb_path_ops` is approximately 30% smaller than default GIN. For a table with ~1,000 active draft carts averaging 5 items each, the index is estimated at under 100 KB. The index is effectively free to maintain — cart rows are created, updated a handful of times during the sales entry process, and then deleted when the invoice is finalized.
+  1264→
+  1265→### 7.6 Advisory Locks — Replace SELECT FOR UPDATE for Code Generation
+  1266→
+  1267→Currently `document_sequences` uses `SELECT FOR UPDATE` for atomic code generation. PostgreSQL advisory locks are faster:
+  1268→
+  1269→```sql
+  1270→-- Instead of: SELECT counter FROM document_sequences WHERE ... FOR UPDATE
+  1271→-- Use: pg_advisory_xact_lock(hash) → then SELECT/UPDATE without FOR UPDATE
+  1272→
+  1273→-- Laravel:
+  1274→DB::select("SELECT pg_advisory_xact_lock(?, ?)", [$branchId, $typeHash]);
+  1275→$next = DB::selectOne("SELECT nextval('doc_seq_$type')");
+  1276→```
+  1277→
+  1278→**Why this matters for long-term**: Advisory locks are **in-memory** (no disk I/O), **transaction-scoped** (auto-released on commit/rollback), and **don't block reads**. Under high concurrency, they outperform row-level locks significantly.
+  1279→
+  1280→### 7.7 LISTEN/NOTIFY — Replace Polling for Real-Time Updates
+  1281→
+  1282→Replace AJAX polling (DataTables refresh, pipeline cache) with PostgreSQL LISTEN/NOTIFY:
+  1283→
+  1284→```sql
+  1285→-- On invoice finalize:
+  1286→NOTIFY sales_invoice_created, '{"invoice_id": 123, "branch_id": 1}';
+  1287→
+  1288→-- On challan issue:
+  1289→NOTIFY sales_challan_issued, '{"challan_id": 45, "warehouse_ids": [1,2]}';
+  1290→
+  1291→-- On payment:
+  1292→NOTIFY sales_payment_received, '{"payment_id": 78, "customer_id": 5}';
+  1293→```
+  1294→
+  1295→Laravel can listen via `pg_notify` PHP extension or Redis pub/sub bridge.
+  1296→
+  1297→**Why this matters for long-term**: Eliminates **polling overhead** (no more setInterval AJAX calls). Warehouse managers see new invoices **instantly** without 5-30s delay. Stock pipeline cache can be invalidated **precisely** when data changes.
+  1298→
+  1299→### 7.8 Window Functions — Replace Running Balance Denormalization
+  1300→
+  1301→Currently `customer_ledger.balance` is a denormalized running total maintained by application code. This is **fragile** — if any row is inserted out of order or modified, all subsequent balances are wrong.
+  1302→
+  1303→Replace with window-function computed balance:
+  1304→
+  1305→```sql
+  1306→-- Replace: SELECT balance FROM customer_ledger WHERE customer_id = ? ORDER BY id DESC LIMIT 1
+  1307→-- With:
+  1308→CREATE FUNCTION customer_current_balance(p_customer_id INT) RETURNS NUMERIC AS $$
+  1309→  SELECT COALESCE(SUM(debit) - SUM(credit), 0)
+  1310→  FROM customer_ledger
+  1311→  WHERE customer_id = p_customer_id AND is_reversed = false;
+  1312→$$ LANGUAGE SQL STABLE;
+  1313→
+  1314→-- Or for full running balance verification:
+  1315→SELECT id, debit, credit,
+  1316→  SUM(debit - credit) OVER (PARTITION BY customer_id ORDER BY id) AS computed_balance,
+  1317→  balance AS stored_balance
+  1318→FROM customer_ledger
+  1319→WHERE customer_id = ? AND is_reversed = false;
+  1320→```
+  1321→
+  1322→**Strategy**: Keep `balance` column for fast reads, but add a **reconciliation job** that verifies `stored_balance = computed_balance` using window functions. Run daily. This gives the performance of denormalization with the safety of recomputation.
+  1323→
+  1324→**Why this matters for long-term**: Running balance denormalization is the **#1 source of data drift** in accounting systems. Window functions provide a mathematically correct verification that catches any drift early.
+  1325→
+  1326→### 7.9 CTE (Common Table Expressions) — Complex Sales Queries
+  1327→
+  1328→Replace multi-query PHP patterns with single CTE queries:
+  1329→
+  1330→```sql
+  1331→-- Today's sales summary with payment info (currently 3+ queries)
+  1332→WITH today_invoices AS (
+  1333→  SELECT si.*,
+  1334→    COALESCE(SUM(ipa.allocated_amount), 0) AS paid_total,
+  1335→    GREATEST(0, si.total_amount - COALESCE(SUM(ipa.allocated_amount), 0)) AS balance_due
+  1336→  FROM sales_invoices si
+  1337→  LEFT JOIN invoice_payment_allocations ipa ON ipa.invoice_id = si.id
+  1338→  LEFT JOIN customer_payments cp ON cp.id = ipa.payment_id AND cp.is_reversed = false
+  1339→  WHERE si.branch_id = ? AND si.invoice_date = CURRENT_DATE
+  1340→    AND si.is_reversed = false
+  1341→  GROUP BY si.id
+  1342→)
+  1343→SELECT status,
+  1344→  COUNT(*) AS invoice_count,
+  1345→  SUM(total_amount) AS total_revenue,
+  1346→  SUM(paid_total) AS total_collected,
+  1347→  SUM(balance_due) AS total_outstanding
+  1348→FROM today_invoices
+  1349→GROUP BY status;
+  1350→```
+  1351→
+  1352→**Why this matters for long-term**: CTEs reduce **round-trips to DB** (1 query vs 3+), eliminate **race conditions** between sequential reads, and let PostgreSQL's optimizer choose the best execution plan for the entire operation.
+  1353→
+  1354→### 7.10 Row-Level Security (RLS) — Defense-in-Depth for Branch Isolation
+  1355→
+  1356→Currently branch isolation is enforced at middleware + model scope level. RLS provides **DB-level enforcement** that cannot be bypassed even by direct SQL:
+  1357→
+  1358→```sql
+  1359→ALTER TABLE sales_invoices ENABLE ROW LEVEL SECURITY;
+  1360→
+  1361→CREATE POLICY branch_isolation ON sales_invoices
+  1362→  USING (branch_id = current_setting('app.branch_id')::int);
+  1363→
+  1364→-- Set on each request:
+  1365→DB::statement("SET app.branch_id = ?", [session('branch_id')]);
+  1366→```
+  1367→
+  1368→**Why this matters for long-term**: If any developer forgets `BranchScope`, writes raw SQL, or a bug in middleware allows cross-branch access, RLS **still prevents data leakage** at the database level. This is the ultimate defense-in-depth.
+  1369→
+  1370→### 7.11 Table Partitioning — For Large Tables
+  1371→
+  1372→As the system grows, these tables will become very large. Range partitioning by date:
+  1373→
+  1374→```sql
+  1375→-- Partition sales_invoices by month
+  1376→CREATE TABLE sales_invoices (
+  1377→  id BIGINT GENERATED ALWAYS AS IDENTITY,
+  1378→  invoice_date DATE NOT NULL,
+  1379→  -- ... other columns ...
+  1380→  PRIMARY KEY (id, invoice_date)
+  1381→) PARTITION BY RANGE (invoice_date);
+  1382→
+  1383→CREATE TABLE sales_invoices_2025_01 PARTITION OF sales_invoices
+  1384→  FOR VALUES FROM ('2025-01-01') TO ('2025-02-01');
+  1385→CREATE TABLE sales_invoices_2025_02 PARTITION OF sales_invoices
+  1386→  FOR VALUES FROM ('2025-02-01') TO ('2025-03-01');
+  1387→-- ... auto-create future partitions via pg_partman ...
+  1388→```
+  1389→
+  1390→**Candidates for partitioning:**
+  1391→- `sales_invoices` (by invoice_date, monthly)
+  1392→- `stock_transactions` (by transaction_date, monthly)
+  1393→- `customer_ledger` (by transaction_date, quarterly)
+  1394→- `journal_entry_lines` (by created_at, quarterly)
+  1395→
+  1396→**Why this matters for long-term**: Partitioning provides:
+  1397→- **Faster queries** — PostgreSQL scans only relevant partitions
+  1398→- **Faster maintenance** — VACUUM, REINDEX operate per-partition
+  1399→- **Easy archiving** — Detach old partitions instead of DELETE
+  1400→- **Parallel query** — Each partition can be scanned in parallel
+  1401→
+  1402→### 7.12 EXCLUDE Constraints — Prevent Overlapping Allocations
+  1403→
+  1404→```sql
+  1405→-- Prevent double-allocation of the same invoice amount
+  1406→ALTER TABLE invoice_payment_allocations
+  1407→  ADD CONSTRAINT no_overallocation
+  1408→  EXCLUDE USING gist (
+  1409→    invoice_id WITH =,
+  1410→    numrange(0, allocated_amount, '[]') WITH &&
+  1411→  );
+  1412→```
+  1413→
+  1414→**Why this matters for long-term**: Application-level validation can be bypassed by race conditions. EXCLUDE constraints enforce **mathematical invariants** at the DB level.
+  1415→
+  1416→### 7.13 Deferred Constraints — For Multi-Table Atomic Operations
+  1417→
+  1418→Currently, some operations must INSERT rows in specific order due to FK constraints. Deferring constraints allows any order within a transaction:
+  1419→
+  1420→```sql
+  1421→ALTER TABLE sales_invoice_items
+  1422→  ALTER CONSTRAINT sales_invoice_items_invoice_id_foreign
+  1423→  DEFERRABLE INITIALLY DEFERRED;
+  1424→```
+  1425→
+  1426→**Why this matters for long-term**: Deferred constraints let PostgreSQL validate all FKs at COMMIT time rather than at each INSERT. This simplifies service code (no need to worry about insertion order) and enables batch operations.
+  1427→
+  1428→### 7.14 pg_cron — Replace Laravel Scheduler for DB-Level Jobs
+  1429→
+  1430→```sql
+  1431→-- Install pg_cron extension
+  1432→CREATE EXTENSION pg_cron;
+  1433→
+  1434→-- Schedule stale draft cleanup (runs even if Laravel queue is down)
+  1435→SELECT cron.schedule(
+  1436→  'cancel-stale-drafts',
+  1437→  '0 2 * * *',
+  1438→  $$SELECT cancel_stale_sales_drafts(14)$$
+  1439→);
+  1440→
+  1441→-- Schedule materialized view refresh
+  1442→SELECT cron.schedule(
+  1443→  'refresh-ar-aging',
+  1444→  '*/5 * * * *',
+  1445→  $$REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ar_aging$$
+  1446→);
+  1447→```
+  1448→
+  1449→**Why this matters for long-term**: pg_cron runs **inside the database** — no dependency on Laravel scheduler, queue workers, or supervisor. Even if the app server crashes, DB-level maintenance continues.
+  1450→
+  1451→### 7.15 Full-Text Search — ✅ Implemented (Task 17)
+  1452→
+  1453→PostgreSQL full-text search replaces all `LIKE '%term%'` / `ILIKE '%term%'` pattern-matching queries on the `products` and `customers` tables with index-accelerated `tsvector @@ plainto_tsquery` lookups. This is one of the most impactful performance optimizations in the ERP because product and customer search are the highest-frequency AJAX operations — every sales order creation triggers `search_product()` and `search_customer()` on every keystroke.
+  1454→
+  1455→**Why full-text search is superior to LIKE:**
+  1456→
+  1457→1. **Index-accelerated**: GIN indexes enable sub-millisecond lookups on millions of rows, vs. full sequential scan with `LIKE '%term%'` (leading wildcard prevents B-tree usage).
+  1458→2. **Ranking**: `ts_rank()` returns best matches first, so "cement" matches "Cement Rod 12mm" before "Steel Rod with Cement Base".
+  1459→3. **Weighted columns**: Product name outranks product code; customer name outranks code which outranks phone/address. This matches user expectation — you type a name, you get the name match first.
+  1460→4. **Scalability**: As product catalog grows from hundreds to tens of thousands, LIKE performance degrades linearly while full-text search stays constant-time via the GIN index.
+  1461→
+  1462→**Dictionary choice: `simple` vs `english`**
+  1463→
+  1464→We use the `'simple'` text search configuration instead of `'english'` because:
+  1465→
+  1466→- Product codes like "PRD-001" must match exactly — English stemming would destroy them
+  1467→- Customer names are often Bengali transliterations — no English stemming rules apply
+  1468→- Phone numbers must not be "stemmed" — "01711" should not become "0171"
+  1469→- The `'simple'` dictionary just lowercases and splits on whitespace, which is exactly what we need for identifier-heavy search
+  1470→
+  1471→If English-language product descriptions are added in the future, a separate `'english'` tsvector column can be added alongside for description-based search.
+  1472→
+  1473→Migration: `2025_01_20_000005_add_fulltext_search_products_customers.php`
+  1474→Schema: `07_views_triggers_constraints.sql` — FULL-TEXT SEARCH section added.
+  1475→
+  1476→#### Products: search_vector (2 columns, 2 weights)
+  1477→
+  1478→```sql
+  1479→-- GENERATED tsvector column — auto-maintained on every INSERT/UPDATE
+  1480→ALTER TABLE products ADD COLUMN search_vector tsvector
+  1481→    GENERATED ALWAYS AS (
+  1482→        setweight(to_tsvector('simple', coalesce(product_name, '')), 'A') ||
+  1483→        setweight(to_tsvector('simple', coalesce(product_code, '')), 'B')
+  1484→    ) STORED;
+  1485→
+  1486→-- GIN index for fast @@ lookups
+  1487→CREATE INDEX idx_products_search ON products USING GIN (search_vector);
+  1488→```
+  1489→
+  1490→**Weight rationale**: `product_name` gets weight A (highest) because users typically search by name. `product_code` gets weight B because code lookups are secondary. This means searching for "cement" returns "Cement Rod" (name match) ranked higher than "CEM-001" (code match).
+  1491→
+  1492→**Example queries:**
+  1493→
+  1494→```sql
+  1495→-- Basic search (plain text, no special syntax)
+  1496→SELECT *, ts_rank(search_vector, plainto_tsquery('simple', 'cement')) AS rank
+  1497→FROM products
+  1498→WHERE search_vector @@ plainto_tsquery('simple', 'cement')
+  1499→ORDER BY rank DESC LIMIT 30;
+  1500→
+  1501→-- Search with additional filter (active only)
+  1502→SELECT *, ts_rank(search_vector, plainto_tsquery('simple', 'rod')) AS rank
+  1503→FROM products
+  1504→WHERE search_vector @@ plainto_tsquery('simple', 'rod')
+  1505→  AND is_active = true AND deleted_at IS NULL
+  1506→ORDER BY rank DESC LIMIT 30;
+  1507→```
+  1508→
+  1509→#### Customers: search_vector (5 columns, 4 weights)
+  1510→
+  1511→```sql
+  1512→-- GENERATED tsvector column — auto-maintained on every INSERT/UPDATE
+  1513→ALTER TABLE customers ADD COLUMN search_vector tsvector
+  1514→    GENERATED ALWAYS AS (
+  1515→        setweight(to_tsvector('simple', coalesce(customer_name, '')), 'A') ||
+  1516→        setweight(to_tsvector('simple', coalesce(customer_code, '')), 'B') ||
+  1517→        setweight(to_tsvector('simple', coalesce(phone, '')), 'C') ||
+  1518→        setweight(to_tsvector('simple', coalesce(mobile, '')), 'C') ||
+  1519→        setweight(to_tsvector('simple', coalesce(address, '')), 'D')
+  1520→    ) STORED;
+  1521→
+  1522→-- GIN index for fast @@ lookups
+  1523→CREATE INDEX idx_customers_search ON customers USING GIN (search_vector);
+  1524→```
+  1525→
+  1526→**Weight rationale**: `customer_name` gets weight A (primary match — users search by name/shop). `customer_code` gets weight B (secondary — code lookups). `phone` and `mobile` share weight C (tertiary — phone number search, useful for POS customer identification). `address` gets weight D (lowest — keyword match for area-based customer lookup).
+  1527→
+  1528→**Note on `shop_name`**: The legacy MySQL schema had a `shop_name` column, but the PostgreSQL migration consolidated it into `customer_name`. All legacy queries that searched `shop_name` now search `customer_name` at weight A.
+  1529→
+  1530→**Example queries:**
+  1531→
+  1532→```sql
+  1533→-- Search by name fragment
+  1534→SELECT *, ts_rank(search_vector, plainto_tsquery('simple', 'rahman')) AS rank
+  1535→FROM customers
+  1536→WHERE search_vector @@ plainto_tsquery('simple', 'rahman')
+  1537→ORDER BY rank DESC LIMIT 30;
+  1538→
+  1539→-- Search by phone number (partial match)
+  1540→SELECT *, ts_rank(search_vector, plainto_tsquery('simple', '01711')) AS rank
+  1541→FROM customers
+  1542→WHERE search_vector @@ plainto_tsquery('simple', '01711')
+  1543→  AND is_active = true AND deleted_at IS NULL
+  1544→ORDER BY rank DESC LIMIT 30;
+  1545→```
+  1546→
+  1547→#### Laravel Integration: Model Scopes + Controller Refactoring
+  1548→
+  1549→**Product and Customer models** each have a `scopeSearch()` method that automatically uses full-text search when the `search_vector` column exists, and falls back to ILIKE when it doesn't (e.g., before migration is run):
+  1550→
+  1551→```php
+  1552→// Product::search('cement') → uses tsvector @@ plainto_tsquery when available
+  1553→// Falls back to ILIKE on product_name, product_code when search_vector doesn't exist
+  1554→$products = Product::search('cement')->get();
+  1555→
+  1556→// Customer::search('rahman') → ranked results (name matches first)
+  1557→$customers = Customer::search('rahman', ranked: true)->limit(30)->get();
+  1558→```
+  1559→
+  1560→**BaseMasterDataController** was refactored to use `scopeSearch()` for DataTables and CSV export when `$useFullTextSearch = true` is set on the controller. Both `ProductController` and `CustomerController` enable this flag.
+  1561→
+  1562→**ArchiveService** was refactored to use `Customer::search()` instead of three separate ILIKE clauses.
+  1563→
+  1564→**Controllers changed:**
+  1565→
+  1566→| Controller | Change | Before | After |
+  1567→|---|---|---|---|
+  1568→| `ProductController` | `$useFullTextSearch = true` | ILIKE on 2 fields | `scopeSearch()` with tsvector |
+  1569→| `CustomerController` | `$useFullTextSearch = true` | ILIKE on 4 fields | `scopeSearch()` with tsvector |
+  1570→| `BaseMasterDataController` | `dataTablesResponse()` + `applyExportSearch()` | ILIKE loop | Full-text first, ILIKE fallback |
+  1571→| `ArchiveService` | `searchCustomers()` | 3× ILIKE | `Customer::search()` |
+  1572→
+  1573→**Backward compatibility**: The `scopeSearch()` method checks `information_schema.columns` for `search_vector` existence. If the migration hasn't been run yet, the search gracefully falls back to ILIKE. This means the code can be deployed before the migration runs without breaking anything.
+  1574→
+  1575→---
+  1576→
+  1577→## 8. Implementation Priority & Phase Plan
+  1578→
+  1579→### Phase 1A: Critical Bug Fixes (Week 1)
+  1580→
+  1581→| # | Task | Priority | Effort | Type |
+  1582→|---|------|----------|--------|------|
+  1583→| 1 | Fix SubLedgerService integration — Sales services should use SubLedgerService instead of inline customer_ledger writes | ✅ DONE | Business Logic | 2025-01-18 — All 8 inline writes replaced with SubLedgerService::postCustomerLedgerEntry() |
+  1584→| 2 | Fix JournalReversalService integration — Sales services should delegate reversals to JournalReversalService::reverseByJournalEntry() | ✅ DONE | Business Logic | 2025-01-18 — All 10 inline reversal calls replaced with JournalReversalService::reverseByJournalEntry() cascade; 4 direct supplier_ledger inserts replaced with SubLedgerService calls; 4 dead private methods removed (-160 lines) |
+  1585→| 3 | Fix journal_entry_id linking in customer_ledger — Ensure every customer_ledger row has journal_entry_id | ✅ DONE | Business Logic | 2025-01-18 — Fixed as part of SubLedgerService integration (G-1); also added DEFAULT false migration for is_reversed |
+  1586→| 4 | Fix SQL injection in ReconciliationService — Parameterize all date filters | ✅ DONE | Security | 2025-01-18 — All 16 interpolated date filters replaced with parameterized ? placeholders; added validateDate() defense-in-depth |
+  1587→| 5 | Remove dead CustomerPaymentSettlement model | ✅ DONE | Cleanup | 2025-01-20 — Model file removed; table already dropped by P1-4 migration; replaced by InvoicePaymentAllocation |
+  1588→
+  1589→### Phase 1B: Missing Business Logic (Week 2-3)
+  1590→
+  1591→| # | Task | Priority | Effort | Type |
+  1592→|---|------|----------|--------|------|
+  1593→| 6 | ~~Implement invoice dispatchers assignment (UI + service)~~ | ✅ DONE | Business Logic + UI | 2025-01-20 — Full implementation: dispatchers() belongsToMany, assignDispatchers() with branch/role validation, Select2 multi-select in cart+edit, badge display in show+print, AJAX endpoints + routes |
+  1594→| 7 | ~~Implement multi-invoice payment allocation~~ | ✅ DONE | Business Logic + UI | 2025-01-20 — confirmPayment() now accepts allocations[] array; controller reads parallel arrays from UI; single-invoice legacy code removed |
+  1595→| 8 | ~~Implement payment transaction types (discount, write_off, refund) with GL~~ | ✅ DONE | Business Logic + UI | 2025-01-20 — Full implementation: type-specific GL posting (4 types with correct Dr/Cr), type-specific customer_ledger entries, type-specific payment code prefixes (PAY/DISC/WOFF/RFND), type-specific audit events (payment_discount/payment_write_off/payment_refund), dynamic create form with type selector + color-coded hero + GL info, show view with type badge + gradient, index with type filter + 7 stats cards, print receipt with type label |
+  1596→| 9 | ~~Implement discount_amount GL posting on payment confirm~~ | ✅ DONE | Business Logic | 2025-01-20 — Included in Task #8: receive type posts Dr Sales Discount / Cr AR for discount_amount; discount type posts entire amount as Dr Sales Discount / Cr AR |
+  1597→| 10 | ~~Implement Call It A Day batch operation~~ | ✅ Done | 1 day | Business Logic |
+  1598→| 11 | ~~Implement Customer 360 hub view~~ | ✅ DONE | UI | 2025-01-20 — Full 360° hub: 7 KPI cards, 5-tab interface (Overview/Ledger/Invoices/Payments/Returns), server-side DataTables AJAX, Customer model reverse relationships, date/status/type filters, New Payment shortcut |
+  1599→
+  1600→### Phase 1C: PostgreSQL Power Features (Week 3-4)
+  1601→
+  1602→| # | Task | Priority | Effort | Type |
+  1603→|---|------|----------|--------|------|
+  1604→| 12 | ~~Add GENERATED columns for due_amount, issue_cost, cogs_amount, stock_value~~ | ✅ DONE | Database | 2025-01-20 — 3 GENERATED columns added: due_amount (sales_invoices = total_amount - paid_amount), cogs_amount (sales_challan_items = qty × issue_rate), stock_value (warehouse_stock = qty × avg_cost, new column). issue_cost on sales_challans CANNOT be GENERATED (PostgreSQL forbids subqueries in GENERATED expressions — cross-table aggregate). All 6 due_amount manual-write sites refactored to only update paid_amount/total_amount; 4 cogs_amount insert sites cleaned; 4 stock_value DB::raw() queries simplified to use column. Models updated: due_amount & cogs_amount removed from $fillable, stock_value cast added. Partial index on stock_value for non-zero rows. |
+  1605→| 13 | ~~Add partial indexes (open invoices, unpaid, pending returns, active ledger)~~ | ✅ Done | 1 day | Database |
+  1606→| 14 | ~~Add covering indexes (INCLUDE) for high-frequency queries~~ | ✅ Done | 1 day | Database |
+  1607→| 15 | ~~Add BRIN indexes for time-series tables~~ | ✅ Done | 0.5 day | Database |
+  1608→| 16 | ~~Add GIN index on sales_draft_carts.items_json~~ | ✅ Done | 0.5 day | Database |
+  1609→| 17 | ~~Implement full-text search for products + customers (tsvector + GIN)~~ | ✅ Done | 2 days | Database + Business Logic |
+  1610→| 18 | Add window-function running balance reconciliation job | High | 2 days | Database + Business Logic |
+  1611→| 19 | Implement Row-Level Security (RLS) for branch isolation | High | 2 days | Database + Business Logic |
+  1612→| 20 | Replace document_sequences SELECT FOR UPDATE with advisory locks | Medium | 1 day | Business Logic |
+  1613→| 21 | Add pg_cron for stale draft cleanup + materialized view refresh | Medium | 1 day | Database |
+  1614→
+  1615→### Phase 1D: Notifications & Reports (Week 4-5)
+  1616→
+  1617→| # | Task | Priority | Effort | Type |
+  1618→|---|------|----------|--------|------|
+  1619→| 22 | Implement Telegram notifications (5 event types) | Medium | 2 days | Business Logic |
+  1620→| 23 | Implement FCM push notifications | Medium | 1 day | Business Logic |
+  1621→| 24 | Implement Revenue Overview dashboard (Chart.js KPIs) | Medium | 3 days | UI |
+  1622→| 25 | Implement Sales Funnel/Pipeline dashboard | Medium | 3 days | UI |
+  1623→| 26 | Implement Customer Performance dashboard | Medium | 3 days | UI |
+  1624→| 27 | Implement blank godown copy print template | Low | 1 day | UI |
+  1625→| 28 | Implement CSV export for invoices + challans | Low | 1 day | Business Logic |
+  1626→| 29 | Implement Sales guideline page (Bengali/English) | Low | 2 days | UI |
+  1627→| 30 | Implement Go-live checklist | Low | 1 day | UI |
+  1628→
+  1629→### Phase 1E: Advanced PostgreSQL (Week 5-6)
+  1630→
+  1631→| # | Task | Priority | Effort | Type |
+  1632→|---|------|----------|--------|------|
+  1633→| 31 | Implement LISTEN/NOTIFY for real-time updates | Medium | 3 days | Database + Business Logic |
+  1634→| 32 | Implement CTE-based complex queries (today's summary, AR aging) | Medium | 2 days | Business Logic |
+  1635→| 33 | Add EXCLUDE constraint for invoice_payment_allocations | Low | 1 day | Database |
+  1636→| 34 | Set up table partitioning for sales_invoices + stock_transactions | Low | 2 days | Database |
+  1637→| 35 | Configure deferred FK constraints | Low | 1 day | Database |
+  1638→| 36 | Implement Sales API write endpoints (mobile) | Medium | 5 days | Business Logic + API |
+  1639→| 37 | Implement salesman commission tracking | Low | 3 days | Business Logic |
+  1640→
+  1641→### UI Guidelines (All Phases)
+  1642→
+  1643→**Rule: Same as legacy — no UI/UX changes needed in new Laravel**
+  1644→
+  1645→This means:
+  1646→- Keep Bengali/English bilingual labels on all print documents
+  1647→- Keep SVG branch headers with branch-specific colors (Red, Blue, Green, Orange)
+  1648→- Keep multi-page print pagination (17 items per page)
+  1649→- Keep POS-style cart layout (customer search, product search, price slider)
+  1650→- Keep 3-step godown/challan wizard visual
+  1651→- Keep 2-step return workflow (create → confirm)
+  1652→- Keep Bootstrap modals for payment collection
+  1653→- Keep DataTables server-side processing
+  1654→- Keep Chart.js for dashboards
+  1655→- Keep A4 print format for all documents
+  1656→
+  1657→### Database Guidelines (All Phases)
+  1658→
+  1659→**Rule: Legacy MySQL → PostgreSQL — maximize PostgreSQL power**
+  1660→
+  1661→Core principles:
+  1662→1. **GENERATED columns** over application-maintained denormalization
+  1663→2. **Partial indexes** over full indexes for filtered queries
+  1664→3. **BRIN indexes** over B-tree for append-only time-series
+  1665→4. **Covering indexes** (INCLUDE) for index-only scans
+  1666→5. **Window functions** for running balance verification
+  1667→6. **RLS** for defense-in-depth branch isolation
+  1668→7. **Advisory locks** for atomic code generation
+  1669→8. **Full-text search** (tsvector + GIN) over LIKE for search
+  1670→9. **Materialized views** for pre-computed reporting
+  1671→10. **pg_cron** for DB-level scheduled maintenance
+  1672→11. **LISTEN/NOTIFY** for real-time cache invalidation
+  1673→12. **CTE** for complex multi-table queries
+  1674→13. **EXCLUDE constraints** for mathematical invariants
+  1675→14. **Partitioning** for large table management (future)
+  1676→
+  1677→---
+  1678→
+  1679→## Appendix A: Legacy vs Laravel Feature Matrix
+  1680→
+  1681→| Feature | Legacy CodeIgniter | Laravel Status | Gap Level |
+  1682→|---------|-------------------|----------------|-----------|
+  1683→| POS invoice creation | ✅ Full (create.php) | ✅ Full (cart.blade.php) | None |
+  1684→| Multi-tab cart | ✅ Full (session + DB drafts) | ✅ Full (JSONB drafts) | None |
+  1685→| Barcode scanning | ✅ product_by_code | ✅ Via product search | Minor UI |
+  1686→| Price range slider | ✅ Visual min/default/max | ✅ Price range validation | Minor UI (no visual slider?) |
+  1687→| Credit limit check | ✅ Full with override | ✅ Full with override | None |
+  1688→| Invoice finalize | ✅ 9-step atomic | ✅ 9-step atomic | None |
+  1689→| Invoice edit (draft) | ✅ Full | ✅ Full | None |
+  1690→| Invoice cancel | ✅ Full (delete + GL reversal) | ✅ Full (cancel + GL reversal) | None |
+  1691→| Invoice print | ✅ A4 multi-page Bengali | ✅ A4 multi-page | None |
+  1692→| Godown prep | ✅ Full | ✅ Full | None |
+  1693→| Godown copy print | ✅ Bengali picking list | ✅ Picking list | None |
+  1694→| Blank godown copy | ✅ Handwrite template | ✅ print_godown.blade.php has blank Picked Qty + Signature columns | None |
+  1695→| Challan finalize | ✅ Full (stock OUT + COGS) | ✅ Full (stock OUT + COGS) | None |
+  1696→| Challan print | ✅ Bengali delivery note | ✅ Delivery note | None |
+  1697→| Challan reversal | ✅ Full (stock + GL restore) | ✅ Full | None |
+  1698→| Transport adjustment | ✅ Full (snapshot + delta) | ✅ Full | None |
+  1699→| Payment receive (modal) | ✅ Cash/Bank, partial/full | ✅ Full page + allocation | None |
+  1700→| Payment reversal | ✅ Full (GL + intercompany) | ✅ Full | None |
+  1701→| Payment receipt print | ✅ Full | ✅ Full | None |
+  1702→| Multi-invoice allocation | ✅ CustomerTransactionController | ✅ allocations[] array in confirmPayment() | None |
+  1703→| Payment types (discount/write-off) | ✅ transaction_type column + service | ✅ 4 types with GL (receive/discount/write_off/payment) | None |
+  1704→| Invoice dispatchers | ✅ Assigned in godown flow | ✅ Assigned in finalize/edit flow (UI + service) | None |
+  1705→| Sales return create | ✅ Two-phase | ✅ Two-phase | None |
+  1706→| Return warehouse confirm | ✅ Good/Damage condition | ✅ Good/Damage + damage linkage | None |
+  1707→| Return reversal | ✅ Full (stock + GL + damage) | ✅ Full | None |
+  1708→| Return slip print | ✅ Bengali | ✅ Full | None |
+  1709→| Damage write-off | ✅ Manual + auto from return | ✅ Manual + auto from return | None |
+  1710→| Customer CRUD | ✅ Full with deactivation safety | ✅ Full with deactivation safety | None |
+  1711→| Customer 360 hub | ✅ Summary + ledger + invoices + payments | ✅ Full 360° hub (7 KPIs, 5 tabs, DataTables AJAX, filters) | None |
+  1712→| Customer ledger | ✅ Running balance SSOT | ✅ Running balance SSOT | None |
+  1713→| Credit limit enforcement | ✅ Full | ✅ Full | None |
+  1714→| Stock availability (pipeline) | ✅ physical - pipeline | ✅ physical - pipeline + Redis cache | Better |
+  1715→| Moving average cost | ✅ Weighted average | ✅ Weighted average | None |
+  1716→| GL journal integration | ✅ Full double-entry | ✅ Full double-entry | None |
+  1717→| GL reconciliation | ✅ 6-section tie-out | ✅ 6-section tie-out | None |
+  1718→| Branch isolation | ✅ Middleware + session | ✅ Middleware + BranchScope + RLS opportunity | Better |
+  1719→| RBAC | ✅ requireRouteAccess | ✅ role:middleware + pen-test | Better |
+  1720→| Audit trail | ✅ UserAudit + file dual-write | ✅ SalesAuditLogger + file dual-write | None |
+  1721→| Stale draft cleanup | ✅ Full (throttled, batched) | ✅ Full (scheduled, dry-run) | None |
+  1722→| Call It A Day | ✅ Batch operation | ✅ Batch operation (SalesInvoiceService::callItADay) | None |
+  1723→| Telegram notifications | ✅ 5 event types | ⚠️ Schema+UI placeholders exist, no dispatch code | MEDIUM |
+  1724→| FCM notifications | ✅ Push to warehouse managers | ⚠️ fcm_tokens table exists, no push service | MEDIUM |
+  1725→| Revenue Overview dashboard | ✅ Chart.js KPIs + filters | ⚠️ Basic report only | MEDIUM |
+  1726→| Sales Funnel dashboard | ✅ Pipeline stages, win rate | ❌ Not implemented | MEDIUM |
+  1727→| Customer Performance | ✅ CLV, churn, segments | ⚠️ Basic report only | MEDIUM |
+  1728→| Sales API (mobile) | ❌ No API | ⚠️ Read-only (dashboard + lookups) | MEDIUM |
+  1729→| Sales guideline page | ✅ Bengali/English | ❌ Not implemented | LOW |
+  1730→| Go-live checklist | ✅ Manager sign-off | ❌ Not implemented | LOW |
+  1731→| CSV export | ✅ Invoices + challans | ❌ Not implemented | LOW |
+  1732→| Salesman commission | ❌ Not in legacy | ❌ Not implemented | LOW |
+  1733→
+  1734→---
+  1735→
+  1736→> **Last Verified**: 2025-07-20 — All gap items manually checked against Laravel codebase by running targeted searches on service files, controllers, models, and views.
+  1737→
+  1738→## Appendix B: Key Formulas Reference
+  1739→
+  1740→| Formula | Expression | Used In |
+  1741→|---------|-----------|---------|
+  1742→| Invoice total | `subtotal + transport_cost - discount_amount` | SalesInvoiceService |
+  1743→| Moving average cost (IN) | `(old_qty × old_avg + in_qty × in_rate) / (old_qty + in_qty)` | StockService |
+  1744→| Moving average cost (OUT) | `unchanged` | StockService |
+  1745→| COGS per line | `qty × avg_cost` at challan time | SalesChallanService |
+  1746→| Stock availability | `GREATEST(0, physical_qty - pipeline_qty)` | StockAvailabilityService |
+  1747→| Pipeline qty | `SUM(ordered_qty - dispatched_qty)` for open invoices | StockAvailabilityService |
+  1748→| Invoice balance due | `GREATEST(0, total_amount - paid_amount)` | SalesInvoiceService |
+  1749→| Customer running balance | `previous_balance + debit - credit` | SubLedgerService |
+  1750→| Credit limit check | `(credit_limit > 0) AND (current_due + new_amount > credit_limit + 0.01)` | SalesInvoiceService |
+  1751→| GL journal balance | `SUM(debit) = SUM(credit)` within ±0.01 tolerance | JournalPostingService |
+  1752→| AR reconciliation | `customer_ledger net balance = GL AR control net` | ReconciliationService |
+  1753→| Inventory valuation | `SUM(warehouse_stock.qty × warehouse_stock.avg_cost)` | ReconciliationService |
+  1754→| Return COGS reversal | `qty × original_cost` (not current avg_cost) | SalesReturnService |
+  1755→| Transport adjustment delta | `challan_transport - invoice_transport` | SalesChallanService |
+  1756→
+  1757→## Appendix C: GL Account Mapping (Nature-Based)
+  1758→
+  1759→| Nature | Normal Balance | Used By |
+  1760→|--------|---------------|---------|
+  1761→| `cash_bank` | Debit | Payment receive, money transfers |
+  1762→| `ar` (customer_receivable) | Debit | Invoice finalize, return, payment |
+  1763→| `ap` (supplier_payable) | Credit | Purchase receive, supplier payment |
+  1764→| `inventory` | Debit | Challan COGS, return, damage, stock take |
+  1765→| `cogs` | Debit | Challan finalize |
+  1766→| `sales_revenue` | Credit | Invoice finalize, return reversal |
+  1767→| `sales_return` | Debit | Return confirm (contra-revenue) |
+  1768→| `sales_discount` | Debit | Discount on payment (contra-revenue) — ✅ Now posted by CustomerPaymentService for receive+discount_amount and discount transaction types |
+  1769→| `transport_revenue` | Credit | Transport adjustment at challan |
+  1770→| `inventory_shrinkage` | Debit | Damage, stock take loss |
+  1771→| `inventory_surplus` | Credit | Stock take gain |
+  1772→| `damage_loss` | Debit | Damage write-off (falls back to shrinkage) |
+  1773→| `write_off` | Debit | Bad debt write-off — ✅ New nature, posted by CustomerPaymentService for write_off transaction type |
+  1774→| `employee_payable` | Credit | Employee transactions |
+  1775→| `interbranch_receivable` | Debit | Cross-branch demand fulfillment |
+  1776→| `interbranch_payable` | Credit | Cross-branch demand settlement |
+  1777→| `other_income` | Credit | Other income entries |
+  1778→| `operating_expense` | Debit | Operating expense entries |
+  1779→| `salary_expense` | Debit | Salary entries |
+  1780→| `finance_cost` | Debit | Finance charges, write-offs |
+  1781→| `retained_earnings` | Credit | Year-end close |
+  1782→
+  1783→---
+  1784→
+  1785→> **End of Sales Module Documentation**  
+  1786→> This document should be used as the reference for all Phase 1 sales module implementation.  
+  1787→> Refer to the gap analysis (Section 6) for prioritization and the PostgreSQL plan (Section 7) for database optimization strategy.
+
+[showing lines 796-1787 of 1788; use offset=1788 with limit to continue reading]

@@ -359,6 +359,39 @@ Migration `2025_01_20_000005_add_fulltext_search_products_customers.php` and
 
 **Laravel integration**: `Product::scopeSearch()` and `Customer::scopeSearch()` use `search_vector @@ plainto_tsquery('simple', ?)` with `ts_rank()` ordering. Automatic ILIKE fallback when `search_vector` column doesn't exist. `BaseMasterDataController::$useFullTextSearch = true` on both controllers. `ArchiveService::searchCustomers()` refactored.
 
+### 3.13 Running Balance Reconciliation (Window Functions + Materialized Views)
+
+Task 18: Verifies that the denormalized `balance` column in each sub-ledger matches the mathematically correct running balance computed by `SUM() OVER (PARTITION BY entity ORDER BY id)` window functions. Materialized views store the comparison (stored_balance, computed_balance, drift) and are refreshed by the `reconcile:running-balance` Artisan command. A `reconciliation_snapshots` table stores structured audit results.
+
+Migration: `2025_01_20_000006_add_running_balance_reconciliation.php`. SQL: `07_views_triggers_constraints.sql` — RUNNING BALANCE RECONCILIATION section.
+
+**Materialized Views:**
+
+| # | View Name | Source Table | Entity Column | Running Balance Formula |
+|---|---|---|---|---|
+| 1 | `mv_customer_ledger_balance_check` | `customer_ledger` | `customer_id` | `SUM(debit - credit) OVER (PARTITION BY customer_id ORDER BY id)` |
+| 2 | `mv_supplier_ledger_balance_check` | `supplier_ledger` | `supplier_id` | `SUM(credit - debit) OVER (PARTITION BY supplier_id ORDER BY id)` |
+| 3 | `mv_employee_ledger_balance_check` | `employee_ledger` | `employee_id` | `SUM(credit - debit) OVER (PARTITION BY employee_id ORDER BY id)` |
+| 4 | `mv_cash_ledger_balance_check` | `cash_ledger` | `branch_id` | `SUM(amount) OVER (PARTITION BY branch_id ORDER BY id)` |
+
+**reconciliation_snapshots Indexes:**
+
+| # | Index Name | Columns | Use Case |
+|---|---|---|---|
+| 1 | `idx_rs_run_type_ran_at` | `(run_type, ran_at DESC)` | Audit trail by run type and date |
+| 2 | `idx_rs_ledger_type_status` | `(ledger_type, status, ran_at DESC)` | Find failed reconciliations by ledger type |
+
+**Materialized View Unique Indexes** (required for `REFRESH MATERIALIZED VIEW CONCURRENTLY`):
+
+| View | Index Name | Column |
+|---|---|---|
+| `mv_customer_ledger_balance_check` | `idx_mv_clbc_id` | `id` |
+| `mv_supplier_ledger_balance_check` | `idx_mv_slbc_id` | `id` |
+| `mv_employee_ledger_balance_check` | `idx_mv_elbc_id` | `id` |
+| `mv_cash_ledger_balance_check` | `idx_mv_cashlbc_id` | `id` |
+
+**Laravel integration**: `php artisan reconcile:running-balance` refreshes all materialized views, counts drifted rows, shows top-N entities by worst drift, optionally fixes drift with `--fix`, and stores results in `reconciliation_snapshots`. Options: `--ledger=customer|supplier|employee|cash`, `--as-of=date`, `--top=N`, `--fix`.
+
 ---
 
 ## 4. PHP Code SQL Compatibility (Phase 2.4)

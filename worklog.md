@@ -181,3 +181,27 @@ Stage Summary:
 - 4 Laravel files refactored: Product model, Customer model, BaseMasterDataController, ArchiveService
 - Backward-compatible: scopeSearch() falls back to ILIKE if search_vector doesn't exist
 - Task 17 marked ✅ Done
+
+---
+Task ID: 10
+Agent: Main Agent
+Task: Add window-function running balance reconciliation job (Task 18)
+
+Work Log:
+- Analyzed existing reconciliation infrastructure: ReconciliationService (6 sections, web UI), SubLedgerService (3 sections + CLI), SubLedgerReconcile command (7 checks), JournalReplayVerify command (8+5 checks)
+- Identified gap: no running balance verification — only total-level reconciliation (sub-ledger sum vs GL control)
+- Designed 4 materialized views using SUM() OVER (PARTITION BY entity ORDER BY id) to compute correct running balances
+- Created reconciliation_snapshots table for structured audit trail (replaces ad-hoc JSON in user_audit_log)
+- Created migration 2025_01_20_000006_add_running_balance_reconciliation.php
+- Created Artisan command RunningBalanceReconcile.php with --fix, --ledger, --as-of, --top options
+- Updated 07_views_triggers_constraints.sql with RUNNING BALANCE RECONCILIATION section
+- Updated sales-module-documentation.md Section 7.8 (planned → ✅ Implemented)
+- Updated schema_mapping.md Section 3.13 (running balance reference tables)
+- Marked Task 18 as ✅ Done in phase plan
+
+Stage Summary:
+- 4 materialized views verify running balance integrity in customer_ledger, supplier_ledger, employee_ledger, cash_ledger
+- reconciliation_snapshots table stores structured reconciliation audit trail
+- reconcile:running-balance Artisan command: refresh → count → drill-down → fix → snapshot
+- Complements existing subledger:reconcile and journal:replay-verify commands
+- Task 18 marked ✅ Done

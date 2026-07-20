@@ -454,3 +454,162 @@ ALTER TABLE customers ADD COLUMN IF NOT EXISTS search_vector tsvector
 
 CREATE INDEX IF NOT EXISTS idx_customers_search
     ON customers USING GIN (search_vector);
+
+-- ===================== RUNNING BALANCE RECONCILIATION (WINDOW FUNCTIONS) =====================
+-- Task 18: Window-function running balance reconciliation for sub-ledgers.
+--
+-- The denormalized `balance` column in each sub-ledger (customer_ledger,
+-- supplier_ledger, employee_ledger, cash_ledger) is maintained by
+-- SubLedgerService using prev + debit/credit. This is efficient for reads
+-- but fragile — if any row is inserted out of order or modified, all
+-- subsequent balances are wrong.
+--
+-- These materialized views use SUM() OVER (PARTITION BY entity ORDER BY id)
+-- to compute the mathematically correct running balance and compare it
+-- against the stored `balance` column. The Artisan command
+-- `reconcile:running-balance` refreshes these views and reports any drift.
+--
+-- Running balance formulas (same as SubLedgerService):
+--   customer_ledger: balance = prev + debit - credit
+--   supplier_ledger: balance = prev + credit - debit
+--   employee_ledger: balance = prev + credit - debit
+--   cash_ledger:     balance = prev + amount
+--
+-- Mirrors migration 2025_01_20_000006_add_running_balance_reconciliation.php.
+
+-- 1. reconciliation_snapshots — Structured audit trail for reconciliation runs.
+CREATE TABLE IF NOT EXISTS reconciliation_snapshots (
+    id              integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    run_type        varchar(30) NOT NULL DEFAULT 'running_balance',
+    ledger_type     varchar(30) NOT NULL,
+    entity_id       integer,
+    total_rows      integer NOT NULL DEFAULT 0,
+    matched_rows    integer NOT NULL DEFAULT 0,
+    drift_rows      integer NOT NULL DEFAULT 0,
+    max_drift       numeric(15,2) DEFAULT 0,
+    max_drift_entity_id integer,
+    status          varchar(10) NOT NULL DEFAULT 'green' CHECK (status IN ('green','red','error')),
+    tolerance       numeric(15,4) NOT NULL DEFAULT 0.02,
+    as_of_date      date,
+    details         jsonb,
+    ran_at          timestamp(0) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ran_by          integer
+);
+
+CREATE INDEX IF NOT EXISTS idx_rs_run_type_ran_at
+    ON reconciliation_snapshots (run_type, ran_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_rs_ledger_type_status
+    ON reconciliation_snapshots (ledger_type, status, ran_at DESC);
+
+-- 2. Materialized View: mv_customer_ledger_balance_check
+--    Compares stored balance vs window-function computed balance per customer.
+--    Only includes non-reversed rows.
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_customer_ledger_balance_check AS
+SELECT
+    id,
+    customer_id,
+    transaction_date,
+    transaction_type,
+    debit,
+    credit,
+    balance AS stored_balance,
+    SUM(debit - credit) OVER (
+        PARTITION BY customer_id
+        ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS computed_balance,
+    ROUND(balance - SUM(debit - credit) OVER (
+        PARTITION BY customer_id
+        ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ), 2) AS drift
+FROM customer_ledger
+WHERE COALESCE(is_reversed, false) = false
+WITH DATA;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_clbc_id
+    ON mv_customer_ledger_balance_check (id);
+
+-- 3. Materialized View: mv_supplier_ledger_balance_check
+--    Formula: SUM(credit - debit) OVER (PARTITION BY supplier_id ORDER BY id)
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_supplier_ledger_balance_check AS
+SELECT
+    id,
+    supplier_id,
+    transaction_date,
+    transaction_type,
+    debit,
+    credit,
+    balance AS stored_balance,
+    SUM(credit - debit) OVER (
+        PARTITION BY supplier_id
+        ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS computed_balance,
+    ROUND(balance - SUM(credit - debit) OVER (
+        PARTITION BY supplier_id
+        ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ), 2) AS drift
+FROM supplier_ledger
+WHERE COALESCE(is_reversed, false) = false
+WITH DATA;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_slbc_id
+    ON mv_supplier_ledger_balance_check (id);
+
+-- 4. Materialized View: mv_employee_ledger_balance_check
+--    Formula: SUM(credit - debit) OVER (PARTITION BY employee_id ORDER BY id)
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_employee_ledger_balance_check AS
+SELECT
+    id,
+    employee_id,
+    transaction_date,
+    transaction_type,
+    debit,
+    credit,
+    balance AS stored_balance,
+    SUM(credit - debit) OVER (
+        PARTITION BY employee_id
+        ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS computed_balance,
+    ROUND(balance - SUM(credit - debit) OVER (
+        PARTITION BY employee_id
+        ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ), 2) AS drift
+FROM employee_ledger
+WHERE COALESCE(is_reversed, false) = false
+WITH DATA;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_elbc_id
+    ON mv_employee_ledger_balance_check (id);
+
+-- 5. Materialized View: mv_cash_ledger_balance_check
+--    Formula: SUM(amount) OVER (PARTITION BY branch_id ORDER BY id)
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_cash_ledger_balance_check AS
+SELECT
+    id,
+    branch_id,
+    transaction_date,
+    transaction_type,
+    amount,
+    balance AS stored_balance,
+    SUM(amount) OVER (
+        PARTITION BY branch_id
+        ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS computed_balance,
+    ROUND(balance - SUM(amount) OVER (
+        PARTITION BY branch_id
+        ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ), 2) AS drift
+FROM cash_ledger
+WHERE COALESCE(is_reversed, false) = false
+WITH DATA;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_cashlbc_id
+    ON mv_cash_ledger_balance_check (id);

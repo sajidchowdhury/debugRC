@@ -1296,32 +1296,156 @@ Laravel can listen via `pg_notify` PHP extension or Redis pub/sub bridge.
 
 **Why this matters for long-term**: Eliminates **polling overhead** (no more setInterval AJAX calls). Warehouse managers see new invoices **instantly** without 5-30s delay. Stock pipeline cache can be invalidated **precisely** when data changes.
 
-### 7.8 Window Functions — Replace Running Balance Denormalization
+### 7.8 Window Functions — ✅ Implemented (Task 18) Running Balance Reconciliation
 
-Currently `customer_ledger.balance` is a denormalized running total maintained by application code. This is **fragile** — if any row is inserted out of order or modified, all subsequent balances are wrong.
+Running balance denormalization is the **#1 source of data drift** in accounting systems. Each sub-ledger (customer_ledger, supplier_ledger, employee_ledger, cash_ledger) maintains a `balance` column computed as `prev + debit/credit`. This is efficient for reads but fragile — if any row is inserted out of order, modified, or a reversal doesn't cascade correctly, all subsequent balances become wrong. Window functions provide a mathematically correct verification that catches any drift early, giving the performance of denormalization with the safety of recomputation.
 
-Replace with window-function computed balance:
+**Strategy**: Keep `balance` column for fast reads, but use PostgreSQL window functions to verify `stored_balance = computed_balance` via materialized views that compute `SUM() OVER (PARTITION BY entity ORDER BY id)`. The `reconcile:running-balance` Artisan command refreshes these views and reports drift with per-entity drill-down.
+
+Schema: `07_views_triggers_constraints.sql` — RUNNING BALANCE RECONCILIATION section. Migration: `2025_01_20_000006_add_running_balance_reconciliation.php`.
+
+#### 1. reconciliation_snapshots Table
+
+A structured audit trail for running balance reconciliation runs. Each run produces one row per ledger type with counts, max drift, and status. This replaces the previous approach of logging reconciliation results as unstructured JSON in `user_audit_log`, enabling SQL-queryable reconciliation history with trend analysis.
 
 ```sql
--- Replace: SELECT balance FROM customer_ledger WHERE customer_id = ? ORDER BY id DESC LIMIT 1
--- With:
-CREATE FUNCTION customer_current_balance(p_customer_id INT) RETURNS NUMERIC AS $$
-  SELECT COALESCE(SUM(debit) - SUM(credit), 0)
-  FROM customer_ledger
-  WHERE customer_id = p_customer_id AND is_reversed = false;
-$$ LANGUAGE SQL STABLE;
-
--- Or for full running balance verification:
-SELECT id, debit, credit,
-  SUM(debit - credit) OVER (PARTITION BY customer_id ORDER BY id) AS computed_balance,
-  balance AS stored_balance
-FROM customer_ledger
-WHERE customer_id = ? AND is_reversed = false;
+CREATE TABLE reconciliation_snapshots (
+    id              integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    run_type        varchar(30) NOT NULL DEFAULT 'running_balance',
+    ledger_type     varchar(30) NOT NULL,       -- customer|supplier|employee|cash
+    entity_id       integer,                     -- null for aggregate runs
+    total_rows      integer NOT NULL DEFAULT 0,  -- total non-reversed rows checked
+    matched_rows    integer NOT NULL DEFAULT 0,  -- rows where |drift| <= tolerance
+    drift_rows      integer NOT NULL DEFAULT 0,  -- rows where |drift| > tolerance
+    max_drift       numeric(15,2) DEFAULT 0,     -- worst drift in this run
+    max_drift_entity_id integer,
+    status          varchar(10) NOT NULL DEFAULT 'green' CHECK (status IN ('green','red','error')),
+    tolerance       numeric(15,4) NOT NULL DEFAULT 0.02,
+    as_of_date      date,                         -- optional historical cutoff
+    details         jsonb,                        -- per-view formula, view name
+    ran_at          timestamp(0) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ran_by          integer
+);
 ```
 
-**Strategy**: Keep `balance` column for fast reads, but add a **reconciliation job** that verifies `stored_balance = computed_balance` using window functions. Run daily. This gives the performance of denormalization with the safety of recomputation.
+#### 2. Materialized Views (4)
 
-**Why this matters for long-term**: Running balance denormalization is the **#1 source of data drift** in accounting systems. Window functions provide a mathematically correct verification that catches any drift early.
+Each materialized view computes the running balance using `SUM() OVER (PARTITION BY entity_id ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)` and compares it against the stored `balance` column. The `drift` column shows `stored_balance - computed_balance`, making it easy to identify both the magnitude and direction of any mismatch.
+
+**customer_ledger** — AR running balance (debit increases, credit decreases):
+
+```sql
+CREATE MATERIALIZED VIEW mv_customer_ledger_balance_check AS
+SELECT
+    id, customer_id, transaction_date, transaction_type, debit, credit,
+    balance AS stored_balance,
+    SUM(debit - credit) OVER (
+        PARTITION BY customer_id ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS computed_balance,
+    ROUND(balance - SUM(debit - credit) OVER (
+        PARTITION BY customer_id ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ), 2) AS drift
+FROM customer_ledger
+WHERE COALESCE(is_reversed, false) = false
+WITH DATA;
+```
+
+**supplier_ledger** — AP running balance (credit increases, debit decreases):
+
+```sql
+CREATE MATERIALIZED VIEW mv_supplier_ledger_balance_check AS
+SELECT
+    id, supplier_id, transaction_date, transaction_type, debit, credit,
+    balance AS stored_balance,
+    SUM(credit - debit) OVER (
+        PARTITION BY supplier_id ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS computed_balance,
+    ROUND(balance - SUM(credit - debit) OVER (
+        PARTITION BY supplier_id ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ), 2) AS drift
+FROM supplier_ledger
+WHERE COALESCE(is_reversed, false) = false
+WITH DATA;
+```
+
+**employee_ledger** — Employee payable running balance (credit increases, debit decreases):
+
+```sql
+CREATE MATERIALIZED VIEW mv_employee_ledger_balance_check AS
+SELECT
+    id, employee_id, transaction_date, transaction_type, debit, credit,
+    balance AS stored_balance,
+    SUM(credit - debit) OVER (
+        PARTITION BY employee_id ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS computed_balance,
+    ROUND(balance - SUM(credit - debit) OVER (
+        PARTITION BY employee_id ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ), 2) AS drift
+FROM employee_ledger
+WHERE COALESCE(is_reversed, false) = false
+WITH DATA;
+```
+
+**cash_ledger** — Cash position running balance (positive = IN, negative = OUT):
+
+```sql
+CREATE MATERIALIZED VIEW mv_cash_ledger_balance_check AS
+SELECT
+    id, branch_id, transaction_date, transaction_type, amount,
+    balance AS stored_balance,
+    SUM(amount) OVER (
+        PARTITION BY branch_id ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS computed_balance,
+    ROUND(balance - SUM(amount) OVER (
+        PARTITION BY branch_id ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ), 2) AS drift
+FROM cash_ledger
+WHERE COALESCE(is_reversed, false) = false
+WITH DATA;
+```
+
+Each materialized view has a unique index on `id` (required for `CONCURRENTLY` refresh in future) and can be refreshed via `REFRESH MATERIALIZED VIEW <view_name>`.
+
+#### 3. Artisan Command: `reconcile:running-balance`
+
+File: `laravel/app/Console/Commands/RunningBalanceReconcile.php`
+
+| Option | Description |
+|---|---|
+| `--fix` | Fix drift by updating `stored_balance = computed_balance` in source tables |
+| `--ledger=customer` | Check a single ledger (customer, supplier, employee, cash) |
+| `--as-of=2025-01-15` | Only check entries up to this date (historical verification) |
+| `--top=10` | Number of top-drift entities to display |
+
+**Workflow**:
+1. Refresh all 4 materialized views (`REFRESH MATERIALIZED VIEW`)
+2. Count total/matched/drifted rows per view using `COUNT(*) FILTER (WHERE ABS(drift) > tolerance)`
+3. If drift detected: show top-N entities by worst drift + top 5 individual rows
+4. With `--fix`: update source table `SET balance = computed_balance` for each drifted row, then re-verify
+5. Store structured snapshot in `reconciliation_snapshots` table (replaces ad-hoc JSON logging)
+
+**Exit codes**: 0 = all match (green), 1 = drift detected (red).
+
+**Scheduling**: This command should be run daily (e.g., via Laravel Scheduler or cron). It can also be run manually before period close to ensure sub-ledger integrity. Example scheduler entry in `routes/console.php`:
+
+```php
+use Illuminate\Support\Facades\Schedule;
+
+Schedule::command('reconcile:running-balance')->dailyAt('02:00')->withoutOverlapping;
+```
+
+**Integration with existing reconciliation**: This command complements (not replaces) the existing `subledger:reconcile` (GL vs sub-ledger totals) and `journal:replay-verify` (GL entry-level integrity). The three commands together provide complete financial data integrity verification:
+- `reconcile:running-balance` — verifies internal consistency of each sub-ledger's running balance column
+- `subledger:reconcile` — verifies sub-ledger totals match GL control accounts
+- `journal:replay-verify` — verifies GL journal entries are balanced and correctly linked
 
 ### 7.9 CTE (Common Table Expressions) — Complex Sales Queries
 
@@ -1607,7 +1731,7 @@ $customers = Customer::search('rahman', ranked: true)->limit(30)->get();
 | 15 | ~~Add BRIN indexes for time-series tables~~ | ✅ Done | 0.5 day | Database |
 | 16 | ~~Add GIN index on sales_draft_carts.items_json~~ | ✅ Done | 0.5 day | Database |
 | 17 | ~~Implement full-text search for products + customers (tsvector + GIN)~~ | ✅ Done | 2 days | Database + Business Logic |
-| 18 | Add window-function running balance reconciliation job | High | 2 days | Database + Business Logic |
+| 18 | ~~Add window-function running balance reconciliation job~~ | ✅ Done | 2 days | Database + Business Logic |
 | 19 | Implement Row-Level Security (RLS) for branch isolation | High | 2 days | Database + Business Logic |
 | 20 | Replace document_sequences SELECT FOR UPDATE with advisory locks | Medium | 1 day | Business Logic |
 | 21 | Add pg_cron for stale draft cleanup + materialized view refresh | Medium | 1 day | Database |
