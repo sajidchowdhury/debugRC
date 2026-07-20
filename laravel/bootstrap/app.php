@@ -21,6 +21,10 @@ return Application::configure(basePath: dirname(__DIR__))
         // This middleware runs FIRST in the web stack, before Laravel's auth.
         $middleware->prepend(\App\Http\Middleware\SyncLegacySession::class);
 
+        // Task 19: Set app.branch_id GUC for RLS policies.
+        // Must run AFTER SyncLegacySession (which populates session('branch_id')).
+        $middleware->append(\App\Http\Middleware\SetAppBranchId::class);
+
         // Phase 3: Credential-version check — invalidates session if password/role changed.
         $middleware->append(\App\Http\Middleware\CheckCredentialVersion::class);
 

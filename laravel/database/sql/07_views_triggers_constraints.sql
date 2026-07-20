@@ -613,3 +613,320 @@ WITH DATA;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_cashlbc_id
     ON mv_cash_ledger_balance_check (id);
+
+-- ===================== ROW-LEVEL SECURITY (RLS) — BRANCH ISOLATION =====================
+-- Task 19: Database-level branch isolation that cannot be bypassed even by raw SQL.
+--
+-- This is the ultimate defense-in-depth layer:
+--   Layer 1 (Query):  BranchScope Eloquent global scope — filters reads
+--   Layer 2 (Route):  EnforceBranchIsolation middleware — validates writes
+--   Layer 3 (DB):     RLS policies — enforced by PostgreSQL, no bypass possible
+--
+-- How it works:
+--   1. SetAppBranchId middleware runs on every authenticated request:
+--      SET app.branch_id = <session_branch_id>
+--      SET app.is_admin = true|false
+--   2. RLS policies check: current_setting('app.is_admin', true) = 'true'
+--      → admin bypass (see all branches)
+--      OR branch_id = current_setting('app.branch_id')::int
+--      → non-admin sees own branch only
+--   3. FORCE ROW LEVEL SECURITY makes even the table owner subject to policies
+--
+-- Safe defaults: Database-level GUC defaults are app.branch_id=0, app.is_admin=false.
+-- Direct psql sessions without SET app.branch_id will see NO branch data (deny by default).
+--
+-- Mirrors migration 2025_01_20_000007_add_rls_branch_isolation.php.
+
+-- Custom GUC defaults (deny-by-default for direct SQL sessions).
+-- These require database owner privilege; if they fail, RLS still works
+-- because current_setting(name, true) returns NULL → not admin → no access.
+-- ALTER DATABASE <dbname> SET app.branch_id = 0;
+-- ALTER DATABASE <dbname> SET app.is_admin = false;
+
+-- ============================================================
+-- SINGLE branch_id tables (31 tables)
+-- Each gets 5 policies: SELECT, INSERT, UPDATE, DELETE + admin bypass
+-- ============================================================
+
+-- Auth & Master
+ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employees FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_employees_select ON employees FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_employees_insert ON employees FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_employees_update ON employees FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_employees_delete ON employees FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_employees_admin ON employees FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customers FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_customers_select ON customers FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_customers_insert ON customers FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_customers_update ON customers FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_customers_delete ON customers FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_customers_admin ON customers FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE suppliers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE suppliers FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_suppliers_select ON suppliers FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_suppliers_insert ON suppliers FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_suppliers_update ON suppliers FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_suppliers_delete ON suppliers FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_suppliers_admin ON suppliers FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE warehouses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE warehouses FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_warehouses_select ON warehouses FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_warehouses_insert ON warehouses FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_warehouses_update ON warehouses FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_warehouses_delete ON warehouses FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_warehouses_admin ON warehouses FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+-- Accounting
+ALTER TABLE journal_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE journal_entries FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_journal_entries_select ON journal_entries FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_journal_entries_insert ON journal_entries FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_journal_entries_update ON journal_entries FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_journal_entries_delete ON journal_entries FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_journal_entries_admin ON journal_entries FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE document_sequences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE document_sequences FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_document_sequences_select ON document_sequences FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_document_sequences_insert ON document_sequences FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_document_sequences_update ON document_sequences FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_document_sequences_delete ON document_sequences FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_document_sequences_admin ON document_sequences FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE customer_ledger ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customer_ledger FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_customer_ledger_select ON customer_ledger FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_customer_ledger_insert ON customer_ledger FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_customer_ledger_update ON customer_ledger FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_customer_ledger_delete ON customer_ledger FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_customer_ledger_admin ON customer_ledger FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE supplier_ledger ENABLE ROW LEVEL SECURITY;
+ALTER TABLE supplier_ledger FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_supplier_ledger_select ON supplier_ledger FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_supplier_ledger_insert ON supplier_ledger FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_supplier_ledger_update ON supplier_ledger FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_supplier_ledger_delete ON supplier_ledger FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_supplier_ledger_admin ON supplier_ledger FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE employee_ledger ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_ledger FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_employee_ledger_select ON employee_ledger FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_employee_ledger_insert ON employee_ledger FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_employee_ledger_update ON employee_ledger FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_employee_ledger_delete ON employee_ledger FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_employee_ledger_admin ON employee_ledger FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE branch_cash ENABLE ROW LEVEL SECURITY;
+ALTER TABLE branch_cash FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_branch_cash_select ON branch_cash FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_cash_insert ON branch_cash FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_cash_update ON branch_cash FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_cash_delete ON branch_cash FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_cash_admin ON branch_cash FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE branch_expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE branch_expenses FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_branch_expenses_select ON branch_expenses FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_expenses_insert ON branch_expenses FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_expenses_update ON branch_expenses FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_expenses_delete ON branch_expenses FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_expenses_admin ON branch_expenses FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE branch_product_cost ENABLE ROW LEVEL SECURITY;
+ALTER TABLE branch_product_cost FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_branch_product_cost_select ON branch_product_cost FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_product_cost_insert ON branch_product_cost FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_product_cost_update ON branch_product_cost FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_product_cost_delete ON branch_product_cost FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_product_cost_admin ON branch_product_cost FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE cash_ledger ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cash_ledger FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_cash_ledger_select ON cash_ledger FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_cash_ledger_insert ON cash_ledger FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_cash_ledger_update ON cash_ledger FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_cash_ledger_delete ON cash_ledger FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_cash_ledger_admin ON cash_ledger FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE accounting_periods ENABLE ROW LEVEL SECURITY;
+ALTER TABLE accounting_periods FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_accounting_periods_select ON accounting_periods FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_accounting_periods_insert ON accounting_periods FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_accounting_periods_update ON accounting_periods FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_accounting_periods_delete ON accounting_periods FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_accounting_periods_admin ON accounting_periods FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE manual_journals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE manual_journals FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_manual_journals_select ON manual_journals FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_manual_journals_insert ON manual_journals FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_manual_journals_update ON manual_journals FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_manual_journals_delete ON manual_journals FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_manual_journals_admin ON manual_journals FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+-- Stock
+ALTER TABLE stock_adjustments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_adjustments FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_stock_adjustments_select ON stock_adjustments FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_adjustments_insert ON stock_adjustments FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_adjustments_update ON stock_adjustments FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_adjustments_delete ON stock_adjustments FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_adjustments_admin ON stock_adjustments FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE stock_take_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_take_sessions FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_stock_take_sessions_select ON stock_take_sessions FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_take_sessions_insert ON stock_take_sessions FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_take_sessions_update ON stock_take_sessions FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_take_sessions_delete ON stock_take_sessions FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_take_sessions_admin ON stock_take_sessions FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE damage_invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE damage_invoices FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_damage_invoices_select ON damage_invoices FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_damage_invoices_insert ON damage_invoices FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_damage_invoices_update ON damage_invoices FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_damage_invoices_delete ON damage_invoices FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_damage_invoices_admin ON damage_invoices FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+-- Sales
+ALTER TABLE sales_invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sales_invoices FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_sales_invoices_select ON sales_invoices FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_invoices_insert ON sales_invoices FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_invoices_update ON sales_invoices FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_invoices_delete ON sales_invoices FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_invoices_admin ON sales_invoices FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE sales_challans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sales_challans FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_sales_challans_select ON sales_challans FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_challans_insert ON sales_challans FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_challans_update ON sales_challans FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_challans_delete ON sales_challans FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_challans_admin ON sales_challans FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE sales_draft_carts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sales_draft_carts FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_sales_draft_carts_select ON sales_draft_carts FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_draft_carts_insert ON sales_draft_carts FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_draft_carts_update ON sales_draft_carts FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_draft_carts_delete ON sales_draft_carts FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_draft_carts_admin ON sales_draft_carts FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE sales_returns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sales_returns FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_sales_returns_select ON sales_returns FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_returns_insert ON sales_returns FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_returns_update ON sales_returns FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_returns_delete ON sales_returns FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_returns_admin ON sales_returns FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+-- Purchase
+ALTER TABLE purchase_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE purchase_orders FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_purchase_orders_select ON purchase_orders FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_purchase_orders_insert ON purchase_orders FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_purchase_orders_update ON purchase_orders FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_purchase_orders_delete ON purchase_orders FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_purchase_orders_admin ON purchase_orders FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE purchase_receives ENABLE ROW LEVEL SECURITY;
+ALTER TABLE purchase_receives FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_purchase_receives_select ON purchase_receives FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_purchase_receives_insert ON purchase_receives FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_purchase_receives_update ON purchase_receives FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_purchase_receives_delete ON purchase_receives FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_purchase_receives_admin ON purchase_receives FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE purchase_returns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE purchase_returns FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_purchase_returns_select ON purchase_returns FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_purchase_returns_insert ON purchase_returns FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_purchase_returns_update ON purchase_returns FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_purchase_returns_delete ON purchase_returns FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_purchase_returns_admin ON purchase_returns FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+-- Payment & Misc
+ALTER TABLE customer_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customer_payments FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_customer_payments_select ON customer_payments FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_customer_payments_insert ON customer_payments FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_customer_payments_update ON customer_payments FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_customer_payments_delete ON customer_payments FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_customer_payments_admin ON customer_payments FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE supplier_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE supplier_payments FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_supplier_payments_select ON supplier_payments FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_supplier_payments_insert ON supplier_payments FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_supplier_payments_update ON supplier_payments FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_supplier_payments_delete ON supplier_payments FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_supplier_payments_admin ON supplier_payments FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE other_incomes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE other_incomes FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_other_incomes_select ON other_incomes FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_other_incomes_insert ON other_incomes FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_other_incomes_update ON other_incomes FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_other_incomes_delete ON other_incomes FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_other_incomes_admin ON other_incomes FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE other_expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE other_expenses FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_other_expenses_select ON other_expenses FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_other_expenses_insert ON other_expenses FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_other_expenses_update ON other_expenses FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_other_expenses_delete ON other_expenses FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_other_expenses_admin ON other_expenses FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE employee_transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_transactions FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_employee_transactions_select ON employee_transactions FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_employee_transactions_insert ON employee_transactions FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_employee_transactions_update ON employee_transactions FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_employee_transactions_delete ON employee_transactions FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_employee_transactions_admin ON employee_transactions FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+-- ============================================================
+-- DUAL branch_id tables (4 tables — inter-branch operations)
+-- Policy: user sees rows where they are the from-branch OR to-branch
+-- ============================================================
+
+ALTER TABLE branch_ledger ENABLE ROW LEVEL SECURITY;
+ALTER TABLE branch_ledger FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_branch_ledger_select ON branch_ledger FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_ledger_insert ON branch_ledger FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_ledger_update ON branch_ledger FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_ledger_delete ON branch_ledger FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_ledger_admin ON branch_ledger FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE warehouse_transfers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE warehouse_transfers FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_warehouse_transfers_select ON warehouse_transfers FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_warehouse_transfers_insert ON warehouse_transfers FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_warehouse_transfers_update ON warehouse_transfers FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_warehouse_transfers_delete ON warehouse_transfers FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_warehouse_transfers_admin ON warehouse_transfers FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE money_transfers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE money_transfers FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_money_transfers_select ON money_transfers FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_money_transfers_insert ON money_transfers FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_money_transfers_update ON money_transfers FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_money_transfers_delete ON money_transfers FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_money_transfers_admin ON money_transfers FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE branch_demands ENABLE ROW LEVEL SECURITY;
+ALTER TABLE branch_demands FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_branch_demands_select ON branch_demands FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_demands_insert ON branch_demands FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_demands_update ON branch_demands FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_demands_delete ON branch_demands FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR from_branch_id = current_setting('app.branch_id')::int OR to_branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_branch_demands_admin ON branch_demands FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');

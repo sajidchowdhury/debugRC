@@ -1475,21 +1475,148 @@ GROUP BY status;
 
 **Why this matters for long-term**: CTEs reduce **round-trips to DB** (1 query vs 3+), eliminate **race conditions** between sequential reads, and let PostgreSQL's optimizer choose the best execution plan for the entire operation.
 
-### 7.10 Row-Level Security (RLS) — Defense-in-Depth for Branch Isolation
+### 7.10 Row-Level Security (RLS) — ✅ Implemented (Task 19) Branch Isolation
 
-Currently branch isolation is enforced at middleware + model scope level. RLS provides **DB-level enforcement** that cannot be bypassed even by direct SQL:
+Row-Level Security provides **database-level branch isolation** that cannot be bypassed even by direct SQL, raw `DB::statement()` calls, or forgotten `BranchScope` in models. This is the ultimate defense-in-depth layer — even if a developer writes `Customer::all()` without BranchScope, or a bug in middleware allows cross-branch access, RLS still prevents data leakage at the PostgreSQL engine level.
+
+**Three-layer defense-in-depth**:
+
+| Layer | Mechanism | Scope | Bypass? |
+|---|---|---|---|
+| Layer 1 (Query) | `BranchScope` Eloquent global scope | Auto-filters reads for 4 sales models | `withoutGlobalScope()`, raw SQL |
+| Layer 2 (Route) | `EnforceBranchIsolation` middleware | Validates branch_id on 14 sales write routes | Admin bypass (logged), missing routes |
+| Layer 3 (DB) | RLS policies | All 31 branch-scoped tables, all operations | **None** — PostgreSQL enforces |
+
+Schema: `07_views_triggers_constraints.sql` — ROW-LEVEL SECURITY section. Migration: `2025_01_20_000007_add_rls_branch_isolation.php`. Middleware: `SetAppBranchId.php`.
+
+#### 1. Custom GUC Parameters
+
+The `SetAppBranchId` middleware (registered globally in `bootstrap/app.php`) sets two PostgreSQL session parameters on every authenticated request:
+
+```php
+DB::statement("SET app.branch_id = ?", [$branchId]);  // session branch_id
+DB::statement("SET app.is_admin = ?", [$isAdmin]);     // 'true' or 'false'
+```
+
+These are consumed by RLS policies via `current_setting('app.branch_id')::int` and `current_setting('app.is_admin', true)`. The `missing_ok=true` parameter returns NULL (not error) when the GUC is not set, enabling graceful handling for CLI commands and unauthenticated requests.
+
+**Safe defaults**: Database-level GUC defaults are `app.branch_id=0` and `app.is_admin=false` (set by migration). Direct psql sessions without `SET app.branch_id` will see NO branch data — deny by default.
+
+#### 2. Single branch_id Tables (31 tables)
+
+Each table gets 5 RLS policies: SELECT, INSERT, UPDATE, DELETE + admin bypass. The core condition is:
+
+```sql
+current_setting('app.is_admin', true) = 'true'
+    OR branch_id = current_setting('app.branch_id')::int
+```
+
+This means:
+- **Admin users** (`app.is_admin = 'true'`) see all branches (bypass)
+- **Non-admin users** (`app.is_admin = 'false'`) see only rows where `branch_id` matches their session branch
+- **Unauthenticated/CLI** (GUC not set → NULL) sees no rows (deny by default)
+
+Example for `sales_invoices`:
 
 ```sql
 ALTER TABLE sales_invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sales_invoices FORCE ROW LEVEL SECURITY;
 
-CREATE POLICY branch_isolation ON sales_invoices
-  USING (branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_sales_invoices_select ON sales_invoices
+    FOR SELECT USING (
+        current_setting('app.is_admin', true) = 'true'
+        OR branch_id = current_setting('app.branch_id')::int
+    );
 
--- Set on each request:
-DB::statement("SET app.branch_id = ?", [session('branch_id')]);
+CREATE POLICY rls_sales_invoices_insert ON sales_invoices
+    FOR INSERT WITH CHECK (
+        current_setting('app.is_admin', true) = 'true'
+        OR branch_id = current_setting('app.branch_id')::int
+    );
+
+CREATE POLICY rls_sales_invoices_update ON sales_invoices
+    FOR UPDATE USING (
+        current_setting('app.is_admin', true) = 'true'
+        OR branch_id = current_setting('app.branch_id')::int
+    ) WITH CHECK (
+        current_setting('app.is_admin', true) = 'true'
+        OR branch_id = current_setting('app.branch_id')::int
+    );
+
+CREATE POLICY rls_sales_invoices_delete ON sales_invoices
+    FOR DELETE USING (
+        current_setting('app.is_admin', true) = 'true'
+        OR branch_id = current_setting('app.branch_id')::int
+    );
+
+CREATE POLICY rls_sales_invoices_admin ON sales_invoices
+    FOR ALL USING (current_setting('app.is_admin', true) = 'true')
+    WITH CHECK (current_setting('app.is_admin', true) = 'true');
 ```
 
-**Why this matters for long-term**: If any developer forgets `BranchScope`, writes raw SQL, or a bug in middleware allows cross-branch access, RLS **still prevents data leakage** at the database level. This is the ultimate defense-in-depth.
+**FORCE ROW LEVEL SECURITY** is critical — without it, the table owner (the PostgreSQL role that Laravel connects as) would bypass all policies. `FORCE` makes even the owner subject to RLS.
+
+**Policy naming convention**: `rls_{table}_{operation}` (e.g., `rls_sales_invoices_select`).
+
+**31 single-branch tables covered**:
+
+| Category | Tables |
+|---|---|
+| Auth & Master | `employees`, `customers`, `suppliers`, `warehouses` |
+| Accounting | `journal_entries`, `document_sequences`, `customer_ledger`, `supplier_ledger`, `employee_ledger`, `branch_cash`, `branch_expenses`, `branch_product_cost`, `cash_ledger`, `accounting_periods`, `manual_journals` |
+| Stock | `stock_adjustments`, `stock_take_sessions`, `damage_invoices` |
+| Sales | `sales_invoices`, `sales_challans`, `sales_draft_carts`, `sales_returns` |
+| Purchase | `purchase_orders`, `purchase_receives`, `purchase_returns` |
+| Payment & Misc | `customer_payments`, `supplier_payments`, `other_incomes`, `other_expenses`, `employee_transactions` |
+
+#### 3. Dual branch_id Tables (4 tables — Inter-Branch Operations)
+
+Four tables use `from_branch_id` and `to_branch_id` instead of a single `branch_id`. These model inter-branch operations where both branches need visibility. The policy uses OR logic:
+
+```sql
+current_setting('app.is_admin', true) = 'true'
+    OR from_branch_id = current_setting('app.branch_id')::int
+    OR to_branch_id = current_setting('app.branch_id')::int
+```
+
+| Table | Columns | Use Case |
+|---|---|---|
+| `branch_ledger` | `from_branch_id`, `to_branch_id` | Intercompany settlement tracking |
+| `warehouse_transfers` | `from_branch_id`, `to_branch_id` | Stock transfer between branches |
+| `money_transfers` | `from_branch_id`, `to_branch_id` | Cash transfer between branches |
+| `branch_demands` | `from_branch_id`, `to_branch_id` | Cross-branch stock demand |
+
+#### 4. Tables NOT Covered by RLS
+
+The following tables do NOT have `branch_id` and are therefore not RLS-protected. These are system-wide resources that all branches share:
+
+- `branches` (the branch lookup table itself — needed to resolve branch_id)
+- `products`, `product_categories`, `product_groups`, `product_price_history` (shared product catalog)
+- `banks`, `bank_ledger_mappings` (shared bank accounts)
+- `users`, `menus`, `user_menu_permissions` (auth/ACL system)
+- `ledgers` (chart of accounts — shared across branches)
+- `journal_lines` (linked to journal_entries which IS RLS-protected)
+- `stock_transactions` (linked via reference_type/reference_id; filtered by service layer)
+- `warehouse_stock` (filtered by warehouse → branch in service layer)
+- `sales_invoice_items`, `sales_challan_items`, `sales_return_items` (child tables — parent is RLS-protected)
+- `purchase_order_items`, `purchase_receive_items`, `purchase_return_items` (child tables)
+- `invoice_payment_settlements`, `supplier_payment_settlements` (allocation tables)
+- `user_audit_log`, `notifications`, `journal_posting_logs` (audit trail — admin-only)
+- `sales_draft_carts_items` (child of sales_draft_carts which IS RLS-protected)
+- `reconciliation_snapshots` (Task 18 — admin-only reconciliation data)
+
+#### 5. Console/CLI Considerations
+
+The `SetAppBranchId` middleware only runs for HTTP requests. Artisan commands run without `app.branch_id` set, which means RLS denies access to all branch-scoped data (deny by default). This is the correct behavior for most reconciliation/maintenance commands which should operate on all branches.
+
+For CLI commands that need branch-scoped access, explicitly set the GUC before queries:
+
+```php
+DB::statement("SET app.branch_id = ?", [$branchId]);
+DB::statement("SET app.is_admin = true");  // or false for branch-scoped only
+```
+
+Existing commands (`subledger:reconcile`, `journal:replay-verify`, `reconcile:running-balance`) all operate on all branches and should set `app.is_admin = true` at the start to bypass RLS.
 
 ### 7.11 Table Partitioning — For Large Tables
 
@@ -1732,7 +1859,7 @@ $customers = Customer::search('rahman', ranked: true)->limit(30)->get();
 | 16 | ~~Add GIN index on sales_draft_carts.items_json~~ | ✅ Done | 0.5 day | Database |
 | 17 | ~~Implement full-text search for products + customers (tsvector + GIN)~~ | ✅ Done | 2 days | Database + Business Logic |
 | 18 | ~~Add window-function running balance reconciliation job~~ | ✅ Done | 2 days | Database + Business Logic |
-| 19 | Implement Row-Level Security (RLS) for branch isolation | High | 2 days | Database + Business Logic |
+| 19 | ~~Implement Row-Level Security (RLS) for branch isolation~~ | ✅ Done | 2 days | Database + Business Logic |
 | 20 | Replace document_sequences SELECT FOR UPDATE with advisory locks | Medium | 1 day | Business Logic |
 | 21 | Add pg_cron for stale draft cleanup + materialized view refresh | Medium | 1 day | Database |
 

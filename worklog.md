@@ -205,3 +205,33 @@ Stage Summary:
 - reconcile:running-balance Artisan command: refresh → count → drill-down → fix → snapshot
 - Complements existing subledger:reconcile and journal:replay-verify commands
 - Task 18 marked ✅ Done
+
+---
+Task ID: 11
+Agent: Main Agent
+Task: Implement Row-Level Security (RLS) for branch isolation (Task 19)
+
+Work Log:
+- Analyzed existing branch isolation: BranchScope (4 models), EnforceBranchIsolation middleware (14 routes), SalesAccess service (4 services)
+- Identified critical gaps: only 4 of 31+ models have BranchScope; only sales routes have branch.isolation middleware; zero DB-level RLS
+- Designed 3-layer defense-in-depth: BranchScope (query) + EnforceBranchIsolation (route) + RLS policies (DB)
+- Created SetAppBranchId middleware: sets app.branch_id and app.is_admin GUC parameters per request
+- Registered SetAppBranchId globally in bootstrap/app.php (runs on every authenticated request)
+- Created migration 2025_01_20_000007_add_rls_branch_isolation.php:
+  - 31 single-branch tables with branch_id = current_setting('app.branch_id')::int policies
+  - 4 dual-branch tables (from_branch_id OR to_branch_id) for inter-branch operations
+  - 5 policies per table: SELECT, INSERT, UPDATE, DELETE + admin bypass
+  - FORCE ROW LEVEL SECURITY on all tables (makes even table owner subject to RLS)
+  - Total: 175 RLS policies across 35 tables
+- Updated 07_views_triggers_constraints.sql with full RLS DDL section
+- Updated sales-module-documentation.md Section 7.10 (planned → ✅ Implemented)
+- Updated schema_mapping.md Section 3.14 (RLS reference tables)
+- Marked Task 19 as ✅ Done in phase plan
+
+Stage Summary:
+- 35 tables × 5 policies = 175 RLS policies for complete branch isolation at the DB level
+- SetAppBranchId middleware sets app.branch_id and app.is_admin per request
+- Admin bypass: current_setting('app.is_admin', true) = 'true' sees all branches
+- Non-admin: branch_id = current_setting('app.branch_id')::int sees own branch only
+- CLI/direct SQL: deny by default (no rows visible without SET app.branch_id)
+- Task 19 marked ✅ Done

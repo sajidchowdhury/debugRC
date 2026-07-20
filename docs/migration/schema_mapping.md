@@ -392,6 +392,43 @@ Migration: `2025_01_20_000006_add_running_balance_reconciliation.php`. SQL: `07_
 
 **Laravel integration**: `php artisan reconcile:running-balance` refreshes all materialized views, counts drifted rows, shows top-N entities by worst drift, optionally fixes drift with `--fix`, and stores results in `reconciliation_snapshots`. Options: `--ledger=customer|supplier|employee|cash`, `--as-of=date`, `--top=N`, `--fix`.
 
+### 3.14 Row-Level Security (RLS) — Branch Isolation
+
+Task 19: Database-level branch isolation using PostgreSQL RLS policies. Cannot be bypassed even by raw SQL or forgotten BranchScope. Each branch-scoped table gets per-operation policies (SELECT/INSERT/UPDATE/DELETE) plus admin bypass, checking `current_setting('app.branch_id')::int` and `current_setting('app.is_admin', true)`.
+
+Migration: `2025_01_20_000007_add_rls_branch_isolation.php`. SQL: `07_views_triggers_constraints.sql` — ROW-LEVEL SECURITY section. Middleware: `SetAppBranchId.php`.
+
+**GUC Parameters (set by SetAppBranchId middleware):**
+
+| Parameter | Default | Set By | Consumed By |
+|---|---|---|---|
+| `app.branch_id` | `0` (deny all) | `SetAppBranchId` middleware per request | RLS policies: `branch_id = current_setting('app.branch_id')::int` |
+| `app.is_admin` | `false` | `SetAppBranchId` middleware per request | RLS policies: `current_setting('app.is_admin', true) = 'true'` |
+
+**Single branch_id Tables (31 tables)** — 5 policies each (select/insert/update/delete + admin):
+
+| # | Table | Category |
+|---|---|---|
+| 1-4 | `employees`, `customers`, `suppliers`, `warehouses` | Auth & Master |
+| 5-15 | `journal_entries`, `document_sequences`, `customer_ledger`, `supplier_ledger`, `employee_ledger`, `branch_cash`, `branch_expenses`, `branch_product_cost`, `cash_ledger`, `accounting_periods`, `manual_journals` | Accounting |
+| 16-18 | `stock_adjustments`, `stock_take_sessions`, `damage_invoices` | Stock |
+| 19-22 | `sales_invoices`, `sales_challans`, `sales_draft_carts`, `sales_returns` | Sales |
+| 23-25 | `purchase_orders`, `purchase_receives`, `purchase_returns` | Purchase |
+| 26-31 | `customer_payments`, `supplier_payments`, `other_incomes`, `other_expenses`, `employee_transactions` | Payment & Misc |
+
+**Dual branch_id Tables (4 tables)** — 5 policies each (from_branch_id OR to_branch_id):
+
+| # | Table | Columns | Use Case |
+|---|---|---|---|
+| 1 | `branch_ledger` | `from_branch_id`, `to_branch_id` | Intercompany settlement |
+| 2 | `warehouse_transfers` | `from_branch_id`, `to_branch_id` | Stock transfer |
+| 3 | `money_transfers` | `from_branch_id`, `to_branch_id` | Cash transfer |
+| 4 | `branch_demands` | `from_branch_id`, `to_branch_id` | Cross-branch demand |
+
+**Total: 35 tables × 5 policies = 175 RLS policies.**
+
+**Laravel integration**: `SetAppBranchId` middleware (global, `bootstrap/app.php`) sets `app.branch_id` and `app.is_admin` on every authenticated request. Console commands need explicit `DB::statement("SET app.is_admin = true")` before operating on branch-scoped data.
+
 ---
 
 ## 4. PHP Code SQL Compatibility (Phase 2.4)
