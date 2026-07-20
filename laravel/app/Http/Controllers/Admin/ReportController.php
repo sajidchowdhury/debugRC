@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Helpers\ReportsCatalog;
 use App\Services\Reports\ReportService;
+use App\Services\Reports\CteReportService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
@@ -17,7 +18,8 @@ use Illuminate\Support\Carbon;
 class ReportController extends Controller
 {
     public function __construct(
-        private ReportService $reportService
+        private ReportService $reportService,
+        private CteReportService $cteReportService
     ) {}
 
     /**
@@ -464,6 +466,85 @@ SQL, [$data['from'], $data['to']]);
             'meta' => ['title' => 'Branch Demand — Weekly', 'from_date' => $data['from']->format('Y-m-d'), 'to_date' => $data['to']->format('Y-m-d')],
             'data' => $rows,
         ]);
+    }
+
+    // ============================================================
+    // Phase 1E (Task 32): CTE-Based Reports
+    // These use PostgreSQL CTE functions for single-query complex
+    // aggregation, replacing multiple SQL roundtrips.
+    // ============================================================
+
+    /**
+     * Today's Summary (CTE) — All dashboard KPIs in one query.
+     */
+    public function todaySummaryCte(Request $request)
+    {
+        $date = $request->input('date')
+            ? Carbon::parse($request->input('date'))
+            : Carbon::today();
+        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+
+        $report = $this->cteReportService->todaySummary($date, $branchId);
+
+        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
+
+        return view('admin.reports.today_summary_cte', array_merge($report, [
+            'branches' => $branches,
+        ]));
+    }
+
+    /**
+     * AR Aging (CTE) — Proper sub-ledger based aging with GL reconciliation.
+     */
+    public function arAgingCte(Request $request)
+    {
+        $asOf = $this->parseAsOfDate($request);
+        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+
+        $report = $this->cteReportService->arAging($asOf, $branchId);
+
+        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
+
+        return view('admin.reports.ar_aging_cte', array_merge($report, [
+            'branches' => $branches,
+        ]));
+    }
+
+    /**
+     * General Ledger (CTE) — With SQL window-function running balance.
+     */
+    public function generalLedgerCte(Request $request)
+    {
+        $data = $this->parseDateRange($request);
+        $ledgerId = $request->input('ledger_id') ? (int) $request->input('ledger_id') : null;
+        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+
+        $report = $this->cteReportService->generalLedger($data['from'], $data['to'], $ledgerId, $branchId);
+
+        $ledgers = \App\Models\Ledger::active()->orderBy('ledger_name')->get();
+        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
+
+        return view('admin.reports.general_ledger_cte', array_merge($report, [
+            'ledgers' => $ledgers,
+            'branches' => $branches,
+        ]));
+    }
+
+    /**
+     * Gross Margin (CTE) — Per-invoice and per-product margin with accurate COGS.
+     */
+    public function grossMarginCte(Request $request)
+    {
+        $data = $this->parseDateRange($request);
+        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+
+        $report = $this->cteReportService->grossMargin($data['from'], $data['to'], $branchId);
+
+        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
+
+        return view('admin.reports.gross_margin_cte', array_merge($report, [
+            'branches' => $branches,
+        ]));
     }
 
     // ============================================================

@@ -334,6 +334,12 @@ Route::middleware('auth')->group(function () {
         Route::get('purchase-audit', [ReportController::class, 'purchaseAudit'])->name('purchaseAudit');
         Route::get('stocktake-variance', [ReportController::class, 'stocktakeVariance'])->name('stocktakeVariance');
         Route::get('branch-demand-weekly', [ReportController::class, 'branchDemandWeekly'])->name('branchDemandWeekly');
+
+        // Phase 1E (Task 32): CTE-Based Reports (single-query complex aggregation)
+        Route::get('today-summary-cte', [ReportController::class, 'todaySummaryCte'])->name('todaySummaryCte');
+        Route::get('ar-aging-cte', [ReportController::class, 'arAgingCte'])->name('arAgingCte');
+        Route::get('general-ledger-cte', [ReportController::class, 'generalLedgerCte'])->name('generalLedgerCte');
+        Route::get('gross-margin-cte', [ReportController::class, 'grossMarginCte'])->name('grossMarginCte');
     });
 
     // ============================================================

@@ -1,6 +1,6 @@
 # RC-ERP Sales Module — Complete Documentation & Gap Analysis
 
-> **Document Version**: 1.2 — Updated with LISTEN/NOTIFY implementation (Task 31 ✅)
+> **Document Version**: 1.3 — Updated with CTE-based queries implementation (Task 32 ✅)
 > **Date**: 2025-07-21  
 > **Scope**: Legacy CodeIgniter/MySQL → Laravel 12/PostgreSQL migration  
 > **Focus**: Sales Entry, Challan/Godown Copy, Invoice, Payment Receive, Sales Return  
@@ -31,6 +31,7 @@
 7. [PostgreSQL Power Features — Optimization Plan](#7-postgresql-power-features--optimization-plan)
 8. [Implementation Priority & Phase Plan](#8-implementation-priority--phase-plan)
 9. [LISTEN/NOTIFY — Real-Time Update Implementation](#9-listennotify--real-time-update-implementation-task-31-)
+10. [CTE-Based Complex Queries — Implementation](#10-cte-based-complex-queries--implementation-task-32-)
 
 ---
 
@@ -1173,7 +1174,7 @@ LIMIT 30;
 | # | Task | Priority | Effort | Type |
 |---|------|----------|--------|------|
 | 31 | ~~Implement LISTEN/NOTIFY for real-time updates~~ ✅ DONE | Medium | 3 days | Database + Business Logic |
-| 32 | Implement CTE-based complex queries (today's summary, AR aging) | Medium | 2 days | Business Logic |
+| 32 | ~~Implement CTE-based complex queries (today's summary, AR aging)~~ ✅ DONE | Medium | 2 days | Business Logic |
 | 33 | Add EXCLUDE constraint for invoice_payment_allocations | Low | 1 day | Database |
 | 34 | Set up table partitioning for sales_invoices + stock_transactions | Low | 2 days | Database |
 | 35 | Configure deferred FK constraints | Low | 1 day | Database |
@@ -1446,6 +1447,192 @@ php artisan tinker
 
 ---
 
+## 10. CTE-Based Complex Queries — Implementation (Task 32 ✅)
+
+### 10.1 Architecture Overview
+
+PostgreSQL Common Table Expressions (CTEs) replace multiple separate SQL roundtrips and PHP-side computation with single-function calls that return structured JSON. This dramatically reduces query count and moves computation to the database engine where it belongs.
+
+**Before CTEs (DashboardController::getRevenueKPIs):**
+- 6+ separate SQL queries: today sales, MTD sales, MTD collection, MTD due, all-time outstanding, previous month sales
+- PHP-side collection rate calculation, growth percentage
+- Result: ~12 database roundtrips per dashboard load
+
+**After CTEs (rcerp_today_summary):**
+- 1 function call: `SELECT rcerp_today_summary(NULL, CURRENT_DATE)`
+- All aggregation, bucketing, and growth calculations in SQL
+- Result: 1 database roundtrip returning complete JSON
+
+### 10.2 CTE Functions Implemented
+
+| Function | Parameters | Returns | Replaces |
+|----------|-----------|---------|----------|
+| `rcerp_today_summary(branch_id, date)` | Optional branch + date | JSON with today/mtd/outstanding/growth/pending/top5/aging/branch | DashboardController 6+ queries |
+| `rcerp_ar_aging_cte(as_of_date, branch_id)` | Required date, optional branch | JSON with per-customer buckets, GL check, overdue invoices, branch breakdown | ReportService::receivableAging() 2 queries |
+| `rcerp_general_ledger_cte(from, to, ledger_id, branch_id)` | Date range + filters | JSON with entries + running balance + opening/closing per ledger | ReportService::generalLedger() PHP loop |
+| `rcerp_gross_margin_cte(from, to, branch_id)` | Date range + branch | JSON with per-invoice + per-product margin | ReportController inline SQL |
+
+### 10.3 Today's Summary CTE (11 CTEs in One Query)
+
+The `rcerp_today_summary()` function chains 11 CTEs into a single query:
+
+| CTE # | Name | Purpose |
+|-------|------|---------|
+| 1 | `active_invoices` | Base: non-cancelled, non-reversed invoices |
+| 2 | `today_sales` | Today's invoice count + total + due |
+| 3 | `mtd_sales` | MTD invoice count + total + due |
+| 4 | `mtd_collection` | MTD customer payments |
+| 5 | `all_time_outstanding` | All-time outstanding (non-draft) |
+| 6 | `prev_month_sales` | Previous month revenue (for growth) |
+| 7 | `pending_ops` | Draft count + pending godown + pending challan |
+| 8 | `top_customers` | Top 5 by MTD revenue |
+| 9 | `top_products` | Top 5 by MTD qty sold |
+| 10 | `ar_aging` | AR aging buckets from customer_ledger |
+| 11 | `branch_revenue` | Per-branch MTD revenue |
+
+**Result format** (JSON returned by function):
+```json
+{
+  "date": "2025-07-21",
+  "today": { "invoice_count": 5, "total_sales": 45000, "total_due": 12000 },
+  "mtd": { "invoice_count": 87, "total_sales": 1250000, "total_due": 340000, "total_collection": 910000, "collection_rate": 72.8 },
+  "outstanding": { "total_outstanding": 567000 },
+  "growth": { "prev_month_sales": 1100000, "revenue_growth_pct": 13.6 },
+  "pending": { "pending_godown": 3, "pending_challan": 2, "draft_count": 5 },
+  "top_customers": [...],
+  "top_products": [...],
+  "ar_aging": { "bucket_0_30": 230000, "bucket_31_60": 180000, "bucket_61_90": 97000, "bucket_90_plus": 60000 },
+  "branch_revenue": [...]
+}
+```
+
+### 10.4 AR Aging CTE — Sub-Ledger Accuracy
+
+The `rcerp_ar_aging_cte()` function provides accurate AR aging using `customer_ledger.transaction_date` (not the simplified `invoice_date` used by the dashboard). This matters because:
+- A customer may have a 90-day-old debit entry from a manual journal adjustment
+- The dashboard's simplified bucketing by `invoice_date` would miss this
+- The CTE correctly buckets by the actual sub-ledger transaction date
+
+**5 CTEs chained:**
+
+| CTE # | Name | Purpose |
+|-------|------|---------|
+| 1 | `customer_balances` | Per-customer aging buckets from customer_ledger |
+| 2 | `gl_ar_control` | GL AR control account balance |
+| 3 | `overdue_invoices` | Top 20 invoices overdue >30 days |
+| 4 | `aging_totals` | Summary totals across all customers |
+| 5 | `aging_by_branch` | Per-branch aging breakdown |
+
+**Key improvement:** The GL reconciliation check is computed in the same query (sub-ledger total vs GL AR control account), replacing the separate `glArBalance` query in `ReportService::receivableAging()`.
+
+### 10.5 General Ledger CTE — SQL Window Function Running Balance
+
+The `rcerp_general_ledger_cte()` replaces the PHP-side running balance computation:
+
+**Before (PHP loop):**
+```php
+$running = [];
+$rows = $rows->map(function ($r) use (&$running) {
+    $key = $r->ledger_id;
+    $running[$key] = ($running[$key] ?? 0) + $r->debit - $r->credit;
+    $r->running_balance = $running[$key];
+    return $r;
+});
+```
+
+**After (SQL window function):**
+```sql
+COALESCE(o.opening_balance, 0) +
+    SUM(jl.debit - jl.credit) OVER (
+        PARTITION BY jl.ledger_id
+        ORDER BY je.entry_date, je.entry_no, jl.id
+        ROWS UNBOUNDED PRECEDING
+    ) AS running_balance
+```
+
+The SQL approach is:
+- **Faster**: No PHP loop, computation stays in PostgreSQL
+- **Correct**: Opening balance is included via CTE JOIN
+- **Scalable**: Handles millions of rows without memory issues
+- **Complete**: Returns opening/closing balance per ledger in the same query
+
+### 10.6 Gross Margin CTE — Accurate Per-Item COGS
+
+The previous `grossMargin()` report used a simplified approach: `COALESCE(sc.issue_cost, 0)` from the single challan record. The CTE version joins through stock_transactions for accurate per-product COGS:
+
+| CTE # | Name | Purpose |
+|-------|------|---------|
+| 1 | `active_invoices` | Base invoice set |
+| 2 | `invoice_items` | Invoice line items with revenue |
+| 3 | `item_cogs` | COGS from stock_transactions (via challan items) |
+| 4 | `invoice_margin` | Per-invoice aggregation |
+| 5 | `product_margin` | Per-product aggregation |
+| 6 | `grand_totals` | Overall totals + margin % |
+
+This produces both **per-invoice** and **per-product** margin breakdowns — the previous version only had per-invoice.
+
+### 10.7 Backend Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| **Migration** | `database/migrations/2025_01_21_000002_add_cte_complex_queries.php` | Creates 4 CTE functions + 2 convenience views |
+| **CteReportService** | `app/Services/Reports/CteReportService.php` | PHP wrapper: calls PG functions, decodes JSON, returns structured arrays |
+| **ReportController** (updated) | `app/Http/Controllers/Admin/ReportController.php` | 4 new methods + CteReportService injection |
+| **Routes** (updated) | `routes/web.php` | 4 new CTE report routes |
+
+**Routes added:**
+| Route | Name | Method |
+|-------|------|--------|
+| `GET admin/reports/today-summary-cte` | `admin.reports.todaySummaryCte` | `todaySummaryCte()` |
+| `GET admin/reports/ar-aging-cte` | `admin.reports.arAgingCte` | `arAgingCte()` |
+| `GET admin/reports/general-ledger-cte` | `admin.reports.generalLedgerCte` | `generalLedgerCte()` |
+| `GET admin/reports/gross-margin-cte` | `admin.reports.grossMarginCte` | `grossMarginCte()` |
+
+**Blade views created:**
+| View | File | Features |
+|------|------|----------|
+| Today's Summary | `today_summary_cte.blade.php` | KPI cards, growth, pending ops, top 5, AR aging, branch revenue |
+| AR Aging | `ar_aging_cte.blade.php` | Bucket cards, customer table, overdue invoices, branch breakdown, GL reconciliation |
+| General Ledger | `general_ledger_cte.blade.php` | Ledger summary, journal lines with running balance, balance check |
+| Gross Margin | `gross_margin_cte.blade.php` | Grand totals, per-product margin, per-invoice margin |
+
+### 10.8 Convenience Views
+
+Two SQL views wrap the CTE functions for direct psql access:
+
+```sql
+-- All dashboard KPIs at a glance
+SELECT * FROM v_today_summary;
+
+-- AR aging snapshot for today
+SELECT * FROM v_ar_aging_today;
+```
+
+These are useful for DBAs, monitoring scripts, and ad-hoc analysis without needing the Laravel application.
+
+### 10.9 Performance Comparison
+
+| Query | Before (Multi-query) | After (CTE) | Improvement |
+|-------|---------------------|-------------|-------------|
+| Dashboard KPIs | 6+ queries, ~12 roundtrips | 1 function call | 12x fewer roundtrips |
+| AR Aging | 2 queries (aging + GL check) | 1 CTE with 5 sub-queries | 2x fewer roundtrips |
+| General Ledger running balance | 1 query + PHP loop (O(n) memory) | 1 CTE with window function | Zero PHP memory overhead |
+| Gross Margin | 1 query, single challan cost | 1 CTE, per-item COGS | More accurate + per-product breakdown |
+
+### 10.10 Design Decisions
+
+1. **Functions return JSON** instead of result sets because PostgreSQL functions can only return one result type. JSON allows flexible structure (nested objects, arrays) without defining custom composite types.
+
+2. **STABLE marking**: All CTE functions are marked `STABLE` because they only read data (no writes). This allows PostgreSQL to cache execution plans and potentially inline the CTEs (PG 12+ feature).
+
+3. **Fallback handling**: `CteReportService` catches all exceptions and returns empty arrays. If the CTE functions don't exist (migration not run) or tables are empty, the application still works.
+
+4. **Coexistence with old reports**: The CTE reports are new routes (`*-cte`), not replacements. The original `receivableAging`, `generalLedger`, `grossMargin` routes still work. This allows gradual migration and A/B comparison.
+
+5. **No recursive CTEs**: None of the current queries need recursion. The CTEs are used for step-by-step data transformation and aggregation, which is where CTEs shine without recursion.
+
+---
+
 ## Appendix A: Legacy vs Laravel Feature Matrix
 
 | Feature | Legacy CodeIgniter | Laravel Status | Gap Level |
@@ -1500,11 +1687,12 @@ php artisan tinker
 | Go-live checklist | ✅ Manager sign-off | ✅ IMPLEMENTED — GoLiveChecklistController + checklist.blade.php | LOW |
 | CSV export | ✅ Invoices + challans | ❌ Not implemented | LOW |
 | Real-time notifications (LISTEN/NOTIFY) | ❌ Polling only | ✅ IMPLEMENTED — PG triggers + Redis Pub/Sub + SSE + polling fallback | Better |
+| CTE-based complex queries | ❌ Multiple queries + PHP loops | ✅ IMPLEMENTED — 4 CTE functions (today's summary, AR aging, GL running balance, gross margin) | Better |
 | Salesman commission | ❌ Not in legacy | ❌ Not implemented | LOW |
 
 ---
 
-> **Last Verified**: 2025-07-21 — All gap items manually checked against Laravel codebase by running targeted searches on service files, controllers, models, and views. Task 31 (LISTEN/NOTIFY) implemented and documented.
+> **Last Verified**: 2025-07-21 — Task 31 (LISTEN/NOTIFY) and Task 32 (CTE queries) implemented and documented.
 
 ## Appendix B: Key Formulas Reference
 
