@@ -768,7 +768,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | G-19 | **Blank godown copy print** | Handwrite template with blank cells | ✅ IMPLEMENTED — print_godown.blade.php has blank Picked Qty + Signature columns | ✅ VERIFIED — This was previously marked wrong |
 | G-20 | **Invoice CSV export** | `export()` in SalesController | Not implemented | ❌ Not implemented |
 | G-21 | **Challan CSV export** | `export()` in ChallanController | Not implemented | ❌ Not implemented |
-| G-22 | **Dead model cleanup** | N/A | `CustomerPaymentSettlement` model still exists (table dropped by P1-4) | ⚠️ VERIFIED — Model file exists but orphaned; service uses invoice_payment_allocations |
+| G-22 | **Dead model cleanup** | N/A | ✅ FIXED — Removed dead `CustomerPaymentSettlement` model (table dropped by P1-4, replaced by `InvoicePaymentAllocation`) | ✅ VERIFIED & FIXED |
 
 ### 6.4 Design Improvements in Laravel (Better Than Legacy)
 
@@ -1121,7 +1121,7 @@ LIMIT 30;
 | 2 | Fix JournalReversalService integration — Sales services should delegate reversals to JournalReversalService::reverseByJournalEntry() | ✅ DONE | Business Logic | 2025-01-18 — All 10 inline reversal calls replaced with JournalReversalService::reverseByJournalEntry() cascade; 4 direct supplier_ledger inserts replaced with SubLedgerService calls; 4 dead private methods removed (-160 lines) |
 | 3 | Fix journal_entry_id linking in customer_ledger — Ensure every customer_ledger row has journal_entry_id | ✅ DONE | Business Logic | 2025-01-18 — Fixed as part of SubLedgerService integration (G-1); also added DEFAULT false migration for is_reversed |
 | 4 | Fix SQL injection in ReconciliationService — Parameterize all date filters | ✅ DONE | Security | 2025-01-18 — All 16 interpolated date filters replaced with parameterized ? placeholders; added validateDate() defense-in-depth |
-| 5 | Remove dead CustomerPaymentSettlement model | Medium | 0.5 day | Cleanup |
+| 5 | Remove dead CustomerPaymentSettlement model | ✅ DONE | Cleanup | 2025-01-20 — Model file removed; table already dropped by P1-4 migration; replaced by InvoicePaymentAllocation |
 
 ### Phase 1B: Missing Business Logic (Week 2-3)
 

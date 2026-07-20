@@ -654,7 +654,7 @@ This is double-bookkeeping: two tables for the same purpose, but only one is eve
 - [x] `CustomerPayment` model updated: `allocations()` relation + `settlements()` backward-compat alias
 - [x] `cancelPayment` reads from + deletes `invoice_payment_allocations` (not settlements)
 - [x] All 3 eager-loads sites updated to `allocations.invoice`
-- [x] No functional references to `customer_payment_settlements` remain (only comments + dead `CustomerPaymentSettlement.php` model)
+- [x] No functional references to `customer_payment_settlements` remain (dead `CustomerPaymentSettlement.php` model removed 2025-01-20)
 - [x] Brace/paren balance verified (all files 0/0)
 - [ ] End-to-end test (create payment → allocate to invoice → show view displays allocations) — **PENDING**
 
