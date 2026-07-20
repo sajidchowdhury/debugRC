@@ -148,6 +148,12 @@ class LedgerNatureService
             'description' => 'Salary expense',
             'used_by' => 'Employee salary postings',
         ],
+        'write_off' => [
+            'account_type' => 'Expense',
+            'normal_balance' => 'debit',
+            'description' => 'Bad debt write-off (uncollectable AR)',
+            'used_by' => 'Customer payment write-off transaction',
+        ],
         'finance_cost' => [
             'account_type' => 'Expense',
             'normal_balance' => 'debit',

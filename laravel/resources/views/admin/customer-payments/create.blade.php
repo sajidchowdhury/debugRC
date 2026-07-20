@@ -7,7 +7,8 @@
     $oldCust    = old('customer_id', $selectedCustomerId ?? null);
     $oldBr      = old('branch_id', session('branch_id'));
     $oldBank    = old('bank_id');
-    $oldMode    = old('payment_mode', 'cash');
+    $oldMode    = old('payment_mode', $transactionType === 'discount' || $transactionType === 'write_off' ? 'adjustment' : 'cash');
+    $oldType    = old('transaction_type', $transactionType ?? 'receive');
     $oldAmt     = old('amount');
     $oldDisc    = old('discount_amount', 0);
     $oldRef     = old('reference_no');
@@ -15,16 +16,49 @@
 
     // Server-side preloaded outstanding invoices (when customer_id in query string).
     $preloadedInvoices = $outstandingInvoices ?? collect();
+
+    // Type-specific configuration.
+    $typeConfig = [
+        'receive' => [
+            'icon' => 'fa-hand-holding-dollar',
+            'gradient' => 'linear-gradient(135deg,#059669,#0d9488)',
+            'gl_info' => 'Dr Bank/Cash · Cr Accounts Receivable',
+            'submit_label' => 'Record Payment',
+            'submit_icon' => 'fa-floppy-disk',
+        ],
+        'discount' => [
+            'icon' => 'fa-tags',
+            'gradient' => 'linear-gradient(135deg,#7c3aed,#6d28d9)',
+            'gl_info' => 'Dr Sales Discount · Cr Accounts Receivable',
+            'submit_label' => 'Record Discount',
+            'submit_icon' => 'fa-floppy-disk',
+        ],
+        'write_off' => [
+            'icon' => 'fa-file-circle-xmark',
+            'gradient' => 'linear-gradient(135deg,#dc2626,#b91c1c)',
+            'gl_info' => 'Dr Bad Debt Expense · Cr Accounts Receivable',
+            'submit_label' => 'Write Off',
+            'submit_icon' => 'fa-file-circle-xmark',
+        ],
+        'payment' => [
+            'icon' => 'fa-rotate-left',
+            'gradient' => 'linear-gradient(135deg,#f59e0b,#d97706)',
+            'gl_info' => 'Dr Accounts Receivable · Cr Bank/Cash',
+            'submit_label' => 'Issue Refund',
+            'submit_icon' => 'fa-rotate-left',
+        ],
+    ];
+    $cfg = $typeConfig[$oldType] ?? $typeConfig['receive'];
 @endphp
 
 <div class="container-fluid py-2">
     {{-- Hero header --}}
     <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
-            style="background: linear-gradient(135deg,#059669,#0d9488);">
+            style="background: {{ $cfg['gradient'] }};" id="heroHeader">
         <div>
-            <h1 class="h4 mb-1"><i class="fas fa-hand-holding-dollar me-2"></i>{{ $title }}</h1>
-            <p class="mb-0 small opacity-75">
-                Receive money from a customer — GL posting (Dr Bank/Cash / Cr AR), customer ledger credit, optional invoice allocation.
+            <h1 class="h4 mb-1"><i class="fas {{ $cfg['icon'] }} me-2"></i>{{ $title }}</h1>
+            <p class="mb-0 small opacity-75" id="heroSubtitle">
+                GL posting: <strong id="heroGl">{{ $cfg['gl_info'] }}</strong> + customer ledger + optional invoice allocation.
             </p>
         </div>
         <div>
@@ -35,11 +69,11 @@
     </header>
 
     {{-- Info banner --}}
-    <div class="alert alert-info d-flex align-items-start mb-3" role="alert">
+    <div class="alert alert-info d-flex align-items-start mb-3" role="alert" id="infoBanner">
         <i class="fas fa-circle-info me-2 mt-1"></i>
-        <div>
+        <div id="infoBannerContent">
             <strong>Payments post immediately on save.</strong>
-            GL is balanced (Dr Bank/Cash / Cr Accounts Receivable), customer ledger is credited,
+            <span id="infoBannerGl">GL is balanced (Dr Bank/Cash / Cr Accounts Receivable), customer ledger is credited,</span>
             @if (isset($selectedCustomerId) && $preloadedInvoices->isNotEmpty())
                 and the selected invoice(s) will receive allocation automatically.
             @else
@@ -58,6 +92,25 @@
             </div>
             <div class="card-body">
                 <div class="row g-3">
+                    {{-- Transaction type selector --}}
+                    <div class="col-md-4">
+                        <label class="form-label" for="transaction_type">
+                            Transaction type <span class="text-danger">*</span>
+                        </label>
+                        <select id="transaction_type" name="transaction_type"
+                                class="form-select @error('transaction_type') is-invalid @enderror" required>
+                            <option value="receive"   {{ $oldType === 'receive' ? 'selected' : '' }}>Payment Received</option>
+                            <option value="discount"  {{ $oldType === 'discount' ? 'selected' : '' }}>Discount Allowed</option>
+                            <option value="write_off" {{ $oldType === 'write_off' ? 'selected' : '' }}>Bad Debt Write-off</option>
+                            <option value="payment"   {{ $oldType === 'payment' ? 'selected' : '' }}>Refund to Customer</option>
+                        </select>
+                        @error('transaction_type') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                        <div class="form-text" id="typeHint">
+                            <i class="fas fa-info-circle me-1"></i>
+                            <span id="typeHintText">Customer paying us — money received.</span>
+                        </div>
+                    </div>
+
                     <div class="col-md-4">
                         <label class="form-label" for="customer_id">
                             Customer <span class="text-danger">*</span>
@@ -92,7 +145,7 @@
                         @error('branch_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
                     </div>
 
-                    <div class="col-md-4">
+                    <div class="col-md-4" id="paymentModeField">
                         <label class="form-label" for="payment_mode">
                             Payment mode <span class="text-danger">*</span>
                         </label>
@@ -125,7 +178,7 @@
                     </div>
 
                     <div class="col-md-4">
-                        <label class="form-label" for="amount">
+                        <label class="form-label" for="amount" id="amountLabel">
                             Amount (Tk) <span class="text-danger">*</span>
                         </label>
                         <input type="number" id="amount" name="amount"
@@ -136,7 +189,7 @@
                         @error('amount') <div class="invalid-feedback">{{ $message }}</div> @enderror
                     </div>
 
-                    <div class="col-md-4">
+                    <div class="col-md-4" id="discountField">
                         <label class="form-label" for="discount_amount">
                             Discount amount (Tk)
                             <span class="text-muted small">(optional)</span>
@@ -183,11 +236,11 @@
         </div>
 
         {{-- Invoice allocation card --}}
-        <div class="card border-0 shadow-sm mb-3">
+        <div class="card border-0 shadow-sm mb-3" id="allocationCard">
             <div class="card-header bg-white d-flex justify-content-between align-items-center">
                 <h2 class="h6 mb-0">
                     <i class="fas fa-file-invoice-dollar me-1 text-success"></i> Invoice allocation
-                    <span class="text-muted small ms-2">(optional — pick a customer to load outstanding invoices)</span>
+                    <span class="text-muted small ms-2" id="allocSubtitle">(optional — pick a customer to load outstanding invoices)</span>
                 </h2>
                 <span class="badge bg-success-subtle text-success" id="allocationStatus">
                     <i class="fas fa-info-circle me-1"></i>No customer selected
@@ -203,7 +256,7 @@
                                 <th class="text-end">Total (Tk)</th>
                                 <th class="text-end">Paid (Tk)</th>
                                 <th class="text-end">Due (Tk)</th>
-                                <th class="text-end" style="width:18%;">Allocate (Tk)</th>
+                                <th class="text-end" style="width:18%;" id="allocAmountHeader">Allocate (Tk)</th>
                                 <th class="text-center" style="width:8%;">Action</th>
                             </tr>
                         </thead>
@@ -240,12 +293,12 @@
                         </tbody>
                         <tfoot>
                             <tr class="table-light fw-bold">
-                                <td colspan="5" class="text-end">Total allocated</td>
+                                <td colspan="5" class="text-end" id="allocTotalLabel">Total allocated</td>
                                 <td class="text-end" id="allocTotal">0.00</td>
                                 <td></td>
                             </tr>
                             <tr class="table-light">
-                                <td colspan="5" class="text-end text-muted">Payment amount entered</td>
+                                <td colspan="5" class="text-end text-muted" id="allocPaymentAmtLabel">Payment amount entered</td>
                                 <td class="text-end text-muted" id="allocPaymentAmt">0.00</td>
                                 <td></td>
                             </tr>
@@ -278,7 +331,8 @@
                     <i class="fas fa-times me-1"></i> Cancel
                 </a>
                 <button type="submit" class="btn btn-success" id="submitBtn">
-                    <i class="fas fa-floppy-disk me-1"></i> Record Payment
+                    <i class="fas {{ $cfg['submit_icon'] }} me-1"></i>
+                    <span id="submitLabel">{{ $cfg['submit_label'] }}</span>
                 </button>
             </div>
         </div>
@@ -301,12 +355,143 @@ $(function () {
     var $allocError    = $('#allocError');
     var $allocErrorMsg = $('#allocErrorMsg');
     var $allocStatus   = $('#allocationStatus');
+    var $transType     = $('#transaction_type');
+
+    // ====== Type configuration ======
+    var typeConfig = {
+        receive: {
+            icon: 'fa-hand-holding-dollar',
+            gradient: 'linear-gradient(135deg,#059669,#0d9488)',
+            gl_info: 'Dr Bank/Cash · Cr Accounts Receivable',
+            submit_label: 'Record Payment',
+            submit_icon: 'fa-floppy-disk',
+            hint: 'Customer paying us — money received.',
+            info_gl: 'GL is balanced (Dr Bank/Cash / Cr Accounts Receivable), customer ledger is credited,',
+            amount_label: 'Amount (Tk)',
+            discount_visible: true,
+            bank_visible: true,
+            mode_default: 'cash',
+            alloc_label: 'Allocate (Tk)',
+            alloc_subtitle: '(optional — pick a customer to load outstanding invoices)',
+            submit_class: 'btn-success'
+        },
+        discount: {
+            icon: 'fa-tags',
+            gradient: 'linear-gradient(135deg,#7c3aed,#6d28d9)',
+            gl_info: 'Dr Sales Discount · Cr Accounts Receivable',
+            submit_label: 'Record Discount',
+            submit_icon: 'fa-floppy-disk',
+            hint: 'Discount allowed to customer — reduces AR, no money received.',
+            info_gl: 'GL is balanced (Dr Sales Discount / Cr Accounts Receivable), customer ledger is credited,',
+            amount_label: 'Discount amount (Tk)',
+            discount_visible: false,
+            bank_visible: false,
+            mode_default: 'adjustment',
+            alloc_label: 'Allocate (Tk)',
+            alloc_subtitle: '(optional — pick a customer to load outstanding invoices)',
+            submit_class: 'btn-purple'
+        },
+        write_off: {
+            icon: 'fa-file-circle-xmark',
+            gradient: 'linear-gradient(135deg,#dc2626,#b91c1c)',
+            gl_info: 'Dr Bad Debt Expense · Cr Accounts Receivable',
+            submit_label: 'Write Off',
+            submit_icon: 'fa-file-circle-xmark',
+            hint: 'Bad debt write-off — uncollectable amount removed from AR.',
+            info_gl: 'GL is balanced (Dr Bad Debt Expense / Cr Accounts Receivable), customer ledger is credited,',
+            amount_label: 'Write-off amount (Tk)',
+            discount_visible: false,
+            bank_visible: false,
+            mode_default: 'adjustment',
+            alloc_label: 'Allocate (Tk)',
+            alloc_subtitle: '(optional — pick a customer to load outstanding invoices)',
+            submit_class: 'btn-danger'
+        },
+        payment: {
+            icon: 'fa-rotate-left',
+            gradient: 'linear-gradient(135deg,#f59e0b,#d97706)',
+            gl_info: 'Dr Accounts Receivable · Cr Bank/Cash',
+            submit_label: 'Issue Refund',
+            submit_icon: 'fa-rotate-left',
+            hint: 'Refund to customer — money returned, AR increases.',
+            info_gl: 'GL is balanced (Dr Accounts Receivable / Cr Bank/Cash), customer ledger is debited,',
+            amount_label: 'Refund amount (Tk)',
+            discount_visible: false,
+            bank_visible: true,
+            mode_default: 'cash',
+            alloc_label: 'Reverse allocate (Tk)',
+            alloc_subtitle: '(optional — select invoices to reverse allocation)',
+            submit_class: 'btn-warning'
+        }
+    };
+
+    // ====== Dynamic type switching ======
+    function applyTypeConfig(type) {
+        var cfg = typeConfig[type] || typeConfig.receive;
+
+        // Hero header.
+        $('#heroHeader').css('background', cfg.gradient);
+        $('#heroHeader .h4 i').attr('class', 'fas ' + cfg.icon + ' me-2');
+        $('#heroGl').text(cfg.gl_info);
+
+        // Info banner.
+        $('#infoBannerGl').text(cfg.info_gl);
+
+        // Type hint.
+        $('#typeHintText').text(cfg.hint);
+
+        // Submit button.
+        $('#submitBtn').attr('class', 'btn ' + cfg.submit_class);
+        $('#submitBtn i').attr('class', 'fas ' + cfg.submit_icon + ' me-1');
+        $('#submitLabel').text(cfg.submit_label);
+
+        // Amount label.
+        $('#amountLabel').contents().first().text(cfg.amount_label + ' ');
+
+        // Discount field visibility.
+        if (cfg.discount_visible) {
+            $('#discountField').show();
+        } else {
+            $('#discountField').hide();
+            $('#discount_amount').val(0);
+        }
+
+        // Bank field visibility.
+        if (!cfg.bank_visible) {
+            $('#bankField').hide();
+            $('#bank_id').prop('required', false);
+        } else {
+            toggleBankField();
+        }
+
+        // Payment mode — auto-set to adjustment for discount/write_off.
+        if (!cfg.bank_visible && $mode.val() !== 'adjustment') {
+            $mode.val(cfg.mode_default);
+        }
+
+        // Allocation table labels.
+        $('#allocAmountHeader').text(cfg.alloc_label);
+        $('#allocSubtitle').text(cfg.alloc_subtitle);
+    }
+
+    $transType.on('change', function () {
+        applyTypeConfig($(this).val());
+    });
 
     // ====== Select2 init ======
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
 
     // ====== Show/hide bank field based on payment mode ======
     function toggleBankField() {
+        var type = $transType.val();
+        var cfg = typeConfig[type] || typeConfig.receive;
+
+        if (!cfg.bank_visible) {
+            $bankField.hide();
+            $bankId.prop('required', false);
+            return;
+        }
+
         var mode = $mode.val();
         if (mode === 'bank' || mode === 'cheque') {
             $bankField.show();
@@ -498,8 +683,11 @@ $(function () {
         }
 
         $('#submitBtn').prop('disabled', true)
-            .html('<i class="fas fa-spinner fa-spin me-1"></i> Recording…');
+            .html('<i class="fas fa-spinner fa-spin me-1"></i> Processing…');
     });
+
+    // ====== Apply initial type config ======
+    applyTypeConfig('{{ $oldType }}');
 
     // ====== If customer is preselected (e.g., via query string), trigger initial load ======
     @if (!empty($selectedCustomerId) && $preloadedInvoices->isEmpty())

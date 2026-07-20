@@ -20,16 +20,44 @@
         }
         return '<span class="badge bg-success' . $cls . '"><i class="fas fa-check me-1"></i>Active</span>';
     };
+
+    $typeBadge = function () use ($payment): string {
+        $type = $payment->transaction_type ?? 'receive';
+        $badges = [
+            'receive'   => '<span class="badge bg-success fs-6"><i class="fas fa-hand-holding-dollar me-1"></i>Payment Received</span>',
+            'discount'  => '<span class="badge bg-purple fs-6" style="background:#7c3aed;"><i class="fas fa-tags me-1"></i>Discount</span>',
+            'write_off' => '<span class="badge bg-danger fs-6"><i class="fas fa-file-circle-xmark me-1"></i>Write-off</span>',
+            'payment'   => '<span class="badge bg-warning text-dark fs-6"><i class="fas fa-rotate-left me-1"></i>Refund</span>',
+        ];
+        return $badges[$type] ?? '<span class="badge bg-light text-dark fs-6">' . e($type) . '</span>';
+    };
+
+    $typeGradients = [
+        'receive'   => 'linear-gradient(135deg,#059669,#0d9488)',
+        'discount'  => 'linear-gradient(135deg,#7c3aed,#6d28d9)',
+        'write_off' => 'linear-gradient(135deg,#dc2626,#b91c1c)',
+        'payment'   => 'linear-gradient(135deg,#f59e0b,#d97706)',
+    ];
+    $heroGradient = $typeGradients[$payment->transaction_type ?? 'receive'] ?? $typeGradients['receive'];
+
+    $typeIcons = [
+        'receive'   => 'fa-hand-holding-dollar',
+        'discount'  => 'fa-tags',
+        'write_off' => 'fa-file-circle-xmark',
+        'payment'   => 'fa-rotate-left',
+    ];
+    $heroIcon = $typeIcons[$payment->transaction_type ?? 'receive'] ?? $typeIcons['receive'];
 @endphp
 
 <div class="container-fluid py-2">
     {{-- Hero header --}}
     <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
-            style="background: linear-gradient(135deg,#059669,#0d9488);">
+            style="background: {{ $heroGradient }};">
         <div>
             <h1 class="h4 mb-1">
-                <i class="fas fa-hand-holding-dollar me-2"></i>Payment {{ $payment->payment_code }}
+                <i class="fas {{ $heroIcon }} me-2"></i>{{ $payment->getTransactionTypeLabel() }} {{ $payment->payment_code }}
                 {!! $statusBadge() !!}
+                {!! $typeBadge() !!}
             </h1>
             <p class="mb-0 small opacity-75">
                 @if ($payment->customer){{ $payment->customer->customer_name }}@endif
@@ -90,6 +118,12 @@
                         <dt class="col-sm-3 text-muted">Payment code</dt>
                         <dd class="col-sm-9">
                             <span class="badge bg-secondary-subtle text-secondary">{{ $payment->payment_code }}</span>
+                        </dd>
+
+                        <dt class="col-sm-3 text-muted">Transaction type</dt>
+                        <dd class="col-sm-9">
+                            {!! $typeBadge() !!}
+                            <span class="text-muted small ms-2">{{ $payment->getGlDescription() }}</span>
                         </dd>
 
                         <dt class="col-sm-3 text-muted">Payment date</dt>

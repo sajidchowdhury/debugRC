@@ -15,7 +15,7 @@
             @endif
         </div>
         <div class="text-end">
-            <div class="doc-title">Payment Receipt</div>
+            <div class="doc-title">{{ $payment->getTransactionTypeLabel() }}</div>
         </div>
     </div>
 
@@ -56,8 +56,24 @@
     {{-- Amount summary --}}
     <div class="card border-0 shadow-sm mb-3">
         <div class="card-body text-center py-4">
-            <div class="meta-label mb-1">Amount Received</div>
-            <div class="display-5 fw-bold text-success">Tk {{ number_format((float) $payment->amount, 2) }}</div>
+            @php
+                $typeLabels = [
+                    'receive' => 'Amount Received',
+                    'discount' => 'Discount Amount',
+                    'write_off' => 'Write-off Amount',
+                    'payment' => 'Refund Amount',
+                ];
+                $amountLabel = $typeLabels[$payment->transaction_type ?? 'receive'] ?? 'Amount';
+                $typeColors = [
+                    'receive' => 'text-success',
+                    'discount' => 'text-purple',
+                    'write_off' => 'text-danger',
+                    'payment' => 'text-warning',
+                ];
+                $amountColor = $typeColors[$payment->transaction_type ?? 'receive'] ?? 'text-success';
+            @endphp
+            <div class="meta-label mb-1">{{ $amountLabel }}</div>
+            <div class="display-5 fw-bold {{ $amountColor }}">Tk {{ number_format((float) $payment->amount, 2) }}</div>
             @if ((float) $payment->discount_amount > 0)
                 <div class="small text-muted mt-1">Discount: Tk {{ number_format((float) $payment->discount_amount, 2) }}</div>
             @endif

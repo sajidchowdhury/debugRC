@@ -587,7 +587,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | P1-4 | **Drops `customer_payment_settlements`** | Replaced by `invoice_payment_allocations` (cleaner naming) |
 | P1-5 | `sales_return_items.damage_invoice_id` + `damage_invoices.sales_return_id, total_value, status` | Damage ↔ Return linkage missing |
 | P2-3 | `sales_invoices.pre_challan_transport, pre_challan_total` | Transport snapshot for safe challan reversal |
-| P2-5 | `customer_payments.transaction_type` | Payment/discount/write_off types missing |
+| P2-5 | `customer_payments.transaction_type` | ✅ FIXED — Column + CHECK constraint + full service implementation for receive/discount/write_off/payment types with type-specific GL posting |
 
 ### 4.4 Denormalization Patterns
 
@@ -748,8 +748,8 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 |---|-----|-----------|---------------|-----------|--------|
 | G-5 | **Invoice dispatchers not assigned** | `sales_invoice_dispatchers` populated in finalize/edit flow | ✅ FIXED — Full UI + service implementation: dispatchers() relationship, assignDispatchers() method, Select2 multi-select in cart/edit, badge display in show/print, branch isolation + role validation | ✅ VERIFIED & FIXED |
 | G-6 | **Multi-payment allocation** | One payment can be allocated to multiple invoices | ✅ FIXED — confirmPayment() now accepts allocations array [{invoice_id, allocated_amount}]; controller reads alloc_invoice_id[] + alloc_amount[] from form; UI already had multi-invoice allocation table | ✅ VERIFIED & FIXED |
-| G-7 | **Payment transaction types** | receive/payment/discount/write_off | Column exists (CHECK constraint) but only 'receive' is set by service | ⚠️ VERIFIED — `transaction_type` column added by P2-5 but service hardcodes 'receive' | Discount, write-off, refund features missing |
-| G-8 | **Discount GL posting on payment** | `postCustomerDiscount()` in JournalPostingService | discount_amount field exists but no GL posted on confirm | ❌ VERIFIED — No discount GL in CustomerPaymentService::confirmPayment() | Discounts not reflected in GL |
+| G-7 | **Payment transaction types** | receive/payment/discount/write_off | ✅ FIXED — Full implementation: type-specific GL posting (receive→Dr Bank/Cash/Cr AR, discount→Dr Sales Discount/Cr AR, write_off→Dr Bad Debt Expense/Cr AR, payment→Dr AR/Cr Bank/Cash), type-specific customer ledger (credit for AR reduction, debit for refund), type-specific payment codes (PAY/DISC/WOFF/RFND prefixes), type-specific audit events, dynamic UI with type selector + color-coded badges | ✅ VERIFIED & FIXED |
+| G-8 | **Discount GL posting on payment** | `postCustomerDiscount()` in JournalPostingService | ✅ FIXED — Discount GL now posts on confirm: receive+discount→Dr Sales Discount/Cr AR for discount_amount; write_off→Dr Bad Debt Expense/Cr AR; payment→Dr AR/Cr Bank/Cash | ✅ VERIFIED & FIXED |
 | G-9 | **Salesman commission tracking** | salesman_id tracked on invoices | No commission calculation service | ❌ Not implemented | Commission reports not possible |
 | G-10 | **Call It A Day** batch operation | `callItADay()` in SalesInvoiceOperationsTrait | Not implemented in Laravel service | ❌ VERIFIED — Zero matches for callItADay/call_it_a_day in Laravel codebase | End-of-day workflow missing |
 | G-11 | **Customer 360 hub** | `CustomerController::show()` with summary, ledger, invoices, payments | Basic show view (name, contact, credit limit) — NO ledger/invoice/payment tabs | ⚠️ VERIFIED — customers/show.blade.php (197 lines) is a static detail page; comment says "placeholder for future customer-ledger widget" | No unified customer view |
@@ -1129,8 +1129,8 @@ LIMIT 30;
 |---|------|----------|--------|------|
 | 6 | Implement invoice dispatchers assignment (UI + service) | ✅ DONE | Business Logic + UI | 2025-01-20 — Full implementation: dispatchers() belongsToMany, assignDispatchers() with branch/role validation, Select2 multi-select in cart+edit, badge display in show+print, AJAX endpoints + routes |
 | 7 | Implement multi-invoice payment allocation | ✅ DONE | Business Logic + UI | 2025-01-20 — confirmPayment() now accepts allocations[] array; controller reads parallel arrays from UI; single-invoice legacy code removed |
-| 8 | Implement payment transaction types (discount, write_off, refund) with GL | ⚠️ High | 3 days | Business Logic |
-| 9 | Implement discount_amount GL posting on payment confirm | ⚠️ High | 1 day | Business Logic |
+| 8 | Implement payment transaction types (discount, write_off, refund) with GL | ✅ DONE | Business Logic + UI | 2025-01-20 — Full implementation: type-specific GL posting (4 types with correct Dr/Cr), type-specific customer_ledger entries, type-specific payment code prefixes (PAY/DISC/WOFF/RFND), type-specific audit events (payment_discount/payment_write_off/payment_refund), dynamic create form with type selector + color-coded hero + GL info, show view with type badge + gradient, index with type filter + 7 stats cards, print receipt with type label |
+| 9 | Implement discount_amount GL posting on payment confirm | ✅ DONE | Business Logic | 2025-01-20 — Included in Task #8: receive type posts Dr Sales Discount / Cr AR for discount_amount; discount type posts entire amount as Dr Sales Discount / Cr AR |
 | 10 | Implement Call It A Day batch operation | ⚠️ High | 1 day | Business Logic |
 | 11 | Implement Customer 360 hub view | ⚠️ High | 2 days | UI |
 
@@ -1237,7 +1237,7 @@ Core principles:
 | Payment reversal | ✅ Full (GL + intercompany) | ✅ Full | None |
 | Payment receipt print | ✅ Full | ✅ Full | None |
 | Multi-invoice allocation | ✅ CustomerTransactionController | ✅ allocations[] array in confirmPayment() | None |
-| Payment types (discount/write-off) | ✅ transaction_type column | ❌ Only 'receive' set | HIGH |
+| Payment types (discount/write-off) | ✅ transaction_type column + service | ✅ 4 types with GL (receive/discount/write_off/payment) | None |
 | Invoice dispatchers | ✅ Assigned in godown flow | ✅ Assigned in finalize/edit flow (UI + service) | None |
 | Sales return create | ✅ Two-phase | ✅ Two-phase | None |
 | Return warehouse confirm | ✅ Good/Damage condition | ✅ Good/Damage + damage linkage | None |
@@ -1302,11 +1302,12 @@ Core principles:
 | `cogs` | Debit | Challan finalize |
 | `sales_revenue` | Credit | Invoice finalize, return reversal |
 | `sales_return` | Debit | Return confirm (contra-revenue) |
-| `sales_discount` | Debit | Discount on payment (contra-revenue) |
+| `sales_discount` | Debit | Discount on payment (contra-revenue) — ✅ Now posted by CustomerPaymentService for receive+discount_amount and discount transaction types |
 | `transport_revenue` | Credit | Transport adjustment at challan |
 | `inventory_shrinkage` | Debit | Damage, stock take loss |
 | `inventory_surplus` | Credit | Stock take gain |
 | `damage_loss` | Debit | Damage write-off (falls back to shrinkage) |
+| `write_off` | Debit | Bad debt write-off — ✅ New nature, posted by CustomerPaymentService for write_off transaction type |
 | `employee_payable` | Credit | Employee transactions |
 | `interbranch_receivable` | Debit | Cross-branch demand fulfillment |
 | `interbranch_payable` | Credit | Cross-branch demand settlement |

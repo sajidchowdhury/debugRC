@@ -18,6 +18,9 @@ use Illuminate\Support\Facades\Log;
  *   4. credit_limit_override — override used (already in P0-6/P1-1)
  *   5. payment_received      — customer payment confirmed
  *   6. payment_reversed      — payment cancelled
+ *   6a. payment_discount     — discount allowed (transaction_type='discount')
+ *   6b. payment_write_off    — bad debt written off (transaction_type='write_off')
+ *   6c. payment_refund       — refund to customer (transaction_type='payment')
  *   7. return_created        — sales return created
  *   8. return_confirmed      — return confirmed (stock IN + GL)
  *   9. return_reversed       — return reversed
@@ -102,6 +105,56 @@ class SalesAuditLogger
             'payment_code' => $paymentCode,
             'amount' => round($amount, 2),
             'reason' => $reason,
+        ]);
+    }
+
+    /**
+     * Log a customer discount allowed (transaction_type='discount').
+     */
+    public function paymentDiscount(
+        int $userId, int $paymentId, string $paymentCode, int $customerId,
+        int $branchId, float $amount, float $discountAmount
+    ): void {
+        $this->log($userId, 'payment_discount', $branchId, [
+            'payment_id' => $paymentId,
+            'payment_code' => $paymentCode,
+            'customer_id' => $customerId,
+            'amount' => round($amount, 2),
+            'discount_amount' => round($discountAmount, 2),
+            'transaction_type' => 'discount',
+        ]);
+    }
+
+    /**
+     * Log a bad debt write-off (transaction_type='write_off').
+     */
+    public function paymentWriteOff(
+        int $userId, int $paymentId, string $paymentCode, int $customerId,
+        int $branchId, float $amount
+    ): void {
+        $this->log($userId, 'payment_write_off', $branchId, [
+            'payment_id' => $paymentId,
+            'payment_code' => $paymentCode,
+            'customer_id' => $customerId,
+            'amount' => round($amount, 2),
+            'transaction_type' => 'write_off',
+        ]);
+    }
+
+    /**
+     * Log a customer refund (transaction_type='payment').
+     */
+    public function paymentRefund(
+        int $userId, int $paymentId, string $paymentCode, int $customerId,
+        int $branchId, float $amount, string $mode
+    ): void {
+        $this->log($userId, 'payment_refund', $branchId, [
+            'payment_id' => $paymentId,
+            'payment_code' => $paymentCode,
+            'customer_id' => $customerId,
+            'amount' => round($amount, 2),
+            'payment_mode' => $mode,
+            'transaction_type' => 'payment',
         ]);
     }
 
@@ -210,6 +263,7 @@ class SalesAuditLogger
             'sale_created', 'sale_updated', 'sale_cancelled',
             'credit_limit_override',
             'payment_received', 'payment_reversed',
+            'payment_discount', 'payment_write_off', 'payment_refund',
             'return_created', 'return_confirmed', 'return_reversed',
             'godown_prepared', 'challan_issued', 'challan_reversed',
             'stale_drafts_cancelled',

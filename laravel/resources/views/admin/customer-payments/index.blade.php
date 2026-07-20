@@ -9,6 +9,7 @@
         'customer_id'   => '',
         'branch_id'     => '',
         'payment_mode'  => '',
+        'transaction_type' => '',
         'search'        => '',
     ], is_array($filters ?? null) ? $filters : []);
 
@@ -18,6 +19,9 @@
         'cash'         => 0,
         'bank'         => 0,
         'reversed'     => 0,
+        'discounts'    => 0,
+        'write_offs'   => 0,
+        'refunds'      => 0,
     ], $stats ?? []);
 
     // Payment mode badge helper
@@ -30,6 +34,16 @@
             'adjustment'      => '<span class="badge bg-dark"><i class="fas fa-sliders me-1"></i>Adjustment</span>',
         ][$mode] ?? '<span class="badge bg-light text-dark">' . e($mode) . '</span>';
     };
+
+    // Transaction type badge helper
+    $typeBadge = function (string $type): string {
+        return [
+            'receive'   => '<span class="badge bg-success"><i class="fas fa-hand-holding-dollar me-1"></i>Received</span>',
+            'discount'  => '<span class="badge" style="background:#7c3aed;color:#fff;"><i class="fas fa-tags me-1"></i>Discount</span>',
+            'write_off' => '<span class="badge bg-danger"><i class="fas fa-file-circle-xmark me-1"></i>Write-off</span>',
+            'payment'   => '<span class="badge bg-warning text-dark"><i class="fas fa-rotate-left me-1"></i>Refund</span>',
+        ][$type] ?? '<span class="badge bg-light text-dark">' . e($type) . '</span>';
+    };
 @endphp
 
 <div class="container-fluid py-2">
@@ -39,17 +53,26 @@
         <div>
             <h1 class="h4 mb-1"><i class="fas fa-hand-holding-dollar me-2"></i>{{ $title }}</h1>
             <p class="mb-0 small opacity-75">
-                Customer receipts — cash, bank, mobile, cheque, or adjustment. Each posts GL + customer ledger + intercompany on confirm.
+                Customer transactions — payments, discounts, write-offs, and refunds. Each posts GL + customer ledger on confirm.
             </p>
         </div>
-        <div>
+        <div class="d-flex gap-2">
             <a href="{{ route('admin.customer-payments.create') }}" class="btn btn-light btn-sm">
                 <i class="fas fa-plus me-1"></i> Receive Payment
+            </a>
+            <a href="{{ route('admin.customer-payments.create', ['transaction_type' => 'discount']) }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-tags me-1"></i> Discount
+            </a>
+            <a href="{{ route('admin.customer-payments.create', ['transaction_type' => 'write_off']) }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-file-circle-xmark me-1"></i> Write Off
+            </a>
+            <a href="{{ route('admin.customer-payments.create', ['transaction_type' => 'payment']) }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-rotate-left me-1"></i> Refund
             </a>
         </div>
     </header>
 
-    {{-- Stats cards: 5 cards --}}
+    {{-- Stats cards: 7 cards --}}
     <div class="row g-3 mb-3">
         <div class="col-sm-6 col-lg">
             <div class="card border-0 shadow-sm h-100">
@@ -74,7 +97,49 @@
                     </div>
                     <div>
                         <div class="h4 mb-0">Tk {{ number_format((float) $stats['total_amount'], 2) }}</div>
-                        <div class="text-muted small">Total amount (ex. reversed)</div>
+                        <div class="text-muted small">Total received</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-lg">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#7c3aed;">
+                        <i class="fas fa-tags"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">Tk {{ number_format((float) $stats['discounts'], 2) }}</div>
+                        <div class="text-muted small">Discounts allowed</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-lg">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#dc2626;">
+                        <i class="fas fa-file-circle-xmark"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">Tk {{ number_format((float) $stats['write_offs'], 2) }}</div>
+                        <div class="text-muted small">Write-offs</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-lg">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#f59e0b;">
+                        <i class="fas fa-rotate-left"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">Tk {{ number_format((float) $stats['refunds'], 2) }}</div>
+                        <div class="text-muted small">Refunds issued</div>
                     </div>
                 </div>
             </div>
@@ -88,21 +153,7 @@
                     </div>
                     <div>
                         <div class="h4 mb-0">Tk {{ number_format((float) $stats['cash'], 2) }}</div>
-                        <div class="text-muted small">Cash total (ex. reversed)</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body d-flex align-items-center">
-                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
-                         style="width:48px;height:48px;background:#2563eb;">
-                        <i class="fas fa-university"></i>
-                    </div>
-                    <div>
-                        <div class="h4 mb-0">Tk {{ number_format((float) $stats['bank'], 2) }}</div>
-                        <div class="text-muted small">Bank total (ex. reversed)</div>
+                        <div class="text-muted small">Cash total</div>
                     </div>
                 </div>
             </div>
@@ -112,7 +163,7 @@
                 <div class="card-body d-flex align-items-center">
                     <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
                          style="width:48px;height:48px;background:#dc2626;">
-                        <i class="fas fa-rotate-left"></i>
+                        <i class="fas fa-ban"></i>
                     </div>
                     <div>
                         <div class="h4 mb-0">{{ number_format((int) $stats['reversed']) }}</div>
@@ -172,6 +223,16 @@
                         <option value="adjustment"      {{ $filters['payment_mode'] === 'adjustment' ? 'selected' : '' }}>Adjustment</option>
                     </select>
                 </div>
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1" for="transaction_type">Type</label>
+                    <select id="transaction_type" name="transaction_type" class="form-select form-select-sm">
+                        <option value="">All types</option>
+                        <option value="receive"   {{ ($filters['transaction_type'] ?? '') === 'receive' ? 'selected' : '' }}>Payment Received</option>
+                        <option value="discount"  {{ ($filters['transaction_type'] ?? '') === 'discount' ? 'selected' : '' }}>Discount</option>
+                        <option value="write_off" {{ ($filters['transaction_type'] ?? '') === 'write_off' ? 'selected' : '' }}>Write-off</option>
+                        <option value="payment"   {{ ($filters['transaction_type'] ?? '') === 'payment' ? 'selected' : '' }}>Refund</option>
+                    </select>
+                </div>
                 <div class="col-md-1">
                     <label class="form-label small text-muted mb-1" for="search">Search</label>
                     <input type="text" id="search" name="search" class="form-control form-control-sm"
@@ -200,8 +261,8 @@
                             <th>Date</th>
                             <th>Customer</th>
                             <th>Branch</th>
+                            <th>Type</th>
                             <th>Mode</th>
-                            <th>Bank</th>
                             <th class="text-end">Amount (Tk)</th>
                             <th>Reversed?</th>
                             <th class="text-center">Actions</th>
@@ -237,15 +298,8 @@
                                         <span class="text-muted">—</span>
                                     @endif
                                 </td>
+                                <td>{!! $typeBadge($p->transaction_type ?? 'receive') !!}</td>
                                 <td>{!! $modeBadge($p->payment_mode) !!}</td>
-                                <td>
-                                    @if ($p->bank)
-                                        <span class="fw-semibold">{{ $p->bank->bank_name }}</span>
-                                        <div class="small text-muted">{{ $p->bank->bank_code ?? '' }}</div>
-                                    @else
-                                        <span class="text-muted">—</span>
-                                    @endif
-                                </td>
                                 <td class="text-end fw-semibold">Tk {{ number_format((float) $p->amount, 2) }}</td>
                                 <td>
                                     @if ($p->is_reversed)
@@ -270,7 +324,7 @@
                                 <td colspan="9" class="text-center text-muted py-5">
                                     <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
                                     No payments found. Try adjusting filters or
-                                    <a href="{{ route('admin.customer-payments.create') }}">receive a new payment</a>.
+                                    <a href="{{ route('admin.customer-payments.create') }}">record a new transaction</a>.
                                 </td>
                             </tr>
                         @endforelse

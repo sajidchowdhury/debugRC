@@ -9,9 +9,15 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Customer Payment Controller — Phase 8.4.
+ * Customer Payment Controller — Phase 8.4 + Transaction Types (P2-5).
  *
  * Two-phase: create draft → confirm (GL + ledger + allocation + intercompany) → cancel.
+ *
+ * Transaction types supported:
+ *   - receive:   Customer paying us → Dr Bank/Cash, Cr AR
+ *   - discount:  Discount allowed → Dr Sales Discount, Cr AR
+ *   - write_off: Bad debt write-off → Dr Bad Debt Expense, Cr AR
+ *   - payment:   Refund to customer → Dr AR, Cr Bank/Cash
  */
 class CustomerPaymentController extends Controller
 {
@@ -27,6 +33,7 @@ class CustomerPaymentController extends Controller
             ->when($request->input('customer_id'), fn($q, $cid) => $q->where('customer_id', $cid))
             ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
             ->when($request->input('payment_mode'), fn($q, $m) => $q->where('payment_mode', $m))
+            ->when($request->input('transaction_type'), fn($q, $t) => $q->where('transaction_type', $t))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('payment_code', 'ILIKE', "%{$search}%");
             })
@@ -45,6 +52,9 @@ class CustomerPaymentController extends Controller
             'cash' => CustomerPayment::where('is_reversed', false)->where('payment_mode', 'cash')->sum('amount'),
             'bank' => CustomerPayment::where('is_reversed', false)->where('payment_mode', 'bank')->sum('amount'),
             'reversed' => CustomerPayment::where('is_reversed', true)->count(),
+            'discounts' => CustomerPayment::where('is_reversed', false)->where('transaction_type', 'discount')->sum('amount'),
+            'write_offs' => CustomerPayment::where('is_reversed', false)->where('transaction_type', 'write_off')->sum('amount'),
+            'refunds' => CustomerPayment::where('is_reversed', false)->where('transaction_type', 'payment')->sum('amount'),
         ];
 
         return view('admin.customer-payments.index', [
@@ -54,7 +64,7 @@ class CustomerPaymentController extends Controller
             'branches' => $branches,
             'banks' => $banks,
             'stats' => $stats,
-            'filters' => $request->only(['from_date', 'to_date', 'customer_id', 'branch_id', 'payment_mode', 'search']),
+            'filters' => $request->only(['from_date', 'to_date', 'customer_id', 'branch_id', 'payment_mode', 'transaction_type', 'search']),
         ]);
     }
 
@@ -75,13 +85,17 @@ class CustomerPaymentController extends Controller
                 ->get();
         }
 
+        // Transaction type from query string (default: receive).
+        $transactionType = $request->input('transaction_type', 'receive');
+
         return view('admin.customer-payments.create', [
-            'title' => 'Receive Payment',
+            'title' => $this->getTitleForType($transactionType),
             'customers' => $customers,
             'branches' => $branches,
             'banks' => $banks,
             'selectedCustomerId' => $customerId ? (int) $customerId : null,
             'outstandingInvoices' => $outstandingInvoices,
+            'transactionType' => $transactionType,
         ]);
     }
 
@@ -92,6 +106,7 @@ class CustomerPaymentController extends Controller
             'branch_id' => 'required|integer|exists:branches,id',
             'bank_id' => 'nullable|integer|exists:banks,id',
             'payment_mode' => 'required|in:cash,bank,mobile_banking,cheque,adjustment',
+            'transaction_type' => 'required|in:receive,discount,write_off,payment',
             'amount' => 'required|numeric|min:0.01',
             'discount_amount' => 'nullable|numeric|min:0',
             'payment_date' => 'required|date',
@@ -105,11 +120,14 @@ class CustomerPaymentController extends Controller
         ]);
 
         try {
+            $transactionType = $validated['transaction_type'];
+
             $payment = $this->paymentService->createPayment([
                 'customer_id' => $validated['customer_id'],
                 'branch_id' => $validated['branch_id'],
                 'bank_id' => $validated['bank_id'] ?? null,
                 'payment_mode' => $validated['payment_mode'],
+                'transaction_type' => $transactionType,
                 'amount' => $validated['amount'],
                 'discount_amount' => $validated['discount_amount'] ?? 0,
                 'payment_date' => $validated['payment_date'],
@@ -140,8 +158,15 @@ class CustomerPaymentController extends Controller
                 ? " Allocated across {$allocCount} invoice(s)."
                 : '';
 
+            $typeMessages = [
+                'receive' => "Payment {$payment->payment_code} recorded. GL posted (Dr Bank/Cash / Cr AR) + customer ledger updated.",
+                'discount' => "Discount {$payment->payment_code} recorded. GL posted (Dr Sales Discount / Cr AR) + customer ledger updated.",
+                'write_off' => "Write-off {$payment->payment_code} recorded. GL posted (Dr Bad Debt Expense / Cr AR) + customer ledger updated.",
+                'payment' => "Refund {$payment->payment_code} recorded. GL posted (Dr AR / Cr Bank/Cash) + customer ledger updated.",
+            ];
+
             return redirect()->route('admin.customer-payments.show', $payment)
-                ->with('success', "Payment {$payment->payment_code} recorded. GL posted + customer ledger updated.{$allocMsg}");
+                ->with('success', ($typeMessages[$transactionType] ?? $typeMessages['receive']) . $allocMsg);
         } catch (\Throwable $e) {
             return back()->withInput()->with('error', $e->getMessage());
         }
@@ -193,7 +218,7 @@ class CustomerPaymentController extends Controller
         try {
             $payment = $this->paymentService->cancelPayment($id, auth()->id(), $request->input('cancel_reason'));
             return redirect()->route('admin.customer-payments.show', $payment)
-                ->with('success', "Payment {$payment->payment_code} cancelled.");
+                ->with('success', "Payment {$payment->payment_code} cancelled. GL + ledger reversed.");
         } catch (\Throwable $e) {
             return back()->with('error', $e->getMessage());
         }
@@ -216,5 +241,18 @@ class CustomerPaymentController extends Controller
             ->get();
 
         return response()->json($invoices);
+    }
+
+    /**
+     * Helper: page title by transaction type.
+     */
+    private function getTitleForType(string $type): string
+    {
+        return [
+            'receive' => 'Receive Payment',
+            'discount' => 'Allow Discount',
+            'write_off' => 'Write Off Bad Debt',
+            'payment' => 'Issue Refund',
+        ][$type] ?? 'Record Payment';
     }
 }

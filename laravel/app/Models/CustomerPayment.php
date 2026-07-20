@@ -130,4 +130,39 @@ class CustomerPayment extends Model
     public function isConfirmed(): bool { return $this->status === 'confirmed'; }
     public function isCancelled(): bool { return $this->status === 'cancelled'; }
     public function isBankMode(): bool { return $this->payment_mode === 'bank' && $this->bank_id !== null; }
+
+    /**
+     * Transaction type helpers (P2-5).
+     */
+    public function isReceive(): bool { return ($this->transaction_type ?? 'receive') === 'receive'; }
+    public function isDiscount(): bool { return $this->transaction_type === 'discount'; }
+    public function isWriteOff(): bool { return $this->transaction_type === 'write_off'; }
+    public function isRefund(): bool { return $this->transaction_type === 'payment'; }
+    public function isArReduction(): bool { return in_array($this->transaction_type ?? 'receive', ['receive', 'discount', 'write_off']); }
+
+    /**
+     * Get human-readable label for the transaction type.
+     */
+    public function getTransactionTypeLabel(): string
+    {
+        return [
+            'receive' => 'Payment Received',
+            'discount' => 'Discount Allowed',
+            'write_off' => 'Bad Debt Write-off',
+            'payment' => 'Refund',
+        ][$this->transaction_type ?? 'receive'] ?? ucfirst($this->transaction_type ?? 'receive');
+    }
+
+    /**
+     * Get the GL description for this transaction type.
+     */
+    public function getGlDescription(): string
+    {
+        return [
+            'receive' => 'Dr Bank/Cash · Cr AR',
+            'discount' => 'Dr Sales Discount · Cr AR',
+            'write_off' => 'Dr Bad Debt Expense · Cr AR',
+            'payment' => 'Dr AR · Cr Bank/Cash',
+        ][$this->transaction_type ?? 'receive'] ?? 'Dr Bank/Cash · Cr AR';
+    }
 }
