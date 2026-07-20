@@ -7,6 +7,7 @@ use App\Models\SalesChallan;
 use App\Services\Stock\StockService;
 use App\Services\Stock\StockAvailabilityService;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\SubLedgerService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -37,6 +38,7 @@ class SalesChallanService
     public function __construct(
         private StockService $stockService,
         private JournalPostingService $journalPosting,
+        private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger,
         private StockAvailabilityService $availabilityService
@@ -263,15 +265,29 @@ class SalesChallanService
                         'due_amount' => round($newTotal - (float) $invoice->paid_amount, 2),
                     ]);
 
-                // Post customer_ledger 'invoice_adjustment' entry for the delta.
-                $this->postTransportAdjustmentLedger($invoice, $transportAdjustment, $challanCode, $data['created_by'] ?? null);
-
-                // Post GL adjustment JE (Dr/Cr AR + Revenue, swapped by sign).
+                // Post GL adjustment JE FIRST (Dr/Cr AR + Revenue, swapped by sign) to get journal_entry_id.
                 $adjustmentJournalEntryId = $this->postTransportAdjustmentGL(
                     $invoiceId, $challanCode, $challanDate, (int) $invoice->branch_id,
                     $transportAdjustment, (int) $invoice->customer_id,
                     $data['created_by'] ?? null
                 );
+
+                // Post customer_ledger 'invoice_adjustment' entry via SubLedgerService for the delta.
+                $debit = $transportAdjustment > 0 ? abs($transportAdjustment) : 0;
+                $credit = $transportAdjustment < 0 ? abs($transportAdjustment) : 0;
+                $this->subLedger->postCustomerLedgerEntry([
+                    'customer_id' => $invoice->customer_id,
+                    'branch_id' => $invoice->branch_id,
+                    'transaction_date' => now()->format('Y-m-d'),
+                    'transaction_type' => 'invoice_adjustment',
+                    'reference_type' => 'sales_invoice',
+                    'reference_id' => $invoice->id,
+                    'debit' => $debit,
+                    'credit' => $credit,
+                    'description' => 'Challan ' . $challanCode . ' — transport adjustment ' . ($transportAdjustment >= 0 ? '+' : '') . number_format($transportAdjustment, 2),
+                    'journal_entry_id' => $adjustmentJournalEntryId,
+                    'created_by' => $data['created_by'] ?? null,
+                ]);
             }
 
             // Store transport_adjustment + adjustment_journal_entry_id on the challan.
@@ -549,42 +565,6 @@ class SalesChallanService
             )
             ->orderBy('sci.id')
             ->get();
-    }
-
-    /**
-     * P2-3: Post customer_ledger 'invoice_adjustment' entry for transport delta.
-     *
-     * @param SalesInvoice $invoice
-     * @param float $adjustment Signed delta (positive = transport increased → customer owes more)
-     * @param string $challanCode
-     * @param int|null $createdBy
-     */
-    private function postTransportAdjustmentLedger($invoice, float $adjustment, string $challanCode, ?int $createdBy): void
-    {
-        $currentBalance = (float) DB::table('customer_ledger')
-            ->where('customer_id', $invoice->customer_id)
-            ->orderByDesc('id')
-            ->value('balance');
-
-        // Positive adjustment = customer owes more (debit); negative = owes less (credit).
-        $debit = $adjustment > 0 ? abs($adjustment) : 0;
-        $credit = $adjustment < 0 ? abs($adjustment) : 0;
-        $newBalance = $currentBalance + $adjustment;
-
-        DB::table('customer_ledger')->insert([
-            'customer_id' => $invoice->customer_id,
-            'branch_id' => $invoice->branch_id,
-            'transaction_date' => now()->format('Y-m-d'),
-            'transaction_type' => 'invoice_adjustment',
-            'reference_type' => 'sales_invoice',
-            'reference_id' => $invoice->id,
-            'debit' => $debit,
-            'credit' => $credit,
-            'balance' => $newBalance,
-            'description' => 'Challan ' . $challanCode . ' — transport adjustment ' . ($adjustment >= 0 ? '+' : '') . number_format($adjustment, 2),
-            'created_by' => $createdBy,
-            'created_at' => now(),
-        ]);
     }
 
     /**

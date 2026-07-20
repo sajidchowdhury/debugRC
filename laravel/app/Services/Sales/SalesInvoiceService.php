@@ -7,6 +7,7 @@ use App\Models\SalesDraftCart;
 use App\Services\Stock\StockAvailabilityService;
 use App\Services\Stock\StockService;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\SubLedgerService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -35,6 +36,7 @@ class SalesInvoiceService
         private StockAvailabilityService $availabilityService,
         private StockService $stockService,
         private JournalPostingService $journalPosting,
+        private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger
     ) {}
@@ -194,20 +196,28 @@ class SalesInvoiceService
             }
             DB::table('sales_invoice_dispatches')->insert($dispatchRows);
 
-            // Step 8: Post customer_ledger debit (customer owes us more).
-            $this->postCustomerLedgerDebit(
-                $customerId, $branchId, $invoiceId, $invoiceCode,
-                $totalAmount, $data['invoice_date'] ?? now()->format('Y-m-d'),
-                $data['created_by'] ?? null
-            );
-
-            // Step 9: Post GL: Dr AR / Cr Sales Revenue (+ Discount + Transport).
+            // Step 8: Post GL FIRST to get journal_entry_id.
             $journalEntryId = $this->postInvoiceGL(
                 $invoiceId, $invoiceCode, $customerId, $branchId,
                 $subTotal, $discount, $transport, $totalAmount,
                 $data['invoice_date'] ?? now()->format('Y-m-d'),
                 $data['created_by'] ?? null
             );
+
+            // Step 9: Post customer_ledger debit via SubLedgerService (customer owes more).
+            $this->subLedger->postCustomerLedgerEntry([
+                'customer_id' => $customerId,
+                'branch_id' => $branchId,
+                'transaction_date' => $data['invoice_date'] ?? now()->format('Y-m-d'),
+                'transaction_type' => 'sales_invoice',
+                'reference_type' => 'sales_invoice',
+                'reference_id' => $invoiceId,
+                'debit' => $totalAmount,
+                'credit' => 0,
+                'description' => 'Invoice ' . $invoiceCode,
+                'journal_entry_id' => $journalEntryId,
+                'created_by' => $data['created_by'] ?? null,
+            ]);
 
             // Update invoice with journal_entry_id.
             DB::table('sales_invoices')
@@ -295,8 +305,20 @@ class SalesInvoiceService
                 );
             }
 
-            // Reverse customer_ledger (credit entry to reduce what customer owes).
-            $this->reverseCustomerLedgerDebit($invoice, $cancelledBy, $reason);
+            // Reverse customer_ledger via SubLedgerService (credit entry to reduce what customer owes).
+            $this->subLedger->postCustomerLedgerEntry([
+                'customer_id' => $invoice->customer_id,
+                'branch_id' => $invoice->branch_id,
+                'transaction_date' => now()->format('Y-m-d'),
+                'transaction_type' => 'sales_invoice_reversal',
+                'reference_type' => 'sales_invoice',
+                'reference_id' => $invoice->id,
+                'debit' => 0,
+                'credit' => (float) $invoice->total_amount,
+                'description' => 'Invoice reversal ' . $invoice->invoice_code . ": {$reason}",
+                'journal_entry_id' => $invoice->journal_entry_id,
+                'created_by' => $cancelledBy,
+            ]);
 
             // Mark invoice as cancelled.
             DB::table('sales_invoices')
@@ -452,8 +474,20 @@ class SalesInvoiceService
                 }
             }
 
-            // Step 1: Reverse old customer_ledger debit (append-only credit entry).
-            $this->reverseCustomerLedgerDebit($locked, $updatedBy, 'Invoice edited');
+            // Step 1: Reverse old customer_ledger debit via SubLedgerService (append-only credit entry).
+            $this->subLedger->postCustomerLedgerEntry([
+                'customer_id' => $customerId,
+                'branch_id' => $branchId,
+                'transaction_date' => now()->format('Y-m-d'),
+                'transaction_type' => 'sales_invoice_reversal',
+                'reference_type' => 'sales_invoice',
+                'reference_id' => $invoiceId,
+                'debit' => 0,
+                'credit' => $oldTotal,
+                'description' => 'Invoice edit reversal ' . $locked->invoice_code,
+                'journal_entry_id' => $oldJournalId,
+                'created_by' => $updatedBy,
+            ]);
 
             // Step 2: Reverse old GL journal entry (append-only).
             if ($oldJournalId) {
@@ -497,18 +531,27 @@ class SalesInvoiceService
             }
             DB::table('sales_invoice_dispatches')->insert($dispatchRows);
 
-            // Step 6: Post new customer_ledger debit (new total).
-            $this->postCustomerLedgerDebit(
-                $customerId, $branchId, $invoiceId, $invoice->invoice_code,
-                $newTotal, $invoiceDate, $updatedBy
-            );
-
-            // Step 7: Post new GL: Dr AR / Cr Revenue (+ Discount + Transport).
+            // Step 6: Post GL FIRST to get new journal_entry_id.
             $newJournalEntryId = $this->postInvoiceGL(
                 $invoiceId, $invoice->invoice_code, $customerId, $branchId,
                 $subTotal, $discount, $transport, $newTotal,
                 $invoiceDate, $updatedBy
             );
+
+            // Step 7: Post new customer_ledger debit via SubLedgerService.
+            $this->subLedger->postCustomerLedgerEntry([
+                'customer_id' => $customerId,
+                'branch_id' => $branchId,
+                'transaction_date' => $invoiceDate,
+                'transaction_type' => 'sales_invoice',
+                'reference_type' => 'sales_invoice',
+                'reference_id' => $invoiceId,
+                'debit' => $newTotal,
+                'credit' => 0,
+                'description' => 'Invoice ' . $invoice->invoice_code . ' (edited)',
+                'journal_entry_id' => $newJournalEntryId,
+                'created_by' => $updatedBy,
+            ]);
 
             // Step 8: UPDATE invoice header.
             DB::table('sales_invoices')
@@ -656,67 +699,6 @@ class SalesInvoiceService
             'credit_limit' => $creditLimit,
             'new_balance' => $newBalance,
         ];
-    }
-
-    /**
-     * Post customer_ledger debit entry (customer owes us more).
-     */
-    private function postCustomerLedgerDebit(
-        int $customerId, int $branchId, int $invoiceId, string $invoiceCode,
-        float $amount, string $invoiceDate, ?int $createdBy
-    ): void {
-        $currentBalance = (float) DB::table('customer_ledger')
-            ->where('customer_id', $customerId)
-            ->orderByDesc('id')
-            ->value('balance');
-
-        $newBalance = $currentBalance + $amount;
-
-        DB::table('customer_ledger')->insert([
-            'customer_id' => $customerId,
-            'branch_id' => $branchId,
-            'transaction_date' => $invoiceDate,
-            'transaction_type' => 'sales_invoice',
-            'reference_type' => 'sales_invoice',
-            'reference_id' => $invoiceId,
-            'debit' => $amount,
-            'credit' => 0,
-            'balance' => $newBalance,
-            'description' => 'Invoice ' . $invoiceCode,
-            'created_by' => $createdBy,
-            'created_at' => now(),
-        ]);
-    }
-
-    /**
-     * Reverse customer_ledger (credit entry to reduce what customer owes).
-     */
-    private function reverseCustomerLedgerDebit(SalesInvoice $invoice, int $cancelledBy, string $reason): void
-    {
-        $amount = (float) $invoice->total_amount;
-        if ($amount < 0.01) return;
-
-        $currentBalance = (float) DB::table('customer_ledger')
-            ->where('customer_id', $invoice->customer_id)
-            ->orderByDesc('id')
-            ->value('balance');
-
-        $newBalance = $currentBalance - $amount;
-
-        DB::table('customer_ledger')->insert([
-            'customer_id' => $invoice->customer_id,
-            'branch_id' => $invoice->branch_id,
-            'transaction_date' => now()->format('Y-m-d'),
-            'transaction_type' => 'sales_invoice_reversal',
-            'reference_type' => 'sales_invoice',
-            'reference_id' => $invoice->id,
-            'debit' => 0,
-            'credit' => $amount,
-            'balance' => $newBalance,
-            'description' => 'Invoice reversal ' . $invoice->invoice_code . ": {$reason}",
-            'created_by' => $cancelledBy,
-            'created_at' => now(),
-        ]);
     }
 
     /**

@@ -4,6 +4,7 @@ namespace App\Services\Sales;
 
 use App\Models\CustomerPayment;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\SubLedgerService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -29,6 +30,7 @@ class CustomerPaymentService
 {
     public function __construct(
         private JournalPostingService $journalPosting,
+        private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger
     ) {}
@@ -111,8 +113,20 @@ class CustomerPaymentService
             // 1. Post GL: Dr Bank/Cash / Cr AR.
             $journalEntryId = $this->postPaymentGL($payment, $confirmedBy);
 
-            // 2. Post customer_ledger credit (customer owes less).
-            $this->postCustomerLedgerCredit($payment, $journalEntryId, $confirmedBy);
+            // 2. Post customer_ledger credit via SubLedgerService (customer owes less).
+            $this->subLedger->postCustomerLedgerEntry([
+                'customer_id' => $payment->customer_id,
+                'branch_id' => $payment->branch_id,
+                'transaction_date' => $payment->payment_date->format('Y-m-d'),
+                'transaction_type' => 'customer_payment',
+                'reference_type' => 'customer_payment',
+                'reference_id' => $payment->id,
+                'debit' => 0,
+                'credit' => $amount,
+                'description' => 'Payment ' . $payment->payment_code . ($payment->notes ? ' — ' . $payment->notes : ''),
+                'journal_entry_id' => $journalEntryId,
+                'created_by' => $confirmedBy,
+            ]);
 
             // 3. Invoice allocation (if specified).
             if ($invoiceId) {
@@ -187,8 +201,20 @@ class CustomerPaymentService
                 );
             }
 
-            // Reverse customer_ledger (debit entry to restore what customer owes).
-            $this->reverseCustomerLedgerCredit($payment, $cancelledBy, $reason);
+            // Reverse customer_ledger via SubLedgerService (debit entry to restore what customer owes).
+            $this->subLedger->postCustomerLedgerEntry([
+                'customer_id' => $payment->customer_id,
+                'branch_id' => $payment->branch_id,
+                'transaction_date' => now()->format('Y-m-d'),
+                'transaction_type' => 'customer_payment_reversal',
+                'reference_type' => 'customer_payment',
+                'reference_id' => $payment->id,
+                'debit' => $amount,
+                'credit' => 0,
+                'description' => 'Payment reversal ' . $payment->payment_code . ": {$reason}",
+                'journal_entry_id' => $payment->journal_entry_id,
+                'created_by' => $cancelledBy,
+            ]);
 
             // Reverse invoice allocations (P1-4: use invoice_payment_allocations, not customer_payment_settlements).
             $allocations = DB::table('invoice_payment_allocations')
@@ -303,69 +329,6 @@ class CustomerPaymentService
             'source' => 'customer_payment',
             'created_by' => $createdBy,
         ], $lines);
-    }
-
-    /**
-     * Post customer_ledger credit entry (customer owes less).
-     */
-    private function postCustomerLedgerCredit(CustomerPayment $payment, ?int $journalEntryId, int $createdBy): void
-    {
-        $amount = (float) $payment->amount;
-        if ($amount < 0.01) return;
-
-        $currentBalance = (float) DB::table('customer_ledger')
-            ->where('customer_id', $payment->customer_id)
-            ->orderByDesc('id')
-            ->value('balance');
-
-        $newBalance = $currentBalance - $amount; // credit reduces what customer owes
-
-        DB::table('customer_ledger')->insert([
-            'customer_id' => $payment->customer_id,
-            'branch_id' => $payment->branch_id,
-            'transaction_date' => $payment->payment_date->format('Y-m-d'),
-            'transaction_type' => 'customer_payment',
-            'reference_type' => 'customer_payment',
-            'reference_id' => $payment->id,
-            'debit' => 0,
-            'credit' => $amount,
-            'balance' => $newBalance,
-            'description' => 'Payment ' . $payment->payment_code . ($payment->notes ? ' — ' . $payment->notes : ''),
-            'journal_entry_id' => $journalEntryId,
-            'created_by' => $createdBy,
-            'created_at' => now(),
-        ]);
-    }
-
-    /**
-     * Reverse customer_ledger (debit entry to restore what customer owes).
-     */
-    private function reverseCustomerLedgerCredit(CustomerPayment $payment, int $cancelledBy, string $reason): void
-    {
-        $amount = (float) $payment->amount;
-        if ($amount < 0.01) return;
-
-        $currentBalance = (float) DB::table('customer_ledger')
-            ->where('customer_id', $payment->customer_id)
-            ->orderByDesc('id')
-            ->value('balance');
-
-        $newBalance = $currentBalance + $amount; // debit restores what customer owes
-
-        DB::table('customer_ledger')->insert([
-            'customer_id' => $payment->customer_id,
-            'branch_id' => $payment->branch_id,
-            'transaction_date' => now()->format('Y-m-d'),
-            'transaction_type' => 'customer_payment_reversal',
-            'reference_type' => 'customer_payment',
-            'reference_id' => $payment->id,
-            'debit' => $amount,
-            'credit' => 0,
-            'balance' => $newBalance,
-            'description' => 'Payment reversal ' . $payment->payment_code . ": {$reason}",
-            'created_by' => $cancelledBy,
-            'created_at' => now(),
-        ]);
     }
 
     /**

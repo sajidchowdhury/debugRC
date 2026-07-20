@@ -6,6 +6,7 @@ use App\Models\SalesReturn;
 use App\Services\Stock\StockService;
 use App\Services\Stock\DamageService;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\SubLedgerService;
 use App\Services\Notification\NotificationService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -37,6 +38,7 @@ class SalesReturnService
     public function __construct(
         private StockService $stockService,
         private JournalPostingService $journalPosting,
+        private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger,
         private DamageService $damageService,
@@ -193,8 +195,20 @@ class SalesReturnService
             // 3. GL COGS Reversal: Dr Inventory / Cr COGS.
             $cogsJournalEntryId = $this->postCogsReversalGL($return, $confirmedBy);
 
-            // 4. Customer ledger: credit entry (customer owes less).
-            $this->postCustomerLedgerCredit($return, $journalEntryId, $confirmedBy);
+            // 4. Customer ledger via SubLedgerService: credit entry (customer owes less).
+            $this->subLedger->postCustomerLedgerEntry([
+                'customer_id' => $return->customer_id,
+                'branch_id' => $return->branch_id,
+                'transaction_date' => $return->return_date->format('Y-m-d'),
+                'transaction_type' => 'sales_return',
+                'reference_type' => 'sales_return',
+                'reference_id' => $return->id,
+                'debit' => 0,
+                'credit' => (float) $return->total_amount,
+                'description' => 'Sales Return ' . $return->return_code . ($return->reason ? ' — ' . $return->reason : ''),
+                'journal_entry_id' => $journalEntryId,
+                'created_by' => $confirmedBy,
+            ]);
 
             // 5. Update return status.
             DB::table('sales_returns')
@@ -266,8 +280,20 @@ class SalesReturnService
                 );
             }
 
-            // Reverse customer_ledger.
-            $this->reverseCustomerLedgerCredit($return, $reversedBy, $reason);
+            // Reverse customer_ledger via SubLedgerService (debit entry to restore what customer owes).
+            $this->subLedger->postCustomerLedgerEntry([
+                'customer_id' => $return->customer_id,
+                'branch_id' => $return->branch_id,
+                'transaction_date' => now()->format('Y-m-d'),
+                'transaction_type' => 'sales_return_reversal',
+                'reference_type' => 'sales_return',
+                'reference_id' => $return->id,
+                'debit' => (float) $return->total_amount,
+                'credit' => 0,
+                'description' => 'Return reversal ' . $return->return_code . ": {$reason}",
+                'journal_entry_id' => $return->journal_entry_id,
+                'created_by' => $reversedBy,
+            ]);
 
             // P1-5: Reverse linked damage write-offs FIRST (before return stock reversal).
             // Each linked damage_invoice has its own stock OUT + GL that must be reversed.
@@ -404,69 +430,6 @@ class SalesReturnService
                 'entity_type' => 'sales_return', 'entity_id' => $return->id,
                 'memo' => 'Return ' . $return->return_code . ' — COGS reversal',
             ],
-        ]);
-    }
-
-    /**
-     * Post customer_ledger credit (customer owes less).
-     */
-    private function postCustomerLedgerCredit(SalesReturn $return, ?int $journalEntryId, int $createdBy): void
-    {
-        $amount = (float) $return->total_amount;
-        if ($amount < 0.01) return;
-
-        $currentBalance = (float) DB::table('customer_ledger')
-            ->where('customer_id', $return->customer_id)
-            ->orderByDesc('id')
-            ->value('balance');
-
-        $newBalance = $currentBalance - $amount;
-
-        DB::table('customer_ledger')->insert([
-            'customer_id' => $return->customer_id,
-            'branch_id' => $return->branch_id,
-            'transaction_date' => $return->return_date->format('Y-m-d'),
-            'transaction_type' => 'sales_return',
-            'reference_type' => 'sales_return',
-            'reference_id' => $return->id,
-            'debit' => 0,
-            'credit' => $amount,
-            'balance' => $newBalance,
-            'description' => 'Sales Return ' . $return->return_code . ($return->reason ? ' — ' . $return->reason : ''),
-            'journal_entry_id' => $journalEntryId,
-            'created_by' => $createdBy,
-            'created_at' => now(),
-        ]);
-    }
-
-    /**
-     * Reverse customer_ledger (debit entry to restore what customer owes).
-     */
-    private function reverseCustomerLedgerCredit(SalesReturn $return, int $reversedBy, string $reason): void
-    {
-        $amount = (float) $return->total_amount;
-        if ($amount < 0.01) return;
-
-        $currentBalance = (float) DB::table('customer_ledger')
-            ->where('customer_id', $return->customer_id)
-            ->orderByDesc('id')
-            ->value('balance');
-
-        $newBalance = $currentBalance + $amount;
-
-        DB::table('customer_ledger')->insert([
-            'customer_id' => $return->customer_id,
-            'branch_id' => $return->branch_id,
-            'transaction_date' => now()->format('Y-m-d'),
-            'transaction_type' => 'sales_return_reversal',
-            'reference_type' => 'sales_return',
-            'reference_id' => $return->id,
-            'debit' => $amount,
-            'credit' => 0,
-            'balance' => $newBalance,
-            'description' => 'Return reversal ' . $return->return_code . ": {$reason}",
-            'created_by' => $reversedBy,
-            'created_at' => now(),
         ]);
     }
 
