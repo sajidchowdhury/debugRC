@@ -33,6 +33,7 @@ use App\Http\Controllers\Admin\SalesInvoiceController;
 use App\Http\Controllers\Admin\SalesChallanController;
 use App\Http\Controllers\Admin\CustomerPaymentController;
 use App\Http\Controllers\Admin\SalesReturnController;
+use App\Http\Controllers\Admin\SalesGuideController;
 use App\Http\Controllers\Admin\AccountingPeriodController;
 use App\Http\Controllers\Admin\NotificationController;
 use App\Http\Controllers\Admin\SystemPolicyController;
@@ -465,6 +466,10 @@ Route::middleware('auth')->group(function () {
         // P1-3: Sales audit trail (accountant+manager+admin read-only)
         Route::get('audit', [SalesInvoiceController::class, 'auditTrail'])
             ->name('audit')->middleware('role:accountant,manager,admin');
+
+        // G-14: Sales guideline page (Bengali/English) — all sales-module roles
+        Route::get('guide', [SalesGuideController::class, 'guide'])
+            ->name('guide')->middleware('role:salesman,warehouse_manager,dispatcher,accountant,manager,admin');
     });
 
     // ============================================================

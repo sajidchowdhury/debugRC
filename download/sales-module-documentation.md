@@ -605,7 +605,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 
 ## 5. Laravel Implementation — Current State
 
-### 5.1 Controllers (6)
+### 5.1 Controllers (7)
 
 | # | Controller | Key Methods | Delegates To |
 |---|-----------|-------------|-------------|
@@ -615,6 +615,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | 4 | `CustomerPaymentController` | index, create, store, show, cancel, printReceipt, getOutstandingInvoices | CustomerPaymentService |
 | 5 | `SalesReturnController` | index, create, store, show, confirm, reverse, printSlip, getInvoiceDetails | SalesReturnService |
 | 6 | `CustomerController` | CRUD (extends BaseMasterDataController) | CodeGenerator, Customer model |
+| 7 | `SalesGuideController` | guide (Bengali/English guideline page) | None (static Blade view) |
 
 ### 5.2 Models (10 primary + supporting)
 
@@ -664,10 +665,11 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 | AccountingPeriodService | closePeriod, reopenPeriod, yearEndClose, preCloseGate |
 | ReconciliationService | 6-section GL tie-out (AR, AP, Employee, Cash/Bank, Inventory, COGS) |
 
-### 5.4 Blade Views (20 views — ALL FULLY IMPLEMENTED)
+### 5.4 Blade Views (21 views — ALL FULLY IMPLEMENTED)
 
 | View | Lines | Purpose |
 |------|-------|---------|
+| sales/guide.blade.php | 290 | Bengali/English sales guideline (search + sticky nav) |
 | sales/cart.blade.php | ~64KB | SPA-like cart workspace |
 | sales-invoices/index | 302 | Invoice list with filters/stats |
 | sales-invoices/show | 748 | Complete detail + GL journal |
@@ -693,7 +695,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 
 | Group | Prefix | Middleware | Key Routes |
 |-------|--------|-----------|------------|
-| Cart | admin/sales | role:salesman,manager,admin + branch.isolation | cart, load, add, update, remove, clear, validate, soft-hold, availability, finalize, cart-data, credit-check, cancel-stale-drafts, audit |
+| Cart | admin/sales | role:salesman,manager,admin + branch.isolation | cart, load, add, update, remove, clear, validate, soft-hold, availability, finalize, cart-data, credit-check, cancel-stale-drafts, audit, **guide** |
 | Invoices | admin/sales-invoices | role-based per route | index, show, edit, update, cancel, print-invoice, print-godown |
 | Challans | admin/sales-challans | role:warehouse_manager,dispatcher,manager,admin | index, show, godown, storeGodown, challan-form, issueChallan, cancel, print-challan |
 | Payments | admin/customer-payments | role:salesman,accountant,manager,admin | index, create, store, show, cancel, print-receipt, outstanding-invoices |
@@ -760,7 +762,7 @@ When a bank payment is received at Branch A for a customer who owes Branch B:
 |---|-----|-----------|---------------|-----------|
 | G-12 | **Sales API write endpoints** | Full AJAX CRUD | Only read-only dashboard + lookups | ❌ Not implemented |
 | G-13 | **Telegram/FCM notifications** | Full notification suite (5 event types) | Schema + UI placeholders exist (fcm_tokens table, telegram_user_id in user CRUD) but NO dispatch code | ⚠️ VERIFIED — No Telegram bot API calls, no FCM push service |
-| G-14 | **Sales guideline page** | Bengali/English user guide | Not implemented | ❌ Not implemented |
+| G-14 | **Sales guideline page** | Bengali/English user guide | ✅ IMPLEMENTED — `SalesGuideController::guide()`, `admin/sales/guide.blade.php`, route `admin/sales/guide` (all sales-module roles) | ✅ VERIFIED — Blade view migrated from legacy guide.php with Bengali/English content, search filter, sticky nav; reuses existing sales-guide.css + sales-guide.js |
 | G-15 | **Go-live checklist** | Manager sign-off checklist | Not implemented | ❌ Not implemented |
 | G-16 | **Revenue Overview dashboard** | Chart.js KPI dashboard with filters | Basic report view only | ⚠️ Partial |
 | G-17 | **Sales Funnel/Pipeline dashboard** | Pipeline stages, win rate, velocity | Not implemented | ❌ Not implemented |
@@ -1160,7 +1162,7 @@ LIMIT 30;
 | 26 | Implement Customer Performance dashboard | Medium | 3 days | UI |
 | 27 | Implement blank godown copy print template | Low | 1 day | UI |
 | 28 | Implement CSV export for invoices + challans | Low | 1 day | Business Logic |
-| 29 | Implement Sales guideline page (Bengali/English) | Low | 2 days | UI |
+| 29 | ~~Implement~~ Sales guideline page (Bengali/English) ✅ DONE | Low | 2 days | UI |
 | 30 | Implement Go-live checklist | Low | 1 day | UI |
 
 ### Phase 1E: Advanced PostgreSQL (Week 5-6)
@@ -1263,7 +1265,7 @@ Core principles:
 | Sales Funnel dashboard | ✅ Pipeline stages, win rate | ❌ Not implemented | MEDIUM |
 | Customer Performance | ✅ CLV, churn, segments | ⚠️ Basic report only | MEDIUM |
 | Sales API (mobile) | ❌ No API | ⚠️ Read-only (dashboard + lookups) | MEDIUM |
-| Sales guideline page | ✅ Bengali/English | ❌ Not implemented | LOW |
+| Sales guideline page | ✅ Bengali/English | ✅ IMPLEMENTED — SalesGuideController + guide.blade.php | LOW |
 | Go-live checklist | ✅ Manager sign-off | ❌ Not implemented | LOW |
 | CSV export | ✅ Invoices + challans | ❌ Not implemented | LOW |
 | Salesman commission | ❌ Not in legacy | ❌ Not implemented | LOW |
