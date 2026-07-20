@@ -17,6 +17,7 @@ use App\Http\Controllers\Admin\WarehouseController;
 use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\SalesFunnelController;
+use App\Http\Controllers\Admin\CustomerPerformanceController;
 use App\Http\Controllers\Admin\ReconciliationController;
 use App\Http\Controllers\Admin\StockTransactionController;
 use App\Http\Controllers\Admin\StockAdjustmentController;
@@ -312,7 +313,7 @@ Route::middleware('auth')->group(function () {
         // Sales & Revenue
         Route::get('revenue-overview', [ReportController::class, 'revenueOverview'])->name('revenueOverview');
         Route::get('gross-margin', [ReportController::class, 'grossMargin'])->name('grossMargin');
-        Route::get('customer-performance', [ReportController::class, 'customerPerformance'])->name('customerPerformance');
+        Route::get('customer-performance', [CustomerPerformanceController::class, 'index'])->name('customerPerformance');
         Route::get('sales-funnel', [SalesFunnelController::class, 'index'])->name('salesFunnel');
 
         // Purchase & Payables
