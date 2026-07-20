@@ -3,13 +3,13 @@
 # RC_ERP_v2 — Docker Entrypoint for PHP-FPM Container
 # =============================================================================
 # Runs on container startup:
-#   1. Ensures storage directories are writable
+#   1. Ensures storage directories are writable (Windows bind-mount safe)
 #   2. Creates .env file from Docker environment variables
 #   3. Installs Composer dependencies (if vendor/ is empty)
 #   4. Installs Node dependencies + builds Vite assets (if public/build missing)
 #   5. Waits for PostgreSQL to be ready
-#   6. Loads SQL schema (if tables don't exist yet)
-#   7. Runs database migrations
+#   6. Wipes + recreates database on first run, then runs migrations
+#   7. Seeds default system_policies row
 #   8. Creates admin user (if not exists)
 #   9. Clears caches
 #  10. Starts PHP-FPM
@@ -22,31 +22,91 @@ echo "║          RC_ERP_v2 — Docker Container Starting          ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 
 # ---------------------------------------------------------------------------
-# Step 1: Fix storage permissions
+# Step 1: Fix storage permissions (Windows bind-mount safe)
 # ---------------------------------------------------------------------------
-# IMPORTANT: The storage/ directory is bind-mounted from the host.
-# On Windows/Mac, bind mounts may have root ownership that www-data can't
-# write to. We fix this by:
-#   1. Creating all required subdirectories
-#   2. Setting ownership to www-data (PHP-FPM runs as www-data)
-#   3. Creating an empty laravel.log if it doesn't exist
+# CRITICAL: On Windows + Docker Desktop, bind-mounted directories from the
+# host (NTFS) have root:root ownership and chmod/chown silently fail.
+# PHP-FPM runs as www-data (UID 33) and cannot write to root-owned dirs.
+#
+# Solution: We detect the mount owner UID and configure PHP-FPM to run
+# as that user. This ensures PHP can write to the bind-mounted storage.
 # ---------------------------------------------------------------------------
 echo "▶ Step 1: Fixing storage permissions..."
-mkdir -p storage/logs storage/framework/cache/data storage/framework/sessions storage/framework/views bootstrap/cache
-# Create the log file if it doesn't exist (ensures www-data can write)
+
+# Create all required directories
+mkdir -p storage/logs \
+    storage/framework/cache/data \
+    storage/framework/sessions \
+    storage/framework/views \
+    bootstrap/cache
+
+# Create log file if it doesn't exist
 touch storage/logs/laravel.log 2>/dev/null || true
-chmod -R 777 storage bootstrap/cache 2>/dev/null || true
+
+# Detect the UID that owns the laravel directory (bind-mounted from host)
+MOUNT_UID=$(stat -c '%u' /var/www/laravel 2>/dev/null || echo "0")
+MOUNT_GID=$(stat -c '%g' /var/www/laravel 2>/dev/null || echo "0")
+
+echo "  Mount owner UID/GID: ${MOUNT_UID}/${MOUNT_GID}"
+
+# Try to set permissions (works on Linux, silently ignored on Windows NTFS)
+chmod -R a+rwx storage bootstrap/cache 2>/dev/null || true
 chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
-chown www-data:www-data storage/logs/laravel.log 2>/dev/null || true
-echo "  ✓ Storage permissions set"
+
+# Configure PHP-FPM pool based on mount ownership.
+# This is the KEY fix for Windows bind mounts where www-data can't write.
+if [ "$MOUNT_UID" != "33" ] && [ "$MOUNT_UID" != "0" ]; then
+    echo "  Bind mount owned by UID ${MOUNT_UID} — adjusting PHP-FPM user"
+    cat > /usr/local/etc/php-fpm.d/www.conf <<FPMEOF
+[www]
+user = ${MOUNT_UID}
+group = ${MOUNT_GID}
+listen = 9000
+pm = dynamic
+pm.max_children = 50
+pm.start_servers = 5
+pm.min_spare_servers = 3
+pm.max_spare_servers = 10
+clear_env = no
+FPMEOF
+elif [ "$MOUNT_UID" = "0" ]; then
+    # Mount owned by root (common on Windows Docker Desktop)
+    # Make everything world-writable as fallback, and run PHP-FPM as www-data
+    echo "  Bind mount owned by root — using world-writable fallback"
+    chmod -R 777 storage bootstrap/cache 2>/dev/null || true
+    cat > /usr/local/etc/php-fpm.d/www.conf <<FPMEOF
+[www]
+user = www-data
+group = www-data
+listen = 9000
+pm = dynamic
+pm.max_children = 50
+pm.start_servers = 5
+pm.min_spare_servers = 3
+pm.max_spare_servers = 10
+clear_env = no
+FPMEOF
+else
+    # Mount owned by www-data (UID 33) — standard Linux setup
+    echo "  Bind mount owned by www-data — standard setup"
+    cat > /usr/local/etc/php-fpm.d/www.conf <<FPMEOF
+[www]
+user = www-data
+group = www-data
+listen = 9000
+pm = dynamic
+pm.max_children = 50
+pm.start_servers = 5
+pm.min_spare_servers = 3
+pm.max_spare_servers = 10
+clear_env = no
+FPMEOF
+fi
+
+echo "  ✓ Storage permissions configured"
 
 # ---------------------------------------------------------------------------
 # Step 2: Create .env file from Docker environment variables
-# ---------------------------------------------------------------------------
-# Laravel requires a .env file to exist. In Docker, all config is injected
-# via environment variables in docker-compose.yml, but some artisan commands
-# and the framework still expect a .env file. We create a minimal one that
-# references the Docker env vars.
 # ---------------------------------------------------------------------------
 echo "▶ Step 2: Creating .env file..."
 if [ ! -f .env ]; then
@@ -154,56 +214,111 @@ if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 6: Run database setup (schema + migrations)
+# Step 6: Database setup — fresh install or migrate existing
+# ---------------------------------------------------------------------------
+# STRATEGY:
+#   - If database is empty (no migrations table) → run migrate:fresh which
+#     drops all tables and re-creates from scratch using migrations.
+#     The first migration (create_rcerp_schema) loads the SQL schema files.
+#   - If database already has migrations table → run migrate (incremental).
+#
+# This avoids the problem of loading SQL via psql AND then having migrations
+# try to re-create the same tables. Everything goes through artisan migrate.
 # ---------------------------------------------------------------------------
 echo "▶ Step 6: Setting up database..."
 
-# Check if schema already exists (tables present)
-TABLE_COUNT=$(php -r "
+# Check if migrations table exists (indicates a previously set up database)
+MIGRATIONS_EXIST=$(php -r "
 try {
     \$pdo = new PDO('pgsql:host=rcerp_postgres;port=5432;dbname=rcerp', 'rcerp_app', 'rcerp_secret');
-    \$stmt = \$pdo->query(\"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'\");
+    \$stmt = \$pdo->query(\"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'migrations'\");
     echo \$stmt->fetchColumn();
 } catch (\Exception \$e) {
     echo '0';
 }
 " 2>/dev/null || echo "0")
 
-if [ "$TABLE_COUNT" -lt 10 ] 2>/dev/null; then
-    echo "  Loading SQL schema files..."
-    for sql_file in database/sql/01_*.sql database/sql/02_*.sql database/sql/03_*.sql database/sql/04_*.sql database/sql/05_*.sql database/sql/06_*.sql database/sql/07_*.sql; do
-        if [ -f "$sql_file" ]; then
-            echo "    → Loading $(basename $sql_file)..."
-            PGPASSWORD="rcerp_secret" psql -h rcerp_postgres -U rcerp_app -d rcerp -f "$sql_file" 2>&1 | tail -3 || true
-        fi
-    done
-    echo "  ✓ Schema loaded"
+if [ "$MIGRATIONS_EXIST" = "0" ]; then
+    echo "  Fresh database detected — running migrate:fresh..."
+    php artisan migrate:fresh --force 2>&1 || {
+        echo "  ⚠ migrate:fresh failed — trying fresh database approach..."
+        # Fallback: drop and recreate the database, then migrate
+        php -r "
+        try {
+            \$pdo = new PDO('pgsql:host=rcerp_postgres;port=5432;dbname=postgres', 'rcerp_app', 'rcerp_secret');
+            \$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            \$pdo->exec('DROP DATABASE IF EXISTS rcerp');
+            \$pdo->exec('CREATE DATABASE rcerp OWNER rcerp_app');
+            echo \"Database recreated\n\";
+        } catch (\Exception \$e) {
+            echo \"Database recreate failed: \" . \$e->getMessage() . \"\n\";
+        }
+        " 2>/dev/null || true
+        php artisan migrate --force 2>&1 || echo "  ⚠ Migration also failed after DB recreate"
+    }
 else
-    echo "  ✓ Schema already loaded ($TABLE_COUNT tables found) — skipping"
+    echo "  Existing database detected — running incremental migrations..."
+    php artisan migrate --force 2>&1 || echo "  ⚠ Migration warning (may already be migrated)"
 fi
 
-# Run migrations
-echo "  Running Laravel migrations..."
-php artisan migrate --force 2>&1 || echo "  ⚠ Migration warning (may already be migrated)"
+echo "  ✓ Database setup complete"
 
-# Fix the migrations IDENTITY sequence if out of sync
+# ---------------------------------------------------------------------------
+# Step 7: Ensure system_policies table exists + seed default policy
+# ---------------------------------------------------------------------------
+# This is a safety net — if migrations somehow didn't create system_policies,
+# the app will crash on every request because CheckSystemPolicy middleware
+# queries this table. We create it directly if it's missing.
+# ---------------------------------------------------------------------------
+echo "▶ Step 7: Ensuring system_policies table + default policy..."
 php -r "
 try {
     \$pdo = new PDO('pgsql:host=rcerp_postgres;port=5432;dbname=rcerp', 'rcerp_app', 'rcerp_secret');
-    \$pdo->exec('CREATE TABLE IF NOT EXISTS migrations (id SERIAL PRIMARY KEY, migration VARCHAR(255) NOT NULL, batch INTEGER NOT NULL DEFAULT 1)');
-    \$stmt = \$pdo->query('SELECT MAX(id) FROM migrations');
-    \$maxId = \$stmt->fetchColumn();
-    if (\$maxId) {
-        \$pdo->exec(\"SELECT setval('migrations_id_seq', \$maxId)\");
+    \$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+    // Check if system_policies table exists
+    \$stmt = \$pdo->query(\"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='system_policies'\");
+    if (\$stmt->fetchColumn() == 0) {
+        echo \"  Creating system_policies table (fallback)...\n\";
+        \$pdo->exec('CREATE TABLE system_policies (
+            id SERIAL PRIMARY KEY,
+            mode VARCHAR(30) NOT NULL DEFAULT \'NORMAL\',
+            is_active BOOLEAN NOT NULL DEFAULT false,
+            activated_by INTEGER NULL,
+            activated_at TIMESTAMP(0) NULL,
+            deactivated_by INTEGER NULL,
+            deactivated_at TIMESTAMP(0) NULL,
+            reason TEXT NULL,
+            expires_at TIMESTAMP(0) NULL,
+            metadata JSONB NULL,
+            activation_source VARCHAR(30) NOT NULL DEFAULT \'admin_panel\',
+            ip_address VARCHAR(45) NULL,
+            user_agent VARCHAR(255) NULL,
+            created_at TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP(0) DEFAULT CURRENT_TIMESTAMP
+        )');
+        \$pdo->exec('CREATE INDEX system_policies_mode_index ON system_policies (mode)');
+        \$pdo->exec('CREATE INDEX system_policies_is_active_index ON system_policies (is_active)');
+        echo \"  ✓ system_policies table created\n\";
     }
-} catch (\Exception \$e) {}
-" 2>/dev/null
-echo "  ✓ Migrations complete"
+
+    // Seed a default NORMAL policy if none exists
+    \$stmt = \$pdo->query(\"SELECT COUNT(*) FROM system_policies\");
+    if (\$stmt->fetchColumn() == 0) {
+        \$pdo->exec(\"INSERT INTO system_policies (mode, is_active, reason, activation_source, created_at, updated_at) VALUES ('NORMAL', false, 'Default policy created by Docker setup', 'system', NOW(), NOW())\");
+        echo \"  ✓ Default NORMAL policy seeded\n\";
+    } else {
+        echo \"  ✓ system_policies already populated\n\";
+    }
+} catch (\Exception \$e) {
+    echo \"  ⚠ system_policies setup skipped: \" . \$e->getMessage() . \"\n\";
+}
+" 2>/dev/null || echo "  ⚠ system_policies check skipped"
 
 # ---------------------------------------------------------------------------
-# Step 7: Create admin user (if not exists)
+# Step 8: Create admin user (if not exists)
 # ---------------------------------------------------------------------------
-echo "▶ Step 7: Creating admin user..."
+echo "▶ Step 8: Creating admin user..."
 php -r "
 try {
     \$pdo = new PDO('pgsql:host=rcerp_postgres;port=5432;dbname=rcerp', 'rcerp_app', 'rcerp_secret');
@@ -248,9 +363,9 @@ try {
 " 2>/dev/null && echo "  ✓ Admin user ready" || echo "  ⚠ Admin user creation skipped"
 
 # ---------------------------------------------------------------------------
-# Step 8: Clear caches + optimize
+# Step 9: Clear caches + optimize
 # ---------------------------------------------------------------------------
-echo "▶ Step 8: Clearing caches..."
+echo "▶ Step 9: Clearing caches..."
 php artisan config:clear 2>/dev/null || true
 php artisan cache:clear 2>/dev/null || true
 php artisan view:clear 2>/dev/null || true
