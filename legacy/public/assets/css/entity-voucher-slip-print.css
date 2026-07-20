@@ -1,0 +1,336 @@
+/**
+ * Entity voucher slip print layout — customer, supplier, employee (use with invoice-print.css).
+ */
+
+body.customer-payment-slip-body,
+body.entity-voucher-slip-body {
+    --cps-primary: #0284c7;
+    --cps-primary-dark: #0369a1;
+    --cps-accent: #0d9488;
+}
+
+.customer-payment-slip-toolbar,
+.entity-voucher-slip-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: linear-gradient(135deg, var(--cps-primary) 0%, var(--cps-accent) 100%);
+    box-shadow: 0 4px 20px rgba(2, 132, 199, 0.28);
+}
+
+.customer-payment-slip-toolbar .btn,
+.entity-voucher-slip-toolbar .btn {
+    min-height: 44px;
+    font-weight: 600;
+    border-radius: 10px;
+}
+
+.cps-banner {
+    text-align: center;
+    margin: 6px 0 10px;
+    padding: 8px 12px;
+    background: linear-gradient(90deg, rgba(2, 132, 199, 0.1) 0%, rgba(13, 148, 136, 0.08) 100%);
+    border: 1px solid rgba(2, 132, 199, 0.35);
+    border-radius: 8px;
+}
+
+.cps-banner h2 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--cps-primary-dark);
+}
+
+.cps-banner p {
+    margin: 3px 0 0;
+    font-size: 11px;
+    color: #64748b;
+}
+
+.cps-voucher-code {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 4px 12px;
+    border-radius: 8px;
+    font-family: ui-monospace, monospace;
+    font-size: 13px;
+    font-weight: 700;
+    background: #e0f2fe;
+    color: var(--cps-primary-dark);
+    letter-spacing: 0.03em;
+}
+
+.cps-status-pill {
+    display: inline-block;
+    margin-top: 6px;
+    margin-left: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.cps-status-pill.active {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.cps-status-pill.reversed {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.cps-amount-hero {
+    text-align: center;
+    margin: 12px 0 14px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 2px solid var(--cps-primary);
+    background: linear-gradient(180deg, #f0f9ff 0%, #ecfdf5 100%);
+}
+
+.cps-amount-hero .cps-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #64748b;
+}
+
+.cps-amount-hero .cps-amount {
+    margin-top: 4px;
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--cps-primary-dark);
+    font-variant-numeric: tabular-nums;
+}
+
+.cps-amount-hero.receive .cps-amount,
+.cps-amount-hero.repayment .cps-amount,
+.cps-amount-hero.deduction .cps-amount { color: #047857; }
+.cps-amount-hero.payment .cps-amount,
+.cps-amount-hero.advance .cps-amount,
+.cps-amount-hero.loan .cps-amount { color: #b45309; }
+.cps-amount-hero.salary .cps-amount { color: #1d4ed8; }
+.cps-amount-hero.discount .cps-amount,
+.cps-amount-hero.write_off .cps-amount,
+.cps-amount-hero.adjustment .cps-amount { color: #6d28d9; }
+
+.cps-type-badge {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: capitalize;
+}
+
+.cps-type-badge.receive { background: #d1fae5; color: #047857; }
+.cps-type-badge.payment { background: #fef3c7; color: #b45309; }
+.cps-type-badge.discount { background: #ede9fe; color: #6d28d9; }
+.cps-type-badge.write_off { background: #fee2e2; color: #b91c1c; }
+
+.cps-details-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin-bottom: 12px;
+}
+
+.cps-details-table th,
+.cps-details-table td {
+    border: 1px solid #cbd5e1;
+    padding: 8px 10px;
+    vertical-align: top;
+}
+
+.cps-details-table th {
+    width: 38%;
+    background: #f1f5f9;
+    font-weight: 600;
+    color: #475569;
+    text-align: left;
+}
+
+.cps-reversed-note {
+    margin: 10px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border-left: 4px solid #dc2626;
+    background: #fef2f2;
+    font-size: 11px;
+    color: #991b1b;
+}
+
+.cps-reversed-watermark {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 5;
+    opacity: 0.12;
+    font-size: 72px;
+    font-weight: 900;
+    color: #dc2626;
+    transform: rotate(-25deg);
+    letter-spacing: 0.1em;
+}
+
+.cps-slip-page-inner {
+    position: relative;
+}
+
+.cps-thank-you {
+    margin-top: 14px;
+    padding: 12px;
+    text-align: center;
+    border-radius: 10px;
+    background: #f0f9ff;
+    border: 1px solid #7dd3fc;
+}
+
+.cps-thank-you strong {
+    color: var(--cps-primary-dark);
+    font-size: 14px;
+}
+
+.cps-signatures {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px dashed #94a3b8;
+    font-size: 11px;
+    text-align: center;
+}
+
+.cps-signatures .sig-line {
+    margin-top: 28px;
+    border-top: 1px solid #0f172a;
+    padding-top: 4px;
+    font-weight: 600;
+}
+
+.cps-footer-note {
+    margin-top: 10px;
+    font-size: 9px;
+    color: #64748b;
+    text-align: center;
+}
+
+.customer-payment-slip-page,
+.entity-voucher-slip-page {
+    min-height: auto !important;
+    page-break-after: auto !important;
+}
+
+.cps-method-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.cps-method-badge.cash {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.cps-method-badge.bank {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+/* Supplier accent */
+.customer-payment-slip-body.supp-payment-slip-body .cps-banner,
+.entity-voucher-slip-body.supp-payment-slip-body .cps-banner {
+    border-color: #fed7aa;
+    background: linear-gradient(135deg, #fff7ed, #ffedd5);
+}
+
+.customer-payment-slip-body.supp-payment-slip-body .cps-amount-hero.payment,
+.customer-payment-slip-body.supp-payment-slip-body .cps-amount-hero.advance,
+.entity-voucher-slip-body.supp-payment-slip-body .cps-amount-hero.payment,
+.entity-voucher-slip-body.supp-payment-slip-body .cps-amount-hero.advance {
+    border-color: #fdba74;
+}
+
+.customer-payment-slip-body.supp-payment-slip-body .cps-type-badge.payment,
+.entity-voucher-slip-body.supp-payment-slip-body .cps-type-badge.payment {
+    background: #ffedd5;
+    color: #c2410c;
+}
+
+.customer-payment-slip-body.supp-payment-slip-body .cps-type-badge.advance,
+.entity-voucher-slip-body.supp-payment-slip-body .cps-type-badge.advance {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+.customer-payment-slip-body.supp-payment-slip-body .cps-type-badge.receive,
+.entity-voucher-slip-body.supp-payment-slip-body .cps-type-badge.receive {
+    background: #d1fae5;
+    color: #047857;
+}
+
+/* Employee accent */
+.customer-payment-slip-body.emp-payment-slip-body .cps-banner,
+.entity-voucher-slip-body.emp-payment-slip-body .cps-banner {
+    border-color: #ddd6fe;
+    background: linear-gradient(135deg, #f5f3ff, #ede9fe);
+}
+
+.customer-payment-slip-body.emp-payment-slip-body .cps-type-badge.advance,
+.entity-voucher-slip-body.emp-payment-slip-body .cps-type-badge.advance {
+    background: #ede9fe;
+    color: #6d28d9;
+}
+
+.customer-payment-slip-body.emp-payment-slip-body .cps-type-badge.loan,
+.entity-voucher-slip-body.emp-payment-slip-body .cps-type-badge.loan {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+.customer-payment-slip-body.emp-payment-slip-body .cps-type-badge.salary,
+.entity-voucher-slip-body.emp-payment-slip-body .cps-type-badge.salary {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.customer-payment-slip-body.emp-payment-slip-body .cps-type-badge.repayment,
+.customer-payment-slip-body.emp-payment-slip-body .cps-type-badge.deduction,
+.entity-voucher-slip-body.emp-payment-slip-body .cps-type-badge.repayment,
+.entity-voucher-slip-body.emp-payment-slip-body .cps-type-badge.deduction {
+    background: #d1fae5;
+    color: #047857;
+}
+
+.customer-payment-slip-body.emp-payment-slip-body .cps-type-badge.adjustment,
+.entity-voucher-slip-body.emp-payment-slip-body .cps-type-badge.adjustment {
+    background: #ede9fe;
+    color: #6d28d9;
+}
+
+@media print {
+    .no-print {
+        display: none !important;
+    }
+}
+
+@media (max-width: 640px) {
+    .cps-signatures {
+        grid-template-columns: 1fr;
+    }
+}

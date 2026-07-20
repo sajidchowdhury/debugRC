@@ -1,0 +1,38 @@
+.other-income-theme {
+    --bh-primary: #15803d;
+    --bh-secondary: #16a34a;
+    --bh-accent: #166534;
+}
+.other-income-theme .branch-hub-hero {
+    box-shadow: 0 14px 36px rgba(21, 128, 61, 0.22);
+}
+.other-income-theme .branch-form-footer .btn-primary {
+    background: linear-gradient(135deg, #16a34a, #15803d);
+}
+.oi-hero-amount { font-size: 1.35rem; font-weight: 700; color: #fff; }
+.oi-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.75rem;
+}
+.oi-detail-item {
+    background: #fff;
+    border: 1px solid #e8e8e8;
+    border-radius: 10px;
+    padding: 0.65rem 0.85rem;
+}
+.oi-detail-item .label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: #6b7280;
+}
+.oi-detail-item .value { font-weight: 600; font-size: 0.9rem; }
+.oi-reversed-banner {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 10px;
+    padding: 0.85rem 1rem;
+}
+.other-income-theme .branch-stat-icon.green {
+    background: linear-gradient(135deg, #16a34a, #15803d);
+}

@@ -1,0 +1,94 @@
+/* Customer directory — theme on branch-hub layout */
+
+.customer-theme {
+    --bh-primary: #0284c7;
+    --bh-secondary: #7c3aed;
+    --bh-accent: #0d9488;
+}
+
+.customer-theme .branch-hub-hero {
+    box-shadow: 0 14px 36px rgba(2, 132, 199, 0.22);
+}
+
+.customer-theme .branch-avatar,
+.customer-theme .branch-preview-card .branch-avatar {
+    background: linear-gradient(135deg, #0284c7, #7c3aed);
+}
+
+.customer-theme .branch-code-pill {
+    color: #6d28d9;
+}
+
+.customer-theme .branch-mini-stat i {
+    color: #0284c7;
+}
+
+.customer-theme .branch-hub-quick a:hover {
+    border-color: #0284c7;
+    color: #0284c7;
+    background: #f0f9ff;
+}
+
+.customer-theme .branch-aside-tip {
+    background: #f0f9ff;
+    border-color: #bae6fd;
+    color: #0369a1;
+}
+
+.customer-theme .branch-form-footer .btn-primary {
+    background: linear-gradient(135deg, #0284c7, #7c3aed);
+}
+
+.customer-ar-due {
+    font-weight: 600;
+    color: #b45309;
+}
+
+.customer-ar-clear {
+    color: var(--bh-muted, #64748b);
+    font-size: 0.85rem;
+}
+
+.customer-sales-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    background: #f1f5f9;
+    color: #475569;
+}
+
+#customerCards {
+    padding: 0.75rem;
+}
+
+.customer-mobile-card {
+    background: #fff;
+    border: 1px solid var(--bh-border, #e2e8f0);
+    border-radius: 14px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+
+.customer-mobile-card .card-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-bottom: 0.65rem;
+}
+
+.customer-mobile-card .card-meta {
+    font-size: 0.8rem;
+    color: var(--bh-muted, #64748b);
+}
+
+.customer-mobile-card .card-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #f1f5f9;
+}

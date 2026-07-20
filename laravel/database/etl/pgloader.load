@@ -1,0 +1,71 @@
+-- ============================================================
+-- pgloader configuration: MySQL → PostgreSQL ETL
+-- Phase 2.3 — Data migration from MySQL to PostgreSQL
+-- ============================================================
+-- Usage:  pgloader pgloader.load
+--
+-- PREREQUISITES:
+--   1. PostgreSQL schema already created (Phase 2.2: php artisan migrate)
+--   2. pgloader installed on the migration machine (apt install pgloader)
+--   3. MySQL source = a RESTORED COPY of production (not production itself)
+--   4. All target tables are EMPTY (TRUNCATE before running, or use --with "truncate")
+--
+-- NOTES:
+--   - pgloader handles type conversion, charset (utf8mb4→UTF8), and NULL for 0000-00-00.
+--   - The 'cast' rules below fix specific MySQL→PG type issues.
+--   - After pgloader, run post_load_fixes.sql and sync_sequences.sql.
+-- ============================================================
+
+LOAD DATABASE
+    FROM mysql://rcerp_user:CHANGE_ME@mysql-source-host:3306/osudlagb_remotecenter
+    INTO postgresql://rcerp_app:CHANGE_ME@localhost:5432/rcerp
+
+WITH include drop, create no tables, truncate,
+     data only,
+     batch rows = 5000,
+     prefetch rows = 5000,
+     create no indexes,
+     reset sequences,
+     foreign keys,
+     downcase identifiers
+
+CAST type datetime to timestamptz drop default drop not null using zero-dates-to-null,
+     type date drop not null drop default using zero-dates-to-null,
+     type tinyint to boolean using tinyint-to-boolean,
+     type float to numeric(18,2),
+     type int to integer,
+     type bigint to bigint,
+     type decimal to numeric,
+     type double to numeric,
+     type longtext to text,
+     type mediumtext to text,
+     type enum to text,
+     type json to jsonb
+
+-- Materialize columns that are GENERATED in PG (don't load them — PG computes them)
+EXCLUDING COLUMNS IN TABLE purchase_order_items MATCHING 'amount'
+EXCLUDING COLUMNS IN TABLE purchase_receive_items MATCHING 'amount'
+EXCLUDING COLUMNS IN TABLE purchase_return_items MATCHING 'amount'
+EXCLUDING COLUMNS IN TABLE sales_invoice_dispatches MATCHING 'amount'
+EXCLUDING COLUMNS IN TABLE sales_invoice_items MATCHING 'amount'
+EXCLUDING COLUMNS IN TABLE sales_return_items MATCHING 'amount'
+EXCLUDING COLUMNS IN TABLE stock_take_items MATCHING 'difference'
+EXCLUDING COLUMNS IN TABLE stock_transactions MATCHING 'total_value'
+-- warehouse_stock: PG schema has total_qty/total_value but legacy MySQL may not.
+-- The avg_cost in MySQL was a GENERATED column; in PG it's a regular column (app-maintained).
+EXCLUDING COLUMNS IN TABLE warehouse_stock MATCHING 'total_qty', 'total_value'
+
+-- Phase 0 dropped columns — don't try to load them
+EXCLUDING COLUMNS IN TABLE users MATCHING 'totp_secret', 'totp_enabled'
+
+-- schema_migrations: legacy table is empty; PG uses Laravel's migrations table instead.
+-- Skip loading it.
+EXCLUDING TABLE NAMES MATCHING 'schema_migrations'
+
+-- The view is not a data target
+EXCLUDING TABLE NAMES MATCHING '~v_.*'
+
+SET work_mem to '128MB',
+    maintenance_work_mem to '512MB'
+
+;

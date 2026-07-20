@@ -1,0 +1,522 @@
+/* Challan create — consistent with challan-index warehouse theme */
+
+.challan-create-app {
+    --ch-primary: #d97706;
+    --ch-primary-dark: #b45309;
+    --ch-accent: #4f46e5;
+    --ch-surface: #fffbeb;
+    --ch-card: #ffffff;
+    --ch-border: #e7e5e4;
+    --ch-text: #1c1917;
+    --ch-muted: #78716c;
+    --ch-success: #059669;
+    --ch-danger: #dc2626;
+    padding-bottom: 5.5rem;
+    color: var(--ch-text);
+}
+
+.challan-create-hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding: 1.15rem 1.25rem;
+    background: linear-gradient(135deg, var(--ch-primary) 0%, var(--ch-accent) 100%);
+    border-radius: 16px;
+    color: #fff;
+    box-shadow: 0 12px 32px rgba(217, 119, 6, 0.28);
+}
+
+.challan-create-hero h1 {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.challan-create-hero p {
+    margin: 0.25rem 0 0;
+    font-size: 0.88rem;
+    opacity: 0.95;
+}
+
+.challan-create-invoice-chip {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    background: rgba(255, 255, 255, 0.22);
+    border-radius: 6px;
+    font-weight: 700;
+}
+
+.challan-create-branch-tag {
+    display: inline-block;
+    margin-top: 0.35rem;
+    padding: 0.15rem 0.55rem;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.challan-create-hero-actions .btn {
+    font-weight: 600;
+    border: none;
+}
+
+.challan-create-policy {
+    display: flex;
+    gap: 0.65rem;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    background: #fffbeb;
+    border: 1px solid rgba(217, 119, 6, 0.35);
+    border-radius: 12px;
+    font-size: 0.85rem;
+    color: var(--ch-text);
+}
+
+.challan-create-policy i {
+    color: var(--ch-primary);
+    margin-top: 0.15rem;
+}
+
+.challan-qty-locked {
+    display: inline-block;
+    padding: 0.25rem 0.55rem;
+    font-weight: 700;
+    background: #f5f5f4;
+    border-radius: 8px;
+    border: 1px dashed var(--ch-border);
+}
+
+.challan-action-challan:disabled {
+    opacity: 0.5;
+    box-shadow: none;
+    cursor: not-allowed;
+}
+
+.challan-create-steps {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin-bottom: 1rem;
+    padding: 0.85rem 1rem;
+    background: var(--ch-card);
+    border: 1px solid var(--ch-border);
+    border-radius: 14px;
+}
+
+.challan-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 72px;
+}
+
+.challan-step-dot {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    font-weight: 700;
+    background: #f5f5f4;
+    color: var(--ch-muted);
+    border: 2px solid var(--ch-border);
+}
+
+.challan-step.is-active .challan-step-dot {
+    background: rgba(217, 119, 6, 0.15);
+    border-color: var(--ch-primary);
+    color: var(--ch-primary);
+}
+
+.challan-step.is-done .challan-step-dot {
+    background: var(--ch-success);
+    border-color: var(--ch-success);
+    color: #fff;
+}
+
+.challan-step-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--ch-muted);
+}
+
+.challan-step.is-active .challan-step-label,
+.challan-step.is-done .challan-step-label {
+    color: var(--ch-text);
+}
+
+.challan-step-line {
+    flex: 1;
+    max-width: 48px;
+    height: 2px;
+    background: var(--ch-border);
+    margin: 0 0.25rem;
+    margin-bottom: 1.1rem;
+}
+
+.challan-step-line.is-active,
+.challan-step-line.is-done {
+    background: var(--ch-success);
+}
+
+.challan-create-summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+}
+
+.challan-create-stat {
+    padding: 0.7rem 0.75rem;
+    background: var(--ch-card);
+    border: 1px solid var(--ch-border);
+    border-radius: 12px;
+}
+
+.challan-create-stat .label {
+    display: block;
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ch-muted);
+}
+
+.challan-create-stat .value {
+    display: block;
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin-top: 0.15rem;
+    line-height: 1.2;
+}
+
+.challan-create-stat .sub {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--ch-muted);
+    margin-top: 0.1rem;
+}
+
+.challan-create-stat-highlight {
+    background: linear-gradient(135deg, rgba(217, 119, 6, 0.08) 0%, rgba(79, 70, 229, 0.06) 100%);
+    border-color: rgba(217, 119, 6, 0.3);
+}
+
+.challan-create-status-pill {
+    display: inline-block;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+
+.ch-create-status-pending {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.ch-create-status-godown {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+.ch-create-status-done {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.challan-create-print-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    background: var(--ch-surface);
+    border: 1px solid rgba(217, 119, 6, 0.25);
+    border-radius: 12px;
+}
+
+.challan-create-print-label {
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.challan-create-panel {
+    margin-bottom: 1rem;
+    background: var(--ch-card);
+    border: 1px solid var(--ch-border);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(28, 25, 23, 0.05);
+}
+
+.challan-create-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.65rem 1rem;
+    background: var(--ch-surface);
+    border-bottom: 1px solid var(--ch-border);
+    font-weight: 700;
+    font-size: 0.9rem;
+}
+
+.challan-create-panel-body {
+    padding: 1rem;
+}
+
+.challan-create-address {
+    font-size: 0.9rem;
+    color: var(--ch-muted);
+}
+
+.challan-transport-input {
+    font-weight: 600;
+    min-height: 44px;
+}
+
+.challan-items-scroll {
+    max-height: min(55vh, 520px);
+}
+
+#godownItemsTable thead th {
+    font-size: 0.78rem;
+    white-space: nowrap;
+    background: #1c1917;
+    color: #fff;
+    border-color: #292524;
+}
+
+.challan-stock-badge {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    background: #f5f5f4;
+    color: var(--ch-muted);
+}
+
+.challan-stock-badge.is-ok {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.challan-stock-badge.is-low {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.challan-stock-badge.is-none {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.challan-stock-badge.is-reserved {
+    background: #dbeafe;
+    color: #1e40af;
+    white-space: nowrap;
+}
+
+.challan-create-policy-godown {
+    background: #eff6ff;
+    border-color: rgba(59, 130, 246, 0.35);
+}
+
+.challan-dispatcher-chip {
+    display: inline-block;
+    margin: 0 0.35rem 0.35rem 0;
+    padding: 0.25rem 0.6rem;
+    background: #f5f5f4;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.challan-wh-readonly {
+    font-weight: 600;
+    font-size: 0.88rem;
+}
+
+.challan-create-actions {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1040;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    background: rgba(255, 255, 255, 0.96);
+    border-top: 1px solid var(--ch-border);
+    box-shadow: 0 -8px 24px rgba(28, 25, 23, 0.1);
+}
+
+.challan-action-secondary {
+    font-weight: 600;
+    min-height: 44px;
+    border-radius: 10px;
+}
+
+.challan-action-godown {
+    min-height: 48px;
+    font-weight: 700;
+    border: none;
+    border-radius: 12px;
+    color: #fff;
+    background: linear-gradient(135deg, var(--ch-accent) 0%, #6366f1 100%);
+}
+
+.challan-action-challan {
+    min-height: 48px;
+    font-weight: 700;
+    border: none;
+    border-radius: 12px;
+    color: #fff;
+    background: linear-gradient(135deg, var(--ch-primary) 0%, var(--ch-primary-dark) 100%);
+    box-shadow: 0 6px 16px rgba(217, 119, 6, 0.35);
+}
+
+.challan-completed-note {
+    font-weight: 600;
+    font-size: 0.9rem;
+    margin-right: auto;
+}
+
+.challan-kbd-hint {
+    font-size: 0.75rem;
+    color: var(--ch-muted);
+    margin-left: 0.25rem;
+}
+
+.challan-kbd-hint kbd {
+    font-size: 0.68rem;
+    padding: 0.1rem 0.3rem;
+}
+
+.challan-bulk-bar {
+    padding: 0.75rem 1rem;
+    background: #fffbeb;
+    border-bottom: 1px solid var(--ch-border);
+}
+
+.challan-bulk-bar--compact {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.challan-bulk-bar-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.challan-bulk-bar-inner label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    margin: 0;
+    white-space: nowrap;
+}
+
+.challan-bulk-bar-inner select {
+    min-width: 160px;
+    max-width: 220px;
+}
+
+.challan-assign-progress-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    margin-top: 0.55rem;
+}
+
+.challan-assign-progress {
+    flex: 1;
+    height: 6px;
+    background: #e7e5e4;
+    border-radius: 999px;
+    overflow: hidden;
+    max-width: 280px;
+}
+
+.challan-assign-progress > div {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, var(--ch-primary), var(--ch-accent));
+    border-radius: 999px;
+    transition: width 0.2s ease;
+}
+
+.challan-assign-progress-label {
+    font-size: 0.72rem;
+    color: var(--ch-muted);
+    white-space: nowrap;
+}
+
+#dispatcher_id + .select2-container {
+    width: 100% !important;
+}
+
+@media (max-width: 991.98px) {
+    .challan-create-summary {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 575.98px) {
+    .challan-create-summary {
+        grid-template-columns: 1fr;
+    }
+
+    .challan-create-stat {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 0.15rem 0.5rem;
+    }
+
+    .challan-create-stat .label {
+        width: 100%;
+    }
+
+    .challan-create-steps {
+        padding: 0.65rem 0.5rem;
+    }
+
+    .challan-step {
+        min-width: 56px;
+    }
+
+    .challan-step-line {
+        max-width: 24px;
+    }
+
+    .challan-create-actions {
+        justify-content: stretch;
+    }
+
+    .challan-create-actions .btn {
+        flex: 1 1 auto;
+    }
+
+    .challan-completed-note {
+        width: 100%;
+        margin-right: 0;
+        text-align: center;
+    }
+}

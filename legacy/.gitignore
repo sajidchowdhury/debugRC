@@ -1,0 +1,35 @@
+# Laravel / PHP
+.env
+.env.backup
+/vendor
+node_modules/
+public/storage
+storage/framework/
+storage/logs/
+
+# Database dumps (keep migrations + reference schema)
+*.sql
+!database/migrations/*.sql
+!database/schema/*.sql
+*.sqlite
+*.db
+osudlagb_*.sql
+
+# Local secrets / credentials
+config/local.php
+
+# Cache & Temp
+.continue/
+.bootstrap/
+cache/
+temp/
+backup/
+
+# Logs
+*.log
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

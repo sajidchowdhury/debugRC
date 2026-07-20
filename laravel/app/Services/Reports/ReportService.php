@@ -1,0 +1,694 @@
+<?php
+
+namespace App\Services\Reports;
+
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Carbon;
+
+/**
+ * Report Service — Phase 5.
+ *
+ * Executes the financial report queries against PostgreSQL.
+ * Uses materialized views where available (for performance) and
+ * falls back to direct queries for real-time / as-of-date data.
+ *
+ * Each method returns an array with:
+ *   - 'meta': report metadata (title, dates, filters)
+ *   - 'data': the report rows
+ *   - 'totals': aggregate totals
+ *   - 'checks': integrity checks (e.g., Dr=Cr for Trial Balance)
+ */
+class ReportService
+{
+    /**
+     * Trial Balance — opening, period, closing per ledger.
+     * Verifies total debits = total credits.
+     *
+     * @return array{ meta: array, data: \Illuminate\Support\Collection, totals: array, checks: array }
+     */
+    public function trialBalance(Carbon $fromDate, Carbon $toDate, ?string $accountType = null, bool $includeZero = false): array
+    {
+        $query = DB::table('ledgers as l')
+            ->leftJoin('journal_lines as jl', 'jl.ledger_id', '=', 'l.id')
+            ->leftJoin('journal_entries as je', function ($join) {
+                $join->on('je.id', '=', 'jl.journal_entry_id')
+                     ->where('je.is_reversed', false);
+            })
+            ->where('l.is_active', true)
+            ->when($accountType, fn($q) => $q->where('l.account_type', $accountType))
+            ->groupBy('l.id', 'l.ledger_code', 'l.ledger_name', 'l.account_type', 'l.ledger_nature')
+            ->orderByRaw("CASE l.account_type WHEN 'Asset' THEN 1 WHEN 'Liability' THEN 2 WHEN 'Equity' THEN 3 WHEN 'Income' THEN 4 WHEN 'Expense' THEN 5 ELSE 0 END")
+            ->orderBy('l.ledger_name')
+            ->select([
+                'l.id as ledger_id',
+                'l.ledger_code',
+                'l.ledger_name',
+                'l.account_type',
+                'l.ledger_nature',
+                DB::raw("COALESCE(SUM(CASE WHEN je.entry_date < ? THEN jl.debit ELSE 0 END), 0) AS opening_debit", [$fromDate]),
+                DB::raw("COALESCE(SUM(CASE WHEN je.entry_date < ? THEN jl.credit ELSE 0 END), 0) AS opening_credit", [$fromDate]),
+                DB::raw("COALESCE(SUM(CASE WHEN je.entry_date BETWEEN ? AND ? THEN jl.debit ELSE 0 END), 0) AS period_debit", [$fromDate, $toDate]),
+                DB::raw("COALESCE(SUM(CASE WHEN je.entry_date BETWEEN ? AND ? THEN jl.credit ELSE 0 END), 0) AS period_credit", [$fromDate, $toDate]),
+                DB::raw("COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit ELSE 0 END), 0) AS closing_debit", [$toDate]),
+                DB::raw("COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.credit ELSE 0 END), 0) AS closing_credit", [$toDate]),
+            ]);
+
+        // Note: Laravel's DB::raw with bound params inside SELECT doesn't work cleanly.
+        // Use a raw SQL statement instead for reliability.
+        $sql = <<<SQL
+SELECT
+    l.id AS ledger_id,
+    l.ledger_code,
+    l.ledger_name,
+    l.account_type,
+    l.ledger_nature,
+    COALESCE(SUM(CASE WHEN je.entry_date < ? THEN jl.debit ELSE 0 END), 0) AS opening_debit,
+    COALESCE(SUM(CASE WHEN je.entry_date < ? THEN jl.credit ELSE 0 END), 0) AS opening_credit,
+    COALESCE(SUM(CASE WHEN je.entry_date BETWEEN ? AND ? THEN jl.debit ELSE 0 END), 0) AS period_debit,
+    COALESCE(SUM(CASE WHEN je.entry_date BETWEEN ? AND ? THEN jl.credit ELSE 0 END), 0) AS period_credit,
+    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit ELSE 0 END), 0) AS closing_debit,
+    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.credit ELSE 0 END), 0) AS closing_credit
+FROM ledgers l
+LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
+LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
+WHERE l.is_active = true
+SQL;
+
+        $params = [$fromDate, $fromDate, $fromDate, $toDate, $fromDate, $toDate, $toDate, $toDate];
+        if ($accountType) {
+            $sql .= ' AND l.account_type = ?';
+            $params[] = $accountType;
+        }
+        $sql .= " GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature";
+        $sql .= " ORDER BY CASE l.account_type WHEN 'Asset' THEN 1 WHEN 'Liability' THEN 2 WHEN 'Equity' THEN 3 WHEN 'Income' THEN 4 WHEN 'Expense' THEN 5 ELSE 0 END, l.ledger_name ASC";
+
+        $rows = collect(DB::select($sql, $params));
+
+        if (!$includeZero) {
+            $rows = $rows->filter(fn($r) =>
+                abs($r->opening_debit) > 0.005 || abs($r->opening_credit) > 0.005 ||
+                abs($r->period_debit) > 0.005 || abs($r->period_credit) > 0.005 ||
+                abs($r->closing_debit) > 0.005 || abs($r->closing_credit) > 0.005
+            )->values();
+        }
+
+        $totals = [
+            'opening_debit' => $rows->sum('opening_debit'),
+            'opening_credit' => $rows->sum('opening_credit'),
+            'period_debit' => $rows->sum('period_debit'),
+            'period_credit' => $rows->sum('period_credit'),
+            'closing_debit' => $rows->sum('closing_debit'),
+            'closing_credit' => $rows->sum('closing_credit'),
+        ];
+
+        return [
+            'meta' => [
+                'title' => 'Trial Balance',
+                'from_date' => $fromDate->format('Y-m-d'),
+                'to_date' => $toDate->format('Y-m-d'),
+                'account_type' => $accountType,
+                'include_zero' => $includeZero,
+            ],
+            'data' => $rows,
+            'totals' => $totals,
+            'checks' => [
+                'opening_balanced' => abs($totals['opening_debit'] - $totals['opening_credit']) < 0.01,
+                'period_balanced' => abs($totals['period_debit'] - $totals['period_credit']) < 0.01,
+                'closing_balanced' => abs($totals['closing_debit'] - $totals['closing_credit']) < 0.01,
+            ],
+        ];
+    }
+
+    /**
+     * Profit & Loss — income vs expense by ledger nature.
+     *
+     * @return array{ meta: array, sections: array, totals: array }
+     */
+    public function profitAndLoss(Carbon $fromDate, Carbon $toDate, ?int $branchId = null, ?Carbon $compareFrom = null, ?Carbon $compareTo = null): array
+    {
+        $sections = [
+            'revenue' => ['label' => 'Revenue', 'natures' => ['sales_revenue', 'other_income', 'inventory_surplus', 'sales_return', 'sales_discount'], 'sort' => 10],
+            'cost_of_sales' => ['label' => 'Cost of Goods Sold', 'natures' => ['cogs'], 'sort' => 20],
+            'operating_expenses' => ['label' => 'Operating Expenses', 'natures' => ['operating_expense', 'inventory_shrinkage', 'manual_adjustment'], 'sort' => 30],
+            'payroll' => ['label' => 'Payroll & Salaries', 'natures' => ['payroll_expense'], 'sort' => 40],
+            'depreciation' => ['label' => 'Depreciation & Amortization', 'natures' => ['depreciation'], 'sort' => 50],
+            'finance' => ['label' => 'Finance Costs', 'natures' => ['finance_cost'], 'sort' => 60],
+            'other' => ['label' => 'Other Income / (Expense)', 'natures' => ['other_income_nature', 'other_expense_nature'], 'sort' => 70],
+        ];
+
+        $result = [];
+        $totalRevenue = 0;
+        $totalCogs = 0;
+        $totalExpenses = 0;
+
+        foreach ($sections as $key => $section) {
+            $sql = <<<SQL
+SELECT
+    l.id, l.ledger_code, l.ledger_name, l.ledger_nature,
+    COALESCE(SUM(jl.debit), 0) AS debit,
+    COALESCE(SUM(jl.credit), 0) AS credit,
+    COALESCE(SUM(jl.credit), 0) - COALESCE(SUM(jl.debit), 0) AS net_amount
+FROM ledgers l
+LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
+LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
+    AND COALESCE(je.is_reversed, false) = false
+    AND je.entry_date BETWEEN ? AND ?
+WHERE l.is_active = true AND l.ledger_nature IN (?
+SQL;
+            $params = [$fromDate, $toDate];
+            $natures = $section['natures'];
+            $params = array_merge($params, $natures);
+            $sql .= str_repeat(',?', count($natures) - 1) . ')';
+
+            if ($branchId) {
+                $sql .= ' AND (je.branch_id = ? OR je.branch_id IS NULL)';
+                $params[] = $branchId;
+            }
+            $sql .= ' GROUP BY l.id, l.ledger_code, l.ledger_name, l.ledger_nature ORDER BY l.ledger_name';
+
+            $rows = collect(DB::select($sql, $params))->filter(fn($r) => abs($r->net_amount) > 0.005)->values();
+            $sectionTotal = $rows->sum('net_amount');
+
+            if ($key === 'revenue') $totalRevenue = $sectionTotal;
+            if ($key === 'cost_of_sales') $totalCogs = $sectionTotal;
+            if (in_array($key, ['operating_expenses', 'payroll', 'depreciation', 'finance'])) $totalExpenses += $sectionTotal;
+
+            $result[$key] = [
+                'label' => $section['label'],
+                'sort' => $section['sort'],
+                'rows' => $rows,
+                'total' => $sectionTotal,
+            ];
+        }
+
+        $grossProfit = $totalRevenue - $totalCogs;
+        $netProfit = $grossProfit - $totalExpenses;
+
+        return [
+            'meta' => [
+                'title' => 'Profit & Loss Statement',
+                'from_date' => $fromDate->format('Y-m-d'),
+                'to_date' => $toDate->format('Y-m-d'),
+                'branch_id' => $branchId,
+            ],
+            'sections' => $result,
+            'totals' => [
+                'revenue' => $totalRevenue,
+                'cogs' => $totalCogs,
+                'gross_profit' => $grossProfit,
+                'operating_expenses' => $totalExpenses,
+                'net_profit' => $netProfit,
+            ],
+        ];
+    }
+
+    /**
+     * Balance Sheet — Assets = Liabilities + Equity as of date.
+     * Income/Expense balances roll into equity (unclosed current-period result).
+     *
+     * @return array{ meta: array, assets: \Illuminate\Support\Collection, liabilities: \Illuminate\Support\Collection, equity: \Illuminate\Support\Collection, totals: array, checks: array }
+     */
+    public function balanceSheet(Carbon $asOfDate, ?int $branchId = null, bool $includeZero = false): array
+    {
+        $sql = <<<SQL
+SELECT
+    l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature,
+    COALESCE(SUM(jl.debit), 0) AS total_debit,
+    COALESCE(SUM(jl.credit), 0) AS total_credit,
+    COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0) AS net_debit,
+    COALESCE(SUM(jl.credit), 0) - COALESCE(SUM(jl.debit), 0) AS net_credit
+FROM ledgers l
+LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
+LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
+    AND COALESCE(je.is_reversed, false) = false
+    AND je.entry_date <= ?
+WHERE l.is_active = true
+SQL;
+        $params = [$asOfDate];
+        if ($branchId) {
+            $sql .= ' AND (je.branch_id = ? OR je.branch_id IS NULL)';
+            $params[] = $branchId;
+        }
+        $sql .= ' GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature ORDER BY l.ledger_name';
+
+        $rows = collect(DB::select($sql, $params));
+
+        $assets = $rows->where('account_type', 'Asset')->filter(fn($r) => $includeZero || abs($r->net_debit) > 0.005)->values();
+        $liabilities = $rows->where('account_type', 'Liability')->filter(fn($r) => $includeZero || abs($r->net_credit) > 0.005)->values();
+        $equity = $rows->where('account_type', 'Equity')->filter(fn($r) => $includeZero || abs($r->net_credit) > 0.005)->values();
+
+        // Unclosed income/expense roll into equity (current-period result).
+        $incomeRows = $rows->where('account_type', 'Income');
+        $expenseRows = $rows->where('account_type', 'Expense');
+        $netIncome = $incomeRows->sum('net_credit') - $expenseRows->sum('net_debit');
+
+        $totalAssets = $assets->sum('net_debit');
+        $totalLiabilities = $liabilities->sum('net_credit');
+        $totalEquity = $equity->sum('net_credit') + $netIncome;
+
+        return [
+            'meta' => [
+                'title' => 'Balance Sheet',
+                'as_of_date' => $asOfDate->format('Y-m-d'),
+                'branch_id' => $branchId,
+            ],
+            'assets' => $assets,
+            'liabilities' => $liabilities,
+            'equity' => $equity,
+            'current_period_result' => $netIncome,
+            'totals' => [
+                'total_assets' => $totalAssets,
+                'total_liabilities' => $totalLiabilities,
+                'total_equity' => $totalEquity,
+                'total_liabilities_equity' => $totalLiabilities + $totalEquity,
+            ],
+            'checks' => [
+                'balanced' => abs($totalAssets - ($totalLiabilities + $totalEquity)) < 0.01,
+            ],
+        ];
+    }
+
+    /**
+     * Cash Flow Statement (indirect method).
+     * Starts from net profit, adjusts for non-cash items + working capital changes.
+     *
+     * @return array{ meta: array, sections: array, totals: array }
+     */
+    public function cashFlow(Carbon $fromDate, Carbon $toDate, ?int $branchId = null): array
+    {
+        // Simplified indirect method:
+        // 1. Net profit (from P&L)
+        // 2. +/- changes in AR, AP, inventory (working capital)
+        // 3. +/- investing activities (asset purchases)
+        // 4. +/- financing activities (equity, loans)
+        // 5. Net change in cash = GL cash/bank movement (plug)
+
+        $pl = $this->profitAndLoss($fromDate, $toDate, $branchId);
+        $netProfit = $pl['totals']['net_profit'];
+
+        // Working capital changes: compare opening vs closing balances.
+        $openingDate = (clone $fromDate)->subDay();
+        $wcSql = <<<SQL
+SELECT
+    l.account_type,
+    l.ledger_nature,
+    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit - jl.credit ELSE 0 END), 0) AS opening_balance,
+    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit - jl.credit ELSE 0 END), 0) AS closing_balance
+FROM ledgers l
+LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
+LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
+WHERE l.is_active = true
+    AND l.ledger_nature IN ('ar', 'ap', 'inventory')
+SQL;
+        $params = [$openingDate, $toDate];
+        if ($branchId) {
+            $wcSql .= ' AND (je.branch_id = ? OR je.branch_id IS NULL)';
+            $params[] = $branchId;
+            $params[] = $branchId;
+        }
+        $wcSql .= ' GROUP BY l.account_type, l.ledger_nature';
+
+        $wcRows = collect(DB::select($wcSql, $params));
+        $arChange = $wcRows->where('ledger_nature', 'ar')->sum(fn($r) => $r->closing_balance - $r->opening_balance);
+        $apChange = $wcRows->where('ledger_nature', 'ap')->sum(fn($r) => $r->closing_balance - $r->opening_balance);
+        $invChange = $wcRows->where('ledger_nature', 'inventory')->sum(fn($r) => $r->closing_balance - $r->opening_balance);
+
+        // Cash/bank movement (the plug).
+        $cashSql = <<<SQL
+SELECT
+    COALESCE(SUM(jl.debit - jl.credit), 0) AS cash_movement
+FROM ledgers l
+JOIN journal_lines jl ON jl.ledger_id = l.id
+JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
+WHERE l.ledger_nature = 'cash_bank' AND je.entry_date BETWEEN ? AND ?
+SQL;
+        $cashParams = [$fromDate, $toDate];
+        if ($branchId) {
+            $cashSql .= ' AND je.branch_id = ?';
+            $cashParams[] = $branchId;
+        }
+        $cashMovement = (float) (DB::select($cashSql, $cashParams)[0]->cash_movement ?? 0);
+
+        $operatingCash = $netProfit - $arChange + $apChange - $invChange;
+
+        return [
+            'meta' => [
+                'title' => 'Cash Flow Statement (Indirect Method)',
+                'from_date' => $fromDate->format('Y-m-d'),
+                'to_date' => $toDate->format('Y-m-d'),
+                'branch_id' => $branchId,
+            ],
+            'sections' => [
+                'operating' => [
+                    'label' => 'Operating Activities',
+                    'net_profit' => $netProfit,
+                    'ar_change' => $arChange,
+                    'ap_change' => $apChange,
+                    'inv_change' => $invChange,
+                    'net' => $operatingCash,
+                ],
+            ],
+            'totals' => [
+                'net_cash_movement' => $cashMovement,
+                'operating_cash' => $operatingCash,
+                'plug_difference' => $cashMovement - $operatingCash,
+            ],
+            'checks' => [
+                'plugs_to_gl_cash' => abs($cashMovement - $operatingCash) < 0.01,
+            ],
+        ];
+    }
+
+    /**
+     * Receivable Aging — customer balances by age bucket (as of date).
+     * Uses the mv_ar_aging materialized view for "as of today";
+     * falls back to direct query for historical as-of dates.
+     */
+    public function receivableAging(Carbon $asOfDate, ?int $branchId = null): array
+    {
+        $isToday = $asOfDate->isToday();
+
+        if ($isToday) {
+            // Use the materialized view (fast).
+            $query = DB::table('mv_ar_aging')
+                ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+                ->orderBy('total_receivable', 'desc');
+            $rows = $query->get();
+        } else {
+            // Direct query for historical as-of date.
+            $sql = <<<SQL
+SELECT
+    c.id AS customer_id, c.customer_code, c.customer_name, c.mobile,
+    cl.branch_id, COALESCE(b.branch_name, '—') AS branch_name,
+    SUM(CASE WHEN (?::date - cl.transaction_date) <= 30 THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_0_30,
+    SUM(CASE WHEN (?::date - cl.transaction_date) BETWEEN 31 AND 60 THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_31_60,
+    SUM(CASE WHEN (?::date - cl.transaction_date) BETWEEN 61 AND 90 THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_61_90,
+    SUM(CASE WHEN (?::date - cl.transaction_date) > 90 THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_90_plus,
+    SUM(cl.debit - cl.credit) AS total_receivable
+FROM customer_ledger cl
+INNER JOIN customers c ON c.id = cl.customer_id
+LEFT JOIN branches b ON b.id = cl.branch_id
+WHERE cl.transaction_date <= ? AND COALESCE(cl.is_reversed, false) = false
+SQL;
+            $params = [$asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate];
+            if ($branchId) {
+                $sql .= ' AND (cl.branch_id = ? OR cl.branch_id IS NULL)';
+                $params[] = $branchId;
+            }
+            $sql .= ' GROUP BY c.id, c.customer_code, c.customer_name, c.mobile, cl.branch_id, b.branch_name';
+            $sql .= ' HAVING SUM(cl.debit - cl.credit) > 0.005 ORDER BY total_receivable DESC';
+            $rows = collect(DB::select($sql, $params));
+        }
+
+        // GL AR control account balance (for reconciliation footnote).
+        $glArBalance = (float) DB::selectOne(<<<SQL
+SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS balance
+FROM ledgers l
+JOIN journal_lines jl ON jl.ledger_id = l.id
+JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
+WHERE l.ledger_nature = 'ar' AND je.entry_date <= ?
+SQL, [$asOfDate])->balance ?? 0;
+
+        return [
+            'meta' => [
+                'title' => 'Receivable Aging',
+                'as_of_date' => $asOfDate->format('Y-m-d'),
+                'branch_id' => $branchId,
+                'source' => $isToday ? 'materialized_view' : 'direct_query',
+            ],
+            'data' => $rows,
+            'totals' => [
+                'bucket_0_30' => $rows->sum('bucket_0_30'),
+                'bucket_31_60' => $rows->sum('bucket_31_60'),
+                'bucket_61_90' => $rows->sum('bucket_61_90'),
+                'bucket_90_plus' => $rows->sum('bucket_90_plus'),
+                'total_receivable' => $rows->sum('total_receivable'),
+                'gl_ar_control' => $glArBalance,
+            ],
+            'checks' => [
+                'matches_gl' => abs($rows->sum('total_receivable') - $glArBalance) < 0.01,
+            ],
+        ];
+    }
+
+    /**
+     * Payable Aging — supplier balances by age bucket (as of date).
+     */
+    public function payableAging(Carbon $asOfDate, ?int $branchId = null): array
+    {
+        $isToday = $asOfDate->isToday();
+
+        if ($isToday) {
+            $rows = DB::table('mv_ap_aging')
+                ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+                ->orderBy('total_payable', 'desc')
+                ->get();
+        } else {
+            $sql = <<<SQL
+SELECT
+    s.id AS supplier_id, s.supplier_code, s.supplier_name, s.mobile,
+    sl.branch_id, COALESCE(b.branch_name, '—') AS branch_name,
+    SUM(CASE WHEN (?::date - sl.transaction_date) <= 30 THEN (sl.credit - sl.debit) ELSE 0 END) AS bucket_0_30,
+    SUM(CASE WHEN (?::date - sl.transaction_date) BETWEEN 31 AND 60 THEN (sl.credit - sl.debit) ELSE 0 END) AS bucket_31_60,
+    SUM(CASE WHEN (?::date - sl.transaction_date) BETWEEN 61 AND 90 THEN (sl.credit - sl.debit) ELSE 0 END) AS bucket_61_90,
+    SUM(CASE WHEN (?::date - sl.transaction_date) > 90 THEN (sl.credit - sl.debit) ELSE 0 END) AS bucket_90_plus,
+    SUM(sl.credit - sl.debit) AS total_payable
+FROM supplier_ledger sl
+INNER JOIN suppliers s ON s.id = sl.supplier_id
+LEFT JOIN branches b ON b.id = sl.branch_id
+WHERE sl.transaction_date <= ? AND COALESCE(sl.is_reversed, false) = false
+SQL;
+            $params = [$asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate];
+            if ($branchId) {
+                $sql .= ' AND (sl.branch_id = ? OR sl.branch_id IS NULL)';
+                $params[] = $branchId;
+            }
+            $sql .= ' GROUP BY s.id, s.supplier_code, s.supplier_name, s.mobile, sl.branch_id, b.branch_name';
+            $sql .= ' HAVING SUM(sl.credit - sl.debit) > 0.005 ORDER BY total_payable DESC';
+            $rows = collect(DB::select($sql, $params));
+        }
+
+        $glApBalance = (float) DB::selectOne(<<<SQL
+SELECT COALESCE(SUM(jl.credit - jl.debit), 0) AS balance
+FROM ledgers l
+JOIN journal_lines jl ON jl.ledger_id = l.id
+JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
+WHERE l.ledger_nature = 'ap' AND je.entry_date <= ?
+SQL, [$asOfDate])->balance ?? 0;
+
+        return [
+            'meta' => [
+                'title' => 'Payable Aging',
+                'as_of_date' => $asOfDate->format('Y-m-d'),
+                'branch_id' => $branchId,
+                'source' => $isToday ? 'materialized_view' : 'direct_query',
+            ],
+            'data' => $rows,
+            'totals' => [
+                'bucket_0_30' => $rows->sum('bucket_0_30'),
+                'bucket_31_60' => $rows->sum('bucket_31_60'),
+                'bucket_61_90' => $rows->sum('bucket_61_90'),
+                'bucket_90_plus' => $rows->sum('bucket_90_plus'),
+                'total_payable' => $rows->sum('total_payable'),
+                'gl_ap_control' => $glApBalance,
+            ],
+            'checks' => [
+                'matches_gl' => abs($rows->sum('total_payable') - $glApBalance) < 0.01,
+            ],
+        ];
+    }
+
+    /**
+     * General Ledger — account activity with running balance.
+     */
+    public function generalLedger(Carbon $fromDate, Carbon $toDate, ?int $ledgerId = null, ?int $branchId = null): array
+    {
+        $sql = <<<SQL
+SELECT
+    je.id AS journal_entry_id, je.entry_no, je.entry_date,
+    je.reference_type, je.reference_id, je.description,
+    je.branch_id, COALESCE(b.branch_name, '—') AS branch_name,
+    je.is_reversed,
+    jl.id AS journal_line_id, jl.ledger_id, l.ledger_code, l.ledger_name,
+    jl.debit, jl.credit, jl.entity_type, jl.entity_id, jl.memo
+FROM journal_lines jl
+JOIN journal_entries je ON je.id = jl.journal_entry_id
+JOIN ledgers l ON l.id = jl.ledger_id
+LEFT JOIN branches b ON b.id = je.branch_id
+WHERE je.entry_date BETWEEN ? AND ?
+    AND COALESCE(je.is_reversed, false) = false
+SQL;
+        $params = [$fromDate, $toDate];
+        if ($ledgerId) {
+            $sql .= ' AND jl.ledger_id = ?';
+            $params[] = $ledgerId;
+        }
+        if ($branchId) {
+            $sql .= ' AND je.branch_id = ?';
+            $params[] = $branchId;
+        }
+        $sql .= ' ORDER BY je.entry_date, je.entry_no, jl.id';
+
+        $rows = collect(DB::select($sql, $params));
+
+        // Compute running balance per ledger.
+        $running = [];
+        $rows = $rows->map(function ($r) use (&$running) {
+            $key = $r->ledger_id;
+            $running[$key] = ($running[$key] ?? 0) + $r->debit - $r->credit;
+            $r->running_balance = $running[$key];
+            return $r;
+        });
+
+        return [
+            'meta' => [
+                'title' => 'General Ledger',
+                'from_date' => $fromDate->format('Y-m-d'),
+                'to_date' => $toDate->format('Y-m-d'),
+                'ledger_id' => $ledgerId,
+                'branch_id' => $branchId,
+            ],
+            'data' => $rows,
+            'totals' => [
+                'total_debit' => $rows->sum('debit'),
+                'total_credit' => $rows->sum('credit'),
+            ],
+            'checks' => [
+                'balanced' => abs($rows->sum('debit') - $rows->sum('credit')) < 0.01,
+            ],
+        ];
+    }
+
+    /**
+     * Journal Entries — searchable list of all journal entries.
+     */
+    public function journalEntries(Carbon $fromDate, Carbon $toDate, ?int $branchId = null, ?string $referenceType = null): array
+    {
+        $query = DB::table('mv_journal_entry_summary as j')
+            ->whereBetween('j.entry_date', [$fromDate, $toDate])
+            ->where('j.is_reversed', false)
+            ->when($branchId, fn($q) => $q->where('j.branch_id', $branchId))
+            ->when($referenceType, fn($q) => $q->where('j.reference_type', $referenceType))
+            ->orderBy('j.entry_date', 'desc')
+            ->orderBy('j.entry_no', 'desc');
+
+        $rows = $query->paginate(50);
+
+        return [
+            'meta' => [
+                'title' => 'Journal Entries',
+                'from_date' => $fromDate->format('Y-m-d'),
+                'to_date' => $toDate->format('Y-m-d'),
+                'branch_id' => $branchId,
+                'reference_type' => $referenceType,
+            ],
+            'data' => $rows,
+            'source' => 'materialized_view',
+        ];
+    }
+
+    /**
+     * Daily Cash Book — receipts vs payments in the period.
+     */
+    public function dailyCashBook(Carbon $fromDate, Carbon $toDate, ?int $branchId = null): array
+    {
+        $sql = <<<SQL
+SELECT
+    je.entry_date,
+    je.entry_no, je.description, je.reference_type,
+    l.ledger_name, l.ledger_nature,
+    jl.debit, jl.credit,
+    je.branch_id, b.branch_name
+FROM journal_lines jl
+JOIN journal_entries je ON je.id = jl.journal_entry_id
+JOIN ledgers l ON l.id = jl.ledger_id
+LEFT JOIN branches b ON b.id = je.branch_id
+WHERE je.entry_date BETWEEN ? AND ?
+    AND COALESCE(je.is_reversed, false) = false
+    AND l.ledger_nature = 'cash_bank'
+SQL;
+        $params = [$fromDate, $toDate];
+        if ($branchId) {
+            $sql .= ' AND je.branch_id = ?';
+            $params[] = $branchId;
+        }
+        $sql .= ' ORDER BY je.entry_date, je.entry_no';
+
+        $rows = collect(DB::select($sql, $params));
+        $receipts = $rows->where('credit', '>', 0)->values();
+        $payments = $rows->where('debit', '>', 0)->values();
+
+        return [
+            'meta' => [
+                'title' => 'Day Book (Cash & Bank)',
+                'from_date' => $fromDate->format('Y-m-d'),
+                'to_date' => $toDate->format('Y-m-d'),
+                'branch_id' => $branchId,
+            ],
+            'receipts' => $receipts,
+            'payments' => $payments,
+            'totals' => [
+                'total_receipts' => $receipts->sum('credit'),
+                'total_payments' => $payments->sum('debit'),
+                'net' => $receipts->sum('credit') - $payments->sum('debit'),
+            ],
+        ];
+    }
+
+    /**
+     * Stock Valuation — current on-hand stock with value.
+     * Uses mv_stock_valuation materialized view.
+     */
+    public function stockValuation(?int $branchId = null, ?int $warehouseId = null): array
+    {
+        $rows = DB::table('mv_stock_valuation')
+            ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+            ->when($warehouseId, fn($q) => $q->where('warehouse_id', $warehouseId))
+            ->orderBy('branch_name')
+            ->orderBy('warehouse_name')
+            ->orderBy('product_name')
+            ->get();
+
+        return [
+            'meta' => ['title' => 'Stock Valuation'],
+            'data' => $rows,
+            'totals' => [
+                'total_qty' => $rows->sum('on_hand_qty'),
+                'total_value' => $rows->sum('stock_value'),
+            ],
+        ];
+    }
+
+    /**
+     * Branch Intercompany — Due-from/Due-to balances per branch pair.
+     * Uses mv_branch_intercompany materialized view.
+     */
+    public function branchIntercompany(?int $branchId = null): array
+    {
+        $rows = DB::table('mv_branch_intercompany')
+            ->when($branchId, fn($q) => $q->where('from_branch_id', $branchId)->orWhere('to_branch_id', $branchId))
+            ->orderBy('from_branch_name')
+            ->orderBy('to_branch_name')
+            ->get();
+
+        return [
+            'meta' => ['title' => 'Branch Intercompany Ledger'],
+            'data' => $rows,
+            'totals' => [
+                'total_amount' => $rows->sum('total_amount'),
+                'total_outstanding' => $rows->sum('outstanding_amount'),
+            ],
+            'checks' => [
+                'zero_sum' => abs($rows->sum('total_amount')) < 0.01, // Intercompany should net to zero across all branches
+            ],
+        ];
+    }
+
+    /**
+     * Refresh all materialized views (called after journal postings + by scheduler).
+     */
+    public function refreshMaterializedViews(): void
+    {
+        DB::statement('SELECT refresh_all_report_views()');
+    }
+}

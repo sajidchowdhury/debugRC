@@ -1,0 +1,228 @@
+# =============================================================================
+# RC_ERP_v2 — Docker Compose for Local Development
+# =============================================================================
+# Core stack (starts by default):
+#   1. rcerp_postgres  — PostgreSQL 16 (primary database)
+#   2. rcerp_redis     — Redis 7 (sessions, cache, queue)
+#   3. rcerp_app       — PHP 8.4 FPM (Laravel application)
+#   4. rcerp_nginx     — Nginx reverse proxy (http://localhost:8080)
+#
+# Optional (does NOT start by default):
+#   5. rcerp_mysql_archive — MySQL 8 (read-only legacy archive)
+#
+# Usage:
+#   docker compose up -d                          # Start core stack only
+#   docker compose --profile archive up -d        # Start core + MySQL archive
+#   docker compose --profile archive up -d rcerp_mysql_archive  # Start only archive
+#   docker compose down                           # Stop all
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 — Primary Database
+  # ---------------------------------------------------------------------------
+  rcerp_postgres:
+    image: postgres:16-alpine
+    container_name: rcerp_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rcerp}
+      POSTGRES_USER: ${POSTGRES_USER:-rcerp_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rcerp_secret}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d
+      - ./laravel/database/sql:/sql-schema:ro
+    networks:
+      - rcerp_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rcerp_app} -d ${POSTGRES_DB:-rcerp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — Sessions, Cache, Queue
+  # ---------------------------------------------------------------------------
+  rcerp_redis:
+    image: redis:7-alpine
+    container_name: rcerp_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - rcerp_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # MySQL 8 — Read-Only Legacy Archive (OPTIONAL)
+  # ---------------------------------------------------------------------------
+  # This container is NOT required for the application to run.
+  # It provides read-only access to the legacy MySQL database for the
+  # Anti-Corruption Layer (Phase 12 archive feature).
+  #
+  # It does NOT start by default. To start it:
+  #   docker compose --profile archive up -d rcerp_mysql_archive
+  #
+  # Host port changed from 3306 → 3307 to avoid conflicts with XAMPP/MySQL
+  # that may already be running on port 3306 on the host machine.
+  # Internal Docker networking is unaffected — containers communicate on
+  # port 3306 via the rcerp_network bridge.
+  # ---------------------------------------------------------------------------
+  rcerp_mysql_archive:
+    image: mysql:8.0
+    container_name: rcerp_mysql_archive
+    restart: unless-stopped
+    profiles:
+      - archive
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-archive_root_secret}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-rcerp_legacy}
+      MYSQL_USER: ${MYSQL_USER:-archive_reader}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-archive_reader_secret}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_archive_data:/var/lib/mysql
+      - ./mysql_archive/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - rcerp_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-archive_root_secret}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # PHP 8.4 FPM — Laravel Application
+  # ---------------------------------------------------------------------------
+  # Depends ONLY on PostgreSQL + Redis (the two databases Laravel actually
+  # uses at runtime). The MySQL archive is NOT in depends_on because:
+  #   1. Laravel uses PostgreSQL only — MySQL is read-only archive
+  #   2. The ArchiveService catches connection errors gracefully
+  #   3. Making it optional allows the app to start without MySQL
+  # ---------------------------------------------------------------------------
+  rcerp_app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rcerp_app
+    restart: unless-stopped
+    depends_on:
+      rcerp_postgres:
+        condition: service_healthy
+      rcerp_redis:
+        condition: service_healthy
+    environment:
+      # Laravel app config
+      APP_NAME: "Remote Center ERP"
+      APP_ENV: local
+      APP_KEY: base64:2cn8GO0r6OSab790IzGrvPj+siQVQDNsjsWbkzNxRC4=
+      APP_DEBUG: "true"
+      APP_TIMEZONE: Asia/Dhaka
+      APP_URL: http://localhost:8080
+
+      # PostgreSQL (primary database — always required)
+      DB_CONNECTION: pgsql
+      DB_HOST: rcerp_postgres
+      DB_PORT: "5432"
+      DB_DATABASE: ${POSTGRES_DB:-rcerp}
+      DB_USERNAME: ${POSTGRES_USER:-rcerp_app}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-rcerp_secret}
+
+      # Redis (sessions, cache, queue — always required)
+      REDIS_CLIENT: predis
+      REDIS_HOST: rcerp_redis
+      REDIS_PASSWORD: null
+      REDIS_PORT: "6379"
+      LEGACY_SESSION_REDIS_DB: "1"
+      LEGACY_SESSION_COOKIE: PHPSESSID
+
+      # Session + Cache + Queue
+      SESSION_DRIVER: redis
+      SESSION_CONNECTION: legacy
+      SESSION_LIFETIME: "480"
+      SESSION_COOKIE: PHPSESSID
+      SESSION_ENCRYPT: "false"
+      SESSION_PATH: /
+      SESSION_DOMAIN: null
+      SESSION_SECURE_COOKIE: "false"
+      SESSION_SAMESITE: lax
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+
+      # MySQL Archive (optional — only used when archive profile is active)
+      # These env vars are always set, but the ArchiveService handles
+      # connection failures gracefully if the MySQL container isn't running.
+      ARCHIVE_MYSQL_HOST: rcerp_mysql_archive
+      ARCHIVE_MYSQL_PORT: "3306"
+      ARCHIVE_MYSQL_DATABASE: ${MYSQL_DATABASE:-rcerp_legacy}
+      ARCHIVE_MYSQL_USERNAME: ${MYSQL_USER:-archive_reader}
+      ARCHIVE_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-archive_reader_secret}
+
+      # Mail (disabled in dev)
+      MAIL_MAILER: log
+    volumes:
+      - ./laravel:/var/www/laravel:delegated
+      - ./legacy:/var/www/legacy:delegated
+      - app_vendor:/var/www/laravel/vendor
+      - app_node_modules:/var/www/laravel/node_modules
+    networks:
+      - rcerp_network
+    working_dir: /var/www/laravel
+
+  # ---------------------------------------------------------------------------
+  # Nginx — Reverse Proxy (serves at http://localhost:8080)
+  # ---------------------------------------------------------------------------
+  # Depends on rcerp_app with condition: service_started (not service_healthy)
+  # because PHP-FPM doesn't have a built-in healthcheck. The app container
+  # will be "started" as soon as its entrypoint begins running.
+  # ---------------------------------------------------------------------------
+  rcerp_nginx:
+    image: nginx:1.25-alpine
+    container_name: rcerp_nginx
+    restart: unless-stopped
+    depends_on:
+      rcerp_app:
+        condition: service_started
+    ports:
+      - "8080:80"
+    volumes:
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./laravel/public:/var/www/laravel/public:ro
+    networks:
+      - rcerp_network
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  rcerp_network:
+    driver: bridge
+    name: rcerp_network
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres_data:
+    name: rcerp_postgres_data
+  redis_data:
+    name: rcerp_redis_data
+  mysql_archive_data:
+    name: rcerp_mysql_archive_data
+  app_vendor:
+    name: rcerp_app_vendor
+  app_node_modules:
+    name: rcerp_app_node_modules

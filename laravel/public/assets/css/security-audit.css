@@ -1,0 +1,82 @@
+/* Unified security audit — extends branch hub */
+
+.security-audit-hub .branch-hub-hero {
+    background: linear-gradient(135deg, #1e3a5f 0%, #4f46e5 55%, #0f766e 100%);
+}
+
+.security-audit-summary {
+    flex-wrap: wrap;
+}
+
+.branch-audit-chip.login {
+    border-color: #c7d2fe;
+    color: #4338ca;
+}
+
+.branch-audit-chip.user {
+    border-color: #99f6e4;
+    color: #0f766e;
+}
+
+.branch-audit-chip.employee {
+    border-color: #fde68a;
+    color: #b45309;
+}
+
+.security-audit-filters {
+    margin-bottom: 0.85rem;
+    padding: 1rem 1.1rem;
+}
+
+.security-audit-filters .form-label {
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+.security-source-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.security-source-chip.login {
+    background: #eef2ff;
+    color: #4338ca;
+}
+
+.security-source-chip.user {
+    background: #ccfbf1;
+    color: #0f766e;
+}
+
+.security-source-chip.employee {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+.security-source-chip.other {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.security-audit-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.65rem;
+    align-items: center;
+}
+
+.security-audit-meta code {
+    font-size: 0.78rem;
+}
+
+@media (max-width: 767.98px) {
+    .security-audit-filters .col-md-2 {
+        margin-top: 0.25rem;
+    }
+}

@@ -1,0 +1,388 @@
+<?php
+
+namespace App\Services\Purchase;
+
+use App\Models\PurchaseReturn;
+use App\Services\Stock\StockService;
+use App\Services\Accounting\JournalPostingService;
+use App\Services\Accounting\JournalReversalService;
+use App\Services\Accounting\SubLedgerService;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+
+/**
+ * Purchase Return Service — Phase 7.3.
+ *
+ * Returns goods to a supplier. Always against a GRN (purchase_receive_id).
+ * Two-phase: draft → confirm → cancel.
+ *
+ * On confirm (3 operations, all atomic):
+ *   1. Stock OUT via StockService at ORIGINAL receive rate (from GRN item)
+ *   2. GL: Dr Accounts Payable / Cr Inventory (reverse of GRN)
+ *   3. Supplier ledger: debit entry (we owe the supplier less)
+ *   4. GRN item return_qty updated (cumulative returns tracking)
+ *
+ * Rate semantics: stock leaves at the ORIGINAL receive rate from the GRN
+ * (NOT current avg_cost). This preserves cost integrity — the return
+ * reverses the exact cost at which the stock was received.
+ *
+ * Return qty cap: returnable_qty = received_qty - already_returned.
+ */
+class PurchaseReturnService
+{
+    public function __construct(
+        private StockService $stockService,
+        private JournalPostingService $journalPosting,
+        private JournalReversalService $journalReversal,
+        private SubLedgerService $subLedger
+    ) {}
+
+    /**
+     * Phase 1: Create a draft purchase return (no stock, no GL, no supplier_ledger).
+     *
+     * @param array $data {
+     *     purchase_receive_id: int (required — always against a GRN),
+     *     return_date: string (Y-m-d),
+     *     reason: string|null,
+     *     created_by: int,
+     *     items: array each { product_id, warehouse_id, qty, rate, purchase_receive_item_id }
+     * }
+     * @return PurchaseReturn
+     */
+    public function createReturn(array $data): PurchaseReturn
+    {
+        if (empty($data['purchase_receive_id'])) {
+            throw new \InvalidArgumentException('purchase_receive_id is required (returns must be against a GRN).');
+        }
+
+        $receiveId = (int) $data['purchase_receive_id'];
+        $receive = DB::table('purchase_receives')->where('id', $receiveId)->first();
+        if (!$receive) {
+            throw new \InvalidArgumentException("GRN {$receiveId} not found.");
+        }
+        if ($receive->status !== 'confirmed') {
+            throw new \RuntimeException("Can only return against confirmed GRNs (current: {$receive->status}).");
+        }
+
+        $items = $this->validateItems($data['items'], $receiveId);
+        $totalAmount = collect($items)->sum(fn($i) => $i['qty'] * $i['rate']);
+
+        $returnCode = $this->generateReturnCode();
+        $supplierId = (int) $receive->supplier_id;
+        $branchId = (int) $receive->branch_id;
+
+        return DB::transaction(function () use (
+            $data, $items, $totalAmount, $returnCode, $receiveId, $supplierId, $branchId
+        ) {
+            $returnId = DB::table('purchase_returns')->insertGetId([
+                'return_code' => $returnCode,
+                'return_date' => $data['return_date'] ?? now()->format('Y-m-d'),
+                'purchase_receive_id' => $receiveId,
+                'supplier_id' => $supplierId,
+                'branch_id' => $branchId,
+                'total_amount' => round($totalAmount, 2),
+                'status' => 'draft',
+                'is_reversed' => false,
+                'reason' => $data['reason'] ?? null,
+                'created_by' => $data['created_by'] ?? null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            $itemRows = [];
+            foreach ($items as $item) {
+                $itemRows[] = [
+                    'purchase_return_id' => $returnId,
+                    'purchase_receive_item_id' => $item['purchase_receive_item_id'],
+                    'product_id' => $item['product_id'],
+                    'warehouse_id' => $item['warehouse_id'],
+                    'qty' => $item['qty'],
+                    'rate' => $item['rate'],
+                ];
+            }
+            DB::table('purchase_return_items')->insert($itemRows);
+
+            return PurchaseReturn::with(['items.product', 'supplier', 'branch', 'purchaseReceive'])
+                ->find($returnId);
+        });
+    }
+
+    /**
+     * Phase 2: Confirm a draft return — stock OUT + GL + supplier_ledger + GRN update.
+     *
+     * @param int $returnId
+     * @param int $confirmedBy
+     * @return PurchaseReturn
+     */
+    public function confirmReturn(int $returnId, int $confirmedBy): PurchaseReturn
+    {
+        return DB::transaction(function () use ($returnId, $confirmedBy) {
+            $return = PurchaseReturn::with('items')->lockForUpdate()->find($returnId);
+
+            if (!$return) {
+                throw new \RuntimeException("Return {$returnId} not found.");
+            }
+            if (!$return->isDraft()) {
+                throw new \RuntimeException("Only draft returns can be confirmed (current: {$return->status}).");
+            }
+
+            $returnDate = $return->return_date->format('Y-m-d');
+
+            // 1. Stock OUT for each item at the ORIGINAL receive rate.
+            foreach ($return->items as $item) {
+                $this->stockService->applyTransaction([
+                    'warehouse_id' => $item->warehouse_id,
+                    'product_id' => $item->product_id,
+                    'qty' => -(float) $item->qty, // negative = OUT
+                    'rate' => (float) $item->rate, // ORIGINAL receive rate (cost flows out, avg unchanged on OUT)
+                    'reference_type' => 'purchase_return',
+                    'reference_id' => $return->id,
+                    'notes' => 'Purchase Return ' . $return->return_code,
+                    'transaction_date' => $returnDate,
+                    'created_by' => $confirmedBy,
+                ]);
+
+                // 2. Update GRN item return_qty (cumulative tracking).
+                if ($item->purchase_receive_item_id) {
+                    DB::table('purchase_receive_items')
+                        ->where('id', $item->purchase_receive_item_id)
+                        ->update([
+                            'return_qty' => DB::raw('COALESCE(return_qty, 0) + ' . (float) $item->qty),
+                        ]);
+                }
+            }
+
+            // 3. Post GL: Dr AP / Cr Inventory.
+            $journalEntryId = $this->postReturnGL($return, $confirmedBy);
+
+            // 4. Post supplier_ledger debit via SubLedgerService (we owe less).
+            $this->subLedger->postSupplierLedgerEntry([
+                'supplier_id' => $return->supplier_id,
+                'branch_id' => $return->branch_id,
+                'transaction_date' => $return->return_date->format('Y-m-d'),
+                'transaction_type' => 'purchase_return',
+                'reference_type' => 'purchase_return',
+                'reference_id' => $return->id,
+                'debit' => (float) $return->total_amount,
+                'credit' => 0,
+                'description' => 'Purchase Return ' . $return->return_code . ($return->reason ? ' — ' . $return->reason : ''),
+                'journal_entry_id' => $journalEntryId,
+                'created_by' => $confirmedBy,
+            ]);
+
+            // 5. Update return status.
+            DB::table('purchase_returns')
+                ->where('id', $returnId)
+                ->update([
+                    'status' => 'confirmed',
+                    'journal_entry_id' => $journalEntryId,
+                    'updated_at' => now(),
+                ]);
+
+            return PurchaseReturn::with([
+                'items.product', 'supplier', 'branch', 'purchaseReceive',
+                'journalEntry.lines.ledger'
+            ])->find($returnId);
+        });
+    }
+
+    /**
+     * Phase 3: Cancel a return.
+     * - If confirmed: reverse stock + GL + supplier_ledger + GRN return_qty.
+     * - If draft: just mark cancelled.
+     */
+    public function cancelReturn(int $returnId, int $cancelledBy, string $reason = ''): PurchaseReturn
+    {
+        return DB::transaction(function () use ($returnId, $cancelledBy, $reason) {
+            $return = PurchaseReturn::with('items')->lockForUpdate()->find($returnId);
+
+            if (!$return) {
+                throw new \RuntimeException("Return {$returnId} not found.");
+            }
+            if ($return->isCancelled()) {
+                throw new \RuntimeException("Return is already cancelled.");
+            }
+
+            if ($return->isConfirmed()) {
+                // Reverse GL + linked supplier_ledger via JournalReversalService (cascade).
+                if ($return->journal_entry_id) {
+                    $this->journalReversal->reverseByJournalEntry(
+                        $return->journal_entry_id, $cancelledBy,
+                        "Return cancelled: {$reason}"
+                    );
+                }
+
+                // Reverse each stock movement.
+                $stockTxs = DB::table('stock_transactions')
+                    ->where('reference_type', 'purchase_return')
+                    ->where('reference_id', $returnId)
+                    ->where('is_reversed', false)
+                    ->get();
+
+                foreach ($stockTxs as $tx) {
+                    $this->stockService->reverseTransaction(
+                        $tx->id, $cancelledBy,
+                        "Return cancelled: {$reason}"
+                    );
+                }
+
+                // Decrement GRN item return_qty.
+                foreach ($return->items as $item) {
+                    if ($item->purchase_receive_item_id) {
+                        DB::table('purchase_receive_items')
+                            ->where('id', $item->purchase_receive_item_id)
+                            ->update([
+                                'return_qty' => DB::raw('GREATEST(0, COALESCE(return_qty, 0) - ' . (float) $item->qty . ')'),
+                            ]);
+                    }
+                }
+
+                DB::table('purchase_returns')
+                    ->where('id', $returnId)
+                    ->update([
+                        'is_reversed' => true,
+                        'reversed_at' => now(),
+                        'reversed_by' => $cancelledBy,
+                        'reverse_reason' => $reason,
+                    ]);
+            }
+
+            DB::table('purchase_returns')
+                ->where('id', $returnId)
+                ->update(['status' => 'cancelled', 'updated_at' => now()]);
+
+            return PurchaseReturn::find($returnId);
+        });
+    }
+
+    /**
+     * Post GL: Dr Accounts Payable / Cr Inventory.
+     * (Reverse of GRN's Dr Inventory / Cr AP.)
+     */
+    private function postReturnGL(PurchaseReturn $return, int $createdBy): int
+    {
+        $amount = (float) $return->total_amount;
+        if ($amount < 0.01) {
+            return 0;
+        }
+
+        $apLedgerId = $this->journalPosting->lookupLedgerByNature('ap');
+        $inventoryLedgerId = $this->journalPosting->lookupLedgerByNature('inventory');
+
+        if (!$apLedgerId) {
+            throw new \RuntimeException('Accounts Payable ledger not found (nature: ap).');
+        }
+        if (!$inventoryLedgerId) {
+            throw new \RuntimeException('Inventory ledger not found (nature: inventory).');
+        }
+
+        return $this->journalPosting->createJournalEntry([
+            'entry_date' => $return->return_date->format('Y-m-d'),
+            'reference_type' => 'purchase_return',
+            'reference_id' => $return->id,
+            'branch_id' => $return->branch_id,
+            'description' => 'Purchase Return ' . $return->return_code
+                . ' (GRN ' . $return->purchaseReceive?->receive_code . ')'
+                . ($return->reason ? ' — ' . $return->reason : ''),
+            'source' => 'purchase_return',
+            'created_by' => $createdBy,
+        ], [
+            [
+                'ledger_id' => $apLedgerId,
+                'debit' => $amount, 'credit' => 0,
+                'entity_type' => 'supplier',
+                'entity_id' => $return->supplier_id,
+                'memo' => 'AP reduced — ' . $return->return_code,
+            ],
+            [
+                'ledger_id' => $inventoryLedgerId,
+                'debit' => 0, 'credit' => $amount,
+                'entity_type' => 'purchase_return',
+                'entity_id' => $return->id,
+                'memo' => 'Inventory out (cost) — ' . $return->return_code,
+            ],
+        ]);
+    }
+
+    /**
+     * Generate atomic return code: PR-YYYYMMDD-NNNN.
+     */
+    private function generateReturnCode(): string
+    {
+        $datePart = now()->format('Ymd');
+        $periodKey = now()->format('Y-m');
+        $docType = 'purchase_return';
+
+        return DB::transaction(function () use ($docType, $periodKey, $datePart) {
+            $seqRow = DB::table('document_sequences')
+                ->where('doc_type', $docType)
+                ->where('branch_id', 0)
+                ->where('period_key', $periodKey)
+                ->lockForUpdate()
+                ->first();
+
+            $nextNumber = $seqRow ? ((int) $seqRow->last_number + 1) : 1;
+
+            if ($seqRow) {
+                DB::table('document_sequences')->where('id', $seqRow->id)
+                    ->update(['last_number' => $nextNumber, 'updated_at' => now()]);
+            } else {
+                DB::table('document_sequences')->insert([
+                    'doc_type' => $docType, 'branch_id' => 0,
+                    'period_key' => $periodKey, 'last_number' => $nextNumber,
+                    'updated_at' => now(),
+                ]);
+            }
+
+            return "PR-{$datePart}-" . str_pad((string) $nextNumber, 4, '0', STR_PAD_LEFT);
+        });
+    }
+
+    /**
+     * Validate items — check returnable_qty cap (received_qty - already_returned).
+     */
+    private function validateItems(array $items, int $receiveId): array
+    {
+        $validated = [];
+        foreach ($items as $item) {
+            $productId = (int) ($item['product_id'] ?? 0);
+            $qty = (float) ($item['qty'] ?? 0);
+            $warehouseId = (int) ($item['warehouse_id'] ?? 0);
+            $receiveItemId = (int) ($item['purchase_receive_item_id'] ?? 0);
+
+            if ($productId <= 0 || $qty <= 0 || $warehouseId <= 0) continue;
+
+            // Check returnable_qty cap.
+            if ($receiveItemId > 0) {
+                $receiveItem = DB::table('purchase_receive_items')->where('id', $receiveItemId)->first();
+                if ($receiveItem) {
+                    $returnable = (float) $receiveItem->qty - (float) ($receiveItem->return_qty ?? 0);
+                    if ($qty > $returnable + 0.0001) {
+                        throw new \RuntimeException(
+                            "Return qty {$qty} exceeds returnable qty {$returnable} for product {$productId}."
+                        );
+                    }
+                }
+            }
+
+            // Use the ORIGINAL receive rate (from the GRN item).
+            $rate = (float) ($item['rate'] ?? 0);
+            if ($rate <= 0 && $receiveItemId > 0) {
+                $receiveItem = DB::table('purchase_receive_items')->where('id', $receiveItemId)->first();
+                $rate = $receiveItem ? (float) $receiveItem->rate : 0;
+            }
+
+            $validated[] = [
+                'product_id' => $productId,
+                'warehouse_id' => $warehouseId,
+                'qty' => $qty,
+                'rate' => $rate,
+                'purchase_receive_item_id' => $receiveItemId > 0 ? $receiveItemId : null,
+            ];
+        }
+        if (empty($validated)) {
+            throw new \InvalidArgumentException('At least one valid item is required.');
+        }
+        return $validated;
+    }
+}

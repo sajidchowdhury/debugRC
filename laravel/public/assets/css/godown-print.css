@@ -1,0 +1,222 @@
+/* Godown copy — print layout (use with invoice-print.css) */
+
+body.godown-print-body {
+    --godown-accent: #d97706;
+    --godown-accent-dark: #b45309;
+}
+
+body.godown-print-body.is-blank .invoice-print-page {
+    position: relative;
+}
+
+.godown-blank-watermark {
+    position: absolute;
+    top: 42%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-35deg);
+    font-size: clamp(48px, 12vw, 88px);
+    font-weight: 800;
+    color: #0f172a;
+    opacity: 0.06;
+    pointer-events: none;
+    white-space: nowrap;
+    z-index: 0;
+    letter-spacing: 0.08em;
+}
+
+.godown-print-page-inner {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+}
+
+.godown-doc-banner.is-blank {
+    border-style: dashed;
+    background: #fff;
+}
+
+.godown-doc-banner.is-blank h2 {
+    color: #64748b;
+}
+
+.godown-write-cell {
+    display: block;
+    min-height: 22px;
+    border-bottom: 1px solid #0f172a;
+    color: transparent;
+    font-size: 1px;
+}
+
+.godown-write-cell.has-hint {
+    border-bottom-style: dashed;
+    color: #94a3b8;
+    font-size: 10px;
+    padding-bottom: 2px;
+}
+
+.godown-dispatch-write {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 20px;
+    margin-top: 8px;
+}
+
+.godown-dispatch-write .write-row label {
+    display: block;
+    font-size: 10px;
+    font-weight: 600;
+    color: #64748b;
+    margin-bottom: 4px;
+}
+
+.godown-dispatch-write .write-line {
+    border-bottom: 1px solid #0f172a;
+    min-height: 26px;
+}
+
+.godown-print-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: linear-gradient(135deg, var(--godown-accent) 0%, #4f46e5 100%);
+    box-shadow: 0 4px 20px rgba(217, 119, 6, 0.25);
+}
+
+.godown-print-toolbar .btn {
+    min-height: 44px;
+    font-weight: 600;
+    border-radius: 10px;
+}
+
+.godown-doc-banner {
+    text-align: center;
+    margin: 6px 0 8px;
+    padding: 6px 12px;
+    background: linear-gradient(90deg, rgba(217, 119, 6, 0.12) 0%, rgba(79, 70, 229, 0.08) 100%);
+    border: 1px solid rgba(217, 119, 6, 0.35);
+    border-radius: 8px;
+}
+
+.godown-doc-banner h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--godown-accent-dark);
+    letter-spacing: 0.04em;
+}
+
+.godown-doc-banner p {
+    margin: 2px 0 0;
+    font-size: 11px;
+    color: #64748b;
+}
+
+.godown-status-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.75rem;
+    margin-top: 6px;
+    font-size: 11px;
+}
+
+.godown-status-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-weight: 700;
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.godown-status-pill.is-done {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.godown-lines-table .col-wh {
+    text-align: left;
+    min-width: 90px;
+}
+
+.godown-lines-table .col-ctn,
+.godown-lines-table .col-pcs,
+.godown-lines-table .col-ord {
+    width: 56px;
+    text-align: center;
+}
+
+.godown-dispatch-block {
+    flex-shrink: 0;
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fffbeb;
+    font-size: 12px;
+}
+
+.godown-dispatch-block strong {
+    color: var(--godown-accent-dark);
+}
+
+.godown-signatures {
+    flex-shrink: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px dashed #94a3b8;
+    font-size: 11px;
+    text-align: center;
+}
+
+.godown-signatures .sig-line {
+    margin-top: 28px;
+    border-top: 1px solid #0f172a;
+    padding-top: 4px;
+    font-weight: 600;
+}
+
+.godown-print-footer-note {
+    flex-shrink: 0;
+    margin-top: 8px;
+    font-size: 9px;
+    color: #64748b;
+    text-align: center;
+}
+
+@media print {
+    .no-print {
+        display: none !important;
+    }
+
+    html, body {
+        background: #fff !important;
+    }
+
+    .invoice-print-stack {
+        margin: 0;
+        padding: 0;
+        max-width: none;
+    }
+
+    .invoice-print-page {
+        box-shadow: none;
+        border-radius: 0;
+        margin: 0;
+        min-height: auto;
+    }
+}
+
+@media (max-width: 640px) {
+    .godown-signatures {
+        grid-template-columns: 1fr;
+    }
+}

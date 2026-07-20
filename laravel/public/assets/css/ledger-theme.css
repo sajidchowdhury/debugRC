@@ -1,0 +1,135 @@
+/* Chart of accounts — theme on branch-hub layout */
+
+.ledger-theme {
+    --bh-primary: #4f46e5;
+    --bh-secondary: #0d9488;
+    --bh-accent: #7c3aed;
+}
+
+.ledger-theme .branch-hub-hero {
+    box-shadow: 0 14px 36px rgba(79, 70, 229, 0.22);
+}
+
+.ledger-theme .branch-avatar,
+.ledger-theme .branch-preview-card .branch-avatar {
+    background: linear-gradient(135deg, #4f46e5, #0d9488);
+}
+
+.ledger-theme .branch-code-pill {
+    color: #4338ca;
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+}
+
+.ledger-theme .branch-hub-quick a:hover {
+    border-color: #4f46e5;
+    color: #4f46e5;
+    background: #eef2ff;
+}
+
+.ledger-theme .branch-aside-tip {
+    background: #eef2ff;
+    border-color: #c7d2fe;
+    color: #4338ca;
+}
+
+.ledger-theme .branch-form-footer .btn-primary {
+    background: linear-gradient(135deg, #4f46e5, #0d9488);
+}
+
+.ledger-type-pill {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.2rem 0.5rem;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.ledger-type-pill.asset { background: #dbeafe; color: #1d4ed8; }
+.ledger-type-pill.liability { background: #fef3c7; color: #b45309; }
+.ledger-type-pill.equity { background: #ede9fe; color: #6d28d9; }
+.ledger-type-pill.income { background: #d1fae5; color: #047857; }
+.ledger-type-pill.expense { background: #fee2e2; color: #b91c1c; }
+
+.ledger-nb-pill {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.15rem 0.45rem;
+    border-radius: 6px;
+}
+
+.ledger-nb-pill.debit { background: #fef3c7; color: #92400e; }
+.ledger-nb-pill.credit { background: #e0f2fe; color: #0369a1; }
+
+.ledger-system-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.15rem 0.4rem;
+    border-radius: 6px;
+    background: #1e293b;
+    color: #f8fafc;
+}
+
+#ledgerCards {
+    padding: 0.75rem;
+}
+
+.ledger-mobile-card {
+    background: #fff;
+    border: 1px solid var(--bh-border, #e2e8f0);
+    border-radius: 14px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+
+.ledger-mobile-card .card-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #f1f5f9;
+    flex-wrap: wrap;
+}
+
+.ledger-theme .scenario-card {
+    background: #f8fafc;
+    transition: all 0.2s ease;
+    border: 1px solid #e2e8f0;
+    cursor: pointer;
+}
+
+.ledger-theme .scenario-card:hover {
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(79, 70, 229, 0.1);
+    transform: translateY(-1px);
+}
+
+.ledger-theme .scenario-card.selected {
+    border-color: #4f46e5;
+    background: #eef2ff;
+}
+
+.ledger-protected-banner {
+    border-left: 4px solid #dc2626;
+    background: #fef2f2;
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+}
+
+.ledger-tree-indent {
+    display: inline-block;
+    border-left: 2px solid #c7d2fe;
+    margin-right: 0.25rem;
+}
+
+.ledger-show-meta dt {
+    font-weight: 500;
+}
+
+.ledger-show-meta dd {
+    margin-bottom: 0.35rem;
+}

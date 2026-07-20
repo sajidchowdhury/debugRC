@@ -1,0 +1,205 @@
+<?php
+
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Symfony\Component\HttpFoundation\Response;
+
+/**
+ * Enforce Branch Isolation — P0-8.
+ *
+ * This middleware validates that the branch_id in the incoming request
+ * matches the authenticated user's session branch_id. It prevents a
+ * non-admin user from forging a different branch_id in a POST body to
+ * create/edit/cancel records for another branch.
+ *
+ * Legacy equivalent: Helper::assertInvoiceAccessible + resolveBranchIdForWrite
+ * (legacy/app/helpers/Helper.php:219-246).
+ *
+ * Enforcement rules:
+ *   - Non-admin users: request branch_id MUST equal session branch_id.
+ *     If mismatch → 403 (JSON for AJAX, redirect for non-AJAX).
+ *   - Admin/superadmin: bypass (allowed to operate on any branch), but
+ *     the override is logged to user_audit_log with action 'branch_override'
+ *     for audit trail.
+ *
+ * The middleware inspects these request inputs for branch_id:
+ *   - request->input('branch_id')  (form fields)
+ *   - request->route('invoiceId')  (URL params — resolved via the invoice)
+ *   - request->route('id')         (resource IDs — resolved via the model)
+ *
+ * For URL-param routes (e.g., POST /admin/sales-invoices/{id}/cancel),
+ * the middleware loads the referenced record's branch_id from the DB
+ * and compares it to the session branch_id. This prevents a non-admin
+ * from cancelling another branch's invoice by guessing its ID.
+ *
+ * Usage in routes:
+ *   ->middleware('branch.isolation')
+ *
+ * Alias registered in bootstrap/app.php.
+ */
+class EnforceBranchIsolation
+{
+    /**
+     * Map route parameter names to their corresponding table + column
+     * for branch_id lookup when the route param is a model ID (not a
+     * direct branch_id input).
+     */
+    private const ROUTE_PARAM_TABLE_MAP = [
+        'invoiceId' => ['table' => 'sales_invoices', 'column' => 'id'],
+        'id'        => null, // resolved dynamically based on route prefix
+    ];
+
+    public function handle(Request $request, Closure $next): Response
+    {
+        if (!Auth::check()) {
+            return $next($request);
+        }
+
+        /** @var \App\Models\User $user */
+        $user = Auth::user();
+        $sessionBranchId = (int) (session('branch_id') ?? $user->getBranchId() ?? 0);
+
+        // Admin/superadmin bypass — but log the cross-branch override.
+        if ($user->isAdmin()) {
+            $this->logBranchOverrideIfCrossBranch($request, $user, $sessionBranchId);
+            return $next($request);
+        }
+
+        // --- Non-admin: check branch_id in request input ---
+        $requestBranchId = $this->resolveRequestBranchId($request);
+
+        if ($requestBranchId !== null && $requestBranchId !== $sessionBranchId) {
+            return $this->deny($request, 'You do not have access to records from another branch.');
+        }
+
+        // --- Non-admin: check branch_id from URL param (model ID) ---
+        $urlParamBranchId = $this->resolveUrlParamBranchId($request);
+        if ($urlParamBranchId !== null && $urlParamBranchId !== $sessionBranchId) {
+            return $this->deny($request, 'You do not have access to this record (belongs to another branch).');
+        }
+
+        return $next($request);
+    }
+
+    /**
+     * Resolve branch_id from request input (form fields / JSON body).
+     */
+    private function resolveRequestBranchId(Request $request): ?int
+    {
+        $branchId = $request->input('branch_id');
+        if ($branchId === null || $branchId === '') {
+            return null;
+        }
+        return (int) $branchId;
+    }
+
+    /**
+     * Resolve branch_id from URL route parameters by loading the
+     * referenced record from the DB.
+     */
+    private function resolveUrlParamBranchId(Request $request): ?int
+    {
+        // Check common route param names that carry a model ID.
+        $route = $request->route();
+        if (!$route) {
+            return null;
+        }
+
+        $params = $route->parameters();
+
+        // Try 'invoiceId' (used by sales-challans godown/issue routes).
+        if (isset($params['invoiceId'])) {
+            $invoiceId = (int) $params['invoiceId'];
+            if ($invoiceId > 0) {
+                $branchId = DB::table('sales_invoices')
+                    ->where('id', $invoiceId)
+                    ->value('branch_id');
+                return $branchId !== null ? (int) $branchId : null;
+            }
+        }
+
+        // Try 'id' — resolve based on the route's controller/method
+        // by inferring the table from the URI prefix.
+        if (isset($params['id'])) {
+            $id = (int) $params['id'];
+            if ($id <= 0) {
+                return null;
+            }
+            $table = $this->inferTableFromUri($request->path());
+            if ($table !== null) {
+                $branchId = DB::table($table)->where('id', $id)->value('branch_id');
+                return $branchId !== null ? (int) $branchId : null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Infer the DB table from the request URI path.
+     */
+    private function inferTableFromUri(string $path): ?string
+    {
+        $path = strtolower($path);
+        if (str_contains($path, 'sales-invoices') || str_contains($path, 'sales/sales-invoices')) {
+            return 'sales_invoices';
+        }
+        if (str_contains($path, 'sales-challans')) {
+            return 'sales_challans';
+        }
+        if (str_contains($path, 'sales-returns')) {
+            return 'sales_returns';
+        }
+        if (str_contains($path, 'customer-payments')) {
+            return 'customer_payments';
+        }
+        return null;
+    }
+
+    /**
+     * Log a cross-branch override by an admin (audit trail).
+     * Only logs when the admin operates on a branch different from
+     * their session branch.
+     */
+    private function logBranchOverrideIfCrossBranch(Request $request, $user, int $sessionBranchId): void
+    {
+        $requestBranchId = $this->resolveRequestBranchId($request);
+        $urlParamBranchId = $this->resolveUrlParamBranchId($request);
+
+        $targetBranchId = $requestBranchId ?? $urlParamBranchId;
+
+        if ($targetBranchId !== null && $targetBranchId !== $sessionBranchId) {
+            DB::table('user_audit_log')->insert([
+                'user_id'         => $user->id,
+                'action'          => 'branch_override',
+                'target_user_id'  => null,
+                'branch_id'       => $targetBranchId,
+                'details'         => json_encode([
+                    'session_branch_id' => $sessionBranchId,
+                    'target_branch_id'  => $targetBranchId,
+                    'method'            => $request->method(),
+                    'path'              => $request->path(),
+                    'ip'                => $request->ip(),
+                ]),
+                'ip_address'  => $request->ip(),
+                'user_agent'  => $request->userAgent() ? mb_substr($request->userAgent(), 0, 255) : null,
+                'created_at'  => now(),
+            ]);
+        }
+    }
+
+    /**
+     * Return a 403 denial — JSON for AJAX, redirect for non-AJAX.
+     */
+    private function deny(Request $request, string $message): Response
+    {
+        if ($request->expectsJson()) {
+            return response()->json(['message' => $message], 403);
+        }
+        return redirect()->route('dashboard')->with('error', $message);
+    }
+}

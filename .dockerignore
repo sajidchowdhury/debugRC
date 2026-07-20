@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Docker files (don't include in build context)
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Vendor + node_modules (installed inside container)
+laravel/vendor
+laravel/node_modules
+
+# Storage (created at runtime)
+laravel/storage/logs/*
+laravel/storage/framework/cache/*
+laravel/storage/framework/sessions/*
+laravel/storage/framework/views/*
+!laravel/storage/logs/.gitkeep
+!laravel/storage/framework/cache/.gitkeep
+!laravel/storage/framework/sessions/.gitkeep
+!laravel/storage/framework/views/.gitkeep
+
+# IDE files
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation (not needed in container)
+docs/
+*.md
+!laravel/README.md
+
+# Legacy app (not needed in Laravel container, but mounted as volume)
+# legacy/ — commented out because it's volume-mounted

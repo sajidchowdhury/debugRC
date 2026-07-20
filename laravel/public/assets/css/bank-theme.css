@@ -1,0 +1,67 @@
+/* Bank accounts — theme on branch-hub layout */
+
+.bank-theme {
+    --bh-primary: #0369a1;
+    --bh-secondary: #ca8a04;
+    --bh-accent: #0d9488;
+}
+
+.bank-theme .branch-hub-hero {
+    box-shadow: 0 14px 36px rgba(3, 105, 161, 0.22);
+}
+
+.bank-theme .branch-avatar,
+.bank-theme .branch-preview-card .branch-avatar {
+    background: linear-gradient(135deg, #0369a1, #ca8a04);
+}
+
+.bank-theme .branch-code-pill {
+    color: #a16207;
+}
+
+.bank-theme .branch-hub-quick a:hover {
+    border-color: #0369a1;
+    color: #0369a1;
+    background: #f0f9ff;
+}
+
+.bank-theme .branch-aside-tip {
+    background: #f0f9ff;
+    border-color: #bae6fd;
+    color: #0369a1;
+}
+
+.bank-theme .branch-form-footer .btn-primary {
+    background: linear-gradient(135deg, #0369a1, #ca8a04);
+}
+
+.bank-balance {
+    font-weight: 600;
+    color: #047857;
+}
+
+.bank-balance.zero {
+    color: var(--bh-muted, #64748b);
+    font-weight: 400;
+}
+
+#bankCards {
+    padding: 0.75rem;
+}
+
+.bank-mobile-card {
+    background: #fff;
+    border: 1px solid var(--bh-border, #e2e8f0);
+    border-radius: 14px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+
+.bank-mobile-card .card-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #f1f5f9;
+}

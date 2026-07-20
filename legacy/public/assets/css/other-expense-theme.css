@@ -1,0 +1,38 @@
+.other-expense-theme {
+    --bh-primary: #b91c1c;
+    --bh-secondary: #dc2626;
+    --bh-accent: #991b1b;
+}
+.other-expense-theme .branch-hub-hero {
+    box-shadow: 0 14px 36px rgba(185, 28, 28, 0.22);
+}
+.other-expense-theme .branch-form-footer .btn-primary {
+    background: linear-gradient(135deg, #dc2626, #b91c1c);
+}
+.oe-hero-amount { font-size: 1.35rem; font-weight: 700; color: #fff; }
+.oe-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.75rem;
+}
+.oe-detail-item {
+    background: #fff;
+    border: 1px solid #e8e8e8;
+    border-radius: 10px;
+    padding: 0.65rem 0.85rem;
+}
+.oe-detail-item .label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: #6b7280;
+}
+.oe-detail-item .value { font-weight: 600; font-size: 0.9rem; }
+.oe-reversed-banner {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 10px;
+    padding: 0.85rem 1rem;
+}
+.other-expense-theme .branch-stat-icon.red {
+    background: linear-gradient(135deg, #dc2626, #b91c1c);
+}

@@ -1,2 +1,73 @@
-skills/
-node_modules/
+# ============================================================
+# RC_ERP_v2 — Master .gitignore
+# Never commit secrets, data dumps, or generated artifacts.
+# ============================================================
+
+# --- Secrets & local config ---
+config/local.php
+.env
+.env.*
+!.env.example
+!.env.docker
+*.pem
+*.key
+
+# --- Database data dumps (NEVER commit — contain real customer data) ---
+osudlagb_remotecenter.sql
+*_dump.sql
+*_backup.sql
+pgloader.log
+
+# --- Logs ---
+logs/
+*.log
+
+# --- Temp / cookies / sessions ---
+tmp_*.txt
+tmp_cookies.txt
+tmp_session_id.txt
+*.tmp
+
+# --- PHP dependencies (legacy) ---
+legacy/vendor/
+vendor/
+composer.lock
+
+# --- Laravel (added in Phase 2.2) ---
+laravel/vendor/
+laravel/node_modules/
+laravel/.env
+laravel/storage/*.key
+laravel/storage/framework/cache/data/*
+laravel/storage/framework/sessions/*
+laravel/storage/framework/views/*
+laravel/storage/logs/*
+!laravel/storage/framework/cache/data/.gitkeep
+!laravel/storage/framework/sessions/.gitkeep
+!laravel/storage/framework/views/.gitkeep
+!laravel/storage/logs/.gitkeep
+
+# --- Node / AI sidecar ---
+mini-services/*/node_modules/
+mini-services/*/__pycache__/
+mini-services/*/.venv/
+mini-services/*/venv/
+
+# --- IDE / OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+
+# --- Uploads (user-generated content) ---
+legacy/public/uploads/products/*
+legacy/public/uploads/employees/*
+!legacy/public/uploads/products/.gitkeep
+!legacy/public/uploads/employees/.gitkeep
+
+# --- Docker volumes (local data — never commit) ---
+postgres/data/
+redis/data/
+mysql_archive/data/
+docker/data/

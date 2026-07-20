@@ -1,0 +1,336 @@
+/* Sales today index */
+
+.sales-today-app {
+    --st-primary: #4f46e5;
+    --st-primary-dark: #4338ca;
+    --st-accent: #0d9488;
+    --st-surface: #eef2ff;
+    --st-card: #ffffff;
+    --st-border: #e2e8f0;
+    --st-text: #0f172a;
+    --st-muted: #64748b;
+    padding-bottom: 2rem;
+    color: var(--st-text);
+}
+
+.sales-today-hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+    padding: 1.15rem 1.25rem;
+    background: linear-gradient(135deg, var(--st-primary) 0%, var(--st-accent) 100%);
+    border-radius: 16px;
+    color: #fff;
+    box-shadow: 0 12px 32px rgba(79, 70, 229, 0.28);
+}
+
+.sales-today-hero h1 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.sales-today-hero p {
+    margin: 0.2rem 0 0;
+    opacity: 0.92;
+    font-size: 0.85rem;
+}
+
+.sales-today-branch-tag {
+    display: inline-block;
+    margin-top: 0.35rem;
+    padding: 0.15rem 0.55rem;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.sales-today-hero-actions .btn {
+    font-weight: 600;
+    border: none;
+}
+
+.sales-today-filters-shell {
+    margin-bottom: 1rem;
+}
+
+.sales-today-filters-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: var(--st-card);
+    border: 1px solid var(--st-border);
+    border-radius: 14px;
+    color: var(--st-text);
+    font-weight: 600;
+    text-align: left;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.05);
+}
+
+.sales-today-filters-toggle:hover {
+    background: #f8fafc;
+    border-color: var(--st-primary);
+}
+
+.sales-today-filters-toggle:not(.collapsed) {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom-color: transparent;
+}
+
+.sales-today-filters-toggle-left {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.65rem;
+}
+
+.sales-today-filters-toggle-hint {
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--st-muted);
+}
+
+.sales-today-filters-chevron {
+    transition: transform 0.25s ease;
+    color: var(--st-muted);
+}
+
+.sales-today-filters-toggle:not(.collapsed) .sales-today-filters-chevron {
+    transform: rotate(180deg);
+}
+
+#salesTodayFiltersCollapse .sales-today-smart-panel {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.sales-today-hero-actions #toggleSalesTodayFilters:not(.collapsed) {
+    background: rgba(255, 255, 255, 0.95);
+    color: var(--st-primary-dark);
+    border-color: transparent;
+}
+
+.sales-today-smart-panel {
+    background: var(--st-card);
+    border: 1px solid var(--st-border);
+    border-radius: 14px;
+    padding: 1rem 1.1rem;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.05);
+}
+
+.sales-today-smart-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--st-muted);
+    margin-bottom: 0.45rem;
+}
+
+.sales-today-preset-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 1rem;
+}
+
+.sales-today-preset-btn {
+    border: 1px solid var(--st-border);
+    background: #f8fafc;
+    border-radius: 999px;
+    padding: 0.35rem 0.85rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.sales-today-preset-btn.active {
+    background: linear-gradient(135deg, var(--st-primary), var(--st-primary-dark));
+    border-color: transparent;
+    color: #fff;
+}
+
+.sales-today-search-wrap {
+    position: relative;
+    margin-bottom: 1rem;
+}
+
+.sales-today-search-wrap i {
+    position: absolute;
+    left: 0.9rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--st-muted);
+}
+
+.sales-today-search-input {
+    width: 100%;
+    min-height: 48px;
+    padding-left: 2.5rem;
+    font-size: 16px;
+    border-radius: 12px;
+}
+
+.sales-today-status-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.sales-today-status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid var(--st-border);
+    background: #fff;
+    border-radius: 12px;
+    padding: 0.45rem 0.75rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sales-today-status-chip.active {
+    border-color: var(--st-primary);
+    background: var(--st-surface);
+    color: var(--st-primary-dark);
+}
+
+.sales-today-status-chip.chip-urgent.active {
+    background: #fff7ed;
+    border-color: #f59e0b;
+    color: #b45309;
+}
+
+.sales-today-status-chip .chip-count {
+    min-width: 1.5rem;
+    text-align: center;
+    padding: 0.1rem 0.4rem;
+    border-radius: 8px;
+    background: #f1f5f9;
+    font-size: 0.75rem;
+}
+
+.sales-today-status-chip.active .chip-count {
+    background: var(--st-primary);
+    color: #fff;
+}
+
+.sales-today-stale-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin: 0 0 0.75rem;
+    padding: 0.75rem 1rem;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    font-size: 0.92rem;
+}
+
+.sales-today-stale-banner.is-warn {
+    background: #fffbeb;
+    border-color: #fcd34d;
+    color: #92400e;
+}
+
+.sales-today-stale-banner.is-info {
+    background: #ecfdf5;
+    border-color: #6ee7b7;
+    color: #065f46;
+}
+
+.sales-today-active-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 0.85rem;
+    margin-bottom: 1rem;
+    background: var(--st-surface);
+    border: 1px solid #c7d2fe;
+    border-radius: 10px;
+    font-size: 0.82rem;
+}
+
+.sales-today-active-bar .filter-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.2rem 0.55rem;
+    background: #fff;
+    border: 1px solid #a5b4fc;
+    border-radius: 999px;
+    font-weight: 600;
+}
+
+.sales-today-results-card {
+    background: var(--st-card);
+    border: 1px solid var(--st-border);
+    border-radius: 14px;
+    overflow: hidden;
+}
+
+.sales-today-results-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    padding: 0.85rem 1rem;
+    background: #f8fafc;
+    border-bottom: 1px solid var(--st-border);
+}
+
+.sales-today-mobile-card {
+    border: 1px solid var(--st-border);
+    border-radius: 12px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.65rem;
+    background: #fff;
+}
+
+.sales-today-mobile-card.status-draft {
+    border-left: 4px solid #64748b;
+}
+
+.sales-today-mobile-card.status-godown {
+    border-left: 4px solid #f59e0b;
+}
+
+.sales-today-mobile-card.status-done {
+    border-left: 4px solid #059669;
+}
+
+.sales-today-app .dataTables_wrapper .dataTables_filter,
+.sales-today-app .dataTables_wrapper .dataTables_length {
+    display: none;
+}
+
+.sales-today-app table.dataTable thead th {
+    background: #1e293b !important;
+    color: #fff !important;
+    font-size: 0.8rem;
+}
+
+@media (max-width: 767.98px) {
+    .sales-today-app .sales-dt-mobile-controls table.dataTable {
+        display: none !important;
+    }
+
+    .sales-today-hero {
+        flex-direction: column;
+    }
+}
+
+@media (min-width: 768px) {
+    .sales-today-mobile-cards {
+        display: none !important;
+    }
+}
