@@ -50,6 +50,7 @@ use App\Models\Scopes\BranchScope;
  * @property int|null $reversed_by
  * @property string|null $reverse_reason
  * @property bool $is_soft_hold
+ * @property bool $call_a_day
  * @property string|null $notes
  * @property int|null $created_by
  */
@@ -81,7 +82,7 @@ class SalesInvoice extends Model
         'is_challan_issued', 'challan_issued_at',
         'journal_entry_id', 'cogs_journal_entry_id',
         'is_reversed', 'reversed_at', 'reversed_by', 'reverse_reason',
-        'is_soft_hold', 'notes', 'created_by',
+        'is_soft_hold', 'call_a_day', 'notes', 'created_by',
     ];
 
     protected $casts = [
@@ -96,6 +97,7 @@ class SalesInvoice extends Model
         'is_challan_issued' => 'boolean',
         'is_reversed' => 'boolean',
         'is_soft_hold' => 'boolean',
+        'call_a_day' => 'boolean',
         'godown_prepared_at' => 'datetime',
         'challan_issued_at' => 'datetime',
         'reversed_at' => 'datetime',
@@ -152,4 +154,5 @@ class SalesInvoice extends Model
     public function isConfirmed(): bool { return $this->status === 'confirmed'; }
     public function isCancelled(): bool { return $this->status === 'cancelled'; }
     public function isReversed(): bool { return $this->status === 'reversed' || $this->is_reversed; }
+    public function isCalledItADay(): bool { return (bool) $this->call_a_day; }
 }

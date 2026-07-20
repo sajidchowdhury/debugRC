@@ -159,6 +159,22 @@ class SalesAuditLogger
     }
 
     /**
+     * Log a Call It A Day batch operation (Gap G-10).
+     * Sets call_a_day = true on selected invoices to remove them
+     * from the daily collection list (Sales Today view).
+     * Legacy event name: sale_call_a_day.
+     */
+    public function callItADay(
+        int $userId, int $branchId, array $invoiceIds, int $updatedCount
+    ): void {
+        $this->log($userId, 'sale_call_a_day', $branchId, [
+            'invoice_ids' => $invoiceIds,
+            'invoice_count' => count($invoiceIds),
+            'updated_count' => $updatedCount,
+        ]);
+    }
+
+    /**
      * Log a sales return creation.
      */
     public function returnCreated(
@@ -260,7 +276,7 @@ class SalesAuditLogger
     public function recentSalesEvents(int $limit = 300, ?int $branchId = null)
     {
         $actions = [
-            'sale_created', 'sale_updated', 'sale_cancelled',
+            'sale_created', 'sale_updated', 'sale_cancelled', 'sale_call_a_day',
             'credit_limit_override',
             'payment_received', 'payment_reversed',
             'payment_discount', 'payment_write_off', 'payment_refund',

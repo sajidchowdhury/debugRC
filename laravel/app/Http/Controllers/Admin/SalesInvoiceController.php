@@ -328,7 +328,7 @@ class SalesInvoiceController extends Controller
 
         $query = DB::table('user_audit_log')
             ->whereIn('action', [
-                'sale_created', 'sale_updated', 'sale_cancelled',
+                'sale_created', 'sale_updated', 'sale_cancelled', 'sale_call_a_day',
                 'credit_limit_override',
                 'payment_received', 'payment_reversed',
                 'return_created', 'return_confirmed', 'return_reversed',
@@ -359,6 +359,7 @@ class SalesInvoiceController extends Controller
             'sale_created' => ['label' => 'Invoice Created', 'icon' => 'fa-file-circle-plus', 'color' => 'success'],
             'sale_updated' => ['label' => 'Invoice Updated', 'icon' => 'fa-pen-to-square', 'color' => 'primary'],
             'sale_cancelled' => ['label' => 'Invoice Cancelled', 'icon' => 'fa-ban', 'color' => 'danger'],
+            'sale_call_a_day' => ['label' => 'Call It A Day', 'icon' => 'fa-check-circle', 'color' => 'secondary'],
             'credit_limit_override' => ['label' => 'Credit Override', 'icon' => 'fa-shield-halved', 'color' => 'warning'],
             'payment_received' => ['label' => 'Payment Received', 'icon' => 'fa-money-bill-wave', 'color' => 'success'],
             'payment_reversed' => ['label' => 'Payment Reversed', 'icon' => 'fa-rotate-left', 'color' => 'danger'],
@@ -512,6 +513,34 @@ class SalesInvoiceController extends Controller
         return response()->json(
             $this->cartService->getCart(auth()->id(), $customerId, $branchId)
         );
+    }
+
+    /**
+     * Call It A Day — batch flag invoices as removed from daily collection list (Gap G-10).
+     * AJAX endpoint. Sets call_a_day = true on selected invoices for the user's branch.
+     * No GL, ledger, or stock impact — purely a UI/operational convenience.
+     */
+    public function callItADay(Request $request)
+    {
+        $validated = $request->validate([
+            'invoice_ids' => 'required|array|min:1',
+            'invoice_ids.*' => 'integer',
+        ]);
+
+        $invoiceIds = $validated['invoice_ids'];
+        $branchId = (int) (session('branch_id') ?? auth()->user()?->getBranchId() ?? 0);
+        $userId = (int) auth()->id();
+
+        try {
+            $result = $this->invoiceService->callItADay($invoiceIds, $branchId, $userId);
+            return response()->json($result);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => $e->getMessage(),
+                'updated_count' => 0,
+            ], 400);
+        }
     }
 
     /**

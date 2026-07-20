@@ -30,6 +30,7 @@ CREATE TABLE sales_invoices (
     reversed_by integer,
     reverse_reason text,
     is_soft_hold boolean NOT NULL DEFAULT false,
+    call_a_day boolean NOT NULL DEFAULT false,  -- G-10: Remove from daily collection list (Sales Today view)
     notes text,
     created_by integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,

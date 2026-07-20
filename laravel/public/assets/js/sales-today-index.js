@@ -513,9 +513,11 @@
     }
 
     function postCallItADay(ids, silent) {
-        $.post(window.SALES_TODAY_BASE + 'sales/call_it_a_day', {
+        // G-10: Use the Laravel route instead of legacy CodeIgniter URL.
+        const url = (window.CIAD_ROUTE || '') || (window.SALES_TODAY_BASE + 'sales/call_it_a_day');
+        $.post(url, {
             invoice_ids: ids,
-            csrf_token: window.CSRF_TOKEN || '',
+            _token: window.CSRF_TOKEN || '',
         }, data => {
             if (data.status === 'success') {
                 if (silent) {

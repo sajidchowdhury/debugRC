@@ -710,6 +710,65 @@ class SalesInvoiceService
     }
 
     /**
+     * Call It A Day — batch flag invoices as removed from daily collection list (Gap G-10).
+     *
+     * Sets call_a_day = true on selected invoices for the given branch.
+     * This is a UI/operational convenience only — no GL, ledger, or stock impact.
+     * Invoices with call_a_day = true disappear from the "Sales Today" view
+     * (the DataTable filters by COALESCE(call_a_day, false) = false).
+     *
+     * Legacy equivalent: SalesInvoiceOperationsTrait::callItADay()
+     *
+     * @param array $invoiceIds Array of sales_invoice IDs to flag.
+     * @param int   $branchId   The branch scope (branch isolation).
+     * @param int   $userId     The user performing the action (for audit).
+     * @return array{ status: string, message: string, updated_count: int }
+     */
+    public function callItADay(array $invoiceIds, int $branchId, int $userId): array
+    {
+        if (empty($invoiceIds)) {
+            return ['status' => 'error', 'message' => 'No invoices selected.', 'updated_count' => 0];
+        }
+
+        // P0-8: Defense-in-depth branch isolation check.
+        $this->salesAccess->assertBranchAccessible($branchId);
+
+        // Limit batch size (same pattern as CancelStaleSalesDrafts).
+        $invoiceIds = array_slice(array_map('intval', array_unique($invoiceIds)), 0, 200);
+
+        $updatedCount = DB::transaction(function () use ($invoiceIds, $branchId, $userId) {
+            // Atomic batch update — only touch invoices that:
+            //   1. Belong to the given branch (branch isolation)
+            //   2. Are NOT reversed (is_reversed = false)
+            //   3. Are NOT already flagged (call_a_day = false)
+            $count = DB::table('sales_invoices')
+                ->whereIn('id', $invoiceIds)
+                ->where('branch_id', $branchId)
+                ->where('is_reversed', false)
+                ->where('call_a_day', false)
+                ->update([
+                    'call_a_day' => true,
+                    'updated_at' => now(),
+                ]);
+
+            // Audit log — sale_call_a_day (legacy event name).
+            $this->auditLogger->callItADay($userId, $branchId, $invoiceIds, $count);
+
+            return $count;
+        });
+
+        $message = $updatedCount === 0
+            ? 'No invoices were updated (already removed or not found in this branch).'
+            : "{$updatedCount} invoice(s) removed from your collection list.";
+
+        return [
+            'status' => 'success',
+            'message' => $message,
+            'updated_count' => $updatedCount,
+        ];
+    }
+
+    /**
      * Assert an invoice is editable (P1-1).
      * Must be: status='draft', not godown-prepared, not reversed.
      */

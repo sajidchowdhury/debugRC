@@ -463,6 +463,9 @@ Route::middleware('auth')->group(function () {
     // P1-1: edit/update — salesman/manager/admin (legacy edit/update).
     // ============================================================
     Route::prefix('admin/sales-invoices')->name('admin.sales-invoices.')->group(function () {
+        // G-10: Call It A Day batch operation (remove invoices from daily collection list)
+        Route::post('call-it-a-day', [SalesInvoiceController::class, 'callItADay'])
+            ->name('call-it-a-day')->middleware(['role:salesman,accountant,manager,admin', 'branch.isolation']);
         Route::post('{id}/cancel', [SalesInvoiceController::class, 'cancel'])
             ->name('cancel')->middleware(['role:salesman,manager,admin', 'branch.isolation']);
         // P1-1: Edit draft invoice (GET form + PUT update)
