@@ -286,3 +286,70 @@ Stage Summary:
 - No new migration, no new tests, no API V1 changes (Blade-only scope, matching R10/R11).
 - All 5 audit-table verdicts that said "Legacy better" for these features now say "Same" or "Same + Laravel extends".
 - User should pull main and browse to /admin/sales/cart — the #customerDetailsPanel appears below the customer selector when a customer is picked (shows credit_limit / current_due / balance_left / cart subtotal + projected new balance + colour-coded status), and the #priceRangePanel appears inside the Add Product card when a product is picked (shows visual band + thumb + status badge + "Use default" button).
+
+---
+Task ID: 42
+Agent: Main (Super Z)
+Task: R15 (customer recents chips) + R16 (sticky bottom bar) + R17 (mobile-cart cards with swipe-to-delete) + R10s (barcode scanning simplified to single product search) + doc updates + push to GitHub
+
+Work Log:
+- Verified prior session commits (7321e17 R10, bf5b18f SoftDeletes fix, 0a615a3 R11, 4734c67 R12/R13/R14) are all on origin/main.
+- Read existing cart blade (2398 lines), SESSION_CONTEXT.md, sales_entry_Lg_vs_La.md, REMEDIATION_LOG.md, plus Legacy reference implementations:
+  - legacy/app/views/sales/create.php L47 (#customerRecents), L166-173 (#posStickyBar)
+  - legacy/public/assets/js/sales.js L1306-1354 (rememberCustomerRecent + renderCustomerRecents), L1356-1380 (initPosStickyBar + updatePosStickyBar), L820-870 (cart-line desktop + mobile markup), L1422-1434 (initCartSwipeRemove)
+  - legacy/public/assets/css/sales-pos.css L632-641 (.sales-recents), L741-815 (.sales-cart-line, .sales-pos-sticky-bar, mobile media query)
+- Implemented R15 (customer recents chips):
+  - New #customerRecentsRow + #customerRecents block in customer selector card.
+  - New JS: CUSTOMER_RECENTS_KEY, CUSTOMER_RECENTS_MAX, rememberCustomerRecent(id, label), loadCustomerRecents(), renderCustomerRecents().
+  - localStorage key 'rcerp_sales_customer_recents' holds [{id, label, ts}, ...] capped at 5, deduped by id, most-recent-first.
+  - Customer change handler calls rememberCustomerRecent + renderCustomerRecents.
+  - Delegated click handler on chips calls switchToCustomer (R11 flow).
+  - Storage failures caught + warned (non-fatal).
+- Implemented R16 (sticky bottom bar):
+  - New #posStickyBar fixed-position bottom bar with #posStickySummary (item count + subtotal) + #posStickyFinalize button.
+  - New @push('css') block scoped to cart page: position:fixed; bottom:0; z-index:1040; env(safe-area-inset-bottom) padding.
+  - New JS updatePosStickyBar() called from renderAll() on every cart mutation; button enabled iff cart is valid.
+  - Click on #posStickyFinalize calls existing finalizeInvoice() — same idempotency-token + credit-check flow.
+  - Body gets pos-sticky-visible class so page padding-bottom (5.5rem) keeps last cart row uncovered (works on browsers without :has()).
+- Implemented R17 (mobile-cart cards with swipe-to-delete):
+  - Wrapped existing desktop <table> in <div class="sales-cart-desktop table-responsive">.
+  - Added sibling <div class="sales-cart-mobile" id="cartItemsMobile">.
+  - renderCartTable() now builds BOTH a <tr> (desktop) and a <div class="sales-cart-line"> card (mobile) per cart item in the same loop.
+  - Both views share .cart-qty/.cart-rate/.cart-remove/.cart-total classes — existing delegated handlers work for both, no duplicated logic.
+  - Generalized debouncedUpdate() from $('#cartItemsBody tr[data-product-id="X"]') to $('[data-product-id="X"]').first().
+  - Generalized .cart-remove click handler from closest('tr') to closest('[data-product-id]').
+  - New JS initCartSwipeRemove() called at end of every renderCartTable() — uses modern Pointer Events (touch + pen, ignores mouse): 80px left swipe within 600ms triggers .cart-remove click.
+  - Red ::before pseudo-element with Font Awesome trash icon revealed behind card during swipe.
+  - CSS media query (max-width: 767.98px) toggles desktop/mobile visibility.
+  - Mobile card inputs: min-height:44px + font-size:16px (iOS no-zoom + accessible tap target).
+- Implemented R10s (barcode scanning simplified):
+  - REMOVED: #btnToggleBarcode button from Add Product card header.
+  - REMOVED: entire #barcodeRow HTML block (input + hint + Scan & Add button + auto-add checkbox).
+  - REMOVED: all R10 JS — $barcodeInput, $barcodeHint, $barcodeAutoAdd vars; #btnToggleBarcode click handler; #barcodeInput keydown handler; #btnBarcodeAdd click handler; the entire scanAndSelect() function (~110 lines).
+  - ADDED: selectOnClose: true to #addProduct Select2 init (scanner Enter picks highlighted first result).
+  - ADDED: delegated keydown handler on .select2-search__field that intercepts Enter when dropdown belongs to #addProduct AND no result is highlighted → calls new lookupProductByCodeAndSelect(term) function.
+  - ADDED: lookupProductByCodeAndSelect(code) function (~50 lines) that fetches R1 productByCode endpoint, on success injects matched product as fresh <option> + selects + triggers change + focuses #addQty. On failure shows toast + reopens Select2.
+  - UPDATED: #addProduct Select2 placeholder from "— Type product name / code —" to "— Type name / scan code —".
+  - ADDED: small "scan ok" badge with barcode icon next to Product label.
+- Verified file integrity:
+  - cart.blade.php: braces 478/478 balanced, parens 1504/1504 balanced, @if/@endif 7/7 balanced, @push/@endpush 2/2 balanced (3rd @push match is inside a JS comment, false positive), @section/@endsection 1/1 balanced, @php/@endphp 1/1 balanced.
+  - All 79 element IDs unique (no duplicates after adding #customerRecentsRow, #customerRecents, #posStickyBar, #posStickySummary, #posStickyFinalize, #cartItemsMobile).
+  - All 5 new functions defined exactly once: rememberCustomerRecent, loadCustomerRecents, renderCustomerRecents, updatePosStickyBar, initCartSwipeRemove, lookupProductByCodeAndSelect.
+  - Old scanAndSelect function removed (0 references).
+  - All R10 element IDs gone from file (0 references to #barcodeInput, #barcodeHint, #barcodeAutoAdd, #btnBarcodeAdd, #btnToggleBarcode, #barcodeRow).
+- Updated 3 doc files:
+  - sales_entry_Lg_vs_La.md: added R15/R16/R17/R10s rows to remediation progress table at top; updated §1 executive summary (POS UX richness + Business-rule parity rows); updated §4.1 (Overall Layout) Product picker + Page architecture rows; rewrote §6.1 items #1 (R10+R10s), #7 (R15), #9 (R16), #10 (R17) with full descriptions; updated §9.3 R15/R16/R17 rows to ✅ Done + added R10s row.
+  - SESSION_CONTEXT.md: updated "Last updated" stamp to "2026-07-22 (R15/R16/R17 + R10s barcode simplification pushed)"; added R15/R16/R17/R10s rows to §3 backlog table; added §5.14 (R15 deep-dive) + §5.15 (R16 deep-dive) + §5.16 (R17 deep-dive) + §5.17 (R10s deep-dive); updated §6 Open Work Items to list R10s/R15/R16/R17 as complete; added R15/R16/R17/R10s entries to §7 Completed Work Items.
+  - REMEDIATION_LOG.md: appended §R15 (~150 lines), §R16 (~140 lines), §R17 (~190 lines), §R10s (~170 lines) — each with status, audit reference, problem, decision, files modified, what was NOT changed, verification, risks, follow-ups.
+- Committed as a single commit and pushed to origin/main using the user-provided PAT (never written to any file in the repo).
+
+Stage Summary:
+- 1 source file modified: laravel/resources/views/admin/sales/cart.blade.php (net +500 lines: removed ~165 lines of R10 barcode UI/JS, added ~665 lines of R15/R16/R17/R10s HTML+CSS+JS).
+- 3 doc files updated: sales_entry_Lg_vs_La.md (audit table + §1 + §4.1 + §6.1 items #1/#7/#9/#10 + §9.3), SESSION_CONTEXT.md (last-updated + §3 + §5.14 + §5.15 + §5.16 + §5.17 + §6 + §7), REMEDIATION_LOG.md (§R15 + §R16 + §R17 + §R10s appended).
+- R15 closes audit gap §6.1 item #7 (customer recents chips).
+- R16 closes audit gap §6.1 item #9 (sticky bottom bar).
+- R17 closes audit gap §6.1 item #10 (mobile-cart cards with swipe-to-delete).
+- R10s supersedes R10's dual-mode UI per the user's explicit brief — single product search box that doubles as the barcode entry via selectOnClose:true + delegated keydown fallback to productByCode endpoint.
+- No new migration, no new routes, no new tests, no API V1 changes (Blade-only scope, matching R10/R11/R12/R13/R14).
+- All 4 audit-table verdicts that said "Missing" for these features now say "✅ Done".
+- User should pull main and browse to /admin/sales/cart — the #customerRecentsRow chips appear beneath the customer Select2 (after picking at least one customer); the #posStickyBar appears at the bottom of the viewport when the cart has items; on mobile (<768px) the cart table is replaced by .sales-cart-line cards with swipe-left-to-delete; the Add Product card no longer has a separate Barcode toggle (the Select2 search box handles both typing and scanning).
