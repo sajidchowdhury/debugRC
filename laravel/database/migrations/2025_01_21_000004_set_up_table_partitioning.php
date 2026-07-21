@@ -52,26 +52,46 @@ use Illuminate\Support\Facades\DB;
  */
 return new class extends Migration
 {
+    private ?bool $hasPgPartman = null;
+
+    /**
+     * Detect (and cache) whether the pg_partman extension is available.
+     * Cached so up()/partitionStockTransactions()/partitionSalesInvoices()/down()
+     * can all share the same answer without re-querying or passing it through
+     * method arguments.
+     */
+    private function hasPgPartman(): bool
+    {
+        if ($this->hasPgPartman !== null) {
+            return $this->hasPgPartman;
+        }
+
+        $row = DB::selectOne("
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_available_extensions
+                WHERE name = 'pg_partman'
+            ) AS installed
+        ");
+
+        $this->hasPgPartman = (bool) ($row->installed ?? false);
+
+        if (! $this->hasPgPartman) {
+            logger()->warning('pg_partman is not installed. Automatic partition maintenance is disabled.');
+        }
+
+        return $this->hasPgPartman;
+    }
+
     public function up(): void
     {
         // ──────────────────────────────────────────────────────────────
         // 0. Install pg_partman extension (auto partition management)
         // ──────────────────────────────────────────────────────────────
-
-$hasPgPartman = DB::selectOne("
-    SELECT EXISTS (
-        SELECT 1
-        FROM pg_available_extensions
-        WHERE name = 'pg_partman'
-    ) AS installed
-");
-
-if ($hasPgPartman->installed) {
-    DB::statement('CREATE EXTENSION IF NOT EXISTS pg_partman');
-} else {
-    logger()->warning('pg_partman is not installed. Automatic partition maintenance is disabled.');
-}
-        DB::statement('CREATE SCHEMA IF NOT EXISTS partman');
+        if ($this->hasPgPartman()) {
+            DB::statement('CREATE EXTENSION IF NOT EXISTS pg_partman');
+            DB::statement('CREATE SCHEMA IF NOT EXISTS partman');
+        }
 
         // ==============================================================
         // PART 1: stock_transactions (simpler — only 1 self-ref FK)
@@ -264,19 +284,22 @@ if ($hasPgPartman->installed) {
             EXECUTE FUNCTION fn_st_reversal_fk_check()
         SQL);
 
-          if ($hasPgPartman->installed) {
         // ── Step 10: Register with pg_partman for automatic monthly partitions ──
-        DB::statement(<<<'SQL'
-         
-                p_parent_table := 'public.stock_transactions',
-                p_control := 'transaction_date',
-                p_type := 'range',
-                p_interval := '1 month',
-                p_premake := 6,
-                p_start_partition := '2026-01-01'
-           
-        SQL);
-    }
+        // pg_partman v5+ uses the partman.create_parent() function with
+        // named arguments. We guard the call with hasPgPartman() so the
+        // migration still succeeds when the extension is unavailable.
+        if ($this->hasPgPartman()) {
+            DB::statement(<<<'SQL'
+                SELECT partman.create_parent(
+                    p_parent_table    := 'public.stock_transactions',
+                    p_control         := 'transaction_date',
+                    p_type            := 'range',
+                    p_interval        := '1 month',
+                    p_premake         := 6,
+                    p_start_partition := '2026-01-01'
+                )
+            SQL);
+        }
         // ── Step 11: Drop backup table ──
         DB::statement('DROP TABLE stock_transactions_unpartitioned');
 
@@ -705,20 +728,21 @@ if ($hasPgPartman->installed) {
             EXECUTE FUNCTION fn_fk_si_cascade_delete('sales_invoice_dispatches', 'sales_invoice_id')
         SQL);
 
-                    if ($hasPgPartman->installed) {
-
         // ── Step 16: Register with pg_partman ──
-        DB::statement(<<<'SQL'
-
-                p_parent_table := 'public.sales_invoices',
-                p_control := 'invoice_date',
-                p_type := 'range',
-                p_interval := '1 month',
-                p_premake := 6,
-                p_start_partition := '2026-01-01'
-            
-        SQL);
-    }
+        // Same pattern as stock_transactions: guard with hasPgPartman()
+        // and call partman.create_parent() with proper SQL syntax.
+        if ($this->hasPgPartman()) {
+            DB::statement(<<<'SQL'
+                SELECT partman.create_parent(
+                    p_parent_table    := 'public.sales_invoices',
+                    p_control         := 'invoice_date',
+                    p_type            := 'range',
+                    p_interval        := '1 month',
+                    p_premake         := 6,
+                    p_start_partition := '2026-01-01'
+                )
+            SQL);
+        }
         // ── Step 17: Drop backup table ──
         DB::statement('DROP TABLE sales_invoices_unpartitioned');
 
@@ -733,13 +757,12 @@ if ($hasPgPartman->installed) {
         // This down() method provides best-effort reversal but will NOT
         // restore declarative FKs on child tables.
 
-        // Remove pg_partman entries
-        DB::statement("if ($hasPgPartman->installed) {
-            SELECT partman.undo_partition('public.stock_transactions', p_batch_count := 20);
-        }");
-        DB::statement("if ($hasPgPartman->installed) {
-            SELECT partman.undo_partition('public.sales_invoices', p_batch_count := 20);
-        }");
+        // Remove pg_partman entries (only if the extension was available
+        // when the up() migration ran — otherwise there is nothing to undo).
+        if ($this->hasPgPartman()) {
+            DB::statement("SELECT partman.undo_partition('public.stock_transactions', p_batch_count := 20)");
+            DB::statement("SELECT partman.undo_partition('public.sales_invoices', p_batch_count := 20)");
+        }
 
         // Drop trigger-based FK enforcement
         $triggers = [
