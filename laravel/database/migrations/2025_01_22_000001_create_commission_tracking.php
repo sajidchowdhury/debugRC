@@ -121,7 +121,7 @@ return new class extends Migration
                 -- Only one active open-ended rule per salesman at a time.
                 -- Expired rules (effective_to set) or inactive rules don't conflict.
             )
-SQL');
+SQL);
 
         // Index for looking up the active rule for a salesman
         DB::statement('CREATE INDEX idx_cr_salesman ON commission_rules(salesman_id, is_active, effective_from)');
@@ -154,7 +154,7 @@ SQL');
                 created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT commission_rule_tiers_threshold_unique UNIQUE (commission_rule_id, threshold)
             )
-SQL');
+SQL);
 
         DB::statement('CREATE INDEX idx_crt_rule ON commission_rule_tiers(commission_rule_id)');
 
@@ -177,7 +177,7 @@ SQL');
                 created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT commission_rule_pg_unique UNIQUE (commission_rule_id, product_group_id)
             )
-SQL');
+SQL);
 
         DB::statement('CREATE INDEX idx_crpg_rule ON commission_rule_product_groups(commission_rule_id)');
         DB::statement('CREATE INDEX idx_crpg_group ON commission_rule_product_groups(product_group_id)');
@@ -210,7 +210,7 @@ SQL');
                 created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT commission_rule_targets_rule_unique UNIQUE (commission_rule_id, period)
             )
-SQL');
+SQL);
 
         DB::statement('CREATE INDEX idx_cxrt_rule ON commission_rule_targets(commission_rule_id)');
 
@@ -295,7 +295,7 @@ SQL');
                 created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
                 updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
             )
-SQL');
+SQL);
 
         // Indexes for commission_entries
         DB::statement('CREATE INDEX idx_ce_salesman ON commission_entries(salesman_id, entry_date)');
@@ -325,7 +325,7 @@ SQL');
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql
-SQL');
+SQL);
 
         DB::statement(<<<'SQL'
             CREATE CONSTRAINT TRIGGER trg_fk_ce_si
@@ -333,7 +333,7 @@ SQL');
                 DEFERRABLE INITIALLY IMMEDIATE
                 FOR EACH ROW
                 EXECUTE FUNCTION fn_fk_ce_si_check()
-SQL');
+SQL);
 
         // ──────────────────────────────────────────────────────────────
         // TRIGGER: Auto-set commission_period from entry_date
@@ -349,14 +349,14 @@ SQL');
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql
-SQL');
+SQL);
 
         DB::statement(<<<'SQL'
             CREATE TRIGGER trg_ce_set_period
                 BEFORE INSERT ON commission_entries
                 FOR EACH ROW
                 EXECUTE FUNCTION fn_ce_set_period()
-SQL');
+SQL);
 
         // ──────────────────────────────────────────────────────────────
         // TRIGGER: Auto-update updated_at
@@ -370,14 +370,14 @@ SQL');
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql
-SQL');
+SQL);
 
         DB::statement(<<<'SQL'
             CREATE TRIGGER trg_ce_updated_at
                 BEFORE UPDATE ON commission_entries
                 FOR EACH ROW
                 EXECUTE FUNCTION fn_ce_updated_at()
-SQL');
+SQL);
 
         // ──────────────────────────────────────────────────────────────
         // TRIGGER: Validate source — exactly one of allocation_id or
@@ -399,14 +399,14 @@ SQL');
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql
-SQL');
+SQL);
 
         DB::statement(<<<'SQL'
             CREATE TRIGGER trg_ce_validate_source
                 BEFORE INSERT ON commission_entries
                 FOR EACH ROW
                 EXECUTE FUNCTION fn_ce_validate_source()
-SQL');
+SQL);
 
         // ──────────────────────────────────────────────────────────────
         // RLS (Row-Level Security) for commission_entries — branch isolation
@@ -432,7 +432,7 @@ SQL');
                     current_setting('app.is_admin', true) = 'true'
                     OR branch_id = current_setting('app.branch_id', true)::integer
                 )
-SQL');
+SQL);
 
         DB::statement(<<<'SQL'
             CREATE POLICY rls_commission_entries_insert ON commission_entries
@@ -440,7 +440,7 @@ SQL');
                     current_setting('app.is_admin', true) = 'true'
                     OR branch_id = current_setting('app.branch_id', true)::integer
                 )
-SQL');
+SQL);
 
         DB::statement(<<<'SQL'
             CREATE POLICY rls_commission_entries_update ON commission_entries
@@ -452,7 +452,7 @@ SQL');
                     current_setting('app.is_admin', true) = 'true'
                     OR branch_id = current_setting('app.branch_id', true)::integer
                 )
-SQL');
+SQL);
 
         DB::statement(<<<'SQL'
             CREATE POLICY rls_commission_entries_delete ON commission_entries
@@ -460,7 +460,7 @@ SQL');
                     current_setting('app.is_admin', true) = 'true'
                     OR branch_id = current_setting('app.branch_id', true)::integer
                 )
-SQL');
+SQL);
 
         // Admin bypass policy — admin sees/modifies all branches.
         DB::statement(<<<'SQL'
@@ -468,7 +468,7 @@ SQL');
                 FOR ALL
                 USING (current_setting('app.is_admin', true) = 'true')
                 WITH CHECK (current_setting('app.is_admin', true) = 'true')
-SQL');
+SQL);
 
         // ──────────────────────────────────────────────────────────────
         // RLS for commission_rules (branch-scoped; NULL branch_id = global)
@@ -484,7 +484,7 @@ SQL');
                     OR branch_id IS NULL
                     OR branch_id = current_setting('app.branch_id', true)::integer
                 )
-SQL');
+SQL);
 
         DB::statement(<<<'SQL'
             CREATE POLICY rls_commission_rules_insert ON commission_rules
@@ -493,7 +493,7 @@ SQL');
                     OR branch_id IS NULL
                     OR branch_id = current_setting('app.branch_id', true)::integer
                 )
-SQL');
+SQL);
 
         DB::statement(<<<'SQL'
             CREATE POLICY rls_commission_rules_update ON commission_rules
@@ -507,7 +507,7 @@ SQL');
                     OR branch_id IS NULL
                     OR branch_id = current_setting('app.branch_id', true)::integer
                 )
-SQL');
+SQL);
 
         DB::statement(<<<'SQL'
             CREATE POLICY rls_commission_rules_delete ON commission_rules
@@ -516,14 +516,14 @@ SQL');
                     OR branch_id IS NULL
                     OR branch_id = current_setting('app.branch_id', true)::integer
                 )
-SQL');
+SQL);
 
         DB::statement(<<<'SQL'
             CREATE POLICY rls_commission_rules_admin ON commission_rules
                 FOR ALL
                 USING (current_setting('app.is_admin', true) = 'true')
                 WITH CHECK (current_setting('app.is_admin', true) = 'true')
-SQL');
+SQL);
 
         // ──────────────────────────────────────────────────────────────
         // Make new FKs DEFERRABLE (per Task 35 pattern)
@@ -566,7 +566,7 @@ SQL');
                   SELECT 1 FROM commission_rules cr
                   WHERE cr.salesman_id = e.id AND cr.is_active = true
               )
-SQL');
+SQL);
     }
 
     /**

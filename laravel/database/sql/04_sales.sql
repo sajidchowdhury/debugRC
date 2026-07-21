@@ -228,29 +228,24 @@ CREATE INDEX idx_sri_return ON sales_return_items(sales_return_id);
 CREATE TABLE commission_rules (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     salesman_id integer NOT NULL REFERENCES employees(id),
-    rule_type varchar(20) NOT NULL CHECK (rule_type IN ('flat','tiered','product_group','target_bonus')),
+    rule_type varchar(20) NOT NULL
+        CHECK (rule_type IN ('flat','tiered','product_group','target_bonus')),
     rate numeric(8,4) NOT NULL DEFAULT 0,
-    -- For 'flat': single rate. For 'tiered': base rate. For 'product_group': default rate.
-    -- For 'target_bonus': base rate.
     effective_from date NOT NULL DEFAULT CURRENT_DATE,
     effective_to date,
     is_active boolean NOT NULL DEFAULT true,
     branch_id integer REFERENCES branches(id),
-    -- NULL = applies to all branches; specific = branch-specific rate
     notes text,
     created_by integer,
-    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT commission_rules_unique_active EXCLUDE (
-        salesman_id WITH =,
-        gist(
-            CASE WHEN is_active AND effective_to IS NULL
-                 THEN daterange(effective_from, NULL, '[)')
-                 ELSE daterange(NULL, NULL, '[]')
-            END WITH &&
-        )
-    ) WHERE (is_active AND effective_to IS NULL)
+    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE UNIQUE INDEX uq_commission_active
+ON commission_rules (salesman_id)
+WHERE is_active = true
+  AND effective_to IS NULL;
+  
 CREATE INDEX idx_cr_salesman ON commission_rules(salesman_id, is_active, effective_from);
 CREATE INDEX idx_cr_branch ON commission_rules(branch_id);
 
