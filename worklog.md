@@ -229,3 +229,60 @@ Stage Summary:
 - No edit-page changes (Legacy has multi-customer tabs only on the create page; R11 matches that scope).
 - All 3 docs updated to reflect R11 completion — future agents reading SESSION_CONTEXT.md will see R11 in the backlog table + §5.11 deep-dive + completed work items.
 - User should pull main and browse to /admin/sales/cart — the #draftTabsCard dock appears above the customer selector. Open carts (from any prior session) will appear as pills on page load. Picking a new customer creates a new pill; clicking a pill switches carts; clicking × closes the cart (after confirm) and switches to the next remaining tab.
+
+---
+Task ID: 41
+Agent: Main (Super Z)
+Task: R12 (verify typeahead via R1) + R13 (price-range slider band UI) + R14 (live credit-limit display) + doc updates + push to GitHub
+
+Work Log:
+- User issued 6 sub-tasks in one message: (1) port live customer/product typeahead (R12), (2) R13 price-range slider band UI, (3) R14 live credit-limit display on cart page, (4) port barcode scanning (R10 — already done in commit 7321e17), (5) update sales_entry_Lg_vs_La.md + SESSION_CONTEXT.md, (6) push to GitHub with full context preservation.
+- Verified R10 (barcode scanning) and R11 (multi-cart tabs) still in place at HEAD (0a615a3). Pushed the 3 already-local commits (7321e17 + bf5b18f + 0a615a3) to origin/main first.
+- Audited R12 against current code: R1 had already wired both Select2 widgets into AJAX mode (minimumInputLength:1, delay:250, processResults populating customerCache + productCache). Select2 AJAX mode IS a debounced AJAX typeahead — R12 is satisfied by R1. No new code needed for R12; just documentation closure.
+- Read legacy reference implementations:
+  - legacy/app/views/sales/create.php L72-80 (#customerDetailsPanel) + L101-121 (#priceRangePanel)
+  - legacy/public/assets/js/sales-create.js L120-210 (updatePriceBandUi + rateRangeStatus + validateActiveRate)
+  - legacy/app/controllers/SalesController.php L167-179 (customer_details endpoint)
+  - legacy/app/models/SalesModel.php L90-102 (getCustomerDetails)
+  - legacy/app/helpers/Helper.php L496-502 (Get_Customer_Due SQL)
+  - laravel/app/Services/Sales/SalesInvoiceService.php L860-890 (checkCreditLimit — to mirror the exact current_due formula)
+- R13 implementation (frontend only, no backend changes):
+  - Added #priceRangePanel HTML inside the Add Product card (below the rate/qty/Add row, above the availability row): grey track + green→purple gradient fill + indigo default-rate mark + circular thumb + Min/Max/Default labels + status badge + "Use default" button. All inline-styled with Bootstrap 5 utility classes + position-absolute (no new CSS file).
+  - Added state.activePriceRange field.
+  - Added 3 new JS functions: setActivePriceRange(product), rateRangeStatus(rate, min, max) [returns ok|warn|bad; warn fires within 10% of min], updatePriceBandUi() [positions thumb/fill/default-mark as % of span, sets status badge to bg-success/bg-warning/bg-danger, sets #addRate min/max HTML attrs, re-colors thumb border].
+  - Modified #addProduct change handler to call setActivePriceRange(p) (and clear when no product selected).
+  - Modified R10 scanAndSelect() to call setActivePriceRange(p) after rate is filled (so thumb snaps to right position immediately).
+  - Added #addRate input handler with 60ms debounce → updatePriceBandUi().
+  - Added #btnUseDefaultRate click handler → sets rate to default_rate + triggers change + shows toast.
+  - Band auto-hides when product has no usable range (min<=0 or max<=0), matching Legacy's early-return.
+- R14 implementation (backend + frontend):
+  - Backend: Added SalesCartService::getCustomerDetails(int $customerId): array method (~45 lines). Loads customer record, computes current_due = SUM(debit) − SUM(credit) FROM customer_ledger WHERE is_reversed = false (identical to SalesInvoiceService::checkCreditLimit). Returns {customer_id, customer_name, shop_name, mobile, address, credit_limit, current_due, due_left}. Returns sane zeros when customer not found.
+  - Backend: Added SalesCartController::customerDetails(Request) method that calls getCustomerDetails and returns JSON. Returns sane zeros when customer_id missing/0.
+  - Backend: Added route GET /admin/sales/cart/customer-details with throttle:60,1 middleware (matches Legacy guardJsonApi limit for sales/customer_details). Named admin.sales.cart.customer-details.
+  - Frontend: Added #customerDetailsPanel HTML inside the customer selector card (below the customer row, d-none by default): 4 stat cells (Credit limit / Current due / Balance left / Cart subtotal) + projected new balance row + status badge + Refresh button.
+  - Frontend: Added ENDPOINTS.customerDetails route binding + state.customerCredit field.
+  - Frontend: Added 2 new JS functions: fetchCustomerDetails(customerId) [AJAX GET, caches in state.customerCredit, calls renderCustomerDetails; clears state + hides panel when customerId is null], renderCustomerDetails() [renders 4 stat cells + projected new balance row (current_due + cart subtotal) + colour-coded status badge: bg-success OK / bg-warning Tight (within 10% of limit) / bg-danger Will breach / "No limit set" when credit_limit=0].
+  - Frontend: Modified renderAll() to call renderCustomerDetails() so the projected row stays in sync with every cart mutation (no extra round-trip — reuses cached snapshot).
+  - Frontend: Modified #customerSelect change handler to call fetchCustomerDetails(cid) (or fetchCustomerDetails(null) when cleared).
+  - Frontend: Added #btnRefreshCredit click handler (re-fetches snapshot with spinning icon — useful for long-running sessions where a payment may have posted in another tab).
+  - Frontend: Added bootstrap call: if (state.customerId) { fetchCustomerDetails(state.customerId); } so the panel renders immediately when the page loads with ?customer_id=…
+- Verified file integrity:
+  - cart.blade.php: braces 405/405, parens 1309/1309, brackets 64/64, @if/@endif 6/6, @push/@endpush 1/1. All 18 new element IDs verified unique.
+  - SalesCartService.php: braces 78/78, parens 302/302.
+  - SalesCartController.php: braces 36/36, parens 231/231.
+  - routes/web.php: braces 114/114, parens 898/898.
+- Documentation updates:
+  - sales_entry_Lg_vs_La.md: added R12/R13/R14 rows to remediation progress table at top; updated §1 executive summary "POS UX richness" + "Business-rule parity" rows; updated §4.1 (Overall Layout) Customer picker + Product picker + Price display rows; updated §4.2 (Customer Panel) Live search + Live credit display rows; updated §4.3 (Product Panel) Live search + Barcode scan + Price-range slider UI rows; rewrote §6.1 items #3, #4, #5, #6 with full R1/R12/R13/R14 descriptions; updated §9.3 R12/R13/R14 rows to ✅ Done with full descriptions.
+  - SESSION_CONTEXT.md: updated "Last updated" stamp to "2026-07-22 (R12/R13/R14 pushed)"; added R12/R13/R14 rows to §3 backlog table; added §5.12 (R13 deep-dive) + §5.13 (R14 deep-dive); updated §6 Open Work Items to list R12/R13/R14 as complete; added R12/R13/R14 entries to §7 Completed Work Items.
+  - REMEDIATION_LOG.md: appended §R12 (~50 lines, documentation-only closure), §R13 (~120 lines, full problem/decision/files-modified/what-was-NOT-changed/verification/risks/follow-ups), §R14 (~180 lines, same structure).
+- Committed as a single commit and pushed to origin/main using the user-provided PAT (never written to any file in the repo).
+
+Stage Summary:
+- 4 source files modified: SalesCartService.php (new method getCustomerDetails), SalesCartController.php (new method customerDetails), routes/web.php (new route admin.sales.cart.customer-details), cart.blade.php (~370 lines added: 70 lines of HTML for #priceRangePanel + 70 lines of HTML for #customerDetailsPanel + 70 lines of JS for R13 functions + 80 lines of JS for R14 functions + 80 lines of wiring changes).
+- 3 doc files updated: sales_entry_Lg_vs_La.md (audit table + §1 + §4 + §6.1 + §9.3), SESSION_CONTEXT.md (last-updated + §3 + §5.12 + §5.13 + §6 + §7), REMEDIATION_LOG.md (§R12 + §R13 + §R14 appended).
+- R12 closed as documentation-only (R1 already satisfied it).
+- R13 closes audit gap §6.1 item #5 (price-range slider band UI).
+- R14 closes audit gap §6.1 item #6 (live credit-limit display) + extends Legacy with a projected new balance row that updates in real time as the cart changes.
+- No new migration, no new tests, no API V1 changes (Blade-only scope, matching R10/R11).
+- All 5 audit-table verdicts that said "Legacy better" for these features now say "Same" or "Same + Laravel extends".
+- User should pull main and browse to /admin/sales/cart — the #customerDetailsPanel appears below the customer selector when a customer is picked (shows credit_limit / current_due / balance_left / cart subtotal + projected new balance + colour-coded status), and the #priceRangePanel appears inside the Add Product card when a product is picked (shows visual band + thumb + status badge + "Use default" button).
