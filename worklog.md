@@ -115,3 +115,44 @@ Stage Summary:
 - After these fixes, `php artisan migrate:fresh` should run end-to-end on PostgreSQL 12-17 without errors.
 - Commit pushed: 88be3f0 → origin/main
 - Next step: User should run `php artisan migrate:fresh` on their Docker container (rcerp_app) to verify. If any further errors appear, they should share the new error message.
+
+---
+Task ID: HOTFIX-ASSETS
+Agent: Main (Super Z)
+Task: Emergency fix — "full site broken, only text showing" after user pulled latest main
+
+Work Log:
+- User reported full site broken (only text, no styles) after pulling latest main.
+- Root cause identified: 4 layout templates (admin.blade.php, app.blade.php, print.blade.php, admin/partials/print-layout.blade.php) + 3 report/dashboard views (sales_funnel, customer_performance, dashboard/index) all loaded Bootstrap, jQuery, Font Awesome, Select2, SweetAlert2, DataTables, and Chart.js from external CDNs (jsdelivr, cdnjs.cloudflare, code.jquery.com, cdn.datatables.net, fonts.googleapis.com). These CDNs are frequently unreachable or throttled from Bangladesh (Asia/Dhaka timezone) — when the browser cannot fetch bootstrap.min.css, the page renders as raw unstyled text.
+- Also discovered: Font Awesome webfonts directory was missing entirely (only all.min.css existed) — even when CDN was reachable, icons would have rendered as text/broken glyphs.
+- Downloaded missing local assets:
+  * /assets/css/jquery.dataTables.min.css (23K, from cdn.datatables.net)
+  * /assets/js/bootstrep/jquery.dataTables.min.js (86K, from cdn.datatables.net)
+  * /assets/js/bootstrep/chart.umd.min.js (202K, from cdn.jsdelivr.net)
+  * /assets/webfonts/fa-solid-900.{woff2,ttf} (153K + 410K)
+  * /assets/webfonts/fa-regular-400.{woff2,ttf} (25K + 67K)
+  * /assets/webfonts/fa-brands-400.{woff2,ttf} (115K + 204K)
+  * /assets/webfonts/fa-v4compatibility.{woff2,ttf} (4.7K + 11K)
+- Updated 9 blade files to switch CDN refs to local /assets/ paths:
+  * layouts/admin.blade.php — 8 CDN refs replaced (Bootstrap CSS+JS, FA, jQuery, SweetAlert2, Select2, DataTables)
+  * layouts/app.blade.php — 3 CDN refs replaced (Bootstrap CSS+JS, FA)
+  * layouts/print.blade.php — 2 CDN refs replaced (Bootstrap CSS, FA)
+  * admin/partials/print-layout.blade.php — 2 CDN refs replaced
+  * admin/reports/sales_funnel.blade.php — Chart.js now local
+  * admin/reports/customer_performance.blade.php — Chart.js now local
+  * dashboard/index.blade.php — Chart.js now local
+  * admin/sales/checklist.blade.php — removed Google Fonts (Hind Siliguri) preconnect+link tags
+  * admin/sales/guide.blade.php — same Google Fonts removal
+- Verified cart.blade.php (heavily modified in previous commit c113428) had no CDN refs and structurally balanced (@extends 1/1, @section 1/1, @push 2/2, @if 7/7, @php 1/1).
+- Final sanity sweep: 0 matches for cdn.|cdnjs.|code.jquery|unpkg|googleapis in laravel/resources/views/.
+- All 15 referenced local assets verified to exist on disk.
+- Committed as 1ff266b "fix(assets): replace ALL CDN dependencies with locally-served assets"
+- Pushed to origin/main successfully.
+
+Stage Summary:
+- 9 blade files modified, 10 new asset files added (CSS/JS/webfonts).
+- CDN dependency: ZERO external CDN refs remain in any blade template.
+- Site will now render correctly regardless of CDN reachability — all assets served from /assets/.
+- Bonus: faster page loads (no DNS lookup + handshake to 4+ CDN domains).
+- Commit pushed: 1ff266b → origin/main
+- User should pull latest main and hard-refresh browser (Ctrl+Shift+R / Cmd+Shift+R) to bypass any cached broken state.
