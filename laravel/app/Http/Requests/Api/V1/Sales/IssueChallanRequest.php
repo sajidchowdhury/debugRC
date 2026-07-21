@@ -10,6 +10,13 @@ use Illuminate\Foundation\Http\FormRequest;
  * This is step 2 of the challan workflow. It creates the sales_challan,
  * moves stock OUT at avg_cost, and posts the COGS journal entry.
  * The invoice must already be godown-prepared (status=confirmed).
+ *
+ * R3: Idempotency — the client MUST send a UUID idempotency_token to
+ * prevent duplicate challan creation on network retries or double-taps.
+ * If the same token is seen within 5 minutes, the cached response is
+ * returned without creating a second challan (mirrors the finalize
+ * pattern in FinalizeInvoiceRequest and the payment-create pattern in
+ * StorePaymentRequest).
  */
 class IssueChallanRequest extends FormRequest
 {
@@ -28,6 +35,8 @@ class IssueChallanRequest extends FormRequest
             'vehicle_number'   => 'nullable|string|max:50',
             'driver_name'      => 'nullable|string|max:100',
             'transport_cost'   => 'nullable|numeric|min:0',
+            // R3: Idempotency token (UUID v4) — mirrors FinalizeInvoiceRequest + StorePaymentRequest.
+            'idempotency_token' => 'required|string|uuid',
         ];
     }
 
@@ -38,6 +47,7 @@ class IssueChallanRequest extends FormRequest
             'challan_date'     => ['description' => 'Challan date (defaults to today)', 'example' => '2025-01-21'],
             'transport_name'   => ['description' => 'Transport company name', 'example' => 'Fast Cargo Ltd'],
             'vehicle_number'   => ['description' => 'Vehicle registration number', 'example' => 'Dhaka-GA-1234'],
+            'idempotency_token' => ['description' => 'Client-generated UUID v4 to prevent duplicate challan creation on network retry / double-tap. Cached for 5 minutes.', 'example' => '550e8400-e29b-41d4-a716-446655440000'],
         ];
     }
 }

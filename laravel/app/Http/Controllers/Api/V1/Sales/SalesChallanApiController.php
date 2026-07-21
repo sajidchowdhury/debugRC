@@ -13,6 +13,7 @@ use App\Services\Sales\SalesAccess;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Sales Challan API Controller — Mobile write endpoints.
@@ -29,6 +30,11 @@ use Illuminate\Support\Facades\Auth;
  *   POST   /api/v1/sales/challans/godown            Prepare godown (step 1)
  *   POST   /api/v1/sales/challans/issue             Issue challan (step 2)
  *   POST   /api/v1/sales/challans/{id}/cancel       Cancel/reverse challan
+ *
+ * R3: The issue endpoint is idempotent — the client must send a UUID
+ * idempotency_token. If the same token is seen within 5 minutes, the
+ * previous result is returned without creating a duplicate challan
+ * (mirrors finalize and payment-create patterns).
  */
 class SalesChallanApiController extends Controller
 {
@@ -136,10 +142,29 @@ class SalesChallanApiController extends Controller
      * The invoice must already be godown-prepared (confirmed status).
      * This creates the sales_challan, moves stock OUT at avg_cost,
      * and posts the COGS journal entry (Dr COGS / Cr Inventory).
+     *
+     * R3: Idempotency — if the same idempotency_token was processed
+     * within 5 min, the cached result is returned without creating a
+     * second challan (prevents duplicate on network retry / double-tap).
+     * Mirrors the finalize pattern in SalesInvoiceApiController::store
+     * and the payment pattern in CustomerPaymentApiController::store.
      */
     public function issue(IssueChallanRequest $request): JsonResponse
     {
         $validated = $request->validated();
+
+        // R3: Idempotency check — must run BEFORE any branch-access
+        // check or service call so a replay is fully side-effect-free.
+        $cacheKey = 'api:challan:' . $validated['idempotency_token'];
+        $cached = Cache::get($cacheKey);
+
+        if ($cached !== null) {
+            // Return the original response, flagged as a replay.
+            return response()->json(array_merge($cached, [
+                'idempotent_replay' => true,
+                'message' => 'Duplicate submission detected — returning the original result. No new challan was created.',
+            ]));
+        }
 
         $invoice = SalesInvoice::findOrFail($validated['sales_invoice_id']);
         $this->salesAccess->assertBranchAccessible($invoice->branch_id);
@@ -152,12 +177,18 @@ class SalesChallanApiController extends Controller
                 ])
             );
 
-            return response()->json([
+            $result = [
                 'message' => 'Challan issued successfully',
                 'data'    => new SalesChallanResource(
                     $challan->load(['salesInvoice', 'items'])
                 ),
-            ], 201);
+            ];
+
+            // R3: Cache the result for 5 minutes (idempotency window —
+            // same TTL as the API finalize + API payment patterns).
+            Cache::put($cacheKey, $result, now()->addMinutes(5));
+
+            return response()->json($result, 201);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 409);
         }

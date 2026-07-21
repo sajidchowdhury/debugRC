@@ -8,6 +8,7 @@ use App\Models\SalesInvoice;
 use App\Services\Sales\SalesChallanService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -17,6 +18,12 @@ use Illuminate\Support\Facades\DB;
  * - prepareGodown: assign warehouses to invoice items (draft → confirmed)
  * - issueChallan: stock OUT + GL Dr COGS / Cr Inventory (confirmed → challan_issued)
  * - cancel: reverse stock + GL
+ *
+ * R3: issueChallan() now requires an idempotency_token (UUID v4) and
+ * mirrors the finalize / payment-create pattern — duplicate submissions
+ * within 10 minutes redirect to the originally-issued challan instead
+ * of throwing "Challan already issued for this invoice." See
+ * docs/REMEDIATION_LOG.md §R3.
  */
 class SalesChallanController extends Controller
 {
@@ -150,6 +157,12 @@ class SalesChallanController extends Controller
 
     /**
      * Issue the challan (stock OUT + GL COGS).
+     *
+     * R3: Idempotency — the form must send an `idempotency_token` (UUID v4).
+     * If the same token was processed within 10 minutes, redirect to the
+     * originally-issued challan with a warning flash instead of throwing
+     * "Challan already issued for this invoice." Mirrors the finalize
+     * (finalize:*) and payment-create (payment:*) cache-key conventions.
      */
     public function issueChallan(Request $request, int $invoiceId)
     {
@@ -160,7 +173,23 @@ class SalesChallanController extends Controller
             'driver_name' => 'nullable|string|max:100',
             'transport_cost' => 'nullable|numeric|min:0',
             'notes' => 'nullable|string|max:500',
+            // R3: Idempotency token (UUID v4) — mirrors the finalize pattern.
+            'idempotency_token' => 'required|string|uuid',
         ]);
+
+        // R3: Idempotency check — must run BEFORE the service call so a
+        // replay is fully side-effect-free (no DB locks, no stock reads).
+        $cacheKey = 'challan:' . $validated['idempotency_token'];
+        $cached = Cache::get($cacheKey);
+
+        if ($cached !== null) {
+            // Replay: redirect to the originally-issued challan with the
+            // original success message + an additional warning flash.
+            return redirect()
+                ->route('admin.sales-challans.show', ['sales_challan' => $cached['challan_id']])
+                ->with('success', $cached['success_message'])
+                ->with('warning', 'Duplicate submission detected — returning the original result. No new challan was created.');
+        }
 
         try {
             $challan = $this->challanService->issueChallan($invoiceId, [
@@ -173,8 +202,18 @@ class SalesChallanController extends Controller
                 'created_by' => auth()->id(),
             ]);
 
+            $successMessage = "Challan {$challan->challan_code} issued. Stock moved + COGS posted.";
+
+            // R3: Cache the redirect target + success message for 10 minutes
+            // (idempotency window — same TTL as the finalize / payment patterns).
+            Cache::put($cacheKey, [
+                'challan_id'      => $challan->id,
+                'challan_code'    => $challan->challan_code,
+                'success_message' => $successMessage,
+            ], 600);
+
             return redirect()->route('admin.sales-challans.show', $challan)
-                ->with('success', "Challan {$challan->challan_code} issued. Stock moved + COGS posted.");
+                ->with('success', $successMessage);
         } catch (\Throwable $e) {
             return back()->withInput()->with('error', $e->getMessage());
         }

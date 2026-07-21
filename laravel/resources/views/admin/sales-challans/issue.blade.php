@@ -136,6 +136,19 @@
             {{-- Transport + notes form --}}
             <form method="POST" action="{{ route('admin.sales-challans.issueChallan', $invoice) }}" id="issueForm">
                 @csrf
+
+                {{-- R3: Idempotency token (UUID v4). Mirrors the finalize / payment
+                     patterns. Generated server-side via Str::uuid() on first render;
+                     preserved across validation failures via old() so the user can
+                     resubmit the corrected form with the same token (safe — no
+                     cache entry was created on the failed attempt). The server
+                     caches the redirect target + success message keyed by this
+                     token for 10 minutes so that a duplicate submission
+                     (double-click, refresh-after-submit, network retry) returns
+                     the original challan instead of throwing
+                     "Challan already issued for this invoice." --}}
+                <input type="hidden" name="idempotency_token" id="idempotencyToken"
+                       value="{{ old('idempotency_token', (string) \Illuminate\Support\Str::uuid()) }}">
                 <div class="card border-0 shadow-sm">
                     <div class="card-header bg-white">
                         <h2 class="h6 mb-0">

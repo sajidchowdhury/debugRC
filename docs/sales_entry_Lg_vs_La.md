@@ -49,7 +49,7 @@ The Laravel Sales Cart Blade is the **Phase 8 re-implementation** of the same mo
 **Top recommendations** (details in §9):
 - Port legacy POS UX (barcode + multi-tab cart + live credit) into the Laravel cart blade.
 - Add `customer_ledger` row-level lock or DB trigger to maintain running_balance atomically (carry forward to Laravel).
-- Add idempotency tokens to payment, challan, and cart-mutation endpoints. **Payment done in R2.**
+- Add idempotency tokens to payment, challan, and cart-mutation endpoints. **Payment done in R2. Challan done in R3.** Cart mutations remain a future item (R4 follows a different pattern — audit logging, not idempotency).
 - Add cart mutation audit logging.
 - Replace select2 dump-500 dropdowns with live search endpoints (legacy already had this — `sales/search_customer`, `sales/search_product`). **Done in R1.**
 
@@ -367,6 +367,7 @@ The Laravel flow splits dispatch from invoicing into a **two-step godown → cha
 **Step 2: Issue Challan** (`issueChallan`, SalesChallanService.php L132–326)
 - Endpoint: `POST /admin/sales-challans/issue/{invoiceId}` or `POST /api/v1/sales/challans/issue`.
 - Form Request: `IssueChallanRequest`.
+- **R3: Idempotency** — client must send a UUID v4 `idempotency_token`. Server caches the response keyed by `challan:` (web, 10-min TTL) or `api:challan:` (API, 5-min TTL). Replays redirect to / return the originally-issued challan instead of throwing "Challan already issued for this invoice."
 - Inside DB transaction:
   - Lock invoice + items + dispatches FOR UPDATE.
   - `assertBranchAccessible`.
@@ -981,7 +982,7 @@ On `updateExistingInvoice`, credit limit re-check uses `NET increase = max(0, ne
 |---|---|---|---|
 | V1 | **Cart page dropdown capped at 500 records** | `Customer::active()->limit(500)` and `Product::active()->limit(500)`. If a branch has more than 500 active customers/products, the dropdown won't show them all. The customer model has a `scopeSearch` with full-text search (GIN + tsvector), but the cart page doesn't use it. | **High** (production-blocking for large catalogs) |
 | V2 | **No idempotency token on payment create** | `POST /admin/customer-payments` and `POST /api/v1/sales/payments` have no idempotency token. Double-submit can create duplicate payments. The auto-confirm path exacerbates this (no draft state to deduplicate). **Fixed by R2** — both endpoints now require a UUID v4 `idempotency_token`; replays within 10 min (web) / 5 min (API) return the cached result instead of creating a second payment. | **High** → ✅ Fixed |
-| V3 | **No idempotency token on challan issue** | `POST /admin/sales-challans/issue/{invoiceId}` has no idempotency token. Mitigated by `if ($invoice->is_challan_issued) throw "Challan already issued"` — but this is checked AFTER the invoice is locked FOR UPDATE, so concurrent calls would serialize (one succeeds, one fails with the error). | **Medium** |
+| V3 | **No idempotency token on challan issue** | `POST /admin/sales-challans/issue/{invoiceId}` has no idempotency token. Mitigated by `if ($invoice->is_challan_issued) throw "Challan already issued"` — but this is checked AFTER the invoice is locked FOR UPDATE, so concurrent calls would serialize (one succeeds, one fails with the error). **Fixed by R3** — both `POST /admin/sales-challans/issue/{invoiceId}` (web, 10-min cache) and `POST /api/v1/sales/challans/issue` (API, 5-min cache) now require a UUID v4 `idempotency_token`. Replays now return the original challan instead of throwing the error, which is friendlier UX than a stack trace. | **Medium** → ✅ Fixed |
 | V4 | **Cart mutations not audit logged** | Cart add/update/remove/clear are NOT audit logged. If a salesman tampers with another salesman's cart (unlikely but possible if user_ids were shared), there's no trail. | **Medium** |
 | V5 | **Credit-limit check race** | `checkCreditLimit` is called BEFORE the transaction lock. Two concurrent finalizes for the same customer could both pass the check, then both post debits. The `customer_ledger` SUM would then exceed the limit. Mitigation: the lock is on products, not on the customer row — so this race is theoretically possible. | **Medium** |
 | V6 | **Auto-confirm payments + network timeout** | If the GL posting fails mid-transaction, the entire request rolls back. But if the network times out before the client sees the response, the client may retry, creating a duplicate payment. **Mitigated by R2** — the idempotency token now makes the retry safe (returns the cached payment instead of duplicating). | **Medium** → ✅ Mitigated |
@@ -1024,7 +1025,7 @@ On `updateExistingInvoice`, credit limit re-check uses `NET increase = max(0, ne
 |---|---|---|
 | R1 | **Replace select2 500-row dropdowns with live search endpoints** (port `sales/search_customer` and `sales/search_product` from Legacy) | V1 — production-blocking for large catalogs. The Customer model already has a `scopeSearch` with GIN full-text search — just needs to be wired to a controller endpoint and the blade updated to use AJAX typeahead. |
 | R2 | ~~**Add idempotency token to payment create** (mirror the finalize pattern — UUID v4 + 5–10 min cache)~~ **✅ DONE (2026-07-21)** — both `POST /admin/customer-payments` (web, 10-min cache) and `POST /api/v1/sales/payments` (API, 5-min cache) now require a UUID v4 `idempotency_token`. Web replays redirect to the cached payment show page with a warning flash; API replays return the cached JSON with `idempotent_replay: true`. Fixes V2, mitigates V6. |
-| R3 | **Add idempotency token to challan issue** | V3 — prevents duplicate challans (mitigated by status check, but explicit idempotency is safer). |
+| R3 | ~~**Add idempotency token to challan issue**~~ **✅ DONE (2026-07-21)** — both `POST /admin/sales-challans/issue/{invoiceId}` (web, 10-min cache) and `POST /api/v1/sales/challans/issue` (API, 5-min cache) now require a UUID v4 `idempotency_token`. Web replays redirect to the cached challan show page with a warning flash; API replays return the cached JSON with `idempotent_replay: true`. Fixes V3. Pattern matches finalize (R-finalize) and payment (R2). |
 | R4 | **Add cart mutation audit logging** (extend `SalesAuditLogger` with `cartItemAdded`, `cartItemUpdated`, `cartItemRemoved`, `cartCleared` methods) | V4 — closes the audit trail gap. |
 | R5 | **Lock the customer row before credit-limit check** (add `Customer::lockForUpdate()->find($customerId)` inside the finalize transaction, before `checkCreditLimit`) | V5, C1 — eliminates the credit-limit race window. |
 | R6 | **Add `branch_id` to `sales_draft_carts` unique key** (migration to drop `uq_sales_draft_user_customer` and create `uq_sales_draft_user_customer_branch`) | V11, C7 — prevents cross-branch cart contamination. |

@@ -279,3 +279,176 @@ payment.
   as well — currently a double-click on "Cancel Payment" would fire
   two POSTs, but the second would fail with "payment is already
   reversed" because of the `is_reversed` check. So this is low priority.
+
+---
+
+## R3 — Add idempotency token to challan issue
+
+- **Status:** ✅ Done
+- **Date:** 2026-07-21
+- **Audit reference:** `docs/sales_entry_Lg_vs_La.md`
+  - §3.7 (Laravel Workflow — Issue Challan step)
+  - §8 Risks V3 (Medium)
+  - §9 Recommendations table row R3
+
+### Problem
+
+The challan-issue endpoints lacked an idempotency token:
+
+1. **Web** — `POST /admin/sales-challans/issue/{invoiceId}` (`SalesChallanController::issueChallan`):
+   a regular POST-redirect form. The service call inside does
+   significant work in one transaction: locks the invoice FOR UPDATE,
+   creates a `sales_challan` header, moves stock OUT via
+   `StockService::applyTransaction` (decrementing `warehouse_stock.qty`
+   and inserting immutable `stock_transactions` rows), posts a COGS
+   GL journal entry (Dr COGS / Cr Inventory), updates
+   `sales_invoice_dispatches` to mark items as dispatched, optionally
+   posts a transport-cost adjustment journal + `customer_ledger`
+   `invoice_adjustment` entry, and sets `is_challan_issued=true` on
+   the invoice.
+   A double-click on "Yes, issue challan" (the SweetAlert confirm) or
+   a refresh-after-submit would attempt all of this twice. The
+   `is_challan_issued` check inside the lock catches the duplicate
+   and throws `RuntimeException("Challan already issued for this invoice.")`,
+   but the user sees an error flash — confusing UX, since the first
+   submission actually succeeded.
+
+2. **API** — `POST /api/v1/sales/challans/issue` (`SalesChallanApiController::issue`):
+   the mobile client typically issues a challan immediately after
+   preparing godown. A network timeout on the response (when the
+   server has actually committed) would cause the mobile client to
+   retry — same "Challan already issued" 409 error, same confusing UX.
+
+The audit (§8 V3) rated this Medium severity because the
+service-level guard does prevent duplicate stock movements and GL
+entries — the real impact was poor UX, not data corruption. R3 fixes
+both the UX (silent replay with a warning) and provides a
+defense-in-depth layer in front of the service.
+
+### Solution
+
+Mirrored the existing finalize (P2-6) and payment-create (R2)
+patterns. The client must send a UUID v4 `idempotency_token`. The
+server caches the successful response keyed by that token; a replay
+within the TTL returns the cached response (or redirects to the
+cached challan's show page) instead of calling the service.
+
+### Files modified
+
+1. **`laravel/app/Http/Controllers/Admin/SalesChallanController.php`**
+   - Added `use Illuminate\Support\Facades\Cache;` to the imports.
+   - Added `'idempotency_token' => 'required|string|uuid'` to the
+     inline `validate()` rules in `issueChallan()`.
+   - Added a cache check at the top of `issueChallan()`: if
+     `Cache::get('challan:' . $token)` is non-null, redirect to the
+     cached `admin.sales-challans.show` URL with the cached `success`
+     message plus a `warning` flash reading "Duplicate submission
+     detected — returning the original result. No new challan was
+     created."
+   - The cache check runs BEFORE the service call, so a replay is
+     fully side-effect-free (no DB reads, no locks, no stock reads).
+   - After the successful `issueChallan` service call, cache
+     `['challan_id', 'challan_code', 'success_message']` under
+     `'challan:' . $token` for **600 seconds (10 min)** — same TTL
+     as the web finalize + web payment patterns.
+   - Updated the class-level docblock to mention R3.
+
+2. **`laravel/resources/views/admin/sales-challans/issue.blade.php`**
+   - Added a hidden `<input name="idempotency_token" id="idempotencyToken">`
+     immediately after `@csrf` inside `<form id="issueForm">`.
+   - The value is generated server-side via
+     `old('idempotency_token', (string) \Illuminate\Support\Str::uuid())`
+     so the same UUID survives a validation-failure re-render.
+   - Added an inline `{-- R3 --}}` comment block explaining the
+     rationale.
+   - **No JS changes** — the existing SweetAlert-confirm-then-submit
+     flow already prevents accidental double-clicks in the common
+     case (the confirm dialog swallows the first click). The
+     idempotency token is the defense-in-depth backstop for
+     refresh-after-submit, browser-back, and network-retry scenarios.
+
+3. **`laravel/app/Http/Requests/Api/V1/Sales/IssueChallanRequest.php`**
+   - Added `'idempotency_token' => 'required|string|uuid'` to the
+     `rules()` array.
+   - Added an `idempotency_token` entry to `bodyParameters()` with
+     description and example UUID.
+   - Updated the class-level docblock to mention R3 and that the
+     token is cached for 5 minutes.
+
+4. **`laravel/app/Http/Controllers/Api/V1/Sales/SalesChallanApiController.php`**
+   - Added `use Illuminate\Support\Facades\Cache;` to the imports.
+   - Added a cache check at the top of `issue()`: if
+     `Cache::get('api:challan:' . $token)` is non-null, return the
+     cached JSON payload merged with `idempotent_replay: true` and a
+     replay `message`.
+   - The idempotency check runs **before** `SalesInvoice::findOrFail()`
+     and `assertBranchAccessible()` so a replay is fully
+     side-effect-free.
+   - After the successful `issueChallan` service call, cache the
+     full response payload under `'api:challan:' . $token` for
+     **5 min** (`now()->addMinutes(5)`) — same TTL as the API finalize
+     + API payment patterns.
+   - Updated the class-level docblock to mention R3.
+
+### Verification
+
+- Manual code review of all four files. No syntax errors found.
+- Confirmed the validation rule name (`idempotency_token`) and the
+  cache-key prefixes (`challan:` / `api:challan:`) are consistent
+  with the existing finalize (`finalize:` / `api:finalize:`) and
+  payment (`payment:` / `api:payment:`) conventions.
+- Confirmed the TTLs (10 min web, 5 min API) match the existing
+  finalize + payment TTLs.
+- Confirmed the `layouts/admin.blade.php` already renders
+  `session('warning')` flashes, so no view-layer changes were needed
+  for the warning to appear on the challan show page after a replay.
+- Searched `laravel/tests/` for any existing tests that POST to
+  `sales-challans/issue` or `challans/issue` — none found, so no
+  tests needed updating.
+- Confirmed `SalesChallanService::issueChallan()` was NOT modified.
+  The service still has its `is_challan_issued` guard inside the
+  `lockForUpdate()` transaction; R3 sits in front of it as a
+  friendlier fast-path. The guard remains as the last line of
+  defense against any race that somehow bypasses the cache.
+- PHP binary is not available in the Z.ai sandbox; `php -l` was not
+  run. The user should run `php artisan route:list` and
+  `php artisan test` in their dev environment to verify.
+
+### Risks introduced
+
+- **No new risks.** The idempotency layer is purely additive: it
+  short-circuits duplicate submissions and otherwise leaves the
+  existing challan-issue flow untouched. `SalesChallanService` was
+  not modified.
+- **Minor cache-storage consideration:** each successful challan
+  issue creates one cache entry (web: 10 min, API: 5 min). At any
+  realistic submit volume this is negligible.
+- **Mobile client contract change (breaking):** the API now REQUIRES
+  `idempotency_token` in the request body. Mobile clients that do
+  not send it will receive a 422 validation error. **Action item for
+  the user:** deploy the mobile-app update that generates and sends
+  a UUID v4 per challan-issue request before deploying this server
+  change to production. (The web Blade generates the UUID
+  automatically, so no browser-side action is needed.)
+- **UX change for web users (positive):** a refresh-after-submit on
+  the challan issue form previously showed an error flash ("Challan
+  already issued for this invoice"). It now silently redirects to
+  the already-issued challan's show page with a warning flash. This
+  matches how finalize + payment already behave.
+
+### Follow-ups (NOT part of R3)
+
+- **R4 (next):** add cart mutation audit logging (audit risk V4).
+- **R44 (audit recommendation):** add integration tests that submit
+  the same `idempotency_token` twice and assert the second response
+  is the cached one (no duplicate row in `sales_challans`).
+- Consider adding a short TTL cache (30 s) on
+  `POST /admin/sales-challans/{id}/cancel` as well — currently a
+  double-click on "Cancel Challan" would fire two POSTs, but the
+  second would fail with "challan is already reversed" because of
+  the `is_reversed` check. So this is low priority.
+- The `godown` (step 1) endpoint does NOT have an idempotency token.
+  It uses `sync()` semantics for `sales_invoice_dispatches`, which
+  is idempotent by accident (same end state on resubmit). If the
+  user wants symmetry, R-later could add one — but it's not
+  currently a risk.

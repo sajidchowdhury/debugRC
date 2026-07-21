@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-21 (R2 pushed)
+> **Last updated:** 2026-07-21 (R3 pushed)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -63,14 +63,18 @@ debugRC/
 │   ├── app/Http/Controllers/Admin/SalesCartController.php    # Laravel cart controller (R1 owner)
 │   ├── app/Http/Controllers/Admin/SalesInvoiceController.php # Laravel invoice finalize/edit/cancel (has idempotency_token since P2-6)
 │   ├── app/Http/Controllers/Admin/CustomerPaymentController.php # R2 added idempotency_token + cache check to store()
+│   ├── app/Http/Controllers/Admin/SalesChallanController.php    # R3 added idempotency_token + cache check to issueChallan()
 │   ├── app/Http/Controllers/Api/V1/Sales/CustomerPaymentApiController.php # R2 added idempotency_token + cache check to store()
+│   ├── app/Http/Controllers/Api/V1/Sales/SalesChallanApiController.php    # R3 added idempotency_token + cache check to issue()
 │   ├── app/Http/Requests/Api/V1/Sales/StorePaymentRequest.php # R2 added idempotency_token rule
-│   ├── app/Services/Sales/                                  # SalesCartService, SalesInvoiceService, CustomerPaymentService, …
+│   ├── app/Http/Requests/Api/V1/Sales/IssueChallanRequest.php # R3 added idempotency_token rule
+│   ├── app/Services/Sales/                                  # SalesCartService, SalesInvoiceService, SalesChallanService, CustomerPaymentService, …
 │   ├── app/Services/Stock/StockAvailabilityService.php      # R1 added searchProductsWithStock() + findProductByExactCode()
 │   ├── app/Models/Customer.php                              # has scopeSearch() — tsvector + GIN, ILIKE fallback
 │   ├── app/Models/Product.php                               # has scopeSearch() — tsvector + GIN, ILIKE fallback
 │   ├── resources/views/admin/sales/cart.blade.php           # R1 replaced 500-row dropdowns with AJAX select2
 │   ├── resources/views/admin/customer-payments/create.blade.php # R2 added hidden idempotency_token input (Str::uuid())
+│   ├── resources/views/admin/sales-challans/issue.blade.php # R3 added hidden idempotency_token input (Str::uuid())
 │   └── routes/web.php                                       # R1 added cart/search-customer, cart/search-product, cart/product-by-code
 ├── docs/
 │   ├── sales_entry_Lg_vs_La.md   # The big audit report (1100+ lines)
@@ -109,7 +113,7 @@ Items are tackled in order. Each item has its own entry in
 |-----|---------------------------------------------------------------------------|--------------|-------|
 | R1  | Replace select2 500-row dropdowns with live search endpoints              | ✅ done      | Ported `sales/search_customer` + `sales/search_product` + `sales/product_by_code` from Legacy to Laravel. See `REMEDIATION_LOG.md` for full diff. |
 | R2  | Add idempotency token to payment create (mirror finalize pattern)         | ✅ done      | Both `POST /admin/customer-payments` (web, 10-min cache) and `POST /api/v1/sales/payments` (API, 5-min cache) now require a UUID v4 `idempotency_token`. Fixes audit risks V2 + V6. See `REMEDIATION_LOG.md` §R2 for full diff. |
-| R3  | Add idempotency token to challan issue                                    | ⏳ pending   | Mirror the same pattern on `POST /admin/sales-challans/issue/{invoiceId}`. Mitigated today by the `is_challan_issued` status check inside the lock. |
+| R3  | Add idempotency token to challan issue                                    | ✅ done      | Both `POST /admin/sales-challans/issue/{invoiceId}` (web, 10-min cache) and `POST /api/v1/sales/challans/issue` (API, 5-min cache) now require a UUID v4 `idempotency_token`. Fixes audit risk V3. See `REMEDIATION_LOG.md` §R3 for full diff. |
 | R4  | Add cart mutation audit logging                                           | ⏳ pending   | Extend `SalesAuditLogger` with `cartItemAdded`, `cartItemUpdated`, `cartItemRemoved`, `cartCleared` methods. Closes V4. |
 | R5  | (TBD)                                                                     | ⏳ pending   | Likely candidate: lock the customer row before credit-limit check (V5). |
 
@@ -248,19 +252,77 @@ Items are tackled in order. Each item has its own entry in
   given idempotency tokens (out of scope for R2; the user may want it
   for R3 or later).
 
-### 5.4 What was NOT changed (deliberately)
+### 5.4 R3: Challan issue idempotency token design
+
+- **Scope:** Both the Blade (web) and API V1 challan-issue endpoints.
+  Mirrors how `finalize` (R-finalize / P2-6) and `payment-create` (R2)
+  are already protected in both tiers.
+- **Web — `POST /admin/sales-challans/issue/{invoiceId}`:**
+  - Validation rule added to inline `$request->validate()` in
+    `SalesChallanController::issueChallan()`:
+    `'idempotency_token' => 'required|string|uuid'`.
+  - Cache key: `'challan:' . $token` (mirrors `'finalize:' . $token`
+    and `'payment:' . $token`).
+  - Cache TTL: **600 seconds (10 min)** — same as finalize + payment web.
+  - Cache value: `['challan_id', 'challan_code', 'success_message']`.
+  - On replay: redirects to `admin.sales-challans.show` with the
+    original `success` flash AND an additional `warning` flash reading
+    "Duplicate submission detected — returning the original result.
+    No new challan was created."
+  - UUID generated **server-side** via `\Illuminate\Support\Str::uuid()`
+    in `issue.blade.php`, preserved across validation failures via
+    `old('idempotency_token', ...)`. Same approach as R2's payment form.
+  - Important: this changes the **user-visible behavior on a double-
+    submit**. Before R3, a double-submit would: (1) succeed on the
+    first request, (2) throw "Challan already issued for this invoice"
+    on the second request, showing an error flash to the user. After
+    R3, the second request silently redirects to the already-issued
+    challan with a warning flash — much friendlier UX, and matches
+    how finalize + payment already behave.
+- **API — `POST /api/v1/sales/challans/issue`:**
+  - Validation rule added to `IssueChallanRequest::rules()`:
+    `'idempotency_token' => 'required|string|uuid'`.
+  - Cache key: `'api:challan:' . $token` (mirrors `'api:finalize:' . $token`
+    and `'api:payment:' . $token`).
+  - Cache TTL: **5 min** (`now()->addMinutes(5)`) — same as finalize + payment API.
+  - Cache value: the full JSON response payload (`message`, `data`).
+  - On replay: returns the cached payload with `idempotent_replay: true`
+    and a replay `message` added.
+  - The idempotency check runs BEFORE `SalesInvoice::findOrFail()` and
+    `assertBranchAccessible()` so a replay is fully side-effect-free.
+- **Service-level mitigation that R3 wraps:** `SalesChallanService::issueChallan()`
+  already had a defense — it locks the invoice `FOR UPDATE` and throws
+  `RuntimeException("Challan already issued for this invoice.")` if
+  `is_challan_issued` is true. So concurrent calls would serialize
+  (one succeeds, one fails) even without R3. R3 doesn't replace this
+  guard; it sits in front of it as a friendlier fast-path for the
+  common double-submit case (where the first request already
+  succeeded and the user is just refreshing/retrying).
+- **What was NOT changed:**
+  - `SalesChallanService` was not touched. The idempotency layer is a
+    controller concern.
+  - The `godown` (step 1) endpoint was not given an idempotency token.
+    Godown prep is idempotent by accident — the same warehouse
+    assignments submitted twice would `sync()` to the same end state
+    (no duplicate `sales_invoice_dispatches` rows). Out of scope for R3.
+  - The challan `cancel` endpoint was not given an idempotency token.
+    Cancel has a `cancel_reason` guard and reverses a known existing
+    challan, so duplicate-cancellation fails with "challan is already
+    reversed." Low priority.
+
+### 5.5 What was NOT changed (deliberately)
 
 - The Legacy sales entry code (`legacy/`) was not touched. Legacy
   is still the production system; the audit is a parallel analysis.
-- The Laravel `SalesCartService`, `SalesInvoiceService`, and
-  `SalesPaymentService` were not touched. R1 was purely a UI/search
-  concern; R2 is purely a controller/validation concern.
+- The Laravel `SalesCartService`, `SalesInvoiceService`,
+  `SalesChallanService`, and `CustomerPaymentService` were not touched.
+  R1 was a UI/search concern; R2 + R3 are controller/validation concerns.
 - The Laravel API V1 controllers OTHER than `CustomerPaymentApiController`
-  were not touched.
-- The `confirm` and `cancel` payment endpoints were not given
-  idempotency tokens. The `cancel` endpoint already has a `cancel_reason`
-  guard and reverses a known existing payment, so duplicate-cancellation
-  is not a real risk (it would fail with "payment is already reversed").
+  and `SalesChallanApiController` were not touched.
+- The `confirm` / `cancel` / `godown` / `cancelChallan` endpoints were
+  not given idempotency tokens. They either have natural guards
+  (`is_reversed` / `is_challan_issued` status checks) or are
+  idempotent by accident (`sync()` semantics). Out of scope.
 
 ---
 
@@ -268,8 +330,8 @@ Items are tackled in order. Each item has its own entry in
 
 (Items the user has asked for but that are not yet done.)
 
-- **None outstanding.** R1 and R2 are complete and pushed. The user has
-  not yet assigned R3.
+- **None outstanding.** R1, R2, and R3 are complete and pushed. The
+  user has not yet assigned R4.
 
 When the user gives the next instruction, append it here as a
 checkbox item. When done, move it to the "Completed Work Items"
@@ -291,6 +353,12 @@ section below.
       the Blade `POST /admin/customer-payments` (10-min cache) and the
       API `POST /api/v1/sales/payments` (5-min cache). Committed &
       pushed. See `REMEDIATION_LOG.md` §R2 for the full diff.
+- [x] **R3** — Add idempotency token to challan issue (mirror
+      finalize + payment pattern — UUID v4 + 5–10 min cache). Applied
+      to both the Blade `POST /admin/sales-challans/issue/{invoiceId}`
+      (10-min cache) and the API `POST /api/v1/sales/challans/issue`
+      (5-min cache). Committed & pushed. See `REMEDIATION_LOG.md` §R3
+      for the full diff.
 
 ---
 
