@@ -198,6 +198,45 @@ class SalesCartController extends Controller
     }
 
     /**
+     * R14: AJAX live customer credit snapshot for the cart page.
+     *
+     * Ported from Legacy `SalesController::customer_details`. Returns
+     * the customer's credit_limit, current AR balance (current_due),
+     * and balance_left (= credit_limit − current_due) so the cart
+     * blade can render an inline credit panel. The frontend combines
+     * this with the cart subtotal to compute a projected new balance
+     * — giving the cashier an early warning before finalize.
+     *
+     * RBAC: salesman/manager/admin.
+     * Rate limit: 60 req/min (matches Legacy guardJsonApi limit for
+     * sales/customer_details).
+     *
+     * GET /admin/sales/cart/customer-details?customer_id=...
+     * Returns: {customer_id, customer_name, shop_name, mobile, address,
+     *           credit_limit, current_due, due_left}
+     */
+    public function customerDetails(Request $request)
+    {
+        $customerId = (int) $request->input('customer_id', 0);
+        if ($customerId <= 0) {
+            return response()->json([
+                'customer_id'   => 0,
+                'customer_name' => '',
+                'shop_name'     => '',
+                'mobile'        => '',
+                'address'       => '',
+                'credit_limit'  => 0.0,
+                'current_due'   => 0.0,
+                'due_left'      => 0.0,
+            ]);
+        }
+
+        return response()->json(
+            $this->cartService->getCustomerDetails($customerId)
+        );
+    }
+
+    /**
      * AJAX: Load the cart for a customer.
      */
     public function load(Request $request)

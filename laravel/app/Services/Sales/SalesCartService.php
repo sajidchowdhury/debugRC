@@ -445,6 +445,86 @@ class SalesCartService
     }
 
     /**
+     * R14: Get live customer credit snapshot for the cart page.
+     *
+     * Ported from Legacy `SalesModel::getCustomerDetails` (which calls
+     * `Get_Customer_By_Id` + `Get_Customer_Due`). Returns the customer's
+     * credit_limit, current AR balance (recent_due), and balance_left
+     * (= credit_limit − recent_due) so the cart blade can render an
+     * inline credit panel without waiting until finalize.
+     *
+     * The current balance is computed as
+     *   SUM(debit) − SUM(credit) FROM customer_ledger
+     *   WHERE customer_id = ? AND is_reversed = false
+     *
+     * `is_reversed = false` filters out reversed transactions (Legacy
+     * had no `is_reversed` column on customer_ledger — Laravel added
+     * it in migration 2025_01_02_000002; the R5/R10 fix made it the
+     * canonical filter for "live" ledger rows). The Legacy SUM(CASE
+     * WHEN debit>0 THEN debit ELSE -credit END) is mathematically
+     * identical to SUM(debit) − SUM(credit) and was rewritten for
+     * clarity + index friendliness.
+     *
+     * Returns an empty array (not null) when the customer is not
+     * found — matches Legacy `customer_details` endpoint behaviour
+     * (`$this->sendJson($data ?: [...defaults])`) so the frontend
+     * can always render the panel with sane zeros.
+     *
+     * @return array{
+     *     customer_id:int,
+     *     customer_name:string,
+     *     shop_name:string,
+     *     mobile:string,
+     *     address:string,
+     *     credit_limit:float,
+     *     current_due:float,
+     *     due_left:float
+     * }
+     */
+    public function getCustomerDetails(int $customerId): array
+    {
+        $cust = DB::table('customers')->where('id', $customerId)->first([
+            'id', 'customer_name', 'shop_name', 'mobile', 'phone',
+            'address', 'credit_limit',
+        ]);
+
+        if (!$cust) {
+            return [
+                'customer_id'   => $customerId,
+                'customer_name' => '',
+                'shop_name'     => '',
+                'mobile'        => '',
+                'address'       => '',
+                'credit_limit'  => 0.0,
+                'current_due'   => 0.0,
+                'due_left'      => 0.0,
+            ];
+        }
+
+        $creditLimit = (float) ($cust->credit_limit ?? 0);
+
+        // Current AR balance = SUM(debit) − SUM(credit), excluding reversed rows.
+        // Mirrors SalesInvoiceService::checkCreditLimit (L875–L879) exactly so
+        // the live panel and the finalize-time check see the same number.
+        $currentDue = (float) DB::table('customer_ledger')
+            ->where('customer_id', $customerId)
+            ->where('is_reversed', false)
+            ->selectRaw('COALESCE(SUM(debit) - SUM(credit), 0) as balance')
+            ->value('balance');
+
+        return [
+            'customer_id'   => (int) $cust->id,
+            'customer_name' => (string) ($cust->customer_name ?? ''),
+            'shop_name'     => (string) ($cust->shop_name ?? ''),
+            'mobile'        => (string) ($cust->mobile ?? $cust->phone ?? ''),
+            'address'       => (string) ($cust->address ?? ''),
+            'credit_limit'  => round($creditLimit, 2),
+            'current_due'   => round($currentDue, 2),
+            'due_left'      => round($creditLimit - $currentDue, 2),
+        ];
+    }
+
+    /**
      * Validate the cart for finalization (hard gate before creating invoice).
      *
      * @param int $userId

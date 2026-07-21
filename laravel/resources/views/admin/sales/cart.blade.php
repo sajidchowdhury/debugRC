@@ -110,6 +110,78 @@
                     </div>
                 </div>
             </div>
+
+            {{-- ============ R14: LIVE CREDIT SNAPSHOT PANEL ============ --}}
+            {{--
+              Ported from Legacy #customerDetailsPanel in
+              legacy/app/views/sales/create.php (L72–80). Shows the
+              customer's credit_limit, current_due (SUM debit − credit
+              from customer_ledger where is_reversed=false), and due_left
+              inline so the cashier can see at a glance whether adding
+              more items will breach the limit. Mirrors Legacy's
+              disp_limit / disp_due / disp_left layout.
+
+              Beyond Legacy parity, we also surface a *projected* new
+              balance row that combines current_due + cart subtotal —
+              this is the "prevents wasted cart-building" UX win called
+              out in audit gap §6.1 #6. The cashier no longer has to
+              wait until finalize to discover a credit breach.
+
+              Data is fetched via the R14 endpoint
+              GET /admin/sales/cart/customer-details?customer_id=...
+              (throttled 60/min). The panel re-renders on every cart
+              mutation (add/update/remove/clear) using the cached
+              snapshot + the latest cart subtotal — no extra round-trip
+              per mutation. A fresh fetch is fired only when the
+              customer changes.
+            --}}
+            <div id="customerDetailsPanel" class="row g-2 mt-2 d-none">
+                <div class="col-12">
+                    <div class="border rounded-3 bg-light p-2">
+                        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                            <span class="small text-muted">
+                                <i class="fas fa-wallet me-1 text-primary"></i>
+                                <strong>Credit snapshot</strong>
+                                <span class="text-muted ms-1">— live from customer ledger</span>
+                            </span>
+                            <button type="button" id="btnRefreshCredit" class="btn btn-sm btn-link text-decoration-none p-0 m-0"
+                                    title="Re-fetch from ledger (in case of recent payments)">
+                                <i class="fas fa-rotate me-1"></i><span class="small">Refresh</span>
+                            </button>
+                        </div>
+                        <div class="row g-2 small">
+                            <div class="col-6 col-md-3">
+                                <div class="text-muted lh-1">Credit limit</div>
+                                <div class="fw-bold lh-1" id="cdCreditLimit">—</div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="text-muted lh-1">Current due</div>
+                                <div class="fw-bold lh-1" id="cdCurrentDue">—</div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="text-muted lh-1">Balance left</div>
+                                <div class="fw-bold lh-1" id="cdDueLeft">—</div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <div class="text-muted lh-1">Cart subtotal</div>
+                                <div class="fw-bold lh-1 text-primary" id="cdCartSubtotal">—</div>
+                            </div>
+                        </div>
+                        <hr class="my-2">
+                        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                            <span class="small text-muted">
+                                <i class="fas fa-chart-line me-1"></i>
+                                Projected new balance <span class="text-muted">(due + cart)</span>
+                            </span>
+                            <span class="fw-bold" id="cdProjectedBalance">—</span>
+                        </div>
+                        <div id="cdStatusRow" class="small mt-1">
+                            <span id="cdStatus" class="badge bg-secondary">—</span>
+                            <span id="cdStatusText" class="text-muted ms-1"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -197,6 +269,68 @@
                             </button>
                         </div>
                     </div>
+
+                    {{-- ============ R13: PRICE-RANGE SLIDER BAND ============ --}}
+                    {{--
+                      Ported from Legacy #priceRangePanel in
+                      legacy/app/views/sales/create.php (L101–121) +
+                      sales-create.js::updatePriceBandUi (L129–187).
+
+                      A visual band showing min / default / max rates for
+                      the currently-selected product, with a thumb that
+                      tracks the live #addRate value. Status text turns
+                      green (in range) / amber (near minimum) / red (out
+                      of range). The "Use default" button snaps the rate
+                      back to default_rate.
+
+                      Min / max / default come from productCache, which
+                      the R1 live-search endpoint populates. If a product
+                      has no price range configured (min <= 0 or max <= 0)
+                      the panel hides itself — matching Legacy's
+                      early-return in updatePriceBandUi.
+
+                      The band is purely informational — actual rate
+                      validation still happens server-side in
+                      SalesCartService::validateCartItems + the finalize
+                      flow. This just gives the cashier a visual cue so
+                      they don't have to mentally compare the typed rate
+                      against the min/max hint text.
+                    --}}
+                    <div id="priceRangePanel" class="row g-2 mt-2 d-none">
+                        <div class="col-12">
+                            <div class="border rounded-3 bg-light p-2">
+                                <div class="d-flex align-items-center justify-content-between mb-1">
+                                    <span class="small fw-semibold text-muted">
+                                        <i class="fas fa-tags me-1 text-primary"></i>
+                                        Selling range
+                                    </span>
+                                    <button type="button" id="btnUseDefaultRate" class="btn btn-sm btn-outline-primary py-0 px-2">
+                                        <i class="fas fa-arrow-rotate-left me-1"></i>Use default
+                                    </button>
+                                </div>
+                                <div class="d-flex justify-content-between small text-muted mb-1">
+                                    <span>Min <b id="priceBandMin" class="text-body">0</b></span>
+                                    <span>Default <b id="priceBandDefault" class="text-primary">0</b></span>
+                                    <span>Max <b id="priceBandMax" class="text-body">0</b></span>
+                                </div>
+                                <div class="price-band-track-wrap position-relative" style="height:14px;">
+                                    <div class="price-band-track position-absolute top-50 start-0 translate-middle-y w-100 rounded-pill"
+                                         style="height:6px;background:#e5e7eb;"></div>
+                                    <div id="priceBandFill" class="position-absolute top-50 start-0 translate-middle-y rounded-pill"
+                                         style="height:6px;background:linear-gradient(90deg,#22c55e,#4f46e5);width:0%;transition:width .15s ease-out;"></div>
+                                    <div id="priceBandDefaultMark" class="position-absolute top-50 translate-middle-y"
+                                         style="width:3px;height:14px;background:#4f46e5;opacity:.55;left:50%;transition:left .15s ease-out;border-radius:2px;"
+                                         title="Default price"></div>
+                                    <div id="priceBandThumb" class="position-absolute top-50"
+                                         style="width:14px;height:14px;background:#fff;border:2px solid #4f46e5;border-radius:50%;left:0%;transform:translate(-50%,-50%);transition:left .15s ease-out,border-color .15s;"></div>
+                                </div>
+                                <div id="priceRangeStatus" class="small mt-2">
+                                    <span class="badge bg-success">Rate is within allowed range</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="row g-2 mt-2 align-items-center">
                         <div class="col-12 col-md-4">
                             <div class="border rounded-3 bg-light px-3 py-2 d-flex align-items-center gap-2 h-100">
@@ -435,6 +569,9 @@
         productByCode:  "{{ route('admin.sales.cart.product-by-code') }}",
         // R11: list all open draft carts for the #draft-tabs dock.
         listDrafts:     "{{ route('admin.sales.cart.list-drafts') }}",
+        // R14: live customer credit snapshot (credit_limit, current_due,
+        // due_left) for the inline credit panel.
+        customerDetails: "{{ route('admin.sales.cart.customer-details') }}",
     };
 
     // -------- State --------
@@ -445,7 +582,16 @@
         validation: INITIAL_CART ? INITIAL_CART.validation : null,
         availBreakdown: [],         // last availability response
         availProductId: null,
-        debounceTimers: {}          // productId -> setTimeout handle
+        debounceTimers: {},         // productId -> setTimeout handle
+        // R13: currently-active product price range (min/max/default) for
+        // the #priceRangePanel slider band. Null when no product is
+        // selected or the product has no price range configured.
+        activePriceRange: null,
+        // R14: cached customer credit snapshot from the customer-details
+        // endpoint. Re-fetched only when the customer changes; the
+        // projected-balance row recomputes locally on every cart
+        // mutation using this snapshot + the latest cart subtotal.
+        customerCredit: null,
     };
 
     // R1: in-memory product cache (id -> {id, product_code, product_name,
@@ -825,6 +971,10 @@
         renderCartTable();
         renderSummary();
         renderValidation(state.validation);
+        // R14: re-render the credit snapshot's projected-balance row
+        // using the latest cart subtotal. The cached snapshot
+        // (state.customerCredit) is reused — no extra round-trip.
+        renderCustomerDetails();
         // Finalize button enabled state depends on cart + validation
         var valid   = state.validation ? !!state.validation.valid : false;
         var hasItems = state.cart && state.cart.items && state.cart.items.length > 0;
@@ -1012,6 +1162,212 @@
         $('#availTotalPipeline').text(fmtQty(totalPipeline));
         $('#availTotalAvailable').text(fmtQty(totalAvailable));
         $('#addAvailTotal').text(fmtQty(payload.available_qty) + ' ' + (breakdown.length === 1 ? 'warehouse' : 'warehouses'));
+    }
+
+    // ============================================================
+    // ============== R13: PRICE-RANGE SLIDER BAND ================
+    // ============================================================
+    //
+    // Mirrors Legacy `updatePriceBandUi` (sales-create.js L129–187).
+    // Renders a visual band: track + green→purple fill (current rate
+    // position) + default-rate mark + thumb that follows #addRate.
+    // Status text below turns green / amber / red depending on where
+    // the typed rate sits within the [min, max] window.
+    //
+    // The band reads from `state.activePriceRange`, which is set by
+    // `setActivePriceRange(product)` whenever the user picks a
+    // product (from Select2 or via the R10 barcode scan). When the
+    // rate input changes, `updatePriceBandUi()` is called again to
+    // reposition the thumb and refresh the status.
+
+    function setActivePriceRange(product) {
+        if (!product) {
+            state.activePriceRange = null;
+            updatePriceBandUi();
+            return;
+        }
+        var min = parseFloat(product.min_rate) || 0;
+        var max = parseFloat(product.max_rate) || 0;
+        var def = parseFloat(product.default_rate ?? product.price) || 0;
+        if (min <= 0 || max <= 0) {
+            // Legacy early-returns when there's no usable range.
+            state.activePriceRange = null;
+            updatePriceBandUi();
+            return;
+        }
+        state.activePriceRange = { min_rate: min, max_rate: max, default_rate: def };
+        updatePriceBandUi();
+    }
+
+    function rateRangeStatus(rate, min, max) {
+        // Returns 'ok' | 'warn' | 'bad' mirroring Legacy
+        // salesRateRangeStatus (in sales.js). 'warn' fires when the
+        // rate is within range but within 10% of the minimum — gives
+        // the cashier a margin heads-up without blocking the add.
+        if (rate < min || rate > max) return 'bad';
+        var span = max - min;
+        if (span > 0 && (rate - min) / span < 0.10) return 'warn';
+        return 'ok';
+    }
+
+    function updatePriceBandUi() {
+        var $panel = $('#priceRangePanel');
+        var $rate  = $('#addRate');
+        if (!$panel.length || !$rate.length) return;
+
+        if (!state.activePriceRange) {
+            $panel.addClass('d-none');
+            $rate.removeAttr('min').removeAttr('max');
+            return;
+        }
+
+        var r = state.activePriceRange;
+        var min = r.min_rate, max = r.max_rate, def = r.default_rate;
+        var rate = parseFloat($rate.val()) || 0;
+        var span = max - min;
+
+        $panel.removeClass('d-none');
+        $('#priceBandMin').text('৳' + fmtMoney(min));
+        $('#priceBandMax').text('৳' + fmtMoney(max));
+        $('#priceBandDefault').text('৳' + fmtMoney(def));
+
+        // Clamp rate input attributes so the browser's own stepper
+        // also respects the range (HTML5 min/max on <input type=number>).
+        $rate.attr('min', min.toFixed(2)).attr('max', max.toFixed(2));
+
+        var pct    = span > 0 ? Math.min(100, Math.max(0, ((rate - min) / span) * 100)) : 0;
+        var defPct = span > 0 ? Math.min(100, Math.max(0, ((def - min) / span) * 100)) : 50;
+
+        $('#priceBandFill').css('width', pct + '%');
+        $('#priceBandThumb').css('left', pct + '%');
+        $('#priceBandDefaultMark').css('left', defPct + '%');
+
+        var st = rateRangeStatus(rate, min, max);
+        var $thumb = $('#priceBandThumb');
+        $thumb.css('border-color', st === 'bad' ? '#dc2626' : (st === 'warn' ? '#b45309' : '#4f46e5'));
+
+        var $status = $('#priceRangeStatus');
+        $status.empty();
+        if (st === 'bad') {
+            $status.append('<span class="badge bg-danger">' +
+                'Out of range — must be ৳' + fmtMoney(min) + ' – ৳' + fmtMoney(max) +
+                '</span>');
+        } else if (st === 'warn') {
+            $status.append('<span class="badge bg-warning text-dark">' +
+                'Near minimum — check margin' +
+                '</span>');
+        } else {
+            $status.append('<span class="badge bg-success">' +
+                'Rate is within allowed range' +
+                '</span>');
+        }
+    }
+
+    // ============================================================
+    // ============== R14: LIVE CREDIT SNAPSHOT ===================
+    // ============================================================
+    //
+    // Mirrors Legacy `customerDetailsPanel` (sales/create.php L72–80)
+    // + the JS that fetches customer_details and populates disp_limit /
+    // disp_due / disp_left.
+    //
+    // Beyond Legacy parity, we also surface a *projected* new balance
+    // row that combines current_due + cart subtotal — this is the
+    // "prevents wasted cart-building" UX win called out in audit
+    // gap §6.1 #6. The cashier sees the projected balance update in
+    // real time as they add/remove/edit cart items, with a colored
+    // status badge:
+    //   - bg-success: projected ≤ credit_limit (room to spare)
+    //   - bg-warning: projected within 10% of credit_limit (tight)
+    //   - bg-danger:  projected > credit_limit (will breach)
+    //
+    // The snapshot is fetched once per customer change (and on
+    // explicit "Refresh" click). The projected row recomputes locally
+    // on every cart mutation using the cached snapshot — no extra
+    // round-trip per add/remove.
+
+    function fetchCustomerDetails(customerId) {
+        if (!customerId) {
+            state.customerCredit = null;
+            renderCustomerDetails();
+            return;
+        }
+        ajaxGet(ENDPOINTS.customerDetails, { customer_id: customerId })
+            .done(function (data) {
+                state.customerCredit = data || null;
+                renderCustomerDetails();
+            })
+            .fail(function (xhr) {
+                // Non-fatal — the panel just hides. The finalize-time
+                // credit-check endpoint is still authoritative.
+                console.warn('customer-details failed', xhr?.responseJSON || xhr?.statusText);
+                state.customerCredit = null;
+                renderCustomerDetails();
+            });
+    }
+
+    function renderCustomerDetails() {
+        var $panel = $('#customerDetailsPanel');
+        if (!$panel.length) return;
+
+        if (!state.customerCredit || !state.customerId) {
+            $panel.addClass('d-none');
+            return;
+        }
+        $panel.removeClass('d-none');
+
+        var c = state.customerCredit;
+        var cartSub = state.cart ? (parseFloat(state.cart.subtotal) || 0) : 0;
+        var limit    = parseFloat(c.credit_limit) || 0;
+        var due      = parseFloat(c.current_due) || 0;
+        var left     = parseFloat(c.due_left);
+        if (isNaN(left)) left = limit - due;
+        var projNew  = due + cartSub;
+        var projLeft = limit - projNew;
+
+        $('#cdCreditLimit').text('৳' + fmtMoney(limit));
+        $('#cdCurrentDue').text('৳' + fmtMoney(due));
+
+        // Balance left (existing ledger position, no cart yet) —
+        // red if already over, amber if within 10% of limit, green otherwise.
+        var $leftEl = $('#cdDueLeft');
+        $leftEl.text('৳' + fmtMoney(left))
+               .removeClass('text-success text-warning text-danger');
+        if (limit > 0 && left < 0) $leftEl.addClass('text-danger');
+        else if (limit > 0 && left < limit * 0.10) $leftEl.addClass('text-warning');
+        else $leftEl.addClass('text-success');
+
+        $('#cdCartSubtotal').text('৳' + fmtMoney(cartSub));
+
+        // Projected new balance (due + cart subtotal)
+        var $projEl = $('#cdProjectedBalance');
+        $projEl.text('৳' + fmtMoney(projNew))
+               .removeClass('text-success text-warning text-danger');
+
+        var $status = $('#cdStatus');
+        var $statusText = $('#cdStatusText');
+        $status.removeClass('bg-success bg-warning bg-danger bg-secondary').addClass('bg-secondary');
+        $statusText.text('');
+
+        if (limit <= 0) {
+            // No credit limit configured — show a neutral "no limit" hint
+            // so the cashier knows the panel is live but the customer has
+            // no enforceable ceiling.
+            $status.text('No limit set');
+            $statusText.text('credit_limit = 0 — no ceiling enforced');
+        } else if (projLeft < 0) {
+            $projEl.addClass('text-danger');
+            $status.removeClass('bg-secondary').addClass('bg-danger').text('Will breach');
+            $statusText.text('Cart pushes balance ৳' + fmtMoney(Math.abs(projLeft)) + ' over the limit — finalize will require override.');
+        } else if (projLeft < limit * 0.10) {
+            $projEl.addClass('text-warning');
+            $status.removeClass('bg-secondary').addClass('bg-warning text-dark').text('Tight');
+            $statusText.text('Less than 10% of credit limit would remain after finalize.');
+        } else {
+            $projEl.addClass('text-success');
+            $status.removeClass('bg-secondary').addClass('bg-success').text('OK');
+            $statusText.text('Plenty of headroom — finalize will pass credit check.');
+        }
     }
 
     // ============================================================
@@ -1393,16 +1749,44 @@
                 // cart load resolves).
                 ensureTab(cid, { active: true, label: tabLabelFor(cid) });
                 loadCart(cid);
+                // R14: fetch the live credit snapshot for this customer so
+                // the credit panel renders alongside the cart. Cheap call
+                // (one indexed SUM query), throttled 60/min — only fires
+                // on customer change, not on every cart mutation.
+                fetchCustomerDetails(parseInt(cid, 10));
             } else {
                 if (window.history && history.replaceState) {
                     history.replaceState(null, '', window.location.pathname);
                 }
                 loadCart(null);
+                // R14: hide the credit panel — no customer selected.
+                fetchCustomerDetails(null);
             }
         });
 
         $('#btnLoadCart').on('click', function () {
             loadCart($('#customerSelect').val());
+        });
+
+        // R14: "Refresh" button — re-fetch the credit snapshot in case a
+        // payment was posted in another tab/window since the customer was
+        // first selected. Useful for long-running cart sessions.
+        $('#btnRefreshCredit').on('click', function () {
+            if (!state.customerId) return;
+            var $btn = $(this);
+            var $icon = $btn.find('i');
+            $icon.addClass('fa-spin');
+            ajaxGet(ENDPOINTS.customerDetails, { customer_id: state.customerId })
+                .done(function (data) {
+                    state.customerCredit = data || null;
+                    renderCustomerDetails();
+                })
+                .fail(function () {
+                    toast('Could not refresh credit snapshot.', 'error');
+                })
+                .always(function () {
+                    $icon.removeClass('fa-spin');
+                });
         });
 
         // --- Add Product interactions ---
@@ -1412,6 +1796,8 @@
             if (!productId) {
                 $('#addRate').val('');
                 $('#rateHint').html('&nbsp;');
+                // R13: clear the price band when no product is selected.
+                setActivePriceRange(null);
                 renderAvailability(null);
                 return;
             }
@@ -1439,6 +1825,11 @@
             }
             $('#rateHint').html('<i class="fas fa-info-circle me-1"></i>' + hint);
 
+            // R13: prime the price-range slider band with this product's
+            // min/max/default. setActivePriceRange() also hides the band
+            // if the product has no usable range (min<=0 or max<=0).
+            setActivePriceRange(p);
+
             // Check availability (branch-wide). If the live-search payload
             // already includes available_qty, prime the card immediately so
             // the user sees stock info even before the breakdown request
@@ -1447,6 +1838,25 @@
                 $('#addAvailTotal').text(fmtQty(p.available_qty) + ' (live)');
             }
             checkAvailability(productId);
+        });
+
+        // R13: live rate changes should reposition the slider thumb and
+        // refresh the in-range / warn / bad status badge. Debounced
+        // 60ms so rapid typing doesn't thrash the DOM.
+        var _rateBandDebounce = null;
+        $('#addRate').on('input change', function () {
+            if (_rateBandDebounce) clearTimeout(_rateBandDebounce);
+            _rateBandDebounce = setTimeout(updatePriceBandUi, 60);
+        });
+
+        // R13: "Use default" button — snap the rate back to default_rate
+        // and re-render the band. Mirrors Legacy #btnUseDefaultRate in
+        // sales/create.php L104–106.
+        $('#btnUseDefaultRate').on('click', function () {
+            if (!state.activePriceRange) return;
+            var def = parseFloat(state.activePriceRange.default_rate) || 0;
+            $('#addRate').val(def.toFixed(2)).trigger('change');
+            toast('Rate reset to default (৳' + fmtMoney(def) + ')', 'info');
         });
 
         $('#btnAddToCart').on('click', addToCart);
@@ -1571,6 +1981,15 @@
             var defRate = parseFloat(p.default_rate);
             if (!(defRate > 0)) defRate = parseFloat(p.min_rate) || 0;
             $('#addRate').val(defRate.toFixed(2));
+
+            // R13: prime the price-range slider band with this scanned
+            // product's min/max/default. The .trigger('change') above on
+            // #addProduct already calls setActivePriceRange(p) via the
+            // regular change handler, but the rate input was empty at
+            // that moment so the thumb sat at 0%. Now that we've set
+            // #addRate, force a re-render so the thumb snaps to the
+            // default-rate position immediately.
+            setActivePriceRange(p);
 
             // Reset qty to 1 (mirrors Legacy selectProductCreate)
             $('#addQty').val(1);
@@ -1961,6 +2380,18 @@
         // any) is already showing, and we just add the rest + activate
         // the right one.
         restoreSessionCarts();
+
+        // ============================================================
+        // ============== R14: bootstrap the credit snapshot ==========
+        // ============================================================
+        // If a customer is pre-selected (?customer_id=...), fetch their
+        // credit snapshot immediately so the panel renders alongside
+        // the initial server-rendered cart payload — no extra round-trip
+        // beyond the one customer-details call. When the customer
+        // changes later (via Select2), the change handler re-fetches.
+        if (state.customerId) {
+            fetchCustomerDetails(state.customerId);
+        }
     });
 })();
 </script>

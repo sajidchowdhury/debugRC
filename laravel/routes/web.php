@@ -470,6 +470,17 @@ Route::middleware('auth')->group(function () {
             ->middleware('throttle:60,1')
             ->name('cart.list-drafts');
 
+        // R14: live customer credit snapshot for the cart page.
+        // Returns credit_limit, current_due (SUM of debit−credit on
+        // customer_ledger, is_reversed=false), and due_left. The cart
+        // blade combines this with the cart subtotal to compute a
+        // projected new balance — gives the cashier an early warning
+        // before finalize. Throttled to 60 req/min (matches Legacy
+        // guardJsonApi limit for sales/customer_details).
+        Route::get('cart/customer-details', [SalesCartController::class, 'customerDetails'])
+            ->middleware('throttle:60,1')
+            ->name('cart.customer-details');
+
         // R1: Live search endpoints (ported from Legacy sales/search_customer &
         // sales/search_product). Replaces 500-row select2 dropdowns with
         // AJAX-driven typeahead. Throttled to 90 req/min via configured

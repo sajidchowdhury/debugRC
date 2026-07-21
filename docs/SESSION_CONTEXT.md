@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-22 (R11 pushed)
+> **Last updated:** 2026-07-22 (R12/R13/R14 pushed)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -130,6 +130,9 @@ Items are tackled in order. Each item has its own entry in
 | R6  | Add `branch_id` to `sales_draft_carts` unique key                          | ✅ done      | New migration `2025_01_23_000001_r6_add_branch_id_to_sales_draft_carts_unique_key.php` drops `uq_sales_draft_user_customer` and adds `uq_sales_draft_user_customer_branch` on `(user_id, customer_id, branch_id)`. Also drops the FK on `branch_id`, backfills NULL → 0, and makes the column `NOT NULL DEFAULT 0` (Legacy "no specific branch" sentinel). `SalesDraftCart::getOrCreate()` updated to include `branch_id` in `firstOrCreate` search attrs + normalize null → 0. All `clearCart()` / `setSoftHold()` callers updated to pass `branch_id` explicitly (Admin web + API V1 + `SalesInvoiceService::finalizeFromCart`). `04_sales.sql` updated for fresh installs. Fixes V11, mitigates C7 (Laravel side). See `REMEDIATION_LOG.md` §R6 for full diff. |
 | R10 | Wire up barcode scanning in the cart blade (UI for the R1 endpoint)        | ✅ done      | R1 ported the `sales/product_by_code` endpoint to Laravel but left it without a UI consumer. R10 adds a toggle-revealed `#barcodeInput` field to `cart.blade.php` with an Enter-key + "Scan & Add" button handler that calls the existing endpoint. On success: caches the product in `productCache`, injects a fresh `<option>` into the Select2 and triggers `change` (so rate/qty/availability populate via the existing handlers), then auto-adds to cart if "Auto-add after scan" is checked (default on). Out-of-stock guard matches Legacy `selectProductCreate`. After auto-add the field is cleared and refocused for the next scan. No backend changes — purely additive UI. Fixes audit risk §6.1 item #1 (barcode scanning). See `REMEDIATION_LOG.md` §R10 for full diff. |
 | R11 | Port multi-customer cart tabs (`#draft-tabs` dock with per-tab item-count badges) | ✅ done      | New `GET /admin/sales/cart/list-drafts` endpoint (mirrors Legacy `sales/list_draft_carts`) backed by `SalesCartService::listCarts()` — returns all non-empty carts for the current user + session branch, sorted by item_count DESC then updated_at DESC, with customer-name + mobile + subtotal aggregation. New `#draftTabsCard` dock in `cart.blade.php` (above the customer selector) renders one Bootstrap nav-pill per cart with shop_name/mobile label, item-count badge (bg-secondary when 0, bg-primary when >0), and a × close button. On page load, `restoreSessionCarts()` fetches list-drafts + renders one pill per cart + activates the busiest (or the `?customer_id=` one if present). Clicking a pill switches carts in-page by setting `#customerSelect` and triggering `change` (no page reload). The × button shows a SweetAlert confirm, calls the existing `/cart/clear` endpoint (which writes the R4 audit-log entry), then removes the pill and switches to the next remaining tab. Badges update on every successful `add`/`update`/`remove`/`clear` mutation by reading the response payload — no extra round-trip. Fixes audit risk §6.1 item #2 (multi-customer cart tabs). See `REMEDIATION_LOG.md` §R11 for full diff. |
+| R12 | Port live customer/product typeahead (debounced AJAX)                      | ✅ done (via R1) | Same root cause as R1. R1 already wired both Select2 widgets into AJAX mode (`minimumInputLength: 1`, `delay: 250`, `processResults` populating `customerCache` + `productCache`). Select2 AJAX mode *is* a debounced AJAX typeahead — no separate typeahead library was introduced. R12 was the audit-tracking label; the implementation was the R1 work. |
+| R13 | Port price-range slider band UI (`#priceRangePanel`)                        | ✅ done      | New `#priceRangePanel` dock in `cart.blade.php` (inside Add Product card, below the rate input) renders a visual band: grey track + green→purple gradient fill (current rate position) + indigo default-rate mark + circular thumb that follows `#addRate` on every keystroke (60 ms debounce). Min/Max/Default labels in ৳ above the band; status badge below flips `bg-success` / `bg-warning` (within 10 % of min) / `bg-danger` (out of range). "Use default" button snaps rate back to `default_rate`. Reads from `productCache` (R1 live search + R10 barcode scan) — no extra round-trip. Band auto-hides when the selected product has no usable range (`min_rate ≤ 0` or `max_rate ≤ 0`). Purely informational; server-side rate validation in `SalesCartService::validateCartItems` + finalize flow is still authoritative. New JS: `setActivePriceRange()`, `rateRangeStatus()`, `updatePriceBandUi()` + new state field `activePriceRange`. Fixes audit risk §6.1 item #5 (price-range slider). See `REMEDIATION_LOG.md` §R13 for full diff. |
+| R14 | Port live credit-limit display on cart page                                 | ✅ done      | New backend endpoint `GET /admin/sales/cart/customer-details?customer_id=…` (throttle 60/min) + new `SalesCartService::getCustomerDetails()` method compute `current_due = SUM(debit) − SUM(credit)` from `customer_ledger WHERE is_reversed = false` (same formula as `SalesInvoiceService::checkCreditLimit`). New `#customerDetailsPanel` in the customer selector card shows 4 stat cells (Credit limit / Current due / Balance left / Cart subtotal) + a projected new balance row (`current_due + cart subtotal`) with colour-coded status: `bg-success` (OK), `bg-warning` (Tight — within 10 % of limit), `bg-danger` (Will breach — finalize will require override), or "No limit set" when `credit_limit = 0`. Snapshot fetched once per customer change (and on explicit "Refresh" button click); projected row recomputes locally on every cart mutation (add/update/remove/clear) using the cached snapshot — no extra round-trip per mutation. New JS: `fetchCustomerDetails()`, `renderCustomerDetails()` + new state field `customerCredit`. New route `admin.sales.cart.customer-details`. Fixes audit risk §6.1 item #6 (live credit-limit display). See `REMEDIATION_LOG.md` §R14 for full diff. |
 
 > When the user assigns the next R# item, add a row here and create a
 > matching section in `REMEDIATION_LOG.md`. **Do not start work without
@@ -733,14 +736,243 @@ Why reuse `/cart/clear` for the close-tab action? It already does the right thin
 
 ---
 
+### 5.12 R13: Price-range slider band UI
+
+**Problem:** When the cashier typed a rate into `#addRate`, the only
+feedback was a static "Min X / Max Y" hint below the input (added in
+R1). The Legacy system showed a visual band with a thumb that tracked
+the typed rate, plus a default-rate mark and a green/amber/red status
+badge — much faster to parse at a glance during a busy POS session.
+
+Audit risk: §6.1 item #5 in `sales_entry_Lg_vs_La.md`.
+
+**Decision: add a `#priceRangePanel` dock inside the Add Product card
+(below the rate input) that mirrors Legacy `#priceRangePanel` +
+`updatePriceBandUi` (sales-create.js L129–187).**
+
+Why a separate panel instead of enriching the existing `#rateHint`
+text? Two reasons: (1) a slider communicates *position within the
+range* at a glance — text can't; (2) the Legacy cashier's muscle
+memory expects the band in a specific spot. Mirroring the Legacy
+layout minimizes retraining.
+
+Why read from `productCache` instead of fetching the price range
+separately? R1 already populates `productCache[p.id]` with
+`{min_rate, max_rate, default_rate, available_qty}` from the live
+search endpoint (and R10's barcode scan does the same). No extra
+round-trip is needed — the band renders instantly when the product is
+selected.
+
+**The flow (mirrors Legacy `updatePriceBandUi` + `selectProduct`):**
+
+1. **User picks a product** (Select2 change OR R10 barcode scan) →
+   the `#addProduct` change handler calls `setActivePriceRange(p)`
+   with the cached product payload.
+2. `setActivePriceRange` reads `p.min_rate`, `p.max_rate`,
+   `p.default_rate` and stashes them in `state.activePriceRange`.
+   If `min ≤ 0` or `max ≤ 0` (no usable range), it clears the state
+   and `updatePriceBandUi()` hides the panel — matching Legacy's
+   early-return.
+3. `updatePriceBandUi()` shows the panel, sets the Min/Max/Default
+   labels in ৳, sets `#addRate`'s `min`/`max` HTML attributes (so the
+   browser's own stepper also respects the range), positions the
+   gradient fill + thumb + default-mark as percentages of the span,
+   and sets the status badge to `bg-success` / `bg-warning` (within
+   10 % of min) / `bg-danger` (out of range).
+4. **User types/edits the rate** → `#addRate` `input` event fires
+   (60 ms debounce) → `updatePriceBandUi()` re-positions the thumb +
+   refreshes the status badge.
+5. **User clicks "Use default"** → `#addRate` is set to
+   `default_rate.toFixed(2)` and `.trigger('change')` fires, which
+   runs the band update again (thumb snaps to the default position).
+
+**Files modified:**
+
+- `laravel/resources/views/admin/sales/cart.blade.php`
+  - Added `#priceRangePanel` HTML inside the Add Product card (below
+    the rate/qty/Add row, above the availability row) — track + fill
+    + default-mark + thumb + Min/Max/Default labels + status badge +
+    "Use default" button. All inline-styled with Bootstrap 5 utility
+    classes + a few `position-absolute` elements. No new CSS file.
+  - Added `state.activePriceRange` to the `state` object.
+  - Added 3 new JS functions in the rendering section:
+    `setActivePriceRange(product)`, `rateRangeStatus(rate, min, max)`,
+    `updatePriceBandUi()` — ~70 lines total.
+  - Modified the `#addProduct` change handler to call
+    `setActivePriceRange(p)` (and clear it when no product is
+    selected).
+  - Modified the R10 `scanAndSelect()` function to call
+    `setActivePriceRange(p)` after the rate is filled (so the thumb
+    snaps to the right position immediately, not at 0 %).
+  - Added `#addRate` `input` handler with 60 ms debounce →
+    `updatePriceBandUi()`.
+  - Added `#btnUseDefaultRate` click handler → sets rate to
+    `default_rate.toFixed(2)` + triggers `change`.
+
+**What was NOT changed:**
+
+- The Legacy sales entry code (`legacy/`) was not touched.
+- No backend changes — R13 is purely additive UI. The price-range
+  data was already in `productCache` (populated by R1).
+- Server-side rate validation in `SalesCartService::validateCartItems`
+  + the finalize flow is still authoritative. The slider band is
+  purely informational — a red badge does NOT block the Add button.
+  (If we wanted to block, we'd add a check inside `addToCart()` —
+  deferred to a follow-up if the user requests it.)
+- The cart-table inline rate editor (per-row `#cart-rate` input) does
+  NOT get a slider band — only the Add-Product rate input does.
+  Legacy matches this scope (slider only on the create-page add
+  form, not the cart table). Could be added per-row in a follow-up.
+- No new CSS file was added. All slider styling is inline `style="…"`
+  on the band elements. Keeps the blade self-contained; if a future
+  designer wants to theme it, the inline styles are easy to find and
+  extract into a CSS class.
+
+---
+
+### 5.13 R14: Live credit-limit display on cart page
+
+**Problem:** Laravel only checked the customer's credit limit at
+finalize time, via `GET /admin/sales/credit-check?customer_id=X&amount=Y`.
+A cashier could spend 5 minutes building a 50-item cart only to be
+blocked at the finalize dialog — wasted effort and a poor UX,
+especially for high-volume POS sessions.
+
+The Legacy system solved this with a `#customerDetailsPanel` in
+`sales/create.php` (L72–80) that showed the customer's `credit_limit`,
+`recent_due`, and `due_left` inline, fetched via
+`sales/customer_details` endpoint. The cashier could see at a glance
+whether the customer had headroom before adding items.
+
+Audit risk: §6.1 item #6 in `sales_entry_Lg_vs_La.md`.
+
+**Decision: port the Legacy `customer_details` endpoint + panel, AND
+extend it with a projected new balance row** (`current_due + cart
+subtotal`) **that updates in real time as the cart changes.**
+
+Why extend beyond Legacy parity? The Legacy panel shows the *current*
+AR position only — it doesn't reflect the in-progress cart. The
+cashier still has to mentally add `cart_subtotal + current_due` and
+compare against `credit_limit`. R14 does that math for them and
+colour-codes the result (green/amber/red), which directly addresses
+the audit risk's "prevents wasted cart-building" rationale.
+
+Why fetch the snapshot once per customer change (vs on every cart
+mutation)? The customer ledger doesn't change between cart mutations
+— only at finalize / payment / reverse time. So one fetch per
+customer change is sufficient; the projected row recomputes locally
+using the cached snapshot + the latest cart subtotal. This avoids
+hammering the customer_ledger SUM query on every keystroke.
+
+Why reuse `SalesInvoiceService::checkCreditLimit`'s exact formula
+(`SUM(debit) − SUM(credit) WHERE is_reversed = false`)? Consistency.
+The live panel and the finalize-time check must show the same number
+or the cashier will lose trust in the UI. The `is_reversed = false`
+filter is important — Legacy didn't have `is_reversed` on
+`customer_ledger` (Laravel added it in migration
+`2025_01_02_000002`); without the filter, reversed transactions
+would inflate the apparent due.
+
+**The flow:**
+
+1. **User picks a customer** (Select2 change) → `fetchCustomerDetails(cid)`
+   fires → `GET /admin/sales/cart/customer-details?customer_id=…` →
+   returns `{credit_limit, current_due, due_left, customer_name,
+   shop_name, mobile, address}`.
+2. The response is cached in `state.customerCredit` and
+   `renderCustomerDetails()` renders the panel: 4 stat cells +
+   projected new balance row + colour-coded status badge.
+3. **User adds/updates/removes/clears a cart item** → `renderAll()`
+   runs (existing flow) → `renderCustomerDetails()` is now called
+   inside `renderAll()` → it recomputes the projected balance using
+   `state.customerCredit.current_due + state.cart.subtotal` and
+   re-renders the projected row + status badge. **No extra
+   round-trip** — the snapshot is reused.
+4. **User clicks "Refresh"** → re-fetches the snapshot (in case a
+   payment was posted in another tab since the customer was first
+   selected). Useful for long-running cart sessions.
+5. **User clears the customer** (Select2 cleared) →
+   `fetchCustomerDetails(null)` clears `state.customerCredit` →
+   `renderCustomerDetails()` hides the panel.
+
+**Files modified:**
+
+- `laravel/app/Services/Sales/SalesCartService.php`
+  - Added `getCustomerDetails(int $customerId): array` method (~45
+    lines). Loads the customer record, computes `current_due` as
+    `SUM(debit) − SUM(credit)` from `customer_ledger` (is_reversed =
+    false), returns `{customer_id, customer_name, shop_name, mobile,
+    address, credit_limit, current_due, due_left}`. Returns sane
+    zeros when the customer is not found (matches Legacy's
+    `$this->sendJson($data ?: […defaults])`).
+- `laravel/app/Http/Controllers/Admin/SalesCartController.php`
+  - Added `customerDetails(Request $request)` method that calls
+    `getCustomerDetails((int) $request->input('customer_id', 0))` and
+    returns JSON. Returns sane zeros when customer_id is missing/0.
+- `laravel/routes/web.php`
+  - Added `Route::get('cart/customer-details',
+    [SalesCartController::class, 'customerDetails'])`
+    ->middleware('throttle:60,1')
+    ->name('cart.customer-details')`.
+- `laravel/resources/views/admin/sales/cart.blade.php`
+  - Added `#customerDetailsPanel` HTML inside the customer selector
+    card (below the customer row) — 4 stat cells (Credit limit /
+    Current due / Balance left / Cart subtotal) + projected new
+    balance row + status badge + Refresh button.
+  - Added `ENDPOINTS.customerDetails` route binding.
+  - Added `state.customerCredit` to the `state` object.
+  - Added 2 new JS functions: `fetchCustomerDetails(customerId)`,
+    `renderCustomerDetails()` — ~80 lines total.
+  - Modified `renderAll()` to call `renderCustomerDetails()` so the
+    projected row stays in sync with every cart mutation.
+  - Modified the `#customerSelect` change handler to call
+    `fetchCustomerDetails(cid)` (or `fetchCustomerDetails(null)` when
+    cleared).
+  - Added `#btnRefreshCredit` click handler (re-fetches the snapshot
+    with a spinning icon).
+  - Added bootstrap call: `if (state.customerId) {
+    fetchCustomerDetails(state.customerId); }` so the panel renders
+    immediately when the page loads with `?customer_id=…`.
+
+**What was NOT changed:**
+
+- The Legacy sales entry code (`legacy/`) was not touched.
+- The Laravel API V1 was NOT touched. The new
+  `/admin/sales/cart/customer-details` endpoint is Blade-only. If a
+  mobile/AI client wants the same data, the service method
+  `SalesCartService::getCustomerDetails()` is reusable — a future
+  `GET /api/v1/sales/customers/{id}/credit-snapshot` endpoint would
+  be a thin wrapper (low effort).
+- The finalize-time credit-check endpoint (`credit-check`) was NOT
+  touched. R14 is informational only; the authoritative check still
+  happens inside `SalesInvoiceService::finalizeFromCart` (with the R5
+  in-transaction lock). The live panel might say "Will breach" but
+  the cashier can still proceed to the finalize dialog and use the
+  override + reason flow.
+- The customer 360° Hub page (`admin/customers/{id}`) was NOT
+  touched. That page already shows the customer's AR balance via
+  `CustomerController::show` — R14 only adds the inline panel to the
+  cart page.
+- No new migration was needed — `customer_ledger` already has
+  `debit`, `credit`, `is_reversed` columns from the original schema
+  + migration `2025_01_02_000002`.
+- The panel does NOT auto-refresh on a timer. The "Refresh" button is
+  manual. A timer-based refresh would add a polling load for little
+  benefit (the cashier is looking at the page; if they want fresh
+  data they click Refresh). A future enhancement could use SSE
+  (already wired up via `SseController`) to push balance updates when
+  a payment posts — low priority.
+
+---
+
 ## 6. Open Work Items
 
 (Items the user has asked for but that are not yet done.)
 
-- **None outstanding.** R1, R2, R3, R4, R5, R6, R10, R11, and H1 (bugfix)
-  are complete and pushed. The user has not yet assigned R7, R8, R9
-  (numbers reserved for future items; R10/R11 were the user's explicit
-  asks after R6).
+- **None outstanding.** R1, R2, R3, R4, R5, R6, R10, R11, R12, R13,
+  R14, and H1 (bugfix) are complete and pushed. The user has not yet
+  assigned R7, R8, R9 (numbers reserved for future items; R10/R11/
+  R12/R13/R14 were the user's explicit asks after R6).
 
 When the user gives the next instruction, append it here as a
 checkbox item. When done, move it to the "Completed Work Items"
@@ -837,6 +1069,47 @@ section below.
       switches to the next remaining tab. Badges update on every
       successful cart mutation from the response payload. No new
       migration. See `REMEDIATION_LOG.md` §R11 for the full diff.
+- [x] **R12** — Port live customer/product typeahead. Same root
+      cause as R1; R1 already wired both Select2 widgets into AJAX
+      mode (`minimumInputLength: 1`, `delay: 250`, `processResults`
+      populating `customerCache` + `productCache`). Select2 AJAX
+      mode *is* a debounced AJAX typeahead — no separate typeahead
+      library was introduced. R12 was the audit-tracking label; the
+      implementation was the R1 work. Marked ✅ in the audit doc
+      §6.1 items #3 + #4 + §9.3 R12 row.
+- [x] **R13** — Port price-range slider band UI. New
+      `#priceRangePanel` dock in `cart.blade.php` (inside Add
+      Product card, below the rate input) renders a visual band:
+      grey track + green→purple gradient fill (current rate
+      position) + indigo default-rate mark + circular thumb that
+      follows `#addRate` on every keystroke (60 ms debounce).
+      Min/Max/Default labels in ৳; status badge flips `bg-success`
+      / `bg-warning` (within 10 % of min — margin heads-up) /
+      `bg-danger` (out of range). "Use default" button snaps rate
+      back to `default_rate`. Reads from `productCache` (populated
+      by R1 live search + R10 barcode scan) — no extra round-trip.
+      Band auto-hides when the product has no usable range. New JS:
+      `setActivePriceRange()`, `rateRangeStatus()`,
+      `updatePriceBandUi()` + new state field `activePriceRange`.
+      No backend changes. See `REMEDIATION_LOG.md` §R13 for the
+      full diff.
+- [x] **R14** — Port live credit-limit display on cart page. New
+      backend endpoint `GET /admin/sales/cart/customer-details`
+      (throttle 60/min) + new `SalesCartService::getCustomerDetails()`
+      method compute `current_due = SUM(debit) − SUM(credit)` from
+      `customer_ledger WHERE is_reversed = false` (same formula as
+      `SalesInvoiceService::checkCreditLimit`). New
+      `#customerDetailsPanel` in the customer selector card shows
+      4 stat cells (Credit limit / Current due / Balance left /
+      Cart subtotal) + a projected new balance row (`current_due +
+      cart subtotal`) with `bg-success` / `bg-warning` /
+      `bg-danger` status. Snapshot fetched once per customer change
+      (and on explicit "Refresh" button click); projected row
+      recomputes locally on every cart mutation (no extra
+      round-trip). New JS: `fetchCustomerDetails()`,
+      `renderCustomerDetails()` + new state field `customerCredit`.
+      New route `admin.sales.cart.customer-details`. See
+      `REMEDIATION_LOG.md` §R14 for the full diff.
 
 ---
 
