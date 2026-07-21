@@ -127,6 +127,19 @@ return new class extends Migration
             DB::statement("DROP INDEX IF EXISTS {$idx}");
         }
 
+        // ── Step 2.5: Drop dependent materialized views ──
+        // mv_product_movement_summary (created by migration 2025_01_03_000001)
+        // has a tracked dependency on stock_transactions. PostgreSQL would refuse
+        // the DROP TABLE stock_transactions_unpartitioned at Step 11 because of
+        // this dependency. We drop the MV here (with CASCADE to also drop its
+        // indexes) and recreate it in Step 13 against the new partitioned table.
+        //
+        // trg_notify_stock_transactions (created by migration 2025_01_21_000001)
+        // does NOT need to be dropped explicitly — triggers follow their table
+        // through RENAME, and are dropped together with the renamed table at
+        // Step 11. We recreate the trigger in Step 14.
+        DB::statement('DROP MATERIALIZED VIEW IF EXISTS mv_product_movement_summary CASCADE');
+
         // ── Step 3: Rename old table ──
         DB::statement('ALTER TABLE stock_transactions RENAME TO stock_transactions_unpartitioned');
 
@@ -305,6 +318,51 @@ return new class extends Migration
 
         // ── Step 12: Analyze ──
         DB::statement('ANALYZE stock_transactions');
+
+        // ── Step 13: Recreate dependent materialized view ──
+        // Recreate mv_product_movement_summary against the new partitioned
+        // stock_transactions table. Definition mirrors migration
+        // 2025_01_03_000001_create_report_materialized_views.php exactly.
+        DB::statement(<<<'SQL'
+CREATE MATERIALIZED VIEW mv_product_movement_summary AS
+SELECT
+    st.product_id,
+    p.product_code,
+    p.product_name,
+    p.unit,
+    st.warehouse_id,
+    w.warehouse_name,
+    w.branch_id,
+    b.branch_name,
+    SUM(CASE WHEN st.qty > 0 THEN st.qty ELSE 0 END) AS total_in_qty,
+    SUM(CASE WHEN st.qty < 0 THEN ABS(st.qty) ELSE 0 END) AS total_out_qty,
+    SUM(st.qty) AS net_qty,
+    SUM(CASE WHEN st.qty > 0 THEN st.total_value ELSE 0 END) AS total_in_value,
+    SUM(CASE WHEN st.qty < 0 THEN st.total_value ELSE 0 END) AS total_out_value,
+    MIN(st.transaction_date) AS first_movement_date,
+    MAX(st.transaction_date) AS last_movement_date,
+    COUNT(*) AS movement_count
+FROM stock_transactions st
+INNER JOIN products p ON p.id = st.product_id
+INNER JOIN warehouses w ON w.id = st.warehouse_id
+INNER JOIN branches b ON b.id = w.branch_id
+GROUP BY st.product_id, p.product_code, p.product_name, p.unit,
+         st.warehouse_id, w.warehouse_name, w.branch_id, b.branch_name
+SQL);
+        DB::statement('CREATE UNIQUE INDEX mv_pms_prod_wh_idx ON mv_product_movement_summary (product_id, warehouse_id)');
+        DB::statement('CREATE INDEX mv_pms_branch_idx ON mv_product_movement_summary (branch_id)');
+
+        // ── Step 14: Recreate LISTEN/NOTIFY trigger ──
+        // trg_notify_stock_transactions was created by migration
+        // 2025_01_21_000001_add_listen_notify_triggers.php. It followed the
+        // old table through the RENAME and was dropped at Step 11. The
+        // underlying function rcerp_notify_stock_change() still exists —
+        // we just need to re-attach the trigger to the new partitioned table.
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER trg_notify_stock_transactions
+            AFTER INSERT ON stock_transactions
+            FOR EACH ROW EXECUTE FUNCTION rcerp_notify_stock_change()
+        SQL);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -748,6 +806,22 @@ return new class extends Migration
 
         // ── Step 18: Analyze ──
         DB::statement('ANALYZE sales_invoices');
+
+        // ── Step 19: Recreate LISTEN/NOTIFY trigger ──
+        // trg_notify_sales_invoices was created by migration
+        // 2025_01_21_000001_add_listen_notify_triggers.php. It followed the
+        // old table through the RENAME at Step 6 and was dropped at Step 17
+        // together with sales_invoices_unpartitioned. The underlying function
+        // rcerp_notify_sales_invoice() still exists — we just need to
+        // re-attach the trigger to the new partitioned sales_invoices table.
+        // No materialized views depend on sales_invoices, so no MV recreation
+        // is needed here (unlike partitionStockTransactions which recreates
+        // mv_product_movement_summary).
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER trg_notify_sales_invoices
+            AFTER INSERT OR UPDATE ON sales_invoices
+            FOR EACH ROW EXECUTE FUNCTION rcerp_notify_sales_invoice()
+        SQL);
     }
 
     public function down(): void
