@@ -2054,7 +2054,7 @@
     //
     // Also adds a "swiping" CSS class during the gesture so the
     // card visibly slides left and reveals the red delete backdrop
-    // (the ::before pseudo-element defined in the @push('css') block).
+    // (the ::before pseudo-element defined in the @@push('css') block).
     //
     // Re-bound after every renderCartTable() call (touch handlers
     // don't survive $mobile.empty()).
