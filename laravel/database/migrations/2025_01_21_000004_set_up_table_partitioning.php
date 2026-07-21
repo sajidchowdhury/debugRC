@@ -159,16 +159,22 @@ return new class extends Migration
         // ── Step 6: Copy data from old table ──
         // Uses INSERT ... SELECT which preserves the GENERATED ALWAYS AS IDENTITY sequence
         // by explicitly specifying the id column.
+        //
+        // CRITICAL: `total_value` is a GENERATED ALWAYS AS (qty * rate) STORED column
+        // in BOTH the old (renamed) and new partitioned tables. PostgreSQL does NOT
+        // allow INSERT into a GENERATED ALWAYS column without OVERRIDING SYSTEM VALUE.
+        // We OMIT total_value from both the INSERT column list and the SELECT list —
+        // PostgreSQL auto-computes it from (qty * rate) on insert.
         DB::statement(<<<'SQL'
             INSERT INTO stock_transactions (
                 id, transaction_date, warehouse_id, product_id, qty, rate,
-                total_value, reference_type, reference_id, branch_demand_item_id,
+                reference_type, reference_id, branch_demand_item_id,
                 notes, is_reversed, reversal_of_transaction_id, reversed_at,
                 reversed_by, reverse_reason, created_by, created_at
             )
             SELECT
                 id, transaction_date, warehouse_id, product_id, qty, rate,
-                total_value, reference_type, reference_id, branch_demand_item_id,
+                reference_type, reference_id, branch_demand_item_id,
                 notes, is_reversed, reversal_of_transaction_id, reversed_at,
                 reversed_by, reverse_reason, created_by, created_at
             FROM stock_transactions_unpartitioned

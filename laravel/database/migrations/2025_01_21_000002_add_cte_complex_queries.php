@@ -594,20 +594,24 @@ BEGIN
     ),
 
     -- CTE 3: COGS per invoice item (from stock transactions via challan)
+    -- Schema fixes applied:
+    --   * sales_challan_items has sales_challan_id (not challan_id)
+    --   * sales_invoice_id lives on sales_challans, not sales_challan_items
+    --   * stock_transactions uses qty (not qty_change) and rate (not avg_cost)
+    --   * sales_challans has no deleted_at column (only sales_invoices does)
     item_cogs AS (
         SELECT
-            sci.sales_invoice_id AS invoice_id,
+            sc.sales_invoice_id AS invoice_id,
             sci.product_id,
-            SUM(st.qty_change) AS cogs_qty,  -- negative (stock OUT)
-            SUM(ABS(st.qty_change) * st.avg_cost) AS cogs_amount
+            SUM(st.qty) AS cogs_qty,  -- negative (stock OUT)
+            SUM(ABS(st.qty) * st.rate) AS cogs_amount
         FROM sales_challan_items sci
-        INNER JOIN sales_challans sc ON sc.id = sci.challan_id
+        INNER JOIN sales_challans sc ON sc.id = sci.sales_challan_id
         INNER JOIN stock_transactions st ON st.reference_type = 'sales_challan'
             AND st.reference_id = sc.id
             AND st.product_id = sci.product_id
         WHERE sc.is_reversed = false
-          AND sc.deleted_at IS NULL
-        GROUP BY sci.sales_invoice_id, sci.product_id
+        GROUP BY sc.sales_invoice_id, sci.product_id
     ),
 
     -- CTE 4: Per-invoice margin (aggregated from items)

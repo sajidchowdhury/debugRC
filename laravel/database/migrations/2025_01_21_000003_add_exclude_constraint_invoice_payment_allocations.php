@@ -43,11 +43,21 @@ return new class extends Migration
         // Refund allocations (payment type) store the positive amount and
         // the sign logic is handled in CustomerPaymentService, so the
         // allocation row itself is always positive.
-        DB::statement(
-            "ALTER TABLE invoice_payment_allocations
-             ADD CONSTRAINT ipa_allocated_amount_positive
-             CHECK (allocated_amount > 0)"
+        // Guard with pg_constraint lookup for idempotency (handles re-runs
+        // after partial failure; migrate:fresh drops tables first so this
+        // is a no-op there).
+        $checkExists = DB::selectOne(
+            "SELECT 1 FROM pg_constraint
+             WHERE conname = 'ipa_allocated_amount_positive'
+               AND conrelid = 'invoice_payment_allocations'::regclass"
         );
+        if (!$checkExists) {
+            DB::statement(
+                "ALTER TABLE invoice_payment_allocations
+                 ADD CONSTRAINT ipa_allocated_amount_positive
+                 CHECK (allocated_amount > 0)"
+            );
+        }
 
         // ──────────────────────────────────────────────
         // 2. EXCLUDE constraint: one allocation per (invoice_id, payment_id)
@@ -58,14 +68,21 @@ return new class extends Migration
         //   - Duplicate allocation rows for the same invoice+payment
         //   - Race-condition double-inserts when two requests allocate
         //     the same payment to the same invoice concurrently
-        DB::statement(
-            "ALTER TABLE invoice_payment_allocations
-             ADD CONSTRAINT ipa_unique_invoice_payment
-             EXCLUDE USING gist (
-                 invoice_id WITH =,
-                 payment_id WITH =
-             )"
+        $excludeExists = DB::selectOne(
+            "SELECT 1 FROM pg_constraint
+             WHERE conname = 'ipa_unique_invoice_payment'
+               AND conrelid = 'invoice_payment_allocations'::regclass"
         );
+        if (!$excludeExists) {
+            DB::statement(
+                "ALTER TABLE invoice_payment_allocations
+                 ADD CONSTRAINT ipa_unique_invoice_payment
+                 EXCLUDE USING gist (
+                     invoice_id WITH =,
+                     payment_id WITH =
+                 )"
+            );
+        }
 
         // ──────────────────────────────────────────────
         // 3. FK constraint: payment_id → customer_payments(id)
@@ -74,12 +91,19 @@ return new class extends Migration
         // missed payment_id FK. This prevents orphaned allocation rows.
         // ON DELETE CASCADE: when a payment is deleted, its allocations
         // are automatically removed (though the app uses is_reversed soft-delete).
-        DB::statement(
-            "ALTER TABLE invoice_payment_allocations
-             ADD CONSTRAINT ipa_payment_id_foreign
-             FOREIGN KEY (payment_id) REFERENCES customer_payments(id)
-             ON DELETE CASCADE"
+        $fkExists = DB::selectOne(
+            "SELECT 1 FROM pg_constraint
+             WHERE conname = 'ipa_payment_id_foreign'
+               AND conrelid = 'invoice_payment_allocations'::regclass"
         );
+        if (!$fkExists) {
+            DB::statement(
+                "ALTER TABLE invoice_payment_allocations
+                 ADD CONSTRAINT ipa_payment_id_foreign
+                 FOREIGN KEY (payment_id) REFERENCES customer_payments(id)
+                 ON DELETE CASCADE"
+            );
+        }
 
         // ──────────────────────────────────────────────
         // 4. Trigger: prevent over-allocation of an invoice
@@ -125,6 +149,10 @@ return new class extends Migration
             END;
             $$ LANGUAGE plpgsql;
         SQL);
+
+        // Defensive: drop existing trigger before (re)creating. CONSTRAINT
+        // TRIGGERs cannot use IF NOT EXISTS in PG, so we explicitly DROP first.
+        DB::statement('DROP TRIGGER IF EXISTS trg_ipa_no_overallocation ON invoice_payment_allocations');
 
         DB::statement(
             "CREATE CONSTRAINT TRIGGER trg_ipa_no_overallocation

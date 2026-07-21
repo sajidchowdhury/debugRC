@@ -69,6 +69,19 @@ return new class extends Migration
     public function up(): void
     {
         // ══════════════════════════════════════════════════════════════
+        // PREREQUISITE: btree_gist extension
+        //
+        // The commission_rules table uses an EXCLUDE constraint with GiST
+        // index that combines `salesman_id WITH =` (integer equality) and
+        // a `daterange WITH &&` (range overlap). PostgreSQL's built-in GiST
+        // supports range types natively, but integer equality in GiST
+        // requires the btree_gist extension. We enable it here defensively
+        // (IF NOT EXISTS is a no-op if already enabled by migration
+        // 2025_01_21_000003_add_exclude_constraint_invoice_payment_allocations).
+        // ══════════════════════════════════════════════════════════════
+        DB::statement('CREATE EXTENSION IF NOT EXISTS btree_gist');
+
+        // ══════════════════════════════════════════════════════════════
         // TABLE 1: commission_rules
         //
         // Defines the commission structure for each salesman.
@@ -197,7 +210,7 @@ SQL');
                 created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT commission_rule_targets_rule_unique UNIQUE (commission_rule_id, period)
             )
-SQL());
+SQL');
 
         DB::statement('CREATE INDEX idx_cxrt_rule ON commission_rule_targets(commission_rule_id)');
 
@@ -320,7 +333,7 @@ SQL');
                 DEFERRABLE INITIALLY IMMEDIATE
                 FOR EACH ROW
                 EXECUTE FUNCTION fn_fk_ce_si_check()
-SQL());
+SQL');
 
         // ──────────────────────────────────────────────────────────────
         // TRIGGER: Auto-set commission_period from entry_date
@@ -336,14 +349,14 @@ SQL());
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql
-SQL());
+SQL');
 
         DB::statement(<<<'SQL'
             CREATE TRIGGER trg_ce_set_period
                 BEFORE INSERT ON commission_entries
                 FOR EACH ROW
                 EXECUTE FUNCTION fn_ce_set_period()
-SQL());
+SQL');
 
         // ──────────────────────────────────────────────────────────────
         // TRIGGER: Auto-update updated_at
@@ -357,14 +370,14 @@ SQL());
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql
-SQL());
+SQL');
 
         DB::statement(<<<'SQL'
             CREATE TRIGGER trg_ce_updated_at
                 BEFORE UPDATE ON commission_entries
                 FOR EACH ROW
                 EXECUTE FUNCTION fn_ce_updated_at()
-SQL());
+SQL');
 
         // ──────────────────────────────────────────────────────────────
         // TRIGGER: Validate source — exactly one of allocation_id or
@@ -386,61 +399,131 @@ SQL());
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql
-SQL());
+SQL');
 
         DB::statement(<<<'SQL'
             CREATE TRIGGER trg_ce_validate_source
                 BEFORE INSERT ON commission_entries
                 FOR EACH ROW
                 EXECUTE FUNCTION fn_ce_validate_source()
-SQL());
+SQL');
 
         // ──────────────────────────────────────────────────────────────
         // RLS (Row-Level Security) for commission_entries — branch isolation
+        //
+        // IMPORTANT: GUC names must match the rest of the RLS system
+        // (migration 2025_01_20_000007_add_rls_branch_isolation.php):
+        //   - app.branch_id  (set by SetAppBranchId middleware)
+        //   - app.is_admin   (set by SetAppBranchId middleware)
+        // The original draft used app.current_branch_id and
+        // app.current_user_id which are NEVER set by the middleware —
+        // that would have made every SELECT on commission_entries
+        // return 0 rows for ALL users (admins too, since the bypass
+        // also referenced the wrong GUC). Fixed to use the canonical
+        // names so RLS actually works.
         // ──────────────────────────────────────────────────────────────
 
         DB::statement('ALTER TABLE commission_entries ENABLE ROW LEVEL SECURITY');
+        DB::statement('ALTER TABLE commission_entries FORCE ROW LEVEL SECURITY');
 
         DB::statement(<<<'SQL'
-            CREATE POLICY commission_entries_branch_isolation ON commission_entries
-                USING (branch_id = current_setting('app.current_branch_id', true)::integer)
+            CREATE POLICY rls_commission_entries_select ON commission_entries
+                FOR SELECT USING (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR branch_id = current_setting('app.branch_id', true)::integer
+                )
 SQL');
 
-        // Admin bypass policy
         DB::statement(<<<'SQL'
-            CREATE POLICY commission_entries_admin_bypass ON commission_entries
-                USING (
-                    EXISTS (
-                        SELECT 1 FROM employees e
-                        JOIN users u ON u.employee_id = e.id
-                        WHERE e.role IN ('admin', 'superadmin')
-                          AND u.id = current_setting('app.current_user_id', true)::integer
-                    )
+            CREATE POLICY rls_commission_entries_insert ON commission_entries
+                FOR INSERT WITH CHECK (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR branch_id = current_setting('app.branch_id', true)::integer
                 )
-SQL());
+SQL');
 
-        // RLS for commission_rules (branch-scoped)
+        DB::statement(<<<'SQL'
+            CREATE POLICY rls_commission_entries_update ON commission_entries
+                FOR UPDATE USING (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR branch_id = current_setting('app.branch_id', true)::integer
+                )
+                WITH CHECK (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR branch_id = current_setting('app.branch_id', true)::integer
+                )
+SQL');
+
+        DB::statement(<<<'SQL'
+            CREATE POLICY rls_commission_entries_delete ON commission_entries
+                FOR DELETE USING (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR branch_id = current_setting('app.branch_id', true)::integer
+                )
+SQL');
+
+        // Admin bypass policy — admin sees/modifies all branches.
+        DB::statement(<<<'SQL'
+            CREATE POLICY rls_commission_entries_admin ON commission_entries
+                FOR ALL
+                USING (current_setting('app.is_admin', true) = 'true')
+                WITH CHECK (current_setting('app.is_admin', true) = 'true')
+SQL');
+
+        // ──────────────────────────────────────────────────────────────
+        // RLS for commission_rules (branch-scoped; NULL branch_id = global)
+        // ──────────────────────────────────────────────────────────────
+
         DB::statement('ALTER TABLE commission_rules ENABLE ROW LEVEL SECURITY');
+        DB::statement('ALTER TABLE commission_rules FORCE ROW LEVEL SECURITY');
 
         DB::statement(<<<'SQL'
-            CREATE POLICY commission_rules_branch_isolation ON commission_rules
-                USING (
-                    branch_id IS NULL  -- global rules visible to all
-                    OR branch_id = current_setting('app.current_branch_id', true)::integer
+            CREATE POLICY rls_commission_rules_select ON commission_rules
+                FOR SELECT USING (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR branch_id IS NULL
+                    OR branch_id = current_setting('app.branch_id', true)::integer
                 )
-SQL());
+SQL');
 
         DB::statement(<<<'SQL'
-            CREATE POLICY commission_rules_admin_bypass ON commission_rules
-                USING (
-                    EXISTS (
-                        SELECT 1 FROM employees e
-                        JOIN users u ON u.employee_id = e.id
-                        WHERE e.role IN ('admin', 'superadmin')
-                          AND u.id = current_setting('app.current_user_id', true)::integer
-                    )
+            CREATE POLICY rls_commission_rules_insert ON commission_rules
+                FOR INSERT WITH CHECK (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR branch_id IS NULL
+                    OR branch_id = current_setting('app.branch_id', true)::integer
                 )
-SQL());
+SQL');
+
+        DB::statement(<<<'SQL'
+            CREATE POLICY rls_commission_rules_update ON commission_rules
+                FOR UPDATE USING (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR branch_id IS NULL
+                    OR branch_id = current_setting('app.branch_id', true)::integer
+                )
+                WITH CHECK (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR branch_id IS NULL
+                    OR branch_id = current_setting('app.branch_id', true)::integer
+                )
+SQL');
+
+        DB::statement(<<<'SQL'
+            CREATE POLICY rls_commission_rules_delete ON commission_rules
+                FOR DELETE USING (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR branch_id IS NULL
+                    OR branch_id = current_setting('app.branch_id', true)::integer
+                )
+SQL');
+
+        DB::statement(<<<'SQL'
+            CREATE POLICY rls_commission_rules_admin ON commission_rules
+                FOR ALL
+                USING (current_setting('app.is_admin', true) = 'true')
+                WITH CHECK (current_setting('app.is_admin', true) = 'true')
+SQL');
 
         // ──────────────────────────────────────────────────────────────
         // Make new FKs DEFERRABLE (per Task 35 pattern)
@@ -483,7 +566,7 @@ SQL());
                   SELECT 1 FROM commission_rules cr
                   WHERE cr.salesman_id = e.id AND cr.is_active = true
               )
-SQL());
+SQL');
     }
 
     /**

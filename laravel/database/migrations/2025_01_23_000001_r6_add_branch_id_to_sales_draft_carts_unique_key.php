@@ -144,11 +144,31 @@ return new class extends Migration
             // One cart per (user, customer, branch). A salesman
             // switching branches with the same customer now gets
             // a fresh cart per branch — no cross-branch contamination.
-            DB::statement(
-                'ALTER TABLE sales_draft_carts
-                 ADD CONSTRAINT uq_sales_draft_user_customer_branch
-                 UNIQUE (user_id, customer_id, branch_id)'
-            );
+            //
+            // Guard with pg_constraint lookup so the migration is
+            // idempotent on a fresh install — 04_sales.sql (updated
+            // as part of R6) already declares this constraint. Without
+            // this check, `ADD CONSTRAINT` would fail with
+            // "relation already exists" on a fresh `migrate:fresh`.
+            $newConstraintExists = DB::selectOne(<<<SQL
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE t.relname = 'sales_draft_carts'
+                  AND n.nspname = 'public'
+                  AND c.contype = 'u'
+                  AND c.conname = 'uq_sales_draft_user_customer_branch'
+                LIMIT 1
+            SQL);
+
+            if (!$newConstraintExists) {
+                DB::statement(
+                    'ALTER TABLE sales_draft_carts
+                     ADD CONSTRAINT uq_sales_draft_user_customer_branch
+                     UNIQUE (user_id, customer_id, branch_id)'
+                );
+            }
         });
     }
 
@@ -159,7 +179,24 @@ return new class extends Migration
             DB::statement('ALTER TABLE sales_draft_carts DROP CONSTRAINT IF EXISTS uq_sales_draft_user_customer_branch');
 
             // Restore the old 2-column unique constraint.
-            DB::statement('ALTER TABLE sales_draft_carts ADD CONSTRAINT uq_sales_draft_user_customer UNIQUE (user_id, customer_id)');
+            // Guard with pg_constraint lookup so the down migration is idempotent
+            // — a second rollback attempt (or rollback on a fresh install where
+            // the constraint was created by 04_sales.sql) would otherwise fail
+            // with "relation already exists".
+            $oldConstraintExists = DB::selectOne(<<<SQL
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE t.relname = 'sales_draft_carts'
+                  AND n.nspname = 'public'
+                  AND c.contype = 'u'
+                  AND c.conname = 'uq_sales_draft_user_customer'
+                LIMIT 1
+            SQL);
+            if (!$oldConstraintExists) {
+                DB::statement('ALTER TABLE sales_draft_carts ADD CONSTRAINT uq_sales_draft_user_customer UNIQUE (user_id, customer_id)');
+            }
 
             // Restore the nullable branch_id (revert the NOT NULL + DEFAULT 0
             // changes) so the schema matches the pre-R6 state.
@@ -174,11 +211,26 @@ return new class extends Migration
             // a warning and move on, since rollback is a recovery path,
             // not a normal operation).
             try {
-                DB::statement(
-                    'ALTER TABLE sales_draft_carts
-                     ADD CONSTRAINT sales_draft_carts_branch_id_foreign
-                     FOREIGN KEY (branch_id) REFERENCES branches(id)'
-                );
+                // Guard: only add if no FK on branch_id already exists.
+                $fkExists = DB::selectOne(<<<SQL
+                    SELECT 1
+                    FROM pg_constraint c
+                    JOIN pg_class t ON t.oid = c.conrelid
+                    JOIN pg_namespace n ON n.oid = t.relnamespace
+                    JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+                    WHERE t.relname = 'sales_draft_carts'
+                      AND n.nspname = 'public'
+                      AND c.contype = 'f'
+                      AND a.attname = 'branch_id'
+                    LIMIT 1
+                SQL);
+                if (!$fkExists) {
+                    DB::statement(
+                        'ALTER TABLE sales_draft_carts
+                         ADD CONSTRAINT sales_draft_carts_branch_id_foreign
+                         FOREIGN KEY (branch_id) REFERENCES branches(id)'
+                    );
+                }
             } catch (\Throwable $e) {
                 Log::warning("R6 rollback: could not re-create FK on sales_draft_carts.branch_id (likely because branch_id=0 sentinel rows exist). Manual cleanup required: {$e->getMessage()}");
             }

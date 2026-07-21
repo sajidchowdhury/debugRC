@@ -81,7 +81,7 @@ SQL);
         //    On INSERT: notifies with key fields (status, customer_id, total).
         //    On UPDATE: only notifies if important columns changed
         //      (status, is_godown_prepared, is_challan_issued, is_reversed,
-        //       total_amount, paid_amount, is_call_a_day).
+        //       total_amount, paid_amount, call_a_day).
         // ============================================================
         DB::statement(<<<'SQL'
 CREATE OR REPLACE FUNCTION rcerp_notify_sales_invoice()
@@ -109,7 +109,7 @@ BEGIN
            NEW.is_reversed        IS DISTINCT FROM OLD.is_reversed OR
            NEW.total_amount       IS DISTINCT FROM OLD.total_amount OR
            NEW.paid_amount        IS DISTINCT FROM OLD.paid_amount OR
-           NEW.is_call_a_day      IS DISTINCT FROM OLD.is_call_a_day
+           NEW.call_a_day      IS DISTINCT FROM OLD.call_a_day
         THEN
             -- Build changes object with only the changed columns
             v_changes := '{}'::jsonb;
@@ -131,8 +131,8 @@ BEGIN
             IF NEW.paid_amount IS DISTINCT FROM OLD.paid_amount THEN
                 v_changes := jsonb_set(v_changes, '{paid_amount}', to_jsonb(NEW.paid_amount));
             END IF;
-            IF NEW.is_call_a_day IS DISTINCT FROM OLD.is_call_a_day THEN
-                v_changes := jsonb_set(v_changes, '{is_call_a_day}', to_jsonb(NEW.is_call_a_day));
+            IF NEW.call_a_day IS DISTINCT FROM OLD.call_a_day THEN
+                v_changes := jsonb_set(v_changes, '{call_a_day}', to_jsonb(NEW.call_a_day));
             END IF;
 
             PERFORM rcerp_notify('rcerp_sales_invoice', TG_TABLE_NAME, 'UPDATE', NEW.id, NEW.branch_id, v_changes);
@@ -157,24 +157,27 @@ DECLARE
     v_changes jsonb := '{}'::jsonb;
 BEGIN
     IF TG_OP = 'INSERT' THEN
+        -- sales_challans has no `status` column — use is_reversed and
+        -- is_dispatch_soft_hold as the state flags. The invoice link is
+        -- sales_invoice_id (not invoice_id).
         v_changes := jsonb_build_object(
-            'status',       NEW.status,
-            'invoice_id',   NEW.invoice_id,
-            'is_reversed',  NEW.is_reversed
+            'sales_invoice_id',     NEW.sales_invoice_id,
+            'is_reversed',          NEW.is_reversed,
+            'is_dispatch_soft_hold', NEW.is_dispatch_soft_hold
         );
         PERFORM rcerp_notify('rcerp_sales_challan', TG_TABLE_NAME, 'INSERT', NEW.id, NEW.branch_id, v_changes);
         RETURN NEW;
     END IF;
 
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.status      IS DISTINCT FROM OLD.status OR
-           NEW.is_reversed IS DISTINCT FROM OLD.is_reversed
+        IF NEW.is_reversed          IS DISTINCT FROM OLD.is_reversed OR
+           NEW.is_dispatch_soft_hold IS DISTINCT FROM OLD.is_dispatch_soft_hold
         THEN
-            IF NEW.status IS DISTINCT FROM OLD.status THEN
-                v_changes := jsonb_set(v_changes, '{status}', to_jsonb(NEW.status));
-            END IF;
             IF NEW.is_reversed IS DISTINCT FROM OLD.is_reversed THEN
                 v_changes := jsonb_set(v_changes, '{is_reversed}', to_jsonb(NEW.is_reversed));
+            END IF;
+            IF NEW.is_dispatch_soft_hold IS DISTINCT FROM OLD.is_dispatch_soft_hold THEN
+                v_changes := jsonb_set(v_changes, '{is_dispatch_soft_hold}', to_jsonb(NEW.is_dispatch_soft_hold));
             END IF;
             PERFORM rcerp_notify('rcerp_sales_challan', TG_TABLE_NAME, 'UPDATE', NEW.id, NEW.branch_id, v_changes);
         END IF;
@@ -198,10 +201,12 @@ DECLARE
     v_changes jsonb := '{}'::jsonb;
 BEGIN
     IF TG_OP = 'INSERT' THEN
+        -- sales_returns has `status` (created/confirmed/reversed) and
+        -- `sales_invoice_id` (not invoice_id).
         v_changes := jsonb_build_object(
-            'status',       NEW.status,
-            'invoice_id',   NEW.invoice_id,
-            'is_reversed',  NEW.is_reversed
+            'status',          NEW.status,
+            'sales_invoice_id', NEW.sales_invoice_id,
+            'is_reversed',     NEW.is_reversed
         );
         PERFORM rcerp_notify('rcerp_sales_return', TG_TABLE_NAME, 'INSERT', NEW.id, NEW.branch_id, v_changes);
         RETURN NEW;
@@ -239,9 +244,12 @@ DECLARE
     v_changes jsonb := '{}'::jsonb;
 BEGIN
     IF TG_OP = 'INSERT' THEN
+        -- customer_payments has no `status` column — use is_reversed and
+        -- payment_mode for state. transaction_type is added by migration
+        -- 2025_01_09_000005 (which runs before this one).
         v_changes := jsonb_build_object(
-            'status',           NEW.status,
             'transaction_type', NEW.transaction_type,
+            'payment_mode',     NEW.payment_mode,
             'amount',           NEW.amount,
             'customer_id',      NEW.customer_id
         );
@@ -250,13 +258,9 @@ BEGIN
     END IF;
 
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.status           IS DISTINCT FROM OLD.status OR
-           NEW.is_reversed      IS DISTINCT FROM OLD.is_reversed OR
+        IF NEW.is_reversed      IS DISTINCT FROM OLD.is_reversed OR
            NEW.amount           IS DISTINCT FROM OLD.amount
         THEN
-            IF NEW.status IS DISTINCT FROM OLD.status THEN
-                v_changes := jsonb_set(v_changes, '{status}', to_jsonb(NEW.status));
-            END IF;
             IF NEW.is_reversed IS DISTINCT FROM OLD.is_reversed THEN
                 v_changes := jsonb_set(v_changes, '{is_reversed}', to_jsonb(NEW.is_reversed));
             END IF;
@@ -281,15 +285,24 @@ SQL);
         DB::statement(<<<'SQL'
 CREATE OR REPLACE FUNCTION rcerp_notify_stock_change()
 RETURNS trigger AS $$
+DECLARE
+    v_branch_id integer;
 BEGIN
-    PERFORM rcerp_notify('rcerp_stock_change', TG_TABLE_NAME, 'INSERT', NEW.id, NEW.branch_id,
+    -- stock_transactions has no branch_id column directly — look it up
+    -- from the warehouse. qty and rate are the actual column names
+    -- (not qty_change / avg_cost).
+    SELECT w.branch_id INTO v_branch_id
+    FROM warehouses w
+    WHERE w.id = NEW.warehouse_id;
+
+    PERFORM rcerp_notify('rcerp_stock_change', TG_TABLE_NAME, 'INSERT', NEW.id, v_branch_id,
         jsonb_build_object(
             'product_id',     NEW.product_id,
             'warehouse_id',   NEW.warehouse_id,
             'reference_type', NEW.reference_type,
             'reference_id',   NEW.reference_id,
-            'qty_change',     NEW.qty_change,
-            'avg_cost',       NEW.avg_cost
+            'qty',            NEW.qty,
+            'rate',           NEW.rate
         )
     );
     RETURN NEW;
@@ -329,11 +342,14 @@ CREATE OR REPLACE FUNCTION rcerp_notify_system_policy()
 RETURNS trigger AS $$
 BEGIN
     IF TG_OP = 'UPDATE' AND NEW.mode IS DISTINCT FROM OLD.mode THEN
+        -- system_policies has no policy_key column — use id and mode
+        -- as the identifying attributes (mode is the unique identifier
+        -- for the active policy type).
         PERFORM rcerp_notify('rcerp_system', TG_TABLE_NAME, 'UPDATE', NEW.id, NULL,
             jsonb_build_object(
-                'policy_key', NEW.policy_key,
-                'old_mode',   OLD.mode,
-                'new_mode',   NEW.mode
+                'policy_id', NEW.id,
+                'old_mode',  OLD.mode,
+                'new_mode',  NEW.mode
             )
         );
     END IF;

@@ -18,14 +18,21 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('sales_invoices', function (Blueprint $table) {
-            $table->boolean('call_a_day')->default(false)->after('is_soft_hold');
-        });
+        // Guard with Schema::hasColumn so this migration is idempotent and
+        // safe on a fresh install — 04_sales.sql already declares
+        // `call_a_day boolean NOT NULL DEFAULT false` on sales_invoices.
+        if (!Schema::hasColumn('sales_invoices', 'call_a_day')) {
+            Schema::table('sales_invoices', function (Blueprint $table) {
+                $table->boolean('call_a_day')->default(false)->after('is_soft_hold');
+            });
+        }
 
         // Partial index: only index rows where call_a_day = false
         // (the Sales Today view always filters by call_a_day = false).
+        // Use IF NOT EXISTS for idempotency on re-runs and fresh installs
+        // where the index may already have been created by a prior partial run.
         DB::statement(
-            'CREATE INDEX idx_si_call_a_day_active ON sales_invoices (call_a_day) WHERE call_a_day = false'
+            'CREATE INDEX IF NOT EXISTS idx_si_call_a_day_active ON sales_invoices (call_a_day) WHERE call_a_day = false'
         );
     }
 
@@ -33,8 +40,12 @@ return new class extends Migration
     {
         DB::statement('DROP INDEX IF EXISTS idx_si_call_a_day_active');
 
-        Schema::table('sales_invoices', function (Blueprint $table) {
-            $table->dropColumn('call_a_day');
-        });
+        // Only drop the column if it exists (avoids error on fresh-install
+        // rollback where the column was created by 04_sales.sql, not by this migration).
+        if (Schema::hasColumn('sales_invoices', 'call_a_day')) {
+            Schema::table('sales_invoices', function (Blueprint $table) {
+                $table->dropColumn('call_a_day');
+            });
+        }
     }
 };

@@ -84,17 +84,17 @@ return new class extends Migration
             DB::statement('CREATE INDEX idx_sci_product ON sales_challan_items (product_id)');
             DB::statement('CREATE INDEX idx_sci_wh ON sales_challan_items (warehouse_id)');
 
-            // updated_at auto-touch trigger (consistent with other tables).
-            $trgExists = collect(DB::select(
-                "SELECT tgname FROM pg_trigger WHERE tgname = 'trg_sales_challan_items_updated_at'"
-            ))->count();
-            if (!$trgExists) {
-                DB::statement(
-                    'CREATE TRIGGER trg_sales_challan_items_updated_at ' .
-                    'BEFORE UPDATE ON sales_challan_items ' .
-                    'FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()'
-                );
-            }
+            // NOTE: We intentionally do NOT create the trg_sales_challan_items_updated_at
+            // trigger here. The table has only `created_at` (no `updated_at` column),
+            // because challan line items are append-only snapshots — they are never
+            // updated after creation. The shared update_updated_at_column() function
+            // assigns to NEW.updated_at, which would raise "column does not exist"
+            // at runtime if any UPDATE fired on this table.
+            //
+            // The earlier draft of this migration created the trigger anyway, which
+            // broke the GENERATED-column migration (2025_01_20_000000) that runs
+            // `UPDATE sales_challan_items SET cogs_amount = ...` as a backfill.
+            // That UPDATE would fire the trigger and abort the entire migration.
         }
 
         // Backfill: reconstruct sales_challan_items from stock_transactions
@@ -130,6 +130,10 @@ return new class extends Migration
 
     public function down(): void
     {
+        // Defensive: drop the trigger IF it exists (it may have been created
+        // by an older version of this migration before the trigger creation
+        // was removed). DROP TRIGGER IF EXISTS is a no-op if the trigger
+        // doesn't exist, so this is always safe.
         DB::statement('DROP TRIGGER IF EXISTS trg_sales_challan_items_updated_at ON sales_challan_items');
         DB::statement('DROP INDEX IF EXISTS idx_sci_challan');
         DB::statement('DROP INDEX IF EXISTS idx_sci_product');

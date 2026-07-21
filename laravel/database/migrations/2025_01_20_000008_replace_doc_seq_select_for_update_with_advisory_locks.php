@@ -78,8 +78,10 @@ return new class extends Migration
         //    the case because the RLS policy was designed with admin bypass, but
         //    we add an explicit policy for branch_id=0 visibility.
         //
-        //    The existing policy `document_sequences_select_policy` uses:
-        //      USING (branch_id = current_setting('app.branch_id')::int)
+        //    The existing policy `rls_document_sequences_select` (created by
+        //    migration 2025_01_20_000007_add_rls_branch_isolation.php) uses:
+        //      USING (current_setting('app.is_admin', true) = 'true'
+        //             OR branch_id = current_setting('app.branch_id', true)::int)
         //    which would hide branch_id=0 rows from non-admin, non-zero-branch users.
         //    We add a policy that always allows SELECT on branch_id=0 rows.
         DB::statement(<<<'SQL'
@@ -107,10 +109,19 @@ return new class extends Migration
         // 4. Drop the old per-branch RLS policies on document_sequences that
         //    would conflict with global (branch_id=0) sequence allocation.
         //    We keep the admin-bypass policy but replace branch-scoped ones.
-        DB::statement("DROP POLICY IF EXISTS document_sequences_select_policy ON document_sequences");
-        DB::statement("DROP POLICY IF EXISTS document_sequences_insert_policy ON document_sequences");
-        DB::statement("DROP POLICY IF EXISTS document_sequences_update_policy ON document_sequences");
-        DB::statement("DROP POLICY IF EXISTS document_sequences_delete_policy ON document_sequences");
+        //
+        //    IMPORTANT: The policy names here MUST match the names created by
+        //    migration 2025_01_20_000007_add_rls_branch_isolation.php, which
+        //    uses the pattern `rls_<table>_<op>` (e.g., rls_document_sequences_select).
+        //    An earlier draft of this migration tried to drop `document_sequences_select_policy`
+        //    (with `_policy` suffix) — those policies never existed, so the DROPs
+        //    were no-ops and the old per-branch policies would have remained,
+        //    causing the global branch_id=0 sequence rows to be invisible to
+        //    non-admin users.
+        DB::statement("DROP POLICY IF EXISTS rls_document_sequences_select ON document_sequences");
+        DB::statement("DROP POLICY IF EXISTS rls_document_sequences_insert ON document_sequences");
+        DB::statement("DROP POLICY IF EXISTS rls_document_sequences_update ON document_sequences");
+        DB::statement("DROP POLICY IF EXISTS rls_document_sequences_delete ON document_sequences");
 
         // 5. Admin bypass policy (superadmin can see/modify all sequences).
         DB::statement(<<<'SQL'
@@ -139,31 +150,33 @@ return new class extends Migration
         DB::statement("DROP POLICY IF EXISTS document_sequences_admin_all ON document_sequences");
 
         // Recreate the original per-branch RLS policies (as they were in Task 19 migration).
+        // Use the SAME policy names as migration 2025_01_20_000007 (`rls_<table>_<op>`)
+        // so a subsequent `migrate:rollback` of that migration finds and drops them correctly.
         DB::statement(<<<'SQL'
-            CREATE POLICY document_sequences_select_policy
+            CREATE POLICY rls_document_sequences_select
                 ON document_sequences FOR SELECT
-                USING (branch_id = current_setting('app.branch_id', true)::int
-                       OR current_setting('app.is_admin', true)::text = 'true');
+                USING (current_setting('app.is_admin', true) = 'true'
+                       OR branch_id = current_setting('app.branch_id', true)::int);
         SQL);
         DB::statement(<<<'SQL'
-            CREATE POLICY document_sequences_insert_policy
+            CREATE POLICY rls_document_sequences_insert
                 ON document_sequences FOR INSERT
-                WITH CHECK (branch_id = current_setting('app.branch_id', true)::int
-                            OR current_setting('app.is_admin', true)::text = 'true');
+                WITH CHECK (current_setting('app.is_admin', true) = 'true'
+                            OR branch_id = current_setting('app.branch_id', true)::int);
         SQL);
         DB::statement(<<<'SQL'
-            CREATE POLICY document_sequences_update_policy
+            CREATE POLICY rls_document_sequences_update
                 ON document_sequences FOR UPDATE
-                USING (branch_id = current_setting('app.branch_id', true)::int
-                       OR current_setting('app.is_admin', true)::text = 'true')
-                WITH CHECK (branch_id = current_setting('app.branch_id', true)::int
-                            OR current_setting('app.is_admin', true)::text = 'true');
+                USING (current_setting('app.is_admin', true) = 'true'
+                       OR branch_id = current_setting('app.branch_id', true)::int)
+                WITH CHECK (current_setting('app.is_admin', true) = 'true'
+                            OR branch_id = current_setting('app.branch_id', true)::int);
         SQL);
         DB::statement(<<<'SQL'
-            CREATE POLICY document_sequences_delete_policy
+            CREATE POLICY rls_document_sequences_delete
                 ON document_sequences FOR DELETE
-                USING (branch_id = current_setting('app.branch_id', true)::int
-                       OR current_setting('app.is_admin', true)::text = 'true');
+                USING (current_setting('app.is_admin', true) = 'true'
+                       OR branch_id = current_setting('app.branch_id', true)::int);
         SQL);
     }
 };

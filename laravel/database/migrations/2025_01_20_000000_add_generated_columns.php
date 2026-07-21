@@ -31,6 +31,17 @@ return new class extends Migration
     public function up(): void
     {
         // ──────────────────────────────────────────────────────────
+        // 0. Defensive cleanup: drop the broken trg_sales_challan_items_updated_at
+        //    trigger if it exists. Older versions of migration 2025_01_08_000005
+        //    created this trigger on sales_challan_items, but that table has
+        //    no `updated_at` column. The UPDATE backfill in step 2 below
+        //    would fire this trigger and fail with "column updated_at does
+        //    not exist". DROP TRIGGER IF EXISTS is a no-op on fresh installs
+        //    where the trigger was never created.
+        // ──────────────────────────────────────────────────────────
+        DB::statement('DROP TRIGGER IF EXISTS trg_sales_challan_items_updated_at ON sales_challan_items');
+
+        // ──────────────────────────────────────────────────────────
         // 1. sales_invoices.due_amount → GENERATED ALWAYS AS (total_amount - paid_amount) STORED
         // ──────────────────────────────────────────────────────────
 
