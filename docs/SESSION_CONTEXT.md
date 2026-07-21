@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-21 (R4 pushed)
+> **Last updated:** 2026-07-21 (R5 + H1 bugfix pushed)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -71,6 +71,9 @@ debugRC/
 │   ├── app/Services/Sales/                                  # SalesCartService, SalesInvoiceService, SalesChallanService, CustomerPaymentService, …
 │   ├── app/Services/Sales/SalesAuditLogger.php              # R4 added cartItemAdded/Updated/Removed/Cleared methods + recentSalesEvents entries
 │   ├── app/Services/Sales/SalesCartService.php              # R4 wired SalesAuditLogger into addItem/updateItem/removeItem/clearCart
+│   ├── app/Services/Sales/SalesInvoiceService.php           # R5 added assertCreditLimitUnderLock() — Customer::lockForUpdate() inside finalize + update transactions
+│   ├── app/Models/CustomerPayment.php                      # H1 bugfix: removed dead isDraft/isConfirmed/isCancelled (status column doesn't exist)
+│   ├── app/Http/Controllers/Admin/CustomerController.php   # H1 bugfix: removed whereNotIn('status') on CustomerPayment/SalesReturn queries in show()
 │   ├── app/Services/Stock/StockAvailabilityService.php      # R1 added searchProductsWithStock() + findProductByExactCode()
 │   ├── app/Models/Customer.php                              # has scopeSearch() — tsvector + GIN, ILIKE fallback
 │   ├── app/Models/Product.php                               # has scopeSearch() — tsvector + GIN, ILIKE fallback
@@ -117,7 +120,9 @@ Items are tackled in order. Each item has its own entry in
 | R2  | Add idempotency token to payment create (mirror finalize pattern)         | ✅ done      | Both `POST /admin/customer-payments` (web, 10-min cache) and `POST /api/v1/sales/payments` (API, 5-min cache) now require a UUID v4 `idempotency_token`. Fixes audit risks V2 + V6. See `REMEDIATION_LOG.md` §R2 for full diff. |
 | R3  | Add idempotency token to challan issue                                    | ✅ done      | Both `POST /admin/sales-challans/issue/{invoiceId}` (web, 10-min cache) and `POST /api/v1/sales/challans/issue` (API, 5-min cache) now require a UUID v4 `idempotency_token`. Fixes audit risk V3. See `REMEDIATION_LOG.md` §R3 for full diff. |
 | R4  | Add cart mutation audit logging                                           | ✅ done      | Extended `SalesAuditLogger` with `cartItemAdded`, `cartItemUpdated`, `cartItemRemoved`, `cartCleared`. Wired into `SalesCartService` via DI — fires one audit event per successful cart mutation. Both Blade + API paths covered (they share the service). Fixes audit risk V4, mitigates C2 (Laravel side). See `REMEDIATION_LOG.md` §R4 for full diff. |
-| R5  | (TBD)                                                                     | ⏳ pending   | Likely candidate: lock the customer row before credit-limit check (V5). |
+| R5  | Lock the customer row before credit-limit check                          | ✅ done      | Added `assertCreditLimitUnderLock()` helper that does `Customer::lockForUpdate()->find()` + `checkCreditLimit` + throw-on-exceed. Called at the top of the transaction in BOTH `finalizeFromCart` and `updateInvoice`. The pre-transaction `checkCreditLimit` call is kept for fast UX feedback. Fixes audit risk V5, mitigates C1 (Laravel side). See `REMEDIATION_LOG.md` §R5 for full diff. |
+| H1  | Hotfix: `customer_payments.status` column does not exist                  | ✅ done      | Production bug: viewing a customer's "360° Hub" page threw `SQLSTATE[42703]` because `CustomerController::show` filtered `CustomerPayment` queries with `->whereNotIn('status', ['cancelled'])`, but `customer_payments` has no `status` column (only `is_reversed`). Removed the broken filters; also removed the dead `isDraft/isConfirmed/isCancelled` methods on `CustomerPayment` model. See `REMEDIATION_LOG.md` §H1 for full diff. |
+| R6  | (TBD)                                                                     | ⏳ pending   | Likely candidate: add `branch_id` to `sales_draft_carts` unique key (V11, C7). |
 
 > When the user assigns the next R# item, add a row here and create a
 > matching section in `REMEDIATION_LOG.md`. **Do not start work without
@@ -312,73 +317,130 @@ Items are tackled in order. Each item has its own entry in
     challan, so duplicate-cancellation fails with "challan is already
     reversed." Low priority.
 
-### 5.5 R4: Cart mutation audit logging design
+### 5.6 R5: Customer row lock before credit-limit check
 
-**Problem:** `SalesCartService` mutates `sales_draft_carts.items_json`
-on every add / update / remove / clear, but no audit trail was
-written. Audit risk V4 (Medium): if a salesman tampers with
-another salesman's cart (e.g. via shared user_ids or session
-hijack), there was no trail. Legacy had no equivalent either
-(common risk C2).
+**Problem:** `SalesInvoiceService::checkCreditLimit` was called
+BEFORE the DB transaction opened — so two concurrent finalize
+(or edit) calls for the same customer could both read the same
+`customer_ledger` SUM, both pass the credit-limit check, and both
+post debits — pushing the customer over the limit. Audit risk V5
+(Medium), common risk C1 (Medium).
 
-**Decision: log at the SERVICE layer, not the controller layer.**
+**Decision: check TWICE — fast-fail UX check + authoritative
+in-transaction check.**
 
-Both `SalesCartController` (web Blade AJAX) and `SalesCartApiController`
-(mobile JSON API) flow through the same `SalesCartService`. Putting
-the audit call in the service means:
+The original pre-transaction `checkCreditLimit` call is kept as
+a fast-fail UX gate: it gives the user immediate feedback
+("credit limit exceeded, override?") without opening a transaction.
+This check is **non-authoritative** — it can pass and the
+transaction can still fail if a concurrent finalize posts the
+debit first.
 
-- One code path, both surfaces covered automatically.
-- Future cart-mutation callers (e.g. a CLI import tool) would also
-  be audited without thinking about it.
-- The `user_id` is always passed as an explicit argument to the
-  service methods, so no `Auth::id()` ambiguity.
+The new authoritative check lives inside the transaction via a
+new private helper:
 
-**Four new `SalesAuditLogger` methods, mirroring the existing
-`saleCreated` / `paymentReceived` / etc. convention:**
+```php
+private function assertCreditLimitUnderLock(
+    int $customerId, float $amount,
+    bool $isOverride, string $overrideReason,
+    string $messageTpl
+): void {
+    $customer = Customer::lockForUpdate()->find($customerId);
+    if (!$customer) { throw new \RuntimeException(...); }
+    $creditCheck = $this->checkCreditLimit($customerId, $amount);
+    if (!$creditCheck['exceeds']) return;
+    if ($isOverride && strlen($overrideReason) >= 10) return;
+    if ($isOverride && strlen($overrideReason) < 10) {
+        throw new \RuntimeException('Override reason must be at least 10 characters...');
+    }
+    throw new \RuntimeException(sprintf($messageTpl, ...));
+}
+```
 
-| Method              | Action              | Captures                                                                                                          |
-|---------------------|---------------------|-------------------------------------------------------------------------------------------------------------------|
-| `cartItemAdded`     | `cart_item_added`   | customer_id, product_id, qty_added, rate, merged (bool), cart_item_count, cart_subtotal                           |
-| `cartItemUpdated`   | `cart_item_updated` | customer_id, product_id, old_qty, new_qty, old_rate, new_rate, cart_subtotal                                      |
-| `cartItemRemoved`   | `cart_item_removed` | customer_id, product_id, removed_qty, removed_rate, removed_total, cart_item_count, cart_subtotal                 |
-| `cartCleared`       | `cart_cleared`      | customer_id, items_cleared_count, items_cleared_value                                                             |
+This is called as the **first thing** inside `DB::transaction()`
+in BOTH `finalizeFromCart` (line ~144) and `updateInvoice`
+(line ~496). Concurrent finalize/edit calls for the same customer
+will block on `Customer::lockForUpdate()` until the first
+transaction commits/rolls back.
 
-**Why these fields:**
+**Why lock the customer row, not the customer_ledger row?**
 
-- `merged` on `cart_item_added` distinguishes a brand-new line vs
-  a same-rate qty bump (same product + same rate merges in legacy
-  cart semantics).
-- `old_qty` / `old_rate` / `new_qty` / `new_rate` on
-  `cart_item_updated` lets an auditor replay the delta without
-  reconstructing prior cart snapshots.
-- `removed_qty` / `removed_rate` / `removed_total` on
-  `cart_item_removed` captures the foregone revenue.
-- `items_cleared_count` / `items_cleared_value` on `cart_cleared`
-  flags a suspicious bulk-clear (e.g. right before finalizing with
-  a different cart).
-- `cart_subtotal` after every mutation lets an auditor chart the
-  cart's value over time.
+The `customer_ledger` table can have many rows per customer (one
+per transaction). Locking all of them would be expensive. Locking
+just the latest row doesn't help (a new ledger entry is what
+changes the SUM). Locking the `customers` row is the natural
+serialization point — it's a single row, and the credit-limit
+check is conceptually about the customer as a whole.
 
-**All four delegate to `UserAuditLogger::log()`** which dual-writes:
+**Why keep the pre-transaction check?**
 
-- `user_audit_log` table (PG, jsonb `details` column)
-- `logs/user_audit.log` file (JSON lines, defense in depth)
+Removing it would mean every credit-limit-exceeded attempt opens
+a transaction, locks the customer row, runs the SUM query, throws,
+and rolls back — wasted work + holds the lock briefly. The
+pre-transaction check short-circuits the common case (user clearly
+over the limit, no override) before any of that happens.
 
-**Recent-events query** (`recentSalesEvents`) was updated to include
-the 4 new action names so any future audit dashboard sees them.
+**One extra `checkCreditLimit` call per finalize/edit:** the cost
+is a single `SELECT SUM(debit) - SUM(credit) FROM customer_ledger
+WHERE customer_id = ? AND is_reversed = false` — negligible
+(~1ms with the existing indexes).
 
-**Signature change to `clearCart`:**
+**Override semantics:** the in-transaction check honors the same
+override (`credit_limit_override=true` + `override_reason` >= 10
+chars) as the pre-transaction check. If the user supplies a valid
+override, the in-transaction check returns successfully even if
+the limit is exceeded.
 
-- Before: `clearCart(int $userId, int $customerId): array`
-- After:  `clearCart(int $userId, int $customerId, ?int $branchId = null): array`
+### 5.7 H1: `customer_payments.status` column bugfix
 
-This is backward-compatible (new optional parameter). Both existing
-callers (`SalesCartController::clear`, `SalesCartApiController::clear`)
-pass only two args and will read `$cart->branch_id` for the audit
-row. If a future caller wants to override (e.g. an admin forcing
-a clear from a different branch), they can pass it explicitly.
+**Problem reported by user (2026-07-21):**
 
-### 5.6 What was NOT changed (deliberately)
+> SQLSTATE[42703]: Undefined column: 7 ERROR: column "status" does
+> not exist ... SQL: select sum("amount") as aggregate from
+> "customer_payments" where "customer_id" = 454 and "is_reversed"
+> = 0 and "status" not in (cancelled) ...
+
+**Root cause:** `CustomerController::show` (the customer "360°
+Hub" page) had three KPI queries that filtered on a `status`
+column that doesn't exist on `customer_payments` (and is a
+misleading no-op on `sales_returns`):
+
+1. `CustomerPayment::...->whereNotIn('status', ['cancelled'])` —
+   `customer_payments` has NO `status` column. Schema is `is_reversed`
+   boolean flag only. **This was the user's reported error.**
+2. `CustomerPayment::...->whereNotIn('status', ['cancelled'])` —
+   same as #1, on the `lastPayment` query.
+3. `SalesReturn::...->whereNotIn('status', ['cancelled'])` —
+   `sales_returns` DOES have a `status` column, but its CHECK
+   constraint only allows `('created','confirmed','reversed')`.
+   `'cancelled'` is not a valid value, so this filter was a no-op
+   (filtered out nothing) but didn't error.
+
+**Fix:**
+
+- Removed all three `->whereNotIn('status', ...)` filters from
+  `CustomerController::show`. The `is_reversed = false` predicate
+  already excludes reversed/cancelled rows.
+- Removed the dead `isDraft()` / `isConfirmed()` / `isCancelled()`
+  methods from `CustomerPayment` model — they referenced the
+  non-existent `status` column and were never called anywhere
+  in the codebase (verified by grep).
+- Updated the `CustomerPayment` class docblock to clarify that
+  the table has no `status` column.
+
+**Why this was caught only now:** the `show` page is hit when
+viewing an existing customer. New customers with no payments
+also hit the queries (returning 0/empty), so the bug surfaced
+when viewing ANY customer — including during new-customer setup
+flows that redirect to the show page.
+
+**Similar bug class to watch for:** other Laravel controllers
+may have copy-pasted `->whereNotIn('status', ['cancelled'])`
+filters onto tables that don't have a `status` column. A grep
+for this pattern on `CustomerPayment` queries was done — only
+the 2 instances in `CustomerController::show` were affected.
+
+### 5.8 What was NOT changed (deliberately)
 
 - The Legacy sales entry code (`legacy/`) was not touched. Legacy
   is still the production system; the audit is a parallel analysis.
@@ -414,8 +476,8 @@ a clear from a different branch), they can pass it explicitly.
 
 (Items the user has asked for but that are not yet done.)
 
-- **None outstanding.** R1, R2, R3, and R4 are complete and pushed. The
-  user has not yet assigned R5.
+- **None outstanding.** R1, R2, R3, R4, R5, and H1 (bugfix) are
+  complete and pushed. The user has not yet assigned R6.
 
 When the user gives the next instruction, append it here as a
 checkbox item. When done, move it to the "Completed Work Items"
@@ -450,6 +512,22 @@ section below.
       (`SalesCartController`) and API (`SalesCartApiController`)
       paths covered by virtue of the shared service. Committed &
       pushed. See `REMEDIATION_LOG.md` §R4 for the full diff.
+- [x] **R5** — Lock the customer row before credit-limit check.
+      Added `assertCreditLimitUnderLock()` helper that does
+      `Customer::lockForUpdate()->find()` + `checkCreditLimit` +
+      throw-on-exceed. Called at the top of the transaction in
+      BOTH `finalizeFromCart` and `updateInvoice`. The
+      pre-transaction `checkCreditLimit` call is kept for fast
+      UX feedback. Committed & pushed. See `REMEDIATION_LOG.md` §R5
+      for the full diff.
+- [x] **H1 (bugfix)** — Fixed `SQLSTATE[42703]: column "status"
+      does not exist` on `customer_payments` queries in
+      `CustomerController::show`. Removed broken
+      `->whereNotIn('status', ['cancelled'])` filters (the table has
+      no `status` column — only `is_reversed`). Also removed dead
+      `isDraft/isConfirmed/isCancelled` methods on `CustomerPayment`
+      model. Committed & pushed. See `REMEDIATION_LOG.md` §H1 for
+      the full diff.
 
 ---
 

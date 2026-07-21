@@ -173,7 +173,6 @@ class CustomerController extends BaseMasterDataController
 
         $totalPaid = (float) CustomerPayment::where('customer_id', $customer->id)
             ->where('is_reversed', false)
-            ->whereNotIn('status', ['cancelled'])
             ->sum('amount');
 
         $openInvoices = SalesInvoice::where('customer_id', $customer->id)
@@ -184,13 +183,11 @@ class CustomerController extends BaseMasterDataController
 
         $lastPayment = CustomerPayment::where('customer_id', $customer->id)
             ->where('is_reversed', false)
-            ->whereNotIn('status', ['cancelled'])
             ->orderBy('payment_date', 'desc')
             ->first();
 
         $totalReturns = (float) SalesReturn::where('customer_id', $customer->id)
             ->where('is_reversed', false)
-            ->whereNotIn('status', ['cancelled'])
             ->sum('total_amount');
 
         return view("{$this->viewDir}.show", [

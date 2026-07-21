@@ -10,7 +10,10 @@ use App\Models\Scopes\BranchScope;
 /**
  * Customer Payment — Phase 8.4.
  *
- * Records money received from a customer. Two-phase: draft → confirm → cancel.
+ * Records money received from a customer. Lifecycle is two-phase
+ * create → confirm → reverse. Reversal (cancellation) is recorded
+ * via the `is_reversed` boolean flag (+ `reversed_at`, `reversed_by`,
+ * `reverse_reason`); there is NO `status` enum column on this table.
  *
  * On confirm:
  *   1. GL: Dr Bank/Cash / Cr Accounts Receivable
@@ -20,6 +23,10 @@ use App\Models\Scopes\BranchScope;
  *   3. Invoice allocation (if against a specific invoice): invoice_payment_allocations
  *   4. Invoice paid_amount updated
  *   5. Intercompany settlement (if bank-mode + cross-branch): branch_ledger entry
+ *
+ * R5-bugfix (2026-07-21): the dead isDraft() / isConfirmed() /
+ * isCancelled() methods (which referenced a non-existent `status`
+ * column) were removed. Use `! $payment->is_reversed` instead.
  *
  * @property int $id
  * @property string $payment_code
@@ -126,9 +133,13 @@ class CustomerPayment extends Model
         return $this->allocations();
     }
 
-    public function isDraft(): bool { return $this->status === 'draft'; }
-    public function isConfirmed(): bool { return $this->status === 'confirmed'; }
-    public function isCancelled(): bool { return $this->status === 'cancelled'; }
+    // R5-bugfix (2026-07-21): the legacy isDraft() / isConfirmed() /
+    // isCancelled() methods were removed. They referenced a `status`
+    // column that does not exist on `customer_payments` — the table
+    // uses `is_reversed` boolean flag only. A reversed/cancelled
+    // payment has `is_reversed = true`; use `! $payment->is_reversed`
+    // for the equivalent of "is this payment active?".
+
     public function isBankMode(): bool { return $this->payment_mode === 'bank' && $this->bank_id !== null; }
 
     /**

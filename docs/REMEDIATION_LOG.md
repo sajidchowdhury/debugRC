@@ -608,3 +608,281 @@ reconstructed.
   that calls `SalesAuditLogger::recentSalesEvents()` filtered to
   the 4 cart actions, so managers can review cart tampering without
   querying the DB directly.
+
+
+---
+
+## R5 — Lock customer row before credit-limit check
+
+**Date:** 2026-07-21
+**Status:** ✅ Done
+**Audit risk closed:** V5 (Medium) — "Credit-limit check race"
+**Audit risk mitigated:** C1 (Medium) — "Credit-limit check before customer row lock" (Laravel side only; Legacy still has the race)
+
+### Problem
+
+`SalesInvoiceService::checkCreditLimit` was called BEFORE the
+DB transaction opened. Two concurrent `finalizeFromCart` (or
+`updateInvoice`) calls for the same customer could both:
+
+1. Read the same `customer_ledger` SUM (debit − credit).
+2. Both pass the credit-limit check.
+3. Both open their transactions.
+4. Both post new `customer_ledger` debit entries.
+5. Both commit — and the customer's AR balance now exceeds the
+   credit limit.
+
+The existing per-product `lockForUpdate` in the finalize transaction
+serializes concurrent finalizes that touch the same products, but it
+does nothing for two finalizes against the same customer with
+**different** products.
+
+### Solution
+
+The credit-limit check is now performed TWICE:
+
+1. **OUTSIDE the transaction** (kept from the original code) —
+   fast-fail UX gate. No lock, no transaction. Gives the user
+   immediate feedback ("credit limit exceeded, override?") without
+   paying the cost of opening a transaction for the common
+   rejection case. This check is non-authoritative.
+
+2. **INSIDE the transaction** (new) — authoritative. Performed
+   immediately after `Customer::lockForUpdate()->find($customerId)`.
+   The row lock serializes concurrent finalize/edit calls for the
+   same customer — the second one blocks until the first transaction
+   commits or rolls back, then re-reads the (now-updated)
+   `customer_ledger` SUM.
+
+Both checks call the existing `checkCreditLimit()` helper. The
+in-transaction check lives in a new private method
+`assertCreditLimitUnderLock()` that also handles the override
+semantics (override allowed if `credit_limit_override=true` AND
+`override_reason` is ≥ 10 chars).
+
+### The new helper
+
+```php
+private function assertCreditLimitUnderLock(
+    int $customerId, float $amount,
+    bool $isOverride, string $overrideReason,
+    string $messageTpl
+): void {
+    $customer = Customer::lockForUpdate()->find($customerId);
+    if (!$customer) {
+        throw new \RuntimeException("Customer {$customerId} not found while locking for credit check.");
+    }
+
+    $creditCheck = $this->checkCreditLimit($customerId, $amount);
+
+    if (!$creditCheck['exceeds']) return;
+
+    if ($isOverride && strlen($overrideReason) >= 10) return;
+
+    if ($isOverride && strlen($overrideReason) < 10) {
+        throw new \RuntimeException(
+            'Override reason must be at least 10 characters when exceeding credit limit.'
+        );
+    }
+
+    throw new \RuntimeException(sprintf(
+        $messageTpl,
+        $creditCheck['current_balance'],
+        $creditCheck['credit_limit'],
+        $amount
+    ));
+}
+```
+
+The `$messageTpl` parameter lets the two callers (`finalizeFromCart`
+and `updateInvoice`) use their own wording in the error message
+without duplicating the lock + check + override logic.
+
+### Files modified
+
+| File | Change |
+|------|--------|
+| `laravel/app/Services/Sales/SalesInvoiceService.php` | Added `use App\Models\Customer;` import. Updated class docblock. Added `assertCreditLimitUnderLock()` private method. Called it at the top of the transaction in both `finalizeFromCart` (after `Customer::lockForUpdate()->find()`) and `updateInvoice` (same). The pre-transaction `checkCreditLimit` calls are kept with a comment explaining they are non-authoritative fast-fail UX gates. |
+
+### Files NOT modified (deliberately)
+
+- `laravel/app/Services/Sales/CustomerPaymentService.php` — payments
+  don't increase the customer's AR balance (they credit it), so the
+  credit-limit check doesn't apply.
+- `laravel/app/Services/Sales/SalesChallanService.php` — challan
+  issue doesn't change the AR balance (the GL was already posted at
+  finalize). No credit-limit check there.
+- `legacy/` — out of scope. The Legacy system has the same race
+  (common risk C1 applies to both). A future R# item could port
+  this fix.
+
+### Verification
+
+- PHP binary not available in the Z.ai sandbox — `php -l` and
+  `php artisan test` could not be run. User should verify in their
+  dev environment:
+  ```bash
+  cd laravel
+  php -l app/Services/Sales/SalesInvoiceService.php
+  php artisan test
+  ```
+
+- Manual race-condition test (best done in dev):
+  1. Set a customer's `credit_limit` to 1000.
+  2. Confirm their AR balance is 0.
+  3. Open two `psql` sessions, both `BEGIN;`.
+  4. In session 1: `SELECT * FROM customers WHERE id = X FOR UPDATE;`
+     (this holds the lock).
+  5. In session 2: try to finalize an invoice for customer X via
+     the web UI — the request should hang (blocked on the lock).
+  6. In session 1: `INSERT INTO customer_ledger (...) VALUES (...);`
+     (a 600 debit) then `COMMIT;`.
+  7. Session 2 should now resume, re-read the customer_ledger SUM
+     (which is now 600), and the credit check should pass for an
+     invoice of 300 (total 900 ≤ 1000) but fail for an invoice of
+     500 (total 1100 > 1000).
+
+### Risks introduced
+
+- **Mild contention on `customers` row for high-volume customers.**
+  If many salesmen are simultaneously finalizing invoices for the
+  same customer (e.g. a chain store with multiple cashiers on the
+  same account), they will serialize on the customer row lock.
+  This is the intended trade-off — without the lock, the
+  credit-limit check is meaningless under concurrency. The lock
+  is held for the duration of the finalize transaction (~10–50ms
+  typical), so contention should be minimal in practice.
+
+- **One extra `checkCreditLimit` query per finalize/edit.** The
+  pre-transaction call was already there; R5 adds the in-transaction
+  call. The query is `SELECT SUM(debit) - SUM(credit) FROM
+  customer_ledger WHERE customer_id = ? AND is_reversed = false`
+  — runs in ~1ms with the existing `idx_cl_customer` index. The
+  `Customer::lockForUpdate()->find()` is also a single-row primary
+  key lookup. Negligible overhead.
+
+- **Potential for deadlocks if other code paths also lock the
+  customer row.** The `Customer` model is widely used but
+  `lockForUpdate()` on it was not common before R5. A grep for
+  `Customer::lockForUpdate` showed no other call sites in the
+  codebase, so deadlock risk is low. If future code adds another
+  `Customer::lockForUpdate()` call, ensure the lock ordering is
+  consistent (customer row first, then product rows, then invoice
+  row — which is what R5 does).
+
+### Follow-ups (NOT part of R5)
+
+- **R6 (next, TBD):** Likely candidate is to add `branch_id` to
+  the `sales_draft_carts` unique key (audit risk V11 / common
+  risk C7 — prevents cross-branch cart contamination).
+
+- **R43 (audit recommendation, carried from before):** Add
+  integration tests for the credit-limit race (R5) — two
+  concurrent finalizes for the same customer.
+
+- **R44 (audit recommendation):** Add integration tests for the
+  idempotency token (R2 / R3) — duplicate submission with same
+  token.
+
+- **R45 (new, suggested):** Add integration tests for the cart
+  audit logging (R4) — verify each mutation writes the expected
+  audit row with the expected `details` JSON.
+
+- Consider porting the R5 fix to the Legacy system. Legacy
+  `customer_ledger.running_balance` race is a similar problem
+  (audit risk L1, top of the Legacy risks list) — a customer-row
+  lock before reading `running_balance` would close it.
+
+
+---
+
+## H1 — Hotfix: `customer_payments.status` column does not exist
+
+**Date:** 2026-07-21 (reported and fixed in the same session as R5)
+**Status:** ✅ Done
+**Type:** Production bug (not part of the R# backlog)
+
+### Problem reported by user
+
+When setting up / viewing a new customer, the customer "360° Hub"
+page (`CustomerController::show`) threw:
+
+```
+SQLSTATE[42703]: Undefined column: 7 ERROR: column "status" does
+not exist
+LINE 1: ...ere "customer_id" = $1 and "is_reversed" = $2 and "status" n...
+^ (Connection: pgsql, Host: rcerp_postgres, Port: 5432, Database:
+rcerp, SQL: select sum("amount") as aggregate from
+"customer_payments" where "customer_id" = 454 and "is_reversed" = 0
+and "status" not in (cancelled) and "customer_payments"."deleted_at"
+is null)
+```
+
+### Root cause
+
+`CustomerController::show` had three KPI queries with broken
+`->whereNotIn('status', ...)` filters:
+
+1. `CustomerPayment::where('customer_id', ...)->where('is_reversed', false)->whereNotIn('status', ['cancelled'])->sum('amount')`
+   — **broken**: `customer_payments` table has NO `status` column.
+   Schema is `is_reversed boolean` + `reversed_at` + `reversed_by`
+   + `reverse_reason` only. This was the user's reported error.
+
+2. `CustomerPayment::...->whereNotIn('status', ['cancelled'])->orderBy('payment_date', 'desc')->first()`
+   — **same bug** on the `lastPayment` query.
+
+3. `SalesReturn::...->whereNotIn('status', ['cancelled'])->sum('total_amount')`
+   — `sales_returns` DOES have a `status` column, but its CHECK
+   constraint only allows `('created','confirmed','reversed')`.
+   `'cancelled'` is not a valid value, so this filter was a no-op
+   (filtered out nothing) but didn't error. Misleading code.
+
+The `CustomerPayment` model also had three dead methods — `isDraft()`,
+`isConfirmed()`, `isCancelled()` — that all referenced `$this->status`,
+which would also error out if any code called them. A grep confirmed
+no callers anywhere in the codebase.
+
+### Fix
+
+| File | Change |
+|------|--------|
+| `laravel/app/Http/Controllers/Admin/CustomerController.php` | Removed `->whereNotIn('status', ['cancelled'])` from the 2 `CustomerPayment` queries in `show()` (totalPaid + lastPayment). Removed `->whereNotIn('status', ['cancelled'])` from the `SalesReturn` query in `show()` (totalReturns). `is_reversed = false` already excludes reversed/cancelled rows on both tables. |
+| `laravel/app/Models/CustomerPayment.php` | Removed the 3 dead methods `isDraft()`, `isConfirmed()`, `isCancelled()` (they referenced a non-existent `status` column). Updated class docblock to clarify that `customer_payments` has no `status` column — only `is_reversed`. Added an inline comment marking the removal. |
+
+### Files NOT modified
+
+- `SalesInvoice` / `SalesReturn` / `DamageInvoice` / `WarehouseTransfer` / `CommissionEntry` models — they all have a `status` column on their respective tables, so their `isDraft/isConfirmed/isCancelled` methods are valid.
+- `CustomerPaymentApiController.php` line 256 — `whereNotIn('status', ['cancelled'])` is on `SalesInvoice`, not `CustomerPayment`. Valid.
+- All other `whereNotIn('status', ...)` usages across the codebase — verified to be on tables that actually have a `status` column (`sales_invoices`, `purchase_orders`, `purchase_receives`, `purchase_returns`, `damages`, `warehouse_transfers`, `stock_take_sessions`).
+
+### Verification
+
+- Manual: open any customer's "360° Hub" page (`/admin/customers/{id}`)
+  — the page should now load without the SQL error. The `totalPaid`
+  and `lastPayment` KPIs should reflect the customer's non-reversed
+  payments (same as before the bug, since `is_reversed = false` was
+  already in the WHERE clause).
+- For a brand-new customer with no payments, both `totalPaid` and
+  `lastPayment` should be 0 / null respectively — the page should
+  load cleanly.
+
+### Risks introduced
+
+- **None.** The fix is purely removing broken filters. The
+  `is_reversed = false` predicate was already present and is the
+  correct way to exclude cancelled/reversed payments on
+  `customer_payments` and `sales_returns`.
+
+### Follow-ups
+
+- Consider adding a CI check (e.g., a Laravel static-analysis rule
+  or a test that introspects table columns) that flags
+  `->whereNotIn('status', ...)` calls on models whose table doesn't
+  have a `status` column. This would prevent the same bug class
+  from recurring.
+
+- Other Laravel models that may have similar vestigial
+  `isDraft/isConfirmed/isCancelled` methods referencing
+  non-existent `status` columns should be audited. A quick grep
+  shows `CustomerPayment` was the only one, but the same pattern
+  may exist for other tables.

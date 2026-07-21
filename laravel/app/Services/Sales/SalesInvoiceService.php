@@ -4,6 +4,7 @@ namespace App\Services\Sales;
 
 use App\Models\SalesInvoice;
 use App\Models\SalesDraftCart;
+use App\Models\Customer;
 use App\Models\Employee;
 use App\Services\Stock\StockAvailabilityService;
 use App\Services\Stock\StockService;
@@ -32,6 +33,13 @@ use Illuminate\Support\Facades\Log;
  *
  * The invoice is a DRAFT at this point — no stock movement yet.
  * Stock moves on challan issue (Phase 8.3).
+ *
+ * R5 (2026-07-21): the credit-limit check is now performed TWICE —
+ *   (a) OUTSIDE the transaction for fast UX feedback (no lock), and
+ *   (b) INSIDE the transaction after `Customer::lockForUpdate()->find()`
+ *       for race-safety. The in-transaction check is authoritative.
+ * This closes audit risk V5 and common risk C1 (credit-limit race
+ * window when two concurrent finalizes/edit for the same customer).
  */
 class SalesInvoiceService
 {
@@ -101,7 +109,9 @@ class SalesInvoiceService
         $transport = (float) ($data['transport_cost'] ?? 0);
         $totalAmount = $subTotal + $transport - $discount;
 
-        // Step 3: Credit limit check.
+        // Step 3: Credit limit check (UX fast-fail — no lock yet).
+        // R5: an authoritative re-check runs INSIDE the transaction below,
+        // after locking the customer row, to eliminate the race window.
         $creditCheck = $this->checkCreditLimit($customerId, $totalAmount);
         $isOverride = !empty($data['credit_limit_override']);
         $overrideReason = trim($data['override_reason'] ?? '');
@@ -124,6 +134,20 @@ class SalesInvoiceService
             $data, $items, $customerId, $branchId, $subTotal, $discount, $transport, $totalAmount,
             $creditCheck, $isOverride, $overrideReason
         ) {
+            // R5: Lock the customer row FOR UPDATE before re-checking the
+            // credit limit. This serializes concurrent finalize/edit calls
+            // for the same customer, so only one can pass the check at a
+            // time. Without this lock, two concurrent finalizes could both
+            // read the same `customer_ledger` SUM, both pass the check, and
+            // both post debits — pushing the customer over the limit.
+            // See audit risk V5 / common risk C1.
+            $this->assertCreditLimitUnderLock(
+                $customerId, $totalAmount, $isOverride, $overrideReason,
+                'Credit limit exceeded. Customer balance: %s, '
+                . 'Credit limit: %s, This invoice: %s. '
+                . 'Override with a reason to proceed.'
+            );
+
             // Lock branch products FOR UPDATE (prevent race conditions on concurrent finalizes).
             $productIds = collect($items)->pluck('product_id')->unique()->toArray();
             $this->stockService->lockBranchProductsForUpdate($branchId, $productIds);
@@ -436,7 +460,9 @@ class SalesInvoiceService
         $transport = (float) ($data['transport_cost'] ?? 0);
         $newTotal = $subTotal + $transport - $discount;
 
-        // --- Credit limit check (NET increase, not full new total) ---
+        // --- Credit limit check (UX fast-fail — no lock yet) ---
+        // R5: an authoritative re-check runs INSIDE the transaction below,
+        // after locking the customer row, to eliminate the race window.
         $netIncrease = max(0.0, $newTotal - $oldTotal);
         $creditCheck = $this->checkCreditLimit($customerId, $netIncrease);
         $isOverride = !empty($data['credit_limit_override']);
@@ -462,8 +488,18 @@ class SalesInvoiceService
         return DB::transaction(function () use (
             $invoiceId, $invoice, $items, $customerId, $branchId, $oldTotal, $newTotal,
             $subTotal, $discount, $transport, $invoiceDate, $oldJournalId,
-            $creditCheck, $isOverride, $overrideReason, $updatedBy, $data
+            $creditCheck, $isOverride, $overrideReason, $updatedBy, $data, $netIncrease
         ) {
+            // R5: Lock the customer row FOR UPDATE before re-checking the
+            // credit limit. Serializes concurrent finalize/edit for the same
+            // customer. See audit risk V5 / common risk C1.
+            $this->assertCreditLimitUnderLock(
+                $customerId, $netIncrease, $isOverride, $overrideReason,
+                "Updating this invoice would exceed the customer's credit limit. "
+                . "Current balance: %s, Credit limit: %s, Net increase: %s. "
+                . "Override with a reason to proceed."
+            );
+
             // Lock the invoice row FOR UPDATE.
             $locked = SalesInvoice::lockForUpdate()->find($invoiceId);
             if (!$locked) {
@@ -843,6 +879,62 @@ class SalesInvoiceService
             'credit_limit' => $creditLimit,
             'new_balance' => $newBalance,
         ];
+    }
+
+    /**
+     * R5: Authoritative credit-limit check INSIDE the transaction,
+     * under a row lock on the customer. Serializes concurrent
+     * finalize / edit calls for the same customer so only one can
+     * pass the credit check at a time. Closes audit risk V5 and
+     * common risk C1.
+     *
+     * Must be called from inside a DB::transaction() block. Throws
+     * RuntimeException if the limit is exceeded and no valid override
+     * is supplied. The error message template is parameterized so
+     * callers (finalize vs update) can use their own wording.
+     *
+     * @param int    $customerId
+     * @param float  $amount         Amount to add to current balance for the check.
+     * @param bool   $isOverride     True if the user supplied credit_limit_override=true.
+     * @param string $overrideReason Override reason text (must be >= 10 chars if override).
+     * @param string $messageTpl    printf template with 3 %s: balance, limit, amount.
+     */
+    private function assertCreditLimitUnderLock(
+        int $customerId, float $amount,
+        bool $isOverride, string $overrideReason,
+        string $messageTpl
+    ): void {
+        // Lock the customer row FOR UPDATE — any other concurrent
+        // finalize/edit for the same customer will block here until
+        // this transaction commits or rolls back.
+        $customer = Customer::lockForUpdate()->find($customerId);
+        if (!$customer) {
+            throw new \RuntimeException("Customer {$customerId} not found while locking for credit check.");
+        }
+
+        $creditCheck = $this->checkCreditLimit($customerId, $amount);
+
+        if (!$creditCheck['exceeds']) {
+            return;
+        }
+
+        // Exceeded — honor override if reason is long enough.
+        if ($isOverride && strlen($overrideReason) >= 10) {
+            return;
+        }
+
+        if ($isOverride && strlen($overrideReason) < 10) {
+            throw new \RuntimeException(
+                'Override reason must be at least 10 characters when exceeding credit limit.'
+            );
+        }
+
+        throw new \RuntimeException(sprintf(
+            $messageTpl,
+            $creditCheck['current_balance'],
+            $creditCheck['credit_limit'],
+            $amount
+        ));
     }
 
     /**
