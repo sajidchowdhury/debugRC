@@ -593,4 +593,79 @@ class SalesInvoiceController extends Controller
             'invoice_amount' => round($amount, 2),
         ]);
     }
+
+    /**
+     * R19: Inline receive-payment modal — returns the HTML body for
+     * the #receivePaymentModal on the Today's Sales / sales-invoices
+     * index page. Loaded via AJAX when the user clicks the "Receive"
+     * button on a row with due_amount > 0.
+     *
+     * Mirrors Legacy sales/receive_modal/{id} endpoint which is
+     * fetched by sales-today-index.js and injected into #receiveModalContent.
+     *
+     * Returns a Blade partial with the invoice summary, payment form
+     * (mode/amount/bank/reference/notes), and a list of payments
+     * already recorded against this invoice. The form posts to the
+     * existing admin.customer-payments.store route — no new write
+     * endpoint is created (R2 idempotency-token flow is reused).
+     */
+    public function receiveModal(int $id)
+    {
+        $invoice = SalesInvoice::with([
+            'customer', 'branch',
+            'allocations' => function ($q) {
+                $q->with('payment.branch', 'payment.bank')
+                    ->orderByDesc('id');
+            },
+        ])->findOrFail($id);
+
+        // Outstanding payments already allocated to this invoice
+        // (uses the invoice_payment_allocations table joined via
+        // SalesInvoice::allocations() → InvoicePaymentAllocation::payment()).
+        // received_by_name is resolved from the users table via the
+        // CustomerPayment::created_by FK (no formal model relationship
+        // — we look it up here so the modal can display who collected it).
+        $userIds = $invoice->allocations
+            ->map(fn ($a) => $a->payment?->created_by)
+            ->filter()
+            ->unique()
+            ->all();
+        $userNames = $userIds
+            ? \App\Models\User::whereIn('id', $userIds)->pluck('username', 'id')
+            : collect();
+
+        $payments = $invoice->allocations->map(function ($alloc) use ($userNames) {
+            $p = $alloc->payment;
+            return [
+                'payment_id'        => $p?->id ?? 0,
+                'payment_code'      => $p?->payment_code ?? '—',
+                'payment_date'      => $p?->payment_date ?? null,
+                'allocated_amount'  => (float) $alloc->allocated_amount,
+                'payment_mode'      => $p?->payment_mode ?? 'cash',
+                'bank_name'         => $p?->bank?->bank_name ?? '',
+                'received_by_name'  => $userNames[$p?->created_by ?? 0] ?? '—',
+            ];
+        });
+
+        $banks = \App\Models\Bank::active()->orderBy('bank_name')->get();
+        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
+
+        // Default branch = invoice's branch (or session branch as fallback)
+        $defaultBranchId = (int) ($invoice->branch_id ?? session('branch_id', 0));
+
+        $grandTotal = (float) $invoice->total_amount;
+        $amountPaid = (float) $invoice->paid_amount;
+        $balance   = max(0.0, round($grandTotal - $amountPaid, 2));
+
+        return view('admin.sales-invoices._receive_modal_body', [
+            'invoice'        => $invoice,
+            'payments'       => $payments,
+            'banks'          => $banks,
+            'branches'       => $branches,
+            'defaultBranchId' => $defaultBranchId,
+            'grandTotal'     => $grandTotal,
+            'amountPaid'     => $amountPaid,
+            'balance'        => $balance,
+        ]);
+    }
 }

@@ -156,3 +156,52 @@ Stage Summary:
 - Bonus: faster page loads (no DNS lookup + handshake to 4+ CDN domains).
 - Commit pushed: 1ff266b → origin/main
 - User should pull latest main and hard-refresh browser (Ctrl+Shift+R / Cmd+Shift+R) to bypass any cached broken state.
+
+---
+Task ID: R18-R19
+Agent: Main (Super Z)
+Task: R18 Port keyboard shortcuts + R19 Port inline receive-payment modal + docs + push
+
+Work Log:
+- Read legacy sales-create.js (L96–101, L324–351, L615–621) + sales-receive-payment.js to understand the Legacy keyboard flow + receive-modal pattern.
+- Read existing Laravel cart.blade.php + admin/sales-invoices/index.blade.php to understand current state.
+- R18 implementation (cart.blade.php):
+  * Replaced shared `$('#addQty, #addRate').on('keydown', ...)` handler with two separate handlers
+  * `#addQty` Enter → focus + select `#addRate` (was: `addToCart()`)
+  * `#addRate` Enter → `addToCart()` (unchanged behavior, separate handler now)
+  * Added `#addQty` focus + select at the end of `$('#addProduct').on('change', ...)` handler
+  * Added `setTimeout(() => $('#addProduct').select2('open'), 50)` in `addToCart().done()` success branch to refocus product search
+  * Added R18 explanation comment block citing Legacy line numbers
+- R19 implementation:
+  * Added new route `GET /admin/sales-invoices/{id}/receive-modal` (named `admin.sales-invoices.receive-modal`, middleware `role:salesman,accountant,manager,admin`)
+  * Added new `SalesInvoiceController::receiveModal(int $id)` method (~50 lines): loads invoice with allocations, resolves received_by_name from users table via User::whereIn, generates fresh UUID idempotency token, returns Blade partial
+  * Added new `SalesInvoice::allocations()` HasMany relationship (uses existing InvoicePaymentAllocation model)
+  * Created new `laravel/resources/views/admin/sales-invoices/_receive_modal_body.blade.php` (~200 lines): invoice summary (3 stat cells), payment form (amount + quick chips + mode radio + bank panel + notes), payment history list with print-receipt buttons
+  * Updated `laravel/resources/views/admin/sales-invoices/index.blade.php`: added green "Receive payment" button on rows with due_amount > 0.01, added #receivePaymentModal shell, added @push('scripts') JS block (lazy modal instance, AJAX fetch + inject, initReceiveModalBody with amount validation + quick chips + bank toggle + submit handler with over-payment SweetAlert confirm), added @push('css') for modal polish
+- Verified structural integrity:
+  * cart.blade.php: @push/@endpush balance 2/2 (no @@push leakage)
+  * _receive_modal_body.blade.php: @php/@endphp 1/1, @if/@endif 2/2, @foreach/@endforeach 3/3
+  * index.blade.php: @section/@endsection 1/1, @push/@endpush 2/2
+- Updated docs/sales_entry_Lg_vs_La.md:
+  * Added R18 + R19 rows to remediation progress table at top
+  * Updated §1 executive summary table to mention R18/R19 closed 9 of 9 POS UX gaps
+  * Updated §6.1 POS UX items #11 (keyboard shortcuts — was Missing, now ✅ R18), #12 (inline receive modal — was Missing, now ✅ R19), #13 (quick-amount chips — was Missing, now ✅ R19)
+  * Updated §9.3 R18 + R19 + R20 rows to ✅ Done
+- Updated docs/SESSION_CONTEXT.md:
+  * Updated Last updated stamp
+  * Added R18, R19, R20 (via R19) rows to §3 backlog table
+  * Added §5.18 R18 deep-dive (What changed / What was NOT changed / Files modified / Why this matters)
+  * Added §5.19 R19 deep-dive (Backend changes / Frontend changes / What was NOT changed / Files modified / Why a traditional form POST instead of AJAX)
+  * Updated §6 Open Work Items (R18/R19/R20 added to completed list)
+  * Added R18 + R19 + R20 entries to §7 Completed Work Items
+
+Stage Summary:
+- 4 source files modified: cart.blade.php, SalesInvoiceController.php, SalesInvoice.php, web.php, admin/sales-invoices/index.blade.php
+- 1 new file: _receive_modal_body.blade.php
+- 2 docs updated: sales_entry_Lg_vs_La.md, SESSION_CONTEXT.md
+- 1 worklog updated
+- No backend migrations, no new write endpoints (R19 reuses existing customer-payments.store + R2 idempotency flow)
+- R18 closes the keyboard-only POS operation gap (audit §6.1 item #11)
+- R19 closes the inline receive-payment modal gap (audit §6.1 item #12) + R20 quick-amount chips (item #13) as a side effect
+- All Blade directives verified balanced. All ASCII chars (no Unicode escape sequences in Blade).
+- Ready to commit and push.

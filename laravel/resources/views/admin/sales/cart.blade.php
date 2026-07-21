@@ -1715,6 +1715,20 @@
                     $('#addRate').val('');
                     $('#rateHint').html('&nbsp;');
                     renderAvailability(null);
+
+                    // R18: refocus the product search box so the cashier
+                    // can immediately scan/type the next product without
+                    // reaching for the mouse. Mirrors Legacy
+                    // sales-create.js::resetProductEntry L632:
+                    //   document.getElementById('productSearch')?.focus();
+                    // Select2 needs 'open' to focus the search input —
+                    // just triggering focus on the original <select>
+                    // doesn't bring up the search box.
+                    setTimeout(function () {
+                        $('#addProduct').select2('open');
+                        // Select2's open gives focus to the search input
+                        // automatically; no further focus call needed.
+                    }, 50);
                 } else {
                     toast(resp.message || 'Could not add item.', 'error');
                 }
@@ -2331,6 +2345,15 @@
                 $('#addAvailTotal').text(fmtQty(p.available_qty) + ' (live)');
             }
             checkAvailability(productId);
+
+            // R18: auto-focus #addQty + select its content so the cashier
+            // can immediately type a new qty (Legacy mirrors this in
+            // sales-create.js::selectProductCreate). Default of 1 is
+            // already in the field — selecting it means Enter accepts 1,
+            // or typing a new number replaces it.
+            var $qty = $('#addQty');
+            $qty.focus();
+            $qty[0] && $qty[0].select();
         });
 
         // R13: live rate changes should reposition the slider thumb and
@@ -2353,9 +2376,50 @@
         });
 
         $('#btnAddToCart').on('click', addToCart);
-        // Enter-key support
-        $('#addQty, #addRate').on('keydown', function (e) {
-            if (e.key === 'Enter') { e.preventDefault(); addToCart(); }
+
+        // ============================================================
+        // ============== R18: KEYBOARD SHORTCUTS =====================
+        // ============================================================
+        // Mirrors Legacy sales-create.js keyboard flow:
+        //   1. Product Select2 ArrowUp/ArrowDown/Enter — already
+        //      handled natively by Select2 (dropdown navigation).
+        //      R10s added the Enter-on-empty fallback to the
+        //      productByCode endpoint.
+        //   2. After a product is picked (Select2 change), auto-focus
+        //      #addQty and select its content so the cashier can
+        //      immediately type a new qty without an extra Tab.
+        //      (Legacy: sales-create.js::selectProductCreate calls
+        //      document.getElementById('quantity')?.focus() — though
+        //      Legacy also pre-fills qty=1, the focus lets the cashier
+        //      override by just typing.)
+        //   3. Enter in #addQty → focus + select #addRate (NOT submit).
+        //      Legacy sales-create.js L615–621: Enter on quantity
+        //      moves focus to rate, so the cashier can review/override
+        //      the rate before submitting. This is critical for
+        //      keyboard-only operation — without it, the cashier would
+        //      have to Tab to rate or reach for the mouse.
+        //   4. Enter in #addRate → click "Add to Cart" (addToCart).
+        //      Legacy sales-create.js L96–100: Enter on rate triggers
+        //      the addToCartBtn click. After add, focus returns to the
+        //      product search so the cashier can scan/type the next
+        //      product immediately (Legacy sales-create.js::resetProductEntry
+        //      L632: document.getElementById('productSearch')?.focus()).
+        $('#addQty').on('keydown', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                // Move focus to rate and select its content so the
+                // cashier can immediately type a new value or press
+                // Enter again to accept the default and add to cart.
+                var $rate = $('#addRate');
+                $rate.focus();
+                $rate[0] && $rate[0].select();
+            }
+        });
+        $('#addRate').on('keydown', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                addToCart();
+            }
         });
 
         // ============================================================

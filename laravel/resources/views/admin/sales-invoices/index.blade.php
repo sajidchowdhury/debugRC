@@ -264,6 +264,15 @@
                                        class="btn btn-sm btn-outline-secondary" title="View">
                                         <i class="fas fa-eye"></i>
                                     </a>
+                                    @if ((float) $inv->due_amount > 0.01 && $inv->status !== 'cancelled' && !$inv->is_reversed)
+                                        <button type="button"
+                                                class="btn btn-sm btn-success btn-receive-payment"
+                                                title="Receive payment"
+                                                data-invoice-id="{{ $inv->id }}"
+                                                data-invoice-code="{{ $inv->invoice_code }}">
+                                            <i class="fas fa-hand-holding-dollar"></i>
+                                        </button>
+                                    @endif
                                 </td>
                             </tr>
                         @empty
@@ -281,6 +290,22 @@
         </div>
         <div class="card-footer bg-white">
             {{ $invoices->links() }}
+        </div>
+    </div>
+</div>
+
+{{--
+    R19: Inline receive-payment modal shell.
+    Body is fetched via AJAX from admin.sales-invoices.receive-modal
+    and injected into #receivePaymentModalContent when the user
+    clicks the "Receive" button on a row.
+--}}
+<div class="modal fade" id="receivePaymentModal" tabindex="-1"
+     aria-labelledby="receivePaymentModalLabel" aria-hidden="true"
+     data-bs-focus="false">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+        <div class="modal-content" id="receivePaymentModalContent">
+            {{-- AJAX-fetched _receive_modal_body.blade.php goes here --}}
         </div>
     </div>
 </div>
@@ -310,7 +335,191 @@ $(function () {
         });
         window.open($(this).attr('href') + '?' + params.toString(), '_blank');
     });
+
+    // ============================================================
+    // ============== R19: INLINE RECEIVE-PAYMENT MODAL ===========
+    // ============================================================
+    // Mirrors Legacy sales/receive_modal/{id} + sales-receive-payment.js.
+    // When the user clicks the green "Receive" button on a row, we
+    // fetch the modal body via AJAX and inject it into the modal shell.
+    // The body contains the form, summary stats, payment history, and
+    // submit handler — all rendered by the server, so no client-side
+    // templating is needed (matches the Legacy pattern).
+    //
+    // Bootstrap 5 modal is created once and reused. The body is
+    // replaced on every open so we always get fresh data + a fresh
+    // idempotency token (R2 protects the store endpoint).
+
+    var $receiveModal = $('#receivePaymentModal');
+    var receiveModalBs = null;          // Bootstrap Modal instance (lazy)
+    var $modalContent = $('#receivePaymentModalContent');
+
+    function getReceiveModalBs() {
+        if (!receiveModalBs) {
+            receiveModalBs = bootstrap.Modal.getOrCreateInstance($receiveModal[0], {
+                backdrop: 'static',
+                keyboard: false,
+            });
+        }
+        return receiveModalBs;
+    }
+
+    // Open modal + fetch body
+    $('.btn-receive-payment').on('click', function () {
+        var invoiceId = $(this).data('invoice-id');
+        if (!invoiceId) return;
+        // Loading state
+        $modalContent.html(
+            '<div class="modal-body text-center py-5">' +
+                '<i class="fas fa-spinner fa-spin fa-2x text-primary mb-3"></i>' +
+                '<div class="text-muted">Loading payment form…</div>' +
+            '</div>'
+        );
+        getReceiveModalBs().show();
+
+        $.ajax({
+            url: '/admin/sales-invoices/' + invoiceId + '/receive-modal',
+            method: 'GET',
+            dataType: 'html',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        }).done(function (html) {
+            $modalContent.html(html);
+            initReceiveModalBody();
+        }).fail(function (xhr) {
+            $modalContent.html(
+                '<div class="modal-body text-center py-5">' +
+                    '<i class="fas fa-exclamation-triangle fa-2x text-danger mb-3"></i>' +
+                    '<div class="text-danger">Could not load payment form.</div>' +
+                    '<div class="small text-muted mt-2">' + (xhr.statusText || 'Server error') + '</div>' +
+                    '<button type="button" class="btn btn-outline-secondary btn-sm mt-3" data-bs-dismiss="modal">Close</button>' +
+                '</div>'
+            );
+        });
+    });
+
+    // Wire up the body after each AJAX load. Inline <script> tags
+    // injected via .html() don't run, so we attach handlers here.
+    function initReceiveModalBody() {
+        var $body = $modalContent.find('.receive-modal-body');
+        if (!$body.length) return;
+
+        var balance = parseFloat($body.data('balance')) || 0;
+        var $form = $('#srpForm');
+        var $amount = $('#srpAmount');
+        var $hint = $('#srpAmountHint');
+        var $submit = $('#srpSubmit');
+        var $bankPanel = $('#srpBankPanel');
+        var $bankId = $('#srpBankId');
+        var $allocHidden = $('#srpAllocAmountHidden');
+
+        function parseNum(v) {
+            var n = parseFloat(String(v).replace(/,/g, ''));
+            return Number.isFinite(n) ? n : 0;
+        }
+        function fmtMoney(n) {
+            return 'Tk ' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        }
+
+        // Validate amount + sync hidden allocation field
+        function validateAmount() {
+            var amt = parseNum($amount.val());
+            if (balance <= 0) {
+                $submit.prop('disabled', true);
+                $hint.html('<i class="fas fa-check-circle text-success me-1"></i>Already fully paid.').removeClass('text-danger').addClass('text-success');
+                return false;
+            }
+            if (amt <= 0) {
+                $submit.prop('disabled', true);
+                $hint.html('<i class="fas fa-info-circle text-warning me-1"></i>Enter an amount greater than zero.').removeClass('text-success').addClass('text-danger');
+                return false;
+            }
+            if (amt > balance + 0.001) {
+                $submit.prop('disabled', true);
+                $hint.html('<i class="fas fa-triangle-exclamation text-danger me-1"></i>Amount cannot exceed balance due (' + fmtMoney(balance) + ').').addClass('text-danger');
+                return false;
+            }
+            $submit.prop('disabled', false);
+            $hint.html('<i class="fas fa-check text-success me-1"></i>Balance after this payment: ' + fmtMoney(Math.max(0, balance - amt))).removeClass('text-danger');
+            // Sync the hidden allocation field so the store endpoint
+            // knows how much of this payment goes to THIS invoice.
+            $allocHidden.val(amt.toFixed(2));
+            return true;
+        }
+
+        $amount.on('input change', validateAmount);
+        validateAmount();  // initial
+
+        // Bank panel toggle: show when mode is bank / mobile_banking / cheque
+        $('input[name="payment_mode"]').on('change', function () {
+            var mode = $(this).val();
+            var showBank = (mode === 'bank' || mode === 'mobile_banking' || mode === 'cheque');
+            $bankPanel.toggle(showBank);
+            if (showBank && mode === 'bank') {
+                $bankId.prop('required', true);
+            } else {
+                $bankId.prop('required', false);
+            }
+        });
+
+        // Quick-amount chips
+        $modalContent.find('[data-quick]').on('click', function () {
+            var kind = $(this).data('quick');
+            var val = 0;
+            if (kind === 'quarter') val = balance / 4;
+            else if (kind === 'half') val = balance / 2;
+            else if (kind === 'full') val = balance;
+            else if (kind === 'clear') val = 0;
+            $amount.val(val.toFixed(2)).trigger('input');
+        });
+
+        // Submit (uses jQuery form post so we get redirect handling
+        // for the existing admin.customer-payments.store route).
+        $submit.on('click', function () {
+            if ($submit.prop('disabled')) return;
+            if (!validateAmount()) return;
+
+            // Confirm large payments / over-balance scenarios.
+            var amt = parseNum($amount.val());
+            if (amt > balance) {
+                Swal.fire({
+                    title: 'Over-payment?',
+                    html: 'Amount entered (' + fmtMoney(amt) + ') exceeds balance due (' + fmtMoney(balance) + ').<br>The excess will be applied to the customer\'s account as advance.',
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonText: 'Yes, proceed',
+                    cancelButtonText: 'Cancel'
+                }).then(function (r) {
+                    if (r.isConfirmed) doSubmit();
+                });
+                return;
+            }
+            doSubmit();
+        });
+
+        function doSubmit() {
+            $submit.prop('disabled', true).html(
+                '<i class="fas fa-spinner fa-spin me-1"></i>Processing…'
+            );
+            // Use traditional form POST so the store endpoint's
+            // redirect (to customer-payments.show) works normally —
+            // no SPA-style response handling needed.
+            $form[0].submit();
+        }
+    }
 });
 </script>
+@push('css')
+<style>
+    /* R19: Inline receive-payment modal polish
+       (mirrors legacy sales-receive-payment.css — kept inline to
+        avoid an extra asset file. The legacy CSS file is loaded
+        for parity on the Today's Sales page; here we just add
+        small touches for the modal context.) */
+    #receivePaymentModal .modal-body { max-height: 70vh; overflow-y: auto; }
+    #receivePaymentModal .form-control-sm,
+    #receivePaymentModal .form-select-sm { font-size: 0.875rem; }
+    #receivePaymentModal .btn-sm { font-size: 0.8rem; }
+</style>
+@endpush
 @endpush
 @endsection

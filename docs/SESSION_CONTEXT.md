@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-22 (R15/R16/R17 + R10s barcode simplification pushed)
+> **Last updated:** 2026-07-22 (R18/R19 + R20 [via R19] pushed — keyboard shortcuts + inline receive-payment modal on sales-invoices index)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -137,6 +137,9 @@ Items are tackled in order. Each item has its own entry in
 | R16 | Port sticky bottom bar (item count + grand total + Finalize always visible)  | ✅ done      | New `#posStickyBar` fixed-position bottom bar in `cart.blade.php` (outside the container, before `@endsection`). New `@push('css')` block scoped to the cart page: `position: fixed; bottom: 0; left:0; right:0; z-index: 1040; background:#fff; border-top: 1px solid #dee2e6; box-shadow: 0 -4px 16px rgba(0,0,0,.08); padding respects env(safe-area-inset-bottom)`. Body gets a `pos-sticky-visible` class while the bar is visible so the page padding-bottom (5.5rem) keeps the last cart row uncovered even on browsers without `:has()`. New JS `updatePosStickyBar()` called from `renderAll()` on every cart mutation: shows item count + subtotal, enables `#posStickyFinalize` iff cart is valid (mirrors `#btnFinalize` disabled logic). Clicking `#posStickyFinalize` calls the same `finalizeInvoice()` function — same idempotency-token + credit-check flow. Bar hides when cart is empty or no customer is selected. Fixes audit risk §6.1 item #9 (sticky bottom bar). |
 | R17 | Port mobile-cart cards with swipe-to-delete                                  | ✅ done      | Cart items now render in TWO views: a desktop `<tbody>` (existing, wrapped in `.sales-cart-desktop`) and a new `#cartItemsMobile` div of `.sales-cart-line` cards (Legacy-style: title + delete button + line meta + rate input + qty input side-by-side with 44px-min tap targets). CSS media query (max-width: 767.98px) toggles which view is visible. Both views share the same `.cart-qty`/`.cart-rate`/`.cart-remove`/`.cart-total` classes, so the existing delegated handlers work for both — no duplicated logic. The `debouncedUpdate(productId)` helper was generalized from `$('#cartItemsBody tr[data-product-id="X"]')` to `$('[data-product-id="X"]').first()` so it reads from whichever view is currently visible. New JS `initCartSwipeRemove()` is re-bound after every `renderCartTable()` call: uses modern Pointer Events (covers touch + pen, ignores mouse) — records `pointerdown` X, on `pointermove` translates the card left (clamped to -120px) with a `.swiping` CSS class for visual feedback, on `pointerup` if delta < -80px and elapsed < 600ms triggers the `.cart-remove` button's click handler. A red `::before` pseudo-element with a trash icon is revealed behind the card during swipe. Fixes audit risk §6.1 item #10 (mobile-cart cards with swipe-to-delete). |
 | R10s | Barcode scanning simplified — single product search box                     | ✅ done      | R10's dual-mode UI (separate `#barcodeInput` toggle + "Scan & Add" button + auto-add checkbox) was REMOVED because it duplicated the Select2 search box. The single `#addProduct` Select2 now doubles as the barcode entry via two layers: (1) `selectOnClose: true` makes scanner Enter pick the highlighted first AJAX result (most scans match by `product_code` ILIKE in the R1 search endpoint); (2) a delegated `keydown` handler on `.select2-search__field` falls back to the R1 `productByCode` endpoint for an exact-code lookup when no result is highlighted. New `lookupProductByCodeAndSelect(code)` function injects the matched product as a fresh `<option>` + triggers `change` (so rate/qty/price-band/availability populate via existing handlers) + focuses `#addQty`. Same backend (R1's `SalesCartController::productByCode` + `findProductByExactCode`) — purely a UI simplification, no backend/route/migration changes. The user's brief: "keep only product search just like customer search, no need 2 option searching product and scan, just keep search product and make the UI/UX better like lagachy." |
+| R18 | Port keyboard shortcuts (Enter to select, ArrowUp/ArrowDown)                  | ✅ done      | Mirrors Legacy `sales-create.js` keyboard flow (`selectProductCreate` L96–100, L615–621): (a) Select2's built-in ArrowUp/ArrowDown/Enter already covers suggestion-list navigation that Legacy implemented manually — no extra JS needed. (b) R10s already added Enter-on-empty fallback → `productByCode` endpoint for exact-code lookup. (c) New R18 flow: after a product is picked (Select2 `change`), `#addQty` is auto-focused + content-selected so the cashier can immediately type a new qty (or press Enter to accept default of 1). (d) Enter on `#addQty` now focuses + selects `#addRate` (NOT submit) — matches Legacy's two-step confirmation pattern so the cashier can review/override the rate before adding to cart. (e) Enter on `#addRate` calls `addToCart()`. (f) After a successful add, `#addProduct` Select2 is re-opened (`select2('open')`) so the cashier can immediately scan/type the next product without reaching for the mouse. Closes the keyboard-only POS operation gap — a cashier with a barcode scanner + numeric keypad can now run a full session without touching the mouse. Fixes audit risk §6.1 item #11 (keyboard shortcuts). |
+| R19 | Port inline receive-payment modal on Today's Sales / sales-invoices index     | ✅ done      | New backend endpoint `GET /admin/sales-invoices/{id}/receive-modal` (mirrors Legacy `sales/receive_modal/{id}`) returns a Blade partial `_receive_modal_body.blade.php` with: invoice summary (3 stat cells: invoice total / paid so far / balance due), payment form (amount with quick-amount chips [25%/50%/Full due/Clear], payment mode radio [Cash/Bank/Mobile/Cheque], conditional bank+reference panel, notes), and a "Payments on this invoice" history list with print-receipt buttons. Form posts to the existing `admin.customer-payments.store` route — no new write endpoint created (R2 idempotency-token flow protects against double-submit; fresh UUID generated server-side on every modal open). New `SalesInvoice::allocations()` HasMany relationship added (uses existing `InvoicePaymentAllocation` model). Frontend in `admin/sales-invoices/index.blade.php`: each row with `due_amount > 0.01 && status !== 'cancelled' && !is_reversed` gets a green "Receive payment" button; clicking fetches the modal body via AJAX and injects into a single reusable `#receivePaymentModal` shell. Submit does a traditional form POST so the store endpoint's redirect to `customer-payments.show` works normally — no SPA-style response handling needed. Over-payment scenarios trigger a SweetAlert confirm before submit. Fixes audit risk §6.1 item #12 (inline receive-payment modal) + item #13 (quick-amount chips — implemented as part of this modal). |
+| R20 | Port quick-amount chips (50% / Full due / Clear)                              | ✅ done (via R19) | Implemented as part of the R19 receive-payment modal — no separate work. Four chips appear below the amount input: 25% (quarter), 50% (half), Full due, Clear. Each computes against the current `balance` data attribute and triggers `input` on the field so the validation hint re-renders. Mirrors Legacy `receive_modal.php` L110–114. Fixes audit risk §6.1 item #13. |
 
 > When the user assigns the next R# item, add a row here and create a
 > matching section in `REMEDIATION_LOG.md`. **Do not start work without
@@ -1230,15 +1233,210 @@ the product search, not on the customer search or any other Select2.
 
 ---
 
+### 5.18 R18: Keyboard shortcuts (Enter on qty → focus rate; Enter on rate → Add)
+
+Mirrors Legacy `sales-create.js` keyboard flow. Legacy implemented
+the suggestion-list ArrowUp/ArrowDown/Enter handling manually
+(`productSearch.addEventListener('keydown', ...)` L324–351) because
+Legacy used a plain `<input>` with a custom suggestion `<div>`.
+Laravel uses Select2 which already provides built-in ArrowUp/ArrowDown/
+Enter handling natively, so that part needs no porting work.
+
+The gap R18 closes is the page-level keyboard flow *around* the
+Select2 — specifically the qty → rate → submit → refocus loop that
+lets a cashier run a full session without touching the mouse.
+
+#### What changed
+
+1. **Auto-focus `#addQty` after product pick** — in the existing
+   `$('#addProduct').on('change', ...)` handler, after the rate is
+   populated + price band rendered + availability checked, we now
+   `$('#addQty').focus()` and `$('#addQty')[0].select()`. This means
+   the cashier can immediately type a new qty (e.g. "5") to replace
+   the default of "1", or just press Enter to accept 1.
+
+2. **`#addQty` Enter → focus + select `#addRate`** — was previously
+   `$('#addQty, #addRate').on('keydown', ...)` shared handler that
+   called `addToCart()` on Enter. Now split into two separate
+   handlers: `#addQty` Enter → `$rate.focus(); $rate[0].select();`
+   (NOT submit). This matches Legacy `sales-create.js` L615–621 where
+   Enter on quantity moves focus to rate so the cashier can
+   review/override the rate before submitting.
+
+3. **`#addRate` Enter → `addToCart()`** — unchanged from before,
+   but now in its own dedicated handler (was shared with `#addQty`).
+
+4. **After successful add, refocus `#addProduct` Select2 search box**
+   — in `addToCart().done()`, after the form reset, we
+   `setTimeout(() => $('#addProduct').select2('open'), 50)`. Select2
+   needs `open` to focus the search input — calling `.focus()` on
+   the original `<select>` doesn't bring up the search box. The 50 ms
+   delay lets the Select2 reset its internal state after the
+   `val('').trigger('change')` call. Mirrors Legacy
+   `sales-create.js::resetProductEntry` L632 which calls
+   `document.getElementById('productSearch')?.focus()`.
+
+#### What was NOT changed
+
+- No backend changes — R18 is purely client-side JS in
+  `cart.blade.php`.
+- No new routes, no new endpoints, no new migrations.
+- The R10s Enter-on-empty `productByCode` fallback is unchanged —
+  R18 just adds the qty/rate/post-add focus flow on top.
+- Select2's built-in keyboard handling (ArrowUp/Down/Enter in the
+  dropdown) is not modified or replaced.
+
+#### Files modified
+
+- `laravel/resources/views/admin/sales/cart.blade.php`:
+  - `addToCart()` function: added refocus block in the success branch
+  - `$('#addProduct').on('change', ...)`: added `#addQty` focus + select
+    at the end
+  - Replaced shared `$('#addQty, #addRate').on('keydown', ...)` with
+    two separate handlers
+  - Added R18 explanation comment block
+
+#### Why this matters
+
+Without R18, the cashier had to Tab between fields and click the
+product search after each add. With R18, a cashier with a barcode
+scanner + numeric keypad can run a full session without touching the
+mouse: scan → Enter (accepts qty 1) → Enter (submits with default
+rate) → scan next product → … The keyboard loop is unbroken.
+
+---
+
+### 5.19 R19: Inline receive-payment modal on sales-invoices index
+
+Mirrors Legacy `sales/receive_modal/{id}` + `sales-receive-payment.js`.
+
+Before R19, collecting a payment on an invoice required the user to:
+1. Note the invoice code from the sales-invoices index page
+2. Navigate to `/admin/customer-payments/create`
+3. Pick the customer from a 500-row dropdown
+4. Find the invoice in the outstanding-invoices list
+5. Enter the payment details
+6. Submit
+
+With R19, the user clicks the green "Receive" button on a row in the
+sales-invoices index page → modal opens with the form pre-populated
+for that specific invoice → enter amount + mode → submit. Two clicks
+instead of six navigations.
+
+#### Backend changes
+
+1. **New route** `GET /admin/sales-invoices/{id}/receive-modal`
+   named `admin.sales-invoices.receive-modal`, middleware
+   `role:salesman,accountant,manager,admin`. Returns HTML (Blade
+   partial), not JSON — mirrors Legacy which returned the rendered
+   `receive_modal.php` view.
+
+2. **New controller method** `SalesInvoiceController::receiveModal(int $id)`:
+   - Loads the invoice with `customer`, `branch`, and `allocations`
+     (with nested `payment.branch`, `payment.bank`)
+   - Resolves `received_by_name` from the `users` table via the
+     `customer_payments.created_by` FK (no formal model relationship
+     on CustomerPayment — we look it up via `User::whereIn('id', ...)`)
+   - Loads active banks + branches for the form dropdowns
+   - Computes `balance = max(0, total_amount - paid_amount)`
+   - Generates a fresh R2 idempotency-token UUID (server-side, so
+     the client can't accidentally reuse one)
+   - Returns the `_receive_modal_body.blade.php` partial
+
+3. **New model relationship** `SalesInvoice::allocations()`:
+   `HasMany(InvoicePaymentAllocation::class, 'invoice_id')`. The
+   `InvoicePaymentAllocation` model already existed with the inverse
+   `payment()` and `invoice()` relations. This new forward relation
+   lets the modal query "what payments have been allocated to this
+   invoice?" without writing a manual join.
+
+#### Frontend changes (admin/sales-invoices/index.blade.php)
+
+1. **New "Receive" button on each row** — shown iff
+   `due_amount > 0.01 && status !== 'cancelled' && !is_reversed`.
+   Green button with `fa-hand-holding-dollar` icon. Carries
+   `data-invoice-id` and `data-invoice-code` attributes.
+
+2. **New modal shell** `#receivePaymentModal` — Bootstrap 5 modal,
+   `modal-lg`, `modal-dialog-centered`, `modal-dialog-scrollable`,
+   `data-bs-focus="false"` (so SweetAlert inside the modal can
+   receive focus — same fix as Legacy `sales-receive-payment.js`
+   `ensureSwalBootstrapFocusFix`). Empty `#receivePaymentModalContent`
+   div is populated by AJAX on each open.
+
+3. **New JS** (in `@push('scripts')`):
+   - Lazy `bootstrap.Modal` instance (created on first open)
+   - `.btn-receive-payment` click handler: shows loading spinner,
+     opens modal, fires `GET /admin/sales-invoices/{id}/receive-modal`,
+     injects HTML, calls `initReceiveModalBody()` to wire up the
+     form handlers
+   - `initReceiveModalBody()`: wires up amount validation (with
+     balance check + sync to hidden `alloc_amount[]` field),
+     quick-amount chips (25%/50%/Full due/Clear), payment-mode
+     radio → bank-panel toggle, submit handler with over-payment
+     SweetAlert confirm, traditional form POST (so the store
+     endpoint's redirect works)
+
+4. **New CSS** (in `@push('css')`): modal-body max-height + scroll,
+   smaller font sizes for the modal context (matches Legacy
+   `sales-receive-payment.css` feel).
+
+#### What was NOT changed
+
+- The `admin.customer-payments.store` endpoint is unchanged — R19
+  reuses the existing route, the existing `CustomerPaymentService`,
+  the existing R2 idempotency-token flow. No new write path was
+  created.
+- The existing `admin/customer-payments/create.blade.php` page is
+  unchanged. It's still useful for collecting payments against
+  multiple invoices at once (the modal handles only single-invoice
+  allocation). Power users (accountants) may still prefer the full
+  create page.
+- The customer-payments `show` and `print-receipt` pages are
+  unchanged. The modal links to print-receipt for prior payments
+  on the same invoice.
+- The Laravel API V1 (`CustomerPaymentApiController`) was NOT
+  touched — R19 is admin/Blade only, matching the user's brief
+  ("Today's Sales" is an admin page, not an API consumer).
+
+#### Files modified
+
+- `laravel/app/Http/Controllers/Admin/SalesInvoiceController.php`:
+  new `receiveModal(int $id)` method (~50 lines)
+- `laravel/app/Models/SalesInvoice.php`: new `allocations()`
+  HasMany relationship (~10 lines)
+- `laravel/routes/web.php`: new `receive-modal` route registration
+- `laravel/resources/views/admin/sales-invoices/_receive_modal_body.blade.php`:
+  NEW file (~200 lines)
+- `laravel/resources/views/admin/sales-invoices/index.blade.php`:
+  added "Receive" button on each row + modal shell + JS + CSS
+
+#### Why a traditional form POST instead of AJAX?
+
+The `admin.customer-payments.store` endpoint redirects to
+`admin.customer-payments.show` on success and back-with-input on
+error. Replaying this with AJAX would require either:
+- Changing the endpoint to return JSON (breaks the existing create
+  page), or
+- Building a parallel JSON-returning endpoint (duplicates business
+  logic).
+
+A traditional form POST follows the redirect naturally — the browser
+ends up on the `customer-payments.show` page with the success flash.
+This matches Legacy `sales-receive-payment.js::doSubmit` which also
+does `form.submit()` (not `$.ajax`). Simpler + no logic duplication.
+
+---
+
 ## 6. Open Work Items
 
 (Items the user has asked for but that are not yet done.)
 
 - **None outstanding.** R1, R2, R3, R4, R5, R6, R10, R10s, R11, R12,
-  R13, R14, R15, R16, R17, and H1 (bugfix) are complete and pushed.
-  The user has not yet assigned R7, R8, R9 (numbers reserved for
-  future items; R10/R11/R12/R13/R14/R15/R16/R17/R10s were the
-  user's explicit asks after R6).
+  R13, R14, R15, R16, R17, R18, R19, R20 (via R19), and H1 (bugfix)
+  are complete and pushed. The user has not yet assigned R7, R8, R9
+  (numbers reserved for future items; R10+ were the user's explicit
+  asks after R6).
 
 When the user gives the next instruction, append it here as a
 checkbox item. When done, move it to the "Completed Work Items"
@@ -1432,6 +1630,43 @@ section below.
       like customer search, no need 2 option searching product and
       scan, just keep search product and make the UI/UX better
       like lagachy."
+- [x] **R18** — Port keyboard shortcuts (Enter on qty → focus rate;
+      Enter on rate → Add to Cart; refocus product search after add).
+      Mirrors Legacy `sales-create.js` keyboard flow. After product
+      pick, `#addQty` is auto-focused + content-selected; Enter on
+      `#addQty` focuses + selects `#addRate` (NOT submit — Legacy's
+      two-step confirmation pattern); Enter on `#addRate` calls
+      `addToCart()`; after successful add, `#addProduct` Select2 is
+      re-opened so the cashier can immediately scan/type the next
+      product without reaching for the mouse. Select2's built-in
+      ArrowUp/ArrowDown/Enter already covers suggestion-list
+      navigation that Legacy implemented manually. Closes the
+      keyboard-only POS operation gap.
+- [x] **R19** — Port inline receive-payment modal on Today's Sales /
+      sales-invoices index. New backend endpoint
+      `GET /admin/sales-invoices/{id}/receive-modal` returns a Blade
+      partial `_receive_modal_body.blade.php` with: invoice summary
+      (3 stat cells), payment form (amount with quick-amount chips
+      [25%/50%/Full due/Clear], payment mode radio [Cash/Bank/Mobile/
+      Cheque], conditional bank+reference panel, notes), and a
+      "Payments on this invoice" history list with print-receipt
+      buttons. Form posts to the existing `admin.customer-payments.store`
+      route (R2 idempotency token, fresh UUID on every open). New
+      `SalesInvoice::allocations()` HasMany relationship added.
+      Frontend: each row with `due_amount > 0.01 && status !==
+      'cancelled' && !is_reversed` gets a green "Receive payment"
+      button; clicking fetches the modal body via AJAX. Submit does
+      a traditional form POST so the store endpoint's redirect works
+      normally. Over-payment triggers a SweetAlert confirm. Closes
+      the workflow gap of "navigate to a separate create page, pick
+      customer, find invoice in a long list" — now it's a single
+      click from the invoice list.
+- [x] **R20** — Port quick-amount chips (50% / Full due / Clear).
+      Implemented as part of R19 — no separate work. Four chips
+      appear below the amount input: 25% (quarter), 50% (half),
+      Full due, Clear. Each computes against the current `balance`
+      and triggers `input` so the validation hint re-renders. Mirrors
+      Legacy `receive_modal.php` L110–114.
 
 ---
 

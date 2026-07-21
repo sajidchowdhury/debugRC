@@ -546,6 +546,11 @@ Route::middleware('auth')->group(function () {
             ->name('print-godown')->middleware('role:warehouse_manager,manager,admin');
         Route::get('{id}/print-blank-godown', [SalesInvoiceController::class, 'printBlankGodown'])
             ->name('print-blank-godown')->middleware('role:warehouse_manager,manager,admin');
+        // R19: Inline receive-payment modal body (AJAX-fetched HTML).
+        // Returns the Blade partial injected into #receivePaymentModal on
+        // the sales-invoices index page. Mirrors Legacy sales/receive_modal/{id}.
+        Route::get('{id}/receive-modal', [SalesInvoiceController::class, 'receiveModal'])
+            ->name('receive-modal')->middleware('role:salesman,accountant,manager,admin');
     });
     // index + show — accountant included (read access)
     Route::resource('admin/sales-invoices', SalesInvoiceController::class)

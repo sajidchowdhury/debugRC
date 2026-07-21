@@ -146,6 +146,17 @@ class SalesInvoice extends Model
     }
 
     /**
+     * R19: payment allocations posted against this invoice
+     * (via invoice_payment_allocations → customer_payments).
+     * Used by the inline receive-payment modal on the sales-invoices
+     * index page to render the "Payments on this invoice" history.
+     */
+    public function allocations(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(InvoicePaymentAllocation::class, 'invoice_id');
+    }
+
+    /**
      * Human dispatchers assigned to this invoice (many-to-many via sales_invoice_dispatchers).
      * NOT to be confused with dispatches() which tracks the product pipeline.
      */
