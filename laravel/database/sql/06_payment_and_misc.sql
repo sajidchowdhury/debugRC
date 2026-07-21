@@ -34,7 +34,12 @@ CREATE INDEX idx_cp_journal ON customer_payments(journal_entry_id);
 CREATE TABLE customer_payment_settlements (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     payment_id integer NOT NULL REFERENCES customer_payments(id) ON DELETE CASCADE,
-    invoice_id integer NOT NULL REFERENCES sales_invoices(id),
+    -- FK to sales_invoices (partitioned) cannot be declarative in PG 12-17
+    -- because sales_invoices is partitioned by invoice_date and `id` alone
+    -- is not unique. Enforcement is handled at the application layer.
+    -- This table is dropped by migration 2025_01_09_000001 in favor of
+    -- invoice_payment_allocations (which uses a trigger-based FK).
+    invoice_id integer NOT NULL,
     settled_amount numeric(14,2) NOT NULL DEFAULT 0,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
 );

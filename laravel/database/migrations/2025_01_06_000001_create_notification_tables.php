@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -38,6 +39,18 @@ return new class extends Migration
 
             $table->index(['notifiable_type', 'notifiable_id']);
         });
+
+        // Re-create performance indexes lost when the legacy notifications
+        // table was dropped above. The original indexes (idx_notif_user,
+        // idx_notif_is_read) were defined in 06_payment_and_misc.sql during
+        // migration 2025_01_01_000001. The Laravel-standard schema only
+        // includes the (notifiable_type, notifiable_id) index, so we add
+        // the read-status index explicitly to keep dropdown queries fast.
+        DB::statement(
+            "CREATE INDEX IF NOT EXISTS idx_notif_is_read
+             ON notifications (read_at)
+             WHERE read_at IS NULL"
+        );
 
         // 2. Notification Rules table.
         if (!Schema::hasTable('notification_rules')) {

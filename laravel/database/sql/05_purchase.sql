@@ -130,15 +130,23 @@ CREATE INDEX idx_prti_warehouse ON purchase_return_items(warehouse_id);
 
 CREATE TABLE invoice_payment_allocations (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    invoice_id integer NOT NULL REFERENCES sales_invoices(id),
-    payment_id integer NOT NULL REFERENCES customer_payments(id) ON DELETE CASCADE,
+    -- FK to sales_invoices (partitioned) is enforced by trigger trg_fk_ipa_si
+    -- (created in migration 2025_01_21_000004). PG 12-17 does not support
+    -- declarative FK references TO a partitioned table.
+    invoice_id integer NOT NULL,
+    -- FK to customer_payments(id) is added by migration 2025_01_21_000003
+    -- (ipa_payment_id_foreign, ON DELETE CASCADE). It cannot be inline here
+    -- because customer_payments is created in 06_payment_and_misc.sql (runs AFTER).
+    payment_id integer NOT NULL,
     allocated_amount numeric(14,2) NOT NULL DEFAULT 0 CHECK (allocated_amount > 0),
-    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT ipa_unique_invoice_payment EXCLUDE USING gist (invoice_id WITH =, payment_id WITH =)
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
+    -- EXCLUDE constraint (ipa_unique_invoice_payment) is added by migration
+    -- 2025_01_21_000003, which first enables the btree_gist extension required
+    -- for = operator on integers in GiST indexes.
 );
 CREATE INDEX idx_ipa_invoice ON invoice_payment_allocations(invoice_id);
 CREATE INDEX idx_ipa_payment ON invoice_payment_allocations(payment_id);
 
 -- Over-allocation trigger: prevents SUM(allocated_amount) > invoice total_amount.
 -- See migration 2025_01_21_000003 for the full trigger + function definition.
--- Requires: CREATE EXTENSION IF NOT EXISTS btree_gist;
+-- Requires: CREATE EXTENSION IF NOT EXISTS btree_gist; (handled by 2025_01_21_000003)

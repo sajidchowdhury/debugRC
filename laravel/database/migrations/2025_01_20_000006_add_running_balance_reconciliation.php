@@ -174,6 +174,13 @@ return new class extends Migration
         // 5. Materialized View: mv_cash_ledger_balance_check
         //    Formula: SUM(amount) OVER (PARTITION BY branch_id ORDER BY id)
         //    Cash ledger: positive = IN, negative = OUT
+        //
+        //    NOTE: cash_ledger does NOT have an `is_reversed` column (unlike
+        //    customer_ledger, supplier_ledger, employee_ledger which get one
+        //    from migration 2025_01_02_000002). Cash ledger rows are never
+        //    reversed in the current application design (reversals are
+        //    appended as new rows with opposite-sign amount). So no
+        //    is_reversed filter is applied here.
         // ============================================================
         DB::statement("
             CREATE MATERIALIZED VIEW IF NOT EXISTS mv_cash_ledger_balance_check AS
@@ -195,7 +202,6 @@ return new class extends Migration
                     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
                 ), 2) AS drift
             FROM cash_ledger
-            WHERE COALESCE(is_reversed, false) = false
             WITH DATA
         ");
 

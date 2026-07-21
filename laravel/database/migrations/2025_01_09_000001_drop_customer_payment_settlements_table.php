@@ -66,9 +66,13 @@ return new class extends Migration
                 $table->foreign('payment_id', 'fk_cps_payment')
                       ->references('id')->on('customer_payments')
                       ->onDelete('cascade');
+                // Note: FK to sales_invoices is NOT created here because
+                // sales_invoices is PARTITION BY RANGE (invoice_date), and
+                // PG 12-17 does not allow declarative FK references TO a
+                // partitioned table unless the referenced columns form a
+                // UNIQUE constraint that includes the partition key. The
+                // original table did not have this FK enforced either.
                 $table->integer('invoice_id');
-                $table->foreign('invoice_id', 'fk_cps_invoice')
-                      ->references('id')->on('sales_invoices');
                 $table->decimal('settled_amount', 14, 2)->default(0);
                 $table->timestamp('created_at', 0)->useCurrent();
             });

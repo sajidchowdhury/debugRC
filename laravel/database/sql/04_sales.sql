@@ -211,112 +211,16 @@ CREATE INDEX idx_sri_return ON sales_return_items(sales_return_id);
 -- ============================================================
 -- COMMISSION TRACKING (Task 37)
 -- ============================================================
--- Commission is calculated on PAYMENT allocation, not invoice creation.
--- This ensures salesmen only earn commission on collected revenue.
+-- Commission tracking tables (commission_rules, commission_rule_tiers,
+-- commission_rule_product_groups, commission_rule_targets, commission_entries)
+-- are created by migration 2025_01_22_000001_create_commission_tracking.php.
 --
--- Four rule types:
---   flat:          Single % rate on allocated amount
---   tiered:        Progressive rates based on cumulative sales
---   product_group: Different % per product group
---   target_bonus:  Base rate + bonus when sales target exceeded
---
--- Status workflow for commission_entries:
---   calculated → confirmed (month-end batch, GL posted) → paid
---   Any status → reversed (underlying transaction reversed)
--- ============================================================
-
-CREATE TABLE commission_rules (
-    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    salesman_id integer NOT NULL REFERENCES employees(id),
-    rule_type varchar(20) NOT NULL
-        CHECK (rule_type IN ('flat','tiered','product_group','target_bonus')),
-    rate numeric(8,4) NOT NULL DEFAULT 0,
-    effective_from date NOT NULL DEFAULT CURRENT_DATE,
-    effective_to date,
-    is_active boolean NOT NULL DEFAULT true,
-    branch_id integer REFERENCES branches(id),
-    notes text,
-    created_by integer,
-    created_at timestamp DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX uq_commission_active
-ON commission_rules (salesman_id)
-WHERE is_active = true
-  AND effective_to IS NULL;
-  
-CREATE INDEX idx_cr_salesman ON commission_rules(salesman_id, is_active, effective_from);
-CREATE INDEX idx_cr_branch ON commission_rules(branch_id);
-
-CREATE TABLE commission_rule_tiers (
-    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    commission_rule_id integer NOT NULL REFERENCES commission_rules(id) ON DELETE CASCADE,
-    threshold numeric(14,2) NOT NULL DEFAULT 0,
-    rate numeric(8,4) NOT NULL DEFAULT 0,
-    sort_order integer NOT NULL DEFAULT 0,
-    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT commission_rule_tiers_threshold_unique UNIQUE (commission_rule_id, threshold)
-);
-CREATE INDEX idx_crt_rule ON commission_rule_tiers(commission_rule_id);
-
-CREATE TABLE commission_rule_product_groups (
-    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    commission_rule_id integer NOT NULL REFERENCES commission_rules(id) ON DELETE CASCADE,
-    product_group_id integer NOT NULL REFERENCES product_groups(id) ON DELETE CASCADE,
-    rate numeric(8,4) NOT NULL DEFAULT 0,
-    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT commission_rule_pg_unique UNIQUE (commission_rule_id, product_group_id)
-);
-CREATE INDEX idx_crpg_rule ON commission_rule_product_groups(commission_rule_id);
-CREATE INDEX idx_crpg_group ON commission_rule_product_groups(product_group_id);
-
-CREATE TABLE commission_rule_targets (
-    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    commission_rule_id integer NOT NULL REFERENCES commission_rules(id) ON DELETE CASCADE,
-    target_amount numeric(14,2) NOT NULL DEFAULT 0,
-    bonus_rate numeric(8,4) NOT NULL DEFAULT 0,
-    period varchar(10) NOT NULL DEFAULT 'monthly' CHECK (period IN ('monthly','quarterly','yearly')),
-    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT commission_rule_targets_rule_unique UNIQUE (commission_rule_id, period)
-);
-CREATE INDEX idx_cxrt_rule ON commission_rule_targets(commission_rule_id);
-
-CREATE TABLE commission_entries (
-    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    salesman_id integer NOT NULL REFERENCES employees(id),
-    branch_id integer NOT NULL REFERENCES branches(id),
-    sales_invoice_id integer,
-    -- FK to sales_invoices (partitioned) — enforced by trigger trg_fk_ce_si
-    commission_rule_id integer NOT NULL REFERENCES commission_rules(id),
-    allocation_id integer REFERENCES invoice_payment_allocations(id) ON DELETE SET NULL,
-    sales_return_id integer REFERENCES sales_returns(id) ON DELETE SET NULL,
-    invoice_total numeric(14,2) DEFAULT 0,
-    commission_base numeric(14,2) DEFAULT 0,
-    commission_rate numeric(8,4) DEFAULT 0,
-    commission_amount numeric(14,2) NOT NULL DEFAULT 0,
-    status varchar(20) NOT NULL DEFAULT 'calculated'
-        CHECK (status IN ('calculated','confirmed','paid','reversed')),
-    entry_date date NOT NULL DEFAULT CURRENT_DATE,
-    journal_entry_id integer REFERENCES journal_entries(id),
-    reversed_by_entry_id integer REFERENCES commission_entries(id),
-    is_reversed boolean NOT NULL DEFAULT false,
-    reversed_at timestamp(0),
-    reversed_by integer,
-    reverse_reason text,
-    commission_period varchar(7),
-    -- Format: '2025-01' — set by trigger fn_ce_set_period
-    notes text,
-    created_by integer,
-    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX idx_ce_salesman ON commission_entries(salesman_id, entry_date);
-CREATE INDEX idx_ce_branch ON commission_entries(branch_id, entry_date);
-CREATE INDEX idx_ce_invoice ON commission_entries(sales_invoice_id);
-CREATE INDEX idx_ce_allocation ON commission_entries(allocation_id);
-CREATE INDEX idx_ce_return ON commission_entries(sales_return_id);
-CREATE INDEX idx_ce_rule ON commission_entries(commission_rule_id);
-CREATE INDEX idx_ce_status ON commission_entries(status);
-CREATE INDEX idx_ce_period ON commission_entries(commission_period, salesman_id);
-CREATE INDEX idx_ce_journal ON commission_entries(journal_entry_id);
+-- They are NOT defined here because:
+--   1. commission_entries.allocation_id REFERENCES invoice_payment_allocations(id),
+--      which is created in 05_purchase.sql (runs AFTER 04_sales.sql). Defining
+--      the FK inline here would cause a "relation does not exist" error.
+--   2. The dedicated migration runs AFTER 05_purchase.sql, so the FK can be
+--      created inline there without issue.
+--   3. The dedicated migration also installs the trigger-based FK
+--      (trg_fk_ce_si) for commission_entries → sales_invoices (partitioned),
+--      following the same pattern as other child tables of sales_invoices.

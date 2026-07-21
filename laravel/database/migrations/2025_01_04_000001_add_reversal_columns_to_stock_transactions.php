@@ -28,9 +28,13 @@ return new class extends Migration
                 $table->boolean('is_reversed')->default(false)->after('notes');
             }
             if (!Schema::hasColumn('stock_transactions', 'reversal_of_transaction_id')) {
+                // Note: FK is enforced by trigger trg_st_reversal_fk, created by
+                // migration 2025_01_21_000004_set_up_table_partitioning.php.
+                // stock_transactions is PARTITION BY RANGE (transaction_date),
+                // so a declarative FK on `id` alone is not allowed (PG 12-17
+                // requires the referenced columns to include the partition key
+                // and form a UNIQUE constraint).
                 $table->integer('reversal_of_transaction_id')->nullable()->after('is_reversed');
-                $table->foreign('reversal_of_transaction_id', 'fk_st_reversal_of')
-                      ->references('id')->on('stock_transactions')->onDelete('set null');
             }
             if (!Schema::hasColumn('stock_transactions', 'reversed_at')) {
                 $table->timestamp('reversed_at')->nullable()->after('reversal_of_transaction_id');
@@ -58,7 +62,7 @@ return new class extends Migration
         DB::statement('DROP INDEX IF EXISTS idx_st_reversal_of');
 
         Schema::table('stock_transactions', function (Blueprint $table) {
-            $table->dropForeign(['reversal_of_transaction_id']);
+            // No FK to drop — FK is trigger-based (trg_st_reversal_fk).
             $table->dropColumn(['is_reversed', 'reversal_of_transaction_id', 'reversed_at', 'reversed_by', 'reverse_reason']);
         });
     }

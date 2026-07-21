@@ -210,9 +210,15 @@ return new class extends Migration
 
     /**
      * Create SELECT policy — rows matching the condition are visible.
+     *
+     * Drops any existing policy with the same name first to keep the migration
+     * idempotent. The same-named policies are also created by
+     * 07_views_triggers_constraints.sql (during migration 2025_01_01_000001),
+     * so without DROP IF EXISTS this would fail with "policy already exists".
      */
     private function createSelectPolicy(string $table, string $condition): void
     {
+        DB::statement("DROP POLICY IF EXISTS rls_{$table}_select ON {$table}");
         DB::statement(
             "CREATE POLICY rls_{$table}_select ON {$table}
              FOR SELECT
@@ -225,6 +231,7 @@ return new class extends Migration
      */
     private function createInsertPolicy(string $table, string $condition): void
     {
+        DB::statement("DROP POLICY IF EXISTS rls_{$table}_insert ON {$table}");
         DB::statement(
             "CREATE POLICY rls_{$table}_insert ON {$table}
              FOR INSERT
@@ -238,6 +245,7 @@ return new class extends Migration
      */
     private function createUpdatePolicy(string $table, string $condition): void
     {
+        DB::statement("DROP POLICY IF EXISTS rls_{$table}_update ON {$table}");
         DB::statement(
             "CREATE POLICY rls_{$table}_update ON {$table}
              FOR UPDATE
@@ -251,6 +259,7 @@ return new class extends Migration
      */
     private function createDeletePolicy(string $table, string $condition): void
     {
+        DB::statement("DROP POLICY IF EXISTS rls_{$table}_delete ON {$table}");
         DB::statement(
             "CREATE POLICY rls_{$table}_delete ON {$table}
              FOR DELETE
@@ -264,6 +273,7 @@ return new class extends Migration
      */
     private function createAdminBypassPolicy(string $table): void
     {
+        DB::statement("DROP POLICY IF EXISTS rls_{$table}_admin ON {$table}");
         DB::statement(
             "CREATE POLICY rls_{$table}_admin ON {$table}
              FOR ALL

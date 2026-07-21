@@ -54,3 +54,28 @@ Stage Summary:
 - 3 new controller methods: searchCustomer(), searchProduct(), productByCode()
 - No new risks; reuses existing scopes + services; rate-limited at Legacy parity (90/min search, 120/min barcode)
 - Ready for git commit + push
+
+---
+Task ID: REVIEW-1
+Agent: general-purpose (migration reviewer)
+Task: Comprehensive PostgreSQL review of all migration files (excluding 04_sales.sql commission_entries issue which parent is fixing)
+
+Work Log:
+- Read all 7 SQL files in /home/z/my-project/laravel/database/sql/ (01_auth_and_master, 02_accounting, 03_stock, 04_sales, 05_purchase, 06_payment_and_misc, 07_views_triggers_constraints)
+- Read all 44 migration PHP files in /home/z/my-project/laravel/database/migrations/
+- Read 2025_01_01_000001_create_rcerp_schema.php orchestrator (executes SQL files 01-07 in order via splitSql() that splits on `;\n` at end of line, respecting $$ blocks)
+- Cross-checked FK dependencies between SQL files and migration files
+- Verified partitioning status: stock_transactions (03_stock.sql) and sales_invoices (04_sales.sql) are both created WITH `PARTITION BY RANGE` from the very first migration (2025_01_01_000001_create_rcerp_schema.php). No partitions or default partition are created in the SQL files — partitions are only created later by migration 2025_01_21_000004_set_up_table_partitioning.php.
+- Confirmed PG 12-17 limitation: FK references TO partitioned tables require the referenced columns to form a UNIQUE constraint that includes the partition key. sales_invoices PK is (id, invoice_date) → `id` alone is NOT unique. Same for stock_transactions PK = (id, transaction_date).
+- Verified that cash_ledger is NEVER given an `is_reversed` column (migration 2025_01_02_000002_add_is_reversed_to_sub_ledgers.php only adds it to customer_ledger, supplier_ledger, employee_ledger).
+- Confirmed that pg_cron extension is only installed by migration 2025_01_20_000009_add_pg_cron_scheduled_jobs.php (line 41), but cron.schedule() calls appear in 07_views_triggers_constraints.sql (lines 1121-1156) which runs as part of the FIRST migration (2025_01_01_000001_create_rcerp_schema.php) — long before pg_cron is available.
+- PHP binary not available in sandbox (which php → exit code 1), so PHP syntax checks were done via visual inspection.
+- Excluded 04_sales.sql commission_entries issue (lines 211-322) since parent is fixing it.
+
+Stage Summary:
+- Total files reviewed: 44 PHP migrations + 7 SQL files = 51 files
+- Total issues found: 16
+- Critical issues (block migrate:fresh): 8
+- High issues (functional/rollback problems): 3
+- Medium issues (runtime bugs / redundant migrations): 5
+- Recommended next action: Fix Critical issues #1-#8 in order of execution (05_purchase.sql first, then 06_payment_and_misc.sql, then 07_views_triggers_constraints.sql, then migrations 2025_01_04_000001, 2025_01_20_000006, 2025_01_20_000007) before re-running php artisan migrate:fresh.

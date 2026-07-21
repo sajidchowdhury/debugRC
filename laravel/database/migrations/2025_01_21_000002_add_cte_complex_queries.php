@@ -100,7 +100,8 @@ BEGIN
         FROM customer_payments
         WHERE payment_date BETWEEN DATE_TRUNC('month', p_date)::date AND p_date
           AND is_reversed = false
-          AND deleted_at IS NULL
+          -- Note: customer_payments has no deleted_at column (no soft-delete);
+          -- only is_reversed is used to exclude reversed payments.
           AND (p_branch_id IS NULL OR branch_id = p_branch_id)
     ),
 
