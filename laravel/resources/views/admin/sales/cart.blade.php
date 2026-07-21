@@ -53,6 +53,34 @@
         </div>
     </header>
 
+    {{-- ===================== R11: MULTI-CART TABS DOCK ===================== --}}
+    {{--
+      One pill per open customer-cart. Clicking a pill switches the active
+      cart (no page reload). The × button clears that customer's cart and
+      removes the tab. Mirrors Legacy `#draft-tabs` in sales/create.php
+      (L144–163) + sales-create.js::createOrSwitchTab / closeTab /
+      restoreSessionCarts (L657–803).
+    --}}
+    <div id="draftTabsCard" class="card border-0 shadow-sm mb-3 @if (empty($selectedCustomerId)) d-none @endif">
+        <div class="card-body py-2">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="small text-muted">
+                    <i class="fas fa-layer-group me-1 text-primary"></i>
+                    <strong>Open carts</strong>
+                    <span class="text-muted ms-1">— switch customers without losing items</span>
+                </div>
+                <span id="draftTabsCount" class="badge bg-light text-secondary border">0 carts</span>
+            </div>
+            <ul class="nav nav-pills flex-nowrap overflow-auto gap-1 py-1" id="draftTabs" role="tablist">
+                {{-- pills rendered by JS --}}
+            </ul>
+            <div id="draftTabsEmpty" class="small text-muted py-1 ps-1">
+                <i class="fas fa-info-circle me-1"></i>
+                No open carts. Pick a customer below to start a new one.
+            </div>
+        </div>
+    </div>
+
     {{-- ===================== CUSTOMER SELECTOR ===================== --}}
     <div class="card border-0 shadow-sm mb-3">
         <div class="card-body">
@@ -405,6 +433,8 @@
         searchCustomer: "{{ route('admin.sales.cart.search-customer') }}",
         searchProduct:  "{{ route('admin.sales.cart.search-product') }}",
         productByCode:  "{{ route('admin.sales.cart.product-by-code') }}",
+        // R11: list all open draft carts for the #draft-tabs dock.
+        listDrafts:     "{{ route('admin.sales.cart.list-drafts') }}",
     };
 
     // -------- State --------
@@ -452,6 +482,338 @@
             showConfirmButton: false,
             timer: 2500,
             timerProgressBar: true
+        });
+    }
+
+    // ============================================================
+    // ============== R11: MULTI-CART TABS DOCK ===================
+    // ============================================================
+    //
+    // Mirrors Legacy `#draft-tabs` in sales/create.php (L144–163)
+    // + sales-create.js::createOrSwitchTab / switchToTab / closeTab
+    // / refreshTabBadge / restoreSessionCarts (L643–803).
+    //
+    // Each pill = one open customer-cart. Clicking the pill body
+    // switches the active cart (no page reload); clicking the ×
+    // closes that cart (after a confirm dialog) by calling the
+    // existing /cart/clear endpoint, then removes the pill.
+    //
+    // The pill's badge shows the live item count for that cart.
+    // Badges update on every successful cart mutation (add /
+    // update / remove / clear) by reading the response payload —
+    // no extra round-trip needed.
+
+    // In-memory cache of customer metadata for tabs that were
+    // opened by selecting a customer (vs restored from list-drafts).
+    // Keyed by customer_id. Used to format tab labels without an
+    // extra fetch when the user picks a customer from the Select2.
+    var customerCache = {};
+
+    function tabLabelFor(customerId) {
+        var c = customerCache[customerId];
+        if (!c) return 'Customer #' + customerId;
+        var label = (c.shop_name || c.customer_name || '').trim();
+        if (c.mobile) label = label ? label + ' · ' + c.mobile : c.mobile;
+        return label || ('Customer #' + customerId);
+    }
+
+    function tabTitleFor(customerId) {
+        // Long-form tooltip text (truncated in the pill body).
+        var c = customerCache[customerId];
+        if (!c) return 'Customer #' + customerId;
+        var parts = [];
+        if (c.shop_name) parts.push(c.shop_name);
+        if (c.customer_name) parts.push(c.customer_name);
+        if (c.mobile) parts.push(c.mobile);
+        return parts.join(' · ') || ('Customer #' + customerId);
+    }
+
+    function ensureTab(customerId, opts) {
+        // opts: { label?:string, itemCount?:int, active?:bool, softHold?:bool }
+        // Returns the tab <li> element (jQuery-wrapped).
+        if (!customerId) return $();
+        customerId = parseInt(customerId, 10);
+        opts = opts || {};
+
+        var $li = $('#draftTabLi-' + customerId);
+        if ($li.length === 0) {
+            // Create the pill
+            $li = $(
+                '<li class="nav-item draft-tab-item" id="draftTabLi-' + customerId + '" role="presentation">' +
+                    '<div class="d-flex align-items-stretch border rounded-2 overflow-hidden" ' +
+                         'style="background:#f8f9fc;">' +
+                        '<button type="button" class="btn btn-sm draft-tab-link text-start px-2 py-1 border-0 bg-transparent" ' +
+                                'id="draftTab-' + customerId + '" ' +
+                                'data-customer-id="' + customerId + '" role="tab">' +
+                            '<span class="d-block fw-semibold small text-truncate draft-tab-name" style="max-width:180px;">' +
+                                escHtml(opts.label || tabLabelFor(customerId)) +
+                            '</span>' +
+                            '<span class="d-block text-muted" style="font-size:11px;line-height:1.1;">' +
+                                '<span class="badge bg-secondary rounded-pill draft-tab-badge">0</span>' +
+                                (opts.softHold ? ' <i class="fas fa-pause-circle text-warning ms-1" title="Soft-hold"></i>' : '') +
+                            '</span>' +
+                        '</button>' +
+                        '<button type="button" class="btn btn-sm draft-tab-close border-0 bg-transparent text-danger px-1" ' +
+                                'data-customer-id="' + customerId + '" title="Close this cart" ' +
+                                'aria-label="Close cart for ' + escHtml(opts.label || tabLabelFor(customerId)) + '">' +
+                            '<i class="fas fa-times"></i>' +
+                        '</button>' +
+                    '</div>' +
+                '</li>'
+            );
+            $('#draftTabs').append($li);
+        }
+
+        // Update label / badge if provided
+        if (opts.label !== undefined) {
+            $li.find('.draft-tab-name').text(opts.label);
+        }
+        if (opts.itemCount !== undefined) {
+            var $badge = $li.find('.draft-tab-badge');
+            $badge.text(opts.itemCount);
+            $badge.toggleClass('bg-secondary', opts.itemCount === 0)
+                  .toggleClass('bg-primary', opts.itemCount > 0);
+        }
+        if (opts.softHold !== undefined) {
+            // Show / hide the soft-hold icon next to the badge.
+            var $iconBox = $li.find('.draft-tab-badge').parent();
+            $iconBox.find('.fa-pause-circle').remove();
+            if (opts.softHold) {
+                $iconBox.append(' <i class="fas fa-pause-circle text-warning ms-1" title="Soft-hold"></i>');
+            }
+        }
+
+        if (opts.active) {
+            activateTab(customerId);
+        }
+        refreshTabDockVisibility();
+        return $li;
+    }
+
+    function activateTab(customerId) {
+        if (!customerId) return;
+        customerId = parseInt(customerId, 10);
+
+        // Highlight only the active pill
+        $('#draftTabs .draft-tab-link').removeClass('active bg-white shadow-sm');
+        $('#draftTabs .draft-tab-item > div').css('background', '#f8f9fc');
+        var $active = $('#draftTab-' + customerId);
+        if ($active.length) {
+            $active.addClass('active bg-white shadow-sm');
+            $active.closest('div').css('background', '#fff');
+            // Scroll the active tab into view (horizontal scroll)
+            var tabEl = $active[0];
+            if (tabEl && tabEl.scrollIntoView) {
+                tabEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+            }
+        }
+    }
+
+    function removeTab(customerId) {
+        $('#draftTabLi-' + parseInt(customerId, 10)).remove();
+        refreshTabDockVisibility();
+    }
+
+    function refreshTabDockVisibility() {
+        var count = $('#draftTabs > li').length;
+        $('#draftTabsCount').text(count + (count === 1 ? ' cart' : ' carts'));
+        $('#draftTabsEmpty').toggle(count === 0);
+        // Keep the dock visible whenever the workspace is visible
+        // (so the cashier can open more carts); only hide it in the
+        // initial "no customer selected" empty-state view.
+        if (count > 0) {
+            $('#draftTabsCard').removeClass('d-none');
+        }
+    }
+
+    function updateActiveTabBadge(itemCount, opts) {
+        // itemCount: int (current cart item count)
+        // opts: { softHold?:bool, label?:string }
+        if (!state.customerId) return;
+        var $li = $('#draftTabLi-' + state.customerId);
+        if ($li.length === 0) {
+            // Tab not yet rendered (e.g. user added an item to a fresh
+            // customer's cart before list-drafts finished). Create it.
+            ensureTab(state.customerId, {
+                itemCount: itemCount,
+                active: true,
+                softHold: opts && opts.softHold,
+                label: opts && opts.label,
+            });
+            return;
+        }
+        ensureTab(state.customerId, Object.assign({
+            itemCount: itemCount,
+            active: true,
+        }, opts || {}));
+    }
+
+    /**
+     * Fetch the list of open carts and render one pill per cart.
+     * Called on page load. Mirrors Legacy `restoreSessionCarts`
+     * (sales-create.js L733–760).
+     */
+    function restoreSessionCarts() {
+        return ajaxGet(ENDPOINTS.listDrafts, {})
+            .done(function (carts) {
+                if (!carts || !carts.length) return;
+                carts.forEach(function (c) {
+                    // Cache customer metadata so tabLabelFor can render
+                    // pills even before /load resolves.
+                    customerCache[c.customer_id] = {
+                        id: c.customer_id,
+                        shop_name: c.shop_name,
+                        customer_name: c.customer_name,
+                        mobile: c.mobile,
+                    };
+                    ensureTab(c.customer_id, {
+                        label: c.label,
+                        itemCount: c.item_count,
+                        softHold: c.is_soft_hold,
+                        active: false,
+                    });
+                });
+
+                // If we already have an INITIAL_CID (from ?customer_id=)
+                // activate that tab; otherwise activate the first one
+                // (busiest cart, since list-drafts sorts by item_count
+                // desc then updated_at desc — matches Legacy).
+                var firstCid = parseInt(carts[0].customer_id, 10);
+                var activateCid = state.customerId || firstCid;
+                if (activateCid) {
+                    activateTab(activateCid);
+                    // If state.customerId wasn't set yet (no ?customer_id=)
+                    // we need to also load the cart + sync the Select2.
+                    if (!state.customerId) {
+                        switchToCustomer(activateCid, { skipTabEnsure: true });
+                    }
+                }
+            })
+            .fail(function (xhr) {
+                // Non-fatal — the dock just stays empty.
+                console.warn('list-drafts failed', xhr?.responseJSON || xhr?.statusText);
+            });
+    }
+
+    /**
+     * Switch the active cart to a different customer.
+     * - Updates the Select2 (#customerSelect) value
+     * - Triggers `change` which calls loadCart(cid)
+     * - Ensures a tab exists + activates it
+     *
+     * opts.skipTabEnsure (bool) — when called from inside
+     * restoreSessionCarts, the tab has already been ensured; skip
+     * the duplicate call.
+     */
+    function switchToCustomer(customerId, opts) {
+        opts = opts || {};
+        customerId = parseInt(customerId, 10);
+        if (!customerId) return;
+
+        // Ensure the Select2 has an <option> for this customer so
+        // .val() actually selects it. (Select2 AJAX only has options
+        // the user typed for; we synthesize one from the cache.)
+        var c = customerCache[customerId];
+        if (c) {
+            var label = (c.shop_name || c.customer_name || '#' + customerId);
+            if (c.customer_code) label += ' [' + c.customer_code + ']';
+            if (c.mobile) label += ' · ' + c.mobile;
+            if ($('#customerSelect option[value="' + customerId + '"]').length === 0) {
+                var $opt = $('<option></option>').val(customerId).text(label);
+                $('#customerSelect').append($opt);
+            }
+        }
+        $('#customerSelect').val(customerId).trigger('change');
+
+        if (!opts.skipTabEnsure) {
+            ensureTab(customerId, { active: true });
+        } else {
+            activateTab(customerId);
+        }
+
+        // Update the URL so a refresh preserves selection
+        if (window.history && history.replaceState) {
+            history.replaceState(null, '', window.location.pathname + '?customer_id=' + customerId);
+        }
+    }
+
+    /**
+     * Close (clear) the cart for a customer and remove its tab.
+     * Mirrors Legacy `closeTab` (sales-create.js L762–792).
+     *
+     * If the closed tab was the active one, switch to the next
+     * remaining tab; if no tabs remain, show the empty state.
+     */
+    function closeTabCart(customerId) {
+        customerId = parseInt(customerId, 10);
+        if (!customerId) return;
+
+        Swal.fire({
+            title: 'Close this cart?',
+            text: 'All items for this customer will be removed.',
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonColor: '#d33',
+            confirmButtonText: '<i class="fas fa-check me-1"></i> Yes, close',
+            cancelButtonText: 'Cancel',
+        }).then(function (result) {
+            if (!result.isConfirmed) return;
+
+            // Clear the cart via the existing endpoint (already does
+            // SalesCartService::clearCart under the hood, which writes
+            // the R4 audit-log entry too).
+            ajaxPost(ENDPOINTS.clear, { customer_id: customerId })
+                .done(function (resp) {
+                    if (resp && resp.status === 'success') {
+                        removeTab(customerId);
+                        if (parseInt(state.customerId, 10) === customerId) {
+                            // Active tab was closed — switch to next remaining
+                            var $next = $('#draftTabs .draft-tab-link').first();
+                            if ($next.length) {
+                                var nextCid = parseInt($next.data('customer-id'), 10);
+                                switchToCustomer(nextCid);
+                            } else {
+                                // No carts left → reset to empty state
+                                state.customerId = null;
+                                state.cart = null;
+                                state.validation = null;
+                                $('#customerSelect').val('').trigger('change');
+                                setWorkspaceVisible(false);
+                                renderAll();
+                                if (window.history && history.replaceState) {
+                                    history.replaceState(null, '', window.location.pathname);
+                                }
+                                $('#draftTabsCard').addClass('d-none');
+                            }
+                        }
+                        toast('Cart closed', 'success');
+                    } else {
+                        toast((resp && resp.message) || 'Could not close cart.', 'error');
+                    }
+                })
+                .fail(function (xhr) {
+                    toast('Close failed: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
+                });
+        });
+    }
+
+    // ---- Tab dock event wiring (delegated, runs once) ----
+    function initDraftTabsDock() {
+        // Pill body click → switch cart
+        $(document).on('click', '.draft-tab-link', function (e) {
+            e.preventDefault();
+            var cid = parseInt($(this).data('customer-id'), 10);
+            if (!cid) return;
+            if (parseInt(state.customerId, 10) === cid) return; // already active
+            switchToCustomer(cid);
+        });
+
+        // × close button
+        $(document).on('click', '.draft-tab-close', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var cid = parseInt($(this).data('customer-id'), 10);
+            closeTabCart(cid);
         });
     }
 
@@ -683,6 +1045,16 @@
                 state.validation = data.validation || null;
                 setWorkspaceVisible(true);
                 renderAll();
+
+                // R11: ensure a tab exists for this customer + update its
+                // badge from the freshly-loaded cart. The label comes from
+                // customerCache (populated by Select2's processResults) or
+                // falls back to "Customer #ID".
+                updateActiveTabBadge(
+                    (data.items || []).length,
+                    { softHold: state.softHold, label: tabLabelFor(state.customerId) }
+                );
+                activateTab(state.customerId);
             })
             .fail(function (xhr) {
                 toast('Failed to load cart: ' + (xhr.responseJSON?.message || xhr.statusText), 'error');
@@ -711,6 +1083,11 @@
                         state.cart = resp.cart;
                         state.validation = resp.cart.validation || state.validation;
                         renderAll();
+                        // R11: refresh the active tab's badge from the new cart
+                        updateActiveTabBadge(
+                            (resp.cart.items || []).length,
+                            { softHold: state.softHold }
+                        );
                     } else {
                         loadCart(state.customerId);
                     }
@@ -745,6 +1122,12 @@
                     state.cart = resp.cart;
                     state.validation = resp.cart.validation || state.validation;
                     renderAll();
+                    // R11: qty/rate change doesn't change item count, but
+                    // refresh anyway in case the server merged a duplicate.
+                    updateActiveTabBadge(
+                        (resp.cart.items || []).length,
+                        { softHold: state.softHold }
+                    );
                 } else {
                     toast(resp.message || 'Update failed.', 'error');
                 }
@@ -774,6 +1157,12 @@
                             state.cart = resp.cart;
                             state.validation = resp.cart.validation || state.validation;
                             renderAll();
+                            // R11: refresh the active tab's badge — count
+                            // just dropped by 1.
+                            updateActiveTabBadge(
+                                (resp.cart.items || []).length,
+                                { softHold: state.softHold }
+                            );
                         } else {
                             loadCart(state.customerId);
                         }
@@ -804,6 +1193,15 @@
                         toast(resp.message || 'Cart cleared', 'success');
                         state.softHold = false;
                         loadCart(state.customerId);
+                        // R11: after clear, the cart is empty — remove its tab.
+                        // (list-drafts skips empty carts, so the tab would
+                        // disappear on next refresh anyway; doing it now
+                        // gives immediate visual feedback.)
+                        removeTab(state.customerId);
+                        // If no tabs remain, hide the dock + reset to empty state.
+                        if ($('#draftTabs > li').length === 0) {
+                            $('#draftTabsCard').addClass('d-none');
+                        }
                     } else {
                         toast(resp.message || 'Clear failed.', 'error');
                     }
@@ -909,6 +1307,16 @@
                             var label = c.customer_name || c.shop_name || ('#' + c.id);
                             if (c.customer_code)  label += ' [' + c.customer_code + ']';
                             if (c.mobile)         label += ' · ' + c.mobile;
+                            // R11: cache the customer so the tab dock can
+                            // render the right label without an extra fetch.
+                            customerCache[c.id] = {
+                                id: c.id,
+                                customer_code: c.customer_code,
+                                customer_name: c.customer_name,
+                                shop_name: c.shop_name,
+                                mobile: c.mobile,
+                                credit_limit: c.credit_limit,
+                            };
                             return {
                                 id: c.id,
                                 text: label,
@@ -980,6 +1388,10 @@
                     var newUrl = window.location.pathname + '?customer_id=' + parseInt(cid, 10);
                     history.replaceState(null, '', newUrl);
                 }
+                // R11: ensure a tab exists for this customer before loadCart
+                // fires (so the pill appears immediately, even before the
+                // cart load resolves).
+                ensureTab(cid, { active: true, label: tabLabelFor(cid) });
                 loadCart(cid);
             } else {
                 if (window.history && history.replaceState) {
@@ -1515,6 +1927,40 @@
         } else {
             setWorkspaceVisible(false);
         }
+
+        // ============================================================
+        // ============== R11: bootstrap the multi-cart dock ==========
+        // ============================================================
+        // Wire delegated click handlers for pill bodies + × buttons.
+        initDraftTabsDock();
+
+        // Pre-populate customerCache with the server-rendered selected
+        // customer (if any) so the first tab's label is correct before
+        // any AJAX fires.
+        @if (!empty($selectedCustomer))
+            customerCache[{{ (int) $selectedCustomer->id }}] = {
+                id: {{ (int) $selectedCustomer->id }},
+                customer_code: @json((string) ($selectedCustomer->customer_code ?? '')),
+                customer_name: @json((string) ($selectedCustomer->customer_name ?? '')),
+                shop_name:     @json((string) ($selectedCustomer->shop_name ?? '')),
+                mobile:        @json((string) ($selectedCustomer->mobile ?? '')),
+            };
+            // Render the initial tab immediately with whatever count we
+            // already know (from the server-rendered cart payload).
+            var initialCount = (state.cart && state.cart.items) ? state.cart.items.length : 0;
+            ensureTab({{ (int) $selectedCustomer->id }}, {
+                active: true,
+                itemCount: initialCount,
+                softHold: state.softHold,
+                label: tabLabelFor({{ (int) $selectedCustomer->id }}),
+            });
+        @endif
+
+        // Fetch the full list of open carts + render one pill per cart.
+        // This is async — by the time it resolves, the initial tab (if
+        // any) is already showing, and we just add the rest + activate
+        // the right one.
+        restoreSessionCarts();
     });
 })();
 </script>

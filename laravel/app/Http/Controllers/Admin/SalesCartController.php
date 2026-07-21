@@ -173,6 +173,31 @@ class SalesCartController extends Controller
     }
 
     /**
+     * R11: AJAX list all open draft carts for the current user (+ branch).
+     *
+     * Ported from Legacy `SalesController::list_draft_carts` +
+     * `SalesCartOperationsTrait::listDraftCarts()`. Drives the
+     * `#draft-tabs` dock in `cart.blade.php` so the cashier can see
+     * every customer-cart they have in flight, switch between them
+     * without losing items, and close any cart they no longer need.
+     *
+     * GET /admin/sales/cart/list-drafts
+     * Returns: [{customer_id, label, shop_name, customer_name, mobile,
+     *            item_count, subtotal, is_soft_hold, updated_at}, ...]
+     *
+     * Only non-empty carts are returned (empty carts don't earn a tab).
+     * Sorted by item_count DESC then updated_at DESC.
+     */
+    public function listDrafts(Request $request)
+    {
+        $branchId = (int) session('branch_id', 0);
+
+        return response()->json(
+            $this->cartService->listCarts(auth()->id(), $branchId)
+        );
+    }
+
+    /**
      * AJAX: Load the cart for a customer.
      */
     public function load(Request $request)

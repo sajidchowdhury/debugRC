@@ -23,6 +23,8 @@
 > | R5  | Lock customer row before credit-limit check                  | ✅ Done   |
 > | H1  | Hotfix: `customer_payments.status` column does not exist     | ✅ Done   |
 > | R6  | Add `branch_id` to `sales_draft_carts` unique key            | ✅ Done   |
+> | R10 | Port barcode scanning (product_by_code + Enter-key handler)  | ✅ Done   |
+> | R11 | Port multi-customer cart tabs (`#draft-tabs` dock)           | ✅ Done   |
 
 ---
 
@@ -39,7 +41,7 @@ The Laravel Sales Cart Blade is the **Phase 8 re-implementation** of the same mo
 | Architectural cleanliness | Laravel is **clearly better** (Form Requests, Resources, services, RLS, partitioning). |
 | POS UX richness | Legacy is **clearly better** (barcode, multi-tab cart, price-range slider, walk-in flows). |
 | Concurrency safety | Laravel is **better** (idempotency tokens, advisory locks, EXCLUDE constraint) — but the Legacy system's pre-/post-lock double-check pattern is also safe in practice. |
-| Business-rule parity | Laravel is **mostly on par**, with notable gaps in barcode, multi-customer tabs, walk-in customer, live credit display, and notification fan-out. |
+| Business-rule parity | Laravel is **mostly on par**, with notable gaps in walk-in customer, live credit display, and notification fan-out (barcode + multi-customer tabs closed by R10 / R11). |
 | Performance characteristics | Laravel is **better on read paths** (CTE MVs, partitioning, full-text search) and **comparable on write paths**. |
 | Production maturity | Legacy is **more battle-tested**; Laravel is **newer and partially incomplete** (orphaned `sales-create.js`, dropdown capped at 500 [**fixed by R1**], ~~no cart-level audit log~~ [**fixed by R4**], ~~missing payment idempotency~~ [**fixed by R2**]). |
 
@@ -513,12 +515,12 @@ This split ensures salesmen can finalize invoices without touching warehouse, an
 | Aspect | Legacy | Laravel | Verdict |
 |---|---|---|---|
 | Framework stack | Custom PHP 8 MVC + Bootstrap 5 + jQuery 3.6 + SweetAlert2 + Font Awesome 6 + DataTables | Laravel 11 Blade + Bootstrap 5 + jQuery 3.6 + SweetAlert2 + Select2 + Bootstrap Icons + Font Awesome 6 | **Same** |
-| Page architecture | Single POS page (`sales/create.php`) with multi-customer tab dock + sticky bottom bar | Two-column cart page (`admin/sales/cart.blade.php`) with summary + validation + availability right rail | Legacy better for high-volume POS; Laravel better for audit clarity |
+| Page architecture | Single POS page (`sales/create.php`) with multi-customer tab dock + sticky bottom bar | Two-column cart page (`admin/sales/cart.blade.php`) with multi-customer tab dock (R11) + summary + validation + availability right rail | **Same** (multi-customer dock ported by R11; Laravel still lacks sticky bottom bar) |
 | Customer picker | Live typeahead (`initCustomerTypeahead`, 250 ms debounce) on ALL active customers | Select2 dropdown capped at 500 customers, no live search | **Legacy better** |
 | Product picker | Live typeahead + barcode scan (Enter triggers exact-code lookup) | Select2 dropdown capped at 500 products, no barcode | **Legacy better** |
 | Price display | Price-range slider band with min/default/max thumb + red/amber/green status | Plain rate input with min/max hint text below | **Legacy better** |
 | Stock display | Inline "Available (branch)" badge per cart row + per-warehouse breakdown modal | Per-warehouse breakdown table on right rail + color-coded availability per row | **Laravel better** (always-visible breakdown vs modal) |
-| Cart tabs | Multi-customer tab dock with per-tab item-count badges and × close buttons | Single cart per page — switching customers requires URL change or "Load Cart" button | **Legacy better** |
+| Cart tabs | Multi-customer tab dock with per-tab item-count badges and × close buttons | Multi-customer tab dock (`#draftTabsCard`) with per-tab item-count badges + × close (R11); pills switch carts in-page without reload | **Same** (R11 closed the gap) |
 | Cart persistence indicator | None — silently syncs | "Not checked / Valid / Invalid" validation status card | **Laravel better** |
 | Sticky bottom bar | Yes — item count + grand total + Finalize button always visible | No — Finalize button is in the cart actions card | **Legacy better** for long carts |
 | Modals | Bootstrap modals + SweetAlert2 | SweetAlert2 only (Bootstrap modals not used) | **Same** |
@@ -558,8 +560,8 @@ This split ensures salesmen can finalize invoices without touching warehouse, an
 | Inline rate edit | Yes | Yes | **Same** |
 | Inline total recalculation | Yes (immediate) | Yes (immediate) | **Same** |
 | Swipe-to-delete (mobile) | Yes | No | **Legacy better** |
-| Multi-customer tabs | Yes (one cart per customer, switchable) | No (single cart per page) | **Legacy better** |
-| Per-tab item count badge | Yes | N/A | **Legacy better** |
+| Multi-customer tabs | Yes (one cart per customer, switchable) | Yes (R11 — `#draftTabsCard` dock with per-customer pills) | **Same** (R11 closed the gap) |
+| Per-tab item count badge | Yes | Yes (R11 — updates from cart-mutation response payloads) | **Same** (R11 closed the gap) |
 | Cart total display | Per-tab footer + sticky bottom bar | Summary card on right rail | **Same** |
 | Finalize button location | Sticky bottom bar + per-tab footer | Cart actions card (no sticky) | **Legacy better** |
 
@@ -736,7 +738,7 @@ Features that exist in the **Legacy** system but are **missing or weakened** in 
 | # | Feature | Legacy Location | Laravel Status |
 |---|---|---|---|
 | 1 | **Barcode scanning** (`product_by_code` exact-match endpoint + Enter-key handler) | `sales.js::fetchSalesProductByExactCode` L67–82; `SalesController::product_by_code` L97–114; `sales-create.js` L324–381 Enter-key handler | **✅ R10 (2026-07-21)** — Backend ported in R1 (`SalesCartController::productByCode` + `findProductByExactCode`). UI wired in R10: dedicated `#barcodeInput` field (toggle-revealed) in `cart.blade.php` with Enter-key + "Scan & Add" button. On success: caches product in `productCache`, injects a fresh `<option>` into the Select2 and triggers `change` (so rate/qty/availability populate via the existing handlers), then auto-adds to cart if "Auto-add after scan" is checked (default on). Out-of-stock guard matches Legacy `selectProductCreate` (blocks add, shows toast). After auto-add the field is cleared and refocused for the next scan. |
-| 2 | **Multi-customer cart tabs** (one POS page, N customer carts, switchable) | `sales-create.js::createOrSwitchTab` L657–693; `#draft-tabs` in `create.php` | **Missing** — Laravel cart supports one customer per page |
+| 2 | **Multi-customer cart tabs** (one POS page, N customer carts, switchable) | `sales-create.js::createOrSwitchTab` L657–693; `#draft-tabs` in `create.php` | **✅ R11 (2026-07-22)** — Ported. New backend endpoint `GET /admin/sales/cart/list-drafts` (mirrors Legacy `sales/list_draft_carts` + `listDraftCarts()`): returns all non-empty carts for the current user + session branch, sorted by item_count DESC then updated_at DESC. New `SalesCartService::listCarts()` method does the DB query + customer-name join + item_count + subtotal aggregation. New frontend `#draftTabsCard` dock in `cart.blade.php` (above the customer selector) renders one Bootstrap nav-pill per cart with the shop_name/mobile label, an item-count badge (bg-secondary when 0, bg-primary when >0), and a × close button. On page load, `restoreSessionCarts()` calls list-drafts + renders one pill per cart + activates the busiest (or the `?customer_id=` one if present). Clicking a pill switches carts by setting `#customerSelect` and triggering `change` (which calls `loadCart`). The × button shows a SweetAlert confirm, calls the existing `/cart/clear` endpoint (which writes the R4 audit-log entry), then removes the pill and switches to the next remaining tab (or shows the empty state if no tabs remain). Badges update on every successful `add`/`update`/`remove`/`clear` mutation by reading the response payload — no extra round-trip. |
 | 3 | **Live customer typeahead** (LIKE %term% on name/shop/mobile/code) | `initCustomerTypeahead` + `sales/search_customer` endpoint | **✅ R1 (2026-07-21)** — Ported to `admin.sales.cart.search-customer` (throttle 90/min). Wired into Select2 AJAX mode with `minimumInputLength: 1` and a `processResults` mapper. Different visual treatment (Select2 dropdown vs Legacy's custom suggestion box) but functionally equivalent. |
 | 4 | **Live product typeahead** (LIKE %term% with stock + price join) | `initProductTypeahead` + `sales/search_product` endpoint | **✅ R1 (2026-07-21)** — Ported to `admin.sales.cart.search-product` (throttle 90/min). Wired into Select2 AJAX mode. `processResults` populates an in-memory `productCache` so the change handler can read `default_rate`/`min_rate`/`max_rate`/`available_qty` without another round-trip. |
 | 5 | **Price-range slider band** (visual min/default/max with thumb + red/amber/green status) | `#priceRangePanel` in `create.php`; `sales.js::renderPriceRangeBand` | **Missing** — Laravel shows plain text hint |
@@ -1049,7 +1051,7 @@ On `updateExistingInvoice`, credit limit re-check uses `NET increase = max(0, ne
 | # | Recommendation | Rationale |
 |---|---|---|
 | R10 | **Port barcode scanning** (`product_by_code` endpoint + Enter-key handler in cart blade) | Missing feature #1 — high-value for retail POS. |
-| R11 | **Port multi-customer cart tabs** (`#draft-tabs` dock with per-tab item-count badges) | Missing feature #2 — high-volume POS workflows. |
+| R11 | **✅ Done (2026-07-22).** Port multi-customer cart tabs (`#draft-tabs` dock with per-tab item-count badges) | Missing feature #2 — high-volume POS workflows. New `list-drafts` endpoint + `#draftTabsCard` dock; badges refresh from cart-mutation response payloads. |
 | R12 | **Port live customer/product typeahead** (replace select2 dropdowns with debounced AJAX typeahead) | Missing features #3, #4 — same root cause as R1. |
 | R13 | **Port price-range slider band UI** | Missing feature #5 — improves cashier UX. |
 | R14 | **Port live credit-limit display on cart page** | Missing feature #6 — prevents wasted cart-building. |

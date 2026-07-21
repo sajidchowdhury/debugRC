@@ -331,6 +331,120 @@ class SalesCartService
     }
 
     /**
+     * List all open draft carts for a user (+ optional branch).
+     *
+     * R11 (2026-07-22): ported from Legacy
+     * `SalesCartOperationsTrait::listDraftCarts()` — used by the
+     * `#draft-tabs` dock in the cart blade to render one pill per
+     * customer-cart with item-count badges.
+     *
+     * Only carts with at least one item are returned — empty carts
+     * are not shown as tabs (matches Legacy behaviour where empty
+     * session slots are skipped). Soft-held carts ARE included so
+     * the user can see + resume them.
+     *
+     * Sorted by item_count DESC then updated_at DESC so the busiest
+     * cart is leftmost (matches Legacy usort by item_count desc).
+     *
+     * @param int      $userId
+     * @param int|null $branchId  If non-null, restrict to this branch
+     *                              (R6: carts are branched).
+     * @return list<array{
+     *     customer_id:int,
+     *     label:string,
+     *     shop_name:string,
+     *     customer_name:string,
+     *     mobile:string,
+     *     item_count:int,
+     *     subtotal:float,
+     *     is_soft_hold:bool,
+     *     updated_at:?string
+     * }>
+     */
+    public function listCarts(int $userId, ?int $branchId = null): array
+    {
+        $query = SalesDraftCart::query()
+            ->where('user_id', $userId)
+            ->whereNotNull('customer_id');
+
+        if ($branchId !== null) {
+            $query->where('branch_id', $branchId);
+        }
+
+        $rows = $query->orderByDesc('updated_at')->limit(50)->get();
+
+        $result = [];
+        foreach ($rows as $cart) {
+            $items = $cart->items_json ?? [];
+            if (!is_array($items)) {
+                $items = [];
+            }
+            $itemCount = count($items);
+            // Skip empty carts — they shouldn't appear as tabs.
+            // (Matches Legacy: empty session slots are not listed.)
+            if ($itemCount === 0) {
+                continue;
+            }
+
+            $customerId = (int) $cart->customer_id;
+            if ($customerId <= 0) {
+                continue;
+            }
+
+            // Look up the customer once. Use a cheap DB::table query
+            // (not Eloquent) to avoid model boot overhead per row.
+            $cust = DB::table('customers')
+                ->where('id', $customerId)
+                ->first(['customer_name', 'shop_name', 'mobile']);
+
+            $shop   = (string) ($cust->shop_name ?? '');
+            $name   = (string) ($cust->customer_name ?? '');
+            $mobile = (string) ($cust->mobile ?? '');
+
+            $label = trim($shop !== '' ? $shop : $name);
+            if ($mobile !== '') {
+                $label = $label !== '' ? "{$label} · {$mobile}" : $mobile;
+            }
+            if ($label === '') {
+                $label = "Customer #{$customerId}";
+            }
+
+            $subtotal = 0.0;
+            foreach ($items as $item) {
+                $subtotal += (float) ($item['total'] ?? (
+                    (float) ($item['qty'] ?? 0) * (float) ($item['rate'] ?? 0)
+                ));
+            }
+
+            $result[] = [
+                'customer_id'   => $customerId,
+                'label'         => $label,
+                'shop_name'     => $shop,
+                'customer_name' => $name,
+                'mobile'        => $mobile,
+                'item_count'    => $itemCount,
+                'subtotal'      => round($subtotal, 2),
+                'is_soft_hold'  => (bool) $cart->is_soft_hold,
+                'updated_at'    => $cart->updated_at
+                    ? $cart->updated_at->toIso8601String()
+                    : null,
+            ];
+        }
+
+        // Sort: item_count DESC, then updated_at DESC. Legacy usort
+        // only used item_count; we add updated_at as a tiebreaker so
+        // equally-busy carts surface the recently-touched one first.
+        usort($result, function ($a, $b) {
+            if ($b['item_count'] !== $a['item_count']) {
+                return $b['item_count'] <=> $a['item_count'];
+            }
+            return ($b['updated_at'] ?? '') <=> ($a['updated_at'] ?? '');
+        });
+
+        return $result;
+    }
+
+    /**
      * Validate the cart for finalization (hard gate before creating invoice).
      *
      * @param int $userId

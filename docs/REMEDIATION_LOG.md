@@ -1276,3 +1276,286 @@ products/by-code` endpoint could be added later if needed.
   the barcode input without needing to click the toggle button.
 - Consider a "scan sound" beep on successful scan (Web Audio API)
   for audible feedback in noisy retail environments. Low priority.
+
+---
+
+## R11 — Port multi-customer cart tabs (`#draft-tabs` dock with per-tab item-count badges)
+
+- **Status:** ✅ Done
+- **Date:** 2026-07-22
+- **Audit reference:** `docs/sales_entry_Lg_vs_La.md` §6.1 item #2
+  (Multi-customer cart tabs) — now marked ✅ R11. Also updated
+  §3 architecture comparison ("Cart tabs" + "Page architecture"
+  rows), §4 cart-table comparison ("Multi-customer tabs" +
+  "Per-tab item count badge" rows), §9.3 recommendations table.
+- **Legacy port:** `sales/list_draft_carts` controller +
+  `SalesCartOperationsTrait::listDraftCarts()` service +
+  `sales-create.js::createOrSwitchTab / switchToTab / closeTab /
+  refreshTabBadge / restoreSessionCarts` (L643–803) + `#draft-tabs`
+  dock in `sales/create.php` (L144–163).
+
+### Problem
+
+The Laravel cart blade supported one customer per page. Switching
+customers required either changing the URL (`?customer_id=…`) or
+selecting a different customer in the Select2 and clicking "Load
+Cart". For a high-volume POS cashier ringing up several customers
+in parallel, this is friction:
+
+- Every switch costs a round-trip and a page-state reset.
+- The previously-edited cart disappears behind the new selection
+  — the cashier can't see at a glance which carts are open and
+  how many items each has.
+- There is no in-page overview of "open work" (cart inventory
+  per customer).
+
+Legacy solved this with a `#draft-tabs` dock: one pill per
+customer-cart, item-count badge, × close button, instant in-page
+switching. The cashier can keep 5–10 carts open at once and
+toggle between them with a single click.
+
+Audit risk: §6.1 item #2 in `sales_entry_Lg_vs_La.md`.
+
+### Decision
+
+Add a `#draftTabsCard` dock above the customer selector that
+mirrors the Legacy UX, backed by a new `list-drafts` endpoint.
+
+**Why a new endpoint instead of reusing `/cart/load`?** `load` is
+per-customer (one cart at a time); we need an enumeration of all
+open carts for the user + branch. Legacy had a dedicated
+`sales/list_draft_carts` endpoint for exactly this reason.
+
+**Why reuse `/cart/clear` for the close-tab action?** It already
+does the right thing — clears the cart for a (user, customer,
+branch) tuple and writes the R4 audit-log entry. Adding a separate
+`clear-tab` endpoint would just duplicate the logic and risk
+divergent behavior.
+
+**Why sort by item_count DESC then updated_at DESC?** Legacy
+`usort` only used item_count desc; we add updated_at as a
+tiebreaker so equally-busy carts surface the recently-touched one
+first. This matches Legacy intent ("busiest cart leftmost") while
+giving a sensible fallback when counts tie.
+
+**Why cap at 50 rows?** Defensive — a runaway user with hundreds
+of stale carts shouldn't OOM the page. 50 is well above any
+realistic POS workflow (Legacy had no cap, but its session-based
+storage naturally bounded things).
+
+### Files modified
+
+#### `laravel/app/Services/Sales/SalesCartService.php`
+
+Added `listCarts(int $userId, ?int $branchId = null): array`
+method (~80 lines):
+
+- Queries `sales_draft_carts` for the user (+ optional branch),
+  ordered by `updated_at DESC`, capped at 50 rows.
+- For each row: skips if `items_json` is empty (Legacy semantics
+  — empty carts don't earn a tab); looks up the customer's
+  `customer_name`/`shop_name`/`mobile` via a cheap `DB::table`
+  query (not Eloquent — avoids model boot overhead per row);
+  computes `item_count` = `count(items)` and `subtotal` = sum of
+  `item.total`.
+- Builds the `label` field: `shop_name || customer_name`, with
+  ` · mobile` appended if mobile is present. Falls back to
+  `Customer #ID` if both are empty.
+- Returns an array of `{customer_id, label, shop_name,
+  customer_name, mobile, item_count, subtotal, is_soft_hold,
+  updated_at}` rows.
+- Sorts by `item_count DESC, updated_at DESC` (PHP `usort`) —
+  matches Legacy intent with an updated_at tiebreaker.
+
+#### `laravel/app/Http/Controllers/Admin/SalesCartController.php`
+
+Added `listDrafts(Request $request)` method:
+
+```php
+public function listDrafts(Request $request)
+{
+    $branchId = (int) session('branch_id', 0);
+    return response()->json(
+        $this->cartService->listCarts(auth()->id(), $branchId)
+    );
+}
+```
+
+Thin wrapper — all logic is in the service. Returns JSON directly
+(no view, no resource class — the response shape is simple and
+matches Legacy).
+
+#### `laravel/routes/web.php`
+
+Added inside the `admin/sales` route group:
+
+```php
+Route::get('cart/list-drafts', [SalesCartController::class, 'listDrafts'])
+    ->middleware('throttle:60,1')
+    ->name('cart.list-drafts');
+```
+
+Throttle: 60 req/min — matches Legacy `guardJsonApi` limit for
+`sales/list_draft_carts`.
+
+#### `laravel/resources/views/admin/sales/cart.blade.php`
+
+Multiple changes:
+
+1. **New `#draftTabsCard` dock** above the customer selector:
+   - Card with header ("Open carts — switch customers without
+     losing items") + a count badge ("N carts") + an empty-state
+     hint.
+   - `<ul class="nav nav-pills flex-nowrap overflow-auto">` for
+     the pill list — horizontal scroll when pills overflow.
+   - Hidden by default (`d-none`) when no customer is selected;
+     becomes visible once the first tab is rendered.
+
+2. **New JS section "R11: MULTI-CART TABS DOCK"** (~330 lines):
+   - `customerCache` (in-memory object) — keyed by customer_id,
+     holds `{id, customer_code, customer_name, shop_name, mobile,
+     credit_limit}`. Populated by the customer Select2's
+     `processResults` (so newly-picked customers get a properly
+     labeled tab immediately) and by `restoreSessionCarts()`
+     (so list-drafts pills render correctly).
+   - `tabLabelFor(customerId)` — formats the pill label
+     (`shop_name || customer_name`, with ` · mobile` if present).
+   - `tabTitleFor(customerId)` — long-form tooltip text.
+   - `ensureTab(customerId, opts)` — idempotent: creates the pill
+     `<li>` if absent, updates its label/badge/soft-hold icon if
+     present. `opts.active = true` also calls `activateTab()`.
+   - `activateTab(customerId)` — highlights only the active pill,
+     dims the rest, scrolls the active pill into view (horizontal
+     scroll).
+   - `removeTab(customerId)` — deletes the `<li>` from the DOM,
+     then calls `refreshTabDockVisibility()`.
+   - `refreshTabDockVisibility()` — updates the "N carts" badge,
+     toggles the empty-state hint, ensures the dock is visible
+     when there's at least one tab.
+   - `updateActiveTabBadge(itemCount, opts)` — convenience wrapper
+     that calls `ensureTab(state.customerId, {itemCount, active:
+     true, ...opts})`. Used by every cart-mutation success handler.
+   - `restoreSessionCarts()` — async; calls
+     `ajaxGet(ENDPOINTS.listDrafts)`, caches each customer, calls
+     `ensureTab()` per cart, then activates the busiest (or the
+     `?customer_id=` one if present).
+   - `switchToCustomer(customerId, opts)` — sets `#customerSelect`
+     value (synthesizing an `<option>` from `customerCache` if
+     needed), triggers `change` (which calls `loadCart`), ensures
+     the tab exists + is active, updates the URL.
+   - `closeTabCart(customerId)` — SweetAlert confirm →
+     `ajaxPost(ENDPOINTS.clear, {customer_id})` → on success,
+     `removeTab(customerId)` and either switch to the next
+     remaining tab or reset to the empty state.
+   - `initDraftTabsDock()` — delegated event wiring for pill-body
+     click + × close button. Called once on DOM ready.
+
+3. **Modified customer Select2 `processResults`** to also populate
+   `customerCache` (so the tab label is correct for newly-picked
+   customers).
+
+4. **Modified customer `<select>` change handler** to call
+   `ensureTab(cid, {active:true, label})` before `loadCart(cid)`
+   — so the pill appears immediately, even before the AJAX
+   resolves.
+
+5. **Modified `loadCart()` success handler** to call
+   `updateActiveTabBadge(itemCount, {softHold, label})` +
+   `activateTab(state.customerId)`.
+
+6. **Modified `addToCart()` / `updateItem()` / `removeItem()` /
+   `clearCart()` success handlers** to call
+   `updateActiveTabBadge(itemCount, {softHold})` from the response
+   payload. `clearCart()` also calls `removeTab(state.customerId)`
+   and hides the dock if no tabs remain.
+
+7. **Added bootstrap sequence** at the bottom of the
+   `$(function () { ... })` block:
+   - Calls `initDraftTabsDock()` to wire delegated handlers.
+   - If `$selectedCustomer` is set (server-rendered), pre-populates
+     `customerCache` and renders the initial tab with the
+     already-known item count (from the server-rendered
+     `$cartData`).
+   - Calls `restoreSessionCarts()` to fetch the full list and
+     render the remaining tabs + activate the right one.
+
+### What was NOT changed
+
+- The Legacy sales entry code (`legacy/`) was not touched.
+- The Laravel API V1 (`SalesCartApiController`) was NOT touched.
+  The user's R11 brief explicitly named "cart blade" — the API
+  tier is out of scope. If a mobile/AI client wants multi-cart
+  enumeration, the new `GET /admin/sales/cart/list-drafts`
+  endpoint could be mirrored at `GET /api/v1/sales/cart/list-drafts`
+  in a follow-up (low effort — the service method already exists).
+- The Laravel sales invoice **edit** page
+  (`admin/sales-invoices/{id}/edit`) was NOT touched. Legacy has
+  multi-customer tabs only on the create page; R11 matches that
+  scope.
+- No new migration was needed — the existing `sales_draft_carts`
+  schema (with the R6 3-column unique key `(user_id, customer_id,
+  branch_id)`) is sufficient. `listCarts()` is a pure read query.
+- No keyboard shortcut (e.g. `Ctrl+Tab` to cycle carts) was
+  added. Low priority follow-up.
+- No "drag to reorder tabs" was added. Low priority follow-up.
+- The dock does not (yet) show the per-cart subtotal on the pill —
+  only the item count. Legacy shows only the count too, so this
+  matches. Could be added as a tooltip in a follow-up.
+
+### Verification
+
+- Confirmed blade braces balanced (366 `{` / 366 `}`).
+- Confirmed no duplicate `id=` attributes in the rendered HTML.
+- Confirmed all 11 new functions (`ensureTab`, `activateTab`,
+  `removeTab`, `refreshTabDockVisibility`, `updateActiveTabBadge`,
+  `restoreSessionCarts`, `switchToCustomer`, `closeTabCart`,
+  `initDraftTabsDock`, `tabLabelFor`, `tabTitleFor`) are defined
+  exactly once.
+- Confirmed `@if`/`@endif`/`@push`/`@endpush`/`@section`/
+  `@endsection` counts are balanced.
+- Confirmed the new route is wired inside the
+  `['role:salesman,manager,admin', 'branch.isolation']`
+  middleware group, so only authorized users can hit it.
+- Confirmed the new `SalesCartService::listCarts()` method uses
+  `DB::table('customers')` (not Eloquent) for the per-customer
+  lookup — avoids the BranchScope global scope that would
+  incorrectly filter out customers from other branches (the
+  cashier's carts may legitimately reference customers from any
+  branch they've worked in; the branch filter on `sales_draft_carts`
+  is what enforces scope).
+
+### Risks introduced
+
+- **Low.** The new endpoint is read-only and throttled (60/min).
+  The dock UI is additive — if JS fails to load, the customer
+  Select2 + cart workspace continue to work as before (R1-R10
+  behavior).
+- The `listCarts` query joins `sales_draft_carts` with `customers`
+  per row (N+1 lookup pattern). For typical POS workflows (5–10
+  open carts) this is fine. If a user accumulates hundreds of
+  stale carts, the 50-row cap bounds the worst case. A future
+  optimization could use a single `JOIN` query, but the per-row
+  lookup keeps the code simple and matches Legacy's per-customer
+  `Get_Customer_By_Id` call pattern.
+- The `customerCache` is in-memory only — it doesn't survive page
+  reload. On reload, `restoreSessionCarts()` re-populates it from
+  list-drafts. This is intentional (no localStorage) — the source
+  of truth is the server, not the browser.
+
+### Follow-ups
+
+- Consider porting the same multi-cart dock to the **API V1**
+  (`SalesCartApiController`) so mobile/AI clients can enumerate
+  open carts. The service method already exists; only a thin
+  controller wrapper + route are needed.
+- Consider adding a per-cart subtotal to the pill (as a tooltip
+  or a small text line below the badge). Legacy doesn't have this
+  but it would help cashiers prioritize.
+- Consider a keyboard shortcut (e.g. `Ctrl+Tab` / `Ctrl+Shift+Tab`)
+  to cycle through open carts without using the mouse.
+- Consider a "drag to reorder" interaction so the cashier can
+  arrange carts in their preferred order (Legacy doesn't have
+  this; would be a net-new feature).
+- Consider adding a per-cart "last updated X minutes ago" relative
+  timestamp to the pill (Legacy doesn't have this). Would help
+  spot stale carts.

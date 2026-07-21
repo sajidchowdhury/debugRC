@@ -462,6 +462,14 @@ Route::middleware('auth')->group(function () {
         Route::post('cart/soft-hold', [SalesCartController::class, 'softHold'])->name('cart.softHold');
         Route::get('cart/availability', [SalesCartController::class, 'checkAvailability'])->name('cart.availability');
 
+        // R11: list all open draft carts for the #draft-tabs dock.
+        // Used by the cart blade on page-load to restore the cashier's
+        // multi-customer session. Throttled to 60 req/min (matches Legacy
+        // guardJsonApi limit for sales/list_draft_carts).
+        Route::get('cart/list-drafts', [SalesCartController::class, 'listDrafts'])
+            ->middleware('throttle:60,1')
+            ->name('cart.list-drafts');
+
         // R1: Live search endpoints (ported from Legacy sales/search_customer &
         // sales/search_product). Replaces 500-row select2 dropdowns with
         // AJAX-driven typeahead. Throttled to 90 req/min via configured

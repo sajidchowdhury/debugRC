@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-21 (R10 pushed)
+> **Last updated:** 2026-07-22 (R11 pushed)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -129,6 +129,7 @@ Items are tackled in order. Each item has its own entry in
 | H1  | Hotfix: `customer_payments.status` column does not exist                  | ✅ done      | Production bug: viewing a customer's "360° Hub" page threw `SQLSTATE[42703]` because `CustomerController::show` filtered `CustomerPayment` queries with `->whereNotIn('status', ['cancelled'])`, but `customer_payments` has no `status` column (only `is_reversed`). Removed the broken filters; also removed the dead `isDraft/isConfirmed/isCancelled` methods on `CustomerPayment` model. See `REMEDIATION_LOG.md` §H1 for full diff. |
 | R6  | Add `branch_id` to `sales_draft_carts` unique key                          | ✅ done      | New migration `2025_01_23_000001_r6_add_branch_id_to_sales_draft_carts_unique_key.php` drops `uq_sales_draft_user_customer` and adds `uq_sales_draft_user_customer_branch` on `(user_id, customer_id, branch_id)`. Also drops the FK on `branch_id`, backfills NULL → 0, and makes the column `NOT NULL DEFAULT 0` (Legacy "no specific branch" sentinel). `SalesDraftCart::getOrCreate()` updated to include `branch_id` in `firstOrCreate` search attrs + normalize null → 0. All `clearCart()` / `setSoftHold()` callers updated to pass `branch_id` explicitly (Admin web + API V1 + `SalesInvoiceService::finalizeFromCart`). `04_sales.sql` updated for fresh installs. Fixes V11, mitigates C7 (Laravel side). See `REMEDIATION_LOG.md` §R6 for full diff. |
 | R10 | Wire up barcode scanning in the cart blade (UI for the R1 endpoint)        | ✅ done      | R1 ported the `sales/product_by_code` endpoint to Laravel but left it without a UI consumer. R10 adds a toggle-revealed `#barcodeInput` field to `cart.blade.php` with an Enter-key + "Scan & Add" button handler that calls the existing endpoint. On success: caches the product in `productCache`, injects a fresh `<option>` into the Select2 and triggers `change` (so rate/qty/availability populate via the existing handlers), then auto-adds to cart if "Auto-add after scan" is checked (default on). Out-of-stock guard matches Legacy `selectProductCreate`. After auto-add the field is cleared and refocused for the next scan. No backend changes — purely additive UI. Fixes audit risk §6.1 item #1 (barcode scanning). See `REMEDIATION_LOG.md` §R10 for full diff. |
+| R11 | Port multi-customer cart tabs (`#draft-tabs` dock with per-tab item-count badges) | ✅ done      | New `GET /admin/sales/cart/list-drafts` endpoint (mirrors Legacy `sales/list_draft_carts`) backed by `SalesCartService::listCarts()` — returns all non-empty carts for the current user + session branch, sorted by item_count DESC then updated_at DESC, with customer-name + mobile + subtotal aggregation. New `#draftTabsCard` dock in `cart.blade.php` (above the customer selector) renders one Bootstrap nav-pill per cart with shop_name/mobile label, item-count badge (bg-secondary when 0, bg-primary when >0), and a × close button. On page load, `restoreSessionCarts()` fetches list-drafts + renders one pill per cart + activates the busiest (or the `?customer_id=` one if present). Clicking a pill switches carts in-page by setting `#customerSelect` and triggering `change` (no page reload). The × button shows a SweetAlert confirm, calls the existing `/cart/clear` endpoint (which writes the R4 audit-log entry), then removes the pill and switches to the next remaining tab. Badges update on every successful `add`/`update`/`remove`/`clear` mutation by reading the response payload — no extra round-trip. Fixes audit risk §6.1 item #2 (multi-customer cart tabs). See `REMEDIATION_LOG.md` §R11 for full diff. |
 
 > When the user assigns the next R# item, add a row here and create a
 > matching section in `REMEDIATION_LOG.md`. **Do not start work without
@@ -675,14 +676,71 @@ everyone.
 
 ---
 
+### 5.11 R11: Multi-customer cart tabs dock
+
+**Problem:** The Laravel cart blade supported one customer per page — switching customers required a URL change (`?customer_id=…`) or clicking "Load Cart" with a different customer selected. For a high-volume POS cashier ringing up 5–10 customers in parallel (e.g. a busy retail afternoon with several walk-up customers waiting), this is friction: every switch costs a round-trip, the previously-edited cart is hidden behind a URL change, and there's no at-a-glance overview of which carts are open and how many items each has.
+
+The Legacy system solved this with a `#draft-tabs` dock in `sales/create.php` (L144–163) + `sales-create.js::createOrSwitchTab / closeTab / refreshTabBadge / restoreSessionCarts` (L643–803): one pill per customer-cart, item-count badge, × close button, instant in-page switching.
+
+Audit risk: §6.1 item #2 in `sales_entry_Lg_vs_La.md`.
+
+**Decision: add a `#draftTabsCard` dock above the customer selector that mirrors the Legacy UX, backed by a new `list-drafts` endpoint.**
+
+Why a new endpoint instead of reusing `/cart/load`? `load` is per-customer (one cart at a time); we need an enumeration of all open carts for the user + branch. Legacy had a dedicated `sales/list_draft_carts` endpoint for exactly this reason.
+
+Why reuse `/cart/clear` for the close-tab action? It already does the right thing (clears the cart for a (user, customer, branch) tuple and writes the R4 audit-log entry). Adding a separate `clear-tab` endpoint would just duplicate the logic.
+
+**The flow (mirrors Legacy `createOrSwitchTab` + `restoreSessionCarts` + `closeTab`):**
+
+1. **Page load** → `restoreSessionCarts()` fires → `GET /admin/sales/cart/list-drafts` → returns `[{customer_id, label, shop_name, customer_name, mobile, item_count, subtotal, is_soft_hold, updated_at}, …]` sorted by `item_count DESC` then `updated_at DESC`.
+2. For each cart: cache the customer metadata in `customerCache` (so the tab label can render without an extra fetch), then call `ensureTab(customerId, {label, itemCount, softHold, active:false})` which appends a `<li class="draft-tab-item">` pill to `#draftTabs`.
+3. After all pills are rendered: activate the busiest cart (or the `?customer_id=` one if present in the URL). If state.customerId wasn't already set (no `?customer_id=`), also call `switchToCustomer(busiestCid)` to load its cart + sync the Select2.
+4. **User picks a new customer from Select2** → `change` handler calls `ensureTab(cid, {active:true, label})` immediately (pill appears) → `loadCart(cid)` fires (AJAX) → on success, `updateActiveTabBadge(itemCount, {softHold})` refreshes the badge from the response payload.
+5. **User clicks a pill body** → `switchToCustomer(cid)` sets `#customerSelect.val(cid)` and triggers `change` (which runs the existing customer-change handler that calls `loadCart`). No page reload. The pill is highlighted as active; the previous pill loses its highlight.
+6. **User clicks × on a pill** → SweetAlert confirm → `POST /cart/clear` with that customer_id → on success, `removeTab(customerId)` deletes the `<li>` from the DOM → if the closed tab was active, switch to the next remaining tab (or show the empty state if no tabs remain).
+7. **After any cart mutation** (`add` / `update` / `remove` / `clear`) → `updateActiveTabBadge(itemCount, {softHold})` is called inside the response handler — reads the new `items.length` from the response payload and updates the badge. No extra round-trip.
+8. **After `clearCart`** (the explicit "Clear Cart" button) → also calls `removeTab(state.customerId)` because the cart is now empty (matches Legacy behavior where empty session slots don't earn a tab).
+
+**Files modified:**
+
+- `laravel/app/Services/Sales/SalesCartService.php`
+  - Added `listCarts(int $userId, ?int $branchId): array` method (~80 lines).
+  - Queries `sales_draft_carts` for the user (+ optional branch), skips empty carts, looks up each customer's name/mobile from `customers`, computes `item_count` + `subtotal`, sorts by `item_count DESC, updated_at DESC`. Capped at 50 rows for safety.
+- `laravel/app/Http/Controllers/Admin/SalesCartController.php`
+  - Added `listDrafts(Request $request)` method that calls `listCarts(auth()->id(), session('branch_id', 0))` and returns JSON.
+- `laravel/routes/web.php`
+  - Added `Route::get('cart/list-drafts', [SalesCartController::class, 'listDrafts'])->middleware('throttle:60,1')->name('cart.list-drafts')` (throttle matches Legacy `guardJsonApi` limit of 60/min).
+- `laravel/resources/views/admin/sales/cart.blade.php`
+  - Added `#draftTabsCard` dock above the customer selector.
+  - Added `ENDPOINTS.listDrafts` route binding.
+  - Added `customerCache` (in-memory), `tabLabelFor()`, `tabTitleFor()`, `ensureTab()`, `activateTab()`, `removeTab()`, `refreshTabDockVisibility()`, `updateActiveTabBadge()`, `restoreSessionCarts()`, `switchToCustomer()`, `closeTabCart()`, `initDraftTabsDock()` (~330 lines of new JS).
+  - Modified the customer Select2 `processResults` to populate `customerCache` as the user types (so newly-picked customers get a properly-labeled tab immediately).
+  - Modified the customer `<select>` change handler to call `ensureTab()` before `loadCart()`.
+  - Modified `loadCart()` to call `updateActiveTabBadge()` + `activateTab()` on success.
+  - Modified `addToCart()` / `updateItem()` / `removeItem()` / `clearCart()` to call `updateActiveTabBadge()` on success (and `removeTab()` for clearCart).
+  - Added the bootstrap sequence at the bottom of `$(function () { ... })`: pre-populate `customerCache` for the server-rendered selected customer, render the initial tab, then fire `restoreSessionCarts()`.
+
+**What was NOT changed:**
+
+- The Legacy sales entry code (`legacy/`) was not touched.
+- The Laravel API V1 (`SalesCartApiController`) was NOT touched. The user's R11 brief explicitly named "cart blade" — the API tier is out of scope. If a mobile/AI client wants the multi-cart enumeration, the new `GET /admin/sales/cart/list-drafts` endpoint could be mirrored at `GET /api/v1/sales/cart/list-drafts` in a follow-up (low effort — the service method already exists).
+- The Laravel sales invoice **edit** page (`admin/sales-invoices/{id}/edit`) was NOT touched. Legacy has multi-customer tabs only on the create page; R11 matches that scope.
+- No new migration was needed — the existing `sales_draft_carts` schema (with the R6 3-column unique key `(user_id, customer_id, branch_id)`) is sufficient. `listCarts()` is a pure read query.
+- The API V1 cart endpoints (`/api/v1/sales/cart/*`) were NOT touched — they continue to operate on a single (user, customer, branch) cart per request. Multi-cart enumeration is a Blade-only convenience.
+- No keyboard shortcut (e.g. `Ctrl+Tab` to cycle carts) was added. Low priority follow-up.
+- No "drag to reorder tabs" was added. Low priority follow-up.
+- The dock does not (yet) show the per-cart subtotal on the pill — only the item count. Legacy shows only the count too, so this matches. Could be added as a tooltip in a follow-up.
+
+---
+
 ## 6. Open Work Items
 
 (Items the user has asked for but that are not yet done.)
 
-- **None outstanding.** R1, R2, R3, R4, R5, R6, R10, and H1 (bugfix)
+- **None outstanding.** R1, R2, R3, R4, R5, R6, R10, R11, and H1 (bugfix)
   are complete and pushed. The user has not yet assigned R7, R8, R9
-  (numbers reserved for future items; R10 was the user's explicit
-  next ask after R6).
+  (numbers reserved for future items; R10/R11 were the user's explicit
+  asks after R6).
 
 When the user gives the next instruction, append it here as a
 checkbox item. When done, move it to the "Completed Work Items"
@@ -761,6 +819,24 @@ section below.
       toast). After auto-add the field is cleared and refocused for
       the next scan. No backend changes — purely additive UI. See
       `REMEDIATION_LOG.md` §R10 for the full diff.
+- [x] **R11** — Port multi-customer cart tabs. Legacy had a
+      `#draft-tabs` dock in `sales/create.php` that let a cashier
+      keep N customer-carts open at once, switch between them with
+      one click, and close any with a × button. R11 ports this to
+      the Laravel cart blade: new `GET /admin/sales/cart/list-drafts`
+      endpoint (mirrors Legacy `sales/list_draft_carts`), new
+      `SalesCartService::listCarts()` method, new `#draftTabsCard`
+      dock above the customer selector with one Bootstrap nav-pill
+      per open cart (shop_name + mobile label + item-count badge +
+      × close). On page load, `restoreSessionCarts()` fetches
+      list-drafts and renders one pill per cart. Clicking a pill
+      switches carts in-page (no reload) by setting `#customerSelect`
+      and triggering `change`. The × button shows a SweetAlert
+      confirm, calls the existing `/cart/clear` endpoint (which
+      writes the R4 audit-log entry), then removes the pill and
+      switches to the next remaining tab. Badges update on every
+      successful cart mutation from the response payload. No new
+      migration. See `REMEDIATION_LOG.md` §R11 for the full diff.
 
 ---
 
