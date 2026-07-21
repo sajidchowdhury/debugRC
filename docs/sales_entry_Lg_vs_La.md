@@ -8,6 +8,17 @@
 > **Auditor:** Super Z (automated code analysis)
 > **Repository:** `sajidchowdhury/debugRC` @ `main`
 
+> **REMEDIATION PROGRESS (post-audit):** This audit drives a remediation
+> backlog tracked in `docs/REMEDIATION_LOG.md`. Each gap closed is marked
+> inline in §6 (Missing Features) and §9 (Recommendations) with
+> `✅ Fixed by R#`. See also `docs/SESSION_CONTEXT.md` for the
+> persistent session memory.
+>
+> | ID  | Title                                                       | Status    |
+> |-----|-------------------------------------------------------------|-----------|
+> | R1  | Replace select2 500-row dropdowns with live search endpoints | ✅ Done   |
+> | R2  | (next item — user to assign)                                | ⏳ Pending |
+
 ---
 
 ## 1. Executive Summary

@@ -205,6 +205,178 @@ class StockAvailabilityService
     }
 
     /**
+     * Live product search with branch-level available stock — ported from
+     * Legacy `StockAvailabilityService::searchProductsWithStock`.
+     *
+     * Returns up to 30 active products whose product_name OR product_code
+     * matches the term (ILIKE on PgSQL), each row enriched with:
+     *   - default_rate / min_rate / max_rate (latest product_price_history row)
+     *   - available_qty = max(0, branch physical − branch pipeline)
+     *
+     * @param  string $term    Search term (>= 1 char). Empty term returns [].
+     * @param  int    $branchId Branch scope for stock calculation.
+     * @return array<int, array{
+     *     id: int,
+     *     product_code: string,
+     *     product_name: string,
+     *     default_rate: float,
+     *     min_rate: float,
+     *     max_rate: float,
+     *     price: float,
+     *     available_qty: float
+     * }>
+     */
+    public function searchProductsWithStock(string $term, int $branchId): array
+    {
+        $term = trim($term);
+        if ($term === '' || $branchId <= 0) {
+            return [];
+        }
+
+        // Latest price row per product — correlated subqueries mirror the
+        // Legacy SQL exactly so behaviour matches the production Legacy app.
+        $latestPriceSub = function (string $column): string {
+            return "COALESCE((
+                SELECT lp.{$column}
+                FROM product_price_history lp
+                WHERE lp.product_id = p.id
+                ORDER BY lp.effective_from DESC, lp.created_at DESC, lp.id DESC
+                LIMIT 1
+            ), 0)";
+        };
+
+        $rows = DB::table('products as p')
+            ->leftJoinSub(
+                DB::table('warehouse_stock as ws')
+                    ->join('warehouses as w', 'w.id', '=', 'ws.warehouse_id')
+                    ->where('w.branch_id', $branchId)
+                    ->select('ws.product_id', DB::raw('SUM(ws.qty) AS physical_qty'))
+                    ->groupBy('ws.product_id'),
+                'phys',
+                'phys.product_id',
+                '=',
+                'p.id'
+            )
+            ->leftJoinSub(
+                DB::table('sales_invoice_dispatches as sid')
+                    ->join('sales_invoices as si', 'si.id', '=', 'sid.sales_invoice_id')
+                    ->whereRaw('sid.ordered_qty > sid.dispatched_qty')
+                    ->where('si.is_reversed', false)
+                    ->whereNotIn('si.status', ['challan_completed', 'reversed', 'cancelled'])
+                    ->where('si.branch_id', $branchId)
+                    ->whereNotNull('sid.product_id')
+                    ->select('sid.product_id', DB::raw('SUM(sid.ordered_qty - sid.dispatched_qty) AS pending_qty'))
+                    ->groupBy('sid.product_id'),
+                'pend',
+                'pend.product_id',
+                '=',
+                'p.id'
+            )
+            ->where(function ($q) use ($term) {
+                $q->where('p.product_name', 'ILIKE', "%{$term}%")
+                  ->orWhere('p.product_code', 'ILIKE', "%{$term}%");
+            })
+            ->where('p.is_active', true)
+            ->whereNull('p.deleted_at')
+            ->select(
+                'p.id',
+                'p.product_code',
+                'p.product_name',
+                DB::raw($latestPriceSub('default_rate') . ' AS default_rate'),
+                DB::raw($latestPriceSub('min_rate') . ' AS min_rate'),
+                DB::raw($latestPriceSub('max_rate') . ' AS max_rate'),
+                DB::raw($latestPriceSub('default_rate') . ' AS price'),
+                DB::raw('GREATEST(0, COALESCE(phys.physical_qty, 0) - COALESCE(pend.pending_qty, 0)) AS available_qty')
+            )
+            ->orderBy('p.product_name')
+            ->limit(30)
+            ->get();
+
+        return $rows->map(fn ($r) => [
+            'id'            => (int) $r->id,
+            'product_code'  => (string) $r->product_code,
+            'product_name'  => (string) $r->product_name,
+            'default_rate'  => (float) $r->default_rate,
+            'min_rate'      => (float) $r->min_rate,
+            'max_rate'      => (float) $r->max_rate,
+            'price'         => (float) $r->price,
+            'available_qty' => (float) $r->available_qty,
+        ])->values()->all();
+    }
+
+    /**
+     * Barcode / scanner — exact product_code lookup with branch stock.
+     * Ported from Legacy `StockAvailabilityService::findProductByExactCode`.
+     *
+     * Case-insensitive, trimmed. Returns null when no active product matches.
+     *
+     * @param  string $code
+     * @param  int    $branchId
+     * @return array<string, mixed>|null
+     */
+    public function findProductByExactCode(string $code, int $branchId): ?array
+    {
+        $code = trim($code);
+        if ($code === '' || $branchId <= 0) {
+            return null;
+        }
+
+        $latestPriceSub = function (string $column): string {
+            return "COALESCE((
+                SELECT lp.{$column}
+                FROM product_price_history lp
+                WHERE lp.product_id = p.id
+                ORDER BY lp.effective_from DESC, lp.created_at DESC, lp.id DESC
+                LIMIT 1
+            ), 0)";
+        };
+
+        $row = DB::table('products as p')
+            ->leftJoinSub(
+                DB::table('warehouse_stock as ws')
+                    ->join('warehouses as w', 'w.id', '=', 'ws.warehouse_id')
+                    ->where('w.branch_id', $branchId)
+                    ->select('ws.product_id', DB::raw('SUM(ws.qty) AS physical_qty'))
+                    ->groupBy('ws.product_id'),
+                'phys',
+                'phys.product_id',
+                '=',
+                'p.id'
+            )
+            ->leftJoinSub(
+                DB::table('sales_invoice_dispatches as sid')
+                    ->join('sales_invoices as si', 'si.id', '=', 'sid.sales_invoice_id')
+                    ->whereRaw('sid.ordered_qty > sid.dispatched_qty')
+                    ->where('si.is_reversed', false)
+                    ->whereNotIn('si.status', ['challan_completed', 'reversed', 'cancelled'])
+                    ->where('si.branch_id', $branchId)
+                    ->whereNotNull('sid.product_id')
+                    ->select('sid.product_id', DB::raw('SUM(sid.ordered_qty - sid.dispatched_qty) AS pending_qty'))
+                    ->groupBy('sid.product_id'),
+                'pend',
+                'pend.product_id',
+                '=',
+                'p.id'
+            )
+            ->whereRaw('UPPER(TRIM(p.product_code)) = UPPER(TRIM(?))', [$code])
+            ->where('p.is_active', true)
+            ->whereNull('p.deleted_at')
+            ->select(
+                'p.id',
+                'p.product_code',
+                'p.product_name',
+                DB::raw($latestPriceSub('default_rate') . ' AS default_rate'),
+                DB::raw($latestPriceSub('min_rate') . ' AS min_rate'),
+                DB::raw($latestPriceSub('max_rate') . ' AS max_rate'),
+                DB::raw($latestPriceSub('default_rate') . ' AS price'),
+                DB::raw('GREATEST(0, COALESCE(phys.physical_qty, 0) - COALESCE(pend.pending_qty, 0)) AS available_qty')
+            )
+            ->first();
+
+        return $row ? (array) $row : null;
+    }
+
+    /**
      * Per-warehouse breakdown for a branch (for the challan picker modal).
      *
      * @param int $productId

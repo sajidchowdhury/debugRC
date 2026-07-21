@@ -63,13 +63,12 @@
                     </label>
                     <select id="customerSelect" class="form-select select2" style="width:100%;">
                         <option value="">— Select a customer —</option>
-                        @foreach ($customers as $customer)
-                            <option value="{{ $customer->id }}"
-                                @if ((int) ($selectedCustomerId ?? 0) === (int) $customer->id) selected @endif>
-                                {{ $customer->customer_name }}
-                                @if (!empty($customer->customer_code)) [{{ $customer->customer_code }}] @endif
+                        @if (!empty($selectedCustomer))
+                            <option value="{{ $selectedCustomer->id }}" selected>
+                                {{ $selectedCustomer->customer_name }}
+                                @if (!empty($selectedCustomer->customer_code)) [{{ $selectedCustomer->customer_code }}] @endif
                             </option>
-                        @endforeach
+                        @endif
                     </select>
                 </div>
                 <div class="col-12 col-md-4">
@@ -115,15 +114,6 @@
                             <label for="addProduct" class="form-label small fw-semibold mb-1">Product</label>
                             <select id="addProduct" class="form-select select2" style="width:100%;">
                                 <option value="">— Search product —</option>
-                                @foreach ($products as $product)
-                                    <option value="{{ $product->id }}"
-                                            data-code="{{ $product->product_code ?? '' }}"
-                                            data-name="{{ $product->product_name }}"
-                                            data-default-rate="{{ $product->sales_rate ?? 0 }}">
-                                        {{ $product->product_name }}
-                                        @if (!empty($product->product_code)) [{{ $product->product_code }}] @endif
-                                    </option>
-                                @endforeach
                             </select>
                         </div>
                         <div class="col-6 col-md-2">
@@ -372,6 +362,11 @@
         creditCheck:  "{{ route('admin.sales.credit-check') }}",
         invoiceShow:  "{{ route('admin.sales-invoices.index') }}",
         branchDispatchers: "{{ route('admin.sales-invoices.branch-dispatchers') }}",
+        // R1: live search endpoints (ported from Legacy sales/search_customer
+        // & sales/search_product).
+        searchCustomer: "{{ route('admin.sales.cart.search-customer') }}",
+        searchProduct:  "{{ route('admin.sales.cart.search-product') }}",
+        productByCode:  "{{ route('admin.sales.cart.product-by-code') }}",
     };
 
     // -------- State --------
@@ -384,6 +379,13 @@
         availProductId: null,
         debounceTimers: {}          // productId -> setTimeout handle
     };
+
+    // R1: in-memory product cache (id -> {id, product_code, product_name,
+    // default_rate, min_rate, max_rate, available_qty}). Populated by the
+    // live search endpoint as the user types, and consulted when rendering
+    // the cart table / availability card so we no longer depend on a
+    // pre-rendered <option> list.
+    var productCache = {};
 
     // -------- Money / qty formatting --------
     function fmtMoney(v) {
@@ -570,8 +572,19 @@
         }
 
         var breakdown = payload.warehouse_breakdown || [];
+        // R1: prefer productCache (AJAX-populated) for the label; fall back
+        // to a transient <option> rendered by Select2, and finally to a
+        // bare "#id" placeholder.
+        var cached = productCache[payload.product_id];
         var $opt = $('#addProduct option[value="' + payload.product_id + '"]');
-        var label = $opt.length ? $opt.text().trim() : ('#' + payload.product_id);
+        var label;
+        if (cached && cached.product_name) {
+            label = cached.product_name + (cached.product_code ? ' [' + cached.product_code + ']' : '');
+        } else if ($opt.length) {
+            label = $opt.text().trim();
+        } else {
+            label = '#' + payload.product_id;
+        }
 
         $badge.removeClass('bg-secondary').addClass('bg-info text-dark').text(label.substring(0, 28));
         $empty.addClass('d-none');
@@ -838,8 +851,83 @@
     // ============================================================
     $(function () {
         // --- Initialize Select2 ---
-        $('#customerSelect').select2({ theme: 'bootstrap-5', placeholder: '— Select a customer —', allowClear: true });
-        $('#addProduct').select2({ theme: 'bootstrap-5', placeholder: '— Search product —', allowClear: true });
+        // R1: customer & product dropdowns are now AJAX-driven (live search).
+        // The 500-row server-side pre-render has been removed.
+        $('#customerSelect').select2({
+            theme: 'bootstrap-5',
+            placeholder: '— Type customer name / code / mobile —',
+            allowClear: true,
+            minimumInputLength: 1,
+            ajax: {
+                url: ENDPOINTS.searchCustomer,
+                dataType: 'json',
+                delay: 250,                       // debounce (ms) — matches Legacy UX
+                data: function (params) {
+                    return { term: (params.term || '').trim() };
+                },
+                processResults: function (data) {
+                    return {
+                        results: (data || []).map(function (c) {
+                            var label = c.customer_name || c.shop_name || ('#' + c.id);
+                            if (c.customer_code)  label += ' [' + c.customer_code + ']';
+                            if (c.mobile)         label += ' · ' + c.mobile;
+                            return {
+                                id: c.id,
+                                text: label,
+                                // stash for client-side use
+                                customer_code: c.customer_code,
+                                customer_name: c.customer_name,
+                                shop_name: c.shop_name,
+                                mobile: c.mobile,
+                                credit_limit: c.credit_limit,
+                            };
+                        })
+                    };
+                },
+                cache: true,
+            },
+            templateSelection: function (state) {
+                if (!state.id) return state.text;
+                // Preserve the server-rendered "Customer [CODE]" label for the
+                // pre-selected customer; for AJAX picks, use the formatted text.
+                return state.text || state.customer_name || ('#' + state.id);
+            },
+        });
+
+        $('#addProduct').select2({
+            theme: 'bootstrap-5',
+            placeholder: '— Type product name / code —',
+            allowClear: true,
+            minimumInputLength: 1,
+            ajax: {
+                url: ENDPOINTS.searchProduct,
+                dataType: 'json',
+                delay: 250,
+                data: function (params) {
+                    return { term: (params.term || '').trim(), branch_id: BRANCH_ID };
+                },
+                processResults: function (data) {
+                    return {
+                        results: (data || []).map(function (p) {
+                            // Cache the full product payload so the change
+                            // handler can read default_rate/min_rate/max_rate
+                            // without another round-trip.
+                            productCache[p.id] = p;
+                            var label = p.product_name + (p.product_code ? ' [' + p.product_code + ']' : '');
+                            return {
+                                id: p.id,
+                                text: label,
+                                // also stashed on the option for back-compat
+                                'data-default-rate': p.default_rate,
+                                'data-code': p.product_code,
+                                'data-name': p.product_name,
+                            };
+                        })
+                    };
+                },
+                cache: true,
+            },
+        });
 
         // --- Tooltips ---
         var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
@@ -869,8 +957,6 @@
 
         // --- Add Product interactions ---
         $('#addProduct').on('change', function () {
-            var $opt = $(this).find('option:selected');
-            var defaultRate = $opt.data('default-rate');
             var productId = parseInt($(this).val(), 10);
 
             if (!productId) {
@@ -879,15 +965,37 @@
                 renderAvailability(null);
                 return;
             }
+
+            // R1: prefer the in-memory productCache (populated by the AJAX
+            // search) — it has min_rate/max_rate/default_rate/available_qty.
+            // Fall back to <option> data attributes for back-compat.
+            var p = productCache[productId] || {};
+            var defaultRate = p.default_rate !== undefined
+                ? p.default_rate
+                : ($(this).find('option:selected').data('default-rate') || 0);
+
             // Auto-fill rate with default_rate
-            if (defaultRate !== undefined && defaultRate !== '') {
-                $('#addRate').val(parseFloat(defaultRate).toFixed(2));
+            $('#addRate').val(parseFloat(defaultRate).toFixed(2));
+
+            // Rate hint — show min/max range when available (from live search),
+            // otherwise fall back to default-rate only.
+            var hint;
+            if (p.min_rate !== undefined && p.max_rate !== undefined &&
+                (parseFloat(p.min_rate) > 0 || parseFloat(p.max_rate) > 0)) {
+                hint = 'Default ' + fmtMoney(defaultRate) +
+                       ' · Range ' + fmtMoney(p.min_rate) + '–' + fmtMoney(p.max_rate);
+            } else {
+                hint = 'Default: ' + fmtMoney(defaultRate);
             }
-            // Rate hint — show min/max range from the cart if present, else default-rate only
-            var hint = 'Default: ' + fmtMoney(defaultRate);
             $('#rateHint').html('<i class="fas fa-info-circle me-1"></i>' + hint);
 
-            // Check availability (branch-wide)
+            // Check availability (branch-wide). If the live-search payload
+            // already includes available_qty, prime the card immediately so
+            // the user sees stock info even before the breakdown request
+            // resolves.
+            if (p.available_qty !== undefined) {
+                $('#addAvailTotal').text(fmtQty(p.available_qty) + ' (live)');
+            }
             checkAvailability(productId);
         });
 

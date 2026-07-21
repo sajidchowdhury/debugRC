@@ -462,6 +462,20 @@ Route::middleware('auth')->group(function () {
         Route::post('cart/soft-hold', [SalesCartController::class, 'softHold'])->name('cart.softHold');
         Route::get('cart/availability', [SalesCartController::class, 'checkAvailability'])->name('cart.availability');
 
+        // R1: Live search endpoints (ported from Legacy sales/search_customer &
+        // sales/search_product). Replaces 500-row select2 dropdowns with
+        // AJAX-driven typeahead. Throttled to 90 req/min via configured
+        // API rate limiter (matches Legacy guardJsonApi).
+        Route::get('cart/search-customer', [SalesCartController::class, 'searchCustomer'])
+            ->middleware('throttle:90,1')
+            ->name('cart.search-customer');
+        Route::get('cart/search-product', [SalesCartController::class, 'searchProduct'])
+            ->middleware('throttle:90,1')
+            ->name('cart.search-product');
+        Route::get('cart/product-by-code', [SalesCartController::class, 'productByCode'])
+            ->middleware('throttle:120,1')
+            ->name('cart.product-by-code');
+
         // Phase 8.2: Invoice finalize
         Route::post('finalize', [SalesInvoiceController::class, 'finalize'])->name('finalize');
         Route::get('cart-data', [SalesInvoiceController::class, 'getCartData'])->name('cart-data');

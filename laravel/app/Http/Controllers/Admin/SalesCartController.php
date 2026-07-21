@@ -3,9 +3,11 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Customer;
 use App\Services\Sales\SalesCartService;
 use App\Services\Stock\StockAvailabilityService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Sales Cart Controller — Phase 8.1.
@@ -35,8 +37,13 @@ class SalesCartController extends Controller
         $customerId = $request->input('customer_id') ? (int) $request->input('customer_id') : null;
         $branchId = session('branch_id', 0);
 
-        $customers = \App\Models\Customer::active()->orderBy('customer_name')->limit(500)->get();
-        $products = \App\Models\Product::active()->orderBy('product_name')->limit(500)->get();
+        // R1: live search endpoints — dropdowns are no longer pre-populated.
+        // We only need the *currently selected* customer record so the
+        // customer <select> can render its label on first paint.
+        $selectedCustomer = null;
+        if ($customerId) {
+            $selectedCustomer = Customer::active()->find($customerId);
+        }
 
         $cartData = null;
         if ($customerId) {
@@ -45,12 +52,124 @@ class SalesCartController extends Controller
 
         return view('admin.sales.cart', [
             'title' => 'Sales Cart',
-            'customers' => $customers,
-            'products' => $products,
+            'selectedCustomer' => $selectedCustomer,
             'selectedCustomerId' => $customerId,
             'cartData' => $cartData,
             'branchId' => $branchId,
         ]);
+    }
+
+    /**
+     * R1: AJAX live customer search — ported from Legacy `SalesController::search_customer`.
+     *
+     * RBAC: salesman/manager/admin (enforced by the route group middleware).
+     * Rate limit: 90 req/min (matches Legacy guardJsonApi).
+     *
+     * GET /admin/sales/cart/search-customer?term=...&_q=...
+     * Returns: [{id, customer_code, customer_name, shop_name, mobile, credit_limit}, ...]
+     */
+    public function searchCustomer(Request $request)
+    {
+        $term = trim((string) $request->input('term', ''));
+        if ($term === '' || mb_strlen($term) < 1) {
+            return response()->json([]);
+        }
+
+        // Use the existing scopeSearch() — full-text (tsvector + GIN) on PgSQL,
+        // with ILIKE fallback on customer_name/code/mobile/phone.
+        $rows = Customer::active()->search($term)
+            ->orderBy('customer_name')
+            ->limit(20)
+            ->get([
+                'id', 'customer_code', 'customer_name', 'shop_name',
+                'mobile', 'phone', 'credit_limit',
+            ]);
+
+        // Shape the response so it matches Legacy searchCustomers() exactly:
+        // - shop_name first for display ordering
+        // - credit_limit as float
+        return response()->json(
+            $rows->map(fn ($c) => [
+                'id'            => (int) $c->id,
+                'customer_code' => (string) ($c->customer_code ?? ''),
+                'customer_name' => (string) ($c->customer_name ?? ''),
+                'shop_name'     => (string) ($c->shop_name ?? ''),
+                'mobile'        => (string) ($c->mobile ?? ''),
+                'credit_limit'  => (float) ($c->credit_limit ?? 0),
+            ])->values()->all()
+        );
+    }
+
+    /**
+     * R1: AJAX live product search with branch stock — ported from Legacy
+     * `SalesController::search_product`.
+     *
+     * RBAC: salesman/manager/admin.
+     * Rate limit: 90 req/min.
+     *
+     * GET /admin/sales/cart/search-product?term=...&branch_id=...
+     * Returns: [{id, product_code, product_name, default_rate, min_rate, max_rate, price, available_qty}, ...]
+     */
+    public function searchProduct(Request $request)
+    {
+        $term = trim((string) $request->input('term', ''));
+        if ($term === '') {
+            return response()->json([]);
+        }
+
+        $branchId = $this->resolveBranchIdForRead((int) $request->input('branch_id', 0));
+
+        return response()->json(
+            $this->availabilityService->searchProductsWithStock($term, $branchId)
+        );
+    }
+
+    /**
+     * R1: AJAX barcode-scanner exact-match lookup — ported from Legacy
+     * `SalesController::product_by_code`.
+     *
+     * GET /admin/sales/cart/product-by-code?code=...&branch_id=...
+     * Returns: {status: success|not_found|error, data?: {...}, message?: '...'}
+     */
+    public function productByCode(Request $request)
+    {
+        $code = trim((string) $request->input('code', ''));
+        $branchId = $this->resolveBranchIdForRead((int) $request->input('branch_id', 0));
+
+        if ($code === '') {
+            return response()->json(['status' => 'error', 'message' => 'Product code required']);
+        }
+
+        $product = $this->availabilityService->findProductByExactCode($code, $branchId);
+        if (!$product) {
+            return response()->json(['status' => 'not_found', 'message' => 'No product with this code']);
+        }
+
+        return response()->json(['status' => 'success', 'data' => $product]);
+    }
+
+    /**
+     * Resolve the effective branch ID for a read request.
+     *
+     * - If the user passed an explicit branch_id and it is an active branch,
+     *   honour it (managers/admins with override permission).
+     * - Otherwise fall back to the session branch.
+     *
+     * Mirrors Legacy SalesModel::resolveBranchIdForRead().
+     */
+    private function resolveBranchIdForRead(int $requestedBranchId): int
+    {
+        if ($requestedBranchId > 0) {
+            $active = DB::table('branches')
+                ->where('id', $requestedBranchId)
+                ->where('is_active', true)
+                ->exists();
+            if ($active) {
+                return $requestedBranchId;
+            }
+        }
+
+        return (int) session('branch_id', 0);
     }
 
     /**
