@@ -108,19 +108,45 @@ return new class extends Migration
                 notes text,
                 created_by integer,
                 created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
-                updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
-                CONSTRAINT commission_rules_unique_active EXCLUDE (
-                    salesman_id WITH =,
-                    gist(
-                        CASE WHEN is_active AND effective_to IS NULL
-                             THEN daterange(effective_from, NULL, '[)')
-                             ELSE daterange(NULL, NULL, '[]')  -- inactive/expired rows don't participate
-                        END WITH &&
-                    )
-                ) WHERE (is_active AND effective_to IS NULL)
-                -- Only one active open-ended rule per salesman at a time.
-                -- Expired rules (effective_to set) or inactive rules don't conflict.
+                updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
+                -- No inline EXCLUDE constraint here — added below as a separate
+                -- ALTER TABLE statement. The constraint uses an expression index
+                -- (CASE over is_active/effective_to) and must be created after
+                -- the table exists. See the ALTER TABLE block immediately below.
             )
+SQL);
+
+        // ───────────────────────────────────────────────────────────────
+        // EXCLUDE constraint: one active open-ended rule per salesman
+        // ───────────────────────────────────────────────────────────────
+        // Enforces that for any two rows where (is_active = true AND
+        // effective_to IS NULL), the salesman_id values differ OR the
+        // active date ranges do not overlap.
+        //
+        // Syntax correction (was SQLSTATE 42601):
+        //   EXCLUDE USING gist ( <element> WITH <op>, ... )
+        // The "USING gist" goes ONCE at the constraint level, not per
+        // element. Each element is "<expression> WITH <operator>".
+        // The CASE expression yields a daterange, which GiST supports
+        // natively with && (overlaps). The integer column salesman_id
+        // needs btree_gist for = (enabled at the top of up()).
+        //
+        // The partial-index predicate (WHERE is_active AND effective_to
+        // IS NULL) keeps the index small: only currently-active,
+        // open-ended rules participate in the exclusion check. Expired
+        // or inactive rows are excluded from the index entirely.
+        DB::statement(<<<'SQL'
+            ALTER TABLE commission_rules
+            ADD CONSTRAINT commission_rules_unique_active
+            EXCLUDE USING gist (
+                salesman_id WITH =,
+                (
+                    CASE WHEN is_active AND effective_to IS NULL
+                         THEN daterange(effective_from, NULL, '[)')
+                         ELSE daterange(NULL, NULL, '[]')
+                    END
+                ) WITH &&
+            ) WHERE (is_active AND effective_to IS NULL)
 SQL);
 
         // Index for looking up the active rule for a salesman
