@@ -85,27 +85,41 @@ return new class extends Migration
         //    which would hide branch_id=0 rows from non-admin, non-zero-branch users.
         //    We add a policy that always allows SELECT on branch_id=0 rows.
         DB::statement(<<<'SQL'
-            CREATE OR REPLACE POLICY document_sequences_global_select
-                ON document_sequences
-                FOR SELECT
-                USING (branch_id = 0);
-        SQL);
+    DROP POLICY IF EXISTS document_sequences_global_select
+    ON document_sequences;
+SQL);
 
-        DB::statement(<<<'SQL'
-            CREATE OR REPLACE POLICY document_sequences_global_insert
-                ON document_sequences
-                FOR INSERT
-                WITH CHECK (branch_id = 0);
-        SQL);
+DB::statement(<<<'SQL'
+    CREATE POLICY document_sequences_global_select
+    ON document_sequences
+    FOR SELECT
+    USING (branch_id = 0);
+SQL);
 
-        DB::statement(<<<'SQL'
-            CREATE OR REPLACE POLICY document_sequences_global_update
-                ON document_sequences
-                FOR UPDATE
-                USING (branch_id = 0)
-                WITH CHECK (branch_id = 0);
-        SQL);
+DB::statement(<<<'SQL'
+    DROP POLICY IF EXISTS document_sequences_global_insert
+    ON document_sequences;
+SQL);
 
+DB::statement(<<<'SQL'
+    CREATE POLICY document_sequences_global_insert
+    ON document_sequences
+    FOR INSERT
+    WITH CHECK (branch_id = 0);
+SQL);
+
+DB::statement(<<<'SQL'
+    DROP POLICY IF EXISTS document_sequences_global_update
+    ON document_sequences;
+SQL);
+
+DB::statement(<<<'SQL'
+    CREATE POLICY document_sequences_global_update
+    ON document_sequences
+    FOR UPDATE
+    USING (branch_id = 0)
+    WITH CHECK (branch_id = 0);
+SQL);
         // 4. Drop the old per-branch RLS policies on document_sequences that
         //    would conflict with global (branch_id=0) sequence allocation.
         //    We keep the admin-bypass policy but replace branch-scoped ones.
