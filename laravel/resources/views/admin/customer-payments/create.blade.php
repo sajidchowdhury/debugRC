@@ -85,6 +85,18 @@
     <form method="POST" action="{{ route('admin.customer-payments.store') }}" id="paymentForm">
         @csrf
 
+        {{-- R2: Idempotency token (UUID v4). Mirrors the finalize pattern.
+             Generated server-side via Str::uuid() on first render; preserved
+             across validation failures via old() so the user can resubmit
+             the corrected form with the same token (safe — no cache entry
+             was created on the failed attempt). The server caches the
+             redirect target + success message keyed by this token for
+             10 minutes so that a duplicate submission (double-click,
+             refresh-after-submit, network retry) returns the original
+             payment instead of creating a second one. --}}
+        <input type="hidden" name="idempotency_token" id="idempotencyToken"
+               value="{{ old('idempotency_token', (string) \Illuminate\Support\Str::uuid()) }}">
+
         {{-- Payment header card --}}
         <div class="card border-0 shadow-sm mb-3">
             <div class="card-header bg-white">

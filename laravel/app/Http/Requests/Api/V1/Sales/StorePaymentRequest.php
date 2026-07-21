@@ -11,6 +11,12 @@ use Illuminate\Foundation\Http\FormRequest;
  * On confirmation, the GL, customer_ledger, and optional invoice allocations
  * are posted atomically. The client can optionally pass allocations at
  * creation time to auto-confirm in a single request.
+ *
+ * R2: Idempotency — the client MUST send a UUID idempotency_token to
+ * prevent duplicate payment creation on network retries or double-taps.
+ * If the same token is seen within 5 minutes, the cached response is
+ * returned without creating a second payment (mirrors the finalize
+ * pattern in FinalizeInvoiceRequest).
  */
 class StorePaymentRequest extends FormRequest
 {
@@ -36,6 +42,8 @@ class StorePaymentRequest extends FormRequest
             'allocations.*.invoice_id'   => 'required_with:allocations|integer|exists:sales_invoices,id',
             'allocations.*.allocated_amount' => 'required_with:allocations|numeric|min:0.01',
             'auto_confirm'     => 'nullable|boolean',
+            // R2: Idempotency token (UUID v4) — mirrors FinalizeInvoiceRequest.
+            'idempotency_token' => 'required|string|uuid',
         ];
     }
 
@@ -56,6 +64,7 @@ class StorePaymentRequest extends FormRequest
                 ],
             ],
             'auto_confirm'     => ['description' => 'Set true to create+confirm in one request (skips draft state)', 'example' => true],
+            'idempotency_token' => ['description' => 'Client-generated UUID v4 to prevent duplicate payment creation on network retry / double-tap. Cached for 5 minutes.', 'example' => '550e8400-e29b-41d4-a716-446655440000'],
         ];
     }
 }

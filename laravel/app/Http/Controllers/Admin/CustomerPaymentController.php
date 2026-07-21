@@ -18,6 +18,11 @@ use Illuminate\Support\Facades\DB;
  *   - discount:  Discount allowed → Dr Sales Discount, Cr AR
  *   - write_off: Bad debt write-off → Dr Bad Debt Expense, Cr AR
  *   - payment:   Refund to customer → Dr AR, Cr Bank/Cash
+ *
+ * R2: store() now requires an idempotency_token (UUID v4) and mirrors
+ * the finalize pattern — duplicate submissions within 10 minutes return
+ * the cached redirect instead of creating a second payment. See
+ * docs/REMEDIATION_LOG.md §R2.
  */
 class CustomerPaymentController extends Controller
 {
@@ -117,7 +122,25 @@ class CustomerPaymentController extends Controller
             'alloc_invoice_id.*' => 'integer|exists:sales_invoices,id',
             'alloc_amount' => 'nullable|array',
             'alloc_amount.*' => 'numeric|min:0',
+            // R2: Idempotency token (UUID v4) — mirrors the finalize pattern.
+            'idempotency_token' => 'required|string|uuid',
         ]);
+
+        // R2: Idempotency check — if this token was already processed,
+        // redirect to the originally-created payment with the original
+        // success message and an idempotent_replay warning. Prevents
+        // duplicate payments on double-submit / refresh-after-submit.
+        $cacheKey = 'payment:' . $validated['idempotency_token'];
+        $cached = \Illuminate\Support\Facades\Cache::get($cacheKey);
+
+        if ($cached !== null) {
+            // Replay: redirect to the same payment show page with the
+            // original success message + an additional warning flash.
+            return redirect()
+                ->route('admin.customer-payments.show', ['customer_payment' => $cached['payment_id']])
+                ->with('success', $cached['success_message'])
+                ->with('warning', 'Duplicate submission detected — returning the original result. No new payment was created.');
+        }
 
         try {
             $transactionType = $validated['transaction_type'];
@@ -165,8 +188,18 @@ class CustomerPaymentController extends Controller
                 'payment' => "Refund {$payment->payment_code} recorded. GL posted (Dr AR / Cr Bank/Cash) + customer ledger updated.",
             ];
 
+            $successMessage = ($typeMessages[$transactionType] ?? $typeMessages['receive']) . $allocMsg;
+
+            // R2: Cache the redirect target + success message for 10 minutes
+            // (idempotency window — same TTL as the finalize pattern).
+            \Illuminate\Support\Facades\Cache::put($cacheKey, [
+                'payment_id'      => $payment->id,
+                'payment_code'    => $payment->payment_code,
+                'success_message' => $successMessage,
+            ], 600);
+
             return redirect()->route('admin.customer-payments.show', $payment)
-                ->with('success', ($typeMessages[$transactionType] ?? $typeMessages['receive']) . $allocMsg);
+                ->with('success', $successMessage);
         } catch (\Throwable $e) {
             return back()->withInput()->with('error', $e->getMessage());
         }

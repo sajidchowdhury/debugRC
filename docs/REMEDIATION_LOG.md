@@ -135,7 +135,147 @@ Blade Select2 dropdowns to AJAX mode.
 
 ---
 
-## R2 — (not yet assigned)
+## R2 — Add idempotency token to payment create (mirror finalize pattern)
 
-Placeholder. When the user assigns R2, replace this section with the
-full R2 entry following the R1 template above.
+- **Status:** ✅ Done
+- **Date:** 2026-07-21
+- **Audit reference:** `docs/sales_entry_Lg_vs_La.md`
+  - §1 Executive Summary (top risk #4)
+  - §3.8 Payment Handling
+  - §8 Risks V2 (High) + V6 (Medium)
+  - §9 Recommendations table row R2
+
+### Problem
+
+Both payment-create endpoints lacked an idempotency token:
+
+1. **Web** — `POST /admin/customer-payments` (`CustomerPaymentController::store`):
+   a regular POST-redirect form. The auto-confirm path means one
+   request creates the draft payment AND immediately posts GL +
+   customer_ledger + allocations. A double-click on "Record Payment"
+   or a refresh-after-submit (browser's "Confirm Form Resubmission")
+   would create two payments, two GL entries, two ledger entries, and
+   double-allocate against the same invoices.
+
+2. **API** — `POST /api/v1/sales/payments` (`CustomerPaymentApiController::store`):
+   the mobile client commonly uses `auto_confirm=true`, which has the
+   same create+confirm semantics. A network timeout on the response
+   (when the server has actually committed) would cause the mobile
+   client to retry — same duplicate-payment problem.
+
+The Legacy system had no idempotency protection here either (audit
+risk L12), so this is a net new safety guarantee on the Laravel side.
+
+### Solution
+
+Mirrored the existing finalize pattern (which already protects both
+`SalesInvoiceController::finalize` web and `SalesInvoiceApiController::store`
+API). The client must send a UUID v4 `idempotency_token`. The server
+caches the successful response keyed by that token; a replay within
+the TTL returns the cached response instead of creating a second
+payment.
+
+### Files modified
+
+1. **`laravel/app/Http/Controllers/Admin/CustomerPaymentController.php`**
+   - Added `'idempotency_token' => 'required|string|uuid'` to the
+     inline `validate()` rules in `store()`.
+   - Added a cache check at the top of `store()`: if
+     `Cache::get('payment:' . $token)` is non-null, redirect to the
+     cached `admin.customer-payments.show` URL with the cached
+     `success` message plus a `warning` flash reading
+     "Duplicate submission detected — returning the original result.
+     No new payment was created."
+   - After the successful `confirmPayment` call, cache
+     `['payment_id', 'payment_code', 'success_message']` under
+     `'payment:' . $token` for **600 seconds (10 min)** — same TTL
+     as the web finalize pattern.
+   - Updated the class-level docblock to mention R2.
+   - Uses `\Illuminate\Support\Facades\Cache::` (full namespace) for
+     consistency with the finalize controller (which does the same).
+
+2. **`laravel/resources/views/admin/customer-payments/create.blade.php`**
+   - Added a hidden `<input name="idempotency_token" id="idempotencyToken">`
+     immediately after `@csrf` inside `<form id="paymentForm">`.
+   - The value is generated server-side via
+     `old('idempotency_token', (string) \Illuminate\Support\Str::uuid())`
+     so the same UUID survives a validation-failure re-render (the
+     user can fix the validation error and resubmit with the same
+     token — safe because no cache entry was created on the failed
+     attempt).
+   - Added an inline `{-- R2 --}}` comment block explaining the
+     rationale.
+   - **No JS changes** — the existing submit-button disable on
+     `$form.on('submit')` already prevents accidental double-clicks
+     in the common case. The idempotency token is the
+     defense-in-depth backstop for refresh-after-submit, browser-back,
+     and network-retry scenarios.
+
+3. **`laravel/app/Http/Requests/Api/V1/Sales/StorePaymentRequest.php`**
+   - Added `'idempotency_token' => 'required|string|uuid'` to the
+     `rules()` array.
+   - Added an `idempotency_token` entry to `bodyParameters()` with
+     description and example UUID.
+   - Updated the class-level docblock to mention R2 and that the
+     token is cached for 5 minutes.
+
+4. **`laravel/app/Http/Controllers/Api/V1/Sales/CustomerPaymentApiController.php`**
+   - Added `use Illuminate\Support\Facades\Cache;` to the imports.
+   - Added a cache check at the top of `store()`: if
+     `Cache::get('api:payment:' . $token)` is non-null, return the
+     cached JSON payload merged with `idempotent_replay: true` and a
+     replay `message`.
+   - The idempotency check runs **before** `assertBranchAccessible()`
+     so a replay is fully side-effect-free (no DB reads, no locks).
+   - After the successful create(+optional confirm) call, cache the
+     full response payload under `'api:payment:' . $token` for
+     **5 min** (`now()->addMinutes(5)`) — same TTL as the API finalize.
+   - Updated the class-level docblock to mention R2.
+
+### Verification
+
+- Manual code review of all four files. No syntax errors found.
+- Confirmed the validation rule name (`idempotency_token`) and the
+  cache-key prefixes (`payment:` / `api:payment:`) are consistent
+  with the existing finalize convention (`finalize:` / `api:finalize:`).
+- Confirmed the TTLs (10 min web, 5 min API) match the existing
+  finalize TTLs.
+- Confirmed the `layouts/admin.blade.php` already renders
+  `session('warning')` flashes, so no view-layer changes were needed
+  for the warning to appear on the show page after a replay.
+- Searched `laravel/tests/` for any existing tests that POST to
+  `customer-payments/store` or `api/v1/sales/payments` — none found,
+  so no tests needed updating. (Future R# may add idempotency-replay
+  tests per audit recommendation R44.)
+- PHP binary is not available in the Z.ai sandbox; `php -l` was not
+  run. The user should run `php artisan route:list` and
+  `php artisan test` in their dev environment to verify.
+
+### Risks introduced
+
+- **No new risks.** The idempotency layer is purely additive: it
+  short-circuits duplicate submissions and otherwise leaves the
+  existing payment flow untouched. `CustomerPaymentService` was not
+  modified.
+- **Minor cache-storage consideration:** each successful payment
+  creates one cache entry (web: 10 min, API: 5 min). At any realistic
+  submit volume this is negligible. Laravel's default cache driver
+  (file/database/redis) handles this trivially.
+- **Mobile client contract change (breaking):** the API now REQUIRES
+  `idempotency_token` in the request body. Mobile clients that do
+  not send it will receive a 422 validation error. **Action item for
+  the user:** deploy the mobile-app update that generates and sends
+  a UUID v4 per payment request before deploying this server change
+  to production. (The web Blade generates the UUID automatically, so
+  no browser-side action is needed.)
+
+### Follow-ups (NOT part of R2)
+
+- **R3 (next):** apply the same pattern to `POST /admin/sales-challans/issue/{invoiceId}` (audit risk V3).
+- **R44 (audit recommendation):** add integration tests that submit
+  the same `idempotency_token` twice and assert the second response
+  is the cached one (no duplicate row in `customer_payments`).
+- Consider adding a short TTL cache (30 s) on `POST /admin/customer-payments/{id}/cancel`
+  as well — currently a double-click on "Cancel Payment" would fire
+  two POSTs, but the second would fail with "payment is already
+  reversed" because of the `is_reversed` check. So this is low priority.

@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-21
+> **Last updated:** 2026-07-21 (R2 pushed)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -61,12 +61,16 @@ debugRC/
 │   └── public/assets/js/sales-create.js          # Legacy sales entry JS
 ├── laravel/
 │   ├── app/Http/Controllers/Admin/SalesCartController.php    # Laravel cart controller (R1 owner)
-│   ├── app/Http/Controllers/Admin/SalesInvoiceController.php # Laravel invoice finalize/edit/cancel
-│   ├── app/Services/Sales/                                  # SalesCartService, SalesInvoiceService, …
+│   ├── app/Http/Controllers/Admin/SalesInvoiceController.php # Laravel invoice finalize/edit/cancel (has idempotency_token since P2-6)
+│   ├── app/Http/Controllers/Admin/CustomerPaymentController.php # R2 added idempotency_token + cache check to store()
+│   ├── app/Http/Controllers/Api/V1/Sales/CustomerPaymentApiController.php # R2 added idempotency_token + cache check to store()
+│   ├── app/Http/Requests/Api/V1/Sales/StorePaymentRequest.php # R2 added idempotency_token rule
+│   ├── app/Services/Sales/                                  # SalesCartService, SalesInvoiceService, CustomerPaymentService, …
 │   ├── app/Services/Stock/StockAvailabilityService.php      # R1 added searchProductsWithStock() + findProductByExactCode()
 │   ├── app/Models/Customer.php                              # has scopeSearch() — tsvector + GIN, ILIKE fallback
 │   ├── app/Models/Product.php                               # has scopeSearch() — tsvector + GIN, ILIKE fallback
 │   ├── resources/views/admin/sales/cart.blade.php           # R1 replaced 500-row dropdowns with AJAX select2
+│   ├── resources/views/admin/customer-payments/create.blade.php # R2 added hidden idempotency_token input (Str::uuid())
 │   └── routes/web.php                                       # R1 added cart/search-customer, cart/search-product, cart/product-by-code
 ├── docs/
 │   ├── sales_entry_Lg_vs_La.md   # The big audit report (1100+ lines)
@@ -104,10 +108,10 @@ Items are tackled in order. Each item has its own entry in
 | ID  | Title                                                                     | Status       | Notes |
 |-----|---------------------------------------------------------------------------|--------------|-------|
 | R1  | Replace select2 500-row dropdowns with live search endpoints              | ✅ done      | Ported `sales/search_customer` + `sales/search_product` + `sales/product_by_code` from Legacy to Laravel. See `REMEDIATION_LOG.md` for full diff. |
-| R2  | (TBD — user has not assigned yet)                                         | ⏳ pending   | Likely candidate: invoice edit / delete round-trip with full GL reversal (per audit §6) |
-| R3  | (TBD)                                                                     | ⏳ pending   | Likely candidate: barcode scanner wiring (`product_by_code` endpoint is now in place; UI wiring remains) |
-| R4  | (TBD)                                                                     | ⏳ pending   | |
-| R5  | (TBD)                                                                     | ⏳ pending   | |
+| R2  | Add idempotency token to payment create (mirror finalize pattern)         | ✅ done      | Both `POST /admin/customer-payments` (web, 10-min cache) and `POST /api/v1/sales/payments` (API, 5-min cache) now require a UUID v4 `idempotency_token`. Fixes audit risks V2 + V6. See `REMEDIATION_LOG.md` §R2 for full diff. |
+| R3  | Add idempotency token to challan issue                                    | ⏳ pending   | Mirror the same pattern on `POST /admin/sales-challans/issue/{invoiceId}`. Mitigated today by the `is_challan_issued` status check inside the lock. |
+| R4  | Add cart mutation audit logging                                           | ⏳ pending   | Extend `SalesAuditLogger` with `cartItemAdded`, `cartItemUpdated`, `cartItemRemoved`, `cartCleared` methods. Closes V4. |
+| R5  | (TBD)                                                                     | ⏳ pending   | Likely candidate: lock the customer row before credit-limit check (V5). |
 
 > When the user assigns the next R# item, add a row here and create a
 > matching section in `REMEDIATION_LOG.md`. **Do not start work without
@@ -201,15 +205,62 @@ Items are tackled in order. Each item has its own entry in
   text, with a graceful fallback to the option (for back-compat with
   any code path that still sets options imperatively).
 
-### 5.3 What was NOT changed (deliberately)
+### 5.3 R2: Payment idempotency token design
+
+- **Scope:** Both the Blade (web) and API V1 payment-create endpoints.
+  This mirrors how `finalize` is already protected in both tiers
+  (`SalesInvoiceController::finalize` web, `SalesInvoiceApiController::store` API).
+- **Web — `POST /admin/customer-payments`:**
+  - Validation rule added to inline `$request->validate()`:
+    `'idempotency_token' => 'required|string|uuid'`.
+  - Cache key: `'payment:' . $token` (mirrors `'finalize:' . $token`).
+  - Cache TTL: **600 seconds (10 min)** — same as finalize web.
+  - Cache value: `['payment_id', 'payment_code', 'success_message']`.
+  - On replay: redirects to `admin.customer-payments.show` with the
+    original `success` flash AND an additional `warning` flash reading
+    "Duplicate submission detected — returning the original result.
+    No new payment was created." The `layouts.admin` template already
+    renders both flashes, so no view changes were needed.
+  - UUID is generated **server-side** via `\Illuminate\Support\Str::uuid()`
+    on first page render, and preserved across validation failures via
+    `old('idempotency_token', ...)`. This is intentionally different from
+    the finalize pattern (which generates the UUID client-side in JS),
+    because the payment form is a regular POST-redirect form, not an
+    AJAX flow — server-side generation is more robust to no-JS and
+    validation-failure re-renders.
+- **API — `POST /api/v1/sales/payments`:**
+  - Validation rule added to `StorePaymentRequest::rules()`:
+    `'idempotency_token' => 'required|string|uuid'`.
+  - Cache key: `'api:payment:' . $token` (mirrors `'api:finalize:' . $token`).
+  - Cache TTL: **5 min** (`now()->addMinutes(5)`) — same as finalize API.
+  - Cache value: the full JSON response payload (`message`, `data`, `confirmed`).
+  - On replay: returns the cached payload with `idempotent_replay: true`
+    and a replay `message` added.
+  - The idempotency check runs BEFORE `assertBranchAccessible()` so a
+    replay is fully side-effect-free (no DB reads, no locks).
+- **Why the cache-key prefix differs between web and API:** to keep the
+  web and API idempotency windows independent (a web submit and an API
+  submit with the same UUID do not collide). This matches the existing
+  finalize convention.
+- **What was NOT changed:** `CustomerPaymentService` was not touched.
+  The idempotency layer is a controller concern — the service remains
+  free of cache coupling. The `confirm` and `cancel` endpoints were not
+  given idempotency tokens (out of scope for R2; the user may want it
+  for R3 or later).
+
+### 5.4 What was NOT changed (deliberately)
 
 - The Legacy sales entry code (`legacy/`) was not touched. Legacy
   is still the production system; the audit is a parallel analysis.
 - The Laravel `SalesCartService`, `SalesInvoiceService`, and
-  `SalesPaymentService` were not touched. R1 is purely a UI/search
-  concern.
-- The Laravel API V1 controllers (`app/Http/Controllers/Api/V1/Sales/*`)
-  were not touched. They serve the mobile app, not the Blade cart.
+  `SalesPaymentService` were not touched. R1 was purely a UI/search
+  concern; R2 is purely a controller/validation concern.
+- The Laravel API V1 controllers OTHER than `CustomerPaymentApiController`
+  were not touched.
+- The `confirm` and `cancel` payment endpoints were not given
+  idempotency tokens. The `cancel` endpoint already has a `cancel_reason`
+  guard and reverses a known existing payment, so duplicate-cancellation
+  is not a real risk (it would fail with "payment is already reversed").
 
 ---
 
@@ -217,8 +268,8 @@ Items are tackled in order. Each item has its own entry in
 
 (Items the user has asked for but that are not yet done.)
 
-- **None outstanding.** R1 is complete and pushed. The user has not
-  yet assigned R2.
+- **None outstanding.** R1 and R2 are complete and pushed. The user has
+  not yet assigned R3.
 
 When the user gives the next instruction, append it here as a
 checkbox item. When done, move it to the "Completed Work Items"
@@ -235,6 +286,11 @@ section below.
 - [x] **R1** — Replace select2 500-row dropdowns with live search
       endpoints. Committed & pushed. See `REMEDIATION_LOG.md` for
       the full diff summary.
+- [x] **R2** — Add idempotency token to payment create (mirror
+      finalize pattern — UUID v4 + 5–10 min cache). Applied to both
+      the Blade `POST /admin/customer-payments` (10-min cache) and the
+      API `POST /api/v1/sales/payments` (5-min cache). Committed &
+      pushed. See `REMEDIATION_LOG.md` §R2 for the full diff.
 
 ---
 

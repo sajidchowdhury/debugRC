@@ -11,6 +11,7 @@ use App\Services\Sales\SalesAccess;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Customer Payment API Controller — Mobile write endpoints.
@@ -35,6 +36,10 @@ use Illuminate\Support\Facades\Auth;
  *   POST   /api/v1/sales/payments/{id}/confirm           Confirm draft payment
  *   POST   /api/v1/sales/payments/{id}/cancel            Cancel/reverse payment
  *   GET    /api/v1/sales/payments/outstanding-invoices   Get customer's outstanding invoices
+ *
+ * R2: The store endpoint is idempotent — the client must send a UUID
+ * idempotency_token. If the same token is seen within 5 minutes, the
+ * previous result is returned without creating a duplicate payment.
  */
 class CustomerPaymentApiController extends Controller
 {
@@ -107,10 +112,28 @@ class CustomerPaymentApiController extends Controller
      *
      * If auto_confirm=false (or omitted), only the draft payment is created.
      * The client must then call POST /payments/{id}/confirm separately.
+     *
+     * R2: Idempotency — if the same idempotency_token was processed
+     * within 5 min, the cached result is returned without creating a
+     * second payment (prevents duplicate on network retry / double-tap).
+     * Mirrors the finalize pattern in SalesInvoiceApiController::store.
      */
     public function store(StorePaymentRequest $request): JsonResponse
     {
         $validated = $request->validated();
+
+        // R2: Idempotency check — must run BEFORE any branch-access
+        // check or service call so a replay is fully side-effect-free.
+        $cacheKey = 'api:payment:' . $validated['idempotency_token'];
+        $cached = Cache::get($cacheKey);
+
+        if ($cached !== null) {
+            // Return the original response, flagged as a replay.
+            return response()->json(array_merge($cached, [
+                'idempotent_replay' => true,
+                'message' => 'Duplicate submission detected — returning the original result. No new payment was created.',
+            ]));
+        }
 
         $this->salesAccess->assertBranchAccessible((int) $validated['branch_id']);
 
@@ -134,13 +157,19 @@ class CustomerPaymentApiController extends Controller
 
             $payment->load(['customer', 'bank', 'allocations.invoice']);
 
-            return response()->json([
+            $result = [
                 'message' => $autoConfirm
                     ? 'Payment created and confirmed successfully'
                     : 'Draft payment created successfully',
                 'data' => new CustomerPaymentResource($payment),
                 'confirmed' => $autoConfirm,
-            ], 201);
+            ];
+
+            // R2: Cache the result for 5 minutes (idempotency window —
+            // same TTL as the API finalize pattern).
+            Cache::put($cacheKey, $result, now()->addMinutes(5));
+
+            return response()->json($result, 201);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         } catch (\RuntimeException $e) {
