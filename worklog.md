@@ -190,3 +190,42 @@ Stage Summary:
 - Migration is idempotent and reversible (down() drops the column).
 - Does NOT conflict with the is_reversed boolean on customer_payments/supplier_payments (different purposes: user-soft-delete vs transaction-reverse).
 - User should pull main and run `php artisan migrate:fresh` (or just `php artisan migrate` to apply only this new migration) — the deleted_at column will be added and the new-customer flow will work.
+
+---
+Task ID: 40
+Agent: Main
+Task: R11 — Port multi-customer cart tabs (#draft-tabs dock with per-tab item-count badges)
+
+Work Log:
+- Read existing docs: sales_entry_Lg_vs_La.md (1131 lines), SESSION_CONTEXT.md (800 lines), REMEDIATION_LOG.md (1278 lines). Found §6.1 item #2 "Multi-customer cart tabs" marked as Missing — this is the gap R11 closes.
+- Read Legacy reference: legacy/app/views/sales/create.php L144-163 (#draft-tabs dock) + legacy/public/assets/js/sales-create.js L643-803 (createOrSwitchTab, switchToTab, closeTab, refreshTabBadge, restoreSessionCarts). Also read legacy/app/services/Sales/traits/SalesCartOperationsTrait.php::listDraftCarts (L238-280) + clearTabCart (L356-366) for the backend port.
+- Read current Laravel cart stack: SalesCartController.php (339 lines, R1 endpoints already in place), SalesCartService.php (490 lines), SalesDraftCart.php (102 lines, R6 unique key already in place), cart.blade.php (1521 lines, R1 live search + R10 barcode already in place).
+- Designed R11 to mirror Legacy UX: one Bootstrap nav-pill per open customer-cart, item-count badge, × close button, in-page switching without reload.
+- Backend implementation (3 files):
+  - SalesCartService::listCarts(userId, branchId) — new method, ~80 lines. Queries sales_draft_carts, skips empty carts, joins customers for name/mobile, computes item_count + subtotal, sorts by item_count DESC then updated_at DESC. Capped at 50 rows.
+  - SalesCartController::listDrafts() — thin wrapper, returns listCarts() as JSON.
+  - routes/web.php — new GET /admin/sales/cart/list-drafts route, throttle 60/min (matches Legacy guardJsonApi).
+- Frontend implementation (cart.blade.php, ~340 lines of new JS + HTML):
+  - New #draftTabsCard dock above the customer selector with horizontal-scroll pill list + count badge + empty-state hint.
+  - New JS section "R11: MULTI-CART TABS DOCK" with 11 functions: customerCache, tabLabelFor, tabTitleFor, ensureTab, activateTab, removeTab, refreshTabDockVisibility, updateActiveTabBadge, restoreSessionCarts, switchToCustomer, closeTabCart, initDraftTabsDock.
+  - Modified customer Select2 processResults to populate customerCache (so newly-picked customers get a properly-labeled tab immediately).
+  - Modified customer <select> change handler to call ensureTab() before loadCart().
+  - Modified loadCart() success handler to call updateActiveTabBadge() + activateTab().
+  - Modified addToCart/updateItem/removeItem/clearCart success handlers to call updateActiveTabBadge() from response payload (no extra round-trip). clearCart also calls removeTab() since the cart is now empty.
+  - Added bootstrap sequence at end of $(function(){}): initDraftTabsDock() + pre-populate customerCache for server-rendered selected customer + render initial tab + fire restoreSessionCarts().
+- Reused existing /cart/clear endpoint for the close-tab action (it already does SalesCartService::clearCart which writes the R4 audit-log entry). No new clear-tab endpoint needed.
+- Verified blade file integrity: braces balanced (366/366), @if/@endif balanced (6/6), @push/@endpush balanced (1/1), no duplicate IDs, all 11 new functions defined exactly once.
+- Verified PHP file integrity: SalesCartService.php braces balanced (75/75), SalesCartController.php braces balanced (33/33), routes/web.php braces balanced (114/114).
+- Updated 3 docs:
+  - sales_entry_Lg_vs_La.md: added R10/R11 rows to backlog table; updated §1 executive summary business-rule parity row; updated §3 architecture comparison "Page architecture" + "Cart tabs" rows; updated §4 cart-table comparison "Multi-customer tabs" + "Per-tab item count badge" rows; rewrote §6.1 item #2 entry with full R11 description; updated §9.3 recommendations table R11 row.
+  - SESSION_CONTEXT.md: updated "Last updated" stamp to 2026-07-22 (R11 pushed); added R11 row to backlog table; added new §5.11 deep-dive section with full problem/decision/flow/files-modified/what-was-NOT-changed breakdown; updated §6 Open Work Items; added R11 entry to §7 Completed Work Items.
+  - REMEDIATION_LOG.md: appended new §R11 section (~280 lines) with status, audit reference, problem, decision, files modified (with code snippets), what was NOT changed, verification, risks introduced, follow-ups.
+- Committed as 0a615a3 and pushed to origin/main (bf5b18f..0a615a3). 7 files changed, 965 insertions(+), 11 deletions(-).
+
+Stage Summary:
+- Single R11 commit closes audit gap §6.1 item #2 (multi-customer cart tabs).
+- No new migration needed — reuses the R6 3-column unique key on sales_draft_carts.
+- No API V1 changes (user brief explicitly named "cart blade"); the service method is reusable for a future API mirror.
+- No edit-page changes (Legacy has multi-customer tabs only on the create page; R11 matches that scope).
+- All 3 docs updated to reflect R11 completion — future agents reading SESSION_CONTEXT.md will see R11 in the backlog table + §5.11 deep-dive + completed work items.
+- User should pull main and browse to /admin/sales/cart — the #draftTabsCard dock appears above the customer selector. Open carts (from any prior session) will appear as pills on page load. Picking a new customer creates a new pill; clicking a pill switches carts; clicking × closes the cart (after confirm) and switches to the next remaining tab.
