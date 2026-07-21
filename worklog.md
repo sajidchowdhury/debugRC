@@ -154,3 +154,39 @@ Stage Summary:
 - Commit message: "feat(sales): R10 — wire up barcode scanning in cart blade (UI for the R1 productByCode endpoint) + doc updates"
 - Pushed to origin/main successfully.
 - Next step: user pulls and tests the cart page (click "Barcode" button in Add Product card header → scan or type a product code → press Enter → item should appear in cart with default rate + qty 1, and the field should auto-clear for the next scan).
+
+---
+Task ID: 39
+Agent: Main
+Task: Fix customer_payments.deleted_at missing column error blocking new-customer creation
+
+Work Log:
+- User reported: SQLSTATE[42703]: Undefined column: 7 ERROR: column customer_payments.deleted_at does not exist — raised while creating a new customer (CustomerController runs an aggregate over customer_payments to compute opening balance).
+- Root cause: CustomerPayment model uses `use SoftDeletes` trait but the customer_payments table (database/sql/06_payment_and_misc.sql) was created WITHOUT a deleted_at column. The SoftDeletes trait automatically appends `AND customer_payments.deleted_at IS NULL` to every query, which crashes.
+- Confirmed design intent by finding an existing inline comment in 2025_01_21_000002_add_cte_complex_queries.php:103: `-- Note: customer_payments has no deleted_at column (no soft-delete);`
+- Wrote /home/z/my-project/scripts/audit_deleted_at.py — scans all SQL files AND migrations for `deleted_at` columns, cross-references with every Eloquent model declaring `use SoftDeletes`.
+- Audit found 13 models with the same latent bug, not just CustomerPayment:
+    CustomerPayment -> customer_payments
+    SalesChallan -> sales_challans
+    SalesReturn -> sales_returns
+    PurchaseOrder -> purchase_orders
+    PurchaseReceive -> purchase_receives
+    PurchaseReturn -> purchase_returns
+    StockTakeSession -> stock_take_sessions
+    StockAdjustment -> stock_adjustments
+    DamageInvoice -> damage_invoices
+    WarehouseTransfer -> warehouse_transfers
+    CommissionRule -> commission_rules
+    CommissionEntry -> commission_entries
+    NotificationRule -> notification_rules
+- Verified withTrashed/onlyTrashed/restore callsites: ALL callsites are for master-data models (Customer/Product/Bank/Branch/etc.) — none reference any of the 13 affected transactional models. So removing SoftDeletes from models would also have been safe, but adding the column is lower-risk (schema-only, no PHP changes, matches existing project convention).
+- Verified only sales_invoices + stock_transactions are partitioned; none of the 13 affected tables are partitioned, so plain ALTER TABLE ... ADD COLUMN works without cascade complications.
+- Created laravel/database/migrations/2025_01_23_000002_add_soft_deletes_to_transactional_tables.php — single migration adds `deleted_at timestamp(0) NULL` to all 13 tables, idempotent (guarded by Schema::hasColumn + Schema::hasTable), mirrors the pattern from 2025_01_13_000001_add_soft_deletes_to_banks.php.
+- Committed as bf5b18f and pushed to origin/main (alongside 7321e17 from previous session which was unpushed).
+
+Stage Summary:
+- Single migration fixes 13 latent bugs at once; user would have hit each one-by-one as they exercised more features.
+- No PHP code changes — risk of breaking controller/model callsites is zero.
+- Migration is idempotent and reversible (down() drops the column).
+- Does NOT conflict with the is_reversed boolean on customer_payments/supplier_payments (different purposes: user-soft-delete vs transaction-reverse).
+- User should pull main and run `php artisan migrate:fresh` (or just `php artisan migrate` to apply only this new migration) — the deleted_at column will be added and the new-customer flow will work.
