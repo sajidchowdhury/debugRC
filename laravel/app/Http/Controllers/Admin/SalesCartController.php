@@ -270,7 +270,10 @@ class SalesCartController extends Controller
         ]);
 
         $customerId = (int) $request->input('customer_id');
-        $result = $this->cartService->clearCart(auth()->id(), $customerId);
+        // R6: pass branch_id (session) so clearCart targets the right
+        // (user, customer, branch) cart row.
+        $branchId = (int) session('branch_id', 0);
+        $result = $this->cartService->clearCart(auth()->id(), $customerId, $branchId);
         return response()->json($result);
     }
 
@@ -302,8 +305,11 @@ class SalesCartController extends Controller
 
         $customerId = (int) $request->input('customer_id');
         $softHold = (bool) $request->input('soft_hold');
+        // R6: pass branch_id (session) so setSoftHold targets the right
+        // (user, customer, branch) cart row.
+        $branchId = (int) session('branch_id', 0);
 
-        $result = $this->cartService->setSoftHold(auth()->id(), $customerId, $softHold);
+        $result = $this->cartService->setSoftHold(auth()->id(), $customerId, $softHold, $branchId);
         return response()->json($result);
     }
 

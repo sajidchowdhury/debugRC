@@ -147,8 +147,11 @@ class SalesCartApiController extends Controller
 
         $userId = Auth::id();
         $customerId = (int) $request->input('customer_id');
+        // R6: pass branch_id so clearCart targets the right
+        // (user, customer, branch) cart row.
+        $branchId = $this->resolveBranchId($request);
 
-        $result = $this->cartService->clearCart($userId, $customerId);
+        $result = $this->cartService->clearCart($userId, $customerId, $branchId);
 
         return response()->json(['message' => $result['message']]);
     }
@@ -193,8 +196,11 @@ class SalesCartApiController extends Controller
         $userId = Auth::id();
         $customerId = (int) $request->input('customer_id');
         $softHold = (bool) $request->input('soft_hold');
+        // R6: pass branch_id so setSoftHold targets the right
+        // (user, customer, branch) cart row.
+        $branchId = $this->resolveBranchId($request);
 
-        $result = $this->cartService->setSoftHold($userId, $customerId, $softHold);
+        $result = $this->cartService->setSoftHold($userId, $customerId, $softHold, $branchId);
 
         return response()->json(['message' => $result['message']]);
     }

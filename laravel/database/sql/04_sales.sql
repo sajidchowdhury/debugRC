@@ -153,13 +153,17 @@ CREATE INDEX idx_sc_adj_journal ON sales_challans(adjustment_journal_entry_id);
 CREATE TABLE sales_draft_carts (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    branch_id integer REFERENCES branches(id),
+    -- branch_id is NOT NULL DEFAULT 0 (Legacy semantics): 0 = "no specific branch".
+    -- R6: branch_id is part of the unique key (uq_sales_draft_user_customer_branch)
+    -- so a salesman switching branches with the same customer gets a fresh cart per
+    -- branch — prevents cross-branch cart contamination (audit risks V11, C7).
+    branch_id integer NOT NULL DEFAULT 0,
     customer_id integer,
     items_json jsonb,
     is_soft_hold boolean NOT NULL DEFAULT false,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_sales_draft_user_customer UNIQUE (user_id, customer_id)
+    CONSTRAINT uq_sales_draft_user_customer_branch UNIQUE (user_id, customer_id, branch_id)
 );
 CREATE INDEX idx_sdc_branch ON sales_draft_carts(branch_id);
 CREATE INDEX idx_sdc_updated ON sales_draft_carts(updated_at);

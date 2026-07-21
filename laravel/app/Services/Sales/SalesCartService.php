@@ -317,10 +317,13 @@ class SalesCartService
 
     /**
      * Set soft-hold flag on the cart (reserved for later).
+     *
+     * R6 (2026-07-21): branch_id added to match the new 3-column unique key.
+     * Null is normalized to 0 inside SalesDraftCart::getOrCreate().
      */
-    public function setSoftHold(int $userId, int $customerId, bool $softHold): array
+    public function setSoftHold(int $userId, int $customerId, bool $softHold, ?int $branchId = null): array
     {
-        $cart = SalesDraftCart::getOrCreate($userId, $customerId);
+        $cart = SalesDraftCart::getOrCreate($userId, $customerId, $branchId);
         $cart->is_soft_hold = $softHold;
         $cart->save();
 

@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-21 (R5 + H1 bugfix pushed)
+> **Last updated:** 2026-07-21 (R6 pushed)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -60,18 +60,21 @@ debugRC/
 │   ├── app/views/sales/create.php                # Legacy sales entry UI
 │   └── public/assets/js/sales-create.js          # Legacy sales entry JS
 ├── laravel/
-│   ├── app/Http/Controllers/Admin/SalesCartController.php    # Laravel cart controller (R1 owner)
+│   ├── app/Http/Controllers/Admin/SalesCartController.php    # Laravel cart controller (R1 owner). R6: clear() + softHold() now pass session branch_id explicitly.
 │   ├── app/Http/Controllers/Admin/SalesInvoiceController.php # Laravel invoice finalize/edit/cancel (has idempotency_token since P2-6)
 │   ├── app/Http/Controllers/Admin/CustomerPaymentController.php # R2 added idempotency_token + cache check to store()
 │   ├── app/Http/Controllers/Admin/SalesChallanController.php    # R3 added idempotency_token + cache check to issueChallan()
 │   ├── app/Http/Controllers/Api/V1/Sales/CustomerPaymentApiController.php # R2 added idempotency_token + cache check to store()
 │   ├── app/Http/Controllers/Api/V1/Sales/SalesChallanApiController.php    # R3 added idempotency_token + cache check to issue()
+│   ├── app/Http/Controllers/Api/V1/Sales/SalesCartApiController.php       # R6: clear() + softHold() now pass resolveBranchId($request) explicitly.
 │   ├── app/Http/Requests/Api/V1/Sales/StorePaymentRequest.php # R2 added idempotency_token rule
 │   ├── app/Http/Requests/Api/V1/Sales/IssueChallanRequest.php # R3 added idempotency_token rule
 │   ├── app/Services/Sales/                                  # SalesCartService, SalesInvoiceService, SalesChallanService, CustomerPaymentService, …
 │   ├── app/Services/Sales/SalesAuditLogger.php              # R4 added cartItemAdded/Updated/Removed/Cleared methods + recentSalesEvents entries
 │   ├── app/Services/Sales/SalesCartService.php              # R4 wired SalesAuditLogger into addItem/updateItem/removeItem/clearCart
-│   ├── app/Services/Sales/SalesInvoiceService.php           # R5 added assertCreditLimitUnderLock() — Customer::lockForUpdate() inside finalize + update transactions
+│   ├── app/Services/Sales/SalesInvoiceService.php           # R5 added assertCreditLimitUnderLock() — Customer::lockForUpdate() inside finalize + update transactions. R6: clearCart() now passes branch_id explicitly so the right (user, customer, branch) cart row is cleared.
+│   ├── app/Services/Sales/SalesCartService.php              # R4 wired SalesAuditLogger into addItem/updateItem/removeItem/clearCart. R6: setSoftHold() now takes ?int $branchId (consistent with new 3-column unique key).
+│   ├── app/Models/SalesDraftCart.php                        # R6: getOrCreate() now includes branch_id in firstOrCreate search attrs and normalizes null → 0 (matching the new uq_sales_draft_user_customer_branch constraint + NOT NULL DEFAULT 0 column).
 │   ├── app/Models/CustomerPayment.php                      # H1 bugfix: removed dead isDraft/isConfirmed/isCancelled (status column doesn't exist)
 │   ├── app/Http/Controllers/Admin/CustomerController.php   # H1 bugfix: removed whereNotIn('status') on CustomerPayment/SalesReturn queries in show()
 │   ├── app/Services/Stock/StockAvailabilityService.php      # R1 added searchProductsWithStock() + findProductByExactCode()
@@ -80,7 +83,9 @@ debugRC/
 │   ├── resources/views/admin/sales/cart.blade.php           # R1 replaced 500-row dropdowns with AJAX select2
 │   ├── resources/views/admin/customer-payments/create.blade.php # R2 added hidden idempotency_token input (Str::uuid())
 │   ├── resources/views/admin/sales-challans/issue.blade.php # R3 added hidden idempotency_token input (Str::uuid())
-│   └── routes/web.php                                       # R1 added cart/search-customer, cart/search-product, cart/product-by-code
+│   ├── routes/web.php                                       # R1 added cart/search-customer, cart/search-product, cart/product-by-code
+│   ├── database/migrations/2025_01_23_000001_r6_add_branch_id_to_sales_draft_carts_unique_key.php # R6 migration: drops uq_sales_draft_user_customer, adds uq_sales_draft_user_customer_branch, drops FK on branch_id, backfills NULL → 0, makes column NOT NULL DEFAULT 0
+│   └── database/sql/04_sales.sql                            # R6 updated sales_draft_carts schema for fresh installs (3-column unique key, NOT NULL DEFAULT 0, no FK on branch_id)
 ├── docs/
 │   ├── sales_entry_Lg_vs_La.md   # The big audit report (1100+ lines)
 │   ├── SESSION_CONTEXT.md        # ← this file
@@ -122,7 +127,7 @@ Items are tackled in order. Each item has its own entry in
 | R4  | Add cart mutation audit logging                                           | ✅ done      | Extended `SalesAuditLogger` with `cartItemAdded`, `cartItemUpdated`, `cartItemRemoved`, `cartCleared`. Wired into `SalesCartService` via DI — fires one audit event per successful cart mutation. Both Blade + API paths covered (they share the service). Fixes audit risk V4, mitigates C2 (Laravel side). See `REMEDIATION_LOG.md` §R4 for full diff. |
 | R5  | Lock the customer row before credit-limit check                          | ✅ done      | Added `assertCreditLimitUnderLock()` helper that does `Customer::lockForUpdate()->find()` + `checkCreditLimit` + throw-on-exceed. Called at the top of the transaction in BOTH `finalizeFromCart` and `updateInvoice`. The pre-transaction `checkCreditLimit` call is kept for fast UX feedback. Fixes audit risk V5, mitigates C1 (Laravel side). See `REMEDIATION_LOG.md` §R5 for full diff. |
 | H1  | Hotfix: `customer_payments.status` column does not exist                  | ✅ done      | Production bug: viewing a customer's "360° Hub" page threw `SQLSTATE[42703]` because `CustomerController::show` filtered `CustomerPayment` queries with `->whereNotIn('status', ['cancelled'])`, but `customer_payments` has no `status` column (only `is_reversed`). Removed the broken filters; also removed the dead `isDraft/isConfirmed/isCancelled` methods on `CustomerPayment` model. See `REMEDIATION_LOG.md` §H1 for full diff. |
-| R6  | (TBD)                                                                     | ⏳ pending   | Likely candidate: add `branch_id` to `sales_draft_carts` unique key (V11, C7). |
+| R6  | Add `branch_id` to `sales_draft_carts` unique key                          | ✅ done      | New migration `2025_01_23_000001_r6_add_branch_id_to_sales_draft_carts_unique_key.php` drops `uq_sales_draft_user_customer` and adds `uq_sales_draft_user_customer_branch` on `(user_id, customer_id, branch_id)`. Also drops the FK on `branch_id`, backfills NULL → 0, and makes the column `NOT NULL DEFAULT 0` (Legacy "no specific branch" sentinel). `SalesDraftCart::getOrCreate()` updated to include `branch_id` in `firstOrCreate` search attrs + normalize null → 0. All `clearCart()` / `setSoftHold()` callers updated to pass `branch_id` explicitly (Admin web + API V1 + `SalesInvoiceService::finalizeFromCart`). `04_sales.sql` updated for fresh installs. Fixes V11, mitigates C7 (Laravel side). See `REMEDIATION_LOG.md` §R6 for full diff. |
 
 > When the user assigns the next R# item, add a row here and create a
 > matching section in `REMEDIATION_LOG.md`. **Do not start work without
@@ -470,14 +475,115 @@ the 2 instances in `CustomerController::show` were affected.
   case the user's request errors out anyway. Wrapping in a
   transaction would be a bigger refactor and was deferred.
 
+### 5.9 R6: branch_id in sales_draft_carts unique key
+
+**Problem:** the `sales_draft_carts` unique constraint was
+`UNIQUE (user_id, customer_id)` — `branch_id` was stored on the row
+but NOT part of the key. A salesman switching branches with the same
+customer would share the SAME cart row, leading to cross-branch
+stock reservation contamination (the cart's items could reference
+stock from the wrong branch). Audit risks V11 (Laravel) and C7
+(common to both systems).
+
+**Decision: extend the unique key to 3 columns + align the column
+with Legacy semantics.**
+
+The new constraint is `UNIQUE (user_id, customer_id, branch_id)`.
+A salesman switching branches now gets a separate cart per branch —
+matching Legacy semantics (Legacy's `020_sales_draft_carts.sql`
+declares `branch_id INT NOT NULL DEFAULT 0`).
+
+**Why drop the FK on `branch_id`?**
+
+The original Laravel `04_sales.sql` declared `branch_id integer
+REFERENCES branches(id)` (nullable, with FK). Legacy semantics use
+`branch_id = 0` as a "no specific branch" sentinel — there is no
+`branches(0)` row. Keeping the FK would block the backfill and
+break the sentinel convention. Legacy doesn't enforce this FK
+either, so dropping it is a Legacy parity fix, not a regression.
+The `idx_sdc_branch` index on `branch_id` is kept for query
+performance.
+
+**Why `NOT NULL DEFAULT 0`?**
+
+PostgreSQL `UNIQUE` constraints treat NULL as distinct — two rows
+with `(user_id=5, customer_id=10, branch_id=NULL)` would NOT
+conflict, defeating the purpose of the unique key. Making the
+column `NOT NULL DEFAULT 0` ensures the unique constraint works
+correctly. `0` is the pre-existing Legacy convention for "no
+specific branch".
+
+**Migration safety:**
+
+1. Drop the FK on `branch_id` (looked up dynamically from
+   `pg_constraint` — the name is auto-generated as
+   `sales_draft_carts_branch_id_foreign` but we don't hardcode it).
+2. Backfill `NULL → 0` (in practice a no-op — the Laravel app
+   has always passed a non-null `branch_id` via
+   `session('branch_id', 0)`).
+3. `ALTER COLUMN branch_id SET NOT NULL` + `SET DEFAULT 0`.
+4. Drop old `uq_sales_draft_user_customer`.
+5. Add new `uq_sales_draft_user_customer_branch`.
+
+All DDL is wrapped in a single transaction so a failure at any
+step rolls back the entire migration.
+
+**Code changes outside the migration:**
+
+- `SalesDraftCart::getOrCreate()` updated to include `branch_id`
+  in the `firstOrCreate` search attributes and normalize `null → 0`.
+  Without this, `firstOrCreate` would search by `(user_id,
+  customer_id)` only and return the wrong cart (or create a new
+  empty cart at `branch_id=null`, which would now fail the NOT NULL
+  constraint).
+- `SalesCartService::setSoftHold()` signature changed to accept
+  `?int $branchId = null` (was previously not a parameter). The
+  null is normalized to 0 inside `getOrCreate`.
+- All `clearCart()` and `setSoftHold()` callers updated to pass
+  `branch_id` explicitly:
+  - `Admin\SalesCartController::clear()` — passes `session('branch_id', 0)`
+  - `Admin\SalesCartController::softHold()` — passes `session('branch_id', 0)`
+  - `Api\V1\Sales\SalesCartApiController::clear()` — passes `$this->resolveBranchId($request)`
+  - `Api\V1\Sales\SalesCartApiController::softHold()` — passes `$this->resolveBranchId($request)`
+  - `SalesInvoiceService::finalizeFromCart()` — passes `$branchId`
+    (was previously omitted, which was a latent bug — clearCart
+    would have created a new empty cart at `branch_id=0` and left
+    the actual cart untouched. R6 fixes this as a side effect.)
+
+**Why this fixes a latent clearCart bug:**
+
+Before R6, `SalesInvoiceService::finalizeFromCart` called
+`$this->cartService->clearCart($userId, $customerId)` without
+passing `branch_id`. The cart's `getOrCreate` searched by
+`(user_id, customer_id)` only and matched the actual cart (which
+had a real `branch_id` like 5) — so `clearCart` accidentally
+worked, because the 2-column unique key made the search
+branch-agnostic. After R6, the search is 3-column, so omitting
+`branch_id` would normalize to 0 and target a non-existent cart
+at `branch_id=0` — leaving the actual cart un-cleared (a bug).
+R6 fixes this by passing `$branchId` explicitly.
+
+**What was NOT changed:**
+
+- The Legacy sales entry code (`legacy/`) was not touched. The
+  Legacy schema still has the 2-column unique key. Legacy uses
+  `$_SESSION`-keyed carts as primary storage (with DB as optional
+  backup gated by `SALES_DB_DRAFT_CARTS`), so the cross-branch
+  contamination risk is lower in practice on Legacy.
+- The `customers` table was not touched. The unique key change is
+  isolated to `sales_draft_carts`.
+- The `sales_invoice_dispatches` / `sales_invoice_items` tables
+  were not touched. They already have `branch_id` as part of their
+  business keys (via `sales_invoices.branch_id`).
+
 ---
 
 ## 6. Open Work Items
 
 (Items the user has asked for but that are not yet done.)
 
-- **None outstanding.** R1, R2, R3, R4, R5, and H1 (bugfix) are
-  complete and pushed. The user has not yet assigned R6.
+- **None outstanding.** R1, R2, R3, R4, R5, R6, and H1 (bugfix) are
+  complete and pushed. The user has not yet assigned R7.
 
 When the user gives the next instruction, append it here as a
 checkbox item. When done, move it to the "Completed Work Items"
@@ -528,6 +634,19 @@ section below.
       `isDraft/isConfirmed/isCancelled` methods on `CustomerPayment`
       model. Committed & pushed. See `REMEDIATION_LOG.md` §H1 for
       the full diff.
+- [x] **R6** — Add `branch_id` to `sales_draft_carts` unique key.
+      New migration `2025_01_23_000001_r6_add_branch_id_to_sales_draft_carts_unique_key.php`
+      drops `uq_sales_draft_user_customer` and adds
+      `uq_sales_draft_user_customer_branch` on `(user_id, customer_id, branch_id)`.
+      Also drops the FK on `branch_id` (Legacy doesn't enforce it),
+      backfills NULL → 0, and makes the column `NOT NULL DEFAULT 0`
+      (Legacy "no specific branch" sentinel). `SalesDraftCart::getOrCreate()`
+      updated to include `branch_id` in `firstOrCreate` search attrs +
+      normalize null → 0. All `clearCart()` / `setSoftHold()` callers
+      updated to pass `branch_id` explicitly (Admin web + API V1 +
+      `SalesInvoiceService::finalizeFromCart`). `04_sales.sql` updated
+      for fresh installs. Fixes V11, mitigates C7 (Laravel side).
+      Committed & pushed. See `REMEDIATION_LOG.md` §R6 for the full diff.
 
 ---
 

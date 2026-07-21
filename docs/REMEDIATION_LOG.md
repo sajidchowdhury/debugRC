@@ -886,3 +886,195 @@ no callers anywhere in the codebase.
   non-existent `status` columns should be audited. A quick grep
   shows `CustomerPayment` was the only one, but the same pattern
   may exist for other tables.
+
+
+---
+
+## R6 — Add branch_id to sales_draft_carts unique key
+
+- **Status:** ✅ Done
+- **Date:** 2026-07-21
+- **Audit reference:** `docs/sales_entry_Lg_vs_La.md` §8.2 V11 (Laravel)
+  + §8.3 C7 (common). Also §9.1 R6 (Priority 1 — Critical Fix).
+
+### Problem
+
+The `sales_draft_carts` unique constraint was
+`UNIQUE (user_id, customer_id)` — `branch_id` was stored on the row
+but NOT part of the key. This meant a salesman switching branches
+with the same customer would share the SAME cart row, causing
+cross-branch stock reservation contamination (the cart's items
+could reference stock from the wrong branch).
+
+The Laravel `04_sales.sql` also declared `branch_id` as nullable
+with an FK to `branches(id)` — an oversight vs the Legacy schema
+(`020_sales_draft_carts.sql`) which declares it `INT NOT NULL
+DEFAULT 0` (no FK). PostgreSQL `UNIQUE` treats NULL as distinct,
+so even if we just added `branch_id` to the unique key without
+the NOT NULL change, two rows with `(user_id=5, customer_id=10,
+branch_id=NULL)` would not conflict — defeating the purpose.
+
+### Solution
+
+Extended the unique key from 2 columns to 3 columns, and aligned
+the column with Legacy semantics (`NOT NULL DEFAULT 0`, no FK).
+A salesman switching branches now gets a separate cart per branch —
+matching Legacy behavior.
+
+### Files modified
+
+1. **`laravel/database/migrations/2025_01_23_000001_r6_add_branch_id_to_sales_draft_carts_unique_key.php`** (NEW)
+   - Drops the FK on `branch_id` (name looked up dynamically from
+     `pg_constraint` — typically `sales_draft_carts_branch_id_foreign`).
+   - Backfills `NULL → 0` (defensive — in practice a no-op).
+   - `ALTER COLUMN branch_id SET NOT NULL` + `SET DEFAULT 0`.
+   - Drops old `uq_sales_draft_user_customer` (2-column).
+   - Adds new `uq_sales_draft_user_customer_branch` (3-column).
+   - All DDL wrapped in a single `DB::transaction()` so a failure
+     at any step rolls back the entire migration.
+   - Down migration reverts everything (re-creates the old 2-column
+     constraint, drops NOT NULL + DEFAULT, re-creates the FK
+     best-effort with a warning if it fails due to `branch_id=0`
+     sentinel rows).
+
+2. **`laravel/database/sql/04_sales.sql`**
+   - `sales_draft_carts` schema updated for fresh installs:
+     - `branch_id integer NOT NULL DEFAULT 0` (was `integer REFERENCES branches(id)`)
+     - Constraint renamed `uq_sales_draft_user_customer` → `uq_sales_draft_user_customer_branch`
+     - Added inline comment explaining R6 + the `0` sentinel.
+
+3. **`laravel/app/Models/SalesDraftCart.php`**
+   - Class docblock updated: "Per-user-per-customer-per-branch" +
+     R6 explanation.
+   - `@property int $branch_id` (was `int|null`).
+   - `getOrCreate()` now:
+     - Normalizes `null → 0` (matches DB `DEFAULT 0`).
+     - Includes `branch_id` in `firstOrCreate` 1st arg (search attrs).
+     - Removes `branch_id` from 2nd arg (no longer needed — it's
+       in the search attrs).
+
+4. **`laravel/app/Services/Sales/SalesCartService.php`**
+   - `setSoftHold()` signature changed: `?int $branchId = null`
+     added as 4th parameter (was 3 parameters). Null is normalized
+     to 0 inside `SalesDraftCart::getOrCreate()`.
+   - Docblock updated with R6 note.
+
+5. **`laravel/app/Services/Sales/SalesInvoiceService.php`**
+   - `finalizeFromCart()` Step 10 (clear the cart) now passes
+     `$branchId` explicitly to `clearCart()`. This fixes a latent
+     bug: before R6, `clearCart` was called without `branch_id`,
+     which worked only because the 2-column unique key made the
+     search branch-agnostic. After R6, omitting `branch_id` would
+     normalize to 0 and target a non-existent cart at `branch_id=0`,
+     leaving the actual cart un-cleared.
+
+6. **`laravel/app/Http/Controllers/Admin/SalesCartController.php`**
+   - `clear()` now reads `session('branch_id', 0)` and passes it to
+     `clearCart()`.
+   - `softHold()` now reads `session('branch_id', 0)` and passes it
+     to `setSoftHold()`.
+
+7. **`laravel/app/Http/Controllers/Api/V1/Sales/SalesCartApiController.php`**
+   - `clear()` now calls `$this->resolveBranchId($request)` and
+     passes it to `clearCart()`.
+   - `softHold()` now calls `$this->resolveBranchId($request)` and
+     passes it to `setSoftHold()`.
+
+### Files NOT modified
+
+- `laravel/app/Http/Controllers/Admin/SalesCartController.php` `index()`,
+  `addItem()`, `updateItem()`, `removeItem()`, `validateCart()` —
+  these already pass `$branchId` (read from `session('branch_id', 0)`)
+  to the service. No change needed.
+- `laravel/app/Http/Controllers/Api/V1/Sales/SalesCartApiController.php`
+  `index()`, `addItem()`, `updateItem()`, `removeItem()`, `validateCart()`,
+  `availability()` — these already call `$this->resolveBranchId($request)`
+  and pass it to the service. No change needed.
+- `laravel/app/Http/Controllers/Admin/SalesFunnelController.php` —
+  queries `sales_draft_carts` only for `count()` (no row-level
+  access). No change needed.
+- Legacy code (`legacy/`) — out of scope. Legacy uses session-keyed
+  carts as primary storage, so the cross-branch contamination risk
+  is lower in practice.
+
+### Migration design rationale
+
+**Why drop the FK on `branch_id`?**
+
+The Laravel `04_sales.sql` originally declared `branch_id integer
+REFERENCES branches(id)` (nullable, with FK). Legacy semantics use
+`branch_id = 0` as a "no specific branch" sentinel — there is no
+`branches(0)` row (the `branches` table uses `GENERATED ALWAYS AS
+IDENTITY`, which starts at 1). Keeping the FK would block the
+backfill and break the sentinel convention. Legacy doesn't enforce
+this FK either, so dropping it is a Legacy parity fix, not a
+regression.
+
+**Why `NOT NULL DEFAULT 0`?**
+
+PostgreSQL `UNIQUE` constraints treat NULL as distinct — two rows
+with `(user_id=5, customer_id=10, branch_id=NULL)` would NOT
+conflict, defeating the purpose of the unique key. Making the
+column `NOT NULL DEFAULT 0` ensures the unique constraint works
+correctly. `0` is the pre-existing Legacy convention for "no
+specific branch".
+
+**Why lookup the FK name dynamically?**
+
+PostgreSQL auto-generates FK constraint names (typically
+`<table>_<column>_foreign`). Hardcoding the name would break if
+the naming convention changes between PG versions. The dynamic
+lookup uses `pg_constraint` and is the same pattern used by
+`2025_01_21_000005_configure_deferred_fk_constraints.php` (Task 35).
+
+### Verification
+
+- Manual review of all 6 modified PHP files (PHP binary not
+  available in sandbox for `php -l`).
+- Confirmed all `SalesDraftCart::getOrCreate()` callers pass
+  `$branchId` (or accept `null` which is normalized to 0):
+  - `SalesCartService::getCart()` ✅
+  - `SalesCartService::addItem()` ✅
+  - `SalesCartService::updateItem()` ✅
+  - `SalesCartService::removeItem()` ✅
+  - `SalesCartService::clearCart()` ✅ (now called with branch_id
+    by all 3 callers: Admin, API, finalizeFromCart)
+  - `SalesCartService::setSoftHold()` ✅ (now called with branch_id
+    by both Admin and API controllers)
+- Confirmed the migration's `down()` method reverts everything
+  (including a best-effort re-creation of the FK with a warning
+  if it fails due to `branch_id=0` sentinel rows).
+- Confirmed the SQL file `04_sales.sql` change matches the
+  migration's end state (fresh installs and migrations produce
+  the same schema).
+
+### Risks introduced
+
+- **Minimal.** The unique key change is purely additive — it
+  tightens an existing constraint. Existing carts with the same
+  `(user_id, customer_id)` but different `branch_id` values are
+  now correctly separated (they were already separated by the
+  `branch_id` column, just not enforced as unique).
+- The dropped FK on `branch_id` is a slight integrity loss, but
+  matches Legacy semantics. The `idx_sdc_branch` index is kept
+  for query performance.
+- The latent `clearCart` bug in `finalizeFromCart` is fixed as a
+  side effect (see "Files modified" #5 above).
+
+### Follow-ups
+
+- Consider porting the R6 fix to the Legacy system. Legacy's
+  `020_sales_draft_carts.sql` still has the 2-column unique key.
+  Legacy uses `$_SESSION`-keyed carts as primary storage (with
+  DB as optional backup gated by `SALES_DB_DRAFT_CARTS`), so the
+  cross-branch contamination risk is lower in practice on Legacy
+  — but porting the fix would close the gap entirely.
+
+- Consider adding a CI check that introspects `sales_draft_carts`
+  rows to ensure no orphaned (user_id, customer_id, branch_id=0)
+  carts accumulate. With the new unique key, a misconfigured
+  client that doesn't send `branch_id` would create carts at
+  `branch_id=0` — these would not contaminate real branches but
+  would be invisible to branch-scoped UI. A periodic cleanup
+  script (similar to `cancel_stale_sales_drafts.php`) could
+  remove abandoned `branch_id=0` carts older than 24h.

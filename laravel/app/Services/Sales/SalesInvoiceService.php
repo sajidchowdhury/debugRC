@@ -255,7 +255,15 @@ class SalesInvoiceService
                 ->update(['journal_entry_id' => $journalEntryId, 'updated_at' => now()]);
 
             // Step 10: Clear the cart.
-            $this->cartService->clearCart($data['created_by'] ?? auth()->id(), $customerId);
+            // R6: pass branch_id explicitly so clearCart targets the right
+            // (user, customer, branch) cart row — the unique key is now
+            // 3-column, so omitting branch_id would create a new empty cart
+            // at branch_id=0 and leave the actual cart untouched.
+            $this->cartService->clearCart(
+                $data['created_by'] ?? auth()->id(),
+                $customerId,
+                $branchId
+            );
 
             // Step 11: Assign dispatchers (if provided).
             $dispatcherIds = $data['dispatcher_ids'] ?? [];
