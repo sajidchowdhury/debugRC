@@ -424,6 +424,20 @@ SQL);
         // ── Step 6: Rename old table ──
         DB::statement('ALTER TABLE sales_invoices RENAME TO sales_invoices_unpartitioned');
 
+        // ── Step 6.5: Drop conflicting constraints on the renamed table ──
+        // PostgreSQL preserves constraint (and backing-index) names through
+        // RENAME TO, so the original sales_invoices_pkey (PRIMARY KEY) and
+        // sales_invoices_code_unique (UNIQUE) — plus the indexes that back
+        // them — still live on sales_invoices_unpartitioned after the rename.
+        // They would collide with the new partitioned sales_invoices table
+        // we're about to create in Step 7, which re-declares both with the
+        // same names. We don't need them anymore: the unpartitioned table is
+        // only kept temporarily for the data copy at Step 9 and is dropped
+        // at Step 17. ALTER TABLE DROP CONSTRAINT also drops the backing
+        // index automatically (no separate DROP INDEX needed).
+        DB::statement('ALTER TABLE sales_invoices_unpartitioned DROP CONSTRAINT IF EXISTS sales_invoices_pkey');
+        DB::statement('ALTER TABLE sales_invoices_unpartitioned DROP CONSTRAINT IF EXISTS sales_invoices_code_unique');
+
         // ── Step 7: Create partitioned sales_invoices ──
         // PRIMARY KEY must include partition key: (id, invoice_date)
         // UNIQUE must include partition key: (invoice_code, invoice_date)
