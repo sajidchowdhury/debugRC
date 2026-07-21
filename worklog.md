@@ -115,3 +115,42 @@ Stage Summary:
 - After these fixes, `php artisan migrate:fresh` should run end-to-end on PostgreSQL 12-17 without errors.
 - Commit pushed: 88be3f0 → origin/main
 - Next step: User should run `php artisan migrate:fresh` on their Docker container (rcerp_app) to verify. If any further errors appear, they should share the new error message.
+
+---
+Task ID: R10
+Agent: Super Z (main)
+Task: Port barcode scanning (product_by_code endpoint + Enter-key handler in cart blade) + R10 doc updates (sales_entry_Lg_vs_La.md, SESSION_CONTEXT.md) + push to GitHub.
+
+Work Log:
+- Read docs/SESSION_CONTEXT.md and docs/sales_entry_Lg_vs_La.md to recover full context (R1 had ported the backend endpoint but never wired the UI; "currently no UI uses it" was an explicit TODO).
+- Read the existing `SalesCartController::productByCode` (lines 134-149) — confirmed it returns `{status: success|not_found|error, data?: {...}, message?: '...'}` and is already throttled at 120/min via the route middleware.
+- Read the existing `StockAvailabilityService::findProductByExactCode` (lines 317-377) — confirmed the response shape: `{id, product_code, product_name, default_rate, min_rate, max_rate, price, available_qty}`. Same shape as `searchProductsWithStock` so the existing `productCache` JS object can hold both.
+- Read Legacy `legacy/public/assets/js/sales-create.js` lines 280-418 to understand the canonical Enter-key + exact-code-lookup + selectProduct flow that we're porting. Legacy uses a free-text productSearch input with a custom suggestion box; Laravel uses Select2, so the adaptation is: dedicated barcode input → on success inject a fresh <option> into the Select2 + trigger change (reuses existing rate/availability handlers).
+- Edited `laravel/resources/views/admin/sales/cart.blade.php`:
+  - Added "Barcode" toggle button to the Add Product card header.
+  - Added #barcodeRow (collapsed by default via d-none) with #barcodeInput, #barcodeHint, #btnBarcodeAdd, #barcodeAutoAdd checkbox (default checked).
+  - Added async `scanAndSelect()` function (~80 lines) that: trims input → bails if no customer → fetches productByCode endpoint → on success caches in productCache + out-of-stock guard + injects <option> + triggers change + pre-fills rate/qty + (if auto-add) calls existing addToCart() + clears/refocuses input.
+  - Wired three event handlers: btnToggleBarcode click (toggle row visibility + focus input), barcodeInput keydown Enter (call scanAndSelect), btnBarcodeAdd click (call scanAndSelect).
+- Updated `docs/sales_entry_Lg_vs_La.md`:
+  - §3.3 (Product Selection) — rewrote the "Barcode: No barcode scanning" line to describe the R10 implementation, plus added an R1 line for the live search.
+  - §3.4 (Cart Workflow) — updated the unique key description from 2-column to 3-column (R6), updated the Scope line.
+  - §6.1 (POS UX) item #1 — changed "Missing" to "✅ R10" with a full description of the implementation.
+  - §6.1 items #3 and #4 — changed "Missing" to "✅ R1" (those were also stale — R1 had already ported live typeahead).
+- Appended R10 section to `docs/REMEDIATION_LOG.md` with full problem statement, files modified, design decisions (why a separate input vs reusing Select2, why collapsed by default, why auto-add by default, why direct addToCart() call, why not also wire the API tier, why not also wire the edit page), verification notes, risks, and follow-ups.
+- Updated `docs/SESSION_CONTEXT.md`:
+  - Bumped "Last updated" from "R6 pushed" to "R10 pushed".
+  - Added §5.10 "R10: Barcode scanning UI for the cart blade" with full design rationale and files modified.
+  - Added R10 row to the §3 Remediation Backlog table.
+  - Updated §6 Open Work Items to say "R1, R2, R3, R4, R5, R6, R10, and H1 complete" (and clarified R7/R8/R9 are reserved numbers; R10 was the user's explicit next ask after R6).
+  - Added R10 entry to §7 Completed Work Items.
+- Committed and pushed to origin/main (using the user-provided PAT — never written to any file in the repo).
+
+Stage Summary:
+- 1 code file modified: `laravel/resources/views/admin/sales/cart.blade.php` (~165 lines added: 30 lines of HTML for the barcode row + ~135 lines of JS for scanAndSelect + event handlers).
+- 3 doc files updated: `docs/sales_entry_Lg_vs_La.md` (audit table + §3.3 + §3.4), `docs/REMEDIATION_LOG.md` (R10 section appended), `docs/SESSION_CONTEXT.md` (Last updated + §5.10 + R10 row in §3 + §6 + §7).
+- Backend (controller + service + route) was already in place from R1 — R10 is purely additive UI.
+- No DB migrations, no new routes, no new throttle rules.
+- Mirrors Legacy `fetchSalesProductByExactCode` + `selectProductCreate` semantics: out-of-stock guard, default rate fill, qty reset to 1, optional auto-add.
+- Commit message: "feat(sales): R10 — wire up barcode scanning in cart blade (UI for the R1 productByCode endpoint) + doc updates"
+- Pushed to origin/main successfully.
+- Next step: user pulls and tests the cart page (click "Barcode" button in Add Product card header → scan or type a product code → press Enter → item should appear in cart with default rate + qty 1, and the field should auto-clear for the next scan).
