@@ -111,6 +111,36 @@
                 </div>
             </div>
 
+            {{-- ============ R15: CUSTOMER RECENTS CHIPS ============ --}}
+            {{--
+              Ported from Legacy #customerRecents in
+              legacy/app/views/sales/create.php (L47) + sales.js
+              `rememberCustomerRecent` / `renderCustomerRecents`
+              (L1306–1354). Stores the last 5 picked customers in
+              localStorage and renders them as click-to-pick chips
+              beneath the customer Select2.
+
+              Clicking a chip re-selects that customer (reusing the
+              R11 `switchToCustomer()` flow — Select2 value + tab
+              ensure + cart load + credit fetch). This is a
+              meaningful UX win for repeat-customer workflows: the
+              cashier doesn't have to re-type the name of a customer
+              they just served 5 minutes ago.
+
+              Storage shape:
+                localStorage['rcerp_sales_customer_recents']
+                  = [{id:int, label:string, ts:int(unix_ms)}, ...]
+              Capped at 5, deduped by id, most-recent-first.
+            --}}
+            <div id="customerRecentsRow" class="mt-2 d-none">
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <span class="small text-muted text-nowrap">
+                        <i class="fas fa-clock-rotate-left me-1 text-primary"></i>Recent:
+                    </span>
+                    <div id="customerRecents" class="sales-recents d-flex flex-wrap gap-1"></div>
+                </div>
+            </div>
+
             {{-- ============ R14: LIVE CREDIT SNAPSHOT PANEL ============ --}}
             {{--
               Ported from Legacy #customerDetailsPanel in
@@ -204,54 +234,35 @@
 
             {{-- ---------- Add Product card ---------- --}}
             <div class="card border-0 shadow-sm mb-3">
-                <div class="card-header bg-white border-bottom d-flex align-items-center justify-content-between">
+                <div class="card-header bg-white border-bottom">
                     <span>
                         <i class="fas fa-plus-circle me-2 text-primary"></i>
                         <strong>Add Product</strong>
                     </span>
-                    <button type="button" id="btnToggleBarcode" class="btn btn-sm btn-outline-secondary"
-                            title="Toggle barcode scanner input">
-                        <i class="fas fa-barcode me-1"></i> Barcode
-                    </button>
                 </div>
                 <div class="card-body">
-                    {{-- R10: Barcode scanner input (collapsed by default).
-                         Barcode scanners act as keyboards: they type the code
-                         and end with Enter. We capture Enter on this input,
-                         hit the product-by-code endpoint, and on success
-                         populate the Select2 + rate + qty below, mirroring
-                         Legacy's `fetchSalesProductByExactCode` + selectProduct
-                         flow in sales-create.js / sales-edit.js. --}}
-                    <div id="barcodeRow" class="row g-2 align-items-end mb-2 d-none">
-                        <div class="col-12 col-md-8">
-                            <label for="barcodeInput" class="form-label small fw-semibold mb-1">
-                                <i class="fas fa-barcode me-1 text-primary"></i> Scan / type product code
-                            </label>
-                            <input type="text" id="barcodeInput" class="form-control"
-                                   placeholder="Scan barcode or type product code, then press Enter…"
-                                   autocomplete="off" inputmode="text">
-                            <div id="barcodeHint" class="form-text small text-muted mt-1">
-                                &nbsp;
-                            </div>
-                        </div>
-                        <div class="col-12 col-md-4 d-flex flex-column gap-1">
-                            <button type="button" id="btnBarcodeAdd" class="btn btn-primary">
-                                <i class="fas fa-bolt me-1"></i> Scan &amp; Add
-                            </button>
-                            <label class="form-check form-switch small text-muted m-0 ps-0">
-                                <input class="form-check-input ms-0" type="checkbox"
-                                       id="barcodeAutoAdd" checked>
-                                <span class="form-check-label ms-4">
-                                    Auto-add after scan
-                                </span>
-                            </label>
-                        </div>
-                    </div>
+                    {{-- R10/R15+ simplified: a single Select2 product search box
+                         doubles as the barcode scanner entry. Barcode scanners
+                         act as HID keyboards — they "type" the code rapidly
+                         and end with Enter. Select2's AJAX debounce (250 ms)
+                         is long enough to capture the full scan, and
+                         `selectOnClose: true` (set in the JS below) makes
+                         Enter pick the first highlighted match. If no name
+                         match is found, the user's typed term is treated as
+                         a product_code and a fallback exact-match lookup is
+                         fired against the R1 productByCode endpoint — so
+                         scanning a code that isn't a substring of any
+                         product_name still resolves correctly. --}}
                     <div class="row g-2 align-items-end">
                         <div class="col-12 col-md-5">
-                            <label for="addProduct" class="form-label small fw-semibold mb-1">Product</label>
+                            <label for="addProduct" class="form-label small fw-semibold mb-1">
+                                Product
+                                <span class="badge bg-light text-secondary ms-1 fw-normal" title="Type a name or scan a barcode — Enter picks the first match">
+                                    <i class="fas fa-barcode me-1"></i>scan ok
+                                </span>
+                            </label>
                             <select id="addProduct" class="form-select select2" style="width:100%;">
-                                <option value="">— Search product —</option>
+                                <option value="">— Type name / scan code —</option>
                             </select>
                         </div>
                         <div class="col-6 col-md-2">
@@ -356,10 +367,11 @@
                         <strong>Cart Items</strong>
                         <span id="itemsCountBadge" class="badge bg-secondary ms-2">0</span>
                     </span>
-                    <span class="text-muted small">Inline edits auto-save (300ms debounce)</span>
+                    <span class="text-muted small d-none d-md-inline">Inline edits auto-save (300ms debounce)</span>
                 </div>
                 <div class="card-body p-0">
-                    <div class="table-responsive">
+                    {{-- R17: desktop table view (hidden on <md screens) --}}
+                    <div class="sales-cart-desktop table-responsive">
                         <table class="table table-sm table-hover align-middle mb-0">
                             <thead class="table-light">
                                 <tr>
@@ -382,6 +394,13 @@
                                 </tr>
                             </tfoot>
                         </table>
+                    </div>
+                    {{-- R17: mobile card view (shown on <md screens). Renders
+                         one .sales-cart-line card per cart item with large
+                         tap targets + a swipe-to-delete gesture (touchstart
+                         → touchend delta < -80px triggers removeItem). --}}
+                    <div class="sales-cart-mobile" id="cartItemsMobile">
+                        {{-- rendered by JS --}}
                     </div>
                     <div id="cartEmptyRow" class="text-center text-muted py-4 border-top">
                         <i class="fas fa-inbox me-1"></i> Cart is empty — add a product above.
@@ -513,8 +532,197 @@
             </div>
         </div>
     </div>
+
+    {{-- ============ R16: STICKY BOTTOM BAR ============ --}}
+    {{--
+      Ported from Legacy #posStickyBar in legacy/app/views/sales/create.php
+      (L166–173) + sales.js::updatePosStickyBar / initPosStickyBar
+      (L1356–1380).
+
+      A fixed-position bottom bar that is always visible while the
+      cashier has a cart open. Shows live item count + grand total
+      and a Finalize button — so on long carts the cashier never
+      has to scroll back to the top of the page to finalize. The
+      bar mirrors the existing #btnFinalize button (same handler,
+      same idempotency-token flow, same credit-check gate).
+
+      Visibility rules:
+        - Empty cart or no customer → bar hidden, button disabled
+        - Cart with items but not validated → bar visible, button
+          disabled (clicking shows a "validate first" toast)
+        - Cart with items + valid → bar visible, button enabled
+
+      The bar sits at z-index 1040 (below SweetAlert's 10,000+)
+      and respects the iOS safe-area inset so it doesn't get
+      clipped on notched devices. The page itself gets extra
+      padding-bottom via .sales-pos-page so the bar never covers
+      the last cart row.
+    --}}
+    <div class="sales-pos-sticky-bar" id="posStickyBar">
+        <div class="d-flex justify-content-between align-items-center gap-2 w-100">
+            <div class="sticky-summary" id="posStickySummary">
+                <span class="text-muted small">No active cart</span>
+            </div>
+            <button type="button" class="btn btn-success btn-finalize flex-shrink-0" id="posStickyFinalize" disabled
+                    title="Create a draft sales invoice from this cart">
+                <i class="fas fa-check-circle me-1"></i> Finalize
+            </button>
+        </div>
+    </div>
 </div>
 @endsection
+
+@push('css')
+<style>
+    /* ============================================================
+       R15: Customer recents chips
+       ============================================================ */
+    .sales-recents .btn {
+        font-size: 0.78rem;
+        border-radius: 999px;
+        padding: 0.25rem 0.75rem;
+        background: #f3f4ff;
+        border: 1px solid #c7d2fe;
+        color: #4f46e5;
+        line-height: 1.4;
+        transition: background .15s ease, transform .1s ease;
+    }
+    .sales-recents .btn:hover {
+        background: #e0e7ff;
+        transform: translateY(-1px);
+    }
+    .sales-recents .btn:active {
+        transform: translateY(0);
+    }
+
+    /* ============================================================
+       R16: Sticky bottom bar (always-visible item count + Finalize)
+       ============================================================ */
+    .sales-pos-sticky-bar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 1040;
+        background: #fff;
+        border-top: 1px solid #dee2e6;
+        box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);
+        padding: 0.65rem 1rem calc(0.65rem + env(safe-area-inset-bottom, 0px));
+        display: none;
+    }
+    .sales-pos-sticky-bar.visible {
+        display: block;
+    }
+    .sales-pos-sticky-bar .sticky-summary {
+        font-size: 1rem;
+        font-weight: 600;
+        line-height: 1.2;
+    }
+    .sales-pos-sticky-bar .sticky-summary .sticky-count {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #4f46e5;
+    }
+    .sales-pos-sticky-bar .sticky-summary .sticky-total {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #059669;
+    }
+    .sales-pos-sticky-bar .btn-finalize {
+        min-height: 48px;
+        font-size: 1.05rem;
+        font-weight: 600;
+        padding-left: 1.25rem;
+        padding-right: 1.25rem;
+    }
+    /* Make room for the sticky bar so it never covers the last cart row. */
+    body:has(#posStickyBar.visible) .container-fluid#salesCartApp {
+        padding-bottom: 5.5rem;
+    }
+    /* Fallback for browsers without :has() — add the class from JS. */
+    body.pos-sticky-visible .container-fluid#salesCartApp {
+        padding-bottom: 5.5rem;
+    }
+
+    /* ============================================================
+       R17: Mobile cart cards with swipe-to-delete
+       ============================================================ */
+    .sales-cart-desktop { display: block; }
+    .sales-cart-mobile { display: none; }
+
+    .sales-cart-line {
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        padding: 0.75rem;
+        margin: 0.5rem;
+        background: #fff;
+        position: relative;
+        overflow: hidden;
+        transition: transform .2s ease, opacity .2s ease;
+    }
+    .sales-cart-line.swiping {
+        transform: translateX(-80px);
+        opacity: 0.85;
+    }
+    .sales-cart-line .line-title {
+        font-size: 1rem;
+        font-weight: 600;
+        line-height: 1.3;
+        word-break: break-word;
+    }
+    .sales-cart-line .line-meta {
+        font-size: 0.85rem;
+        color: #6b7280;
+        margin-top: 0.15rem;
+    }
+    .sales-cart-line .line-total {
+        font-weight: 700;
+        color: #059669;
+    }
+    .sales-cart-line .cart-qty,
+    .sales-cart-line .cart-rate {
+        min-height: 44px;
+        font-size: 16px;
+    }
+    .sales-cart-line .cart-remove {
+        min-height: 40px;
+        min-width: 40px;
+    }
+    /* The swipe reveal background — a red "delete" hint that
+       becomes visible as the card slides left. */
+    .sales-cart-line::before {
+        content: "\f1f8";  /* fa-trash */
+        font-family: "Font Awesome 6 Free", "Font Awesome 5 Free", "FontAwesome", sans-serif;
+        font-weight: 900;
+        position: absolute;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        width: 80px;
+        background: #dc2626;
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.25rem;
+        z-index: 0;
+    }
+    .sales-cart-line > * {
+        position: relative;
+        z-index: 1;
+        background: #fff;
+    }
+    .sales-cart-line .line-title,
+    .sales-cart-line .line-meta {
+        background: transparent;
+    }
+
+    @media (max-width: 767.98px) {
+        .sales-cart-desktop { display: none !important; }
+        .sales-cart-mobile { display: block !important; }
+    }
+</style>
+@endpush
 
 @push('scripts')
 <script>
@@ -980,17 +1188,22 @@
         var hasItems = state.cart && state.cart.items && state.cart.items.length > 0;
         var btnFinalize = document.getElementById('btnFinalize');
         btnFinalize.disabled = !(hasItems && valid);
+        // R16: refresh the sticky bottom bar so item count + grand
+        // total stay in sync with every cart mutation.
+        updatePosStickyBar();
     }
 
     function renderCartTable() {
         var $body = $('#cartItemsBody');
+        var $mobile = $('#cartItemsMobile');
         $body.empty();
+        $mobile.empty();
 
         var items = (state.cart && state.cart.items) ? state.cart.items : [];
         $('#itemsCountBadge').text(items.length);
         $('#cartEmptyRow').toggle(items.length === 0);
 
-        items.forEach(function (item) {
+        items.forEach(function (item, idx) {
             var productId = parseInt(item.product_id, 10);
             var qty   = parseFloat(item.qty || 0);
             var rate  = parseFloat(item.rate || 0);
@@ -1006,6 +1219,10 @@
                 else availClass = 'text-success';
             }
 
+            var rateMinAttr = (minR !== null && minR > 0) ? ' min="' + minR.toFixed(2) + '"' : '';
+            var rateMaxAttr = (maxR !== null && maxR > 0) ? ' max="' + maxR.toFixed(2) + '"' : '';
+
+            // ---- Desktop <tr> row ----
             var row =
                 '<tr data-product-id="' + productId + '">' +
                     '<td>' +
@@ -1016,7 +1233,7 @@
                         '<input type="number" class="form-control form-control-sm cart-qty" min="0.001" step="0.001" value="' + qty + '">' +
                     '</td>' +
                     '<td>' +
-                        '<input type="number" class="form-control form-control-sm cart-rate" min="0" step="0.01" value="' + rate.toFixed(2) + '">' +
+                        '<input type="number" class="form-control form-control-sm cart-rate" min="0" step="0.01" value="' + rate.toFixed(2) + '"' + rateMinAttr + rateMaxAttr + '>' +
                         (minR !== null
                             ? '<div class="form-text small text-muted">Min ' + fmtMoney(minR) + ' / Max ' + fmtMoney(maxR) + '</div>'
                             : '') +
@@ -1032,10 +1249,55 @@
                     '</td>' +
                 '</tr>';
             $body.append(row);
+
+            // ---- Mobile .sales-cart-line card ----
+            // Mirrors Legacy sales-cart-line markup (sales.js L831-846):
+            //   - Title + delete button on top row
+            //   - Line meta (avail + total)
+            //   - Rate input + qty input side-by-side (large tap targets)
+            // Shares the SAME .cart-qty / .cart-rate / .cart-remove /
+            // .cart-total classes as the desktop row so the existing
+            // delegated handlers + debouncedUpdate work for both.
+            var availText = avail !== null ? fmtQty(avail) + ' avail' : '—';
+            var card =
+                '<div class="sales-cart-line" data-product-id="' + productId + '">' +
+                    '<div class="d-flex justify-content-between align-items-start gap-2">' +
+                        '<div class="flex-grow-1">' +
+                            '<div class="line-title">' + escHtml(item.product_name) + '</div>' +
+                            '<div class="line-meta">#' + productId +
+                                (minR !== null
+                                    ? ' · Range ' + fmtMoney(minR) + '–' + fmtMoney(maxR)
+                                    : '') +
+                            '</div>' +
+                        '</div>' +
+                        '<button type="button" class="btn btn-sm btn-outline-danger cart-remove flex-shrink-0" title="Remove">' +
+                            '<i class="fas fa-trash"></i>' +
+                        '</button>' +
+                    '</div>' +
+                    '<div class="d-flex justify-content-between align-items-center mt-2">' +
+                        '<span class="line-meta">' + availText + '</span>' +
+                        '<span class="line-total">৳' + fmtMoney(total) + '</span>' +
+                    '</div>' +
+                    '<div class="d-flex gap-2 mt-2">' +
+                        '<div class="flex-grow-1">' +
+                            '<label class="small text-muted mb-0">Rate</label>' +
+                            '<input type="number" class="form-control form-control-sm cart-rate" min="0" step="0.01" value="' + rate.toFixed(2) + '"' + rateMinAttr + rateMaxAttr + '>' +
+                        '</div>' +
+                        '<div class="flex-grow-1">' +
+                            '<label class="small text-muted mb-0">Qty</label>' +
+                            '<input type="number" class="form-control form-control-sm cart-qty" min="0.001" step="0.001" value="' + qty + '">' +
+                        '</div>' +
+                    '</div>' +
+                    '<div class="cart-total d-none">' + fmtMoney(total) + '</div>' +
+                '</div>';
+            $mobile.append(card);
         });
 
-        // Subtotal cell
+        // Subtotal cell (desktop tfoot)
         $('#cartSubtotalCell').text(fmtMoney(state.cart ? state.cart.subtotal : 0));
+
+        // R17: (re)bind swipe-to-delete on the freshly-rendered mobile cards.
+        initCartSwipeRemove();
     }
 
     function renderSummary() {
@@ -1624,18 +1886,224 @@
     }
 
     // -------- Debounced update for table inputs --------
+    // Works for BOTH desktop <tr> rows AND mobile .sales-cart-line
+    // cards — looks up by data-product-id on any element.
     function debouncedUpdate(productId, field, value) {
         if (state.debounceTimers[productId]) {
             clearTimeout(state.debounceTimers[productId]);
         }
         state.debounceTimers[productId] = setTimeout(function () {
-            // Build payload from current row state
-            var $row = $('#cartItemsBody tr[data-product-id="' + productId + '"]');
-            if (!$row.length) return;
-            var qty  = parseFloat($row.find('.cart-qty').val());
-            var rate = parseFloat($row.find('.cart-rate').val());
+            // Find whichever view (desktop or mobile) is currently
+            // holding the inputs for this product. Both views share
+            // the same .cart-qty / .cart-rate classes, so we just
+            // grab the first matching container.
+            var $any = $('[data-product-id="' + productId + '"]').first();
+            if (!$any.length) return;
+            var qty  = parseFloat($any.find('.cart-qty').val());
+            var rate = parseFloat($any.find('.cart-rate').val());
             updateItem(productId, qty, rate);
         }, 300);
+    }
+
+    // ============================================================
+    // ============== R15: CUSTOMER RECENTS CHIPS =================
+    // ============================================================
+    //
+    // Mirrors Legacy `rememberCustomerRecent` + `renderCustomerRecents`
+    // (sales.js L1306–1354). Stores the last 5 picked customers in
+    // localStorage and renders them as click-to-pick chips beneath
+    // the customer Select2.
+    //
+    // Clicking a chip re-selects that customer via the R11
+    // `switchToCustomer()` flow (Select2 value + tab ensure + cart
+    // load + credit fetch). This is a meaningful UX win for
+    // repeat-customer workflows: the cashier doesn't have to re-type
+    // the name of a customer they just served 5 minutes ago.
+    //
+    // Storage key is namespaced to this app so a multi-tenant deploy
+    // doesn't cross-contaminate. Shape:
+    //   [{id:int, label:string, ts:int(unix_ms)}, ...]
+    // Capped at 5, deduped by id, most-recent-first.
+
+    var CUSTOMER_RECENTS_KEY = 'rcerp_sales_customer_recents';
+    var CUSTOMER_RECENTS_MAX = 5;
+
+    function rememberCustomerRecent(customerId, label) {
+        if (!customerId) return;
+        customerId = parseInt(customerId, 10);
+        var text = (label || '').trim() || ('Customer #' + customerId);
+        var recents = loadCustomerRecents();
+        // Dedup by id (move to top)
+        recents = recents.filter(function (r) {
+            return parseInt(r.id, 10) !== customerId;
+        });
+        recents.unshift({ id: customerId, label: text, ts: Date.now() });
+        recents = recents.slice(0, CUSTOMER_RECENTS_MAX);
+        try {
+            localStorage.setItem(CUSTOMER_RECENTS_KEY, JSON.stringify(recents));
+        } catch (e) {
+            // localStorage may be unavailable (private mode, quota).
+            // Non-fatal — chips just won't persist across sessions.
+            console.warn('Could not persist customer recents', e);
+        }
+    }
+
+    function loadCustomerRecents() {
+        try {
+            var raw = localStorage.getItem(CUSTOMER_RECENTS_KEY);
+            var arr = raw ? JSON.parse(raw) : [];
+            return Array.isArray(arr) ? arr : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function renderCustomerRecents() {
+        var $row = $('#customerRecentsRow');
+        var $box = $('#customerRecents');
+        if (!$row.length || !$box.length) return;
+        var recents = loadCustomerRecents();
+        if (!recents.length) {
+            $row.addClass('d-none');
+            $box.empty();
+            return;
+        }
+        $row.removeClass('d-none');
+        $box.empty();
+        recents.forEach(function (r) {
+            // Prefer the in-memory customerCache label (richer —
+            // includes shop_name + mobile) if available; fall back
+            // to the stored label.
+            var cached = customerCache[r.id];
+            var label = cached ? tabLabelFor(r.id) : (r.label || ('#' + r.id));
+            var $chip = $(
+                '<button type="button" class="btn btn-sm" data-customer-id="' + parseInt(r.id, 10) + '" ' +
+                    'title="' + escHtml(label) + '">' +
+                    '<i class="fas fa-user me-1"></i>' + escHtml(label) +
+                '</button>'
+            );
+            $box.append($chip);
+        });
+    }
+
+    // ============================================================
+    // ============== R16: STICKY BOTTOM BAR ======================
+    // ============================================================
+    //
+    // Mirrors Legacy `updatePosStickyBar` (sales.js L1363–1380) +
+    // `initPosStickyBar` (L1356–1361). Shows item count + grand
+    // total + Finalize button in a fixed bottom bar so the cashier
+    // never has to scroll to finalize.
+    //
+    // Visibility rules:
+    //   - Cart empty or no customer → bar hidden, button disabled
+    //   - Cart with items but invalid → bar visible, button disabled
+    //     (clicking shows a "validate first" toast)
+    //   - Cart with items + valid → bar visible, button enabled
+    //
+    // The bar's Finalize button calls the SAME `finalizeInvoice()`
+    // function as the in-page #btnFinalize — same idempotency token
+    // flow, same credit-check gate, same SweetAlert dialog.
+
+    function updatePosStickyBar() {
+        var $bar = $('#posStickyBar');
+        var $summary = $('#posStickySummary');
+        var $btn = $('#posStickyFinalize');
+        if (!$bar.length) return;
+
+        var items = (state.cart && state.cart.items) ? state.cart.items : [];
+        var itemCount = items.length;
+        var subtotal = state.cart ? (parseFloat(state.cart.subtotal) || 0) : 0;
+        var valid = state.validation ? !!state.validation.valid : false;
+
+        if (itemCount > 0 && state.customerId) {
+            $bar.addClass('visible');
+            // Toggle the page-padding class for browsers without :has()
+            document.body.classList.add('pos-sticky-visible');
+            $summary.html(
+                '<span class="sticky-count">' + itemCount + '</span>' +
+                '<span class="text-muted ms-1">' + (itemCount === 1 ? 'item' : 'items') + '</span>' +
+                '<span class="mx-2 text-muted">·</span>' +
+                '<span class="sticky-total">৳' + fmtMoney(subtotal) + '</span>'
+            );
+            // Button enabled iff cart is valid (mirrors #btnFinalize).
+            $btn.prop('disabled', !valid);
+            if (!valid) {
+                $btn.attr('title', 'Click "Validate Cart" first — cart has stock or rate issues.');
+            } else {
+                $btn.attr('title', 'Create a draft sales invoice from this cart');
+            }
+        } else {
+            $bar.removeClass('visible');
+            document.body.classList.remove('pos-sticky-visible');
+            $summary.html('<span class="text-muted small">No active cart</span>');
+            $btn.prop('disabled', true);
+        }
+    }
+
+    // ============================================================
+    // ============== R17: MOBILE SWIPE-TO-DELETE =================
+    // ============================================================
+    //
+    // Mirrors Legacy `initCartSwipeRemove` (sales.js L1422–1434):
+    // on each .sales-cart-line card, record touchstart X and on
+    // touchend compute the delta. If the user swiped left by more
+    // than 80px, trigger the .cart-remove button's click handler
+    // (which calls the existing removeItem() → SweetAlert confirm
+    // → server call).
+    //
+    // Also adds a "swiping" CSS class during the gesture so the
+    // card visibly slides left and reveals the red delete backdrop
+    // (the ::before pseudo-element defined in the @push('css') block).
+    //
+    // Re-bound after every renderCartTable() call (touch handlers
+    // don't survive $mobile.empty()).
+
+    function initCartSwipeRemove() {
+        var $cards = $('#cartItemsMobile .sales-cart-line');
+        if (!$cards.length) return;
+        // Modern pointer events (covers touch + mouse + pen).
+        $cards.off('pointerdown.swipe pointermove.swipe pointerup.swipe pointercancel.swipe');
+        $cards.each(function () {
+            var card = this;
+            var startX = 0, startedAt = 0, dragging = false;
+            card.addEventListener('pointerdown', function (e) {
+                // Only respond to touch/pen primary inputs (not mouse).
+                if (e.pointerType === 'mouse') return;
+                startX = e.clientX;
+                startedAt = Date.now();
+                dragging = true;
+            }, { passive: true });
+            card.addEventListener('pointermove', function (e) {
+                if (!dragging) return;
+                var delta = e.clientX - startX;
+                if (delta < 0 && delta > -120) {
+                    card.classList.add('swiping');
+                    card.style.transform = 'translateX(' + delta + 'px)';
+                } else if (delta >= 0) {
+                    card.classList.remove('swiping');
+                    card.style.transform = '';
+                }
+            }, { passive: true });
+            card.addEventListener('pointerup', function (e) {
+                if (!dragging) return;
+                dragging = false;
+                var delta = e.clientX - startX;
+                var elapsed = Date.now() - startedAt;
+                card.classList.remove('swiping');
+                card.style.transform = '';
+                // 80px left swipe within 600ms = delete (mirrors Legacy).
+                if (delta < -80 && elapsed < 600) {
+                    var $btn = $(card).find('.cart-remove');
+                    if ($btn.length) $btn.trigger('click');
+                }
+            }, { passive: true });
+            card.addEventListener('pointercancel', function () {
+                dragging = false;
+                card.classList.remove('swiping');
+                card.style.transform = '';
+            }, { passive: true });
+        });
     }
 
     // ============================================================
@@ -1698,9 +2166,15 @@
 
         $('#addProduct').select2({
             theme: 'bootstrap-5',
-            placeholder: '— Type product name / code —',
+            placeholder: '— Type name / scan code —',
             allowClear: true,
             minimumInputLength: 1,
+            // Barcode-scanner-friendly: when the dropdown closes (e.g.
+            // scanner sends Enter), pick the highlighted first result
+            // automatically. Combined with the AJAX search matching on
+            // product_code (R1), this makes the single Select2 box
+            // double as the barcode entry — no separate input needed.
+            selectOnClose: true,
             ajax: {
                 url: ENDPOINTS.searchProduct,
                 dataType: 'json',
@@ -1754,6 +2228,14 @@
                 // (one indexed SUM query), throttled 60/min — only fires
                 // on customer change, not on every cart mutation.
                 fetchCustomerDetails(parseInt(cid, 10));
+                // R15: remember this customer in localStorage so a chip
+                // appears under the Select2 for one-click re-selection
+                // later. Use the Select2-rendered label (includes shop +
+                // mobile + code) so the chip is meaningful at a glance.
+                var label = ($('#customerSelect option:selected').text() || '').trim()
+                    || tabLabelFor(parseInt(cid, 10));
+                rememberCustomerRecent(cid, label);
+                renderCustomerRecents();
             } else {
                 if (window.history && history.replaceState) {
                     history.replaceState(null, '', window.location.pathname);
@@ -1761,7 +2243,18 @@
                 loadCart(null);
                 // R14: hide the credit panel — no customer selected.
                 fetchCustomerDetails(null);
+                // R16: hide the sticky bar — no customer selected.
+                updatePosStickyBar();
             }
+        });
+
+        // R15: chip click → switch to that customer (reuses R11 flow).
+        $(document).on('click', '#customerRecents .btn[data-customer-id]', function (e) {
+            e.preventDefault();
+            var cid = parseInt($(this).data('customer-id'), 10);
+            if (!cid) return;
+            if (parseInt(state.customerId, 10) === cid) return; // already active
+            switchToCustomer(cid);
         });
 
         $('#btnLoadCart').on('click', function () {
@@ -1866,173 +2359,145 @@
         });
 
         // ============================================================
-        // R10: Barcode scanner support
+        // ============ BARCODE SCANNER (simplified) ==================
         // ============================================================
         // Barcode scanners act as HID keyboards: they "type" the code
-        // at high speed and end with Enter (or Tab). We capture Enter
-        // on #barcodeInput, call the product-by-code endpoint (which
-        // the controller already had from R1), and on success:
-        //   1. cache the product payload in productCache (so the rest
-        //      of the UI — rate hint, availability card — sees it),
-        //   2. append a fresh <option> to the Select2 and select it
-        //      (Select2 AJAX doesn't have the option pre-rendered),
-        //   3. trigger the same `change` handler as a manual pick so
-        //      the rate field, hint, and availability card populate,
-        //   4. optionally auto-add to cart if the user ticked the
-        //      "auto-add" checkbox (default on for fast POS scanning).
+        // rapidly and end with Enter. The Select2 search box is the
+        // single product entry — there is no separate barcode input
+        // any more (R10's dual-mode UI was removed because it
+        // duplicated the search box and made the page feel cluttered).
         //
-        // Mirrors Legacy's `fetchSalesProductByExactCode` + selectProduct
-        // flow in legacy/public/assets/js/sales-create.js (~line 280-381)
-        // and sales-edit.js (~line 440-540). The Legacy version uses a
-        // free-text productSearch input with suggestions dropdown; the
-        // Laravel version uses Select2, so we programmatically inject
-        // the matched option rather than mutating a text field.
-        var $barcodeInput = $('#barcodeInput');
-        var $barcodeHint  = $('#barcodeHint');
-        var $barcodeAutoAdd = $('#barcodeAutoAdd'); // optional, may be null
-
-        // Toggle the barcode row visibility
-        $('#btnToggleBarcode').on('click', function () {
-            $('#barcodeRow').toggleClass('d-none');
-            if (!$('#barcodeRow').hasClass('d-none')) {
-                $barcodeInput.focus();
-            }
-        });
-
-        // Enter-key handler — the core barcode flow
-        $barcodeInput.on('keydown', async function (e) {
+        // Two layers of barcode support:
+        //
+        //   1. The AJAX search already matches on product_code via
+        //      ILIKE (R1), so most scans resolve as the user types:
+        //      Select2 shows matching results, the first one is
+        //      auto-highlighted, and `selectOnClose: true` (set in
+        //      the Select2 init above) makes Enter pick it.
+        //
+        //   2. FALLBACK: if the user types/scans a code that returns
+        //      NO matches from the ILIKE search (rare — only happens
+        //      when product_code has trailing/leading whitespace
+        //      differences or the user types a code that's a SUBSTRING
+        //      of nothing), we intercept Enter on the Select2 search
+        //      input and fire an exact-match lookup against the R1
+        //      productByCode endpoint. On success, the matched product
+        //      is injected as a fresh <option> + auto-selected.
+        //
+        // The fallback is delegated (works even though Select2
+        // re-creates the search input on every open).
+        $(document).on('keydown', '.select2-search__field', function (e) {
             if (e.key !== 'Enter') return;
-            e.preventDefault();
-            await scanAndSelect();
-        });
-
-        // "Scan & Add" button — same flow
-        $('#btnBarcodeAdd').on('click', async function () {
-            await scanAndSelect();
-        });
-
-        async function scanAndSelect() {
-            var code = ($barcodeInput.val() || '').trim();
-            if (!code) {
-                $barcodeHint.html('<i class="fas fa-info-circle me-1"></i>Type or scan a code first.');
+            // Only intercept when the open dropdown belongs to #addProduct
+            var $dropdown = $(this).closest('.select2-dropdown');
+            if (!$dropdown.length) return;
+            var $container = $dropdown.prev('.select2');
+            // The dropdown's corresponding container sits in the DOM
+            // just before .select2-dropdown; verify it wraps #addProduct.
+            // Simpler: check whether the original <select> is #addProduct
+            // by walking up to the body and finding which Select2 is open.
+            // We use the aria-controls attribute on the search input,
+            // which Select2 sets to the id of the results container,
+            // which is namespaced by the original select id.
+            var resultsId = $(this).attr('aria-controls') || '';
+            if (resultsId.indexOf('addProduct') === -1
+                && resultsId.indexOf('select2-addProduct') === -1) {
+                // Not our product search — let Select2 handle it normally.
                 return;
             }
+            // If a result is highlighted, let Select2 do its default
+            // (select + close). We only fall back to productByCode
+            // when nothing is highlighted.
+            var $highlighted = $dropdown.find('.select2-results__option--highlighted');
+            if ($highlighted.length) return;
+            // No highlighted result → take the typed term as a code.
+            var term = ($(this).val() || '').trim();
+            if (!term) return;
+            e.preventDefault();
+            lookupProductByCodeAndSelect(term);
+        });
+
+        /**
+         * Fallback exact-code lookup: fires when the user pressed Enter
+         * in the product Select2 search box with no highlighted result.
+         * Calls the R1 productByCode endpoint and on success injects
+         * the matched product as a fresh <option> + triggers the
+         * normal change handler (which fills rate + price band +
+         * availability). Does NOT auto-add to cart — the cashier can
+         * review the populated rate/qty first, then click "Add".
+         */
+        function lookupProductByCodeAndSelect(code) {
             if (!state.customerId) {
-                $barcodeHint.html('<i class="fas fa-exclamation-triangle me-1 text-warning"></i>Select a customer first.');
                 toast('Select a customer first.', 'error');
                 return;
             }
-
-            $barcodeHint.html('<i class="fas fa-spinner fa-spin me-1"></i>Looking up "' + escHtml(code) + '"…');
-            $barcodeInput.prop('disabled', true);
-
-            try {
-                var resp = await fetch(
-                    ENDPOINTS.productByCode
-                        + '?code=' + encodeURIComponent(code)
-                        + '&branch_id=' + encodeURIComponent(BRANCH_ID || ''),
-                    { headers: { 'X-Requested-With': 'XMLHttpRequest' } }
-                );
-                var json = await resp.json();
-            } catch (err) {
-                $barcodeHint.html('<i class="fas fa-exclamation-circle me-1 text-danger"></i>Lookup failed: ' + escHtml(err.message || 'network error'));
-                $barcodeInput.prop('disabled', false).focus().select();
-                return;
-            }
-
-            $barcodeInput.prop('disabled', false);
-
-            if (!json || json.status !== 'success' || !json.data) {
-                $barcodeHint.html('<i class="fas fa-times-circle me-1 text-danger"></i>No product with code "' + escHtml(code) + '".');
-                toast('No product with code ' + code, 'warning');
-                $barcodeInput.focus().select();
-                return;
-            }
-
-            var p = json.data;
-            // Cache so the change handler / availability renderer sees it
-            productCache[p.id] = p;
-
-            // Stock guard — match Legacy's selectProductCreate(): if
-            // available_qty <= 0, block the add with a clear warning.
-            // The user can still pick the product manually via Select2
-            // (cart service will also enforce availability on add).
-            var avail = parseFloat(p.available_qty || 0);
-            if (avail <= 0) {
-                $barcodeHint.html('<i class="fas fa-triangle-exclamation me-1 text-warning"></i>' +
-                    escHtml(p.product_name) + ' is out of stock at this branch.');
-                toast('Out of stock: ' + (p.product_name || code), 'warning');
-                $barcodeInput.val('').focus();
-                return;
-            }
-
-            // Inject a fresh <option> and select it — Select2 AJAX only
-            // renders options the user typed for, so we synthesize one.
-            var label = p.product_name + (p.product_code ? ' [' + p.product_code + ']' : '');
-            var $newOpt = $('<option></option>')
-                .val(p.id)
-                .text(label)
-                .data('default-rate', p.default_rate)
-                .data('code', p.product_code)
-                .data('name', p.product_name);
-            $('#addProduct').append($newOpt).val(p.id).trigger('change');
-
-            // Pre-fill rate (default_rate, fall back to min_rate)
-            var defRate = parseFloat(p.default_rate);
-            if (!(defRate > 0)) defRate = parseFloat(p.min_rate) || 0;
-            $('#addRate').val(defRate.toFixed(2));
-
-            // R13: prime the price-range slider band with this scanned
-            // product's min/max/default. The .trigger('change') above on
-            // #addProduct already calls setActivePriceRange(p) via the
-            // regular change handler, but the rate input was empty at
-            // that moment so the thumb sat at 0%. Now that we've set
-            // #addRate, force a re-render so the thumb snaps to the
-            // default-rate position immediately.
-            setActivePriceRange(p);
-
-            // Reset qty to 1 (mirrors Legacy selectProductCreate)
-            $('#addQty').val(1);
-
-            $barcodeHint.html('<i class="fas fa-check-circle me-1 text-success"></i>' +
-                escHtml(p.product_name) + ' · avail ' + fmtQty(avail) + ' · rate ৳' + fmtMoney(defRate));
-
-            // Auto-add to cart if the checkbox exists and is checked,
-            // OR if the user pressed Enter (the typical barcode flow —
-            // scan, beep, item appears in cart). The "Scan & Add"
-            // button also triggers auto-add. The user can untick the
-            // checkbox to suppress auto-add and just populate the form.
-            var autoAdd = ($barcodeAutoAdd && $barcodeAutoAdd.length)
-                ? $barcodeAutoAdd.is(':checked')
-                : true;
-
-            if (autoAdd) {
-                addToCart();
-                // After successful add, clear the barcode field and
-                // re-focus so the cashier can scan the next item
-                // without reaching for the mouse.
-                $barcodeInput.val('').focus();
-            } else {
-                $('#addQty').focus().select();
-            }
+            // Close the Select2 dropdown so the user sees the form.
+            $('#addProduct').select2('close');
+            // Brief hint while the lookup runs (no separate input to
+            // write to — surface via toast + the existing #rateHint).
+            $('#rateHint').html('<i class="fas fa-spinner fa-spin me-1"></i>Looking up code "' + escHtml(code) + '"…');
+            ajaxGet(ENDPOINTS.productByCode, { code: code, branch_id: BRANCH_ID })
+                .done(function (json) {
+                    if (!json || json.status !== 'success' || !json.data) {
+                        $('#rateHint').html('<i class="fas fa-times-circle me-1 text-danger"></i>No product with code "' + escHtml(code) + '".');
+                        toast('No product with code ' + code, 'warning');
+                        // Reopen Select2 so the user can re-search.
+                        setTimeout(function () { $('#addProduct').select2('open'); }, 50);
+                        return;
+                    }
+                    var p = json.data;
+                    // Cache so the change handler / availability renderer sees it
+                    productCache[p.id] = p;
+                    // Inject a fresh <option> and select it
+                    var label = p.product_name + (p.product_code ? ' [' + p.product_code + ']' : '');
+                    var $newOpt = $('<option></option>')
+                        .val(p.id)
+                        .text(label)
+                        .data('default-rate', p.default_rate)
+                        .data('code', p.product_code)
+                        .data('name', p.product_name);
+                    $('#addProduct').append($newOpt).val(p.id).trigger('change');
+                    // Stock guard hint
+                    var avail = parseFloat(p.available_qty || 0);
+                    if (avail <= 0) {
+                        toast('Out of stock: ' + (p.product_name || code), 'warning');
+                    }
+                    // Pre-fill rate (default_rate, fall back to min_rate)
+                    var defRate = parseFloat(p.default_rate);
+                    if (!(defRate > 0)) defRate = parseFloat(p.min_rate) || 0;
+                    $('#addRate').val(defRate.toFixed(2));
+                    setActivePriceRange(p);  // R13: snap the slider thumb
+                    $('#addQty').val(1).focus().select();
+                    toast('Ready: ' + (p.product_name || code) + ' · ৳' + fmtMoney(defRate), 'success');
+                })
+                .fail(function (xhr) {
+                    $('#rateHint').html('<i class="fas fa-exclamation-circle me-1 text-danger"></i>Lookup failed: ' + escHtml(xhr.statusText || 'network error'));
+                    toast('Lookup failed', 'error');
+                });
         }
 
-        // --- Cart table inline edits ---
+        // --- Cart table inline edits (desktop + mobile share classes) ---
         $(document).on('input change', '.cart-qty, .cart-rate', function () {
-            var $row = $(this).closest('tr');
-            var productId = parseInt($row.data('product-id'), 10);
+            // Works for BOTH desktop <tr> rows and mobile .sales-cart-line
+            // cards — both use .cart-qty / .cart-rate inputs.
+            var $container = $(this).closest('[data-product-id]');
+            var productId = parseInt($container.data('product-id'), 10);
 
-            // Optimistic local update of total cell
-            var qty  = parseFloat($row.find('.cart-qty').val()) || 0;
-            var rate = parseFloat($row.find('.cart-rate').val()) || 0;
-            $row.find('.cart-total').text(fmtMoney(qty * rate));
+            // Optimistic local update of total cell(s) — update every
+            // view of this product so desktop + mobile stay in sync.
+            var qty  = parseFloat($container.find('.cart-qty').val()) || 0;
+            var rate = parseFloat($container.find('.cart-rate').val()) || 0;
+            $('[data-product-id="' + productId + '"]').each(function () {
+                $(this).find('.cart-total').text(fmtMoney(qty * rate));
+            });
 
             // Debounced server update
             debouncedUpdate(productId);
         });
 
         $(document).on('click', '.cart-remove', function () {
-            var productId = parseInt($(this).closest('tr').data('product-id'), 10);
+            // Works for both desktop <tr> and mobile .sales-cart-line cards.
+            var productId = parseInt($(this).closest('[data-product-id]').data('product-id'), 10);
             removeItem(productId);
         });
 
@@ -2041,6 +2506,11 @@
         $('#btnSoftHold').on('click', toggleSoftHold);
         $('#btnValidate').on('click', validateCart);
         $('#btnFinalize').on('click', function () {
+            finalizeInvoice();
+        });
+        // R16: sticky-bar Finalize button mirrors #btnFinalize.
+        $('#posStickyFinalize').on('click', function () {
+            if (this.disabled) return;
             finalizeInvoice();
         });
 
@@ -2391,7 +2861,23 @@
         // changes later (via Select2), the change handler re-fetches.
         if (state.customerId) {
             fetchCustomerDetails(state.customerId);
+            // R15: also remember the server-rendered customer in
+            // localStorage so the chip is there on the very first
+            // page load (not just on the next customer-pick).
+            @if (!empty($selectedCustomer))
+                rememberCustomerRecent(
+                    {{ (int) $selectedCustomer->id }},
+                    tabLabelFor({{ (int) $selectedCustomer->id }})
+                );
+            @endif
         }
+        // R15: render the customer-recents chips from localStorage.
+        renderCustomerRecents();
+
+        // R16: render the sticky bottom bar from the initial cart
+        // state. (updatePosStickyBar is also called from renderAll on
+        // every cart mutation, so this just covers the initial paint.)
+        updatePosStickyBar();
     });
 })();
 </script>

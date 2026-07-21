@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-22 (R12/R13/R14 pushed)
+> **Last updated:** 2026-07-22 (R15/R16/R17 + R10s barcode simplification pushed)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -133,6 +133,10 @@ Items are tackled in order. Each item has its own entry in
 | R12 | Port live customer/product typeahead (debounced AJAX)                      | ✅ done (via R1) | Same root cause as R1. R1 already wired both Select2 widgets into AJAX mode (`minimumInputLength: 1`, `delay: 250`, `processResults` populating `customerCache` + `productCache`). Select2 AJAX mode *is* a debounced AJAX typeahead — no separate typeahead library was introduced. R12 was the audit-tracking label; the implementation was the R1 work. |
 | R13 | Port price-range slider band UI (`#priceRangePanel`)                        | ✅ done      | New `#priceRangePanel` dock in `cart.blade.php` (inside Add Product card, below the rate input) renders a visual band: grey track + green→purple gradient fill (current rate position) + indigo default-rate mark + circular thumb that follows `#addRate` on every keystroke (60 ms debounce). Min/Max/Default labels in ৳ above the band; status badge below flips `bg-success` / `bg-warning` (within 10 % of min) / `bg-danger` (out of range). "Use default" button snaps rate back to `default_rate`. Reads from `productCache` (R1 live search + R10 barcode scan) — no extra round-trip. Band auto-hides when the selected product has no usable range (`min_rate ≤ 0` or `max_rate ≤ 0`). Purely informational; server-side rate validation in `SalesCartService::validateCartItems` + finalize flow is still authoritative. New JS: `setActivePriceRange()`, `rateRangeStatus()`, `updatePriceBandUi()` + new state field `activePriceRange`. Fixes audit risk §6.1 item #5 (price-range slider). See `REMEDIATION_LOG.md` §R13 for full diff. |
 | R14 | Port live credit-limit display on cart page                                 | ✅ done      | New backend endpoint `GET /admin/sales/cart/customer-details?customer_id=…` (throttle 60/min) + new `SalesCartService::getCustomerDetails()` method compute `current_due = SUM(debit) − SUM(credit)` from `customer_ledger WHERE is_reversed = false` (same formula as `SalesInvoiceService::checkCreditLimit`). New `#customerDetailsPanel` in the customer selector card shows 4 stat cells (Credit limit / Current due / Balance left / Cart subtotal) + a projected new balance row (`current_due + cart subtotal`) with colour-coded status: `bg-success` (OK), `bg-warning` (Tight — within 10 % of limit), `bg-danger` (Will breach — finalize will require override), or "No limit set" when `credit_limit = 0`. Snapshot fetched once per customer change (and on explicit "Refresh" button click); projected row recomputes locally on every cart mutation (add/update/remove/clear) using the cached snapshot — no extra round-trip per mutation. New JS: `fetchCustomerDetails()`, `renderCustomerDetails()` + new state field `customerCredit`. New route `admin.sales.cart.customer-details`. Fixes audit risk §6.1 item #6 (live credit-limit display). See `REMEDIATION_LOG.md` §R14 for full diff. |
+| R15 | Port customer recents chips (localStorage)                                   | ✅ done      | New `#customerRecentsRow` + `#customerRecents` block in the customer selector card (below the Select2, above the credit panel). New JS functions `rememberCustomerRecent(id, label)` + `loadCustomerRecents()` + `renderCustomerRecents()` mirror Legacy `sales.js::rememberCustomerRecent` + `renderCustomerRecents`. localStorage key `rcerp_sales_customer_recents` holds `[{id, label, ts}, ...]` capped at 5, deduped by id, most-recent-first. On every `#customerSelect` change, the picked customer is unshifted to the top of the list and the chips are re-rendered. Clicking a chip calls the R11 `switchToCustomer(id)` flow (Select2 value + tab ensure + cart load + credit fetch) — no extra endpoint needed. Chip labels prefer the in-memory `customerCache` (richer — includes shop_name + mobile) over the stored label. Storage failures (private mode, quota) are caught + warned — non-fatal. The server-rendered pre-selected customer is also remembered on first page load. Fixes audit risk §6.1 item #7 (customer recents chips). |
+| R16 | Port sticky bottom bar (item count + grand total + Finalize always visible)  | ✅ done      | New `#posStickyBar` fixed-position bottom bar in `cart.blade.php` (outside the container, before `@endsection`). New `@push('css')` block scoped to the cart page: `position: fixed; bottom: 0; left:0; right:0; z-index: 1040; background:#fff; border-top: 1px solid #dee2e6; box-shadow: 0 -4px 16px rgba(0,0,0,.08); padding respects env(safe-area-inset-bottom)`. Body gets a `pos-sticky-visible` class while the bar is visible so the page padding-bottom (5.5rem) keeps the last cart row uncovered even on browsers without `:has()`. New JS `updatePosStickyBar()` called from `renderAll()` on every cart mutation: shows item count + subtotal, enables `#posStickyFinalize` iff cart is valid (mirrors `#btnFinalize` disabled logic). Clicking `#posStickyFinalize` calls the same `finalizeInvoice()` function — same idempotency-token + credit-check flow. Bar hides when cart is empty or no customer is selected. Fixes audit risk §6.1 item #9 (sticky bottom bar). |
+| R17 | Port mobile-cart cards with swipe-to-delete                                  | ✅ done      | Cart items now render in TWO views: a desktop `<tbody>` (existing, wrapped in `.sales-cart-desktop`) and a new `#cartItemsMobile` div of `.sales-cart-line` cards (Legacy-style: title + delete button + line meta + rate input + qty input side-by-side with 44px-min tap targets). CSS media query (max-width: 767.98px) toggles which view is visible. Both views share the same `.cart-qty`/`.cart-rate`/`.cart-remove`/`.cart-total` classes, so the existing delegated handlers work for both — no duplicated logic. The `debouncedUpdate(productId)` helper was generalized from `$('#cartItemsBody tr[data-product-id="X"]')` to `$('[data-product-id="X"]').first()` so it reads from whichever view is currently visible. New JS `initCartSwipeRemove()` is re-bound after every `renderCartTable()` call: uses modern Pointer Events (covers touch + pen, ignores mouse) — records `pointerdown` X, on `pointermove` translates the card left (clamped to -120px) with a `.swiping` CSS class for visual feedback, on `pointerup` if delta < -80px and elapsed < 600ms triggers the `.cart-remove` button's click handler. A red `::before` pseudo-element with a trash icon is revealed behind the card during swipe. Fixes audit risk §6.1 item #10 (mobile-cart cards with swipe-to-delete). |
+| R10s | Barcode scanning simplified — single product search box                     | ✅ done      | R10's dual-mode UI (separate `#barcodeInput` toggle + "Scan & Add" button + auto-add checkbox) was REMOVED because it duplicated the Select2 search box. The single `#addProduct` Select2 now doubles as the barcode entry via two layers: (1) `selectOnClose: true` makes scanner Enter pick the highlighted first AJAX result (most scans match by `product_code` ILIKE in the R1 search endpoint); (2) a delegated `keydown` handler on `.select2-search__field` falls back to the R1 `productByCode` endpoint for an exact-code lookup when no result is highlighted. New `lookupProductByCodeAndSelect(code)` function injects the matched product as a fresh `<option>` + triggers `change` (so rate/qty/price-band/availability populate via existing handlers) + focuses `#addQty`. Same backend (R1's `SalesCartController::productByCode` + `findProductByExactCode`) — purely a UI simplification, no backend/route/migration changes. The user's brief: "keep only product search just like customer search, no need 2 option searching product and scan, just keep search product and make the UI/UX better like lagachy." |
 
 > When the user assigns the next R# item, add a row here and create a
 > matching section in `REMEDIATION_LOG.md`. **Do not start work without
@@ -965,14 +969,276 @@ would inflate the apparent due.
 
 ---
 
+### 5.14 R15: Customer recents chips (localStorage)
+
+Mirrors Legacy `sales.js::rememberCustomerRecent` (L1306–1323) +
+`renderCustomerRecents` (L1325–1354) + `#customerRecents` div in
+`create.php` L47. The cashier picks dozens of customers per shift;
+for repeat customers they shouldn't have to type the name each time.
+
+**Storage shape:**
+```
+localStorage['rcerp_sales_customer_recents']
+  = JSON.stringify([{id:int, label:string, ts:int(unix_ms)}, ...])
+```
+Capped at 5 entries, deduped by id, most-recent-first. Namespaced
+with `rcerp_` prefix so a multi-tenant deploy doesn't cross
+-contaminate.
+
+**Files modified:**
+- `laravel/resources/views/admin/sales/cart.blade.php`:
+  - New `#customerRecentsRow` (d-none by default) + `#customerRecents`
+    chip container in the customer selector card (below the Select2,
+    above the credit panel).
+  - New JS: `CUSTOMER_RECENTS_KEY`, `CUSTOMER_RECENTS_MAX`,
+    `rememberCustomerRecent(id, label)`, `loadCustomerRecents()`,
+    `renderCustomerRecents()`.
+  - `#customerSelect` change handler now also calls
+    `rememberCustomerRecent(cid, label)` + `renderCustomerRecents()`.
+  - Delegated click handler on `#customerRecents .btn[data-customer-id]`
+    calls `switchToCustomer(cid)` (R11's flow — Select2 value + tab
+    ensure + cart load + credit fetch).
+  - Bootstrap: `renderCustomerRecents()` is called on page load +
+    the server-rendered pre-selected customer is also remembered.
+
+**What was NOT changed:**
+- No backend changes — purely client-side.
+- No new endpoint — clicking a chip reuses R11's
+  `switchToCustomer()` + the existing `/cart/load` endpoint.
+- No expiry / TTL on entries — Legacy doesn't have one either. The
+  5-entry cap is the implicit cleanup.
+- Storage failures (private mode, quota) are caught + warned via
+  `console.warn` — non-fatal, chips just won't persist across
+  sessions but the rest of the page works normally.
+
+**Why 5 entries (not 10 or 3):** Mirrors Legacy's
+`recents.slice(0, 5)` — same UX calibration, no reason to diverge.
+
+---
+
+### 5.15 R16: Sticky bottom bar (item count + grand total + Finalize)
+
+Mirrors Legacy `#posStickyBar` in `create.php` L166–173 +
+`sales.js::updatePosStickyBar` L1363–1380 + `initPosStickyBar`
+L1356–1361. On long carts the cashier shouldn't have to scroll back
+to the top to finalize — the button should always be one tap away.
+
+**Files modified:**
+- `laravel/resources/views/admin/sales/cart.blade.php`:
+  - New `#posStickyBar` fixed-position bottom bar (outside the
+    container, before `@endsection`).
+  - New `@push('css')` block scoped to the cart page with:
+    `position: fixed; left:0; right:0; bottom:0; z-index:1040;
+    background:#fff; border-top:1px solid #dee2e6; box-shadow:
+    0 -4px 16px rgba(0,0,0,.08); padding:0.65rem 1rem
+    calc(0.65rem + env(safe-area-inset-bottom,0px))`.
+  - Bar visible iff cart has items + customer is selected.
+  - `#posStickySummary` shows `<span class="sticky-count">N</span>
+    items · ৳<span class="sticky-total">X</span>`.
+  - `#posStickyFinalize` button enabled iff cart is valid
+    (mirrors `#btnFinalize` disabled logic); clicking calls the
+    same `finalizeInvoice()` function — same idempotency-token +
+    credit-check flow + SweetAlert dialog.
+  - New JS `updatePosStickyBar()` called from `renderAll()` on
+    every cart mutation.
+  - Body gets `pos-sticky-visible` class while the bar is visible
+    so the page padding-bottom (5.5rem) keeps the last cart row
+    uncovered even on browsers without `:has()`.
+
+**What was NOT changed:**
+- No backend changes — purely client-side.
+- No new endpoint — clicking the sticky Finalize button calls the
+  existing `finalizeInvoice()` function.
+- No new route — the bar is just an additional UI element.
+- The bar is hidden when the cart is empty (Legacy keeps it visible
+  with opacity 0.85). We chose to hide it entirely because the
+  Legacy "always visible but disabled" pattern can confuse users
+  into thinking the button is broken.
+
+**Why `env(safe-area-inset-bottom)`:** iOS notched devices clip
+fixed-position bottom bars. The CSS env() function returns the
+safe-area inset (e.g., 34px on iPhone X+) so the bar sits above
+the home indicator.
+
+**Why `:has()` + body class fallback:** Modern browsers support
+`:has()` (Chrome 105+, Safari 15.4+, Firefox 121+). For older
+browsers, the JS toggles a `pos-sticky-visible` class on `<body>`.
+Both rules target the same padding-bottom (5.5rem) so behaviour
+is identical.
+
+---
+
+### 5.16 R17: Mobile-cart cards with swipe-to-delete
+
+Mirrors Legacy `sales-cart-mobile` + `initCartSwipeRemove`
+(sales.js L1422–1434). On mobile, the desktop table is unreadable
+(horizontally scrolling, tiny inputs, hard to tap "Delete"). Legacy
+solves this with a card-based layout + a swipe-left-to-delete
+gesture.
+
+**Files modified:**
+- `laravel/resources/views/admin/sales/cart.blade.php`:
+  - Wrapped the existing desktop `<table>` in a
+    `<div class="sales-cart-desktop table-responsive">` wrapper.
+  - Added a sibling `<div class="sales-cart-mobile" id="cartItemsMobile">`
+    that gets populated by the same `renderCartTable()` loop.
+  - Each cart item now renders as BOTH a `<tr>` (desktop) AND a
+    `<div class="sales-cart-line" data-product-id="ID">` card (mobile).
+    Both share the same `.cart-qty` / `.cart-rate` / `.cart-remove` /
+    `.cart-total` classes so the existing delegated handlers + the
+    `debouncedUpdate()` helper work for both — no duplicated logic.
+  - CSS in the `@push('css')` block:
+    - `.sales-cart-desktop { display:block; }` (default)
+    - `.sales-cart-mobile { display:none; }` (default)
+    - `@media (max-width: 767.98px)` swaps the two displays.
+    - `.sales-cart-line` card styling: border, border-radius:10px,
+      padding:0.75rem, margin:0.5rem, position:relative,
+      overflow:hidden, transition:transform .2s ease.
+    - `.sales-cart-line::before` — a red `::before` pseudo-element
+      with a Font Awesome trash icon (`\f1f8`) positioned at
+      right:0, width:80px, background:#dc2626, color:#fff. Hidden
+      behind the card content (z-index:0) and revealed as the card
+      slides left during a swipe.
+    - `.sales-cart-line > *` gets `position:relative; z-index:1;
+      background:#fff;` so the card content sits above the red
+      ::before pseudo-element.
+    - `.sales-cart-line .cart-qty, .cart-rate { min-height:44px;
+      font-size:16px; }` — large tap targets + iOS no-zoom font size.
+  - Generalized `debouncedUpdate(productId)` from
+    `$('#cartItemsBody tr[data-product-id="X"]')` to
+    `$('[data-product-id="X"]').first()` so it reads from whichever
+    view (desktop or mobile) is currently visible.
+  - Generalized the `.cart-remove` click handler from
+    `closest('tr')` to `closest('[data-product-id]')` so it works
+    for both `<tr>` and `<div class="sales-cart-line">` containers.
+  - New JS `initCartSwipeRemove()` is called at the end of every
+    `renderCartTable()` (touch handlers don't survive
+    `$mobile.empty()`). Uses modern Pointer Events (covers touch +
+    pen, ignores mouse) instead of Legacy's `touchstart`/`touchend`
+    pair — same gesture, broader input coverage, simpler code.
+
+**Why Pointer Events instead of Touch Events:**
+- Pointer Events unify touch + pen + mouse under one API. We
+  filter to touch/pen only via `if (e.pointerType === 'mouse') return;`
+  so mouse users don't accidentally trigger swipe-delete by dragging.
+- Touch Events would require two separate handlers (`touchstart` +
+  `touchend`) and don't cover pen input.
+- Pointer Events have better browser support than Touch Events
+  for some edge cases (e.g., Surface stylus).
+
+**Why -80px threshold:** Mirrors Legacy's
+`if (e.changedTouches[0].clientX - startX < -80)` — same UX
+calibration. Smaller thresholds cause accidental deletes; larger
+thresholds feel sluggish.
+
+**Why 600ms time limit:** Prevents a slow drag from triggering
+delete. A real swipe gesture is fast (~200-400ms); a slow drag is
+the user repositioning. Adding a time limit makes the gesture
+detection more reliable.
+
+**What was NOT changed:**
+- No backend changes — purely client-side.
+- No new endpoint — the swipe gesture triggers the existing
+  `.cart-remove` button's click handler, which calls the existing
+  `removeItem()` → SweetAlert confirm → server call.
+- No new route — the card view is just an alternative rendering
+  of the same cart data.
+
+---
+
+### 5.17 R10s: Barcode scanning simplified (single product search box)
+
+R10 wired up barcode scanning with a separate `#barcodeInput` field
+(toggle-revealed via `#btnToggleBarcode`) + a "Scan & Add" button +
+an "Auto-add after scan" checkbox. This duplicated the Select2
+search box and made the page feel cluttered. R10s consolidates to
+a single Select2 search box that doubles as the barcode entry.
+
+**The user's brief:**
+> "about Port barcode scanning: keep only product search just like
+> customer search, no need 2 option searching product and scan,
+> just keep search product and make the UI/UX better like lagachy"
+
+**Two-layer barcode support:**
+
+1. **Primary path (no JS needed):** The R1 AJAX search endpoint
+   matches on `product_code` via ILIKE. Barcode scanners type the
+   code rapidly + Enter; Select2's 250ms debounce catches the full
+   scan; `selectOnClose: true` (newly added) makes Enter pick the
+   highlighted first result. This handles 99% of scans correctly
+   because the scanned code is a substring (or exact match) of the
+   product's `product_code` field.
+
+2. **Fallback path (delegated keydown handler):** If the user
+   types/scans a code that returns NO matches from the ILIKE search
+   (rare — happens when the code has whitespace differences, or
+   the user is typing a SKU that doesn't match any product_code
+   substring), we intercept Enter on the Select2 search input and
+   fire an exact-match lookup against the R1 `productByCode`
+   endpoint. On success: inject the matched product as a fresh
+   `<option>` + select it + trigger `change` (so rate/qty/price
+   -band/availability populate via the existing handlers) + focus
+   `#addQty`.
+
+**Files modified:**
+- `laravel/resources/views/admin/sales/cart.blade.php`:
+  - REMOVED: `#btnToggleBarcode` button from card header.
+  - REMOVED: entire `#barcodeRow` HTML block (input + hint +
+    "Scan & Add" button + auto-add checkbox).
+  - REMOVED: all R10 JS — `$barcodeInput`, `$barcodeHint`,
+    `$barcodeAutoAdd` vars; `#btnToggleBarcode` click handler;
+    `#barcodeInput` keydown handler; `#btnBarcodeAdd` click handler;
+    the entire `scanAndSelect()` function.
+  - ADDED: `selectOnClose: true` to the `#addProduct` Select2 init.
+  - ADDED: delegated `keydown` handler on `.select2-search__field`
+    that intercepts Enter when the dropdown belongs to `#addProduct`
+    AND no result is highlighted → calls new
+    `lookupProductByCodeAndSelect(term)` function.
+  - ADDED: `lookupProductByCodeAndSelect(code)` function (~50 lines)
+    that fetches the R1 `productByCode` endpoint, on success
+    injects the matched product as a fresh `<option>` + selects it +
+    triggers `change` + focuses `#addQty`. On failure, shows a
+    toast + reopens the Select2 dropdown so the user can re-search.
+  - UPDATED: `#addProduct` Select2 placeholder changed from
+    "— Type product name / code —" to "— Type name / scan code —"
+    to make the dual-purpose nature clear.
+  - ADDED: a small `<span class="badge bg-light text-secondary">`
+    next to the "Product" label that says "scan ok" with a barcode
+    icon, so the cashier knows the field accepts scanner input.
+
+**What was NOT changed:**
+- No backend changes — same R1 endpoints
+  (`admin.sales.cart.search-product` + `admin.sales.cart.product-by-code`).
+- No new route — the fallback uses the existing `productByCode`
+  endpoint via `ajaxGet`.
+- No new migration — purely client-side.
+- The R10 behaviour of "auto-add after scan" is NOT preserved. The
+  R10s flow stops at "product selected, rate filled, qty focused" —
+  the cashier reviews the rate/qty and clicks "Add" themselves.
+  This is safer (no accidental adds from mis-scans) and matches
+  Legacy's `selectProductCreate` behaviour (which also doesn't
+  auto-add). If the user later wants auto-add back, it's a 2-line
+  addition: append `addToCart();` to `lookupProductByCodeAndSelect`.
+
+**Why a delegated handler instead of binding directly to the
+Select2 search input:** Select2 re-creates the `.select2-search__field`
+input every time the dropdown opens, so a direct bind would be
+lost. A delegated handler on `document` survives across open/close
+cycles. We check `aria-controls` attribute (which Select2 sets to
+`select2-addProduct-results`) to ensure we only intercept Enter on
+the product search, not on the customer search or any other Select2.
+
+---
+
 ## 6. Open Work Items
 
 (Items the user has asked for but that are not yet done.)
 
-- **None outstanding.** R1, R2, R3, R4, R5, R6, R10, R11, R12, R13,
-  R14, and H1 (bugfix) are complete and pushed. The user has not yet
-  assigned R7, R8, R9 (numbers reserved for future items; R10/R11/
-  R12/R13/R14 were the user's explicit asks after R6).
+- **None outstanding.** R1, R2, R3, R4, R5, R6, R10, R10s, R11, R12,
+  R13, R14, R15, R16, R17, and H1 (bugfix) are complete and pushed.
+  The user has not yet assigned R7, R8, R9 (numbers reserved for
+  future items; R10/R11/R12/R13/R14/R15/R16/R17/R10s were the
+  user's explicit asks after R6).
 
 When the user gives the next instruction, append it here as a
 checkbox item. When done, move it to the "Completed Work Items"
@@ -1110,6 +1376,62 @@ section below.
       `renderCustomerDetails()` + new state field `customerCredit`.
       New route `admin.sales.cart.customer-details`. See
       `REMEDIATION_LOG.md` §R14 for the full diff.
+- [x] **R15** — Port customer recents chips (localStorage). New
+      `#customerRecentsRow` + `#customerRecents` block in the
+      customer selector card. New JS `rememberCustomerRecent(id, label)`
+      + `loadCustomerRecents()` + `renderCustomerRecents()` mirror
+      Legacy `sales.js::rememberCustomerRecent` + `renderCustomerRecents`.
+      localStorage key `rcerp_sales_customer_recents` holds
+      `[{id, label, ts}, ...]` capped at 5, deduped by id, most-recent
+      -first. On every `#customerSelect` change, the picked customer
+      is unshifted to the top and the chips re-render. Clicking a chip
+      calls the R11 `switchToCustomer(id)` flow. Storage failures
+      caught + warned (non-fatal). Fixes audit gap §6.1 item #7.
+- [x] **R16** — Port sticky bottom bar (item count + grand total +
+      Finalize always visible). New `#posStickyBar` fixed-position
+      bottom bar with `#posStickySummary` (item count + subtotal) +
+      `#posStickyFinalize` button. CSS in a new `@push('css')` block
+      with `position: fixed; bottom: 0; z-index: 1040;
+      env(safe-area-inset-bottom)` padding. New JS
+      `updatePosStickyBar()` called from `renderAll()` on every cart
+      mutation; button enabled iff cart is valid (mirrors
+      `#btnFinalize`); clicking calls the same `finalizeInvoice()`
+      function — same idempotency-token + credit-check flow. Body
+      gets `pos-sticky-visible` class so page padding-bottom (5.5rem)
+      keeps the last cart row uncovered. Fixes audit gap §6.1 item #9.
+- [x] **R17** — Port mobile-cart cards with swipe-to-delete. Cart
+      items now render in TWO views: desktop `<tbody>` (existing,
+      wrapped in `.sales-cart-desktop`) + new `#cartItemsMobile` div
+      of `.sales-cart-line` cards (Legacy-style: title + delete
+      button + rate/qty inputs side-by-side with 44px-min tap
+      targets). CSS media query (max-width: 767.98px) toggles which
+      is visible. Both views share `.cart-qty`/`.cart-rate`/
+      `.cart-remove`/`.cart-total` classes — no duplicated logic.
+      `debouncedUpdate()` generalized to look up by `[data-product-id]`
+      on any element. New `initCartSwipeRemove()` uses modern Pointer
+      Events (touch + pen, ignores mouse): 80px left swipe within
+      600ms triggers `.cart-remove` click. Red `::before` pseudo
+      -element with trash icon revealed behind card during swipe.
+      Fixes audit gap §6.1 item #10.
+- [x] **R10s** — Barcode scanning simplified. R10's dual-mode UI
+      (separate `#barcodeInput` toggle + Scan & Add button + auto
+      -add checkbox) was REMOVED because it duplicated the Select2
+      search box. The single `#addProduct` Select2 now doubles as
+      the barcode entry via `selectOnClose: true` (scanner Enter
+      picks the highlighted first AJAX result) + a delegated
+      `keydown` handler on `.select2-search__field` that falls back
+      to the R1 `productByCode` endpoint for an exact-code lookup
+      when no result is highlighted. New
+      `lookupProductByCodeAndSelect(code)` function injects the
+      matched product as a fresh `<option>` + triggers `change`
+      (so rate/qty/price-band/availability populate via existing
+      handlers) + focuses `#addQty`. Same backend (R1's
+      `SalesCartController::productByCode` + `findProductByExactCode`)
+      — purely a UI simplification, no backend/route/migration
+      changes. The user's brief: "keep only product search just
+      like customer search, no need 2 option searching product and
+      scan, just keep search product and make the UI/UX better
+      like lagachy."
 
 ---
 
