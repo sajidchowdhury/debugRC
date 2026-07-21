@@ -28,12 +28,19 @@ use Illuminate\Support\Facades\Log;
  *  11. challan_issued        — challan issued (stock OUT + COGS)
  *  12. challan_reversed      — challan cancelled
  *  13. stale_drafts_cancelled — bulk stale cleanup (already in P1-2)
+ *  14. cart_item_added       — product added to draft cart (R4)
+ *  15. cart_item_updated     — cart item qty/rate edited (R4)
+ *  16. cart_item_removed     — product removed from cart (R4)
+ *  17. cart_cleared          — entire cart emptied (R4)
  *
  * Legacy equivalent: SalesController::auditLog:39-42 wrote to user_audit_log
  * via $this->userAudit->log(). Events: sale_created, sale_updated, sale_deleted,
  * sale_call_a_day, sale_credit_limit_override, payment_received, payment_reversed,
  * return_confirmed, return_reversed + godown_prepared, challan_completed,
  * challan_reversed.
+ *
+ * R4 (2026-07-21): added the 4 cart-mutation events (14–17). Legacy had no
+ * equivalent — this closes audit risk V4 (cart tampering leaves no trail).
  *
  * This logger uses UserAuditLogger::log() which does dual-write:
  *   - user_audit_log table (PG, jsonb details)
@@ -266,6 +273,128 @@ class SalesAuditLogger
     }
 
     /**
+     * R4: Log a cart item addition (product added to draft cart).
+     *
+     * Captures the product, qty, rate, whether the line was newly created
+     * or merged into an existing same-rate line, and the resulting cart
+     * totals so an auditor can replay the cart state at any point.
+     *
+     * @param int      $userId
+     * @param int      $customerId
+     * @param int      $branchId
+     * @param int      $productId
+     * @param float    $qty            Quantity added in this call (NOT the resulting cart qty).
+     * @param float    $rate           Unit rate.
+     * @param bool     $merged         True if the line was merged into an existing same-rate line.
+     * @param int      $cartItemCount  Total distinct products in cart after the add.
+     * @param float    $cartSubtotal   Cart subtotal after the add.
+     */
+    public function cartItemAdded(
+        int $userId, int $customerId, int $branchId,
+        int $productId, float $qty, float $rate,
+        bool $merged, int $cartItemCount, float $cartSubtotal
+    ): void {
+        $this->log($userId, 'cart_item_added', $branchId, [
+            'customer_id'     => $customerId,
+            'product_id'      => $productId,
+            'qty_added'       => round($qty, 4),
+            'rate'            => round($rate, 4),
+            'merged'          => $merged,
+            'cart_item_count' => $cartItemCount,
+            'cart_subtotal'   => round($cartSubtotal, 2),
+        ]);
+    }
+
+    /**
+     * R4: Log a cart item update (qty and/or rate change).
+     *
+     * Captures before/after values so the delta is auditable without
+     * having to reconstruct prior cart snapshots.
+     *
+     * @param int        $userId
+     * @param int        $customerId
+     * @param int        $branchId
+     * @param int        $productId
+     * @param float      $oldQty
+     * @param float      $newQty
+     * @param float|null $oldRate Null if rate was not changed in this call.
+     * @param float|null $newRate Null if rate was not changed in this call.
+     * @param float      $cartSubtotal Cart subtotal after the update.
+     */
+    public function cartItemUpdated(
+        int $userId, int $customerId, int $branchId,
+        int $productId,
+        float $oldQty, float $newQty,
+        ?float $oldRate, ?float $newRate,
+        float $cartSubtotal
+    ): void {
+        $this->log($userId, 'cart_item_updated', $branchId, [
+            'customer_id'    => $customerId,
+            'product_id'     => $productId,
+            'old_qty'        => round($oldQty, 4),
+            'new_qty'        => round($newQty, 4),
+            'old_rate'       => $oldRate !== null ? round($oldRate, 4) : null,
+            'new_rate'       => $newRate !== null ? round($newRate, 4) : null,
+            'cart_subtotal'  => round($cartSubtotal, 2),
+        ]);
+    }
+
+    /**
+     * R4: Log a cart item removal (product removed from cart).
+     *
+     * Captures the qty + rate of the removed line so the foregone
+     * revenue is auditable.
+     *
+     * @param int        $userId
+     * @param int        $customerId
+     * @param int        $branchId
+     * @param int        $productId
+     * @param float      $removedQty   Qty of the line that was removed.
+     * @param float      $removedRate  Rate of the line that was removed.
+     * @param int        $cartItemCount Total distinct products remaining after the remove.
+     * @param float      $cartSubtotal  Cart subtotal after the remove.
+     */
+    public function cartItemRemoved(
+        int $userId, int $customerId, int $branchId,
+        int $productId, float $removedQty, float $removedRate,
+        int $cartItemCount, float $cartSubtotal
+    ): void {
+        $this->log($userId, 'cart_item_removed', $branchId, [
+            'customer_id'     => $customerId,
+            'product_id'      => $productId,
+            'removed_qty'     => round($removedQty, 4),
+            'removed_rate'    => round($removedRate, 4),
+            'removed_total'   => round($removedQty * $removedRate, 2),
+            'cart_item_count' => $cartItemCount,
+            'cart_subtotal'   => round($cartSubtotal, 2),
+        ]);
+    }
+
+    /**
+     * R4: Log a cart clear (all items removed at once).
+     *
+     * Captures the count + value of what was discarded so a suspicious
+     * bulk-clear (e.g. right before finalizing with a different cart)
+     * can be flagged.
+     *
+     * @param int   $userId
+     * @param int   $customerId
+     * @param int   $branchId
+     * @param int   $itemsClearedCount Number of distinct product lines cleared.
+     * @param float $itemsClearedValue Sum of (qty × rate) for the cleared lines.
+     */
+    public function cartCleared(
+        int $userId, int $customerId, int $branchId,
+        int $itemsClearedCount, float $itemsClearedValue
+    ): void {
+        $this->log($userId, 'cart_cleared', $branchId, [
+            'customer_id'        => $customerId,
+            'items_cleared_count'=> $itemsClearedCount,
+            'items_cleared_value'=> round($itemsClearedValue, 2),
+        ]);
+    }
+
+    /**
      * Query recent sales audit events for display.
      * Returns events matching sales-related action prefixes.
      *
@@ -283,6 +412,9 @@ class SalesAuditLogger
             'return_created', 'return_confirmed', 'return_reversed',
             'godown_prepared', 'challan_issued', 'challan_reversed',
             'stale_drafts_cancelled',
+            // R4: cart mutation events
+            'cart_item_added', 'cart_item_updated',
+            'cart_item_removed', 'cart_cleared',
         ];
 
         $query = DB::table('user_audit_log')

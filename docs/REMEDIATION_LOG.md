@@ -452,3 +452,159 @@ cached challan's show page) instead of calling the service.
   is idempotent by accident (same end state on resubmit). If the
   user wants symmetry, R-later could add one — but it's not
   currently a risk.
+
+
+---
+
+## R4 — Cart mutation audit logging
+
+**Date:** 2026-07-21
+**Status:** ✅ Done
+**Audit risk closed:** V4 (Medium) — "Cart mutations not audit logged"
+**Audit risk mitigated:** C2 (Medium) — "No cart mutation audit log" (Laravel side only; Legacy still has no equivalent)
+
+### Problem
+
+`SalesCartService` mutates `sales_draft_carts.items_json` on every
+add / update / remove / clear, but no audit trail was written. If a
+salesman tampered with another salesman's cart (e.g. via shared
+user_ids or session hijack), there was no trail. The Legacy system
+had the same gap (common risk C2).
+
+Cart mutations are not financially material — no GL posting, no
+customer-ledger entry, no stock movement happens until finalize —
+so an **idempotency token** (R2 / R3 pattern) is not the right fix
+here. The right fix is an **audit trail** of who changed what and
+when, so any later dispute about an unexpected cart state can be
+reconstructed.
+
+### Solution
+
+1. **Extended `SalesAuditLogger`** with four new methods, mirroring
+   the existing `saleCreated` / `paymentReceived` / etc.
+   convention:
+
+   | Method            | Action            | Captures                                                                                                          |
+   |-------------------|-------------------|-------------------------------------------------------------------------------------------------------------------|
+   | `cartItemAdded`   | `cart_item_added` | customer_id, product_id, qty_added, rate, merged (bool), cart_item_count, cart_subtotal                           |
+   | `cartItemUpdated` | `cart_item_updated` | customer_id, product_id, old_qty, new_qty, old_rate, new_rate, cart_subtotal                                    |
+   | `cartItemRemoved` | `cart_item_removed` | customer_id, product_id, removed_qty, removed_rate, removed_total, cart_item_count, cart_subtotal               |
+   | `cartCleared`     | `cart_cleared`    | customer_id, items_cleared_count, items_cleared_value                                                             |
+
+   All four delegate to `UserAuditLogger::log()` which dual-writes
+   (PG `user_audit_log` table + `logs/user_audit.log` file).
+
+2. **Updated `SalesAuditLogger::recentSalesEvents`** to include
+   the four new action names so any future audit dashboard sees them.
+
+3. **Wired the logger into `SalesCartService`** via DI:
+   - Added `private SalesAuditLogger $auditLogger` to the constructor.
+   - `addItem` now calls `cartItemAdded` after a successful save
+     (with the `merged` flag set appropriately).
+   - `updateItem` captures `old_qty` / `old_rate` before overwriting
+     and calls `cartItemUpdated` with before+after values.
+   - `removeItem` captures the removed line's `qty` / `rate` and
+     calls `cartItemRemoved`.
+   - `clearCart` captures the count + value of items being cleared
+     and calls `cartCleared`.
+
+4. **Backward-compatible signature change to `clearCart`:**
+   - Before: `clearCart(int $userId, int $customerId): array`
+   - After:  `clearCart(int $userId, int $customerId, ?int $branchId = null): array`
+   - Both existing callers (`SalesCartController::clear`,
+     `SalesCartApiController::clear`) pass only two args; the audit
+     row reads `$cart->branch_id` for the branch context.
+
+### Files modified
+
+| File | Change |
+|------|--------|
+| `laravel/app/Services/Sales/SalesAuditLogger.php` | Added 4 new public methods (`cartItemAdded`, `cartItemUpdated`, `cartItemRemoved`, `cartCleared`); updated class docblock; added 4 new action names to `recentSalesEvents` whitelist. |
+| `laravel/app/Services/Sales/SalesCartService.php` | Injected `SalesAuditLogger` via DI; added audit calls in `addItem` / `updateItem` / `removeItem` / `clearCart`; updated class docblock; expanded `clearCart` signature with optional `?int $branchId = null` parameter. |
+
+### Files NOT modified (deliberately)
+
+- `laravel/app/Http/Controllers/Admin/SalesCartController.php` — no
+  controller changes needed; the audit calls live in the service.
+- `laravel/app/Http/Controllers/Api/V1/Sales/SalesCartApiController.php` —
+  same; the shared service covers both surfaces transparently.
+- `laravel/app/Models/SalesDraftCart.php` — no model changes needed.
+- `laravel/app/Services/Auth/UserAuditLogger.php` — already supports
+  arbitrary action strings; no schema change needed.
+- `legacy/` — out of scope; Legacy has no equivalent audit log
+  infrastructure.
+
+### Verification
+
+- PHP binary not available in the Z.ai sandbox — `php -l` and
+  `php artisan test` could not be run. User should verify in their
+  dev environment:
+  ```bash
+  cd laravel
+  php -l app/Services/Sales/SalesAuditLogger.php
+  php -l app/Services/Sales/SalesCartService.php
+  php artisan test
+  # Smoke-test: add an item to a cart and check
+  psql -c "select * from user_audit_log where action like 'cart_%' order by id desc limit 5;"
+  ```
+
+- Manual verification steps:
+  1. Open the cart page (`/admin/sales/cart?customer_id=X`).
+  2. Add a product → check `user_audit_log` for a `cart_item_added` row.
+  3. Edit qty → check for a `cart_item_updated` row with `old_qty` ≠ `new_qty`.
+  4. Remove the product → check for a `cart_item_removed` row.
+  5. Add 2 products then Clear → check for a `cart_cleared` row with
+     `items_cleared_count = 2` and `items_cleared_value` matching
+     the sum of (qty × rate).
+  6. Repeat steps 2-5 via the mobile API (`POST /api/v1/sales/cart`,
+     `PUT`, `DELETE`, `POST /cart/clear`) and confirm the same
+     audit rows are written.
+
+### Risks introduced
+
+- **Mild audit-row volume increase.** A busy salesman editing a cart
+  dozens of times in a session will produce dozens of audit rows.
+  This is the intended behavior (the audit trail is the point), but
+  if storage becomes a concern, consider:
+  - Periodic archival of `user_audit_log` rows older than N days.
+  - Or, sampling (only log 1-in-N updates for the same product in
+    a short window) — but this defeats the audit purpose, so it's
+    not recommended.
+
+- **No transactional guarantee between cart save and audit insert.**
+  If `UserAuditLogger::log()` fails AFTER `$cart->save()` succeeds
+  (e.g., the DB goes down between the two writes), the cart will
+  have a mutation without an audit row. This is an acceptable
+  trade-off because:
+  - The audit insert is a single INSERT — unlikely to fail unless
+    the DB is down, in which case the user's request errors out
+    anyway.
+  - Wrapping both in `DB::transaction()` would be a larger refactor
+    across all 4 methods.
+  If stronger guarantees are needed, R-later could wrap each
+  mutation in `DB::transaction(fn() => ...)`.
+
+- **No new breaking API contract change.** Unlike R2/R3, R4 does
+  NOT add a required `idempotency_token` field, so mobile clients
+  do not need to be updated. R4 is a pure server-side observability
+  improvement.
+
+### Follow-ups (NOT part of R4)
+
+- **R5 (next, TBD):** Likely candidate is to lock the customer row
+  before the credit-limit check (audit risk V5 / common risk C1).
+  Add `Customer::lockForUpdate()->find($customerId)` inside the
+  finalize transaction, before `checkCreditLimit`.
+
+- **R44 (audit recommendation, carried from R3):** Add integration
+  tests for the idempotency token (R2 / R3) — duplicate submission
+  with same token should return cached result, not create a new row.
+
+- **R45 (new, suggested):** Add integration tests for the cart
+  audit logging (R4) — verify each mutation writes the expected
+  audit row with the expected `details` JSON.
+
+- Consider exposing a `GET /admin/sales-audit/cart-events` page
+  that calls `SalesAuditLogger::recentSalesEvents()` filtered to
+  the 4 cart actions, so managers can review cart tampering without
+  querying the DB directly.

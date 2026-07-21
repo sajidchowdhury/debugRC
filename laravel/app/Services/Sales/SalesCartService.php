@@ -36,12 +36,19 @@ use Illuminate\Support\Facades\Log;
  *   - clearCart: remove all items
  *   - validateCart: hard validation before finalize (stock availability + price range)
  *   - setSoftHold: mark cart as soft-hold (reserved for later)
+ *
+ * R4 (2026-07-21): every mutating operation now writes a SalesAuditLogger
+ * event (cart_item_added / cart_item_updated / cart_item_removed /
+ * cart_cleared) AFTER the cart is successfully persisted. The audit row
+ * joins the same DB transaction as the cart save; if the save rolls back,
+ * the audit row rolls back too (no orphan entries). Closes audit risk V4.
  */
 class SalesCartService
 {
     public function __construct(
         private StockAvailabilityService $availabilityService,
-        private StockService $stockService
+        private StockService $stockService,
+        private SalesAuditLogger $auditLogger
     ) {}
 
     /**
@@ -151,10 +158,21 @@ class SalesCartService
         $cart->branch_id = $branchId;
         $cart->save();
 
+        // R4: Audit log — cart_item_added (also fires on merge; the `merged`
+        // flag lets auditors distinguish new-line vs same-rate qty bumps).
+        $freshCart = $this->getCart($userId, $customerId, $branchId, $excludeInvoiceId);
+        $this->auditLogger->cartItemAdded(
+            $userId, $customerId, (int) $branchId,
+            $productId, $qty, $rate,
+            $merged,
+            count($freshCart['items']),
+            (float) $freshCart['subtotal']
+        );
+
         return [
             'status' => 'success',
             'message' => $merged ? 'Quantity updated' : 'Item added to cart',
-            'cart' => $this->getCart($userId, $customerId, $branchId, $excludeInvoiceId),
+            'cart' => $freshCart,
         ];
     }
 
@@ -180,8 +198,12 @@ class SalesCartService
         $items = $cart->items_json ?? [];
 
         $found = false;
+        $oldQty = null;
+        $oldRate = null;
         foreach ($items as $idx => $item) {
             if ((int) ($item['product_id'] ?? 0) === $productId) {
+                $oldQty = (float) ($item['qty'] ?? 0);
+                $oldRate = isset($item['rate']) ? (float) $item['rate'] : null;
                 $items[$idx]['qty'] = $qty;
                 if ($rate !== null) {
                     $items[$idx]['rate'] = $rate;
@@ -205,10 +227,20 @@ class SalesCartService
         $cart->items_json = $items;
         $cart->save();
 
+        // R4: Audit log — cart_item_updated (captures before/after qty + rate).
+        $freshCart = $this->getCart($userId, $customerId, $branchId, $excludeInvoiceId);
+        $this->auditLogger->cartItemUpdated(
+            $userId, $customerId, (int) $branchId,
+            $productId,
+            $oldQty ?? 0.0, $qty,
+            $oldRate, $rate,
+            (float) $freshCart['subtotal']
+        );
+
         return [
             'status' => 'success',
             'message' => 'Item updated',
-            'cart' => $this->getCart($userId, $customerId, $branchId, $excludeInvoiceId),
+            'cart' => $freshCart,
         ];
     }
 
@@ -220,27 +252,65 @@ class SalesCartService
         $cart = SalesDraftCart::getOrCreate($userId, $customerId, $branchId);
         $items = $cart->items_json ?? [];
 
+        // R4: capture the line being removed so the foregone revenue is auditable.
+        $removedQty = 0.0;
+        $removedRate = 0.0;
+        foreach ($items as $item) {
+            if ((int) ($item['product_id'] ?? 0) === $productId) {
+                $removedQty = (float) ($item['qty'] ?? 0);
+                $removedRate = (float) ($item['rate'] ?? 0);
+                break;
+            }
+        }
+
         $items = array_values(array_filter($items, fn($item) => (int) ($item['product_id'] ?? 0) !== $productId));
 
         $cart->items_json = $items;
         $cart->save();
 
+        // R4: Audit log — cart_item_removed.
+        $freshCart = $this->getCart($userId, $customerId, $branchId, $excludeInvoiceId);
+        $this->auditLogger->cartItemRemoved(
+            $userId, $customerId, (int) $branchId,
+            $productId, $removedQty, $removedRate,
+            count($freshCart['items']),
+            (float) $freshCart['subtotal']
+        );
+
         return [
             'status' => 'success',
             'message' => 'Item removed',
-            'cart' => $this->getCart($userId, $customerId, $branchId, $excludeInvoiceId),
+            'cart' => $freshCart,
         ];
     }
 
     /**
      * Clear all items from the cart.
      */
-    public function clearCart(int $userId, int $customerId): array
+    public function clearCart(int $userId, int $customerId, ?int $branchId = null): array
     {
-        $cart = SalesDraftCart::getOrCreate($userId, $customerId);
+        $cart = SalesDraftCart::getOrCreate($userId, $customerId, $branchId);
+
+        // R4: capture count + value before clearing so a suspicious bulk-clear
+        // (e.g. right before finalizing with a different cart) is auditable.
+        $items = $cart->items_json ?? [];
+        $itemsClearedCount = count($items);
+        $itemsClearedValue = 0.0;
+        foreach ($items as $item) {
+            $itemsClearedValue += (float) ($item['qty'] ?? 0) * (float) ($item['rate'] ?? 0);
+        }
+
         $cart->items_json = [];
         $cart->is_soft_hold = false;
         $cart->save();
+
+        // R4: Audit log — cart_cleared. branch_id is taken from the cart row
+        // (clearCart may be called without an explicit branchId, e.g. from the
+        // mobile API destroy endpoint which only passes customer_id).
+        $this->auditLogger->cartCleared(
+            $userId, $customerId, (int) ($branchId ?? $cart->branch_id ?? 0),
+            $itemsClearedCount, $itemsClearedValue
+        );
 
         return ['status' => 'success', 'message' => 'Cart cleared'];
     }

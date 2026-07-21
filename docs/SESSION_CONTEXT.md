@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-21 (R3 pushed)
+> **Last updated:** 2026-07-21 (R4 pushed)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -69,6 +69,8 @@ debugRC/
 │   ├── app/Http/Requests/Api/V1/Sales/StorePaymentRequest.php # R2 added idempotency_token rule
 │   ├── app/Http/Requests/Api/V1/Sales/IssueChallanRequest.php # R3 added idempotency_token rule
 │   ├── app/Services/Sales/                                  # SalesCartService, SalesInvoiceService, SalesChallanService, CustomerPaymentService, …
+│   ├── app/Services/Sales/SalesAuditLogger.php              # R4 added cartItemAdded/Updated/Removed/Cleared methods + recentSalesEvents entries
+│   ├── app/Services/Sales/SalesCartService.php              # R4 wired SalesAuditLogger into addItem/updateItem/removeItem/clearCart
 │   ├── app/Services/Stock/StockAvailabilityService.php      # R1 added searchProductsWithStock() + findProductByExactCode()
 │   ├── app/Models/Customer.php                              # has scopeSearch() — tsvector + GIN, ILIKE fallback
 │   ├── app/Models/Product.php                               # has scopeSearch() — tsvector + GIN, ILIKE fallback
@@ -114,7 +116,7 @@ Items are tackled in order. Each item has its own entry in
 | R1  | Replace select2 500-row dropdowns with live search endpoints              | ✅ done      | Ported `sales/search_customer` + `sales/search_product` + `sales/product_by_code` from Legacy to Laravel. See `REMEDIATION_LOG.md` for full diff. |
 | R2  | Add idempotency token to payment create (mirror finalize pattern)         | ✅ done      | Both `POST /admin/customer-payments` (web, 10-min cache) and `POST /api/v1/sales/payments` (API, 5-min cache) now require a UUID v4 `idempotency_token`. Fixes audit risks V2 + V6. See `REMEDIATION_LOG.md` §R2 for full diff. |
 | R3  | Add idempotency token to challan issue                                    | ✅ done      | Both `POST /admin/sales-challans/issue/{invoiceId}` (web, 10-min cache) and `POST /api/v1/sales/challans/issue` (API, 5-min cache) now require a UUID v4 `idempotency_token`. Fixes audit risk V3. See `REMEDIATION_LOG.md` §R3 for full diff. |
-| R4  | Add cart mutation audit logging                                           | ⏳ pending   | Extend `SalesAuditLogger` with `cartItemAdded`, `cartItemUpdated`, `cartItemRemoved`, `cartCleared` methods. Closes V4. |
+| R4  | Add cart mutation audit logging                                           | ✅ done      | Extended `SalesAuditLogger` with `cartItemAdded`, `cartItemUpdated`, `cartItemRemoved`, `cartCleared`. Wired into `SalesCartService` via DI — fires one audit event per successful cart mutation. Both Blade + API paths covered (they share the service). Fixes audit risk V4, mitigates C2 (Laravel side). See `REMEDIATION_LOG.md` §R4 for full diff. |
 | R5  | (TBD)                                                                     | ⏳ pending   | Likely candidate: lock the customer row before credit-limit check (V5). |
 
 > When the user assigns the next R# item, add a row here and create a
@@ -310,19 +312,101 @@ Items are tackled in order. Each item has its own entry in
     challan, so duplicate-cancellation fails with "challan is already
     reversed." Low priority.
 
-### 5.5 What was NOT changed (deliberately)
+### 5.5 R4: Cart mutation audit logging design
+
+**Problem:** `SalesCartService` mutates `sales_draft_carts.items_json`
+on every add / update / remove / clear, but no audit trail was
+written. Audit risk V4 (Medium): if a salesman tampers with
+another salesman's cart (e.g. via shared user_ids or session
+hijack), there was no trail. Legacy had no equivalent either
+(common risk C2).
+
+**Decision: log at the SERVICE layer, not the controller layer.**
+
+Both `SalesCartController` (web Blade AJAX) and `SalesCartApiController`
+(mobile JSON API) flow through the same `SalesCartService`. Putting
+the audit call in the service means:
+
+- One code path, both surfaces covered automatically.
+- Future cart-mutation callers (e.g. a CLI import tool) would also
+  be audited without thinking about it.
+- The `user_id` is always passed as an explicit argument to the
+  service methods, so no `Auth::id()` ambiguity.
+
+**Four new `SalesAuditLogger` methods, mirroring the existing
+`saleCreated` / `paymentReceived` / etc. convention:**
+
+| Method              | Action              | Captures                                                                                                          |
+|---------------------|---------------------|-------------------------------------------------------------------------------------------------------------------|
+| `cartItemAdded`     | `cart_item_added`   | customer_id, product_id, qty_added, rate, merged (bool), cart_item_count, cart_subtotal                           |
+| `cartItemUpdated`   | `cart_item_updated` | customer_id, product_id, old_qty, new_qty, old_rate, new_rate, cart_subtotal                                      |
+| `cartItemRemoved`   | `cart_item_removed` | customer_id, product_id, removed_qty, removed_rate, removed_total, cart_item_count, cart_subtotal                 |
+| `cartCleared`       | `cart_cleared`      | customer_id, items_cleared_count, items_cleared_value                                                             |
+
+**Why these fields:**
+
+- `merged` on `cart_item_added` distinguishes a brand-new line vs
+  a same-rate qty bump (same product + same rate merges in legacy
+  cart semantics).
+- `old_qty` / `old_rate` / `new_qty` / `new_rate` on
+  `cart_item_updated` lets an auditor replay the delta without
+  reconstructing prior cart snapshots.
+- `removed_qty` / `removed_rate` / `removed_total` on
+  `cart_item_removed` captures the foregone revenue.
+- `items_cleared_count` / `items_cleared_value` on `cart_cleared`
+  flags a suspicious bulk-clear (e.g. right before finalizing with
+  a different cart).
+- `cart_subtotal` after every mutation lets an auditor chart the
+  cart's value over time.
+
+**All four delegate to `UserAuditLogger::log()`** which dual-writes:
+
+- `user_audit_log` table (PG, jsonb `details` column)
+- `logs/user_audit.log` file (JSON lines, defense in depth)
+
+**Recent-events query** (`recentSalesEvents`) was updated to include
+the 4 new action names so any future audit dashboard sees them.
+
+**Signature change to `clearCart`:**
+
+- Before: `clearCart(int $userId, int $customerId): array`
+- After:  `clearCart(int $userId, int $customerId, ?int $branchId = null): array`
+
+This is backward-compatible (new optional parameter). Both existing
+callers (`SalesCartController::clear`, `SalesCartApiController::clear`)
+pass only two args and will read `$cart->branch_id` for the audit
+row. If a future caller wants to override (e.g. an admin forcing
+a clear from a different branch), they can pass it explicitly.
+
+### 5.6 What was NOT changed (deliberately)
 
 - The Legacy sales entry code (`legacy/`) was not touched. Legacy
   is still the production system; the audit is a parallel analysis.
-- The Laravel `SalesCartService`, `SalesInvoiceService`,
-  `SalesChallanService`, and `CustomerPaymentService` were not touched.
-  R1 was a UI/search concern; R2 + R3 are controller/validation concerns.
+- The Laravel `SalesInvoiceService`, `SalesChallanService`, and
+  `CustomerPaymentService` were not touched.
+  R1 was a UI/search concern; R2 + R3 are controller/validation
+  concerns; R4 only touches `SalesCartService` + `SalesAuditLogger`.
 - The Laravel API V1 controllers OTHER than `CustomerPaymentApiController`
-  and `SalesChallanApiController` were not touched.
+  and `SalesChallanApiController` were not touched. R4 specifically
+  did NOT need to touch `SalesCartApiController` — the audit calls
+  live in the shared `SalesCartService`, so the API path is covered
+  transparently.
 - The `confirm` / `cancel` / `godown` / `cancelChallan` endpoints were
   not given idempotency tokens. They either have natural guards
   (`is_reversed` / `is_challan_issued` status checks) or are
   idempotent by accident (`sync()` semantics). Out of scope.
+- R4 does NOT add cart mutation idempotency tokens. Cart mutations
+  are not financially material (no GL / ledger / stock movement
+  until finalize), and the user has not requested it. Audit logging
+  is the right pattern here, not idempotency.
+- The audit rows are written AFTER `$cart->save()` in the same
+  logical operation. They are NOT wrapped in an explicit
+  `DB::transaction()`. If the audit insert fails after a successful
+  cart save, there will be a cart mutation without an audit row.
+  This is an acceptable trade-off — `UserAuditLogger::log()` is a
+  single INSERT and unlikely to fail unless the DB is down, in which
+  case the user's request errors out anyway. Wrapping in a
+  transaction would be a bigger refactor and was deferred.
 
 ---
 
@@ -330,8 +414,8 @@ Items are tackled in order. Each item has its own entry in
 
 (Items the user has asked for but that are not yet done.)
 
-- **None outstanding.** R1, R2, and R3 are complete and pushed. The
-  user has not yet assigned R4.
+- **None outstanding.** R1, R2, R3, and R4 are complete and pushed. The
+  user has not yet assigned R5.
 
 When the user gives the next instruction, append it here as a
 checkbox item. When done, move it to the "Completed Work Items"
@@ -359,6 +443,13 @@ section below.
       (10-min cache) and the API `POST /api/v1/sales/challans/issue`
       (5-min cache). Committed & pushed. See `REMEDIATION_LOG.md` §R3
       for the full diff.
+- [x] **R4** — Add cart mutation audit logging. Extended
+      `SalesAuditLogger` with 4 new methods (`cartItemAdded`,
+      `cartItemUpdated`, `cartItemRemoved`, `cartCleared`) and wired
+      them into `SalesCartService` via DI. Both Blade
+      (`SalesCartController`) and API (`SalesCartApiController`)
+      paths covered by virtue of the shared service. Committed &
+      pushed. See `REMEDIATION_LOG.md` §R4 for the full diff.
 
 ---
 
