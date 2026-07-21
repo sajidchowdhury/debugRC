@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-21 (R6 pushed)
+> **Last updated:** 2026-07-21 (R10 pushed)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -128,6 +128,7 @@ Items are tackled in order. Each item has its own entry in
 | R5  | Lock the customer row before credit-limit check                          | ✅ done      | Added `assertCreditLimitUnderLock()` helper that does `Customer::lockForUpdate()->find()` + `checkCreditLimit` + throw-on-exceed. Called at the top of the transaction in BOTH `finalizeFromCart` and `updateInvoice`. The pre-transaction `checkCreditLimit` call is kept for fast UX feedback. Fixes audit risk V5, mitigates C1 (Laravel side). See `REMEDIATION_LOG.md` §R5 for full diff. |
 | H1  | Hotfix: `customer_payments.status` column does not exist                  | ✅ done      | Production bug: viewing a customer's "360° Hub" page threw `SQLSTATE[42703]` because `CustomerController::show` filtered `CustomerPayment` queries with `->whereNotIn('status', ['cancelled'])`, but `customer_payments` has no `status` column (only `is_reversed`). Removed the broken filters; also removed the dead `isDraft/isConfirmed/isCancelled` methods on `CustomerPayment` model. See `REMEDIATION_LOG.md` §H1 for full diff. |
 | R6  | Add `branch_id` to `sales_draft_carts` unique key                          | ✅ done      | New migration `2025_01_23_000001_r6_add_branch_id_to_sales_draft_carts_unique_key.php` drops `uq_sales_draft_user_customer` and adds `uq_sales_draft_user_customer_branch` on `(user_id, customer_id, branch_id)`. Also drops the FK on `branch_id`, backfills NULL → 0, and makes the column `NOT NULL DEFAULT 0` (Legacy "no specific branch" sentinel). `SalesDraftCart::getOrCreate()` updated to include `branch_id` in `firstOrCreate` search attrs + normalize null → 0. All `clearCart()` / `setSoftHold()` callers updated to pass `branch_id` explicitly (Admin web + API V1 + `SalesInvoiceService::finalizeFromCart`). `04_sales.sql` updated for fresh installs. Fixes V11, mitigates C7 (Laravel side). See `REMEDIATION_LOG.md` §R6 for full diff. |
+| R10 | Wire up barcode scanning in the cart blade (UI for the R1 endpoint)        | ✅ done      | R1 ported the `sales/product_by_code` endpoint to Laravel but left it without a UI consumer. R10 adds a toggle-revealed `#barcodeInput` field to `cart.blade.php` with an Enter-key + "Scan & Add" button handler that calls the existing endpoint. On success: caches the product in `productCache`, injects a fresh `<option>` into the Select2 and triggers `change` (so rate/qty/availability populate via the existing handlers), then auto-adds to cart if "Auto-add after scan" is checked (default on). Out-of-stock guard matches Legacy `selectProductCreate`. After auto-add the field is cleared and refocused for the next scan. No backend changes — purely additive UI. Fixes audit risk §6.1 item #1 (barcode scanning). See `REMEDIATION_LOG.md` §R10 for full diff. |
 
 > When the user assigns the next R# item, add a row here and create a
 > matching section in `REMEDIATION_LOG.md`. **Do not start work without
@@ -576,14 +577,112 @@ R6 fixes this by passing `$branchId` explicitly.
   were not touched. They already have `branch_id` as part of their
   business keys (via `sales_invoices.branch_id`).
 
+### 5.10 R10: Barcode scanning UI for the cart blade
+
+**Problem:** R1 ported the Legacy `sales/product_by_code` endpoint to
+Laravel (`SalesCartController::productByCode` →
+`admin.sales.cart.product-by-code`) but left it without a UI consumer.
+The cart blade still had no way for a cashier with a USB HID barcode
+scanner to scan a product into the cart — they had to use the Select2
+search dropdown, which is fine for typing names but slow for POS-style
+scanning where each scan should add an item in one keystroke.
+
+Audit risk: §6.1 item #1 in `sales_entry_Lg_vs_La.md`.
+
+**Decision: add a dedicated barcode input field, collapsed by default,
+with an Enter-key + button handler that calls the existing R1 endpoint.**
+
+Why a dedicated input rather than reusing the Select2 search box?
+Select2 captures keyboard input inside its own search field and
+manages the dropdown lifecycle internally. There is no clean way to
+intercept Enter on the Select2 search field, run an exact-code
+lookup, and inject a synthesized option. A separate input is simpler,
+more predictable, and matches the Legacy UX of having a dedicated scan
+box.
+
+Why collapsed by default? Most users don't have a barcode scanner —
+they pick products via Select2 search. Showing a permanently-visible
+scan box would add visual noise. The "Barcode" toggle button in the
+card header makes the feature discoverable without forcing it on
+everyone.
+
+**The flow (mirrors Legacy `fetchSalesProductByExactCode` +
+`selectProductCreate` in `sales-create.js` L324–381):**
+
+1. User clicks the "Barcode" button in the Add Product card header →
+   `#barcodeRow` is revealed and `#barcodeInput` is focused.
+2. User scans (or types) a product code and presses Enter (or clicks
+   "Scan & Add").
+3. The `scanAndSelect()` async function:
+   - Trims the input; bails if empty or if no customer is selected.
+   - Sets a "Looking up…" hint and disables the input.
+   - Fetches `ENDPOINTS.productByCode?code=…&branch_id=…`.
+   - On network error: shows the error, re-enables + refocuses.
+   - On `status !== 'success'`: shows "No product with code X",
+     toasts a warning, refocuses + selects the input.
+   - On success:
+     - Caches the product in `productCache[p.id]` (so the existing
+       change handler / availability renderer can see it without
+       a re-fetch).
+     - **Stock guard** (mirrors Legacy): if `available_qty <= 0`,
+       blocks the add with a toast and clears the input.
+     - Injects a fresh `<option>` into `#addProduct` and sets its
+       value (Select2 AJAX only renders options the user typed for,
+       so we synthesize one).
+     - Triggers `change` on the Select2 — this reuses the existing
+       change handler which fills the rate field, rate hint, and
+       fires `checkAvailability`.
+     - Pre-fills `#addRate` (default_rate, fall back to min_rate)
+       and resets `#addQty` to 1.
+     - Sets the hint to "✓ Product Name · avail N · rate ৳X".
+     - If "Auto-add after scan" is checked (default on): calls
+       `addToCart()` directly, then clears + refocuses the barcode
+       input so the cashier can scan the next item without reaching
+       for the mouse.
+     - If auto-add is off: focuses `#addQty` for editing before the
+       manual Add click.
+
+**Files modified:**
+
+- `laravel/resources/views/admin/sales/cart.blade.php`
+  - Added "Barcode" toggle button to the Add Product card header.
+  - Added `#barcodeRow` (collapsed by default via `d-none`) with
+    `#barcodeInput`, `#barcodeHint`, `#btnBarcodeAdd`, and
+    `#barcodeAutoAdd` checkbox.
+  - Added `scanAndSelect()` async function (~80 lines).
+  - Wired three event handlers: `#btnToggleBarcode` click,
+    `#barcodeInput` keydown Enter, `#btnBarcodeAdd` click.
+
+**What was NOT changed:**
+
+- The Legacy sales entry code (`legacy/`) was not touched. Legacy's
+  barcode scanner is still on the Legacy create/edit pages.
+- The Laravel `SalesCartController::productByCode` endpoint was NOT
+  changed — R10 only adds a UI consumer for the endpoint that R1
+  already added. No new routes, no new DB queries.
+- The Laravel API V1 (`SalesCartApiController`) was NOT touched.
+  The user's R10 brief explicitly named "cart blade" — the API tier
+  is out of scope. If a mobile/AI client wants barcode lookup, the
+  existing `GET /api/v1/lookups/products?term=…` already supports
+  exact-code matching (LIKE %term% includes exact codes).
+- The Laravel sales invoice **edit** page
+  (`admin/sales-invoices/{id}/edit`) was NOT touched. Legacy has
+  barcode scanning on both create and edit; R10 only covers the
+  cart/create flow. Porting to edit is a follow-up.
+- No keyboard shortcut (e.g. `Alt+B`) was added to focus the barcode
+  input without clicking the toggle. Low priority follow-up.
+- No "scan beep" audio feedback was added. Low priority follow-up.
+
 ---
 
 ## 6. Open Work Items
 
 (Items the user has asked for but that are not yet done.)
 
-- **None outstanding.** R1, R2, R3, R4, R5, R6, and H1 (bugfix) are
-  complete and pushed. The user has not yet assigned R7.
+- **None outstanding.** R1, R2, R3, R4, R5, R6, R10, and H1 (bugfix)
+  are complete and pushed. The user has not yet assigned R7, R8, R9
+  (numbers reserved for future items; R10 was the user's explicit
+  next ask after R6).
 
 When the user gives the next instruction, append it here as a
 checkbox item. When done, move it to the "Completed Work Items"
@@ -647,6 +746,21 @@ section below.
       `SalesInvoiceService::finalizeFromCart`). `04_sales.sql` updated
       for fresh installs. Fixes V11, mitigates C7 (Laravel side).
       Committed & pushed. See `REMEDIATION_LOG.md` §R6 for the full diff.
+- [x] **R10** — Wire up barcode scanning in the cart blade. R1 had
+      ported the Legacy `sales/product_by_code` endpoint to Laravel
+      (`SalesCartController::productByCode` →
+      `admin.sales.cart.product-by-code`) but left it without a UI
+      consumer. R10 adds a toggle-revealed `#barcodeInput` field to
+      `cart.blade.php` with an Enter-key + "Scan & Add" button
+      handler that calls the existing endpoint. On success: caches
+      the product in `productCache`, injects a fresh `<option>` into
+      the Select2 and triggers `change` (so rate/qty/availability
+      populate via the existing handlers), then auto-adds to cart if
+      "Auto-add after scan" is checked (default on). Out-of-stock
+      guard matches Legacy `selectProductCreate` (blocks add, shows
+      toast). After auto-add the field is cleared and refocused for
+      the next scan. No backend changes — purely additive UI. See
+      `REMEDIATION_LOG.md` §R10 for the full diff.
 
 ---
 

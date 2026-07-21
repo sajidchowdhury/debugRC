@@ -1078,3 +1078,201 @@ lookup uses `pg_constraint` and is the same pattern used by
   would be invisible to branch-scoped UI. A periodic cleanup
   script (similar to `cancel_stale_sales_drafts.php`) could
   remove abandoned `branch_id=0` carts older than 24h.
+
+---
+
+## R10 — Wire up barcode scanning in the cart blade (UI for the R1 endpoint)
+
+- **Status:** ✅ Done
+- **Date:** 2026-07-21
+- **Audit reference:** `docs/sales_entry_Lg_vs_La.md` §6.1 item #1
+  (Barcode scanning) — now marked ✅ R10.
+- **Legacy port:** `sales/product_by_code` was already ported at the
+  controller level in R1 (`SalesCartController::productByCode` →
+  `admin.sales.cart.product-by-code`). R10 adds the **missing UI
+  consumer** — the Enter-key handler + barcode input field on the
+  cart blade.
+
+### Problem
+
+R1 added the `productByCode` endpoint to Laravel but left it without
+a UI consumer — the migration notes explicitly said:
+
+  > "Currently no UI uses it — wiring it into the cart page's barcode
+  > input is a future R# item."
+
+(`docs/SESSION_CONTEXT.md` §5.1.) So the Laravel cart still had no
+way for a cashier with a USB HID barcode scanner to scan a product
+into the cart. They had to use the Select2 search dropdown, which is
+fine for typing names but slow for POS-style scanning where each
+scan should add an item in one keystroke.
+
+Legacy's pattern (`legacy/public/assets/js/sales-create.js` L324–381
+and `sales-edit.js` L440–540) is:
+
+1. A free-text `#productSearch` input (always visible) doubles as
+   both the typeahead-search box AND the barcode-scan box.
+2. On `keydown` Enter, the JS first tries an exact-code lookup via
+   `fetchSalesProductByExactCode(term, branchId)`.
+3. If that returns a product, it calls `selectProductCreate(p)` which
+   fills the rate, qty, and stock banner.
+4. If not, it falls back to picking the first suggestion in the
+   typeahead dropdown (if open).
+5. If neither, it shows "Not found".
+
+Laravel's cart uses Select2 instead of a free-text input with a
+custom suggestion box, so we cannot reuse Legacy's exact flow. The
+Laravel adaptation is described below.
+
+### Solution
+
+Added a **dedicated barcode input field** to the cart blade (toggle-
+revealed, collapsed by default) and an Enter-key + button handler
+that calls the existing `productByCode` endpoint and reconciles the
+result with the Select2-based product picker.
+
+### Files modified
+
+1. **`laravel/resources/views/admin/sales/cart.blade.php`**
+   - Added a "Barcode" toggle button to the "Add Product" card
+     header.
+   - Added a new `#barcodeRow` (collapsed by default via `d-none`)
+     containing:
+     - `#barcodeInput` text field (`autocomplete="off"`,
+       `inputmode="text"`, placeholder hints "press Enter…")
+     - `#barcodeHint` form-text element for status feedback
+       ("Looking up…", "✓ Product Name · avail N · rate ৳X",
+       "✗ No product with code X", "⚠ Out of stock", etc.)
+     - `#btnBarcodeAdd` button ("Scan & Add")
+     - `#barcodeAutoAdd` checkbox (default checked) — controls
+       whether the scan auto-adds to cart or just populates the
+       form
+   - Added a new `scanAndSelect()` async function (~80 lines) that:
+     1. Trims the input; bails if empty.
+     2. Bails if no customer is selected (with a toast + hint).
+     3. Sets a "Looking up…" hint + disables the input.
+     4. Fetches `ENDPOINTS.productByCode?code=…&branch_id=…`.
+     5. On network error: shows the error, re-enables + refocuses.
+     6. On `status !== 'success'`: shows "No product with code X",
+        toasts a warning, refocuses + selects the input.
+     7. On success:
+        - Caches the product in `productCache[p.id]` (so the
+          existing change handler / availability renderer can see
+          it without a re-fetch).
+        - **Stock guard** (mirrors Legacy `selectProductCreate`):
+          if `available_qty <= 0`, blocks the add with a toast
+          and clears the input.
+        - Injects a fresh `<option>` into `#addProduct` and sets
+          its value (Select2 AJAX only renders options the user
+          typed for, so we synthesize one).
+        - Triggers `change` on the Select2 — this reuses the
+          existing change handler which fills the rate field,
+          rate hint, and fires `checkAvailability`.
+        - Pre-fills `#addRate` (default_rate, fall back to
+          min_rate) and resets `#addQty` to 1.
+        - Sets the hint to "✓ Product Name · avail N · rate ৳X".
+        - If auto-add is on: calls `addToCart()` directly, then
+          clears + refocuses the barcode input (so the cashier
+          can scan the next item without reaching for the mouse).
+        - If auto-add is off: focuses `#addQty` for editing
+          before the manual Add click.
+   - Wired three event handlers:
+     - `#btnToggleBarcode` click → toggles `d-none` on `#barcodeRow`
+       + focuses the input when revealing.
+     - `#barcodeInput` keydown Enter → `scanAndSelect()`.
+     - `#btnBarcodeAdd` click → `scanAndSelect()`.
+
+### Design decisions
+
+**Why a separate input rather than reusing the Select2 search box?**
+
+Select2 captures keyboard input inside its own search field and
+manages the dropdown lifecycle internally. There is no clean way
+to intercept Enter on the Select2 search field, run an exact-code
+lookup, and inject a synthesized option — Select2's `query`
+interface is designed for fuzzy search, not exact-match-and-select.
+A separate input is simpler, more predictable, and matches the
+Legacy UX of having a dedicated scan box (Legacy's box doubles as
+typeahead, but we already have typeahead via Select2, so the
+barcode input can be scan-only).
+
+**Why collapsed by default?**
+
+Most users don't have a barcode scanner — they pick products via
+Select2 search. Showing a permanently-visible scan box would add
+visual noise. The "Barcode" toggle button in the card header
+makes the feature discoverable without forcing it on everyone.
+
+**Why auto-add by default?**
+
+The whole point of barcode scanning is fast POS entry: scan →
+item appears → scan next. Forcing the user to click "Add" after
+every scan defeats the purpose. The "Auto-add after scan"
+checkbox (default on) lets power users turn it off if they want
+to adjust qty/rate before adding.
+
+**Why call `addToCart()` directly instead of replicating its logic?**
+
+The existing `addToCart()` function already handles the AJAX call,
+toast feedback, state update, and form reset. Reusing it keeps
+the behaviour identical to a manual add and avoids divergence.
+
+**Why not also support the Legacy-style "Enter on the Select2
+search box" flow?**
+
+Select2 doesn't expose a clean hook for "Enter with no highlighted
+suggestion → try exact-code lookup". The Legacy flow relies on a
+custom suggestion box where Enter is fully under app control.
+Adding the same flow to Select2 would require either monkey-
+patching Select2's keydown handler or replacing Select2 with a
+custom dropdown — both are much larger changes than R10's scope.
+The dedicated barcode input is the pragmatic port.
+
+**Why not also wire up the API V1 (`SalesCartApiController`)?**
+
+The user's R10 brief explicitly named "cart blade" — the API tier
+is out of scope. If a mobile/AI client wants barcode lookup, the
+existing `GET /api/v1/lookups/products?term=…` endpoint already
+supports exact-code matching (the underlying
+`StockAvailabilityService::searchProductsWithStock` does a `LIKE
+%term%` which includes exact codes). A dedicated `/api/v1/lookups/
+products/by-code` endpoint could be added later if needed.
+
+### Verification
+
+- Manual code review of the blade changes. No PHP or Blade syntax
+  errors (no PHP added — purely HTML + JS).
+- Confirmed the existing `ENDPOINTS.productByCode` route name
+  matches what R1 registered (`admin.sales.cart.product-by-code`).
+- Confirmed the existing `addToCart()` function signature
+  unchanged (no parameters; reads from `#addProduct`, `#addQty`,
+  `#addRate`, `state.customerId`).
+- Confirmed the `BRANCH_ID` JS global is already defined elsewhere
+  in the blade (used by the Select2 AJAX `data` callbacks).
+- Confirmed the `productCache` global is already declared and
+  populated by the Select2 `processResults` callback (R1).
+- Confirmed the out-of-stock guard matches Legacy
+  `selectProductCreate`'s `stock <= 0` check
+  (`legacy/public/assets/js/sales-create.js` L394-398).
+
+### Risks introduced
+
+- **Minimal.** The barcode input is purely additive UI. If JS
+  fails to load, the input still renders but the Enter handler
+  never fires — the user can still use the Select2 search path.
+- The auto-add path calls the same `addToCart()` function used
+  by the existing "Add" button, so all server-side validation
+  (cart service, stock check, rate check) applies unchanged.
+- No new endpoints, no new routes, no new DB queries (the
+  `productByCode` endpoint was already in place from R1).
+
+### Follow-ups
+
+- Consider porting the same barcode flow to the **sales invoice
+  edit** page (`admin/sales-invoices/{id}/edit`). Legacy has it
+  on both `create.php` and `edit.php`; Laravel currently has it
+  on neither (R10 only covers the cart/create flow).
+- Consider adding a keyboard shortcut (e.g. `Alt+B`) to focus
+  the barcode input without needing to click the toggle button.
+- Consider a "scan sound" beep on successful scan (Web Audio API)
+  for audible feedback in noisy retail environments. Low priority.

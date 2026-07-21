@@ -278,7 +278,8 @@ The blade re-serializes `$cartData` into a JSON `INITIAL_CART` and pushes it as 
 
 ### 3.3 Product Selection
 
-- **Barcode:** No barcode scanning. Product picker is select2 server-rendered with first 500 active products.
+- **Barcode (R10, 2026-07-21):** Barcode scanning is now wired into the cart page. A toggle-revealed `#barcodeInput` field accepts scanner or manual input; pressing Enter (or clicking "Scan & Add") calls `GET /admin/sales/cart/product-by-code?code=…&branch_id=…` (the endpoint was added in R1 but had no UI consumer). On success, the matched product is cached in `productCache`, a fresh `<option>` is injected into the Select2 and `change` is triggered (which fires the same rate/availability population as a manual pick). The "Auto-add after scan" checkbox (default on) controls whether the item is added to the cart immediately or just populates the form. Out-of-stock products are blocked with a warning toast (mirrors Legacy `selectProductCreate`). The barcode row is collapsed by default to keep the cart page clean for non-scanner users; click the "Barcode" button in the card header to reveal it.
+- **Live search (R1, 2026-07-21):** Both the customer and product Select2 dropdowns are now AJAX-backed (`minimumInputLength: 1`, debounce 250 ms) hitting `cart/search-customer` and `cart/search-product` respectively. The product dropdown's `processResults` populates an in-memory `productCache` (id → full payload) so the change handler can read `default_rate`/`min_rate`/`max_rate`/`available_qty` without another round-trip. This replaced the original 500-row pre-rendered `<option>` list.
 - **Stock availability API:** `GET /admin/sales/cart/availability?product_id=X` → `SalesCartController@checkAvailability` → `StockAvailabilityService::getBranchAvailableQty` + `getBranchWarehouseBreakdown`. The blade calls this on product change and renders a per-warehouse breakdown table on the right rail.
 - **Price source** (SalesCartService.php L379–408 `getProductPriceRange`):
   1. **Product price history** — `effective_from <= today AND (effective_to IS NULL OR effective_to >= today)`, ordered by `effective_from DESC`. Returns `{min_rate, max_rate, default_rate}`.
@@ -289,7 +290,7 @@ The product option carries `data-default-rate`; on product change, the rate inpu
 
 ### 3.4 Cart Workflow
 
-The cart is **server-side persisted** in `sales_draft_carts` (DB-backed, not session). Per-user-per-customer; unique key `(user_id, customer_id)`. `SalesDraftCart::getOrCreate()` uses `firstOrCreate` on this composite key.
+The cart is **server-side persisted** in `sales_draft_carts` (DB-backed, not session). Per-user-per-customer-per-branch; unique key `(user_id, customer_id, branch_id)` (R6, 2026-07-21 — was 2-column before). `SalesDraftCart::getOrCreate()` uses `firstOrCreate` on this 3-column composite key, with `null → 0` normalization for the `branch_id` (Legacy "no specific branch" sentinel).
 
 **Sync events:**
 - On customer change → POST `/cart/load` (full cart re-read).
@@ -300,7 +301,7 @@ The cart is **server-side persisted** in `sales_draft_carts` (DB-backed, not ses
 
 Each mutation re-runs `validateCartItems()` and re-saves `items_json` before returning the full cart payload, which the JS uses to re-render the whole table.
 
-**Scope:** Per-user (`auth()->id()`), per-customer (`customer_id`), per-branch (`session('branch_id')`). The branch_id is stored on the cart row but the unique key is only `(user_id, customer_id)` — so a salesman switching branches with the same customer would share the same cart.
+**Scope:** Per-user (`auth()->id()`), per-customer (`customer_id`), per-branch (`session('branch_id')`). Since R6 (2026-07-21) the branch_id is part of the unique key `(user_id, customer_id, branch_id)`, so a salesman switching branches with the same customer now gets a separate cart per branch (previously the carts would contaminate each other across branches).
 
 ### 3.5 Draft State
 
@@ -734,10 +735,10 @@ Features that exist in the **Legacy** system but are **missing or weakened** in 
 
 | # | Feature | Legacy Location | Laravel Status |
 |---|---|---|---|
-| 1 | **Barcode scanning** (`product_by_code` exact-match endpoint + Enter-key handler) | `sales.js::fetchSalesProductByExactCode` L67–82; `SalesController::product_by_code` L97–114 | **Missing** — Laravel cart uses select2 dropdown only |
+| 1 | **Barcode scanning** (`product_by_code` exact-match endpoint + Enter-key handler) | `sales.js::fetchSalesProductByExactCode` L67–82; `SalesController::product_by_code` L97–114; `sales-create.js` L324–381 Enter-key handler | **✅ R10 (2026-07-21)** — Backend ported in R1 (`SalesCartController::productByCode` + `findProductByExactCode`). UI wired in R10: dedicated `#barcodeInput` field (toggle-revealed) in `cart.blade.php` with Enter-key + "Scan & Add" button. On success: caches product in `productCache`, injects a fresh `<option>` into the Select2 and triggers `change` (so rate/qty/availability populate via the existing handlers), then auto-adds to cart if "Auto-add after scan" is checked (default on). Out-of-stock guard matches Legacy `selectProductCreate` (blocks add, shows toast). After auto-add the field is cleared and refocused for the next scan. |
 | 2 | **Multi-customer cart tabs** (one POS page, N customer carts, switchable) | `sales-create.js::createOrSwitchTab` L657–693; `#draft-tabs` in `create.php` | **Missing** — Laravel cart supports one customer per page |
-| 3 | **Live customer typeahead** (LIKE %term% on name/shop/mobile/code) | `initCustomerTypeahead` + `sales/search_customer` endpoint | **Missing** — Laravel uses capped 500-row select2 dropdown |
-| 4 | **Live product typeahead** (LIKE %term% with stock + price join) | `initProductTypeahead` + `sales/search_product` endpoint | **Missing** — Laravel uses capped 500-row select2 dropdown |
+| 3 | **Live customer typeahead** (LIKE %term% on name/shop/mobile/code) | `initCustomerTypeahead` + `sales/search_customer` endpoint | **✅ R1 (2026-07-21)** — Ported to `admin.sales.cart.search-customer` (throttle 90/min). Wired into Select2 AJAX mode with `minimumInputLength: 1` and a `processResults` mapper. Different visual treatment (Select2 dropdown vs Legacy's custom suggestion box) but functionally equivalent. |
+| 4 | **Live product typeahead** (LIKE %term% with stock + price join) | `initProductTypeahead` + `sales/search_product` endpoint | **✅ R1 (2026-07-21)** — Ported to `admin.sales.cart.search-product` (throttle 90/min). Wired into Select2 AJAX mode. `processResults` populates an in-memory `productCache` so the change handler can read `default_rate`/`min_rate`/`max_rate`/`available_qty` without another round-trip. |
 | 5 | **Price-range slider band** (visual min/default/max with thumb + red/amber/green status) | `#priceRangePanel` in `create.php`; `sales.js::renderPriceRangeBand` | **Missing** — Laravel shows plain text hint |
 | 6 | **Live credit-limit display** on cart page | `customer_details` endpoint + inline panel | **Missing** — Laravel checks credit only at finalize |
 | 7 | **Customer recents chips** (last 5 in localStorage) | `localStorage["sales_customer_recents"]` | **Missing** |

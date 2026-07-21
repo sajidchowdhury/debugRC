@@ -104,11 +104,49 @@
 
             {{-- ---------- Add Product card ---------- --}}
             <div class="card border-0 shadow-sm mb-3">
-                <div class="card-header bg-white border-bottom d-flex align-items-center">
-                    <i class="fas fa-plus-circle me-2 text-primary"></i>
-                    <strong>Add Product</strong>
+                <div class="card-header bg-white border-bottom d-flex align-items-center justify-content-between">
+                    <span>
+                        <i class="fas fa-plus-circle me-2 text-primary"></i>
+                        <strong>Add Product</strong>
+                    </span>
+                    <button type="button" id="btnToggleBarcode" class="btn btn-sm btn-outline-secondary"
+                            title="Toggle barcode scanner input">
+                        <i class="fas fa-barcode me-1"></i> Barcode
+                    </button>
                 </div>
                 <div class="card-body">
+                    {{-- R10: Barcode scanner input (collapsed by default).
+                         Barcode scanners act as keyboards: they type the code
+                         and end with Enter. We capture Enter on this input,
+                         hit the product-by-code endpoint, and on success
+                         populate the Select2 + rate + qty below, mirroring
+                         Legacy's `fetchSalesProductByExactCode` + selectProduct
+                         flow in sales-create.js / sales-edit.js. --}}
+                    <div id="barcodeRow" class="row g-2 align-items-end mb-2 d-none">
+                        <div class="col-12 col-md-8">
+                            <label for="barcodeInput" class="form-label small fw-semibold mb-1">
+                                <i class="fas fa-barcode me-1 text-primary"></i> Scan / type product code
+                            </label>
+                            <input type="text" id="barcodeInput" class="form-control"
+                                   placeholder="Scan barcode or type product code, then press Enter…"
+                                   autocomplete="off" inputmode="text">
+                            <div id="barcodeHint" class="form-text small text-muted mt-1">
+                                &nbsp;
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-4 d-flex flex-column gap-1">
+                            <button type="button" id="btnBarcodeAdd" class="btn btn-primary">
+                                <i class="fas fa-bolt me-1"></i> Scan &amp; Add
+                            </button>
+                            <label class="form-check form-switch small text-muted m-0 ps-0">
+                                <input class="form-check-input ms-0" type="checkbox"
+                                       id="barcodeAutoAdd" checked>
+                                <span class="form-check-label ms-4">
+                                    Auto-add after scan
+                                </span>
+                            </label>
+                        </div>
+                    </div>
                     <div class="row g-2 align-items-end">
                         <div class="col-12 col-md-5">
                             <label for="addProduct" class="form-label small fw-semibold mb-1">Product</label>
@@ -1004,6 +1042,149 @@
         $('#addQty, #addRate').on('keydown', function (e) {
             if (e.key === 'Enter') { e.preventDefault(); addToCart(); }
         });
+
+        // ============================================================
+        // R10: Barcode scanner support
+        // ============================================================
+        // Barcode scanners act as HID keyboards: they "type" the code
+        // at high speed and end with Enter (or Tab). We capture Enter
+        // on #barcodeInput, call the product-by-code endpoint (which
+        // the controller already had from R1), and on success:
+        //   1. cache the product payload in productCache (so the rest
+        //      of the UI — rate hint, availability card — sees it),
+        //   2. append a fresh <option> to the Select2 and select it
+        //      (Select2 AJAX doesn't have the option pre-rendered),
+        //   3. trigger the same `change` handler as a manual pick so
+        //      the rate field, hint, and availability card populate,
+        //   4. optionally auto-add to cart if the user ticked the
+        //      "auto-add" checkbox (default on for fast POS scanning).
+        //
+        // Mirrors Legacy's `fetchSalesProductByExactCode` + selectProduct
+        // flow in legacy/public/assets/js/sales-create.js (~line 280-381)
+        // and sales-edit.js (~line 440-540). The Legacy version uses a
+        // free-text productSearch input with suggestions dropdown; the
+        // Laravel version uses Select2, so we programmatically inject
+        // the matched option rather than mutating a text field.
+        var $barcodeInput = $('#barcodeInput');
+        var $barcodeHint  = $('#barcodeHint');
+        var $barcodeAutoAdd = $('#barcodeAutoAdd'); // optional, may be null
+
+        // Toggle the barcode row visibility
+        $('#btnToggleBarcode').on('click', function () {
+            $('#barcodeRow').toggleClass('d-none');
+            if (!$('#barcodeRow').hasClass('d-none')) {
+                $barcodeInput.focus();
+            }
+        });
+
+        // Enter-key handler — the core barcode flow
+        $barcodeInput.on('keydown', async function (e) {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            await scanAndSelect();
+        });
+
+        // "Scan & Add" button — same flow
+        $('#btnBarcodeAdd').on('click', async function () {
+            await scanAndSelect();
+        });
+
+        async function scanAndSelect() {
+            var code = ($barcodeInput.val() || '').trim();
+            if (!code) {
+                $barcodeHint.html('<i class="fas fa-info-circle me-1"></i>Type or scan a code first.');
+                return;
+            }
+            if (!state.customerId) {
+                $barcodeHint.html('<i class="fas fa-exclamation-triangle me-1 text-warning"></i>Select a customer first.');
+                toast('Select a customer first.', 'error');
+                return;
+            }
+
+            $barcodeHint.html('<i class="fas fa-spinner fa-spin me-1"></i>Looking up "' + escHtml(code) + '"…');
+            $barcodeInput.prop('disabled', true);
+
+            try {
+                var resp = await fetch(
+                    ENDPOINTS.productByCode
+                        + '?code=' + encodeURIComponent(code)
+                        + '&branch_id=' + encodeURIComponent(BRANCH_ID || ''),
+                    { headers: { 'X-Requested-With': 'XMLHttpRequest' } }
+                );
+                var json = await resp.json();
+            } catch (err) {
+                $barcodeHint.html('<i class="fas fa-exclamation-circle me-1 text-danger"></i>Lookup failed: ' + escHtml(err.message || 'network error'));
+                $barcodeInput.prop('disabled', false).focus().select();
+                return;
+            }
+
+            $barcodeInput.prop('disabled', false);
+
+            if (!json || json.status !== 'success' || !json.data) {
+                $barcodeHint.html('<i class="fas fa-times-circle me-1 text-danger"></i>No product with code "' + escHtml(code) + '".');
+                toast('No product with code ' + code, 'warning');
+                $barcodeInput.focus().select();
+                return;
+            }
+
+            var p = json.data;
+            // Cache so the change handler / availability renderer sees it
+            productCache[p.id] = p;
+
+            // Stock guard — match Legacy's selectProductCreate(): if
+            // available_qty <= 0, block the add with a clear warning.
+            // The user can still pick the product manually via Select2
+            // (cart service will also enforce availability on add).
+            var avail = parseFloat(p.available_qty || 0);
+            if (avail <= 0) {
+                $barcodeHint.html('<i class="fas fa-triangle-exclamation me-1 text-warning"></i>' +
+                    escHtml(p.product_name) + ' is out of stock at this branch.');
+                toast('Out of stock: ' + (p.product_name || code), 'warning');
+                $barcodeInput.val('').focus();
+                return;
+            }
+
+            // Inject a fresh <option> and select it — Select2 AJAX only
+            // renders options the user typed for, so we synthesize one.
+            var label = p.product_name + (p.product_code ? ' [' + p.product_code + ']' : '');
+            var $newOpt = $('<option></option>')
+                .val(p.id)
+                .text(label)
+                .data('default-rate', p.default_rate)
+                .data('code', p.product_code)
+                .data('name', p.product_name);
+            $('#addProduct').append($newOpt).val(p.id).trigger('change');
+
+            // Pre-fill rate (default_rate, fall back to min_rate)
+            var defRate = parseFloat(p.default_rate);
+            if (!(defRate > 0)) defRate = parseFloat(p.min_rate) || 0;
+            $('#addRate').val(defRate.toFixed(2));
+
+            // Reset qty to 1 (mirrors Legacy selectProductCreate)
+            $('#addQty').val(1);
+
+            $barcodeHint.html('<i class="fas fa-check-circle me-1 text-success"></i>' +
+                escHtml(p.product_name) + ' · avail ' + fmtQty(avail) + ' · rate ৳' + fmtMoney(defRate));
+
+            // Auto-add to cart if the checkbox exists and is checked,
+            // OR if the user pressed Enter (the typical barcode flow —
+            // scan, beep, item appears in cart). The "Scan & Add"
+            // button also triggers auto-add. The user can untick the
+            // checkbox to suppress auto-add and just populate the form.
+            var autoAdd = ($barcodeAutoAdd && $barcodeAutoAdd.length)
+                ? $barcodeAutoAdd.is(':checked')
+                : true;
+
+            if (autoAdd) {
+                addToCart();
+                // After successful add, clear the barcode field and
+                // re-focus so the cashier can scan the next item
+                // without reaching for the mouse.
+                $barcodeInput.val('').focus();
+            } else {
+                $('#addQty').focus().select();
+            }
+        }
 
         // --- Cart table inline edits ---
         $(document).on('input change', '.cart-qty, .cart-rate', function () {
