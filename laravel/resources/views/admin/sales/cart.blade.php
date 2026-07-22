@@ -201,13 +201,21 @@
                         </div>
 
                         {{-- Stock availability banner (legacy L99) --}}
+                        {{-- Stock availability banner (legacy L99 + image B parity).
+                             Teal banner shows: "Available [branch badge] N
+                             [Warehouse & pipeline button]". The button
+                             opens a modal with per-warehouse stock +
+                             pipeline amount breakdown. --}}
                         <div id="BranchStock" class="sales-stock-banner d-none">
                             <div class="stock-banner-inner">
                                 <div class="stock-stat">
-                                    <span class="stock-label">Available (branch)</span>
+                                    <span class="stock-label">Available</span>
+                                    <span id="addAvailBranchBadge" class="badge bg-dark bg-opacity-50 ms-1">—</span>
                                     <span class="stock-value" id="addAvailTotal">—</span>
                                 </div>
-                                <span class="text-white-50 small align-self-center">Warehouse breakdown appears in the Availability panel below.</span>
+                                <button type="button" id="btnWarehousePipeline" class="btn btn-sm btn-outline-light ms-auto" title="Per-warehouse stock + pipeline breakdown">
+                                    <i class="fas fa-warehouse me-1"></i> Warehouse &amp; pipeline
+                                </button>
                             </div>
                         </div>
 
@@ -310,22 +318,22 @@
                         {{-- R17: desktop table view (hidden on <md screens) --}}
                         <div class="sales-cart-desktop table-responsive">
                             <table class="table table-sm table-hover align-middle mb-0">
-                                <thead class="table-light">
+                                <thead class="table-dark">
                                     <tr>
+                                        <th style="width:48px;">Sl</th>
                                         <th style="min-width:220px;">Product</th>
-                                        <th style="width:110px;">Qty</th>
-                                        <th style="width:140px;">Rate</th>
+                                        <th class="text-end" style="width:110px;">Qty</th>
+                                        <th class="text-end" style="width:140px;">Rate</th>
                                         <th class="text-end" style="width:120px;">Total</th>
-                                        <th class="text-end" style="width:110px;">Available</th>
                                         <th class="text-center" style="width:80px;">Action</th>
                                     </tr>
                                 </thead>
                                 <tbody id="cartItemsBody"></tbody>
                                 <tfoot class="table-light">
                                     <tr>
-                                        <th colspan="3" class="text-end">Subtotal</th>
+                                        <th colspan="4" class="text-end">Subtotal</th>
                                         <th class="text-end" id="cartSubtotalCell">0.00</th>
-                                        <th colspan="2"></th>
+                                        <th></th>
                                     </tr>
                                 </tfoot>
                             </table>
@@ -338,27 +346,64 @@
                     </div>
                 </section>
 
-                {{-- Cart actions row (Clear/Hold/Validate/Finalize) --}}
-                <section class="sales-panel mt-3">
-                    <div class="sales-panel-body d-flex flex-wrap gap-2 align-items-center">
-                        <button type="button" id="btnClear" class="btn btn-outline-danger">
-                            <i class="fas fa-trash me-1"></i> Clear Cart
-                        </button>
-                        <button type="button" id="btnSoftHold" class="btn btn-outline-warning">
-                            <i class="fas fa-pause-circle me-1"></i>
-                            <span id="softHoldBtnLabel">Soft Hold</span>
-                        </button>
-                        <button type="button" id="btnValidate" class="btn btn-outline-info">
-                            <i class="fas fa-check-double me-1"></i> Validate Cart
-                        </button>
-                        <button type="button" id="btnFinalize"
-                                class="btn btn-success btn-finalize ms-auto"
-                                data-bs-toggle="tooltip" data-bs-placement="top"
-                                title="Create a draft sales invoice from this cart (GL posted)">
-                            <i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice
-                        </button>
+                {{-- Validation banner (image C parity — pink "Cannot finalize
+                     until fixed: ..." alert). Mirrors legacy
+                     .sales-cart-invalid-banner (sales.js L177-181).
+                     Populated by JS renderCartValidation(). Empty =
+                     no errors = alert hidden. --}}
+                <div id="cartValidationBanner" class="alert alert-danger py-2 px-3 mb-2 d-none">
+                    <strong>Cannot finalize until fixed:</strong>
+                    <ul id="cartValidationList" class="mb-0 small ps-3"></ul>
+                </div>
+
+                {{-- Secondary actions row (Clear/Hold/Validate) — kept
+                     Laravel-only, smaller than the primary Finalize
+                     button below. --}}
+                <div class="d-flex flex-wrap gap-2 align-items-center px-3 py-2 border-bottom">
+                    <button type="button" id="btnClear" class="btn btn-sm btn-outline-danger">
+                        <i class="fas fa-trash me-1"></i> Clear
+                    </button>
+                    <button type="button" id="btnSoftHold" class="btn btn-sm btn-outline-warning">
+                        <i class="fas fa-pause-circle me-1"></i>
+                        <span id="softHoldBtnLabel">Soft Hold</span>
+                    </button>
+                    <button type="button" id="btnValidate" class="btn btn-sm btn-outline-info">
+                        <i class="fas fa-check-double me-1"></i> Validate
+                    </button>
+                </div>
+
+                {{-- Cart summary grid (image C parity — legacy sales.js
+                     L859-868 layout). 2-col grid with Sub Total /
+                     Transport input / Payable / Discount input, then
+                     a full-width Finalize button below. --}}
+                <div class="p-3 bg-light border-top">
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <label class="small text-muted mb-0">Sub Total</label>
+                            <div class="fw-bold fs-5" id="cartSubtotalDisplay">0.00</div>
+                        </div>
+                        <div class="col-6">
+                            <label class="small text-muted mb-0">Payable</label>
+                            <div class="fw-bold fs-5 text-success" id="cartPayableDisplay">0.00</div>
+                        </div>
+                        <div class="col-6">
+                            <label class="small text-muted mb-0">Transport</label>
+                            <input type="number" step="0.01" min="0" id="cartTransport" class="form-control form-control-sm" value="0">
+                        </div>
+                        <div class="col-6">
+                            <label class="small text-muted mb-0">Discount</label>
+                            <input type="number" step="0.01" min="0" id="cartDiscount" class="form-control form-control-sm" value="0">
+                        </div>
+                        <div class="col-12">
+                            <button type="button" id="btnFinalize"
+                                    class="btn btn-success btn-lg w-100 btn-finalize"
+                                    data-bs-toggle="tooltip" data-bs-placement="top"
+                                    title="Create a draft sales invoice from this cart (GL posted)">
+                                <i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice
+                            </button>
+                        </div>
                     </div>
-                </section>
+                </div>
             </div>
         </div>
     </section>
@@ -1143,6 +1188,8 @@
     function renderAll() {
         renderCartTable();
         renderSummary();
+        renderCartValidation();
+        recomputePayable();
         renderValidation(state.validation);
         // R14: re-render the credit snapshot's projected-balance row
         // using the latest cart subtotal. The cached snapshot
@@ -1187,9 +1234,10 @@
             var rateMinAttr = (minR !== null && minR > 0) ? ' min="' + minR.toFixed(2) + '"' : '';
             var rateMaxAttr = (maxR !== null && maxR > 0) ? ' max="' + maxR.toFixed(2) + '"' : '';
 
-            // ---- Desktop <tr> row ----
+            // ---- Desktop <tr> row (image C parity: Sl | Product | Qty | Rate | Total | Action) ----
             var row =
                 '<tr data-product-id="' + productId + '">' +
+                    '<td class="text-center text-muted">' + (idx + 1) + '</td>' +
                     '<td>' +
                         '<div class="fw-semibold">' + escHtml(item.product_name) + '</div>' +
                         '<div class="small text-muted">#' + productId + '</div>' +
@@ -1204,9 +1252,6 @@
                             : '') +
                     '</td>' +
                     '<td class="text-end fw-semibold cart-total">' + fmtMoney(total) + '</td>' +
-                    '<td class="text-end ' + availClass + ' cart-avail">' +
-                        (avail !== null ? fmtQty(avail) : '—') +
-                    '</td>' +
                     '<td class="text-center">' +
                         '<button type="button" class="btn btn-sm btn-outline-danger cart-remove" title="Remove">' +
                             '<i class="fas fa-trash"></i>' +
@@ -1259,7 +1304,16 @@
         });
 
         // Subtotal cell (desktop tfoot)
-        $('#cartSubtotalCell').text(fmtMoney(state.cart ? state.cart.subtotal : 0));
+        var sub = state.cart ? state.cart.subtotal : 0;
+        $('#cartSubtotalCell').text(fmtMoney(sub));
+        // Image C parity: visible Sub Total + Payable displays below the table.
+        // Payable = subtotal + transport - discount. Both transport and
+        // discount default to 0; their inputs are wired below.
+        var transport = parseFloat($('#cartTransport').val()) || 0;
+        var discount  = parseFloat($('#cartDiscount').val()) || 0;
+        var payable   = sub + transport - discount;
+        $('#cartSubtotalDisplay').text(fmtMoney(sub));
+        $('#cartPayableDisplay').text(fmtMoney(payable));
 
         // R17: (re)bind swipe-to-delete on the freshly-rendered mobile cards.
         initCartSwipeRemove();
@@ -1803,17 +1857,95 @@
         var stock = parseFloat(product.available_qty) || 0;
         var branchName = window.ACTIVE_BRANCH_NAME || 'Branch';
         $banner.removeClass('d-none');
-        $banner.find('.stock-banner-inner').remove();
-        $banner.append(
-            '<div class="stock-banner-inner">' +
-                '<div class="stock-stat">' +
-                    '<span class="stock-label">Available (branch)</span> ' +
-                    '<span class="stock-value ' + (stock > 0 ? 'text-white' : 'text-danger') + '">' + fmtQty(stock) + '</span>' +
-                '</div>' +
-                '<span class="text-white-50 small align-self-center">Warehouse breakdown appears in the Availability panel below.</span>' +
-            '</div>'
-        );
+        // Image B parity: only update the two text values — keep the
+        // Warehouse & pipeline button intact (do NOT rebuild .stock-banner-inner).
+        $('#addAvailBranchBadge').text(branchName);
+        var $val = $('#addAvailTotal');
+        $val.text(fmtQty(stock));
+        $val.toggleClass('text-danger', stock <= 0);
+        $val.toggleClass('text-white', stock > 0);
     }
+
+    /**
+     * Image B parity: "Warehouse & pipeline" button click handler.
+     * Shows a SweetAlert modal with per-warehouse stock + pipeline
+     * amount breakdown for the currently-selected product.
+     * Mirrors legacy "BranchStock" detail view (sales-create.js
+     * showStockInfoCreate L420-454 — legacy used a separate modal;
+     * we use SweetAlert2 which is already loaded).
+     *
+     * Reuses state.availBreakdown (populated by checkAvailability()).
+     * Falls back to a fresh ajaxGet(ENDPOINTS.availability) call if
+     * the cache is empty.
+     */
+    function showWarehousePipelineModal() {
+        if (!state.activeProductId) {
+            Swal.fire({
+                icon: 'info',
+                title: 'No product selected',
+                text: 'Pick a product above first.',
+                confirmButtonColor: '#7c3aed'
+            });
+            return;
+        }
+        var render = function (breakdown) {
+            var rows = breakdown || [];
+            var totalPhys = 0, totalPipe = 0, totalAvail = 0;
+            var html = '<div class="table-responsive"><table class="table table-sm mb-0">' +
+                '<thead class="table-light"><tr>' +
+                    '<th>Warehouse</th>' +
+                    '<th class="text-end">Physical</th>' +
+                    '<th class="text-end">Pipeline</th>' +
+                    '<th class="text-end">Available</th>' +
+                '</tr></thead><tbody>';
+            if (rows.length === 0) {
+                html += '<tr><td colspan="4" class="text-center text-muted py-3">No warehouse data.</td></tr>';
+            } else {
+                rows.forEach(function (w) {
+                    var phys  = parseFloat(w.physical_qty || 0);
+                    var pipe  = parseFloat(w.pipeline_qty || 0);
+                    var avail = parseFloat(w.available_qty || 0);
+                    totalPhys  += phys;
+                    totalPipe  += pipe;
+                    totalAvail += avail;
+                    html += '<tr>' +
+                        '<td>' + escHtml(w.warehouse_name || ('#' + w.warehouse_id)) + '</td>' +
+                        '<td class="text-end">' + fmtQty(phys) + '</td>' +
+                        '<td class="text-end text-warning">' + fmtQty(pipe) + '</td>' +
+                        '<td class="text-end fw-semibold text-success">' + fmtQty(avail) + '</td>' +
+                    '</tr>';
+                });
+            }
+            html += '</tbody><tfoot class="table-light"><tr>' +
+                '<th>Total</th>' +
+                '<th class="text-end">' + fmtQty(totalPhys) + '</th>' +
+                '<th class="text-end">' + fmtQty(totalPipe) + '</th>' +
+                '<th class="text-end">' + fmtQty(totalAvail) + '</th>' +
+            '</tr></tfoot></table></div>';
+            Swal.update({ html: html, showConfirmButton: true, confirmButtonText: 'Close' });
+        };
+        Swal.fire({
+            title: 'Warehouse & pipeline',
+            html: '<div class="text-center"><i class="fas fa-spinner fa-spin me-1"></i>Loading breakdown...</div>',
+            showCancelButton: false,
+            showConfirmButton: false,
+            customClass: { popup: 'sales-warehouse-modal' }
+        });
+        // Use cached breakdown if available; otherwise fetch.
+        if (state.availBreakdown && state.availBreakdown.length) {
+            render(state.availBreakdown);
+        } else {
+            ajaxGet(ENDPOINTS.availability, { product_id: state.activeProductId })
+                .done(function (payload) {
+                    state.availBreakdown = payload.warehouse_breakdown || [];
+                    render(state.availBreakdown);
+                })
+                .fail(function () {
+                    Swal.update({ html: '<div class="text-danger">Failed to load warehouse breakdown. Try again.</div>', showConfirmButton: true, confirmButtonText: 'Close' });
+                });
+        }
+    }
+
 
     /**
      * Reset the product entry form after a successful add-to-cart.
@@ -2593,6 +2725,41 @@
     // ============================================================
     // ============== EVENT WIRING (DOM ready) ====================
     // ============================================================
+    // ============================================================
+    // ============== IMAGE C PARITY: CART SUMMARY + VALIDATION ====
+    // ============================================================
+    // Recompute payable = subtotal + transport - discount. Called
+    // whenever transport/discount inputs change OR the cart reloads.
+    function recomputePayable() {
+        var sub       = state.cart ? state.cart.subtotal : 0;
+        var transport = parseFloat($('#cartTransport').val()) || 0;
+        var discount  = parseFloat($('#cartDiscount').val()) || 0;
+        var payable   = sub + transport - discount;
+        $('#cartSubtotalDisplay').text(fmtMoney(sub));
+        $('#cartPayableDisplay').text(fmtMoney(payable));
+    }
+
+    // Render the pink "Cannot finalize until fixed: ..." banner.
+    // Mirrors legacy sales.js applyCartValidationUi (L156-182).
+    function renderCartValidation() {
+        var $banner = $('#cartValidationBanner');
+        var $list   = $('#cartValidationList');
+        if (!$banner.length) return;
+        var v = state.validation;
+        if (v && v.valid === false) {
+            var parts = [];
+            (v.rate_errors  || []).forEach(function (e) { parts.push(e); });
+            (v.stock_errors || []).forEach(function (e) { parts.push(e); });
+            if (!parts.length && v.message) parts.push(v.message);
+            if (!parts.length) parts.push('Cart has validation errors.');
+            $list.html(parts.map(function (p) { return '<li>' + escHtml(p) + '</li>'; }).join(''));
+            $banner.removeClass('d-none');
+        } else {
+            $banner.addClass('d-none');
+            $list.empty();
+        }
+    }
+
     $(function () {
         // ============================================================
         // ============== STYLE-PARITY Phase 3: TYPEAHEAD INIT ========
@@ -2768,6 +2935,11 @@
         $('#btnClear').on('click', clearCart);
         $('#btnSoftHold').on('click', toggleSoftHold);
         $('#btnValidate').on('click', validateCart);
+        // Image C parity: transport/discount inputs recompute payable live.
+        $('#cartTransport, #cartDiscount').on('input', recomputePayable);
+        // Image B parity: "Warehouse & pipeline" button shows per-warehouse
+        // breakdown in a SweetAlert modal.
+        $('#btnWarehousePipeline').on('click', showWarehousePipelineModal);
         $('#btnFinalize').on('click', function () {
             finalizeInvoice();
         });
