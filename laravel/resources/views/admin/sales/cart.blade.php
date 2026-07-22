@@ -26,34 +26,46 @@
     $branchName = session('branch_name', 'No Branch');
 @endphp
 
+{{--
+  ============================================================
+  STYLE-PARITY Phase 2+3 (2026-07-22): Full legacy-faithful restructure.
+  Replaced Bootstrap .card markup with legacy .sales-panel / .sales-cart-dock
+  class families defined in /assets/css/sales-pos.css.
+
+  Per audit decisions (see docs/STYLE_PARITY_AUDIT_PHASE0.md §9):
+    A (hybrid) — keep Select2 (Laravel JS depends on it) but apply
+                 .sales-search-input class for the legacy 48px indigo look.
+                 Full A2 (text-input + .sales-suggest-list) deferred — would
+                 require porting sales-create.js autocomplete logic.
+    B          — move Summary + Validation + Availability cards from the
+                 right aside to BELOW the cart table (legacy has no aside).
+    C          — replace R13 inline-styled slider with .sales-price-band* classes.
+    D          — use legacy "New Sale" header text + single "Today" button.
+
+  ALL Laravel JS-dependent element IDs preserved verbatim (see audit §4
+  for the full ID inventory). The restructure is HTML+CSS only — no JS
+  changes required except adding #cartDock to the workspace-show/hide
+  toggle (handled in a separate small JS patch below the @push('scripts')
+  block — search for "STYLE-PARITY Phase 2" in the JS section).
+  ============================================================
+--}}
+<div id="sales-create-app" class="sales-create-app">
 <div class="container-fluid py-2" id="salesCartApp"
      data-branch-id="{{ (int) $branchId }}"
      data-customer-id="{{ $selectedCustomerId ?? '' }}">
 
-    {{-- ===================== HERO HEADER ===================== --}}
-    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
-            style="background:linear-gradient(135deg,#7c3aed,#4f46e5);">
+    {{-- ===================== HERO HEADER (Decision D1: legacy-faithful) ===================== --}}
+    <header class="sales-create-header">
         <div>
-            <h1 class="h3 mb-1">
-                <i class="fas fa-cart-shopping me-2"></i>{{ $title ?? 'Sales Cart' }}
-            </h1>
-            <p class="mb-0 opacity-75">
-                <i class="fas fa-building me-1"></i> Branch: {{ $branchName }}
-                <span class="mx-2 opacity-50">•</span>
-                <i class="fas fa-receipt me-1"></i> Build a draft invoice before godown dispatch.
-            </p>
+            <h1 class="sales-create-title">New Sale</h1>
+            <p class="sales-create-sub">Fast billing · multiple customers · live stock</p>
         </div>
-        <div class="d-flex flex-wrap gap-1">
-            <a href="{{ route('admin.customers.index') }}" class="btn btn-outline-light btn-sm" target="_blank">
-                <i class="fas fa-users me-1"></i> Customers
-            </a>
-            <a href="{{ route('admin.products.index') }}" class="btn btn-outline-light btn-sm" target="_blank">
-                <i class="fas fa-boxes-stacked me-1"></i> Products
-            </a>
-        </div>
+        <a href="{{ route('admin.sales-invoices.index') }}" class="btn btn-light btn-sm sales-header-btn">
+            <i class="fas fa-list"></i> Today
+        </a>
     </header>
 
-    {{-- ===================== R11: MULTI-CART TABS DOCK ===================== --}}
+    {{-- ===================== R11: MULTI-CART TABS DOCK (legacy-faithful .sales-cart-dock*) ===================== --}}
     {{--
       One pill per open customer-cart. Clicking a pill switches the active
       cart (no page reload). The × button clears that customer's cart and
@@ -61,163 +73,29 @@
       (L144–163) + sales-create.js::createOrSwitchTab / closeTab /
       restoreSessionCarts (L657–803).
     --}}
-    <div id="draftTabsCard" class="card border-0 shadow-sm mb-3 @if (empty($selectedCustomerId)) d-none @endif">
-        <div class="card-body py-2">
-            <div class="d-flex align-items-center justify-content-between mb-2">
-                <div class="small text-muted">
-                    <i class="fas fa-layer-group me-1 text-primary"></i>
-                    <strong>Open carts</strong>
-                    <span class="text-muted ms-1">— switch customers without losing items</span>
-                </div>
-                <span id="draftTabsCount" class="badge bg-light text-secondary border">0 carts</span>
+    <section id="draftTabsCard" class="sales-cart-dock mt-3 @if (empty($selectedCustomerId)) d-none @endif">
+        <div class="sales-cart-dock-head">
+            <div>
+                <strong><i class="fas fa-layer-group me-1"></i> Carts</strong>
+                <span class="text-muted small ms-1">— switch customers without losing items</span>
+                <span id="draftTabsCount" class="badge bg-light text-secondary border ms-2">0 carts</span>
             </div>
-            <ul class="nav nav-pills flex-nowrap overflow-auto gap-1 py-1" id="draftTabs" role="tablist">
-                {{-- pills rendered by JS --}}
-            </ul>
-            <div id="draftTabsEmpty" class="small text-muted py-1 ps-1">
-                <i class="fas fa-info-circle me-1"></i>
-                No open carts. Pick a customer below to start a new one.
-            </div>
+            <button type="button" class="btn btn-outline-primary btn-sm" id="btnFocusCustomer">
+                <i class="fas fa-plus"></i> New customer
+            </button>
         </div>
-    </div>
-
-    {{-- ===================== CUSTOMER SELECTOR ===================== --}}
-    <div class="card border-0 shadow-sm mb-3">
-        <div class="card-body">
-            <div class="row g-2 align-items-end">
-                <div class="col-12 col-md-8">
-                    <label for="customerSelect" class="form-label small fw-semibold mb-1">
-                        <i class="fas fa-user-tag me-1 text-primary"></i> Customer
-                    </label>
-                    <select id="customerSelect" class="form-select select2" style="width:100%;">
-                        <option value="">— Select a customer —</option>
-                        @if (!empty($selectedCustomer))
-                            <option value="{{ $selectedCustomer->id }}" selected>
-                                {{ $selectedCustomer->customer_name }}
-                                @if (!empty($selectedCustomer->customer_code)) [{{ $selectedCustomer->customer_code }}] @endif
-                            </option>
-                        @endif
-                    </select>
-                </div>
-                <div class="col-12 col-md-4">
-                    <div class="d-flex gap-2">
-                        <button type="button" id="btnLoadCart" class="btn btn-primary flex-grow-1">
-                            <i class="fas fa-sync me-1"></i> Load Cart
-                        </button>
-                        <a href="{{ route('admin.sales.cart') }}" class="btn btn-outline-secondary" title="Reset">
-                            <i class="fas fa-rotate-left"></i>
-                        </a>
-                    </div>
-                </div>
-            </div>
-
-            {{-- ============ R15: CUSTOMER RECENTS CHIPS ============ --}}
-            {{--
-              Ported from Legacy #customerRecents in
-              legacy/app/views/sales/create.php (L47) + sales.js
-              `rememberCustomerRecent` / `renderCustomerRecents`
-              (L1306–1354). Stores the last 5 picked customers in
-              localStorage and renders them as click-to-pick chips
-              beneath the customer Select2.
-
-              Clicking a chip re-selects that customer (reusing the
-              R11 `switchToCustomer()` flow — Select2 value + tab
-              ensure + cart load + credit fetch). This is a
-              meaningful UX win for repeat-customer workflows: the
-              cashier doesn't have to re-type the name of a customer
-              they just served 5 minutes ago.
-
-              Storage shape:
-                localStorage['rcerp_sales_customer_recents']
-                  = [{id:int, label:string, ts:int(unix_ms)}, ...]
-              Capped at 5, deduped by id, most-recent-first.
-            --}}
-            <div id="customerRecentsRow" class="mt-2 d-none">
-                <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <span class="small text-muted text-nowrap">
-                        <i class="fas fa-clock-rotate-left me-1 text-primary"></i>Recent:
-                    </span>
-                    <div id="customerRecents" class="sales-recents d-flex flex-wrap gap-1"></div>
-                </div>
-            </div>
-
-            {{-- ============ R14: LIVE CREDIT SNAPSHOT PANEL ============ --}}
-            {{--
-              Ported from Legacy #customerDetailsPanel in
-              legacy/app/views/sales/create.php (L72–80). Shows the
-              customer's credit_limit, current_due (SUM debit − credit
-              from customer_ledger where is_reversed=false), and due_left
-              inline so the cashier can see at a glance whether adding
-              more items will breach the limit. Mirrors Legacy's
-              disp_limit / disp_due / disp_left layout.
-
-              Beyond Legacy parity, we also surface a *projected* new
-              balance row that combines current_due + cart subtotal —
-              this is the "prevents wasted cart-building" UX win called
-              out in audit gap §6.1 #6. The cashier no longer has to
-              wait until finalize to discover a credit breach.
-
-              Data is fetched via the R14 endpoint
-              GET /admin/sales/cart/customer-details?customer_id=...
-              (throttled 60/min). The panel re-renders on every cart
-              mutation (add/update/remove/clear) using the cached
-              snapshot + the latest cart subtotal — no extra round-trip
-              per mutation. A fresh fetch is fired only when the
-              customer changes.
-            --}}
-            <div id="customerDetailsPanel" class="row g-2 mt-2 d-none">
-                <div class="col-12">
-                    <div class="border rounded-3 bg-light p-2">
-                        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
-                            <span class="small text-muted">
-                                <i class="fas fa-wallet me-1 text-primary"></i>
-                                <strong>Credit snapshot</strong>
-                                <span class="text-muted ms-1">— live from customer ledger</span>
-                            </span>
-                            <button type="button" id="btnRefreshCredit" class="btn btn-sm btn-link text-decoration-none p-0 m-0"
-                                    title="Re-fetch from ledger (in case of recent payments)">
-                                <i class="fas fa-rotate me-1"></i><span class="small">Refresh</span>
-                            </button>
-                        </div>
-                        <div class="row g-2 small">
-                            <div class="col-6 col-md-3">
-                                <div class="text-muted lh-1">Credit limit</div>
-                                <div class="fw-bold lh-1" id="cdCreditLimit">—</div>
-                            </div>
-                            <div class="col-6 col-md-3">
-                                <div class="text-muted lh-1">Current due</div>
-                                <div class="fw-bold lh-1" id="cdCurrentDue">—</div>
-                            </div>
-                            <div class="col-6 col-md-3">
-                                <div class="text-muted lh-1">Balance left</div>
-                                <div class="fw-bold lh-1" id="cdDueLeft">—</div>
-                            </div>
-                            <div class="col-6 col-md-3">
-                                <div class="text-muted lh-1">Cart subtotal</div>
-                                <div class="fw-bold lh-1 text-primary" id="cdCartSubtotal">—</div>
-                            </div>
-                        </div>
-                        <hr class="my-2">
-                        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
-                            <span class="small text-muted">
-                                <i class="fas fa-chart-line me-1"></i>
-                                Projected new balance <span class="text-muted">(due + cart)</span>
-                            </span>
-                            <span class="fw-bold" id="cdProjectedBalance">—</span>
-                        </div>
-                        <div id="cdStatusRow" class="small mt-1">
-                            <span id="cdStatus" class="badge bg-secondary">—</span>
-                            <span id="cdStatusText" class="text-muted ms-1"></span>
-                        </div>
-                    </div>
-                </div>
-            </div>
+        <div class="sales-cart-tabs-wrap">
+            <ul class="nav sales-cart-tabs" id="draftTabs" role="tablist"></ul>
         </div>
-    </div>
+        <div id="draftTabsEmpty" class="small text-muted py-1 px-3 pb-2">
+            <i class="fas fa-info-circle me-1"></i>
+            No open carts. Pick a customer below to start a new one.
+        </div>
+    </section>
 
     {{-- ===================== EMPTY STATE (no customer) ===================== --}}
-    <div id="emptyState" class="card border-0 shadow-sm @if (!empty($selectedCustomerId)) d-none @endif">
-        <div class="card-body text-center py-5">
+    <div id="emptyState" class="sales-panel mt-3 @if (!empty($selectedCustomerId)) d-none @endif">
+        <div class="sales-panel-body text-center py-5">
             <div class="display-6 text-muted mb-3">
                 <i class="fas fa-cart-arrow-down"></i>
             </div>
@@ -227,61 +105,165 @@
     </div>
 
     {{-- ===================== MAIN TWO-COLUMN WORKSPACE ===================== --}}
-    <div id="workspace" class="row g-3 @if (empty($selectedCustomerId)) d-none @endif">
+    {{-- Legacy layout: col-xl-4 (Customer) + col-xl-8 (Product entry), side-by-side --}}
+    <div id="workspace" class="row g-3 mt-1 @if (empty($selectedCustomerId)) d-none @endif">
 
-        {{-- ============== LEFT COLUMN (main, col-8) ============== --}}
-        <div class="col-12 col-lg-8">
-
-            {{-- ---------- Add Product card ---------- --}}
-            <div class="card border-0 shadow-sm mb-3">
-                <div class="card-header bg-white border-bottom">
-                    <span>
-                        <i class="fas fa-plus-circle me-2 text-primary"></i>
-                        <strong>Add Product</strong>
-                    </span>
+        {{-- ============== LEFT: Customer panel (col-xl-4, legacy-faithful .sales-panel) ============== --}}
+        <div class="col-12 col-xl-4">
+            <section class="sales-panel">
+                <div class="sales-panel-head">
+                    <i class="fas fa-user-tie"></i>
+                    <span>Customer</span>
                 </div>
-                <div class="card-body">
-                    {{-- R10/R15+ simplified: a single Select2 product search box
-                         doubles as the barcode scanner entry. Barcode scanners
-                         act as HID keyboards — they "type" the code rapidly
-                         and end with Enter. Select2's AJAX debounce (250 ms)
-                         is long enough to capture the full scan, and
-                         `selectOnClose: true` (set in the JS below) makes
-                         Enter pick the first highlighted match. If no name
-                         match is found, the user's typed term is treated as
-                         a product_code and a fallback exact-match lookup is
-                         fired against the R1 productByCode endpoint — so
-                         scanning a code that isn't a substring of any
-                         product_name still resolves correctly. --}}
-                    <div class="row g-2 align-items-end">
-                        <div class="col-12 col-md-5">
-                            <label for="addProduct" class="form-label small fw-semibold mb-1">
-                                Product
-                                <span class="badge bg-light text-secondary ms-1 fw-normal" title="Type a name or scan a barcode — Enter picks the first match">
-                                    <i class="fas fa-barcode me-1"></i>scan ok
-                                </span>
-                            </label>
-                            <select id="addProduct" class="form-select select2" style="width:100%;">
-                                <option value="">— Type name / scan code —</option>
+                <div class="sales-panel-body">
+                    <label class="form-label small text-muted mb-1" for="customerSelect" id="customerSearchLabel">
+                        Search name, shop or mobile
+                    </label>
+                    <div class="sales-customer-picker">
+                        <div class="position-relative flex-grow-1">
+                            {{-- HYBRID Decision A: keep Select2 (Laravel JS depends on it) but apply
+                                 .sales-search-input for the legacy 48px indigo look. Full A2
+                                 (text-input + suggest-list) deferred — would require porting
+                                 sales-create.js autocomplete logic. --}}
+                            <select id="customerSelect" class="form-select select2 sales-search-input" style="width:100%;">
+                                <option value="">— Select a customer —</option>
+                                @if (!empty($selectedCustomer))
+                                    <option value="{{ $selectedCustomer->id }}" selected>
+                                        {{ $selectedCustomer->customer_name }}
+                                        @if (!empty($selectedCustomer->customer_code)) [{{ $selectedCustomer->customer_code }}] @endif
+                                    </option>
+                                @endif
                             </select>
+                            <div id="customerSuggestions" class="sales-suggest-list"></div>
                         </div>
-                        <div class="col-6 col-md-2">
-                            <label for="addQty" class="form-label small fw-semibold mb-1">Qty</label>
-                            <input type="number" id="addQty" class="form-control" min="0.001" step="0.001" value="1">
-                        </div>
-                        <div class="col-6 col-md-3">
-                            <label for="addRate" class="form-label small fw-semibold mb-1">Rate</label>
-                            <input type="number" id="addRate" class="form-control" min="0" step="0.01" placeholder="0.00">
-                            <div id="rateHint" class="form-text small text-muted mt-1">&nbsp;</div>
-                        </div>
-                        <div class="col-12 col-md-2">
-                            <button type="button" id="btnAddToCart" class="btn btn-success w-100">
-                                <i class="fas fa-cart-plus me-1"></i> Add
-                            </button>
+                        <button type="button" class="btn btn-outline-secondary sales-change-customer" id="btnChangeCustomer" title="Change customer">
+                            Change
+                        </button>
+                        <button type="button" id="btnLoadCart" class="btn btn-primary sales-change-customer" title="Load saved cart for this customer">
+                            <i class="fas fa-sync me-1"></i> Load
+                        </button>
+                    </div>
+
+                    {{-- R15: Customer recents chips --}}
+                    {{--
+                      Ported from Legacy #customerRecents in
+                      legacy/app/views/sales/create.php (L47) + sales.js
+                      `rememberCustomerRecent` / `renderCustomerRecents`
+                      (L1306–1354). Stores the last 5 picked customers in
+                      localStorage and renders them as click-to-pick chips
+                      beneath the customer Select2.
+                    --}}
+                    <div id="customerRecentsRow" class="mt-2 d-none">
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <span class="small text-muted text-nowrap">
+                                <i class="fas fa-clock-rotate-left me-1 text-primary"></i>Recent:
+                            </span>
+                            <div id="customerRecents" class="sales-recents d-flex flex-wrap gap-1"></div>
                         </div>
                     </div>
 
-                    {{-- ============ R13: PRICE-RANGE SLIDER BAND ============ --}}
+                    <div class="row g-2 mt-2 align-items-end">
+                        <div class="col-12 d-flex gap-2">
+                            <a href="{{ route('admin.sales.cart') }}" class="btn btn-outline-secondary btn-sm" title="Reset cart page">
+                                <i class="fas fa-rotate-left me-1"></i> Reset
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                {{-- R14: Live credit snapshot — restyled to .sales-customer-due (dark slate box) per Decision B2.
+                     All R14 JS-dependent IDs preserved (cdCreditLimit, cdCurrentDue, cdDueLeft,
+                     cdCartSubtotal, cdProjectedBalance, cdStatus, cdStatusText, btnRefreshCredit). --}}
+                {{--
+                  Ported from Legacy #customerDetailsPanel in
+                  legacy/app/views/sales/create.php (L72–80). Shows the
+                  customer's credit_limit, current_due, and due_left inline
+                  so the cashier can see at a glance whether adding more
+                  items will breach the limit. Mirrors Legacy's
+                  disp_limit / disp_due / disp_left layout (L192–207 in
+                  sales-pos.css — .sales-customer-due dark slate box).
+
+                  Beyond Legacy parity, R14 also surfaces cart subtotal +
+                  projected new balance (audit gap §6.1 #6 — prevents
+                  wasted cart-building). Data fetched via R14 endpoint
+                  GET /admin/sales/cart/customer-details?customer_id=...
+                  (throttled 60/min). Panel re-renders on every cart
+                  mutation using cached snapshot + latest subtotal.
+                --}}
+                <div id="customerDetailsPanel" class="sales-customer-due d-none">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <span class="small">
+                            <i class="fas fa-wallet me-1"></i>
+                            <strong>Credit snapshot</strong>
+                            <span class="opacity-75 ms-1">— live from ledger</span>
+                        </span>
+                        <button type="button" id="btnRefreshCredit" class="btn btn-sm btn-link text-decoration-none p-0 m-0 text-white"
+                                title="Re-fetch from ledger (in case of recent payments)">
+                            <i class="fas fa-rotate me-1"></i><span class="small">Refresh</span>
+                        </button>
+                    </div>
+                    <div class="due-row"><span>Credit limit</span><strong id="cdCreditLimit">—</strong></div>
+                    <div class="due-row"><span>Current due</span><strong id="cdCurrentDue">—</strong></div>
+                    <div class="due-row highlight"><span>Balance left</span><strong id="cdDueLeft">—</strong></div>
+                    <div class="due-row"><span>Cart subtotal</span><strong id="cdCartSubtotal">—</strong></div>
+                    <div class="due-row highlight mt-1 pt-1" style="border-top:1px solid rgba(255,255,255,0.15);">
+                        <span>Projected new balance <small class="opacity-75">(due + cart)</small></span>
+                        <strong id="cdProjectedBalance">—</strong>
+                    </div>
+                    <div id="cdStatusRow" class="mt-2">
+                        <span id="cdStatus" class="badge bg-secondary">—</span>
+                        <span id="cdStatusText" class="ms-1 small"></span>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        {{-- ============== RIGHT: Product entry panel (col-xl-8, legacy-faithful .sales-panel) ============== --}}
+        <div class="col-12 col-xl-8">
+            <section class="sales-panel sales-panel-product">
+                <div class="sales-panel-head">
+                    <i class="fas fa-barcode"></i>
+                    <span>Add products</span>
+                </div>
+                <div class="sales-panel-body">
+                    <label class="form-label small text-muted mb-1" for="addProduct">Product name or code</label>
+                    <div class="position-relative mb-3">
+                        {{-- HYBRID Decision A: Select2 + .sales-search-input class.
+                             R10/R15+ simplified: a single Select2 product search box
+                             doubles as the barcode scanner entry. Barcode scanners
+                             act as HID keyboards — they "type" the code rapidly
+                             and end with Enter. Select2's AJAX debounce (250 ms)
+                             is long enough to capture the full scan, and
+                             `selectOnClose: true` (set in the JS below) makes
+                             Enter pick the first highlighted match. If no name
+                             match is found, the user's typed term is treated as
+                             a product_code and a fallback exact-match lookup is
+                             fired against the R1 productByCode endpoint. --}}
+                        <select id="addProduct" class="form-select select2 sales-search-input" style="width:100%;">
+                            <option value="">— Type name / scan code —</option>
+                        </select>
+                        <div id="productSuggestions" class="sales-suggest-list"></div>
+                    </div>
+
+                    {{-- Stock availability banner (legacy-faithful .sales-stock-banner) --}}
+                    {{--
+                      Ported from Legacy #BranchStock in legacy/app/views/sales/create.php
+                      (L99). Teal-gradient banner showing the total available stock
+                      for the currently-selected product across all warehouses in
+                      the active branch. Mirrors .sales-stock-banner (L209–247
+                      in sales-pos.css).
+                    --}}
+                    <div id="BranchStock" class="sales-stock-banner d-none">
+                        <div class="stock-banner-inner">
+                            <div class="stock-stat">
+                                <span class="stock-label">Available (branch)</span>
+                                <span class="stock-value" id="addAvailTotal">—</span>
+                            </div>
+                            <span class="text-white-50 small align-self-center">Warehouse breakdown appears in the Availability panel below.</span>
+                        </div>
+                    </div>
+
+                    {{-- R13: Price-range slider (Decision C2: use .sales-price-band* classes from sales-pos.css) --}}
                     {{--
                       Ported from Legacy #priceRangePanel in
                       legacy/app/views/sales/create.php (L101–121) +
@@ -294,241 +276,246 @@
                       of range). The "Use default" button snaps the rate
                       back to default_rate.
 
-                      Min / max / default come from productCache, which
-                      the R1 live-search endpoint populates. If a product
-                      has no price range configured (min <= 0 or max <= 0)
-                      the panel hides itself — matching Legacy's
-                      early-return in updatePriceBandUi.
-
-                      The band is purely informational — actual rate
-                      validation still happens server-side in
-                      SalesCartService::validateCartItems + the finalize
-                      flow. This just gives the cashier a visual cue so
-                      they don't have to mentally compare the typed rate
-                      against the min/max hint text.
+                      Phase 2+3 change: replaced inline styles + Bootstrap
+                      utilities with .sales-price-band* classes from
+                      sales-pos.css (L249–402). All element IDs preserved
+                      so sales-create.js::updatePriceBandUi (ported to
+                      Laravel JS) works unchanged.
                     --}}
-                    <div id="priceRangePanel" class="row g-2 mt-2 d-none">
-                        <div class="col-12">
-                            <div class="border rounded-3 bg-light p-2">
-                                <div class="d-flex align-items-center justify-content-between mb-1">
-                                    <span class="small fw-semibold text-muted">
-                                        <i class="fas fa-tags me-1 text-primary"></i>
-                                        Selling range
-                                    </span>
-                                    <button type="button" id="btnUseDefaultRate" class="btn btn-sm btn-outline-primary py-0 px-2">
-                                        <i class="fas fa-arrow-rotate-left me-1"></i>Use default
-                                    </button>
-                                </div>
-                                <div class="d-flex justify-content-between small text-muted mb-1">
-                                    <span>Min <b id="priceBandMin" class="text-body">0</b></span>
-                                    <span>Default <b id="priceBandDefault" class="text-primary">0</b></span>
-                                    <span>Max <b id="priceBandMax" class="text-body">0</b></span>
-                                </div>
-                                <div class="price-band-track-wrap position-relative" style="height:14px;">
-                                    <div class="price-band-track position-absolute top-50 start-0 translate-middle-y w-100 rounded-pill"
-                                         style="height:6px;background:#e5e7eb;"></div>
-                                    <div id="priceBandFill" class="position-absolute top-50 start-0 translate-middle-y rounded-pill"
-                                         style="height:6px;background:linear-gradient(90deg,#22c55e,#4f46e5);width:0%;transition:width .15s ease-out;"></div>
-                                    <div id="priceBandDefaultMark" class="position-absolute top-50 translate-middle-y"
-                                         style="width:3px;height:14px;background:#4f46e5;opacity:.55;left:50%;transition:left .15s ease-out;border-radius:2px;"
-                                         title="Default price"></div>
-                                    <div id="priceBandThumb" class="position-absolute top-50"
-                                         style="width:14px;height:14px;background:#fff;border:2px solid #4f46e5;border-radius:50%;left:0%;transform:translate(-50%,-50%);transition:left .15s ease-out,border-color .15s;"></div>
-                                </div>
-                                <div id="priceRangeStatus" class="small mt-2">
-                                    <span class="badge bg-success">Rate is within allowed range</span>
-                                </div>
+                    <div id="priceRangePanel" class="sales-price-band d-none" aria-live="polite">
+                        <div class="sales-price-band-head">
+                            <span class="sales-price-band-title"><i class="fas fa-tags"></i> Selling range</span>
+                            <button type="button" class="btn btn-sm btn-outline-primary sales-use-default-btn" id="btnUseDefaultRate" title="Set rate to default">
+                                Use default
+                            </button>
+                        </div>
+                        <div class="sales-price-band-labels">
+                            <span>Min <b id="priceBandMin">0</b></span>
+                            <span class="sales-price-band-default">Default <b id="priceBandDefault">0</b></span>
+                            <span>Max <b id="priceBandMax">0</b></span>
+                        </div>
+                        <div class="sales-price-band-track-wrap">
+                            <div class="sales-price-band-track">
+                                <div class="sales-price-band-fill" id="priceBandFill"></div>
+                                <div class="sales-price-band-default-mark" id="priceBandDefaultMark" title="Default price"></div>
+                                <div class="sales-price-band-thumb" id="priceBandThumb"></div>
                             </div>
                         </div>
+                        <div id="priceRangeStatus" class="sales-price-band-status sales-price-ok">Rate is within allowed range</div>
                     </div>
 
-                    <div class="row g-2 mt-2 align-items-center">
-                        <div class="col-12 col-md-4">
-                            <div class="border rounded-3 bg-light px-3 py-2 d-flex align-items-center gap-2 h-100">
-                                <i class="fas fa-warehouse text-secondary"></i>
-                                <div>
-                                    <div class="small text-muted lh-1">Available (branch)</div>
-                                    <div id="addAvailTotal" class="fw-bold lh-1">—</div>
-                                </div>
-                            </div>
+                    {{-- Rate / Qty / Add toolbar (legacy-faithful .sales-entry-toolbar*) --}}
+                    {{--
+                      Mirrors Legacy .sales-entry-toolbar (L432–508 in sales-pos.css):
+                      flex row with Rate (flex-grow), Qty (5.5rem fixed), and Add
+                      button (48px tall, indigo bg). All inputs use .sales-entry-input
+                      for consistent 48px height + 10px radius + indigo focus ring.
+                      On <575.98px screens, the toolbar collapses to a 2-row grid
+                      per the media query at L652–687.
+                    --}}
+                    <div class="sales-entry-toolbar">
+                        <div class="sales-entry-group sales-entry-rate">
+                            <label class="sales-entry-label" for="addRate">Rate (৳)</label>
+                            <input type="number" step="0.01" id="addRate" class="form-control sales-entry-input" placeholder="0.00" inputmode="decimal" min="0">
+                            <div id="rateHint" class="form-text small text-muted mt-1">&nbsp;</div>
                         </div>
-                        <div class="col-12 col-md-8">
-                            <div class="small text-muted">Warehouse breakdown appears in the right-hand Availability card.</div>
+                        <div class="sales-entry-group sales-entry-qty">
+                            <label class="sales-entry-label" for="addQty">Qty</label>
+                            <input type="number" step="0.001" id="addQty" class="form-control sales-entry-input text-center" value="1" inputmode="decimal" min="0.001">
                         </div>
+                        <button type="button" id="btnAddToCart" class="btn btn-primary sales-add-btn">
+                            <i class="fas fa-cart-plus"></i>
+                            <span class="sales-add-text">Add</span>
+                        </button>
                     </div>
                 </div>
-            </div>
-
-            {{-- ---------- Cart Items table ---------- --}}
-            <div class="card border-0 shadow-sm mb-3">
-                <div class="card-header bg-white border-bottom d-flex align-items-center justify-content-between">
-                    <span>
-                        <i class="fas fa-list me-2 text-primary"></i>
-                        <strong>Cart Items</strong>
-                        <span id="itemsCountBadge" class="badge bg-secondary ms-2">0</span>
-                    </span>
-                    <span class="text-muted small d-none d-md-inline">Inline edits auto-save (300ms debounce)</span>
-                </div>
-                <div class="card-body p-0">
-                    {{-- R17: desktop table view (hidden on <md screens) --}}
-                    <div class="sales-cart-desktop table-responsive">
-                        <table class="table table-sm table-hover align-middle mb-0">
-                            <thead class="table-light">
-                                <tr>
-                                    <th style="min-width:220px;">Product</th>
-                                    <th style="width:110px;">Qty</th>
-                                    <th style="width:140px;">Rate</th>
-                                    <th class="text-end" style="width:120px;">Total</th>
-                                    <th class="text-end" style="width:110px;">Available</th>
-                                    <th class="text-center" style="width:80px;">Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="cartItemsBody">
-                                {{-- rendered by JS --}}
-                            </tbody>
-                            <tfoot class="table-light">
-                                <tr>
-                                    <th colspan="3" class="text-end">Subtotal</th>
-                                    <th class="text-end" id="cartSubtotalCell">0.00</th>
-                                    <th colspan="2"></th>
-                                </tr>
-                            </tfoot>
-                        </table>
-                    </div>
-                    {{-- R17: mobile card view (shown on <md screens). Renders
-                         one .sales-cart-line card per cart item with large
-                         tap targets + a swipe-to-delete gesture (touchstart
-                         → touchend delta < -80px triggers removeItem). --}}
-                    <div class="sales-cart-mobile" id="cartItemsMobile">
-                        {{-- rendered by JS --}}
-                    </div>
-                    <div id="cartEmptyRow" class="text-center text-muted py-4 border-top">
-                        <i class="fas fa-inbox me-1"></i> Cart is empty — add a product above.
-                    </div>
-                </div>
-            </div>
-
-            {{-- ---------- Cart actions ---------- --}}
-            <div class="card border-0 shadow-sm mb-3">
-                <div class="card-body d-flex flex-wrap gap-2 align-items-center">
-                    <button type="button" id="btnClear" class="btn btn-outline-danger">
-                        <i class="fas fa-trash me-1"></i> Clear Cart
-                    </button>
-                    <button type="button" id="btnSoftHold" class="btn btn-outline-warning">
-                        <i class="fas fa-pause-circle me-1"></i>
-                        <span id="softHoldBtnLabel">Soft Hold</span>
-                    </button>
-                    <button type="button" id="btnValidate" class="btn btn-outline-info">
-                        <i class="fas fa-check-double me-1"></i> Validate Cart
-                    </button>
-                    <button type="button" id="btnFinalize"
-                            class="btn btn-primary ms-auto"
-                            data-bs-toggle="tooltip" data-bs-placement="top"
-                            title="Create a draft sales invoice from this cart (GL posted)">
-                        <i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice
-                    </button>
-                </div>
-            </div>
+            </section>
         </div>
+    </div>
 
-        {{-- ============== RIGHT COLUMN (aside, col-4) ============== --}}
-        <div class="col-12 col-lg-4">
-
-            {{-- ---------- Cart Summary card ---------- --}}
-            <div class="card border-0 shadow-sm mb-3">
-                <div class="card-header bg-white border-bottom">
-                    <i class="fas fa-receipt me-2 text-primary"></i>
-                    <strong>Summary</strong>
+    {{-- ===================== CART ITEMS TABLE (full-width below workspace, Decision B2) ===================== --}}
+    {{--
+      Legacy has the cart table inside .sales-cart-dock below the workspace
+      form. Per Decision B2, we move Summary + Validation + Availability
+      cards from the right aside to BELOW the cart table — no right aside.
+      The #cartDock wrapper is added so the existing workspace-toggle JS
+      can show/hide both #workspace and #cartDock together (JS patch
+      applied below in @push('scripts')).
+    --}}
+    <div id="cartDock" class="@if (empty($selectedCustomerId)) d-none @endif">
+        <section class="sales-panel mt-3">
+            <div class="sales-panel-head d-flex align-items-center justify-content-between">
+                <span>
+                    <i class="fas fa-list me-1"></i>
+                    <strong>Cart Items</strong>
+                    <span id="itemsCountBadge" class="badge bg-secondary ms-2">0</span>
+                </span>
+                <span class="text-muted small d-none d-md-inline">Inline edits auto-save (300ms debounce)</span>
+            </div>
+            <div class="sales-panel-body p-0">
+                {{-- R17: desktop table view (hidden on <md screens) --}}
+                <div class="sales-cart-desktop table-responsive">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="min-width:220px;">Product</th>
+                                <th style="width:110px;">Qty</th>
+                                <th style="width:140px;">Rate</th>
+                                <th class="text-end" style="width:120px;">Total</th>
+                                <th class="text-end" style="width:110px;">Available</th>
+                                <th class="text-center" style="width:80px;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cartItemsBody">
+                            {{-- rendered by JS --}}
+                        </tbody>
+                        <tfoot class="table-light">
+                            <tr>
+                                <th colspan="3" class="text-end">Subtotal</th>
+                                <th class="text-end" id="cartSubtotalCell">0.00</th>
+                                <th colspan="2"></th>
+                            </tr>
+                        </tfoot>
+                    </table>
                 </div>
-                <div class="card-body">
-                    <dl class="row mb-0 small">
-                        <dt class="col-5 text-muted fw-normal">Customer</dt>
-                        <dd class="col-7 text-end fw-semibold" id="sumCustomer">—</dd>
-
-                        <dt class="col-5 text-muted fw-normal">Branch</dt>
-                        <dd class="col-7 text-end" id="sumBranch">{{ $branchName }}</dd>
-
-                        <dt class="col-5 text-muted fw-normal">Items</dt>
-                        <dd class="col-7 text-end" id="sumItems">0</dd>
-
-                        <dt class="col-5 text-muted fw-normal">Soft-hold</dt>
-                        <dd class="col-7 text-end">
-                            <span id="sumSoftHold" class="badge bg-secondary">No</span>
-                        </dd>
-                    </dl>
-                    <hr class="my-2">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <span class="text-muted">Subtotal</span>
-                        <span id="sumSubtotal" class="fs-4 fw-bold text-primary">0.00</span>
-                    </div>
+                {{-- R17: mobile card view (shown on <md screens). Renders
+                     one .sales-cart-line card per cart item with large
+                     tap targets + a swipe-to-delete gesture (touchstart
+                     → touchend delta < -80px triggers removeItem). --}}
+                <div class="sales-cart-mobile" id="cartItemsMobile">
+                    {{-- rendered by JS --}}
+                </div>
+                <div id="cartEmptyRow" class="text-center text-muted py-4 border-top">
+                    <i class="fas fa-inbox me-1"></i> Cart is empty — add a product above.
                 </div>
             </div>
+        </section>
 
-            {{-- ---------- Validation status card ---------- --}}
-            <div class="card border-0 shadow-sm mb-3">
-                <div class="card-header bg-white border-bottom d-flex align-items-center justify-content-between">
-                    <span>
-                        <i class="fas fa-clipboard-check me-2 text-primary"></i>
-                        <strong>Validation</strong>
-                    </span>
-                    <span id="validationBadge" class="badge bg-secondary">Not checked</span>
-                </div>
-                <div class="card-body">
-                    <p id="validationMessage" class="small text-muted mb-2">Click “Validate Cart” to run the hard gate.</p>
+        {{-- ---------- Cart actions row (Clear/Hold/Validate/Finalize) ---------- --}}
+        <section class="sales-panel mt-3">
+            <div class="sales-panel-body d-flex flex-wrap gap-2 align-items-center">
+                <button type="button" id="btnClear" class="btn btn-outline-danger">
+                    <i class="fas fa-trash me-1"></i> Clear Cart
+                </button>
+                <button type="button" id="btnSoftHold" class="btn btn-outline-warning">
+                    <i class="fas fa-pause-circle me-1"></i>
+                    <span id="softHoldBtnLabel">Soft Hold</span>
+                </button>
+                <button type="button" id="btnValidate" class="btn btn-outline-info">
+                    <i class="fas fa-check-double me-1"></i> Validate Cart
+                </button>
+                <button type="button" id="btnFinalize"
+                        class="btn btn-success btn-finalize ms-auto"
+                        data-bs-toggle="tooltip" data-bs-placement="top"
+                        title="Create a draft sales invoice from this cart (GL posted)">
+                    <i class="fas fa-file-invoice-dollar me-1"></i> Finalize Invoice
+                </button>
+            </div>
+        </section>
 
-                    <div id="stockErrorsBox" class="d-none">
-                        <div class="small fw-semibold text-danger mb-1">
-                            <i class="fas fa-triangle-exclamation me-1"></i>Stock Shortfalls
-                        </div>
-                        <ul id="stockErrorsList" class="list-unstyled small mb-2 ps-3"></ul>
+        {{-- ---------- Three-column row: Summary + Validation + Availability (Decision B2: moved from right aside) ---------- --}}
+        <div class="row g-3 mt-1">
+            {{-- Summary --}}
+            <div class="col-12 col-lg-4">
+                <section class="sales-panel">
+                    <div class="sales-panel-head">
+                        <i class="fas fa-receipt"></i>
+                        <span>Summary</span>
                     </div>
+                    <div class="sales-panel-body">
+                        <dl class="row mb-0 small">
+                            <dt class="col-5 text-muted fw-normal">Customer</dt>
+                            <dd class="col-7 text-end fw-semibold" id="sumCustomer">—</dd>
 
-                    <div id="rateErrorsBox" class="d-none">
-                        <div class="small fw-semibold text-warning mb-1">
-                            <i class="fas fa-tag me-1"></i>Rate Out of Range
+                            <dt class="col-5 text-muted fw-normal">Branch</dt>
+                            <dd class="col-7 text-end" id="sumBranch">{{ $branchName }}</dd>
+
+                            <dt class="col-5 text-muted fw-normal">Items</dt>
+                            <dd class="col-7 text-end" id="sumItems">0</dd>
+
+                            <dt class="col-5 text-muted fw-normal">Soft-hold</dt>
+                            <dd class="col-7 text-end">
+                                <span id="sumSoftHold" class="badge bg-secondary">No</span>
+                            </dd>
+                        </dl>
+                        <hr class="my-2">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="text-muted">Subtotal</span>
+                            <span id="sumSubtotal" class="fs-4 fw-bold text-primary">0.00</span>
                         </div>
-                        <ul id="rateErrorsList" class="list-unstyled small mb-0 ps-3"></ul>
                     </div>
-                </div>
+                </section>
             </div>
 
-            {{-- ---------- Availability card ---------- --}}
-            <div class="card border-0 shadow-sm mb-3">
-                <div class="card-header bg-white border-bottom d-flex align-items-center justify-content-between">
-                    <span>
-                        <i class="fas fa-warehouse me-2 text-primary"></i>
-                        <strong>Availability</strong>
-                    </span>
-                    <span id="availProductBadge" class="badge bg-secondary">No product</span>
-                </div>
-                <div class="card-body">
-                    <div id="availEmpty" class="text-center text-muted small py-3">
-                        <i class="fas fa-magnifying-glass me-1"></i> Select a product in “Add Product” to see per-warehouse availability.
+            {{-- Validation --}}
+            <div class="col-12 col-lg-4">
+                <section class="sales-panel">
+                    <div class="sales-panel-head d-flex align-items-center justify-content-between">
+                        <span>
+                            <i class="fas fa-clipboard-check me-1"></i>
+                            <span>Validation</span>
+                        </span>
+                        <span id="validationBadge" class="badge bg-secondary">Not checked</span>
                     </div>
-                    <div id="availTableWrap" class="d-none">
-                        <div class="table-responsive">
-                            <table class="table table-sm mb-0">
-                                <thead class="table-light">
-                                    <tr>
-                                        <th>Warehouse</th>
-                                        <th class="text-end">Physical</th>
-                                        <th class="text-end">Pipeline</th>
-                                        <th class="text-end">Available</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="availTableBody"></tbody>
-                                <tfoot class="table-light">
-                                    <tr>
-                                        <th>Total</th>
-                                        <th class="text-end" id="availTotalPhysical">0.00</th>
-                                        <th class="text-end" id="availTotalPipeline">0.00</th>
-                                        <th class="text-end" id="availTotalAvailable">0.00</th>
-                                    </tr>
-                                </tfoot>
-                            </table>
+                    <div class="sales-panel-body">
+                        <p id="validationMessage" class="small text-muted mb-2">Click "Validate Cart" to run the hard gate.</p>
+
+                        <div id="stockErrorsBox" class="d-none">
+                            <div class="small fw-semibold text-danger mb-1">
+                                <i class="fas fa-triangle-exclamation me-1"></i>Stock Shortfalls
+                            </div>
+                            <ul id="stockErrorsList" class="list-unstyled small mb-2 ps-3"></ul>
+                        </div>
+
+                        <div id="rateErrorsBox" class="d-none">
+                            <div class="small fw-semibold text-warning mb-1">
+                                <i class="fas fa-tag me-1"></i>Rate Out of Range
+                            </div>
+                            <ul id="rateErrorsList" class="list-unstyled small mb-0 ps-3"></ul>
                         </div>
                     </div>
-                </div>
+                </section>
+            </div>
+
+            {{-- Availability --}}
+            <div class="col-12 col-lg-4">
+                <section class="sales-panel">
+                    <div class="sales-panel-head d-flex align-items-center justify-content-between">
+                        <span>
+                            <i class="fas fa-warehouse me-1"></i>
+                            <span>Availability</span>
+                        </span>
+                        <span id="availProductBadge" class="badge bg-secondary">No product</span>
+                    </div>
+                    <div class="sales-panel-body">
+                        <div id="availEmpty" class="text-center text-muted small py-3">
+                            <i class="fas fa-magnifying-glass me-1"></i> Select a product in "Add Product" to see per-warehouse availability.
+                        </div>
+                        <div id="availTableWrap" class="d-none">
+                            <div class="table-responsive">
+                                <table class="table table-sm mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Warehouse</th>
+                                            <th class="text-end">Physical</th>
+                                            <th class="text-end">Pipeline</th>
+                                            <th class="text-end">Available</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="availTableBody"></tbody>
+                                    <tfoot class="table-light">
+                                        <tr>
+                                            <th>Total</th>
+                                            <th class="text-end" id="availTotalPhysical">0.00</th>
+                                            <th class="text-end" id="availTotalPipeline">0.00</th>
+                                            <th class="text-end" id="availTotalAvailable">0.00</th>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </div>
         </div>
     </div>
@@ -569,6 +556,7 @@
             </button>
         </div>
     </div>
+</div>
 </div>
 @endsection
 
@@ -614,6 +602,64 @@
 <link rel="stylesheet" href="/assets/css/sales-receive-payment.css">
 
 <style>
+    /* ============================================================
+       STYLE-PARITY Phase 2+3: Bridge styles for hybrid Select2 + legacy classes.
+       Select2 generates its own .select2-selection wrapper that ignores
+       the parent <select>'s classes. These rules propagate the
+       .sales-search-input look (48px height, 16px font, indigo focus
+       ring) into the Select2 rendered widget so it visually matches
+       the legacy text-input style.
+       ============================================================ */
+    .sales-customer-picker .select2-container--default .select2-selection--single,
+    .sales-panel-product .select2-container--default .select2-selection--single {
+        font-size: 16px;
+        min-height: 48px;
+        height: 48px;
+        border-radius: 10px;
+        border: 1px solid var(--sales-border, #e2e8f0);
+        padding: 0.55rem 0.85rem;
+        display: flex;
+        align-items: center;
+    }
+    .sales-customer-picker .select2-container--default .select2-selection--single .select2-selection__rendered,
+    .sales-panel-product .select2-container--default .select2-selection--single .select2-selection__rendered {
+        line-height: 36px;
+        color: var(--sales-text, #0f172a);
+    }
+    .sales-customer-picker .select2-container--default .select2-selection--single .select2-selection__arrow,
+    .sales-panel-product .select2-container--default .select2-selection--single .select2-selection__arrow {
+        height: 46px;
+    }
+    .sales-customer-picker .select2-container--default.select2-container--focus .select2-selection--single,
+    .sales-customer-picker .select2-container--default.select2-container--open .select2-selection--single,
+    .sales-panel-product .select2-container--default.select2-container--focus .select2-selection--single,
+    .sales-panel-product .select2-container--default.select2-container--open .select2-selection--single {
+        border-color: var(--sales-primary, #4f46e5);
+        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+    }
+
+    /* ============================================================
+       STYLE-PARITY Phase 2: Minor layout fixes for the restructured cart.
+       The cart-dock wrapper holds the cart table + actions + 3-col row.
+       Add a little breathing room between sections.
+       ============================================================ */
+    #cartDock > .sales-panel + .sales-panel,
+    #cartDock > .row {
+        margin-top: 0.75rem;
+    }
+
+    /* The .sales-customer-due dark slate box was originally a Bootstrap
+       card with text-success / text-warning / text-danger utility classes
+       applied to #cdDueLeft and #cdProjectedBalance. Those Bootstrap
+       utilities set color directly, which works fine on the dark bg.
+       Make sure the projected-balance "highlight" row stands out. */
+    .sales-customer-due .due-row.highlight strong {
+        color: #fbbf24;  /* legacy amber — matches sales-pos.css L205-207 */
+    }
+    .sales-customer-due .due-row strong.text-success { color: #22c55e !important; }
+    .sales-customer-due .due-row strong.text-warning { color: #fbbf24 !important; }
+    .sales-customer-due .due-row strong.text-danger  { color: #ef4444 !important; }
+
     /* ============================================================
        R15: Customer recents chips
        ============================================================ */
@@ -1677,11 +1723,17 @@
     // ============================================================
 
     function setWorkspaceVisible(customerSelected) {
+        // STYLE-PARITY Phase 2: also toggle #cartDock (the cart table +
+        // actions + summary/validation/availability row that lives BELOW
+        // the workspace per Decision B2). Legacy had the cart inside the
+        // dock; we keep it as a separate sibling for cleaner CSS scoping.
         if (customerSelected) {
             $('#workspace').removeClass('d-none');
+            $('#cartDock').removeClass('d-none');
             $('#emptyState').addClass('d-none');
         } else {
             $('#workspace').addClass('d-none');
+            $('#cartDock').addClass('d-none');
             $('#emptyState').removeClass('d-none');
         }
     }

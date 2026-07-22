@@ -366,3 +366,52 @@ Stage Summary:
 - Expected visual impact per Phase 0 audit §11: ~40-60% jump toward legacy look. The sticky bottom bar (.sales-pos-sticky-bar), mobile cart cards (.sales-cart-line), customer-recent chips (.sales-recents .btn), and price-band slider (.sales-price-band* — though R13 uses inline styles so this won't apply yet) will snap to legacy styling immediately. Bootstrap .card-based panels, Select2 dropdowns, and inline-styled hero header will NOT change much — those need Phase 3 HTML restructuring.
 - Cascade safety: 11 duplicate selectors between legacy file and Laravel inline block all resolve correctly (Laravel superset wins by source order).
 - Next step: user reloads the cart page in browser and provides a new screenshot so we can verify the visual jump and identify remaining gaps for Phase 3.
+
+---
+Task ID: STYLE-PHASE-2+3
+Agent: Main (Super Z)
+Task: Phase 2+3 combined — full legacy-faithful HTML restructure of cart.blade.php
+
+Work Log:
+- Read full HTML structure of cart.blade.php (lines 1-572) to map all JS-dependent element IDs (60+ IDs inventoried).
+- Confirmed R14 credit-snapshot JS uses .text() on IDs (cdCreditLimit etc.) — safe to change surrounding markup.
+- Confirmed setWorkspaceVisible() JS function only toggled #workspace and #emptyState — would need patching to also toggle new #cartDock.
+- Wrote /home/z/my-project/scripts/phase2_restructure_cart.py — a Python script that:
+  * Reads cart.blade.php
+  * Replaces lines 29-572 (the entire <div id="salesCartApp"> content block) with legacy-faithful HTML
+  * Verifies boundary lines before splicing
+  * Runs 25+ sanity checks after splicing (all IDs preserved, Blade directives balanced)
+- Executed the script: file went from 3022 → 3010 lines (slight reduction — legacy markup is more compact than Bootstrap-card markup).
+- Restructure applied per audit decisions:
+  * Decision A (hybrid): kept Select2 (#customerSelect, #addProduct) but applied .sales-search-input class for the legacy 48px indigo look. Full A2 (text-input + suggest-list) deferred — would require porting sales-create.js autocomplete logic.
+  * Decision B: moved Summary + Validation + Availability cards from the right aside to BELOW the cart table (3-column row). Removed right aside. Wrapped cart table + actions + 3-col row in new #cartDock div.
+  * Decision C: replaced R13 inline-styled slider with .sales-price-band* classes from sales-pos.css. All element IDs preserved (priceBandMin/Default/Max/Fill/DefaultMark/Thumb, priceRangeStatus).
+  * Decision D: replaced "Sales Cart" + Customers/Products buttons with legacy "New Sale" text + single "Today" button (links to admin.sales-invoices.index route).
+- Major class changes:
+  * Wrapped entire app in <div id="sales-create-app" class="sales-create-app"> (sets CSS variables --sales-primary etc.)
+  * Replaced all Bootstrap .card / .card-header / .card-body with legacy .sales-panel / .sales-panel-head / .sales-panel-body
+  * Replaced Bootstrap nav-pills multi-cart dock with .sales-cart-dock* classes
+  * Replaced R14 Bootstrap card with .sales-customer-due dark slate box (preserving all cd* IDs)
+  * Replaced Bootstrap border rounded-3 bg-light stock pill with .sales-stock-banner teal gradient (preserving #addAvailTotal and #BranchStock IDs)
+  * Replaced inline-styled hero header with .sales-create-header class
+  * Replaced Bootstrap row/col entry toolbar with .sales-entry-toolbar* classes
+- Patched setWorkspaceVisible() JS function (line ~1667) to also toggle #cartDock visibility (was only toggling #workspace and #emptyState).
+- Added Phase 2 CSS bridge styles to the inline <style> block:
+  * Select2 selection widget styling to inherit .sales-search-input look (48px height, 16px font, indigo focus ring)
+  * #cartDock section spacing
+  * .sales-customer-due color overrides for Bootstrap text-success/warning/danger utilities (so they remain visible on dark slate bg)
+- Verified final file:
+  * 3074 lines total
+  * @push/@endpush: 3/3 balanced
+  * @section/@endsection: 1/1 balanced
+  * @@push escapes in comments: 2 (correctly escaped)
+  * All 60+ JS-dependent IDs preserved (verified via loop check — zero missing)
+- Documented everything with inline Blade comments referencing the audit doc and decisions A/B/C/D.
+
+Stage Summary:
+- Phase 2+3 COMPLETED in a single combined pass. Single file changed: laravel/resources/views/admin/sales/cart.blade.php.
+- Net line change: +52 lines (3022 → 3074) — added legacy class comments + Phase 2 CSS bridge + cartDock JS patch; removed Bootstrap card verbosity.
+- Visual impact: should be ~85-90% legacy-faithful now. The .sales-create-app wrapper activates all CSS variables. .sales-panel replaces Bootstrap cards (14px radius, surface-bg header, subtle shadow). .sales-customer-due restores the dark slate credit box. .sales-stock-banner restores the teal gradient stock bar. .sales-price-band* restores the legacy slider look. .sales-entry-toolbar* restores the Rate/Qty/Add flex layout. .sales-cart-dock* restores the multi-cart tabs dock look. Hero header now uses .sales-create-header indigo gradient class.
+- Remaining gap: Select2 dropdowns still look like Select2 (not legacy .sales-suggest-list). Full Decision A2 (revert to text input + custom dropdown) deferred — would require porting sales-create.js autocomplete logic. Bridge CSS in this commit makes Select2 inherit the .sales-search-input 48px indigo look, so it's visually close.
+- No JS logic changed (only the 2-line setWorkspaceVisible patch). All AJAX endpoints, event handlers, state management untouched.
+- Ready to commit and push. User should reload /admin/sales/cart and send a new screenshot for VLM diff verification.
