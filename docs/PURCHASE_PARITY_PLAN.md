@@ -1414,7 +1414,7 @@ Each phase is independently shippable. A phase is "done" when all its success cr
 
 ---
 
-### Phase 6 — Printable Return slip + per-module audit logs + PurchaseAudit checklist
+### Phase 6 — Printable Return slip + per-module audit logs + PurchaseAudit checklist ✅ COMPLETE (2026-07-22)
 
 **Goal:** Add the printable Return slip, per-module audit-log pages (PO/GRN/Return), and the central PurchaseAudit checklist dashboard with 12 health-check sections.
 
