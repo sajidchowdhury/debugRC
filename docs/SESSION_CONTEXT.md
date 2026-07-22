@@ -1814,12 +1814,73 @@ The sales cart style parity work (commits `c2bd5c7` + `0cce0a0`) is in a good st
 
 ---
 
+### 5.27 Purchase module — Phase 1 (RBAC + branch isolation)
+
+**User ask (2026-07-22):** *"work on Phase 1 — RBAC + branch isolation / update the docs/PURCHASE_PARITY_PLAN.md and update docs/SESSION_CONTEXT.md / when done push the update in to the github with ur context documentation so its never lost even z ai lost the conversation"*
+
+**Phase 1 scope:** Lock down every purchase route with role-based access control (RBAC) + branch isolation, so that (a) only authorized roles can access the purchase module, and (b) users can only see/create data for their own branch.
+
+**Verification method:** Could not run live HTTP tests (no `php`/`docker` CLI on host). Verified by:
+1. Brace/paren/bracket balance check on all 6 modified PHP files (all OK).
+2. Cross-reference of every route definition against `legacy/app/config/route_roles.php` `PurchaseOrderController`/`PurchaseReceiveController`/`PurchaseReturnController` matrices.
+3. Manual review of each `index()`, `create()`, `store()`, `update()`, AJAX endpoint, and middleware path for branch-scoping completeness.
+
+**Bugs fixed in Phase 1 (2 security bugs):**
+
+1. **BUG-6 (CRITICAL SECURITY):** No RBAC middleware on purchase routes. Any authenticated user (including a salesman) could access every purchase endpoint — including cancel/reverse. Legacy gates these to admin/manager/accountant/warehouse_manager only.
+
+   **Fix:** All 3 purchase route groups in `routes/web.php` restructured with per-action `role:` middleware. Resource declarations split (`->only(['index', 'create', 'show', 'edit'])` for PO, `->only(['index', 'show'])` for GRN/Return) so write verbs (`store`/`update`) can be registered as standalone routes with tighter RBAC + `branch.isolation`. Role matrix mirrors legacy `route_roles.php`:
+   - Read (`index`/`show`): admin, manager, warehouse_manager, accountant
+   - Write (`create`/`store`/`edit`/`update`/`markAsSent`): admin, manager, warehouse_manager
+   - AJAX (`getPoDetails`/`getReceiveDetails`): admin, manager, warehouse_manager
+   - Destructive (`confirm`/`cancel`/`reverse`): admin, manager (return `cancel` also allows accountant per legacy `reverse`)
+   - `salesman`/`dispatcher`/`hr`/`user`/`other` have NO access; `superadmin` always passes.
+
+2. **BUG-7 (CRITICAL SECURITY):** No branch isolation on purchase routes. A user logged into Branch A could see/filter/create data for Branch B by passing `?branch_id=B` in the URL or POST body, or by guessing another branch's record id in the URL.
+
+   **Fix (multi-layer):**
+   - `EnforceBranchIsolation::inferTableFromUri()` extended to recognize `purchase-orders`/`purchase-receives`/`purchase-returns` URL prefixes and resolve their `{id}` param to `purchase_orders`/`purchase_receives`/`purchase_returns` tables. Non-admin users hitting `/admin/purchase-orders/{other_branch_id}` now get 403.
+   - All write routes carry `branch.isolation` middleware → non-admin POST bodies cannot forge `branch_id`.
+   - `Controller` base class gets 2 protected helpers: `resolveBranchIdForRead(?int)` (admin can override with active branch_id; non-admin falls back to session) and `resolveBranchIdForWrite(?int)` (admin can override; non-admin ALWAYS uses session branch, ignoring client-supplied branch_id).
+   - All 3 controllers' `index()` queries branch-scoped via `resolveBranchIdForRead()`. Stats queries also branch-scoped (using `clone $statsQuery` to avoid mutating the builder).
+   - All 3 controllers' `store()` (and PO `update()`) call `resolveBranchIdForWrite()` — non-admin users cannot create or move a record to another branch.
+   - `PurchaseReceiveController::create(?po_id=)` + `PurchaseReturnController::create(?receive_id=)` check the source record's `branch_id` vs session for non-admins → redirect with error on mismatch.
+   - `PurchaseReceiveController::getPoDetails()` + `PurchaseReturnController::getReceiveDetails()` AJAX endpoints check the source record's `branch_id` vs session for non-admins → 403 JSON on mismatch.
+   - `PurchaseReturnController::create()` GRN selector dropdown (the "confirmed GRNs" list) is now branch-scoped for non-admins — they cannot see another branch's GRNs in the picker.
+
+**Files touched in Phase 1:**
+
+- **`laravel/app/Http/Middleware/EnforceBranchIsolation.php`** — `inferTableFromUri()` extended with 3 new patterns.
+- **`laravel/app/Http/Controllers/Controller.php`** — 2 new protected helpers (`resolveBranchIdForRead` + `resolveBranchIdForWrite`). Available to every controller in the app — non-purchase controllers can adopt them later if needed.
+- **`laravel/routes/web.php`** — All 3 purchase route groups restructured (~100 lines changed).
+- **`laravel/app/Http/Controllers/Admin/PurchaseOrderController.php`** — `index()` branch-scoped (query + stats); `store()` + `update()` force session branch for non-admins.
+- **`laravel/app/Http/Controllers/Admin/PurchaseReceiveController.php`** — `index()` branch-scoped; `create(?po_id=)` cross-branch check; `store()` forces session branch; `getPoDetails()` AJAX cross-branch 403.
+- **`laravel/app/Http/Controllers/Admin/PurchaseReturnController.php`** — `index()` branch-scoped; `create(?receive_id=)` cross-branch check; GRN selector branch-scoped; `getReceiveDetails()` AJAX cross-branch 403.
+- **2 docs updated** — `docs/PURCHASE_PARITY_PLAN.md` (Phase 1 Completion Summary at top + BUG-6/7 annotated with FIXED Phase 1 + Phase 1 section in §8 marked complete) and `docs/SESSION_CONTEXT.md` (this section).
+
+**Phase 1 smoke-test checklist (user to run on local Docker — no migrations needed):**
+
+1. Salesman denied. Log in as salesman → visit `/admin/purchase-orders` → redirect to dashboard with error.
+2. Accountant read-only. Log in as accountant → index renders → click Create → redirect (accountant not in create role list).
+3. Warehouse_manager can create but not cancel. Create a PO → try to cancel → redirect (cancel is admin/manager only).
+4. Manager can do everything except audit-level admin actions.
+5. Branch A user cannot see Branch B records. Visit `?branch_id=<B_id>` → filter ignored. Visit `/admin/purchase-orders/<B_PO_id>` → 403/redirect.
+6. Branch A user cannot create for Branch B. POST with `branch_id=<B_id>` in form body → row created with Branch A's id (silently overridden).
+7. Admin can override branch. Visit `?branch_id=<B_id>` → Branch B's records shown. Verify `user_audit_log` gets a `branch_override` row.
+8. AJAX endpoints respect branch. Call `GET /admin/purchase-receives/po-details?po_id=<B_PO_id>` → 403 JSON. Same for `GET /admin/purchase-returns/receive-details?receive_id=<B_GRN_id>`.
+
+**End of Phase 1 → Phase 2 handoff:**
+
+Phase 2 (PurchaseOrder UI parity) can now start. The security perimeter is in place — every purchase route is role-gated and branch-isolated. Phase 2 will touch only blade views (4 PO views), 1 controller method (search-products + datatables + export), and link 3 CSS files. No further route/middleware/schema changes are anticipated. The full phase-by-phase plan lives in `docs/PURCHASE_PARITY_PLAN.md`.
+
+---
+
 ## 6. Open Work Items
 
 (Items the user has asked for but that are not yet done.)
 
-- **Purchase Phase 1 (RBAC + branch isolation)** — next phase to start after the user confirms Phase 0 smoke test passes. See `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 1 for the task list. Touches only `routes/web.php` + 3 controllers + possibly a new `branch.isolation` middleware. No schema changes.
-- **Purchase Phases 2–8** — UI parity (`.purch-*` / `.prt-*` class families), Damage condition, printable Return slip, per-module audit logs, PurchaseAudit checklist, AJAX typeahead, Form Requests, mobile cards, CSV exports, end-to-end QA. See `docs/PURCHASE_PARITY_PLAN.md` §8 for the full plan.
+- **Purchase Phase 2 (PurchaseOrder UI parity)** — next phase to start after the user confirms Phase 1 smoke test passes. See `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 2 for the task list. Touches only 4 PO blade views + 1 controller method (search-products + datatables + export) + links 3 CSS files. No schema/route/middleware changes.
+- **Purchase Phases 3–8** — GRN UI parity, Return UI parity + offcanvas + smart-sort + chip counts, audit logs, PurchaseAudit checklist, Form Requests, mobile cards, CSV exports, end-to-end QA. See `docs/PURCHASE_PARITY_PLAN.md` §8 for the full plan.
 - **Sales style parity (paused)** — Phase 2 extract inline styles, Phase 4+ color polish, mobile QA, cleanup. Can resume after purchase module reaches feature parity. User confirmed sales cart is "ok so far so good" before pivoting.
 - **R7 / R8 / R9** — numbers reserved for future sales items; not yet assigned.
 - **R24 / R25 (Telegram + FCM)** — dropped by user request (2026-07-22). Explicitly NOT being ported.
@@ -2194,6 +2255,22 @@ When the user gives the next instruction, append it here as a checkbox item. Whe
       (2,501 lines). `docs/PURCHASE_PARITY_PLAN.md` and
       `docs/SESSION_CONTEXT.md` updated. See §5.26 above for the
       full smoke-test checklist the user must run on local Docker.
+
+- [x] **Purchase Phase 1 (RBAC + branch isolation)** — completed
+      2026-07-22. 2 critical security bugs fixed (BUG-6 no RBAC,
+      BUG-7 no branch isolation). 6 files touched: `routes/web.php`
+      (3 purchase route groups restructured with per-action `role:`
+      + `branch.isolation` middleware matching legacy
+      `route_roles.php`), `Controller.php` (2 new helpers
+      `resolveBranchIdForRead` + `resolveBranchIdForWrite`),
+      `EnforceBranchIsolation.php` (`inferTableFromUri` extended to
+      recognize purchase routes), 3 purchase controllers (index
+      branch-scoped, store/update force session branch for
+      non-admins, AJAX endpoints cross-branch 403). No schema
+      changes. `docs/PURCHASE_PARITY_PLAN.md` and
+      `docs/SESSION_CONTEXT.md` updated. See §5.27 above for the
+      full 8-step smoke-test checklist the user must run on local
+      Docker.
 
 ---
 

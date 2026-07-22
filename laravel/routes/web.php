@@ -410,38 +410,105 @@ Route::middleware('auth')->group(function () {
 
     // ============================================================
     // Phase 7.1: Purchase Orders (draft document, no stock/GL)
+    // ------------------------------------------------------------
+    // Phase 1 (RBAC + branch isolation) — mirrors legacy
+    // route_roles.php PurchaseOrderController matrix:
+    //   index/show           : admin, manager, warehouse_manager, accountant  (read)
+    //   create/store/edit    : admin, manager, warehouse_manager             (write)
+    //   update/mark-sent     : admin, manager, warehouse_manager             (write)
+    //   cancel               : admin, manager                                (destructive)
+    // salesman/dispatcher/hr/user have NO access to any purchase route.
+    // All writes also carry `branch.isolation` so a non-admin cannot
+    // forge a branch_id in the POST body or cancel another branch's PO
+    // by guessing its URL id.
     // ============================================================
     Route::prefix('admin/purchase-orders')->name('admin.purchase-orders.')->group(function () {
-        Route::post('{id}/mark-sent', [PurchaseOrderController::class, 'markAsSent'])->name('markSent');
-        Route::post('{id}/cancel', [PurchaseOrderController::class, 'cancel'])->name('cancel');
+        Route::post('{id}/mark-sent', [PurchaseOrderController::class, 'markAsSent'])
+            ->name('markSent')
+            ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+        Route::post('{id}/cancel', [PurchaseOrderController::class, 'cancel'])
+            ->name('cancel')
+            ->middleware(['role:admin,manager', 'branch.isolation']);
     });
     Route::resource('admin/purchase-orders', PurchaseOrderController::class)
-        ->only(['index', 'create', 'store', 'show', 'edit', 'update'])
-        ->names('admin.purchase-orders');
+        ->only(['index', 'create', 'show', 'edit'])   // store + update split out below for tighter RBAC
+        ->names('admin.purchase-orders')
+        ->middleware([
+            'role:admin,manager,warehouse_manager,accountant',   // baseline read for the whole resource
+        ]);
+    // Tighten the write verbs on the resource to drop accountant and add branch.isolation.
+    Route::put('admin/purchase-orders/{id}', [PurchaseOrderController::class, 'update'])
+        ->name('admin.purchase-orders.update')
+        ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+    Route::post('admin/purchase-orders', [PurchaseOrderController::class, 'store'])
+        ->name('admin.purchase-orders.store')
+        ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
 
     // ============================================================
     // Phase 7.2: Purchase Receive / GRN (stock IN + GL + supplier_ledger + PO update)
+    // ------------------------------------------------------------
+    // Phase 1 RBAC (legacy PurchaseReceiveController matrix):
+    //   index/show                : admin, manager, warehouse_manager, accountant
+    //   create/store              : admin, manager, warehouse_manager
+    //   get_po_details (AJAX)     : admin, manager, warehouse_manager
+    //   confirm                   : admin, manager                (legacy: warehouse_manager absent)
+    //   cancel                    : admin, manager
+    // confirm/cancel are destructive (stock + GL reversal) so they
+    // are restricted to admin/manager only — NOT warehouse_manager.
     // ============================================================
     Route::prefix('admin/purchase-receives')->name('admin.purchase-receives.')->group(function () {
-        Route::get('po-details', [PurchaseReceiveController::class, 'getPoDetails'])->name('po-details');
-        Route::post('{id}/confirm', [PurchaseReceiveController::class, 'confirm'])->name('confirm');
-        Route::post('{id}/cancel', [PurchaseReceiveController::class, 'cancel'])->name('cancel');
+        Route::get('po-details', [PurchaseReceiveController::class, 'getPoDetails'])
+            ->name('po-details')
+            ->middleware('role:admin,manager,warehouse_manager');
+        Route::post('{id}/confirm', [PurchaseReceiveController::class, 'confirm'])
+            ->name('confirm')
+            ->middleware(['role:admin,manager', 'branch.isolation']);
+        Route::post('{id}/cancel', [PurchaseReceiveController::class, 'cancel'])
+            ->name('cancel')
+            ->middleware(['role:admin,manager', 'branch.isolation']);
     });
     Route::resource('admin/purchase-receives', PurchaseReceiveController::class)
-        ->only(['index', 'create', 'store', 'show'])
-        ->names('admin.purchase-receives');
+        ->only(['index', 'show'])
+        ->names('admin.purchase-receives')
+        ->middleware('role:admin,manager,warehouse_manager,accountant');
+    Route::get('admin/purchase-receives/create', [PurchaseReceiveController::class, 'create'])
+        ->name('admin.purchase-receives.create')
+        ->middleware('role:admin,manager,warehouse_manager');
+    Route::post('admin/purchase-receives', [PurchaseReceiveController::class, 'store'])
+        ->name('admin.purchase-receives.store')
+        ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
 
     // ============================================================
     // Phase 7.3: Purchase Returns (stock OUT at original rate + Dr AP / Cr Inventory + supplier_ledger debit)
+    // ------------------------------------------------------------
+    // Phase 1 RBAC (legacy PurchaseReturnController matrix):
+    //   index/show                       : admin, manager, warehouse_manager, accountant
+    //   create/store                     : admin, manager, warehouse_manager
+    //   receive-details (AJAX)           : admin, manager, warehouse_manager
+    //   confirm                          : admin, manager                  (stock OUT + GL — destructive)
+    //   cancel (reverse)                 : admin, manager, accountant      (legacy: accountant allowed on reverse)
     // ============================================================
     Route::prefix('admin/purchase-returns')->name('admin.purchase-returns.')->group(function () {
-        Route::get('receive-details', [PurchaseReturnController::class, 'getReceiveDetails'])->name('receive-details');
-        Route::post('{id}/confirm', [PurchaseReturnController::class, 'confirm'])->name('confirm');
-        Route::post('{id}/cancel', [PurchaseReturnController::class, 'cancel'])->name('cancel');
+        Route::get('receive-details', [PurchaseReturnController::class, 'getReceiveDetails'])
+            ->name('receive-details')
+            ->middleware('role:admin,manager,warehouse_manager');
+        Route::post('{id}/confirm', [PurchaseReturnController::class, 'confirm'])
+            ->name('confirm')
+            ->middleware(['role:admin,manager', 'branch.isolation']);
+        Route::post('{id}/cancel', [PurchaseReturnController::class, 'cancel'])
+            ->name('cancel')
+            ->middleware(['role:admin,manager,accountant', 'branch.isolation']);
     });
     Route::resource('admin/purchase-returns', PurchaseReturnController::class)
-        ->only(['index', 'create', 'store', 'show'])
-        ->names('admin.purchase-returns');
+        ->only(['index', 'show'])
+        ->names('admin.purchase-returns')
+        ->middleware('role:admin,manager,warehouse_manager,accountant');
+    Route::get('admin/purchase-returns/create', [PurchaseReturnController::class, 'create'])
+        ->name('admin.purchase-returns.create')
+        ->middleware('role:admin,manager,warehouse_manager');
+    Route::post('admin/purchase-returns', [PurchaseReturnController::class, 'store'])
+        ->name('admin.purchase-returns.store')
+        ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
 
     // ============================================================
     // Phase 8.1: Sales Cart Service (per-user-per-customer draft cart)

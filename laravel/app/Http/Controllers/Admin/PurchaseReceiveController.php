@@ -24,11 +24,14 @@ class PurchaseReceiveController extends Controller
 
     public function index(Request $request)
     {
+        // Phase 1 (branch isolation): non-admin users see only their own branch.
+        $branchId = $this->resolveBranchIdForRead($request->input('branch_id') ? (int) $request->input('branch_id') : null);
+
         $query = PurchaseReceive::with(['supplier', 'branch', 'warehouse', 'purchaseOrder', 'items'])
+            ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
             ->when($request->input('from_date'), fn($q, $d) => $q->where('receive_date', '>=', $d))
             ->when($request->input('to_date'), fn($q, $d) => $q->where('receive_date', '<=', $d))
             ->when($request->input('supplier_id'), fn($q, $sid) => $q->where('supplier_id', $sid))
-            ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
             ->when($request->input('status'), fn($q, $s) => $q->where('status', $s))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('receive_code', 'ILIKE', "%{$search}%");
@@ -41,12 +44,17 @@ class PurchaseReceiveController extends Controller
         $suppliers = \App\Models\Supplier::active()->orderBy('supplier_name')->get();
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
+        // Phase 1: stats are also branch-scoped for non-admins.
+        $statsQuery = PurchaseReceive::query();
+        if ($branchId > 0) {
+            $statsQuery->where('branch_id', $branchId);
+        }
         $stats = [
-            'total' => PurchaseReceive::count(),
-            'draft' => PurchaseReceive::where('status', 'draft')->count(),
-            'confirmed' => PurchaseReceive::where('status', 'confirmed')->count(),
-            'cancelled' => PurchaseReceive::where('status', 'cancelled')->count(),
-            'total_value' => PurchaseReceive::where('status', 'confirmed')->sum('total_amount'),
+            'total' => (clone $statsQuery)->count(),
+            'draft' => (clone $statsQuery)->where('status', 'draft')->count(),
+            'confirmed' => (clone $statsQuery)->where('status', 'confirmed')->count(),
+            'cancelled' => (clone $statsQuery)->where('status', 'cancelled')->count(),
+            'total_value' => (clone $statsQuery)->where('status', 'confirmed')->sum('total_amount'),
         ];
 
         return view('admin.purchase-receives.index', [
@@ -67,11 +75,20 @@ class PurchaseReceiveController extends Controller
         $products = \App\Models\Product::active()->orderBy('product_name')->limit(500)->get();
 
         // If po_id is passed, load the PO for pre-fill.
+        // Phase 1 (branch isolation): non-admin users cannot pre-fill from
+        // another branch's PO.
         $po = null;
         $poId = $request->input('po_id');
         if ($poId) {
             $po = \App\Models\PurchaseOrder::with(['items.product', 'supplier', 'branch', 'warehouse'])
                 ->findOrFail($poId);
+            if (!$request->user()->isAdmin()) {
+                $sessionBranchId = (int) (session('branch_id') ?? $request->user()->getBranchId() ?? 0);
+                if ((int) $po->branch_id !== $sessionBranchId) {
+                    return redirect()->route('admin.purchase-receives.index')
+                        ->with('error', 'You do not have access to that PO.');
+                }
+            }
             if (!$po->canReceive()) {
                 return redirect()->route('admin.purchase-orders.show', $po)
                     ->with('error', "This PO cannot receive goods (status: {$po->status}).");
@@ -107,11 +124,17 @@ class PurchaseReceiveController extends Controller
             'items.*.purchase_order_item_id' => 'nullable|integer',
         ]);
 
+        // Phase 1 (branch isolation): non-admin users cannot create a GRN
+        // for another branch — force the session branch. If no branch_id
+        // was supplied at all, fall back to session branch too.
+        $clientBranchId = isset($validated['branch_id']) ? (int) $validated['branch_id'] : null;
+        $branchId = $this->resolveBranchIdForWrite($clientBranchId);
+
         try {
             $receive = $this->receiveService->createReceive([
                 'purchase_order_id' => $validated['purchase_order_id'] ?? null,
                 'supplier_id' => $validated['supplier_id'] ?? null,
-                'branch_id' => $validated['branch_id'] ?? null,
+                'branch_id' => $branchId,
                 'warehouse_id' => $validated['warehouse_id'],
                 'receive_date' => $validated['receive_date'],
                 'notes' => $validated['notes'] ?? '',
@@ -196,6 +219,11 @@ class PurchaseReceiveController extends Controller
 
     /**
      * AJAX: get PO details for receive form pre-fill.
+     *
+     * Phase 1 (branch isolation): non-admin users can only fetch POs
+     * from their own branch. This prevents a warehouse_manager from
+     * pre-filling the receive form with another branch's PO data via
+     * ?po_id=<guessed_id>.
      */
     public function getPoDetails(Request $request)
     {
@@ -205,6 +233,14 @@ class PurchaseReceiveController extends Controller
 
         $po = \App\Models\PurchaseOrder::with(['items.product', 'supplier', 'branch', 'warehouse'])
             ->findOrFail($request->input('po_id'));
+
+        // Phase 1: branch isolation — deny cross-branch access for non-admins.
+        if (!$request->user()->isAdmin()) {
+            $sessionBranchId = (int) (session('branch_id') ?? $request->user()->getBranchId() ?? 0);
+            if ((int) $po->branch_id !== $sessionBranchId) {
+                return response()->json(['message' => 'You do not have access to this PO.'], 403);
+            }
+        }
 
         if (!$po->canReceive()) {
             return response()->json(['error' => "PO cannot receive (status: {$po->status})"], 400);

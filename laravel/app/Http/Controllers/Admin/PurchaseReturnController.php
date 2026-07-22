@@ -22,11 +22,14 @@ class PurchaseReturnController extends Controller
 
     public function index(Request $request)
     {
+        // Phase 1 (branch isolation): non-admin users see only their own branch.
+        $branchId = $this->resolveBranchIdForRead($request->input('branch_id') ? (int) $request->input('branch_id') : null);
+
         $query = PurchaseReturn::with(['supplier', 'branch', 'purchaseReceive', 'items'])
+            ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
             ->when($request->input('from_date'), fn($q, $d) => $q->where('return_date', '>=', $d))
             ->when($request->input('to_date'), fn($q, $d) => $q->where('return_date', '<=', $d))
             ->when($request->input('supplier_id'), fn($q, $sid) => $q->where('supplier_id', $sid))
-            ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
             ->when($request->input('status'), fn($q, $s) => $q->where('status', $s))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('return_code', 'ILIKE', "%{$search}%");
@@ -39,12 +42,17 @@ class PurchaseReturnController extends Controller
         $suppliers = \App\Models\Supplier::active()->orderBy('supplier_name')->get();
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
+        // Phase 1: stats are also branch-scoped for non-admins.
+        $statsQuery = PurchaseReturn::query();
+        if ($branchId > 0) {
+            $statsQuery->where('branch_id', $branchId);
+        }
         $stats = [
-            'total' => PurchaseReturn::count(),
-            'draft' => PurchaseReturn::where('status', 'draft')->count(),
-            'confirmed' => PurchaseReturn::where('status', 'confirmed')->count(),
-            'cancelled' => PurchaseReturn::where('status', 'cancelled')->count(),
-            'total_value' => PurchaseReturn::where('status', 'confirmed')->sum('total_amount'),
+            'total' => (clone $statsQuery)->count(),
+            'draft' => (clone $statsQuery)->where('status', 'draft')->count(),
+            'confirmed' => (clone $statsQuery)->where('status', 'confirmed')->count(),
+            'cancelled' => (clone $statsQuery)->where('status', 'cancelled')->count(),
+            'total_value' => (clone $statsQuery)->where('status', 'confirmed')->sum('total_amount'),
         ];
 
         return view('admin.purchase-returns.index', [
@@ -66,15 +74,29 @@ class PurchaseReturnController extends Controller
                 ->where('status', 'confirmed')
                 ->where('is_reversed', false)
                 ->findOrFail($receiveId);
+            // Phase 1 (branch isolation): non-admin users cannot start a
+            // return from another branch's GRN.
+            if (!$request->user()->isAdmin()) {
+                $sessionBranchId = (int) (session('branch_id') ?? $request->user()->getBranchId() ?? 0);
+                if ((int) $receive->branch_id !== $sessionBranchId) {
+                    return redirect()->route('admin.purchase-returns.index')
+                        ->with('error', 'You do not have access to that GRN.');
+                }
+            }
         }
 
         // Get confirmed GRNs with returnable items for the selector.
-        $receives = \App\Models\PurchaseReceive::with(['supplier', 'branch'])
+        // Phase 1: branch-scope this list for non-admin users.
+        $receivesQuery = \App\Models\PurchaseReceive::with(['supplier', 'branch'])
             ->where('status', 'confirmed')
             ->where('is_reversed', false)
             ->orderBy('receive_date', 'desc')
-            ->limit(100)
-            ->get();
+            ->limit(100);
+        if (!$request->user()->isAdmin()) {
+            $sessionBranchId = (int) (session('branch_id') ?? $request->user()->getBranchId() ?? 0);
+            $receivesQuery->where('branch_id', $sessionBranchId);
+        }
+        $receives = $receivesQuery->get();
 
         $warehouses = \App\Models\Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
 
@@ -183,6 +205,9 @@ class PurchaseReturnController extends Controller
 
     /**
      * AJAX: get GRN details for return form pre-fill.
+     *
+     * Phase 1 (branch isolation): non-admin users can only fetch GRNs
+     * from their own branch.
      */
     public function getReceiveDetails(Request $request)
     {
@@ -194,6 +219,14 @@ class PurchaseReturnController extends Controller
             ->where('status', 'confirmed')
             ->where('is_reversed', false)
             ->findOrFail($request->input('receive_id'));
+
+        // Phase 1: deny cross-branch access for non-admins.
+        if (!$request->user()->isAdmin()) {
+            $sessionBranchId = (int) (session('branch_id') ?? $request->user()->getBranchId() ?? 0);
+            if ((int) $receive->branch_id !== $sessionBranchId) {
+                return response()->json(['message' => 'You do not have access to this GRN.'], 403);
+            }
+        }
 
         // Calculate returnable_qty for each item.
         $items = $receive->items->map(function ($item) {

@@ -23,11 +23,15 @@ class PurchaseOrderController extends Controller
 
     public function index(Request $request)
     {
+        // Phase 1 (branch isolation): non-admin users see only their own
+        // branch. Admin can override by passing ?branch_id= explicitly.
+        $branchId = $this->resolveBranchIdForRead($request->input('branch_id') ? (int) $request->input('branch_id') : null);
+
         $query = PurchaseOrder::with(['supplier', 'branch', 'warehouse', 'items'])
+            ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
             ->when($request->input('from_date'), fn($q, $d) => $q->where('po_date', '>=', $d))
             ->when($request->input('to_date'), fn($q, $d) => $q->where('po_date', '<=', $d))
             ->when($request->input('supplier_id'), fn($q, $sid) => $q->where('supplier_id', $sid))
-            ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
             ->when($request->input('status'), fn($q, $s) => $q->where('status', $s))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('po_code', 'ILIKE', "%{$search}%");
@@ -40,14 +44,19 @@ class PurchaseOrderController extends Controller
         $suppliers = \App\Models\Supplier::active()->orderBy('supplier_name')->get();
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
+        // Phase 1: stats are also branch-scoped for non-admins.
+        $statsQuery = PurchaseOrder::query();
+        if ($branchId > 0) {
+            $statsQuery->where('branch_id', $branchId);
+        }
         $stats = [
-            'total' => PurchaseOrder::count(),
-            'draft' => PurchaseOrder::where('status', 'draft')->count(),
-            'sent' => PurchaseOrder::where('status', 'sent')->count(),
-            'partial' => PurchaseOrder::where('status', 'partial')->count(),
-            'received' => PurchaseOrder::where('status', 'received')->count(),
-            'cancelled' => PurchaseOrder::where('status', 'cancelled')->count(),
-            'total_value' => PurchaseOrder::whereNotIn('status', ['cancelled'])->sum('total_amount'),
+            'total' => (clone $statsQuery)->count(),
+            'draft' => (clone $statsQuery)->where('status', 'draft')->count(),
+            'sent' => (clone $statsQuery)->where('status', 'sent')->count(),
+            'partial' => (clone $statsQuery)->where('status', 'partial')->count(),
+            'received' => (clone $statsQuery)->where('status', 'received')->count(),
+            'cancelled' => (clone $statsQuery)->where('status', 'cancelled')->count(),
+            'total_value' => (clone $statsQuery)->whereNotIn('status', ['cancelled'])->sum('total_amount'),
         ];
 
         return view('admin.purchase-orders.index', [
@@ -93,10 +102,14 @@ class PurchaseOrderController extends Controller
             'items.*.rate' => 'required|numeric|min:0',
         ]);
 
+        // Phase 1 (branch isolation): non-admin users cannot write to
+        // another branch — force the session branch.
+        $branchId = $this->resolveBranchIdForWrite((int) $validated['branch_id']);
+
         try {
             $po = $this->poService->createOrder([
                 'supplier_id' => $validated['supplier_id'],
-                'branch_id' => $validated['branch_id'],
+                'branch_id' => $branchId,
                 'warehouse_id' => $validated['warehouse_id'] ?? null,
                 'po_date' => $validated['po_date'],
                 'expected_date' => $validated['expected_date'] ?? null,
@@ -167,10 +180,14 @@ class PurchaseOrderController extends Controller
             'items.*.rate' => 'required|numeric|min:0',
         ]);
 
+        // Phase 1 (branch isolation): non-admin users cannot move a PO
+        // to another branch — force the session branch.
+        $branchId = $this->resolveBranchIdForWrite((int) $validated['branch_id']);
+
         try {
             $po = $this->poService->updateOrder($id, [
                 'supplier_id' => $validated['supplier_id'],
-                'branch_id' => $validated['branch_id'],
+                'branch_id' => $branchId,
                 'warehouse_id' => $validated['warehouse_id'] ?? null,
                 'po_date' => $validated['po_date'],
                 'expected_date' => $validated['expected_date'] ?? null,
