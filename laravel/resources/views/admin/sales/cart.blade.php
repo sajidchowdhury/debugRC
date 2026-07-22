@@ -595,6 +595,24 @@
 @endpush
 
 @push('css')
+{{-- ============================================================
+     STYLE-PARITY Phase 1 (2026-07-22): Link legacy module CSS.
+     sales-pos.css       — the full legacy sales-create stylesheet
+                           (960 lines, copied from legacy/public/assets/css/).
+                           Defines .sales-create-app, .sales-panel,
+                           .sales-customer-due, .sales-stock-banner,
+                           .sales-price-band*, .sales-entry-toolbar*,
+                           .sales-cart-dock*, .sales-pos-sticky-bar, etc.
+     sales-receive-payment.css — receive-payment modal styling (the cart
+                                 triggers this modal from the finalize flow).
+     Load order: legacy module CSS first → Laravel inline <style> second
+     so Laravel-only R15/R16/R17 enhancements (which are supersets of
+     the legacy rules they touch) win the cascade without !important.
+     See docs/STYLE_PARITY_AUDIT_PHASE0.md §6 for the conflict table.
+     ============================================================ --}}
+<link rel="stylesheet" href="/assets/css/sales-pos.css">
+<link rel="stylesheet" href="/assets/css/sales-receive-payment.css">
+
 <style>
     /* ============================================================
        R15: Customer recents chips

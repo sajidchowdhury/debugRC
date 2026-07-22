@@ -309,3 +309,60 @@ Stage Summary:
 - R28 closes audit §6.1 item #33 (PWA installability for POS kiosk deployment).
 - All Blade directives verified balanced. All PHP braces verified balanced.
 - Ready to commit and push.
+
+---
+Task ID: STYLE-PHASE-0
+Agent: Main (Super Z)
+Task: Phase 0 audit for sales-pos.css port — make Laravel cart blade look like legacy sales/create
+
+Work Log:
+- Confirmed via grep: sales-pos.css (960 lines) is present at laravel/public/assets/css/sales-pos.css but is NOT linked anywhere in the Laravel codebase (zero matches).
+- Confirmed via grep: laravel/public/assets/css/ contains 50+ module-specific CSS files copied from legacy, none of which are linked.
+- Read legacy/app/views/sales/create.php (186 lines) end-to-end — the gold-reference HTML structure.
+- Read laravel/public/assets/css/sales-pos.css (960 lines) end-to-end — full legacy stylesheet inventory.
+- Read laravel/resources/views/admin/sales/cart.blade.php inline <style> block (lines 598–746, 148 lines) — Laravel-only extensions.
+- Read laravel/resources/views/admin/sales/cart.blade.php HTML structure (lines 1–572) — current Bootstrap-card-based layout.
+- Read laravel/resources/views/layouts/admin.blade.php (231 lines) — confirmed only generic Bootstrap/Select2/DataTables CSS is loaded globally.
+- Built conflict table: 11 selectors defined in BOTH legacy file and Laravel inline block. All 11 are Laravel-supersets (safe to load both — cascade order: legacy first, Laravel inline wins).
+- Inventoried 18 legacy class families (.sales-create-app, .sales-create-header, .sales-panel*, .sales-search-input, .sales-suggest-list, .sales-meta-grid, .sales-customer-picker, .sales-customer-due, .sales-stock-banner, .sales-price-band* + 11 children, .sales-entry-toolbar*, .sales-cart-dock*, .sales-toast, #productSuggestions .list-group-item, .sales-qty-stepper, etc.) that exist in sales-pos.css but are NOT used by the Laravel cart blade — adopting them requires Phase 3 HTML restructuring, not just linking the CSS.
+- Inventoried 13 Laravel-only R-feature selectors (R15 hover/active transforms, R16 sticky-count/sticky-total/:has() padding, R17 swipe-to-delete ::before/.swiping/z-index stacking) that must be preserved.
+- Identified 4 architectural decision points needing user input: (A) Select2 vs legacy text-input autocomplete, (B) keep right aside or move summary below table, (C) R13 slider inline styles vs .sales-price-band classes, (D) header text/buttons.
+- Produced VLM-generated Top-10 visual diff between legacy and Laravel screenshots (in conversation history).
+- Wrote docs/STYLE_PARITY_AUDIT_PHASE0.md (12 sections, ~280 lines) — full audit document saved to project so context survives AI conversation loss.
+
+Stage Summary:
+- Phase 0 COMPLETED. No code changes (per Phase 0 spec).
+- Audit document: docs/STYLE_PARITY_AUDIT_PHASE0.md
+- Key finding: linking sales-pos.css alone gives ~40-60% visual jump (sticky bar, mobile cards, recents chips already use legacy classes); remaining ~40% requires Phase 3 HTML restructuring (replace Bootstrap .card with .sales-panel, restyle R13 slider to use .sales-price-band*, etc.).
+- Key finding: 11 duplicate selectors between legacy file and Laravel inline block — all safe (Laravel versions are supersets).
+- 4 architectural decisions surfaced for user input before Phase 3 can proceed.
+- Ready for Phase 1: link sales-pos.css and screenshot the result.
+
+---
+Task ID: STYLE-PHASE-1
+Agent: Main (Super Z)
+Task: Phase 1 — Link sales-pos.css and sales-receive-payment.css to cart blade
+
+Work Log:
+- Read existing @push('css') block at cart.blade.php L597-765 to find insertion point.
+- Inserted two <link> tags + explanatory comment block at the top of @push('css'), before the existing inline <style>:
+    <link rel="stylesheet" href="/assets/css/sales-pos.css">
+    <link rel="stylesheet" href="/assets/css/sales-receive-payment.css">
+  Load order: legacy module CSS first, Laravel inline <style> second — so Laravel-only R15/R16/R17 supersets win the cascade without !important (per Phase 0 audit §6 conflict table).
+- Verified Blade directive balance after edit:
+    @extends: 1
+    @section / @endsection: 1/1 (content)
+    @push / @endpush: 3/3 (head_meta, css, scripts)
+    @@push escapes in comments: 2 (correctly escaped, no false-positive directives)
+- Verified CSS files exist on disk:
+    laravel/public/assets/css/sales-pos.css  (18,243 bytes, 960 lines)
+    laravel/public/assets/css/sales-receive-payment.css  (8,266 bytes, 423 lines)
+- No PHP on host to run artisan tinker; container is the runtime. Edit is purely additive (two <link> tags + a comment inside an existing @push block) — Blade compiler will accept it without issue.
+- Did NOT clear Laravel view cache (container-only operation). User should run `php artisan view:clear` inside the rcerp_app container if cached views are stale; otherwise Blade recompiles automatically on next request.
+
+Stage Summary:
+- Phase 1 COMPLETED. Single file changed: laravel/resources/views/admin/sales/cart.blade.php (added 18 lines: 16-line comment block + 2 <link> tags + 1 blank separator).
+- Both CSS files load on every cart page request from now on.
+- Expected visual impact per Phase 0 audit §11: ~40-60% jump toward legacy look. The sticky bottom bar (.sales-pos-sticky-bar), mobile cart cards (.sales-cart-line), customer-recent chips (.sales-recents .btn), and price-band slider (.sales-price-band* — though R13 uses inline styles so this won't apply yet) will snap to legacy styling immediately. Bootstrap .card-based panels, Select2 dropdowns, and inline-styled hero header will NOT change much — those need Phase 3 HTML restructuring.
+- Cascade safety: 11 duplicate selectors between legacy file and Laravel inline block all resolve correctly (Laravel superset wins by source order).
+- Next step: user reloads the cart page in browser and provides a new screenshot so we can verify the visual jump and identify remaining gaps for Phase 3.
