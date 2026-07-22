@@ -458,3 +458,300 @@ Stage Summary:
 - All 11 static-verification points pass. Live HTTP tests deferred to user (no php/docker on host).
 - Ready for user to run `docker exec -i rcerp_app php artisan migrate` + the 6-step smoke-test checklist.
 - Next phase: Phase 6 (Printable Return slip + per-module audit logs + PurchaseAudit checklist) — see `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 6.
+
+---
+Task ID: Phase8-audit-1
+Agent: general-purpose (PO+GRN audit)
+Task: Static code audit of E2E Steps 1,2,3,4,8,10 (PO + GRN flow)
+
+Work Log:
+- Read prior worklog (460 lines) for context. Latest logged phase work is Phase 5 (BUG-31/32/33) and Phase 7 (BUG-34/35/36). Task says continue bug numbering from BUG-37 (route param bug, fixed outside worklog).
+- Read PurchaseOrderService.php (342 lines, 8 methods) — createOrder, updateOrder, markAsSent, cancelOrder, updateReceivedQty, generatePoCode, validateCreateInput, validateItems.
+- Read PurchaseReceiveService.php (481 lines, 9 methods) — createReceive, confirmReceive, cancelReceive, postReceiveGL, decrementPoReceivedQty, generateReceiveCode, validateCreateInput, validateItems.
+- Read StockService.php (286 lines) — applyTransaction (lines 57-129) + reverseTransaction (lines 160-213). Verified avg_cost recalc rule + reversal semantics (append-only, opposite-sign).
+- Read PurchaseOrder.php (132 lines) — confirmed isDraft/isSent/isPartial/isReceived/isCancelled + canEdit/canCancel/canReceive methods all present.
+- Read PurchaseReceive.php (132 lines) — has isDraft/isConfirmed/isCancelled/isDirect but NO canCancel() method (gap → BUG-38).
+- Supplementary read: JournalReversalService.php (278 lines) — verified reverseByJournalEntry cascades to supplier_ledger via journal_entry_id linkage (lines 82-93). This confirms Step 10 supplier_ledger reversal works.
+- Supplementary read: StockTransaction.php REFERENCE_TYPES const (lines 95-107) — confirmed 'purchase_receive' is a valid reference_type.
+- Step 1 (Create PO) — PASS. PurchaseOrderService::createOrder (lines 46-107) inserts purchase_orders row with status='draft' (line 69) + purchase_order_items rows with received_qty=0 (line 83). No StockService/JournalPostingService/SubLedgerService calls. Only UserAuditLogger call (lines 92-103). Wrapped in DB::transaction (line 58).
+- Step 2 (Mark PO as Sent) — PASS. markAsSent (lines 188-214) calls $po->isDraft() guard (line 194), then updates only status='sent' (line 199). No stock/GL/ledger side effects. Only audit log (lines 204-211).
+- Step 3 (Create GRN partial) — PASS. createReceive (lines 63-146) inserts purchase_receives row with status='draft' (line 104) + is_reversed=false (line 105), and purchase_receive_items rows with return_qty=0 (line 120). No StockService/JournalPostingService/SubLedgerService calls. Only audit log (lines 130-142).
+- Step 4 (Confirm GRN) — PASS. confirmReceive (lines 156-243) does all 5 expected things:
+    1. Sets status='confirmed' (line 218) + persists journal_entry_id (line 219).
+    2. Calls StockService::applyTransaction per item with qty>0 (IN), reference_type='purchase_receive', reference_id=$receive->id, rate=$item->rate (lines 171-183). For oldQty=0, qty=6, rate=100: StockService::computeAvgCostOnIn returns (0*0 + 6*100)/(0+6) = 100. warehouse_stock.qty=6, avg_cost=100 ✓
+    3. postReceiveGL (lines 357-400): looks up ledger by nature='inventory' and nature='ap'; posts Dr Inventory $amount / Cr AP $amount. For qty=6, rate=100, no discount/tax: total_amount=600 → Dr Inventory 600, Cr AP 600 ✓
+    4. SubLedgerService::postSupplierLedgerEntry with debit=0, credit=$receive->total_amount=600, transaction_type='purchase_receive', journal_entry_id=$journalEntryId (lines 189-201) ✓
+    5. PurchaseOrderService::updateReceivedQty called per item with +qty (lines 204-212); updateReceivedQty (lines 258-294) increments received_qty, then computes status: anyReceived=true, allReceived=false → 'partial' ✓
+- Step 8 (Cancel GRN should FAIL with active returns) — PASS. cancelReceive (lines 275-286) checks PurchaseReturn where purchase_receive_id=$receiveId AND is_reversed=false AND status='confirmed'; if count>0 throws RuntimeException with clear message ("Cannot cancel GRN: N active return(s) exist against it. Reverse them first."). Guard fires only inside `if ($receive->isConfirmed())` (line 275) — correct because draft GRNs cannot have returns against them. Active-returns guard exists; no BUG-38 triggered for missing guard.
+- Step 10 (Cancel GRN should succeed after returns reversed) — PASS. cancelReceive confirmed-branch (lines 288-330):
+    1. Reverses GL + supplier_ledger via JournalReversalService::reverseByJournalEntry (lines 290-295). Verified cascade in JournalReversalService.php lines 82-93: finds supplier_ledger by journal_entry_id and calls SubLedgerService::reverseSupplierLedgerEntry for each. ✓
+    2. Reverses each stock_transaction (reference_type='purchase_receive', reference_id=$receiveId, is_reversed=false) via StockService::reverseTransaction (lines 298-309). reverseTransaction creates opposite-sign movement (qty=6 → -6 = OUT) and marks original is_reversed=true. ✓
+    3. Decrements PO received_qty via decrementPoReceivedQty (lines 312-320). For received_qty=6 → max(0, 6-6)=0 ✓
+    4. decrementPoReceivedQty (lines 405-427) recomputes PO status: anyReceived=false, allReceived=false → 'sent' (line 425). ✓
+    5. Sets GRN is_reversed=true, reversed_at, reversed_by, reverse_reason (lines 322-329) + status='cancelled' (lines 332-334). ✓
+    6. Audit log written (lines 337-346). ✓
+
+Stage Summary:
+- Steps that PASS (code traces correctly to expected behavior):
+  - Step 1 (Create PO): PASS — createOrder saves as 'draft', no stock/GL/ledger side effects.
+  - Step 2 (Mark PO as Sent): PASS — markAsSent only updates status to 'sent', no side effects.
+  - Step 3 (Create GRN partial): PASS — createReceive saves as 'draft', no side effects.
+  - Step 4 (Confirm GRN): PASS — all 5 sub-checks (status=confirmed, stock IN at 6@100→avg_cost=100, GL Dr Inv 600 / Cr AP 600, supplier_ledger credit 600, PO received_qty=6 + status=partial) verified.
+  - Step 8 (Cancel GRN with active returns): PASS — active-returns guard exists at lines 275-286 and throws RuntimeException. No BUG-38 assigned for this candidate.
+  - Step 10 (Cancel GRN after returns reversed): PASS — reverses GL (cascade to supplier_ledger verified), reverses stock (OUT via reverseTransaction), decrements PO received_qty to 0, sets PO status back to 'sent'.
+
+- Steps that FAIL (with BUG-NN number and proposed fix):
+  - BUG-38 (Low severity — model API consistency gap):
+    - File: app/Models/PurchaseReceive.php (lines 124-131)
+    - Description: PurchaseReceive model has isDraft()/isConfirmed()/isCancelled()/isDirect() but NO canCancel() method. cancelReceive() implements cancel eligibility inline (lines 263-265: blocks already-cancelled; lines 275-286: blocks confirmed-with-active-returns). Functionally equivalent today, but inconsistent with PurchaseOrder model (which has canCancel() at line 126) and forces the cancel policy to live in the service rather than the model. Any future caller that needs to check "can this GRN be cancelled?" (e.g. a "Cancel" button visibility check on a show page, or a policy filter in a list endpoint) would have to duplicate the inline logic.
+    - Proposed fix: Add to PurchaseReceive.php:
+        ```php
+        public function canCancel(): bool
+        {
+            if ($this->isCancelled()) return false;
+            // draft or confirmed can be cancelled; the active-returns guard
+            // for confirmed GRNs is enforced at the service layer because it
+            // requires a DB query against purchase_returns.
+            return $this->isDraft() || $this->isConfirmed();
+        }
+        ```
+      Then refactor cancelReceive() lines 263-265 to call `if (!$receive->canCancel())` for the first guard. Keep the active-returns guard in the service (it needs a DB query against PurchaseReturn).
+  - BUG-39 (Medium severity — missing PO state guard in GRN service):
+    - File: app/Services/Purchase/PurchaseReceiveService.php — createReceive lines 80-87 (PO lookup, no state check) and confirmReceive lines 156-243 (no PO state check).
+    - Description: When `purchase_order_id` is set, createReceive() fetches the PO and pulls supplier_id/branch_id from it (lines 80-87) but does NOT verify `$po->canReceive()` (i.e. status is 'sent' or 'partial'). confirmReceive() also does not check. Consequences:
+        * A GRN can be created/confirmed against a draft PO (status='draft'), causing the PO to jump from 'draft' directly to 'partial'/'received' on confirm — skipping the 'sent' state entirely.
+        * A GRN can be confirmed against an already-received PO (status='received'), re-incrementing received_qty beyond the ordered qty (no upper-bound check either).
+        * A GRN can be confirmed against a cancelled PO (status='cancelled'), resurrecting it to 'partial'/'received'.
+      The Phase 8 test plan Steps 1-4 sequence (draft→sent→partial) implicitly assumes this guard exists at the service layer. Without it, the service trusts the controller/UI to enforce PO state, which is fragile and inconsistent with how cancelOrder/cancelReceive enforce their own state guards.
+    - Proposed fix: In createReceive() right after the PO lookup (after line 87), add:
+        ```php
+        $poModel = PurchaseOrder::find($poId);
+        if (!$poModel) {
+            throw new \InvalidArgumentException("PO {$poId} not found.");
+        }
+        if (!$poModel->canReceive()) {
+            throw new \RuntimeException(
+                "PO {$poId} cannot receive goods (current status: {$poModel->status}). "
+                . "Allowed statuses: sent, partial."
+            );
+        }
+        ```
+      Optionally also enforce an upper bound in confirmReceive() per item: `received_qty + new_qty <= ordered qty` (block over-receiving, or expose an allow_over_receive flag).
+
+- Additional observations (NOT bugs, no BUG-NN assigned):
+  - decrementPoReceivedQty (lines 420-426) always sets PO status to 'sent' when received_qty returns to 0, regardless of whether the PO was ever in 'sent' state. Correct for the normal flow (the only way received_qty could be >0 is if the PO was at some point 'sent' or 'partial'). Would only misbehave if BUG-39 allowed a draft PO to receive — in which case cancelling that GRN would incorrectly advance the PO from 'draft' to 'sent'. Low risk; resolving BUG-39 eliminates this concern.
+  - cancelReceive() does NOT call $po->canReceive() when reversing — it always decrements received_qty and recomputes status. This is intentional and correct: cancellation is the inverse of confirmation, not a new receive.
+  - supplier_ledger reversal relies entirely on the JournalReversalService cascade (verified in JournalReversalService.php lines 82-93 — finds supplier_ledger by journal_entry_id and reverses). The linkage is sound because confirmReceive() posts the supplier_ledger entry with journal_entry_id=$journalEntryId (line 199). Verified end-to-end.
+  - StockService::reverseTransaction creates the reversal with reference_type='reversal' (not 'purchase_receive'). This is by design (reversals are append-only, original is marked is_reversed=true). cancelReceive() correctly selects non-reversed original transactions by reference_type='purchase_receive' (lines 298-302), so the reversal entries themselves are not double-reversed on a second pass.
+  - The active-returns guard at lines 275-286 uses `->where('is_reversed', false)->where('status', 'confirmed')`. This is the correct definition of "active" (non-reversed AND confirmed). A reversed return does not block GRN cancel (correct — the return's effect has already been undone). A draft return (not yet confirmed) does not block either (correct — it has not yet applied stock/GL reversal). This is consistent with the parallel PurchaseReturn agent's expected semantics.
+
+- Files reviewed:
+  - app/Services/Purchase/PurchaseOrderService.php (342 lines, full read)
+  - app/Services/Purchase/PurchaseReceiveService.php (481 lines, full read)
+  - app/Services/Stock/StockService.php (286 lines, full read; focus on applyTransaction + reverseTransaction)
+  - app/Models/PurchaseOrder.php (132 lines, full read)
+  - app/Models/PurchaseReceive.php (132 lines, full read)
+  - app/Services/Accounting/JournalReversalService.php (278 lines, supplementary read to verify cascade behavior for Step 10)
+  - app/Models/StockTransaction.php (lines 90-119, REFERENCE_TYPES const, supplementary)
+- Lines of code reviewed: ~1,470 lines across 6 files (5 in-scope + 1 supplementary).
+- Next actions:
+  - Hand off BUG-38 and BUG-39 to a Build subagent for fix. BUG-38 is a pure model addition (low risk). BUG-39 is a service-layer guard (medium risk — needs to verify no controller already enforces this to avoid duplicate error messages; recommend grep'ing PurchaseReceiveController::store/confirm for any existing canReceive call before applying).
+  - Coordinate with the parallel PurchaseReturn audit agent: their cancelReturn flow's "active GRN" guard is the mirror image of our cancelReceive's "active returns" guard. Both should pass each other's checks (a reversed return should not block GRN cancel; a cancelled GRN should not block return cancel). No conflicts expected.
+
+---
+Task ID: Phase8-audit-2
+Agent: general-purpose (Return + cross-cutting audit)
+Task: Static code audit of E2E Steps 5,6,7,9,11,12 + branch/RBAC/mobile/print/CSV tests
+
+Work Log:
+- Read prior worklog (559 lines) for context. Last bug found was BUG-39 (PO state guard missing in GRN service). Continuing bug numbering from BUG-40.
+- Read PurchaseReturnService.php (479 lines, 3 public methods + 4 private helpers) — createReturn, confirmReturn, cancelReturn, postReturnGL, generateReturnCode, validateItems, normalizeCondition. Phase 5 Damage-aware branching confirmed at lines 180-192.
+- Read PurchaseAuditService.php (770 lines, 12 section builders + 3 detail-table getters + 4 helpers) — runHealthChecks assembles 12 sections (lines 53-66), section 8 (sectionPurchaseReturn lines 435-519) contains the prt_damage check at line 507.
+- Read PurchaseReturnController.php (670 lines, 11 public methods) — index/show/create/store/slip/audit/confirm/cancel/getReceiveDetails/summary/searchReceives/export + private returnDataTableJson.
+- Read PurchaseAuditController.php (65 lines, 2 methods) — checklist + runChecks; both call resolveBranchIdForRead and pass branchId into the service.
+- Read slip.blade.php (167 lines) — has @media print block at lines 143-164 hiding sidebar/navbar/buttons/footer.
+- Read routes/web.php purchase group (lines 410-566) for RBAC matrix.
+- Read base Controller.php (88 lines) — resolveBranchIdForRead (lines 41-62) and resolveBranchIdForWrite (lines 77-86) helpers.
+- Read EnforceBranchIsolation.php middleware (220 lines) — handles branch_id from body OR URL {id} param (table inferred from URI prefix); maps 'purchase-orders'/'purchase-receives'/'purchase-returns' paths to their tables (lines 165-173).
+- Read BranchScope.php (66 lines) — confirmed PurchaseReturn/PurchaseOrder/PurchaseReceive are NOT in the list of models that apply BranchScope (only sales-side models + commission models are). Purchase reads are NOT auto-filtered by branch.
+- Read UserAuditLogger.php (86 lines) — log() writes user_id, action, target_user_id, branch_id (from session), details (JSON), ip_address, user_agent; dual-writes to user_audit_log table + storage/logs/user_audit.log file.
+- Supplementary read: PurchaseOrderController.php (461 lines) and PurchaseReceiveController.php (490 lines) — to verify the branch-isolation pattern is consistent across all 3 purchase controllers.
+- Supplementary read: StorePurchaseReturnRequest.php (67 lines) — confirmed no branch check; only field-level validation rules.
+- Supplementary read: PurchaseReturn.php model (126 lines) — confirmed no BranchScope global scope applied (consistent with PurchaseOrder/PurchaseReceive models).
+
+- Step 5 (Create Return Good) — PASS. confirmReturn (lines 162-266) for Good items:
+    1. StockService::applyTransaction with qty=-(float)$item->qty, rate=$item->rate, reference_type='purchase_return' (lines 194-204). For qty=2, rate=100: StockService records an OUT movement of 2 units. ✓
+    2. GRN item return_qty incremented via DB::raw('COALESCE(return_qty, 0) + qty') on purchase_receive_items (lines 207-213). ✓
+    3. postReturnGL (lines 360-403): looks up ledger by nature='ap' (Dr $amount) and nature='inventory' (Cr $amount). For total_amount=200: Dr AP 200, Cr Inventory 200. ✓
+    4. SubLedgerService::postSupplierLedgerEntry with debit=total_amount=200, credit=0, transaction_type='purchase_return', journal_entry_id=$journalEntryId (lines 220-232). ✓
+    5. status='confirmed', journal_entry_id persisted (lines 235-241). ✓
+    6. Audit log written with action='purchase_return_confirmed', details including return_code, branch_id, supplier_id, total, journal_entry_id, good_lines, damage_lines (lines 246-259). ✓
+- Step 6 (Create Return Damage) — PASS. confirmReturn isDamage() branch (lines 181-192):
+    1. NO stockService->applyTransaction call (skipped via `continue` at line 191). ✓ Phase 5 invariant upheld.
+    2. GRN return_qty STILL incremented (lines 184-190) — Damage lines do increment return_qty. ✓
+    3. postReturnGL still posts for ALL items (uses $return->total_amount which includes Damage amounts). For qty=1, rate=100: Dr AP 100, Cr Inventory 100. ✓
+    4. postSupplierLedgerEntry still posts debit=total_amount=100 for the entire return (including Damage). ✓
+    5. Audit log includes good_lines + damage_lines counts so the Damage action is visible. ✓
+- Step 7 (Reverse Damage Return) — PASS. cancelReturn (lines 273-354) for confirmed Damage-only return:
+    1. JournalReversalService::reverseByJournalEntry on $return->journal_entry_id (lines 289-294). Reverses the linked GL entry + cascades to supplier_ledger via journal_entry_id linkage (verified by parallel agent in JournalReversalService.php lines 82-93). ✓
+    2. stock_transactions query (lines 300-304): reference_type='purchase_return', reference_id=$returnId, is_reversed=false → returns 0 rows for Damage-only return (no stock movement was created on confirm). reverseTransaction loop (lines 306-311) is a no-op. ✓ No stock restoration.
+    3. GRN return_qty decrement loop (lines 316-324) runs for ALL items including Damage: GREATEST(0, COALESCE(return_qty,0) - qty). For Damage qty=1, return_qty was 3 (per Step 6) → 3-1=2. ✓
+    4. is_reversed=true, reversed_at=now(), reversed_by=$cancelledBy, reverse_reason=$reason (lines 326-333). ✓
+    5. status='cancelled' (lines 336-338). ✓
+    6. Audit log written with action='purchase_return_reversed', details including was_confirmed=true (lines 341-350). ✓
+- Step 9 (Reverse Good Return) — PASS. cancelReturn for confirmed Good-only return:
+    1. JournalReversalService::reverseByJournalEntry — same as Step 7, reverses GL + supplier_ledger. ✓
+    2. stock_transactions query returns 1 row (qty=-2). reverseTransaction creates opposite-sign +2 IN movement, marks original is_reversed=true. Stock restored to 2 units. ✓
+    3. GRN return_qty decrement: GREATEST(0, 2-2)=0. ✓
+    4. is_reversed=true, status='cancelled'. ✓
+- Step 11 (Audit log check) — PASS. Verified all 3 services + 3 audit controllers:
+    * PurchaseOrderService.php: UserAuditLogger::log at lines 92 (purchase_order_created), 168 (purchase_order_updated), 204 (purchase_order_sent), 236 (purchase_order_cancelled). All include action + target_user_id + details.
+    * PurchaseReceiveService.php: UserAuditLogger::log at lines 130 (purchase_receive_created), 224 (purchase_receive_confirmed), 337 (purchase_receive_cancelled). All include action + target_user_id + details.
+    * PurchaseReturnService.php: UserAuditLogger::log at lines 135 (purchase_return_created), 246 (purchase_return_confirmed), 341 (purchase_return_reversed). All include action + target_user_id + details.
+    * PurchaseOrderController::audit (line 351): filters user_audit_log by LIKE 'purchase_order_%' ✓
+    * PurchaseReceiveController::audit (line 387): filters user_audit_log by LIKE 'purchase_receive_%' ✓
+    * PurchaseReturnController::audit (line 219): filters user_audit_log by LIKE 'purchase_return_%' ✓
+- Step 12 (PurchaseAudit checklist) — PASS.
+    * runHealthChecks (lines 51-95) assembles 12 sections (lines 53-66): scope, products, suppliers, warehouses, stock_ssot, po, grn, return, payments, gl_links, ledger, reports. ✓
+    * Section 8 (sectionPurchaseReturn, lines 435-519) contains 11 items including prt_damage at line 507. The prt_damage check (lines 446-458) counts returns with Damage-condition items that have ANY stock_transactions — fails (status='fail') if count > 0. ✓
+- Branch isolation test — PARTIAL FAIL (see BUG-40 and BUG-41 below).
+    * PurchaseReturnController::index → calls resolveBranchIdForRead (line 43) ✓
+    * PurchaseReturnController::show → NO resolveBranchIdForRead call, NO manual branch check (lines 153-186). ✗ BUG-40
+    * PurchaseReturnController::slip → NO resolveBranchIdForRead call, NO manual branch check (lines 193-204). ✗ BUG-40
+    * PurchaseReturnController::create → has manual branch check (lines 99-107, 117-120) ✓
+    * PurchaseReturnController::store → NO resolveBranchIdForWrite call, NO manual branch check, NO check that the supplied purchase_receive_id is accessible to the user (lines 133-151). The route's `branch.isolation` middleware is effectively a no-op because the request body doesn't include branch_id (it's inherited from the GRN by the service). ✗ BUG-41
+    * PurchaseReturnController::confirm → route has `branch.isolation` middleware (line 522). Middleware resolves URL {id} → purchase_returns.branch_id → compares to session. ✓
+    * PurchaseReturnController::cancel → route has `branch.isolation` middleware (line 525). ✓
+    * PurchaseReturnController::audit → calls resolveBranchIdForRead (line 213) ✓
+    * PurchaseReturnController::getReceiveDetails → has manual branch check (lines 286-291) ✓
+    * PurchaseReturnController::summary → calls resolveBranchIdForRead (line 480) ✓
+    * PurchaseReturnController::searchReceives → calls resolveBranchIdForRead (line 525) ✓
+    * PurchaseReturnController::export → calls resolveBranchIdForRead (line 596) ✓
+- RBAC test — PASS. Verified routes/web.php purchase route group (lines 410-566). salesman is NOT in any purchase route's role list:
+    * Purchase orders: index/show=role:admin,manager,warehouse_manager,accountant (line 446); store/update/mark-sent=role:admin,manager,warehouse_manager (lines 437,451,454); cancel=role:admin,manager (line 440); audit=role:admin,manager,accountant (line 548); search-products=role:admin,manager,warehouse_manager (line 429); export=role:admin,manager,warehouse_manager,accountant (line 433). NO salesman anywhere. ✓
+    * Purchase receives (GRN): index/show=role:admin,manager,warehouse_manager,accountant (line 486); create/store=role:admin,manager,warehouse_manager (lines 489,492); po-details=role:admin,manager,warehouse_manager (line 471); export=role:admin,manager,warehouse_manager,accountant (line 475); confirm=role:admin,manager (line 478); cancel=role:admin,manager (line 481); audit=role:admin,manager,accountant (line 551). NO salesman anywhere. ✓
+    * Purchase returns: index/show=role:admin,manager,warehouse_manager,accountant (line 530); create/store=role:admin,manager,warehouse_manager (lines 533,536); receive-details=role:admin,manager,warehouse_manager (line 510); search-receives=role:admin,manager,warehouse_manager (line 513); summary=role:admin,manager,warehouse_manager,accountant (line 516); export=role:admin,manager,warehouse_manager,accountant (line 519); confirm=role:admin,manager (line 522); cancel=role:admin,manager,accountant (line 525); audit=role:admin,manager,accountant (line 555); slip=role:admin,manager,warehouse_manager,accountant (line 558). NO salesman anywhere. ✓
+    * PurchaseAudit: checklist=role:admin,manager,accountant (line 563); run=role:admin,manager,accountant (line 566). NO salesman. ✓
+- Mobile test — PASS. Verified all 3 index blades have mobile card container + drawCallback:
+    * purchase-orders/index.blade.php: container `purch-index-mobile-cards` at line 234; drawCallback at line 444; mobile card HTML template at line 406. ✓
+    * purchase-receives/index.blade.php: container `purch-index-mobile-cards` at line 199; drawCallback at line 412; mobile card HTML template at line 374. ✓
+    * purchase-returns/index.blade.php: container `purchase-return-mobile-cards` at line 150; drawCallback at line 1171; mobile card HTML template at line 1242. ✓
+- Print test — PASS. slip.blade.php has @media print block at lines 143-164 that hides `.sidebar, .navbar, .main-content > .topbar, .purch-slip-header .btn, .purch-slip-footer, .no-print, .btn, nav, header, footer` via `display: none !important`. Body background forced white, card border/shadow removed, table borders enforced with `border-collapse: collapse` and 1px solid #000 borders on cells. Print color adjust enabled for header + table-dark + badges. ✓
+- CSV export test — PASS. Verified all 3 export endpoints emit UTF-8 BOM + spec headers:
+    * PurchaseOrderController::export (line 211): UTF-8 BOM at line 241 (`fwrite($out, "\xEF\xBB\xBF")`). Headers (lines 242-246): 'PO Code', 'Supplier', 'Branch', 'Warehouse', 'PO Date', 'Expected Date', 'Total Amount', 'Status', 'Created By', 'Notes'. Spec headers (Code, Date, Supplier, Branch, Total, Status, Created By) all present. ✓
+    * PurchaseReceiveController::export (line 187): UTF-8 BOM at line 220. Headers (lines 221-225): 'GRN Code', 'PO Code', 'Supplier', 'Branch', 'Warehouse', 'Receive Date', 'Item Count', 'Total Amount', 'Status', 'Reversed', 'Created By', 'Notes'. Spec headers all present. ✓
+    * PurchaseReturnController::export (line 594): UTF-8 BOM at line 635. Headers (lines 636-640): 'Return Code', 'GRN Code', 'Supplier', 'Branch', 'Return Date', 'Total Amount', 'Status', 'Reversed', 'Created By', 'Reason'. Spec headers all present. ✓
+
+Stage Summary:
+- Steps that PASS (code traces correctly to expected behavior):
+  - Step 5 (Create Return Good): PASS — createReturn saves as 'draft' (no side effects); confirmReturn does all 5 sub-checks verified (status='confirmed', stock OUT 2@100, GL Dr AP 200 / Cr Inventory 200, supplier_ledger debit 200, GRN return_qty=2, audit log).
+  - Step 6 (Create Return Damage): PASS — confirmReturn's isDamage() branch correctly skips StockService::applyTransaction (Phase 5 invariant upheld) but still increments GRN return_qty; postReturnGL + postSupplierLedgerEntry still post for the full total_amount (which includes Damage amounts).
+  - Step 7 (Reverse Damage Return): PASS — cancelReturn correctly: (a) no stock restoration (stock_transactions query returns 0 rows for Damage-only return), (b) GL reversed via JournalReversalService cascade (verified by parallel agent), (c) supplier_ledger reversed via same cascade, (d) GRN return_qty decremented for ALL items (GREATEST(0, return_qty - qty)), (e) is_reversed=true + reversed_at + reversed_by + reverse_reason set, (f) status='cancelled'.
+  - Step 9 (Reverse Good Return): PASS — cancelReturn for Good: stock_transactions query returns 1 row (qty=-2), reverseTransaction creates +2 IN movement restoring stock; GL + supplier_ledger reversed via cascade; GRN return_qty back to 0.
+  - Step 11 (Audit log check): PASS — all 3 services call UserAuditLogger::log() for create/confirm/cancel actions with action + target_user_id + details; all 3 audit controllers query user_audit_log with the correct LIKE prefix matching their service's action names.
+  - Step 12 (PurchaseAudit checklist): PASS — runHealthChecks() returns 12 sections; section 8 (sectionPurchaseReturn) contains the prt_damage check.
+  - RBAC test: PASS — salesman is NOT in any purchase route's role list. All purchase routes have `role:` middleware attached.
+  - Mobile test: PASS — all 3 index blades have a mobile card container + drawCallback function.
+  - Print test: PASS — slip.blade.php has @media print block hiding sidebar/navbar/buttons/footer.
+  - CSV export test: PASS — all 3 export endpoints emit UTF-8 BOM and include all 7 spec headers (Code, Date, Supplier, Branch, Total, Status, Created By).
+
+- Steps that FAIL (with BUG-NN number and proposed fix):
+  - Branch isolation test: PARTIAL FAIL — 2 bugs found (BUG-40, BUG-41).
+
+  - BUG-40 (Medium-High severity — cross-branch read leak in show() and slip()):
+    - File: app/Http/Controllers/Admin/PurchaseReturnController.php lines 153-186 (show) and 193-204 (slip)
+    - Description: PurchaseReturnController::show() and slip() call `PurchaseReturn::with(...)->findOrFail($id)` without any branch scoping. The resource routes (line 527-530) only attach `role:admin,manager,warehouse_manager,accountant` middleware — NO `branch.isolation`. The PurchaseReturn model (app/Models/PurchaseReturn.php) does NOT apply the BranchScope global scope (verified: BranchScope is only applied to SalesInvoice, SalesChallan, SalesReturn, CustomerPayment, CommissionRule, CommissionEntry). A non-admin user (manager, warehouse_manager, or accountant — all of whom are role-permitted on these routes) can view ANY return from ANY branch by guessing or enumerating the URL {id}. The show page exposes the full return details + stock movements + supplier ledger entries for that branch's return. The slip page is even more sensitive (printable, opens in new tab — easily exfiltrated). Note: the same pattern exists in PurchaseOrderController::show (line 324) and PurchaseReceiveController::show (line 327) — those are the parallel agent's territory, but a coordinated fix is strongly recommended because the bug class is identical across all 3 purchase modules.
+    - Proposed fix (pick one): Option A — apply BranchScope to PurchaseReturn (and PurchaseOrder + PurchaseReceive) models, mirroring the sales-side pattern. This auto-filters ALL reads including findOrFail:
+        ```php
+        // In app/Models/PurchaseReturn.php
+        use App\Models\Scopes\BranchScope;
+        protected static function booted(): void {
+            static::addGlobalScope(new BranchScope);
+        }
+        ```
+      Option B — add an explicit branch check inside show() and slip() (less invasive, doesn't affect other read paths):
+        ```php
+        // At the top of show() and slip(), after findOrFail:
+        if (!$request->user()->isAdmin()) {
+            $sessionBranchId = (int) (session('branch_id') ?? $request->user()->getBranchId() ?? 0);
+            if ((int) $return->branch_id !== $sessionBranchId) {
+                abort(403, 'You do not have access to this return.');
+            }
+        }
+        ```
+      Option A is preferred (defensive, matches sales-module pattern, catches any future read entry point).
+
+  - BUG-41 (Medium-High severity — store() doesn't verify user has access to the supplied GRN):
+    - File: app/Http/Controllers/Admin/PurchaseReturnController.php lines 133-151 (store), and app/Services/Purchase/PurchaseReturnService.php lines 64-153 (createReturn)
+    - Description: PurchaseReturnController::store() does NOT call resolveBranchIdForWrite and does NOT verify the user has access to the supplied purchase_receive_id's branch. The store route's `branch.isolation` middleware (routes/web.php line 536) is effectively a NO-OP because: (1) the request body does not include a `branch_id` field (the service inherits branch_id from the GRN — see PurchaseReturnService line 84), so EnforceBranchIsolation::resolveRequestBranchId returns null; and (2) the route is `POST /admin/purchase-returns` with NO URL {id} param, so resolveUrlParamBranchId also returns null. The middleware then falls through with nothing to compare and lets the request through. The service's createReturn() loads the GRN at line 71 and inherits its branch_id at line 84 WITHOUT checking whether the authenticated user is allowed to operate on that branch. A non-admin user (manager or warehouse_manager) can directly POST to `/admin/purchase-returns` with `purchase_receive_id=<id_of_other_branch_confirmed_grn>` and create a return against another branch's GRN. Consequences:
+        * The new return's branch_id will be set to the OTHER branch (inherited from the GRN).
+        * The GRN's purchase_receive_items.return_qty will be incremented — affecting the other branch's returnable qty tracking.
+        * On confirm, supplier_ledger is debited and GL Dr AP / Cr Inventory is posted for the other branch (wrong branch financials polluted).
+        * StockService::applyTransaction is called with warehouse_id from the form (which the attacker controls) — potentially moving stock OUT of an unrelated warehouse.
+      Note: by contrast, PurchaseOrderController::store (line 301) and PurchaseReceiveController::store (line 304) BOTH call resolveBranchIdForWrite and pass the resolved branch_id explicitly to the service. The Return store is the only one of the 3 that doesn't follow this pattern — because the Return service inherits branch_id from the GRN rather than accepting it as input.
+    - Proposed fix (defense in depth — apply both):
+      1. Controller-level (catches UI-bypass attacks):
+          ```php
+          // In PurchaseReturnController::store(), BEFORE calling createReturn:
+          $receive = \App\Models\PurchaseReceive::where('status', 'confirmed')
+              ->where('is_reversed', false)
+              ->findOrFail($validated['purchase_receive_id']);
+          if (!$request->user()->isAdmin()) {
+              $sessionBranchId = (int) (session('branch_id') ?? $request->user()->getBranchId() ?? 0);
+              if ((int) $receive->branch_id !== $sessionBranchId) {
+                  return back()->withInput()
+                      ->with('error', 'You do not have access to that GRN.');
+              }
+          }
+          ```
+      2. Service-level (catches direct service calls from non-controller entry points like jobs/tests):
+          ```php
+          // In PurchaseReturnService::createReturn(), right after the GRN
+          // lookup (after line 77), add:
+          $user = \Illuminate\Support\Facades\Auth::user();
+          if ($user && !$user->isAdmin()) {
+              $sessionBranchId = (int) (session('branch_id') ?? $user->getBranchId() ?? 0);
+              if ((int) $receive->branch_id !== $sessionBranchId) {
+                  throw new \RuntimeException(
+                      "Cannot create return against GRN {$receiveId} — belongs to another branch."
+                  );
+              }
+          }
+          ```
+
+- Additional observations (NOT bugs, no BUG-NN assigned):
+  - prt_damage SQL false-positive risk for mixed-condition returns: the `prt_damage` check (PurchaseAuditService.php lines 446-458) counts Damage items that have ANY stock_transactions matching `reference_type='purchase_return' AND reference_id=prt.id AND product_id=pri.product_id`. Since stock_transactions has NO `condition` column and NO `purchase_return_item_id` FK (verified in database/sql/03_stock.sql lines 19-44), the SQL cannot distinguish Good vs Damage stock movements on the same product within the same return. If a single return mixes Good (qty=2, has stock tx) and Damage (qty=1, no stock tx) lines for the SAME product_id, the EXISTS subquery would find the Good line's stock_transaction for that product_id and falsely flag the Damage line as a Phase 5 invariant violation. Low severity for the Phase 8 E2E test as described (Steps 5 and 6 use separate Good-only and Damage-only returns), but worth fixing if mixed-condition returns are a supported use case. Proposed fix: add a `condition` column to stock_transactions (only Good items create rows), then filter `st.condition = 'Good'` in the EXISTS subquery. Schema migration required.
+  - cancelReturn audit action name inconsistency: PurchaseReturnService::cancelReturn (line 343) logs action='purchase_return_reversed', while PurchaseOrderService::cancelOrder logs 'purchase_order_cancelled' and PurchaseReceiveService::cancelReceive logs 'purchase_receive_cancelled'. For draft returns (where nothing is actually reversed), the action name 'reversed' is misleading. Recommend renaming to 'purchase_return_cancelled' for consistency. Cosmetic/semantic only; the audit controller's LIKE 'purchase_return_%' filter catches both names.
+  - Audit log branch_id uses session branch, not target branch: UserAuditLogger::log (UserAuditLogger.php line 43) reads branch_id from `session('branch_id')` rather than from the record being acted upon. When an admin operates on a return from Branch B while their session is Branch A, the audit log row will have branch_id=Branch A (admin's session), not Branch B (target). The EnforceBranchIsolation middleware separately logs the cross-branch override as a 'branch_override' action with the correct target branch_id (lines 190-206). The net effect: when filtering the Return audit page by Branch B, the admin's action on a Branch B return would NOT show up (because the action log row has branch_id=Branch A). Minor inconsistency; affects admin cross-branch audit visibility, not security. Proposed fix: have the service pass the record's branch_id explicitly to UserAuditLogger::log (it accepts a $details array — could add a 'record_branch_id' key, or extend the log signature).
+  - StockService::reverseTransaction reference_type: reversal stock movements are created with reference_type='reversal' (not 'purchase_return'), per parallel agent's observation. cancelReturn correctly selects only original transactions (reference_type='purchase_return', reference_id=$returnId, is_reversed=false) at lines 300-304 — reversal entries themselves are not double-reversed on a second cancel attempt (which would throw anyway because the status guard at line 281 blocks already-cancelled returns).
+  - All 3 audit controllers (PO/GRN/Return) follow an identical query structure: join user_audit_log with users + employees + branches, filter by LIKE prefix, optional search across action/username/employee_name, paginate 100, pass to a per-module audit blade. No bugs found in the audit controllers themselves.
+  - PurchaseAuditService::runHealthChecks catches Throwable in scalarCount (line 725-727) and returns -1 on error. The section items then evaluate `$count === 0 ? 'pass' : 'fail'` etc. — if a SQL error occurs, scalarCount returns -1, the item gets status='fail' with detail showing "-1" (e.g. "-1 return(s) with Damage lines but stock movements exist"). This is a minor UX issue (the -1 is confusing) but not a security/correctness bug. The 3 detail-table getters (getNegativeStockRows, getGrnsMissingJournalRows, getReturnsMissingJournalRows) catch Throwable and return [] on error.
+
+- Files reviewed:
+  - app/Services/Purchase/PurchaseReturnService.php (479 lines, full read)
+  - app/Services/Purchase/PurchaseAuditService.php (770 lines, full read)
+  - app/Http/Controllers/Admin/PurchaseReturnController.php (670 lines, full read)
+  - app/Http/Controllers/Admin/PurchaseAuditController.php (65 lines, full read)
+  - resources/views/admin/purchase-returns/slip.blade.php (167 lines, full read)
+  - routes/web.php (lines 410-566, purchase route group, full read)
+  - app/Http/Controllers/Controller.php (88 lines, full read — base controller with resolveBranchIdForRead/Write helpers)
+  - app/Http/Middleware/EnforceBranchIsolation.php (220 lines, full read — branch.isolation middleware)
+  - app/Models/Scopes/BranchScope.php (66 lines, full read — confirmed purchase models NOT in scope list)
+  - app/Services/Auth/UserAuditLogger.php (86 lines, full read)
+  - app/Http/Requests/PurchaseReturn/StorePurchaseReturnRequest.php (67 lines, full read)
+  - app/Models/PurchaseReturn.php (126 lines, full read — confirmed no BranchScope)
+  - app/Http/Controllers/Admin/PurchaseOrderController.php (461 lines, full read — for branch-isolation pattern comparison)
+  - app/Http/Controllers/Admin/PurchaseReceiveController.php (490 lines, full read — for branch-isolation pattern comparison)
+  - app/Services/Purchase/PurchaseOrderService.php (lines 220-246 + audit log action names, supplementary)
+  - app/Services/Purchase/PurchaseReceiveService.php (lines 335-346 + audit log action names, supplementary)
+  - resources/views/admin/purchase-orders/index.blade.php (grep only — mobile card + drawCallback verification)
+  - resources/views/admin/purchase-receives/index.blade.php (grep only — mobile card + drawCallback verification)
+  - resources/views/admin/purchase-returns/index.blade.php (grep only — mobile card + drawCallback verification)
+  - database/sql/03_stock.sql (lines 1-45, supplementary — confirmed stock_transactions has no `condition` or `purchase_return_item_id` column)
+
+- Lines of code reviewed: ~3,945 lines across 19 files (12 in-scope + 7 supplementary).
+- Next actions:
+  - Hand off BUG-40 and BUG-41 to a Build subagent for fix. BUG-40 is a read-side branch isolation gap (Medium-High — recommend Option A: add BranchScope to all 3 purchase models, coordinated with the parallel PO/GRN agent since the bug class is identical). BUG-41 is a write-side branch isolation gap (Medium-High — recommend applying BOTH the controller-level and service-level fix for defense in depth).
+  - Coordinate with the parallel PO/GRN audit agent: their show() methods (PurchaseOrderController::show line 324, PurchaseReceiveController::show line 327) have the SAME BUG-40 pattern (no resolveBranchIdForRead, no manual check, no middleware, no BranchScope). Coordinated fix recommended — applying BranchScope to all 3 purchase models in one migration commit is the cleanest path.
+  - No conflicts with BUG-38/BUG-39 from the PO/GRN audit agent — those are model API and PO state guard gaps respectively, orthogonal to the branch-isolation issues found here.
+  - The prt_damage SQL false-positive observation (mixed-condition returns) should be triaged by the product owner: if mixed-condition returns are a supported use case, schedule a schema migration to add `condition` to stock_transactions. If not (current UI may prevent mixing within one return), defer.
