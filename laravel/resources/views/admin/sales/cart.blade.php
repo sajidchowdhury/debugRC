@@ -93,20 +93,15 @@
         </div>
     </section>
 
-    {{-- ===================== EMPTY STATE (no customer) ===================== --}}
-    <div id="emptyState" class="sales-panel mt-3 @if (!empty($selectedCustomerId)) d-none @endif">
-        <div class="sales-panel-body text-center py-5">
-            <div class="display-6 text-muted mb-3">
-                <i class="fas fa-cart-arrow-down"></i>
-            </div>
-            <h4 class="text-muted">Select a customer to start building an invoice.</h4>
-            <p class="text-muted mb-0">The cart is auto-saved per salesman + customer until you finalize the invoice.</p>
-        </div>
-    </div>
-
-    {{-- ===================== MAIN TWO-COLUMN WORKSPACE ===================== --}}
-    {{-- Legacy layout: col-xl-4 (Customer) + col-xl-8 (Product entry), side-by-side --}}
-    <div id="workspace" class="row g-3 mt-1 @if (empty($selectedCustomerId)) d-none @endif">
+    {{-- ===================== MAIN TWO-COLUMN WORKSPACE (always visible — legacy parity) ===================== --}}
+    {{-- STYLE-PARITY Phase 3 (Decision A2/B2/D1): No more empty-state gate.
+         The Customer panel, Product panel, and Cart panel are all visible
+         from first paint — matches Legacy sales/create.php initial state.
+         The cart table's own #cartEmptyRow handles the "empty" hint.
+         Legacy customerSearch is a text input + .sales-suggest-list
+         autocomplete (NOT Select2). When a customer is picked, the input
+         becomes read-only .is-locked and the Change button appears. --}}
+    <div id="workspace" class="row g-3 mt-1">
 
         {{-- ============== LEFT: Customer panel (col-xl-4, legacy-faithful .sales-panel) ============== --}}
         <div class="col-12 col-xl-4">
@@ -116,31 +111,26 @@
                     <span>Customer</span>
                 </div>
                 <div class="sales-panel-body">
-                    <label class="form-label small text-muted mb-1" for="customerSelect" id="customerSearchLabel">
-                        Search name, shop or mobile
+                    <label class="form-label small text-muted mb-1" for="customerSearch" id="customerSearchLabel">
+                        @if (!empty($selectedCustomer)) Selected customer @else Search name, shop or mobile @endif
                     </label>
                     <div class="sales-customer-picker">
                         <div class="position-relative flex-grow-1">
-                            {{-- HYBRID Decision A: keep Select2 (Laravel JS depends on it) but apply
-                                 .sales-search-input for the legacy 48px indigo look. Full A2
-                                 (text-input + suggest-list) deferred — would require porting
-                                 sales-create.js autocomplete logic. --}}
-                            <select id="customerSelect" class="form-select select2 sales-search-input" style="width:100%;">
-                                <option value="">— Select a customer —</option>
-                                @if (!empty($selectedCustomer))
-                                    <option value="{{ $selectedCustomer->id }}" selected>
-                                        {{ $selectedCustomer->customer_name }}
-                                        @if (!empty($selectedCustomer->customer_code)) [{{ $selectedCustomer->customer_code }}] @endif
-                                    </option>
-                                @endif
-                            </select>
+                            {{-- Decision A2 (2026-07-22): legacy text input + .sales-suggest-list
+                                 autocomplete, replacing the Select2 dropdown. Mirrors
+                                 legacy #customerSearch in sales/create.php (L39-46) +
+                                 sales-create.js::initCustomerTypeahead (L212-257).
+                                 The hidden #customer_id mirrors Legacy's hidden field (L24)
+                                 and stores the picked customer's ID for the change handler. --}}
+                            <input type="hidden" id="customer_id" value="{{ $selectedCustomerId ?? '' }}">
+                            <input type="text" id="customerSearch"
+                                   class="form-control sales-search-input @if (!empty($selectedCustomer)) is-locked @endif"
+                                   placeholder="Type to search customer..." autocomplete="off"
+                                   @if (!empty($selectedCustomer)) readonly value="{{ $selectedCustomer->shop_name ?: $selectedCustomer->customer_name }}" @endif>
                             <div id="customerSuggestions" class="sales-suggest-list"></div>
                         </div>
-                        <button type="button" class="btn btn-outline-secondary sales-change-customer" id="btnChangeCustomer" title="Change customer">
+                        <button type="button" class="btn btn-outline-secondary sales-change-customer @if (empty($selectedCustomer)) d-none @endif" id="btnChangeCustomer" title="Change customer">
                             Change
-                        </button>
-                        <button type="button" id="btnLoadCart" class="btn btn-primary sales-change-customer" title="Load saved cart for this customer">
-                            <i class="fas fa-sync me-1"></i> Load
                         </button>
                     </div>
 
@@ -151,22 +141,14 @@
                       `rememberCustomerRecent` / `renderCustomerRecents`
                       (L1306–1354). Stores the last 5 picked customers in
                       localStorage and renders them as click-to-pick chips
-                      beneath the customer Select2.
+                      beneath the customer search input.
                     --}}
-                    <div id="customerRecentsRow" class="mt-2 d-none">
+                    <div id="customerRecentsRow" class="mt-2 @if (!empty($selectedCustomer)) d-none @endif">
                         <div class="d-flex align-items-center gap-2 flex-wrap">
                             <span class="small text-muted text-nowrap">
                                 <i class="fas fa-clock-rotate-left me-1 text-primary"></i>Recent:
                             </span>
                             <div id="customerRecents" class="sales-recents d-flex flex-wrap gap-1"></div>
-                        </div>
-                    </div>
-
-                    <div class="row g-2 mt-2 align-items-end">
-                        <div class="col-12 d-flex gap-2">
-                            <a href="{{ route('admin.sales.cart') }}" class="btn btn-outline-secondary btn-sm" title="Reset cart page">
-                                <i class="fas fa-rotate-left me-1"></i> Reset
-                            </a>
                         </div>
                     </div>
                 </div>
@@ -226,22 +208,24 @@
                     <span>Add products</span>
                 </div>
                 <div class="sales-panel-body">
-                    <label class="form-label small text-muted mb-1" for="addProduct">Product name or code</label>
+                    <label class="form-label small text-muted mb-1" for="productSearch">Product name or code</label>
                     <div class="position-relative mb-3">
-                        {{-- HYBRID Decision A: Select2 + .sales-search-input class.
-                             R10/R15+ simplified: a single Select2 product search box
-                             doubles as the barcode scanner entry. Barcode scanners
-                             act as HID keyboards — they "type" the code rapidly
-                             and end with Enter. Select2's AJAX debounce (250 ms)
-                             is long enough to capture the full scan, and
-                             `selectOnClose: true` (set in the JS below) makes
-                             Enter pick the first highlighted match. If no name
-                             match is found, the user's typed term is treated as
-                             a product_code and a fallback exact-match lookup is
-                             fired against the R1 productByCode endpoint. --}}
-                        <select id="addProduct" class="form-select select2 sales-search-input" style="width:100%;">
-                            <option value="">— Type name / scan code —</option>
-                        </select>
+                        {{-- Decision A2 (2026-07-22): legacy text input + .sales-suggest-list
+                             autocomplete, replacing the Select2 dropdown. Mirrors
+                             legacy #productSearch in sales/create.php (L94-97) +
+                             sales-create.js::initProductSearchCreate (L280-388).
+                             The suggest-list rows render product name + code +
+                             price-range + availability badge (image 1 reference).
+                             Barcode scanners act as HID keyboards — they "type"
+                             the code rapidly and end with Enter. The typeahead's
+                             input handler debounces at 200ms (long enough to
+                             capture the full scan); Enter triggers an exact-code
+                             fallback lookup against the R1 productByCode endpoint.
+                             The hidden #addProduct preserves backward-compat with
+                             existing JS that reads $("#addProduct").val(). --}}
+                        <input type="text" id="productSearch" class="form-control sales-search-input"
+                               placeholder="Scan barcode or search product..." autocomplete="off">
+                        <input type="hidden" id="addProduct" value="">
                         <div id="productSuggestions" class="sales-suggest-list"></div>
                     </div>
 
@@ -342,7 +326,7 @@
       can show/hide both #workspace and #cartDock together (JS patch
       applied below in @push('scripts')).
     --}}
-    <div id="cartDock" class="@if (empty($selectedCustomerId)) d-none @endif">
+    <div id="cartDock">
         <section class="sales-panel mt-3">
             <div class="sales-panel-head d-flex align-items-center justify-content-between">
                 <span>
@@ -603,39 +587,43 @@
 
 <style>
     /* ============================================================
-       STYLE-PARITY Phase 2+3: Bridge styles for hybrid Select2 + legacy classes.
-       Select2 generates its own .select2-selection wrapper that ignores
-       the parent <select>'s classes. These rules propagate the
-       .sales-search-input look (48px height, 16px font, indigo focus
-       ring) into the Select2 rendered widget so it visually matches
-       the legacy text-input style.
+       STYLE-PARITY Phase 3 (Decision A2): Legacy typeahead styles.
+       The customer/product search boxes are now plain <input> elements
+       (not Select2). The .sales-suggest-list dropdown renders clickable
+       .sales-suggest-item rows (defined in sales-pos.css L85-149) with
+       bold product name, code, price range, and an availability badge.
+       This mirrors Legacy sales/create.php + sales-create.js exactly.
        ============================================================ */
-    .sales-customer-picker .select2-container--default .select2-selection--single,
-    .sales-panel-product .select2-container--default .select2-selection--single {
-        font-size: 16px;
-        min-height: 48px;
-        height: 48px;
-        border-radius: 10px;
-        border: 1px solid var(--sales-border, #e2e8f0);
-        padding: 0.55rem 0.85rem;
+
+    /* The .sales-suggest-list needs to overlay subsequent panels when
+       open — bump z-index above the .sales-panel stacking context. */
+    .sales-suggest-list.show {
+        z-index: 1080;
+    }
+
+    /* Suggest-item right side: price range + availability badge layout.
+       Mirrors Legacy sales-create.js L297-312 rendering. */
+    .sales-suggest-item .suggest-meta-line {
         display: flex;
         align-items: center;
+        gap: 0.5rem;
+        margin-top: 0.15rem;
     }
-    .sales-customer-picker .select2-container--default .select2-selection--single .select2-selection__rendered,
-    .sales-panel-product .select2-container--default .select2-selection--single .select2-selection__rendered {
-        line-height: 36px;
-        color: var(--sales-text, #0f172a);
+    .sales-suggest-item .suggest-meta {
+        flex: 1;
+        min-width: 0;
     }
-    .sales-customer-picker .select2-container--default .select2-selection--single .select2-selection__arrow,
-    .sales-panel-product .select2-container--default .select2-selection--single .select2-selection__arrow {
-        height: 46px;
-    }
-    .sales-customer-picker .select2-container--default.select2-container--focus .select2-selection--single,
-    .sales-customer-picker .select2-container--default.select2-container--open .select2-selection--single,
-    .sales-panel-product .select2-container--default.select2-container--focus .select2-selection--single,
-    .sales-panel-product .select2-container--default.select2-container--open .select2-selection--single {
-        border-color: var(--sales-primary, #4f46e5);
-        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+
+    /* When the customer picker is locked (customer selected), the input
+       shows the customer name in indigo on a soft indigo background —
+       a clear visual cue that the customer is set and the cashier can
+       now add products. Mirrors sales-pos.css L181-186 (#customerSearch.is-locked). */
+    #customerSearch.is-locked {
+        background: #eef2ff;
+        border-color: #c7d2fe;
+        font-weight: 600;
+        color: var(--sales-primary-dark, #4338ca);
+        cursor: default;
     }
 
     /* ============================================================
@@ -881,6 +869,11 @@
         // the #priceRangePanel slider band. Null when no product is
         // selected or the product has no price range configured.
         activePriceRange: null,
+        // STYLE-PARITY Phase 3 (Decision A2): currently-selected product
+        // ID for the typeahead. Set by selectProduct(), read by addToCart().
+        // Kept in sync with the hidden #addProduct input — addToCart()
+        // prefers the input value and falls back to this for safety.
+        activeProductId: null,
         // R14: cached customer credit snapshot from the customer-details
         // endpoint. Re-fetched only when the customer changes; the
         // projected-balance row recomputes locally on every cart
@@ -1137,9 +1130,9 @@
 
     /**
      * Switch the active cart to a different customer.
-     * - Updates the Select2 (#customerSelect) value
-     * - Triggers `change` which calls loadCart(cid)
-     * - Ensures a tab exists + activates it
+     * - Calls selectCustomer() which locks the picker, fetches credit,
+     *   and loads the cart (mirrors Legacy sales-create.js::selectCustomer).
+     * - Ensures a tab exists + activates it.
      *
      * opts.skipTabEnsure (bool) — when called from inside
      * restoreSessionCarts, the tab has already been ensured; skip
@@ -1150,26 +1143,11 @@
         customerId = parseInt(customerId, 10);
         if (!customerId) return;
 
-        // Ensure the Select2 has an <option> for this customer so
-        // .val() actually selects it. (Select2 AJAX only has options
-        // the user typed for; we synthesize one from the cache.)
-        var c = customerCache[customerId];
-        if (c) {
-            var label = (c.shop_name || c.customer_name || '#' + customerId);
-            if (c.customer_code) label += ' [' + c.customer_code + ']';
-            if (c.mobile) label += ' · ' + c.mobile;
-            if ($('#customerSelect option[value="' + customerId + '"]').length === 0) {
-                var $opt = $('<option></option>').val(customerId).text(label);
-                $('#customerSelect').append($opt);
-            }
-        }
-        $('#customerSelect').val(customerId).trigger('change');
-
-        if (!opts.skipTabEnsure) {
-            ensureTab(customerId, { active: true });
-        } else {
-            activateTab(customerId);
-        }
+        // Decision A2 (2026-07-22): directly call selectCustomer instead
+        // of going through Select2's .val().trigger('change'). This
+        // locks the #customerSearch input, sets #customer_id, fetches
+        // the credit snapshot, and loads the cart in one shot.
+        selectCustomer(customerId, { skipTabEnsure: !!opts.skipTabEnsure });
 
         // Update the URL so a refresh preserves selection
         if (window.history && history.replaceState) {
@@ -1217,7 +1195,10 @@
                                 state.customerId = null;
                                 state.cart = null;
                                 state.validation = null;
-                                $('#customerSelect').val('').trigger('change');
+                                // Decision A2 (2026-07-22): unlock the customer
+                                // picker + clear the hidden #customer_id instead
+                                // of resetting Select2.
+                                clearCustomerPicker();
                                 setWorkspaceVisible(false);
                                 renderAll();
                                 if (window.history && history.replaceState) {
@@ -1390,8 +1371,11 @@
         var items = (state.cart && state.cart.items) ? state.cart.items : [];
         var customerName = '—';
         if (state.customerId) {
-            var $opt = $('#customerSelect option[value="' + state.customerId + '"]');
-            if ($opt.length) customerName = $opt.text().trim();
+            // Decision A2 (2026-07-22): customer name now comes from the
+            // customerCache (populated by the typeahead) instead of a
+            // Select2 <option>. Falls back to tabLabelFor which also
+            // reads the cache.
+            customerName = tabLabelFor(state.customerId);
         }
         $('#sumCustomer').text(customerName);
         $('#sumItems').text(items.length);
@@ -1470,16 +1454,13 @@
         }
 
         var breakdown = payload.warehouse_breakdown || [];
-        // R1: prefer productCache (AJAX-populated) for the label; fall back
-        // to a transient <option> rendered by Select2, and finally to a
-        // bare "#id" placeholder.
+        // R1: prefer productCache (typeahead-populated) for the label;
+        // fall back to a bare "#id" placeholder. (Select2 <option>
+        // fallback removed in Phase 3 — #addProduct is now a hidden input.)
         var cached = productCache[payload.product_id];
-        var $opt = $('#addProduct option[value="' + payload.product_id + '"]');
         var label;
         if (cached && cached.product_name) {
             label = cached.product_name + (cached.product_code ? ' [' + cached.product_code + ']' : '');
-        } else if ($opt.length) {
-            label = $opt.text().trim();
         } else {
             label = '#' + payload.product_id;
         }
@@ -1722,19 +1703,513 @@
     // ============== ACTIONS =====================================
     // ============================================================
 
-    function setWorkspaceVisible(customerSelected) {
-        // STYLE-PARITY Phase 2: also toggle #cartDock (the cart table +
-        // actions + summary/validation/availability row that lives BELOW
-        // the workspace per Decision B2). Legacy had the cart inside the
-        // dock; we keep it as a separate sibling for cleaner CSS scoping.
-        if (customerSelected) {
-            $('#workspace').removeClass('d-none');
-            $('#cartDock').removeClass('d-none');
-            $('#emptyState').addClass('d-none');
+    // ============================================================
+    // ============== STYLE-PARITY Phase 3: TYPEAHEADS ============
+    // ============================================================
+    // Decision A2 (2026-07-22): replaced Select2 dropdowns with legacy-
+    // faithful text inputs + .sales-suggest-list autocomplete. Mirrors
+    // legacy/app/views/sales/create.php + sales-create.js (L212-418).
+    //
+    //   #customerSearch  → text input. Typing shows .sales-suggest-item
+    //                     rows (shop_name + customer_name + mobile).
+    //                     Clicking a row calls selectCustomer(id), which
+    //                     locks the input (.is-locked), reveals the
+    //                     "Change" button, fetches the credit snapshot,
+    //                     loads the cart, and ensures a tab exists.
+    //
+    //   #productSearch   → text input. Typing shows .sales-suggest-item
+    //                     rows (product_name + code + price range +
+    //                     "N avail" green/red badge — image 1 reference).
+    //                     Clicking a row calls selectProduct(p), which
+    //                     fills the rate / price band / availability,
+    //                     focuses #addQty.
+    //
+    // Barcode scanners act as HID keyboards — they "type" the code
+    // rapidly and end with Enter. The input handler's 200ms debounce
+    // captures the full scan; Enter triggers an exact-code fallback
+    // lookup against the R1 productByCode endpoint (mirrors Legacy
+    // sales-create.js L353-381).
+
+    /**
+     * Format a customer's display name for the locked #customerSearch.
+     * Mirrors Legacy shortCustomerName (sales-create.js L51-55):
+     *   "shop_name || customer_name || 'Customer'", truncated to 22 chars.
+     */
+    function shortCustomerName(c) {
+        if (!c) return 'Customer';
+        var name = (c.shop_name || c.customer_name || 'Customer').trim();
+        return name.length > 22 ? name.slice(0, 22) + '…' : name;
+    }
+
+    /**
+     * Lock the #customerSearch input to a chosen customer (or unlock it
+     * when the cashier clicks "Change"). Mirrors Legacy
+     * setCustomerPickerLocked (sales-create.js L62-85).
+     *
+     * When locked, the input becomes read-only with the indigo .is-locked
+     * background, the "Change" button appears, and the recents chips hide
+     * (Legacy .is-hidden class — sales-pos.css L188-190).
+     */
+    function setCustomerPickerLocked(locked, c) {
+        var $input = $('#customerSearch');
+        var $btnChange = $('#btnChangeCustomer');
+        var $recents = $('#customerRecentsRow');
+        var $label = $('#customerSearchLabel');
+        if (!$input.length) return;
+
+        if (locked && c) {
+            $input.val(shortCustomerName(c));
+            $input.prop('readOnly', true);
+            $input.addClass('is-locked');
+            $btnChange.removeClass('d-none');
+            $recents.addClass('d-none');
+            if ($label.length) $label.text('Selected customer');
         } else {
-            $('#workspace').addClass('d-none');
-            $('#cartDock').addClass('d-none');
-            $('#emptyState').removeClass('d-none');
+            $input.prop('readOnly', false);
+            $input.removeClass('is-locked');
+            $input.val('');
+            $btnChange.addClass('d-none');
+            $recents.removeClass('d-none');
+            if ($label.length) $label.text('Search name, shop or mobile');
+        }
+    }
+
+    /**
+     * Unlock the customer picker and focus it — used by the "Change"
+     * button and by the "+ New customer" button in the cart dock.
+     * Mirrors Legacy clearCustomerPickerForNew (sales-create.js L87-91).
+     */
+    function clearCustomerPicker() {
+        setCustomerPickerLocked(false);
+        $('#customer_id').val('');
+        $('#customerSuggestions').removeClass('show').empty();
+        // Reset the credit panel + sticky bar (no customer = nothing to show)
+        fetchCustomerDetails(null);
+        updatePosStickyBar();
+        var $cs = $('#customerSearch');
+        if ($cs.length) $cs.focus();
+    }
+
+    /**
+     * Select a customer from the typeahead suggest-list.
+     * Locks the picker, sets the hidden #customer_id, fetches the credit
+     * snapshot, loads the cart, ensures a tab exists, and remembers the
+     * customer in the recents list. Mirrors Legacy
+     * sales-create.js::selectCustomer (L261-278).
+     *
+     * opts.skipTabEnsure (bool) — when called from restoreSessionCarts,
+     * the tab has already been ensured.
+     */
+    function selectCustomer(customerId, opts) {
+        opts = opts || {};
+        customerId = parseInt(customerId, 10);
+        if (!customerId) return;
+        var c = customerCache[customerId] || { id: customerId };
+        state.customerId = customerId;
+        // Lock the picker + set hidden field
+        $('#customer_id').val(customerId);
+        setCustomerPickerLocked(true, c);
+        // Hide the suggest list
+        $('#customerSuggestions').removeClass('show').empty();
+        // Remember in recents (R15) — use the cached label if available.
+        rememberCustomerRecent(customerId, tabLabelFor(customerId));
+        renderCustomerRecents();
+        // R11: ensure a tab exists for this customer before loadCart fires.
+        if (!opts.skipTabEnsure) {
+            ensureTab(customerId, { active: true, label: tabLabelFor(customerId) });
+        } else {
+            activateTab(customerId);
+        }
+        // Load the cart (will call setWorkspaceVisible(true) + renderAll).
+        loadCart(customerId);
+        // R14: fetch the live credit snapshot for this customer.
+        fetchCustomerDetails(customerId);
+        // Update URL so refresh preserves selection
+        if (window.history && history.replaceState) {
+            history.replaceState(null, '', window.location.pathname + '?customer_id=' + customerId);
+        }
+        // Auto-focus the product search so the cashier can scan immediately.
+        // (Mirrors Legacy sales-create.js L277.)
+        var $ps = $('#productSearch');
+        if ($ps.length) setTimeout(function () { $ps.focus(); }, 100);
+    }
+
+    /**
+     * Select a product from the typeahead suggest-list.
+     * Fills the rate / price band / availability, focuses #addQty.
+     * Mirrors Legacy sales-create.js::selectProductCreate (L390-418).
+     */
+    function selectProduct(p) {
+        if (!p || !p.id) return;
+        var stock = parseFloat(p.available_qty) || 0;
+        if (stock <= 0) {
+            Swal.fire({
+                icon: 'warning',
+                title: 'Out of stock',
+                text: 'No available stock at this branch.',
+                confirmButtonColor: '#7c3aed'
+            });
+            return;
+        }
+        var min = parseFloat(p.min_rate) || 0;
+        var max = parseFloat(p.max_rate) || 0;
+        if (min <= 0 || max <= 0) {
+            Swal.fire({
+                icon: 'warning',
+                title: 'No price range',
+                text: 'This product has no selling range set. Ask admin to configure prices.',
+                confirmButtonColor: '#7c3aed'
+            });
+            return;
+        }
+        // Cache + set hidden #addProduct for back-compat with addToCart()
+        productCache[p.id] = p;
+        state.activeProductId = p.id;
+        $('#addProduct').val(p.id);
+        // Show the product name in the search input (Legacy L409)
+        $('#productSearch').val(p.product_name);
+        $('#productSuggestions').removeClass('show').empty();
+        // Rate: default_rate (fall back to min_rate)
+        var defRate = parseFloat(p.default_rate);
+        if (!(defRate > 0)) defRate = min;
+        $('#addRate').val(defRate.toFixed(2));
+        $('#addQty').val(1);
+        // Rate hint
+        var hint = 'Default ' + fmtMoney(defRate) +
+                   ' · Range ' + fmtMoney(min) + '–' + fmtMoney(max);
+        $('#rateHint').html('<i class="fas fa-info-circle me-1"></i>' + hint);
+        // R13: prime the price-range slider band
+        setActivePriceRange(p);
+        updatePriceBandUi();
+        // Show the stock banner with this product's branch availability
+        showStockBanner(p);
+        // R13: check availability breakdown (per-warehouse)
+        if (p.available_qty !== undefined) {
+            $('#addAvailTotal').text(fmtQty(p.available_qty) + ' (live)');
+        }
+        checkAvailability(p.id);
+        // R18: focus + select qty so the cashier can immediately type
+        // a new value or press Enter to accept the default.
+        var $qty = $('#addQty');
+        $qty.focus();
+        if ($qty[0]) $qty[0].select();
+    }
+
+    /**
+     * Render the #BranchStock teal banner with this product's branch stock.
+     * Mirrors Legacy showStockInfoCreate (sales-create.js L420-454).
+     */
+    function showStockBanner(product) {
+        var $banner = $('#BranchStock');
+        if (!$banner.length || !product) return;
+        var stock = parseFloat(product.available_qty) || 0;
+        var branchName = window.ACTIVE_BRANCH_NAME || 'Branch';
+        $banner.removeClass('d-none');
+        $banner.find('.stock-banner-inner').remove();
+        $banner.append(
+            '<div class="stock-banner-inner">' +
+                '<div class="stock-stat">' +
+                    '<span class="stock-label">Available (branch)</span> ' +
+                    '<span class="stock-value ' + (stock > 0 ? 'text-white' : 'text-danger') + '">' + fmtQty(stock) + '</span>' +
+                '</div>' +
+                '<span class="text-white-50 small align-self-center">Warehouse breakdown appears in the Availability panel below.</span>' +
+            '</div>'
+        );
+    }
+
+    /**
+     * Reset the product entry form after a successful add-to-cart.
+     * Mirrors Legacy resetProductEntry (sales-create.js L625-632).
+     */
+    function resetProductEntry() {
+        $('#productSearch').val('');
+        $('#addProduct').val('');
+        state.activeProductId = null;
+        $('#addQty').val(1);
+        $('#addRate').val('');
+        $('#rateHint').html('&nbsp;');
+        $('#productSuggestions').removeClass('show').empty();
+        // R13: clear the price band
+        setActivePriceRange(null);
+        // Hide the stock banner
+        $('#BranchStock').addClass('d-none');
+        renderAvailability(null);
+    }
+
+    /**
+     * Wire the #customerSearch input + #customerSuggestions dropdown.
+     * Mirrors Legacy initCustomerTypeahead (sales-create.js L212-257).
+     */
+    function initCustomerTypeahead() {
+        var $input = $('#customerSearch');
+        var $box = $('#customerSuggestions');
+        if (!$input.length || !$box.length) return;
+
+        var _debounce = null;
+        $input.on('input', function () {
+            // If the input is locked (customer already selected), ignore
+            // typing — the cashier must click "Change" to unlock first.
+            if ($input.prop('readOnly')) return;
+            var term = ($input.val() || '').trim();
+            if (_debounce) clearTimeout(_debounce);
+            if (term.length < 1) {
+                $box.removeClass('show').empty();
+                return;
+            }
+            _debounce = setTimeout(function () {
+                ajaxGet(ENDPOINTS.searchCustomer, { term: term })
+                    .done(function (data) {
+                        var list = parseSalesListResponse(data);
+                        if (!list.length) {
+                            $box.html('<div class="sales-suggest-empty">No customer found</div>');
+                            $box.addClass('show');
+                            return;
+                        }
+                        var html = '';
+                        list.forEach(function (c) {
+                            customerCache[c.id] = {
+                                id: c.id,
+                                customer_code: c.customer_code,
+                                customer_name: c.customer_name,
+                                shop_name: c.shop_name,
+                                mobile: c.mobile,
+                                credit_limit: c.credit_limit,
+                            };
+                            var title = c.shop_name || c.customer_name || ('#' + c.id);
+                            var meta = (c.customer_name || '') +
+                                       (c.customer_code ? ' [' + c.customer_code + ']' : '') +
+                                       (c.mobile ? ' · ' + c.mobile : '');
+                            html += '<button type="button" class="sales-suggest-item" data-id="' + parseInt(c.id, 10) + '">' +
+                                        '<span class="suggest-title">' + escHtml(title) + '</span>' +
+                                        '<span class="suggest-meta">' + escHtml(meta) + '</span>' +
+                                    '</button>';
+                        });
+                        $box.html(html);
+                        $box.addClass('show');
+                    })
+                    .fail(function () {
+                        $box.html('<div class="sales-suggest-empty">Search failed — try again</div>');
+                        $box.addClass('show');
+                    });
+            }, 250);
+        });
+
+        // Click an item → select that customer
+        $box.on('click', '.sales-suggest-item', function () {
+            var id = parseInt($(this).data('id'), 10);
+            if (id) selectCustomer(id);
+        });
+
+        // Enter on input → pick the first result (Legacy L244-250)
+        $input.on('keydown', function (e) {
+            if (e.key !== 'Enter') return;
+            if ($input.prop('readOnly')) return;
+            e.preventDefault();
+            var $first = $box.find('.sales-suggest-item').first();
+            if ($first.length) {
+                selectCustomer(parseInt($first.data('id'), 10));
+            }
+        });
+
+        // Outside click → close the suggest list (Legacy L252-256)
+        $(document).on('click', function (e) {
+            if (!$(e.target).closest('#customerSearch').length &&
+                !$(e.target).closest('#customerSuggestions').length) {
+                $box.removeClass('show');
+            }
+        });
+    }
+
+    /**
+     * Wire the #productSearch input + #productSuggestions dropdown.
+     * Mirrors Legacy initProductSearchCreate (sales-create.js L280-388).
+     * Suggest-item layout: product name + code on left, price range +
+     * availability badge on right (image 1 reference).
+     */
+    function initProductSearch() {
+        var $input = $('#productSearch');
+        var $box = $('#productSuggestions');
+        if (!$input.length || !$box.length) return;
+
+        var _debounce = null;
+        $input.on('input', function () {
+            var term = ($input.val() || '').trim();
+            if (_debounce) clearTimeout(_debounce);
+            if (term.length < 2) {
+                $box.removeClass('show').empty();
+                return;
+            }
+            _debounce = setTimeout(function () {
+                ajaxGet(ENDPOINTS.searchProduct, { term: term, branch_id: BRANCH_ID })
+                    .done(function (data) {
+                        var list = parseSalesListResponse(data);
+                        if (!list.length) {
+                            $box.html('<div class="sales-suggest-empty">No product found</div>');
+                            $box.addClass('show');
+                            return;
+                        }
+                        var html = '';
+                        list.forEach(function (p) {
+                            productCache[p.id] = p;
+                            var stock = parseFloat(p.available_qty) || 0;
+                            var out = stock <= 0;
+                            var min = parseFloat(p.min_rate) || 0;
+                            var max = parseFloat(p.max_rate) || 0;
+                            var priceLabel = (min > 0 && max > 0)
+                                ? '<span class="sales-suggest-price">+' + fmtMoney(min) + '-' + fmtMoney(max) + '</span>'
+                                : '<span class="sales-suggest-price text-warning">No range</span>';
+                            var badgeCls = stock > 0 ? 'bg-success' : 'bg-danger';
+                            html += '<button type="button" class="sales-suggest-item' + (out ? ' disabled' : '') + '"' +
+                                        ' data-id="' + parseInt(p.id, 10) + '"' +
+                                        (out ? ' disabled' : '') + '>' +
+                                        '<span class="suggest-title">' + escHtml(p.product_name) +
+                                            ' <small class="text-muted">' + escHtml(p.product_code || '') + '</small>' +
+                                        '</span>' +
+                                        '<span class="d-flex align-items-center gap-1">' +
+                                            priceLabel +
+                                            '<span class="badge ' + badgeCls + '">' + fmtQty(stock) + ' avail</span>' +
+                                        '</span>' +
+                                    '</button>';
+                        });
+                        $box.html(html);
+                        $box.addClass('show');
+                    })
+                    .fail(function () {
+                        $box.html('<div class="sales-suggest-empty">Search failed — try again</div>');
+                        $box.addClass('show');
+                    });
+            }, 200);
+        });
+
+        // Click an item → select that product
+        $box.on('click', '.sales-suggest-item:not(.disabled)', function () {
+            var id = parseInt($(this).data('id'), 10);
+            if (id && productCache[id]) selectProduct(productCache[id]);
+        });
+
+        // Keyboard navigation (ArrowUp/ArrowDown/Enter)
+        $input.on('keydown', function (e) {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                if (!$box.hasClass('show')) return;
+                var $items = $box.find('.sales-suggest-item:not(.disabled)');
+                if (!$items.length) return;
+                var $active = $box.find('.sales-suggest-item.active');
+                if (!$active.length) $active = $items.first();
+                var idx = $items.index($active);
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    $active.removeClass('active');
+                    var $next = $items.eq((idx + 1) % $items.length);
+                    $next.addClass('active');
+                    $next[0].scrollIntoView({ block: 'nearest' });
+                } else {
+                    e.preventDefault();
+                    $active.removeClass('active');
+                    var $prev = $items.eq((idx - 1 + $items.length) % $items.length);
+                    $prev.addClass('active');
+                    $prev[0].scrollIntoView({ block: 'nearest' });
+                }
+                return;
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                var term = ($input.val() || '').trim();
+                if (!term) return;
+                // If a suggest-item is active or visible, pick it.
+                if ($box.hasClass('show')) {
+                    var $pick = $box.find('.sales-suggest-item.active:not(.disabled)');
+                    if (!$pick.length) $pick = $box.find('.sales-suggest-item:not(.disabled)').first();
+                    if ($pick.length) {
+                        var pid = parseInt($pick.data('id'), 10);
+                        if (pid && productCache[pid]) {
+                            selectProduct(productCache[pid]);
+                            return;
+                        }
+                    }
+                }
+                // Fallback: treat the typed term as a product_code and
+                // do an exact-match lookup against the R1 endpoint.
+                lookupProductByCodeAndSelect(term);
+            }
+        });
+
+        // Outside click → close the suggest list
+        $(document).on('click', function (e) {
+            if (!$(e.target).closest('#productSearch').length &&
+                !$(e.target).closest('#productSuggestions').length) {
+                $box.removeClass('show');
+            }
+        });
+    }
+
+    /**
+     * Normalize a sales-list AJAX response into an Array. Mirrors
+     * Legacy parseSalesListResponse (sales.js L45-62) — handles
+     * bare arrays, {status:'error'} envelopes, {data:[...]} envelopes,
+     * and numeric-keyed objects.
+     */
+    function parseSalesListResponse(json) {
+        if (json == null) return [];
+        if (Array.isArray(json)) return json;
+        if (json.status === 'error') {
+            console.warn(json.message || 'Sales API error');
+            return [];
+        }
+        if (Array.isArray(json.data)) return json.data;
+        if (typeof json === 'object') {
+            var numericKeys = Object.keys(json).filter(function (k) { return /^\d+$/.test(k); });
+            if (numericKeys.length) {
+                return numericKeys
+                    .sort(function (a, b) { return Number(a) - Number(b); })
+                    .map(function (k) { return json[k]; });
+            }
+        }
+        return [];
+    }
+
+    /**
+     * Fallback exact-code lookup: fires when the cashier pressed Enter
+     * in #productSearch with no matching suggest-list result. Calls the
+     * R1 productByCode endpoint and on success calls selectProduct(p).
+     * Mirrors Legacy fetchSalesProductByExactCode (sales.js L67-82).
+     */
+    function lookupProductByCodeAndSelect(code) {
+        if (!state.customerId) {
+            toast('Select a customer first.', 'error');
+            return;
+        }
+        var trimmed = String(code || '').trim();
+        if (!trimmed) return;
+        $('#rateHint').html('<i class="fas fa-spinner fa-spin me-1"></i>Looking up code "' + escHtml(trimmed) + '"…');
+        ajaxGet(ENDPOINTS.productByCode, { code: trimmed, branch_id: BRANCH_ID })
+            .done(function (json) {
+                if (!json || json.status !== 'success' || !json.data) {
+                    $('#rateHint').html('<i class="fas fa-times-circle me-1 text-danger"></i>No product with code "' + escHtml(trimmed) + '".');
+                    toast('No product with code ' + trimmed, 'warning');
+                    return;
+                }
+                var p = json.data;
+                productCache[p.id] = p;
+                selectProduct(p);
+                toast('Ready: ' + (p.product_name || trimmed) + ' · ৳' + fmtMoney(parseFloat(p.default_rate) || 0), 'success');
+            })
+            .fail(function (xhr) {
+                $('#rateHint').html('<i class="fas fa-exclamation-circle me-1 text-danger"></i>Lookup failed: ' + escHtml(xhr.statusText || 'network error'));
+                toast('Lookup failed', 'error');
+            });
+    }
+
+    function setWorkspaceVisible(customerSelected) {
+        // STYLE-PARITY Phase 3 (Decision B2/D1): The workspace + cartDock
+        // are always visible from first paint (legacy parity — image 3).
+        // We only toggle the empty-cart hint inside #cartEmptyRow so the
+        // cashier sees "Cart is empty — add a product above." when no
+        // customer is selected, and the actual cart rows when one is.
+        // The #emptyState panel was removed entirely (legacy has none).
+        if (customerSelected) {
+            $('#cartEmptyRow').addClass('d-none');
+        } else {
+            $('#cartEmptyRow').removeClass('d-none');
         }
     }
 
@@ -1773,7 +2248,10 @@
 
     function addToCart() {
         if (!state.customerId) { toast('Select a customer first.', 'error'); return; }
-        var productId = parseInt($('#addProduct').val(), 10);
+        // Decision A2 (2026-07-22): #addProduct is now a hidden input whose
+        // value is set by selectProduct(). Falls back to state.activeProductId
+        // for safety (in case the hidden input was cleared by a re-render).
+        var productId = parseInt($('#addProduct').val() || state.activeProductId, 10);
         var qty  = parseFloat($('#addQty').val());
         var rate = parseFloat($('#addRate').val());
         if (!productId || !(qty > 0) || !(rate >= 0)) {
@@ -1801,25 +2279,17 @@
                     } else {
                         loadCart(state.customerId);
                     }
-                    // Reset add form
-                    $('#addProduct').val('').trigger('change');
-                    $('#addQty').val(1);
-                    $('#addRate').val('');
-                    $('#rateHint').html('&nbsp;');
-                    renderAvailability(null);
+                    // Reset add form (Decision A2: plain input, not Select2)
+                    resetProductEntry();
 
                     // R18: refocus the product search box so the cashier
                     // can immediately scan/type the next product without
                     // reaching for the mouse. Mirrors Legacy
                     // sales-create.js::resetProductEntry L632:
                     //   document.getElementById('productSearch')?.focus();
-                    // Select2 needs 'open' to focus the search input —
-                    // just triggering focus on the original <select>
-                    // doesn't bring up the search box.
                     setTimeout(function () {
-                        $('#addProduct').select2('open');
-                        // Select2's open gives focus to the search input
-                        // automatically; no further focus call needed.
+                        var $ps = $('#productSearch');
+                        if ($ps.length) { $ps.focus(); }
                     }, 50);
                 } else {
                     toast(resp.message || 'Could not add item.', 'error');
@@ -2068,8 +2538,13 @@
         var $row = $('#customerRecentsRow');
         var $box = $('#customerRecents');
         if (!$row.length || !$box.length) return;
+        // Respect the locked-state hide: when the customer picker is
+        // locked (.is-locked on #customerSearch), the recents row stays
+        // hidden regardless of how many chips we'd render. setCustomerPickerLocked
+        // toggles d-none on this row; we must not remove d-none here.
+        var isLocked = $('#customerSearch').hasClass('is-locked');
         var recents = loadCustomerRecents();
-        if (!recents.length) {
+        if (!recents.length || isLocked) {
             $row.addClass('d-none');
             $box.empty();
             return;
@@ -2216,143 +2691,39 @@
     // ============== EVENT WIRING (DOM ready) ====================
     // ============================================================
     $(function () {
-        // --- Initialize Select2 ---
-        // R1: customer & product dropdowns are now AJAX-driven (live search).
-        // The 500-row server-side pre-render has been removed.
-        $('#customerSelect').select2({
-            theme: 'bootstrap-5',
-            placeholder: '— Type customer name / code / mobile —',
-            allowClear: true,
-            minimumInputLength: 1,
-            ajax: {
-                url: ENDPOINTS.searchCustomer,
-                dataType: 'json',
-                delay: 250,                       // debounce (ms) — matches Legacy UX
-                data: function (params) {
-                    return { term: (params.term || '').trim() };
-                },
-                processResults: function (data) {
-                    return {
-                        results: (data || []).map(function (c) {
-                            var label = c.customer_name || c.shop_name || ('#' + c.id);
-                            if (c.customer_code)  label += ' [' + c.customer_code + ']';
-                            if (c.mobile)         label += ' · ' + c.mobile;
-                            // R11: cache the customer so the tab dock can
-                            // render the right label without an extra fetch.
-                            customerCache[c.id] = {
-                                id: c.id,
-                                customer_code: c.customer_code,
-                                customer_name: c.customer_name,
-                                shop_name: c.shop_name,
-                                mobile: c.mobile,
-                                credit_limit: c.credit_limit,
-                            };
-                            return {
-                                id: c.id,
-                                text: label,
-                                // stash for client-side use
-                                customer_code: c.customer_code,
-                                customer_name: c.customer_name,
-                                shop_name: c.shop_name,
-                                mobile: c.mobile,
-                                credit_limit: c.credit_limit,
-                            };
-                        })
-                    };
-                },
-                cache: true,
-            },
-            templateSelection: function (state) {
-                if (!state.id) return state.text;
-                // Preserve the server-rendered "Customer [CODE]" label for the
-                // pre-selected customer; for AJAX picks, use the formatted text.
-                return state.text || state.customer_name || ('#' + state.id);
-            },
+        // ============================================================
+        // ============== STYLE-PARITY Phase 3: TYPEAHEAD INIT ========
+        // ============================================================
+        // Decision A2 (2026-07-22): replaced Select2 dropdowns with
+        // legacy text-input + .sales-suggest-list autocomplete.
+        // The init functions wire the input/click/keydown/outside-click
+        // handlers (see definitions above, near the ACTIONS section).
+        initCustomerTypeahead();
+        initProductSearch();
+
+        // --- "Change" button: unlock the customer picker so the cashier
+        //     can search for a different customer. Mirrors Legacy
+        //     sales-create.js setCustomerPickerLocked(false) (L78-84).
+        $('#btnChangeCustomer').on('click', function () {
+            clearCustomerPicker();
         });
 
-        $('#addProduct').select2({
-            theme: 'bootstrap-5',
-            placeholder: '— Type name / scan code —',
-            allowClear: true,
-            minimumInputLength: 1,
-            // Barcode-scanner-friendly: when the dropdown closes (e.g.
-            // scanner sends Enter), pick the highlighted first result
-            // automatically. Combined with the AJAX search matching on
-            // product_code (R1), this makes the single Select2 box
-            // double as the barcode entry — no separate input needed.
-            selectOnClose: true,
-            ajax: {
-                url: ENDPOINTS.searchProduct,
-                dataType: 'json',
-                delay: 250,
-                data: function (params) {
-                    return { term: (params.term || '').trim(), branch_id: BRANCH_ID };
-                },
-                processResults: function (data) {
-                    return {
-                        results: (data || []).map(function (p) {
-                            // Cache the full product payload so the change
-                            // handler can read default_rate/min_rate/max_rate
-                            // without another round-trip.
-                            productCache[p.id] = p;
-                            var label = p.product_name + (p.product_code ? ' [' + p.product_code + ']' : '');
-                            return {
-                                id: p.id,
-                                text: label,
-                                // also stashed on the option for back-compat
-                                'data-default-rate': p.default_rate,
-                                'data-code': p.product_code,
-                                'data-name': p.product_name,
-                            };
-                        })
-                    };
-                },
-                cache: true,
-            },
+        // --- "+ New customer" button (in the cart dock head): same as
+        //     "Change" — unlocks the picker and focuses it so the cashier
+        //     can immediately type a new customer name. Mirrors Legacy
+        //     #btnFocusCustomer (sales/create.php L150-152 + sales-create.js
+        //     clearCustomerPickerForNew at L87-91).
+        $('#btnFocusCustomer').on('click', function () {
+            clearCustomerPicker();
+            // Scroll to the customer panel so the picker is in view.
+            document.getElementById('customerSearch')?.scrollIntoView({
+                behavior: 'smooth', block: 'center'
+            });
         });
 
         // --- Tooltips ---
         var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
         tooltipTriggerList.map(function (el) { return new bootstrap.Tooltip(el); });
-
-        // --- Customer change ---
-        $('#customerSelect').on('change', function () {
-            var cid = $(this).val();
-            if (cid) {
-                // Update URL so refresh preserves selection
-                if (window.history && history.replaceState) {
-                    var newUrl = window.location.pathname + '?customer_id=' + parseInt(cid, 10);
-                    history.replaceState(null, '', newUrl);
-                }
-                // R11: ensure a tab exists for this customer before loadCart
-                // fires (so the pill appears immediately, even before the
-                // cart load resolves).
-                ensureTab(cid, { active: true, label: tabLabelFor(cid) });
-                loadCart(cid);
-                // R14: fetch the live credit snapshot for this customer so
-                // the credit panel renders alongside the cart. Cheap call
-                // (one indexed SUM query), throttled 60/min — only fires
-                // on customer change, not on every cart mutation.
-                fetchCustomerDetails(parseInt(cid, 10));
-                // R15: remember this customer in localStorage so a chip
-                // appears under the Select2 for one-click re-selection
-                // later. Use the Select2-rendered label (includes shop +
-                // mobile + code) so the chip is meaningful at a glance.
-                var label = ($('#customerSelect option:selected').text() || '').trim()
-                    || tabLabelFor(parseInt(cid, 10));
-                rememberCustomerRecent(cid, label);
-                renderCustomerRecents();
-            } else {
-                if (window.history && history.replaceState) {
-                    history.replaceState(null, '', window.location.pathname);
-                }
-                loadCart(null);
-                // R14: hide the credit panel — no customer selected.
-                fetchCustomerDetails(null);
-                // R16: hide the sticky bar — no customer selected.
-                updatePosStickyBar();
-            }
-        });
 
         // R15: chip click → switch to that customer (reuses R11 flow).
         $(document).on('click', '#customerRecents .btn[data-customer-id]', function (e) {
@@ -2361,10 +2732,6 @@
             if (!cid) return;
             if (parseInt(state.customerId, 10) === cid) return; // already active
             switchToCustomer(cid);
-        });
-
-        $('#btnLoadCart').on('click', function () {
-            loadCart($('#customerSelect').val());
         });
 
         // R14: "Refresh" button — re-fetch the credit snapshot in case a
@@ -2388,66 +2755,6 @@
                 });
         });
 
-        // --- Add Product interactions ---
-        $('#addProduct').on('change', function () {
-            var productId = parseInt($(this).val(), 10);
-
-            if (!productId) {
-                $('#addRate').val('');
-                $('#rateHint').html('&nbsp;');
-                // R13: clear the price band when no product is selected.
-                setActivePriceRange(null);
-                renderAvailability(null);
-                return;
-            }
-
-            // R1: prefer the in-memory productCache (populated by the AJAX
-            // search) — it has min_rate/max_rate/default_rate/available_qty.
-            // Fall back to <option> data attributes for back-compat.
-            var p = productCache[productId] || {};
-            var defaultRate = p.default_rate !== undefined
-                ? p.default_rate
-                : ($(this).find('option:selected').data('default-rate') || 0);
-
-            // Auto-fill rate with default_rate
-            $('#addRate').val(parseFloat(defaultRate).toFixed(2));
-
-            // Rate hint — show min/max range when available (from live search),
-            // otherwise fall back to default-rate only.
-            var hint;
-            if (p.min_rate !== undefined && p.max_rate !== undefined &&
-                (parseFloat(p.min_rate) > 0 || parseFloat(p.max_rate) > 0)) {
-                hint = 'Default ' + fmtMoney(defaultRate) +
-                       ' · Range ' + fmtMoney(p.min_rate) + '–' + fmtMoney(p.max_rate);
-            } else {
-                hint = 'Default: ' + fmtMoney(defaultRate);
-            }
-            $('#rateHint').html('<i class="fas fa-info-circle me-1"></i>' + hint);
-
-            // R13: prime the price-range slider band with this product's
-            // min/max/default. setActivePriceRange() also hides the band
-            // if the product has no usable range (min<=0 or max<=0).
-            setActivePriceRange(p);
-
-            // Check availability (branch-wide). If the live-search payload
-            // already includes available_qty, prime the card immediately so
-            // the user sees stock info even before the breakdown request
-            // resolves.
-            if (p.available_qty !== undefined) {
-                $('#addAvailTotal').text(fmtQty(p.available_qty) + ' (live)');
-            }
-            checkAvailability(productId);
-
-            // R18: auto-focus #addQty + select its content so the cashier
-            // can immediately type a new qty (Legacy mirrors this in
-            // sales-create.js::selectProductCreate). Default of 1 is
-            // already in the field — selecting it means Enter accepts 1,
-            // or typing a new number replaces it.
-            var $qty = $('#addQty');
-            $qty.focus();
-            $qty[0] && $qty[0].select();
-        });
-
         // R13: live rate changes should reposition the slider thumb and
         // refresh the in-range / warn / bad status badge. Debounced
         // 60ms so rapid typing doesn't thrash the DOM.
@@ -2463,7 +2770,8 @@
         $('#btnUseDefaultRate').on('click', function () {
             if (!state.activePriceRange) return;
             var def = parseFloat(state.activePriceRange.default_rate) || 0;
-            $('#addRate').val(def.toFixed(2)).trigger('change');
+            $('#addRate').val(def.toFixed(2));
+            updatePriceBandUi();
             toast('Rate reset to default (৳' + fmtMoney(def) + ')', 'info');
         });
 
@@ -2473,17 +2781,11 @@
         // ============== R18: KEYBOARD SHORTCUTS =====================
         // ============================================================
         // Mirrors Legacy sales-create.js keyboard flow:
-        //   1. Product Select2 ArrowUp/ArrowDown/Enter — already
-        //      handled natively by Select2 (dropdown navigation).
-        //      R10s added the Enter-on-empty fallback to the
-        //      productByCode endpoint.
-        //   2. After a product is picked (Select2 change), auto-focus
+        //   1. Product search ArrowUp/ArrowDown/Enter — handled inside
+        //      initProductSearch() (see above).
+        //   2. After a product is picked (selectProduct), auto-focus
         //      #addQty and select its content so the cashier can
         //      immediately type a new qty without an extra Tab.
-        //      (Legacy: sales-create.js::selectProductCreate calls
-        //      document.getElementById('quantity')?.focus() — though
-        //      Legacy also pre-fills qty=1, the focus lets the cashier
-        //      override by just typing.)
         //   3. Enter in #addQty → focus + select #addRate (NOT submit).
         //      Legacy sales-create.js L615–621: Enter on quantity
         //      moves focus to rate, so the cashier can review/override
@@ -2515,122 +2817,24 @@
         });
 
         // ============================================================
-        // ============ BARCODE SCANNER (simplified) ==================
+        // ============ BARCODE SCANNER ===============================
         // ============================================================
         // Barcode scanners act as HID keyboards: they "type" the code
-        // rapidly and end with Enter. The Select2 search box is the
-        // single product entry — there is no separate barcode input
-        // any more (R10's dual-mode UI was removed because it
-        // duplicated the search box and made the page feel cluttered).
+        // rapidly and end with Enter. The product typeahead (#productSearch)
+        // is the single product entry — there is no separate barcode input
+        // any more (R10's dual-mode UI was removed because it duplicated
+        // the search box and made the page feel cluttered).
         //
-        // Two layers of barcode support:
-        //
-        //   1. The AJAX search already matches on product_code via
-        //      ILIKE (R1), so most scans resolve as the user types:
-        //      Select2 shows matching results, the first one is
-        //      auto-highlighted, and `selectOnClose: true` (set in
-        //      the Select2 init above) makes Enter pick it.
-        //
-        //   2. FALLBACK: if the user types/scans a code that returns
-        //      NO matches from the ILIKE search (rare — only happens
-        //      when product_code has trailing/leading whitespace
-        //      differences or the user types a code that's a SUBSTRING
-        //      of nothing), we intercept Enter on the Select2 search
-        //      input and fire an exact-match lookup against the R1
-        //      productByCode endpoint. On success, the matched product
-        //      is injected as a fresh <option> + auto-selected.
-        //
-        // The fallback is delegated (works even though Select2
-        // re-creates the search input on every open).
-        $(document).on('keydown', '.select2-search__field', function (e) {
-            if (e.key !== 'Enter') return;
-            // Only intercept when the open dropdown belongs to #addProduct
-            var $dropdown = $(this).closest('.select2-dropdown');
-            if (!$dropdown.length) return;
-            var $container = $dropdown.prev('.select2');
-            // The dropdown's corresponding container sits in the DOM
-            // just before .select2-dropdown; verify it wraps #addProduct.
-            // Simpler: check whether the original <select> is #addProduct
-            // by walking up to the body and finding which Select2 is open.
-            // We use the aria-controls attribute on the search input,
-            // which Select2 sets to the id of the results container,
-            // which is namespaced by the original select id.
-            var resultsId = $(this).attr('aria-controls') || '';
-            if (resultsId.indexOf('addProduct') === -1
-                && resultsId.indexOf('select2-addProduct') === -1) {
-                // Not our product search — let Select2 handle it normally.
-                return;
-            }
-            // If a result is highlighted, let Select2 do its default
-            // (select + close). We only fall back to productByCode
-            // when nothing is highlighted.
-            var $highlighted = $dropdown.find('.select2-results__option--highlighted');
-            if ($highlighted.length) return;
-            // No highlighted result → take the typed term as a code.
-            var term = ($(this).val() || '').trim();
-            if (!term) return;
-            e.preventDefault();
-            lookupProductByCodeAndSelect(term);
-        });
-
-        /**
-         * Fallback exact-code lookup: fires when the user pressed Enter
-         * in the product Select2 search box with no highlighted result.
-         * Calls the R1 productByCode endpoint and on success injects
-         * the matched product as a fresh <option> + triggers the
-         * normal change handler (which fills rate + price band +
-         * availability). Does NOT auto-add to cart — the cashier can
-         * review the populated rate/qty first, then click "Add".
-         */
-        function lookupProductByCodeAndSelect(code) {
-            if (!state.customerId) {
-                toast('Select a customer first.', 'error');
-                return;
-            }
-            // Close the Select2 dropdown so the user sees the form.
-            $('#addProduct').select2('close');
-            // Brief hint while the lookup runs (no separate input to
-            // write to — surface via toast + the existing #rateHint).
-            $('#rateHint').html('<i class="fas fa-spinner fa-spin me-1"></i>Looking up code "' + escHtml(code) + '"…');
-            ajaxGet(ENDPOINTS.productByCode, { code: code, branch_id: BRANCH_ID })
-                .done(function (json) {
-                    if (!json || json.status !== 'success' || !json.data) {
-                        $('#rateHint').html('<i class="fas fa-times-circle me-1 text-danger"></i>No product with code "' + escHtml(code) + '".');
-                        toast('No product with code ' + code, 'warning');
-                        // Reopen Select2 so the user can re-search.
-                        setTimeout(function () { $('#addProduct').select2('open'); }, 50);
-                        return;
-                    }
-                    var p = json.data;
-                    // Cache so the change handler / availability renderer sees it
-                    productCache[p.id] = p;
-                    // Inject a fresh <option> and select it
-                    var label = p.product_name + (p.product_code ? ' [' + p.product_code + ']' : '');
-                    var $newOpt = $('<option></option>')
-                        .val(p.id)
-                        .text(label)
-                        .data('default-rate', p.default_rate)
-                        .data('code', p.product_code)
-                        .data('name', p.product_name);
-                    $('#addProduct').append($newOpt).val(p.id).trigger('change');
-                    // Stock guard hint
-                    var avail = parseFloat(p.available_qty || 0);
-                    if (avail <= 0) {
-                        toast('Out of stock: ' + (p.product_name || code), 'warning');
-                    }
-                    // Pre-fill rate (default_rate, fall back to min_rate)
-                    var defRate = parseFloat(p.default_rate);
-                    if (!(defRate > 0)) defRate = parseFloat(p.min_rate) || 0;
-                    $('#addRate').val(defRate.toFixed(2));
-                    setActivePriceRange(p);  // R13: snap the slider thumb
-                    $('#addQty').val(1).focus().select();
-                    toast('Ready: ' + (p.product_name || code) + ' · ৳' + fmtMoney(defRate), 'success');
-                })
-                .fail(function (xhr) {
-                    $('#rateHint').html('<i class="fas fa-exclamation-circle me-1 text-danger"></i>Lookup failed: ' + escHtml(xhr.statusText || 'network error'));
-                    toast('Lookup failed', 'error');
-                });
-        }
+        // Two layers of barcode support (both inside initProductSearch):
+        //   1. The AJAX search matches on product_code via ILIKE (R1),
+        //      so most scans resolve as the user types: the suggest-list
+        //      shows matching results, the first one is highlighted, and
+        //      Enter picks it.
+        //   2. FALLBACK: if the user types/scans a code that returns NO
+        //      matches, Enter triggers lookupProductByCodeAndSelect()
+        //      (defined above) which fires the R1 productByCode endpoint
+        //      and on success calls selectProduct(p) directly.
+        // (No additional wiring needed here — all handled in initProductSearch.)
 
         // --- Cart table inline edits (desktop + mobile share classes) ---
         $(document).on('input change', '.cart-qty, .cart-rate', function () {

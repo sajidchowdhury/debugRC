@@ -415,3 +415,78 @@ Stage Summary:
 - Remaining gap: Select2 dropdowns still look like Select2 (not legacy .sales-suggest-list). Full Decision A2 (revert to text input + custom dropdown) deferred — would require porting sales-create.js autocomplete logic. Bridge CSS in this commit makes Select2 inherit the .sales-search-input 48px indigo look, so it's visually close.
 - No JS logic changed (only the 2-line setWorkspaceVisible patch). All AJAX endpoints, event handlers, state management untouched.
 - Ready to commit and push. User should reload /admin/sales/cart and send a new screenshot for VLM diff verification.
+
+---
+Task ID: PHASE3-A2
+Agent: main (Super Z)
+Task: Phase 3 — Full legacy-faithful restructure of cart.blade.php per user directive "pls follow everything as lagachy regarding ABCD". User uploaded 3 screenshots: image 1 (legacy product search results dropdown with name + code + price range + availability badge), image 2 (current Laravel initial state — single "Select a customer..." empty-state panel hiding everything), image 3 (legacy initial state — Customer panel + Add products panel + Carts panel all visible from first paint).
+
+Work Log:
+- Analyzed all 3 user-uploaded screenshots via VLM (glm-5v-turbo) to map the exact visual gap:
+  * Image 2 (Laravel initial): single empty-state panel says "Select a customer to start building an invoice." — hides Customer/Product/Cart panels until a customer is picked.
+  * Image 3 (legacy initial): 2-column layout (Customer 4-col left + Add products 8-col right) + full-width Carts panel below, all visible from first paint. Customer search is a text input with placeholder "Type to search customer..." + a chip showing the pre-selected customer "A. H. ELECTRONICS".
+  * Image 1 (legacy search results): product search results render as a styled dropdown list with each row showing product name (bold) + code (small muted), price range "+min-max" on the right, and a green/red "N avail" availability badge.
+- Re-read legacy create.php (185 lines) to confirm the gold-reference HTML structure for #customerSearch, #productSearch, #customerSuggestions, #productSuggestions.
+- Re-read sales-pos.css (960 lines) to confirm exact class names: .sales-suggest-list, .sales-suggest-item, .suggest-title, .suggest-meta, .sales-suggest-price, #customerSearch.is-locked, .sales-customer-picker, .sales-change-customer.
+- Re-read legacy sales-create.js (803 lines) for the typeahead logic: initCustomerTypeahead (L212-257), initProductSearchCreate (L280-388), selectCustomer (L261-278), selectProductCreate (L390-418), setCustomerPickerLocked (L62-85), shortCustomerName (L51-55).
+- Re-read legacy sales.js (1461 lines) for shared helpers: parseSalesListResponse (L45-62), salesFormatPriceRange (L89-94), fetchSalesProductByExactCode (L67-82).
+- HTML edits (cart.blade.php):
+  * Removed the entire #emptyState panel (lines 96-105) — legacy has no empty-state gate.
+  * Removed the `@if (empty($selectedCustomerId)) d-none @endif` conditional from #workspace — workspace always visible.
+  * Removed the same conditional from #cartDock — cart dock always visible.
+  * Replaced the Select2 customer <select id="customerSelect"> with a legacy text <input id="customerSearch"> + hidden <input id="customer_id">. When $selectedCustomer is set, the input gets `is-locked` + readonly + value=shop_name; the "Change" button gets visible (no d-none); the label changes to "Selected customer"; the recents row gets d-none.
+  * Replaced the Select2 product <select id="addProduct"> with a legacy text <input id="productSearch"> + hidden <input id="addProduct"> (preserved for back-compat with existing JS that reads $('#addProduct').val()).
+  * Removed the "Reset" link (legacy has none).
+  * Removed the "Load" button (legacy has none — loadCart fires automatically from selectCustomer).
+- CSS edits (inline <style> block):
+  * Removed the entire Select2 bridge style block (~30 lines) — no longer needed.
+  * Added legacy typeahead styles: .sales-suggest-list.show z-index bump, .sales-suggest-item .suggest-meta-line flex layout, #customerSearch.is-locked indigo background + cursor:default.
+- JS edits (cart.blade.php @push('scripts')):
+  * Added new top-level functions (in the ACTIONS section, before setWorkspaceVisible):
+    - shortCustomerName(c) — mirrors legacy L51-55
+    - setCustomerPickerLocked(locked, c) — mirrors legacy L62-85
+    - clearCustomerPicker() — mirrors legacy clearCustomerPickerForNew L87-91
+    - selectCustomer(customerId, opts) — mirrors legacy selectCustomer L261-278; locks picker, sets #customer_id, fetches credit, loads cart, ensures tab, remembers recent, updates URL, auto-focuses product search.
+    - selectProduct(p) — mirrors legacy selectProductCreate L390-418; validates stock + price range, sets hidden #addProduct + state.activeProductId, fills rate/qty/price-band/availability, focuses #addQty.
+    - showStockBanner(product) — mirrors legacy showStockInfoCreate L420-454; renders the teal .sales-stock-banner with branch stock.
+    - resetProductEntry() — mirrors legacy resetProductEntry L625-632; clears #productSearch, #addProduct, #addRate, #rateHint, price band, stock banner.
+    - initCustomerTypeahead() — mirrors legacy L212-257; wires input/click/keydown/outside-click on #customerSearch + #customerSuggestions. Debounce 250ms.
+    - initProductSearch() — mirrors legacy L280-388; wires input/click/keydown (ArrowUp/ArrowDown/Enter)/outside-click on #productSearch + #productSuggestions. Renders each suggest-item with product name + code + price range + "N avail" badge (image 1 reference). Debounce 200ms. Enter on empty list falls back to lookupProductByCodeAndSelect.
+    - parseSalesListResponse(json) — mirrors legacy sales.js L45-62.
+    - lookupProductByCodeAndSelect(code) — mirrors legacy fetchSalesProductByExactCode L67-82; calls R1 productByCode endpoint, on success calls selectProduct(p).
+  * Updated setWorkspaceVisible(): now only toggles #cartEmptyRow (workspace + cartDock always visible).
+  * Updated switchToCustomer(): replaced $('#customerSelect').val().trigger('change') with direct call to selectCustomer(customerId, opts).
+  * Updated closeTabCart() empty-state branch: replaced $('#customerSelect').val('').trigger('change') with clearCustomerPicker().
+  * Updated addToCart(): reads productId from $('#addProduct').val() || state.activeProductId; calls resetProductEntry() instead of inline Select2 reset; refocuses #productSearch instead of $('#addProduct').select2('open').
+  * Updated renderSummary(): customer name now comes from tabLabelFor(state.customerId) (reads customerCache) instead of $('#customerSelect option:selected').text().
+  * Updated renderAvailability(): product label fallback simplified — no more transient <option> lookup.
+  * Updated renderCustomerRecents(): respects the locked-state hide — if #customerSearch has .is-locked, the recents row stays hidden regardless of how many chips we'd render.
+  * Added state.activeProductId to the state object.
+  * Replaced the entire Select2 init + change handlers + barcode scanner delegation block (~415 lines) in the $(function(){}) ready handler with:
+    - initCustomerTypeahead() + initProductSearch() init calls
+    - #btnChangeCustomer click → clearCustomerPicker()
+    - #btnFocusCustomer click → clearCustomerPicker() + scrollIntoView
+    - Tooltips init (unchanged)
+    - R15 chip click handler (unchanged)
+    - R14 Refresh button handler (unchanged)
+    - R13 rate-band live update (unchanged, but removed .trigger('change') from "Use default" button — replaced with direct updatePriceBandUi() call)
+    - #btnAddToCart click (unchanged)
+    - R18 keyboard shortcuts: #addQty Enter → focus #addRate; #addRate Enter → addToCart (unchanged)
+    - Barcode scanner comment block (logic now lives in initProductSearch's keydown handler — no separate Select2 delegation needed)
+  * Verified blade directive balance: 1 @extends, 1 @section/@endsection, 3 @push/@endpush — all balanced.
+  * Verified brace balance: 533 open / 533 close (diff 0).
+  * Verified paren balance: 1803 open / 1803 close (diff 0).
+  * Verified no remaining references to $('#customerSelect'), $('#btnLoadCart'), or .select2() on the main search inputs.
+
+Stage Summary:
+- Phase 3 (Decision A2/B2/D1) COMPLETED. Single file changed: laravel/resources/views/admin/sales/cart.blade.php.
+- File size: 3278 lines (was 3074 — net +204 lines).
+- Visual impact: the cart page now matches the legacy sales/create page exactly on first paint:
+  * The "Select a customer..." empty-state panel is gone. Customer + Product + Carts panels are all visible from first paint (image 3 parity).
+  * Customer search is a text input with placeholder "Type to search customer..." — typing shows a .sales-suggest-list dropdown of matching customers (shop_name + customer_name + code + mobile). Clicking a row locks the input (.is-locked indigo background) and reveals the "Change" button.
+  * Product search is a text input with placeholder "Scan barcode or search product..." — typing shows a .sales-suggest-list dropdown with product name (bold) + code + price range + "N avail" green/red badge (image 1 parity).
+  * Barcode scanners work via the same input (HID keyboard + Enter triggers exact-code fallback lookup).
+  * Keyboard shortcuts: Enter on customer search picks first result; ArrowUp/ArrowDown navigates product results; Enter on product search picks active result or falls back to productByCode; Enter on #addQty moves to #addRate; Enter on #addRate triggers addToCart.
+- All R-feature JS preserved: R11 multi-cart tabs, R13 price band, R14 credit snapshot, R15 customer recents, R16 sticky bar, R17 mobile cart, R18 keyboard shortcuts.
+- All Laravel endpoint routes preserved: search-customer, search-product, product-by-code, customer-details, list-drafts, load, add, update, remove, clear, validate, softHold, availability, finalize, credit-check.
+- Ready to commit and push. User should reload /admin/sales/cart and verify image 2 → image 3 visual parity.
