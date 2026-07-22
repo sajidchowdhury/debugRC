@@ -149,96 +149,162 @@
                         </div>
                     @endif
 
-                    {{-- Supplier --}}
-                    <div class="col-md-4">
-                        <label class="form-label" for="supplier_id">Supplier</label>
-                        <select id="supplier_id" name="supplier_id"
-                                class="form-select @error('supplier_id') is-invalid @enderror"
-                                @if ($isAgainstPo) disabled @endif>
-                            <option value="">Select supplier</option>
-                            @foreach ($suppliers as $s)
-                                @php
-                                    $selVal = $isAgainstPo ? (string) $po->supplier_id : (string) old('supplier_id');
-                                @endphp
-                                <option value="{{ $s->id }}"
-                                    {{ $selVal === (string) $s->id ? 'selected' : '' }}>
-                                    {{ $s->supplier_code }} — {{ $s->supplier_name }}
-                                </option>
-                            @endforeach
-                        </select>
-                        @if ($isAgainstPo)
-                            <input type="hidden" name="supplier_id" value="{{ $po->supplier_id }}">
-                        @endif
-                        @error('supplier_id') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
-                    </div>
+                    @if ($isAgainstPo)
+                        {{-- ============================================================ --}}
+                        {{-- Against-PO mode: supplier/branch/warehouse are LOCKED to PO --}}
+                        {{-- Show as read-only info panels (not disabled selects).      --}}
+                        {{-- Only date + notes are editable. Hidden inputs keep the     --}}
+                        {{-- required form data flowing to the Form Request.            --}}
+                        {{-- ============================================================ --}}
 
-                    {{-- Branch --}}
-                    <div class="col-md-4">
-                        <label class="form-label" for="branch_id">Branch</label>
-                        <select id="branch_id" name="branch_id"
-                                class="form-select @error('branch_id') is-invalid @enderror"
-                                @if ($isAgainstPo) disabled @endif>
-                            <option value="">Select branch</option>
-                            @foreach ($branches as $b)
-                                @php
-                                    $selVal = $isAgainstPo ? (string) $po->branch_id : (string) old('branch_id');
-                                @endphp
-                                <option value="{{ $b->id }}"
-                                    {{ $selVal === (string) $b->id ? 'selected' : '' }}>
-                                    {{ $b->branch_code }} — {{ $b->branch_name }}
-                                </option>
-                            @endforeach
-                        </select>
-                        @if ($isAgainstPo)
-                            <input type="hidden" name="branch_id" value="{{ $po->branch_id }}">
-                        @endif
-                        @error('branch_id') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
-                    </div>
+                        {{-- Hidden inputs (submit supplier_id, branch_id, warehouse_id from PO) --}}
+                        <input type="hidden" name="supplier_id"  value="{{ $po->supplier_id }}">
+                        <input type="hidden" name="branch_id"    value="{{ $po->branch_id }}">
+                        <input type="hidden" name="warehouse_id" id="warehouse_id" value="{{ $po->warehouse_id }}">
 
-                    {{-- Warehouse (header) --}}
-                    <div class="col-md-4">
-                        <label class="form-label" for="warehouse_id">
-                            Warehouse <span class="text-danger">*</span>
-                        </label>
-                        <select id="warehouse_id" name="warehouse_id"
-                                class="form-select @error('warehouse_id') is-invalid @enderror" required>
-                            <option value="">Select warehouse</option>
-                            @foreach ($warehouses as $wh)
-                                @php
-                                    $defWh = $isAgainstPo ? (string) $po->warehouse_id : (string) old('warehouse_id');
-                                @endphp
-                                <option value="{{ $wh->id }}"
-                                    {{ $defWh === (string) $wh->id ? 'selected' : '' }}>
-                                    {{ $wh->warehouse_code }} — {{ $wh->warehouse_name }}
-                                    @if ($wh->branch) ({{ $wh->branch->branch_name }}) @endif
-                                </option>
-                            @endforeach
-                        </select>
-                        @error('warehouse_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
-                        <div class="form-text small">
-                            <i class="fas fa-circle-info me-1"></i>
-                            Default warehouse for items. Per-line warehouse can be overridden in the items table.
+                        {{-- Supplier (read-only) --}}
+                        <div class="col-md-4">
+                            <label class="form-label text-muted small">Supplier</label>
+                            <div class="form-control bg-light-subtle">
+                                @if ($po->supplier)
+                                    <i class="fas fa-truck me-1 text-muted"></i>
+                                    <span class="fw-semibold">{{ $po->supplier->supplier_name }}</span>
+                                    <div class="small text-muted">{{ $po->supplier->supplier_code }}</div>
+                                @else
+                                    <span class="text-muted">—</span>
+                                @endif
+                            </div>
                         </div>
-                    </div>
 
-                    {{-- Receive date --}}
-                    <div class="col-md-4">
-                        <label class="form-label" for="receive_date">
-                            Receive date <span class="text-danger">*</span>
-                        </label>
-                        <input type="date" id="receive_date" name="receive_date"
-                               class="form-control @error('receive_date') is-invalid @enderror"
-                               required value="{{ $oldDate }}">
-                        @error('receive_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
-                    </div>
+                        {{-- Branch (read-only) --}}
+                        <div class="col-md-4">
+                            <label class="form-label text-muted small">Branch</label>
+                            <div class="form-control bg-light-subtle">
+                                @if ($po->branch)
+                                    <i class="fas fa-building me-1 text-muted"></i>
+                                    <span class="fw-semibold">{{ $po->branch->branch_name }}</span>
+                                    <div class="small text-muted">{{ $po->branch->branch_code }}</div>
+                                @else
+                                    <span class="text-muted">—</span>
+                                @endif
+                            </div>
+                        </div>
 
-                    {{-- Notes --}}
-                    <div class="col-12">
-                        <label class="form-label" for="notes">Notes</label>
-                        <textarea id="notes" name="notes" rows="2" class="form-control"
-                                  placeholder="Optional — internal note, supplier challan ref, vehicle no, etc.">{{ old('notes') }}</textarea>
-                        @error('notes') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
-                    </div>
+                        {{-- Default warehouse (read-only hint; actual selection is per-line in items table) --}}
+                        <div class="col-md-4">
+                            <label class="form-label text-muted small">Default warehouse (from PO)</label>
+                            <div class="form-control bg-light-subtle">
+                                @if ($po->warehouse)
+                                    <i class="fas fa-warehouse me-1 text-muted"></i>
+                                    <span class="fw-semibold">{{ $po->warehouse->warehouse_name }}</span>
+                                    <div class="small text-muted">{{ $po->warehouse->warehouse_code }}</div>
+                                @else
+                                    <span class="text-muted">— per-line selection required</span>
+                                @endif
+                            </div>
+                            <div class="form-text small">
+                                <i class="fas fa-circle-info me-1"></i>
+                                Pick the actual receiving warehouse per product line below.
+                            </div>
+                        </div>
+
+                        {{-- Receive date (editable) --}}
+                        <div class="col-md-4">
+                            <label class="form-label" for="receive_date">
+                                Receive date <span class="text-danger">*</span>
+                            </label>
+                            <input type="date" id="receive_date" name="receive_date"
+                                   class="form-control @error('receive_date') is-invalid @enderror"
+                                   required value="{{ $oldDate }}">
+                            @error('receive_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                        </div>
+
+                        {{-- Notes (editable) --}}
+                        <div class="col-12">
+                            <label class="form-label" for="notes">Notes</label>
+                            <textarea id="notes" name="notes" rows="2" class="form-control"
+                                      placeholder="Optional — internal note, supplier challan ref, vehicle no, etc.">{{ old('notes') }}</textarea>
+                            @error('notes') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
+                        </div>
+                    @else
+                        {{-- ============================================================ --}}
+                        {{-- Direct-receive mode (no PO): full editable header.          --}}
+                        {{-- ============================================================ --}}
+
+                        {{-- Supplier --}}
+                        <div class="col-md-4">
+                            <label class="form-label" for="supplier_id">Supplier</label>
+                            <select id="supplier_id" name="supplier_id"
+                                    class="form-select @error('supplier_id') is-invalid @enderror">
+                                <option value="">Select supplier</option>
+                                @foreach ($suppliers as $s)
+                                    <option value="{{ $s->id }}"
+                                        {{ (string) old('supplier_id') === (string) $s->id ? 'selected' : '' }}>
+                                        {{ $s->supplier_code }} — {{ $s->supplier_name }}
+                                    </option>
+                                @endforeach
+                            </select>
+                            @error('supplier_id') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
+                        </div>
+
+                        {{-- Branch --}}
+                        <div class="col-md-4">
+                            <label class="form-label" for="branch_id">Branch</label>
+                            <select id="branch_id" name="branch_id"
+                                    class="form-select @error('branch_id') is-invalid @enderror">
+                                <option value="">Select branch</option>
+                                @foreach ($branches as $b)
+                                    <option value="{{ $b->id }}"
+                                        {{ (string) old('branch_id') === (string) $b->id ? 'selected' : '' }}>
+                                        {{ $b->branch_code }} — {{ $b->branch_name }}
+                                    </option>
+                                @endforeach
+                            </select>
+                            @error('branch_id') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
+                        </div>
+
+                        {{-- Warehouse (header — default for new direct lines) --}}
+                        <div class="col-md-4">
+                            <label class="form-label" for="warehouse_id">
+                                Default warehouse <span class="text-danger">*</span>
+                            </label>
+                            <select id="warehouse_id" name="warehouse_id"
+                                    class="form-select @error('warehouse_id') is-invalid @enderror" required>
+                                <option value="">Select warehouse</option>
+                                @foreach ($warehouses as $wh)
+                                    <option value="{{ $wh->id }}"
+                                        {{ (string) old('warehouse_id') === (string) $wh->id ? 'selected' : '' }}>
+                                        {{ $wh->warehouse_code }} — {{ $wh->warehouse_name }}
+                                        @if ($wh->branch) ({{ $wh->branch->branch_name }}) @endif
+                                    </option>
+                                @endforeach
+                            </select>
+                            @error('warehouse_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                            <div class="form-text small">
+                                <i class="fas fa-circle-info me-1"></i>
+                                Default warehouse for items. Per-line warehouse can be overridden in the items table.
+                            </div>
+                        </div>
+
+                        {{-- Receive date --}}
+                        <div class="col-md-4">
+                            <label class="form-label" for="receive_date">
+                                Receive date <span class="text-danger">*</span>
+                            </label>
+                            <input type="date" id="receive_date" name="receive_date"
+                                   class="form-control @error('receive_date') is-invalid @enderror"
+                                   required value="{{ $oldDate }}">
+                            @error('receive_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                        </div>
+
+                        {{-- Notes --}}
+                        <div class="col-12">
+                            <label class="form-label" for="notes">Notes</label>
+                            <textarea id="notes" name="notes" rows="2" class="form-control"
+                                      placeholder="Optional — internal note, supplier challan ref, vehicle no, etc.">{{ old('notes') }}</textarea>
+                            @error('notes') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
+                        </div>
+                    @endif
                 </div>
             </div>
         </section>
