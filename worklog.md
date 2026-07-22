@@ -755,3 +755,44 @@ Stage Summary:
   - Coordinate with the parallel PO/GRN audit agent: their show() methods (PurchaseOrderController::show line 324, PurchaseReceiveController::show line 327) have the SAME BUG-40 pattern (no resolveBranchIdForRead, no manual check, no middleware, no BranchScope). Coordinated fix recommended — applying BranchScope to all 3 purchase models in one migration commit is the cleanest path.
   - No conflicts with BUG-38/BUG-39 from the PO/GRN audit agent — those are model API and PO state guard gaps respectively, orthogonal to the branch-isolation issues found here.
   - The prt_damage SQL false-positive observation (mixed-condition returns) should be triaged by the product owner: if mixed-condition returns are a supported use case, schedule a schema migration to add `condition` to stock_transactions. If not (current UI may prevent mixing within one return), defer.
+
+---
+Task ID: 38
+Agent: Main
+Task: Smoke test Phase 0–8 — runtime bugs found and fixed
+
+Task:
+User started running smoke-test checklists from docs/PURCHASE_PARITY_PLAN.md §10 on local Docker. Two runtime bugs surfaced immediately.
+
+Work Log:
+- Bug A (TypeError): `admin/purchase-receives/create?po_id=2` triggered
+  `PurchaseReceiveController::show(): Argument #1 ($id) must be of type int, string given`.
+  Root cause: All 3 controllers (PurchaseOrder/Receive/Return) declared `show(int $id)`.
+  PHP 8.4 enforces strict types. Laravel's resource router can pass "create" (literal
+  string from URL) to show() when matching edge cases. The `int` hint then throws TypeError.
+- Fix A: Removed `int` type-hint from `show($id)` in all 3 controllers. The controllers
+  already use `findOrFail($id)` which handles non-numeric input with a 404 — that is the
+  correct behavior.
+- Fix A (defensive): Added `->whereNumber('purchase_order'|'purchase_receive'|'purchase_return')`
+  constraint to all 3 Route::resource() declarations in routes/web.php. This forces the
+  resource's `{id}` parameter to match only `[0-9]+`, so `create`/`edit`/etc. never match
+  the show route at the router level.
+- Bug B (ParseError): `admin/purchase-returns` triggered
+  `Unclosed '[' on line 201 does not match ')'` at resources/views/admin/purchase-returns/index.blade.php:204.
+- Investigation: Parsed the entire blade file with Python. All `{{ }}` expressions have
+  balanced brackets. The @php block (lines 4-31) is balanced. The `return [...][$status] ?? ...`
+  pattern in the closure is valid PHP 5.5+. Sibling blades (orders, receives) use the same
+  pattern and work fine. No BOM, no hidden non-ASCII bytes in problematic areas.
+- Conclusion: The parse error is most likely a STALE COMPILED VIEW in
+  storage/framework/views/ — Laravel cached an older version of the file and is still
+  serving it. The fix is `php artisan view:clear` + `php artisan route:clear` to force
+  recompilation. If the error persists after cache clear, the user should run the
+  diagnostic script at scripts/diagnose_returns_blade.sh inside the container to
+  identify the actual failing line in the compiled PHP file.
+
+Stage Summary:
+- 3 controller files patched (show() type-hint removed)
+- 1 routes file patched (3 whereNumber() constraints added)
+- 1 diagnostic script created (scripts/diagnose_returns_blade.sh)
+- Commits to push: BUG-A fix + BUG-B diagnostic helper
+- Smoke test status: Phase 0 in progress, Phase 1–8 still pending runtime verification

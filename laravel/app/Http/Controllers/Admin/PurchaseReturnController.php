@@ -116,8 +116,11 @@ class PurchaseReturnController extends Controller
         }
     }
 
-    public function show(int $id)
+    public function show($id)
     {
+        // Removed int type-hint: PHP 8.4 strict types broke /create URL which
+        // passes "create" as the route param. findOrFail() handles non-numeric
+        // input with a 404, which is the correct behavior.
         $return = PurchaseReturn::with([
             'items.product', 'items.warehouse', 'supplier', 'branch',
             'purchaseReceive', 'journalEntry.lines.ledger'

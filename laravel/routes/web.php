@@ -417,7 +417,8 @@ Route::middleware('auth')->group(function () {
     });
     Route::resource('admin/purchase-orders', PurchaseOrderController::class)
         ->only(['index', 'create', 'store', 'show', 'edit', 'update'])
-        ->names('admin.purchase-orders');
+        ->names('admin.purchase-orders')
+        ->whereNumber('purchase_order'); // BUGFIX: prevent /create, /edit etc. from matching {purchase_order}
 
     // ============================================================
     // Phase 7.2: Purchase Receive / GRN (stock IN + GL + supplier_ledger + PO update)
@@ -429,7 +430,8 @@ Route::middleware('auth')->group(function () {
     });
     Route::resource('admin/purchase-receives', PurchaseReceiveController::class)
         ->only(['index', 'create', 'store', 'show'])
-        ->names('admin.purchase-receives');
+        ->names('admin.purchase-receives')
+        ->whereNumber('purchase_receive'); // BUGFIX: prevent /create from matching {purchase_receive}
 
     // ============================================================
     // Phase 7.3: Purchase Returns (stock OUT at original rate + Dr AP / Cr Inventory + supplier_ledger debit)
@@ -441,7 +443,8 @@ Route::middleware('auth')->group(function () {
     });
     Route::resource('admin/purchase-returns', PurchaseReturnController::class)
         ->only(['index', 'create', 'store', 'show'])
-        ->names('admin.purchase-returns');
+        ->names('admin.purchase-returns')
+        ->whereNumber('purchase_return'); // BUGFIX: prevent /create from matching {purchase_return}
 
     // ============================================================
     // Phase 8.1: Sales Cart Service (per-user-per-customer draft cart)
