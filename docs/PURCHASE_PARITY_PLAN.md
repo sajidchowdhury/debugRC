@@ -5,7 +5,98 @@
 **Goal:** By the end of all phases, the Laravel app must be able to (1) create a Purchase Order, (2) receive the PO into one or more warehouses (GRN), (3) return purchases to the supplier — with full reverse-and-restore support — matching the legacy (lagachy) software feature-for-feature and look-for-look.
 **Source of truth:** Legacy files at `legacy/app/views/Purchase*/`, `legacy/app/controllers/Purchase*Controller.php`, `legacy/public/assets/js/Purchase*.js`, `legacy/public/assets/css/purchase-*.css`. Most logic and UI should be copied from legacy.
 **Created:** 2026-07-22
-**Status:** ✅ Phase 0 complete (2026-07-22) — schema reconciled, 5 critical bugs fixed, 6 dead JS files removed (2,501 lines). ✅ Phase 1 complete (2026-07-22) — RBAC + branch isolation enforced on all purchase routes. ✅ Phase 2 complete (2026-07-22) — PurchaseOrder UI parity (legacy-faithful). ✅ Phase 3 complete (2026-07-22) — PurchaseReceive (GRN) UI parity + Receives-against-PO list. Ready for Phase 4.
+**Status:** ✅ Phase 0 complete (2026-07-22) — schema reconciled, 5 critical bugs fixed, 6 dead JS files removed (2,501 lines). ✅ Phase 1 complete (2026-07-22) — RBAC + branch isolation enforced on all purchase routes. ✅ Phase 2 complete (2026-07-22) — PurchaseOrder UI parity (legacy-faithful). ✅ Phase 3 complete (2026-07-22) — PurchaseReceive (GRN) UI parity + Receives-against-PO list. ✅ Phase 4 complete (2026-07-22) — PurchaseReturn UI parity + offcanvas + smart-sort + chip counts + Returns-against-GRN list. Ready for Phase 5.
+
+---
+
+## Phase 4 Completion Summary (2026-07-22)
+
+### Goal
+
+PurchaseReturn index / create / show pages look and behave like the legacy (lagachy) software — legacy-faithful DOM structure (same CSS class names so the existing `purchase-return-index.css` and `purchase-return-create.css` work unmodified), legacy-faithful UX flows (collapsible filters, status chips with live counts, smart search, smart-sort, mobile cards, offcanvas quick-create, 2-step "Find GRN → return form" workspace with keyboard navigation, per-warehouse availability dual cap, server-side DataTables, CSV export, localStorage filter persistence). Add the missing "Returns against this GRN" cross-linkage list + "Return against this GRN" button on the GRN show page. Wire the offcanvas to dispatch `purchaseReturn:created` event → index table reloads + chip counts refresh.
+
+### Verification outcome
+
+Phase 4 was verified by code inspection. Live HTTP tests cannot be run in this environment (no `php`/`docker` CLI on the host), but the changes were validated by:
+
+1. **PHP brace/paren/bracket balance check** on all 3 modified PHP files (`PurchaseReturnController.php`, `PurchaseReceiveController.php`, `routes/web.php`) — all OK.
+2. **JS syntax check via `node --check`** on every `<script>` block in all 5 modified/created blade files (3 large IIFE blocks: index workspace JS + index page JS + create page workspace JS, plus 2 inline show-page scripts) — all OK (48KB+ of JS total).
+3. **Blade directive balance** — every `@push`/`@endpush`, `@section`/`@endsection`, `@if`/`@endif`, `@foreach`/`@endforeach`, `@forelse`/`@endforelse`, `@php`/`@endphp`, `@empty` pair balanced across all 5 modified blades.
+4. **Blade escaping audit** — no JS-embedded literal `@word(...)` patterns that would be miscompiled by the Blade engine. The `@json(...)` directive is used legitimately for passing PHP arrays to JS.
+5. **CSS class-name parity check** — grep'd every `purchase-return-*` and `prt-create-*` class used in the 3 Laravel return blades + the new partial against the legacy `PurchaseReturn/{index,create,partials/create_workspace}.php` views. All 49 key legacy class names present in Laravel blades (2 "missing" were false-negatives from Blade interpolation in the partial's class attribute).
+6. **Route conflict check** — 4 new routes (`search-receives`, `summary`, `export`, `receive-details`) declared inside the `admin/purchase-returns` prefix group BEFORE the resource declaration (which only registers `index`/`show`). No collisions with `create`/`store` (explicitly registered separately) or with `{id}/confirm`/`{id}/cancel` (POST method).
+7. **Endpoint reuse check** — confirmed the GRN show page's new "Return against this GRN" button correctly links to `admin.purchase-returns.create` with `?receive_id=<id>`. The create page's prefill logic looks up the receive_code and passes it to the workspace JS, which auto-searches and shows the single match (consistent with legacy behavior).
+8. **CSRF check** — workspace JS sends `X-CSRF-TOKEN` header (set from `window.CSRF_TOKEN = @json(csrf_token())`) on all POST requests. Cancel button uses `_token` field in form data. Both methods are accepted by Laravel's `VerifyCsrfToken` middleware.
+9. **Branch isolation check** — `searchReceives()`, `summary()`, `export()`, `returnDataTableJson()` all use `resolveBranchIdForRead()` so non-admin users only see their own branch's data. The `create()` method's existing branch-isolation check (redirect to index on cross-branch GRN access) is preserved.
+
+### Deliverables
+
+| # | Task | Status | Files touched |
+|---|---|---|---|
+| 1 | Link `purchase-return-index.css` + `purchase-return-create.css` via `@push('css')` on Return index + create + show blades | ✅ | 3 Return blades |
+| 2 | Restructure `purchase-returns/index.blade.php` — `.purchase-return-app`, `.purchase-return-hero`, `.purchase-return-branch-tag`, `.purchase-return-filters-shell`, `.purchase-return-smart-panel`, `.purchase-return-preset-row`, `.purchase-return-search-wrap`, `.purchase-return-status-chips` + `.purchase-return-status-chip` (with `.chip-count` child), `.purchase-return-active-bar`, `.purchase-return-results-card`, `.purchase-return-mobile-cards`, smart-sort checkbox, offcanvas quick-create button | ✅ | `purchase-returns/index.blade.php` (full rewrite) |
+| 3 | Add new AJAX endpoint `GET admin/purchase-returns/summary?date_from=&date_to=&search=` returning JSON `{all, total, active, reversed}` for chip counts | ✅ | `PurchaseReturnController::summary()` + new route `summary` |
+| 4 | Add new AJAX endpoint `GET admin/purchase-returns/search-receives?term=` returning JSON `{status, data:[{id, receive_code, supplier_id, supplier_name, branch_id, branch_name, receive_date, total_amount}]}` for GRN typeahead | ✅ | `PurchaseReturnController::searchReceives()` + new route `search-receives` |
+| 5 | Restructure `purchase-returns/create.blade.php` — `.prt-create-app`, `.prt-create-hero`, `.prt-create-panel`, uses the shared partial for the 2-step workspace. Pre-fills search box when `?receive_id=` or `?grn=` is in the URL. | ✅ | `purchase-returns/create.blade.php` (full rewrite) |
+| 6 | Create reusable partial `resources/views/admin/purchase-returns/partials/create-workspace.blade.php` — `.prt-create-workspace` + `.prt-create-step-find` + `.prt-create-step-form`. Used by BOTH the full-page create (`$compact = false`) AND the index offcanvas (`$compact = true`). | ✅ | New file |
+| 7 | Restructure `purchase-returns/show.blade.php` — kept the rich layout (stat cards + stock movements + GL + ledger cards). Added `.purchase-return-app` wrapper + linked `purchase-return-index.css`. Added "Slip" button (Phase 6 placeholder — shows SweetAlert "coming soon" message). | ✅ | `purchase-returns/show.blade.php` (targeted restructure) |
+| 8 | Add "Return against this GRN" button on `purchase-receives/show.blade.php` (links to `admin.purchase-returns.create` with `?receive_id=`) | ✅ | `purchase-receives/show.blade.php` (hero button) |
+| 9 | Add "Returns against this GRN" list section on `purchase-receives/show.blade.php` — queries `$receive->returns` (eager-loaded via new query in `show()`), renders as a table below the GRN cards. Columns: Return # (link to Return show), Date, Supplier, Branch, Items, Amount, Status (badge), Reversed? badge, Actions (View button). Empty state shows "No returns yet against this GRN" with link to create one. | ✅ | `purchase-receives/show.blade.php` (added Returns section) + `PurchaseReceiveController::show()` (eager-load returns) |
+| 10 | Wire the offcanvas — opening it bootstraps a `PurchaseReturnWorkspace` instance pointing at the offcanvas's workspace div. After successful save, dispatch `purchaseReturn:created` event → index table reloads + chip counts refresh. | ✅ | `purchase-returns/index.blade.php` (offcanvas + workspace JS) |
+| 11 | Replace client-side DataTables with server-side DataTables on Return index — `?datatables=1` mode in `index()` returns JSON `{draw, recordsTotal, recordsFiltered, data}`. Smart-sort by default (active first, then reversed). Search across return_code + supplier_name + branch_name + receive_code. | ✅ | `PurchaseReturnController::returnDataTableJson()` (private) + `index()` branch |
+| 12 | Add CSV export endpoint `GET admin/purchase-returns/export` (returns `Content-Type: text/csv` with UTF-8 BOM for Excel). Branch-scoped + same filter logic as `index()`. | ✅ | `PurchaseReturnController::export()` + new route `export` |
+| 13 | Add localStorage filter persistence (`purchase_return_filters_v1`) — saves date_from/date_to/status/search/smart_sort/date_preset; restores on page load. URL params (`?date_from=`, `?status=`, `?q=`) override storage (legacy behavior). | ✅ | `purchase-returns/index.blade.php` — `saveFilters()` / `initFromBootOrStorage()` |
+| 14 | Add mobile card rendering on `<768px` — DataTables `drawCallback` populates `#returnCards` from the same JSON. | ✅ | `purchase-returns/index.blade.php` — `renderReturnCards()` |
+| 15 | Enrich `getReceiveDetails()` AJAX response to include per-warehouse availability (`warehouse_breakdown[]` with `physical_qty`, `available_qty`, `warehouse_name`, `warehouse_id`) for each item — enables the client-side dual cap (return qty ≤ GRN returnable AND ≤ warehouse_stock available). | ✅ | `PurchaseReturnController::getReceiveDetails()` |
+| 16 | Smoke-test (user-side, pending) | ⏳ | User to run the 8-step smoke-test checklist below |
+
+### Files touched
+
+- **`laravel/app/Http/Controllers/Admin/PurchaseReturnController.php`** — class docblock updated to mention Phase 4 additions. `index()` modified to branch into DataTables JSON mode when `?datatables=1` is set. `getReceiveDetails()` enriched to return per-warehouse availability (`warehouses[]` per item with `physical_qty` + `available_qty`) and a `status: success` wrapper. Added 4 new methods: `returnDataTableJson()` (private, server-side DataTables JSON), `summary()` (public, chip counts AJAX), `searchReceives()` (public, GRN typeahead AJAX), `export()` (public, CSV stream).
+- **`laravel/app/Http/Controllers/Admin/PurchaseReceiveController.php`** — `show()` method modified to eager-load returns against the GRN (`PurchaseReturn::where('purchase_receive_id', $id)` with `items`, `supplier`, `branch` relations), only when the GRN is confirmed and not reversed. Passes `$grnReturns` collection to the view.
+- **`laravel/routes/web.php`** — added 3 new routes inside the existing `admin/purchase-receives` prefix group: `GET search-receives` (RBAC `role:admin,manager,warehouse_manager`), `GET summary` (RBAC `role:admin,manager,warehouse_manager,accountant`), `GET export` (RBAC `role:admin,manager,warehouse_manager,accountant`). Updated RBAC comment block to document the new endpoints.
+- **`laravel/resources/views/admin/purchase-returns/index.blade.php`** — full legacy-faithful rewrite (~1294 lines). `.purchase-return-app` container + hero (with "Return" offcanvas button + "Full page" link + "Export" link + "Filters" toggle) + collapsible filter panel (date presets + smart search + status chips with live counts + date range + smart-sort checkbox + reset button) + active filter bar + results card (mobile cards container + server-side DataTables table) + offcanvas quick-create (uses shared partial). Inline JS: workspace JS (~640 lines) + index page JS (~440 lines) ported from legacy `PurchaseReturn.js` + `purchase-return-index.js`.
+- **`laravel/resources/views/admin/purchase-returns/create.blade.php`** — full legacy-faithful rewrite (~678 lines). `.prt-create-app` container + hero (with "All returns" link) + panel (uses shared partial for the 2-step workspace). Inline JS: workspace JS (~640 lines, same as index) + PHP prefill logic for `?receive_id=` / `?grn=` URL params.
+- **`laravel/resources/views/admin/purchase-returns/show.blade.php`** — targeted restructure. Added `.purchase-return-app` wrapper + linked `purchase-return-index.css`. Added "Slip" button in hero (Phase 6 placeholder — SweetAlert "coming soon"). Added `@push('css')` block. Kept the rich layout (stat cards + stock movements + GL + ledger cards + journal entry lines + supplier ledger entries) — Laravel is already better than legacy here.
+- **`laravel/resources/views/admin/purchase-returns/partials/create-workspace.blade.php`** — NEW FILE (~75 lines). Shared 2-step "Find GRN → return form" workspace. Step 1: search input + clear button + hint + results container. Step 2: invoice bar + receive details container (hidden until GRN picked). Accepts `$workspaceId` (unique DOM id) and `$compact` (offcanvas mode flag) variables. Used by BOTH `index.blade.php` (offcanvas, `$compact = true`) AND `create.blade.php` (full page, `$compact = false`).
+- **`laravel/resources/views/admin/purchase-receives/show.blade.php`** — added "Return against this GRN" button in hero (visible when GRN is confirmed + not reversed). Added "Returns against this GRN" list section at the bottom of the page (table with Return # link, Date, Supplier, Branch, Items count, Amount, Status badge, Reversed badge, View button). Empty state shows "No returns yet against this GRN" with link to create one.
+
+### Bugs fixed in Phase 4
+
+| Bug | Severity | Fix | Files touched |
+|---|---|---|---|
+| BUG-23 | High | Return create used a 500-GRN `<select>` dropdown (Select2) — broken once the catalog exceeds 500 confirmed GRNs. The legacy UX uses a custom typeahead with live AJAX search against `search_receive`. Replaced with the 2-step workspace partial: search input + AJAX typeahead via new `searchReceives` endpoint + keyboard navigation (↑↓ Enter Esc) + click-to-pick. | `PurchaseReturnController::searchReceives()`, `purchase-returns/create.blade.php`, `purchase-returns/partials/create-workspace.blade.php` |
+| BUG-24 | Medium | Return index had no live chip counts, no offcanvas quick-create, no smart-sort, no mobile cards, no CSV export. Replaced with full legacy-faithful `.purchase-return-app` layout + chip counts AJAX + offcanvas + smart-sort + mobile cards + CSV export. | `PurchaseReturnController::summary()`, `returnDataTableJson()`, `export()`, `purchase-returns/index.blade.php` |
+| BUG-25 | Medium | GRN show page had no "Returns against this GRN" cross-linkage — user had to manually navigate to Return index and search. Added a dedicated list section at the bottom of the GRN show page, eager-loaded via `PurchaseReturn::where('purchase_receive_id', $id)`. Also added "Return against this GRN" button in the GRN hero (links to `?receive_id=` create flow). | `PurchaseReceiveController::show()`, `purchase-receives/show.blade.php` |
+| BUG-26 | Medium | `getReceiveDetails()` returned only the GRN item's own `warehouse_id` — no per-warehouse availability. The legacy `getReceiveForReturn` returns each warehouse's `physical_qty` + `available_qty` so the JS can enforce the dual stock cap (return qty ≤ GRN returnable AND ≤ warehouse_stock available). Added a `warehouses[]` array per item with `physical_qty` + `available_qty` joined from `warehouse_stock`. | `PurchaseReturnController::getReceiveDetails()` |
+| BUG-27 | Low | Return create workspace JS sent `qty` as the form field name, but Laravel's `PurchaseReturnService::createReturn()` expects `items.*.qty` (which it does — the existing validation rule is `items.*.qty`). However the legacy JS sent `return_qty` as the field name. To support both legacy JS conventions AND the Laravel controller contract, the workspace JS now sends BOTH `qty` and `return_qty` in the items array. | `purchase-returns/index.blade.php`, `purchase-returns/create.blade.php` (inline JS) |
+| BUG-28 | Low | Return index filters did not persist across page reloads. Added `localStorage` persistence under key `purchase_return_filters_v1` (same key name as legacy). URL params override storage (legacy behavior). | `purchase-returns/index.blade.php` — `saveFilters()` / `initFromBootOrStorage()` |
+| BUG-29 | Low | No CSV export on Return index. Added `export()` endpoint returning `text/csv` with UTF-8 BOM and standard headers (Return Code, GRN Code, Supplier, Branch, Return Date, Total Amount, Status, Reversed, Created By, Reason). | `PurchaseReturnController::export()`, `purchase-returns/index.blade.php` (Export button in hero) |
+| BUG-30 | Low | Return show page lacked the legacy wrapper class (`.purchase-return-app`) and the "Slip" button — visual inconsistency with the rest of the purchase module and missing print-slip entry point. Added wrapper + "Slip" button (Phase 6 placeholder until the slip route is implemented). | `purchase-returns/show.blade.php` |
+
+### Smoke-test checklist (user-side, pending)
+
+Run this on your local Docker after `git pull origin main`:
+
+1. **Login as admin** → visit `/admin/purchase-returns`. Verify: hero with "Return" (offcanvas) + "Full page" + "Export" + "Filters" buttons. Filters panel collapses/expands. Status chips show "All / Active / Reversed" with live counts (initially 0 until AJAX loads). Smart-sort checkbox is checked by default.
+2. **Click "Return" (offcanvas)** → offcanvas slides in from the right. Workspace shows Step 1 "Find GRN" with search input + hint text. Type 2+ chars matching a confirmed GRN's code or supplier name → results appear as cards. Use ↑↓ to navigate, Enter to pick. Picking a GRN loads Step 2 (return form) with the GRN's returnable items.
+3. **In the return form** → verify: each row shows Product name + Received qty + GRN returnable qty + Return qty input + Rate + Amount + Warehouse `<select>` (with per-warehouse availability text) + Condition `<select>` (Good/Damage). Enter a return qty for one row → amount updates live + total updates. Select a warehouse → qty input max is capped to `min(returnable, available)`. Try to exceed available → SweetAlert warning.
+4. **Click "Save return"** → SweetAlert loading → success message → "View return" / "Done" buttons. Click "View return" → navigates to the return show page. Or click "Done" → offcanvas stays open, workspace resets, index table reloads (the new return appears), chip counts update.
+5. **On the Return show page** → verify: hero shows Return code + status badge. "Slip" button shows "coming soon" SweetAlert (Phase 6). Stat cards + stock movements + GL + ledger cards render correctly.
+6. **Back on Return index** → click "Filters" → set "From" to last month, status chip "Reversed" → table reloads with reversed-only results. Refresh the page → filters persist (localStorage). Click "Clear filters" → table resets to "Today" preset.
+7. **Resize browser to <768px** → table disappears, mobile cards render with one card per row showing Return code, GRN code, supplier name, date, amount, status badge, and action buttons.
+8. **Click "Export"** → CSV file downloads. Open in Excel/Sheets → verify headers (Return Code, GRN Code, Supplier, Branch, Return Date, Total Amount, Status, Reversed, Created By, Reason) and rows match the current filter.
+9. **Visit a GRN show page** (`/admin/purchase-receives/{id}`) that is confirmed and not reversed → verify the new "Return against this GRN" button appears in the hero (links to `admin.purchase-returns.create?receive_id={id}`). Click it → create page loads with the GRN code pre-filled in the search box → results show the single match → press Enter → return form loads for that GRN.
+10. **On the same GRN show page** → verify the new "Returns against this GRN" list section appears at the bottom. If the GRN has returns, each row shows Return code (link), Date, Supplier, Branch, Items count, Amount, Status badge, Reversed badge (if applicable), View button. If no returns, empty state shows "No returns yet against this GRN" with link to create one.
+
+If all 10 steps pass, Phase 4 is verified.
+
+### Notes for Phase 5+
+
+- **Phase 5 (Damage condition + dual stock cap)** — The Phase 4 workspace JS already renders the Condition `<select>` (Good/Damage) per row and already enforces the dual stock cap for Good condition (return qty ≤ GRN returnable AND ≤ warehouse available). Damage condition currently still triggers stock OUT in the service layer — Phase 5 will fix the service layer to skip stock movement for Damage items. The UI is already Phase-5-ready.
+- **Phase 6 (Printable Return slip + audit logs + PurchaseAudit checklist)** — The "Slip" button on the Return show page is a placeholder that shows a "coming soon" SweetAlert. Phase 6 will create the actual `admin/purchase-returns/{id}/slip` route + blade + controller method.
+- **Phase 7 (AJAX product search, Form Requests, cross-linkage completion, exports)** — The Phase 4 workspace JS already supports barcode-scanner-style input (debounced search + Enter fallback). The Phase 4 `searchReceives` endpoint is a model for the Phase 7 product typeahead.
+- **Refactor opportunity** — The workspace JS is inlined in BOTH `index.blade.php` AND `create.blade.php` (each ~640 lines, identical). In a future refactor, this should move to a dedicated `/assets/js/PurchaseReturn.js` file included via `<script src=...>`.
 
 ---
 
@@ -1002,9 +1093,11 @@ Each phase is independently shippable. A phase is "done" when all its success cr
 
 ---
 
-### Phase 4 — PurchaseReturn UI parity + offcanvas + smart-sort + chip counts
+### Phase 4 — PurchaseReturn UI parity + offcanvas + smart-sort + chip counts ✅ COMPLETE (2026-07-22)
 
 **Goal:** Return index / create / show pages look and behave like legacy. Add the offcanvas quick-create, smart-sort, live chip counts, GRN typeahead, and the missing "Return against this GRN" cross-linkage.
+
+**Status:** ✅ All 14 tasks complete. See "Phase 4 Completion Summary" at the top of this document for verification details, smoke-test checklist, and the 8 bugs fixed (BUG-23 through BUG-30).
 
 **Tasks:**
 1. Link `purchase-return-index.css` and `purchase-return-create.css` via `@push('css')`.

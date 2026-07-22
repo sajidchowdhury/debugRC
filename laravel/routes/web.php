@@ -497,6 +497,9 @@ Route::middleware('auth')->group(function () {
     //   index/show                       : admin, manager, warehouse_manager, accountant
     //   create/store                     : admin, manager, warehouse_manager
     //   receive-details (AJAX)           : admin, manager, warehouse_manager
+    //   search-receives (AJAX, Phase 4)  : admin, manager, warehouse_manager
+    //   summary (AJAX chip counts, Ph4)  : admin, manager, warehouse_manager, accountant
+    //   export (CSV, Phase 4)            : admin, manager, warehouse_manager, accountant
     //   confirm                          : admin, manager                  (stock OUT + GL — destructive)
     //   cancel (reverse)                 : admin, manager, accountant      (legacy: accountant allowed on reverse)
     // ============================================================
@@ -504,6 +507,15 @@ Route::middleware('auth')->group(function () {
         Route::get('receive-details', [PurchaseReturnController::class, 'getReceiveDetails'])
             ->name('receive-details')
             ->middleware('role:admin,manager,warehouse_manager');
+        Route::get('search-receives', [PurchaseReturnController::class, 'searchReceives'])
+            ->name('search-receives')
+            ->middleware('role:admin,manager,warehouse_manager');
+        Route::get('summary', [PurchaseReturnController::class, 'summary'])
+            ->name('summary')
+            ->middleware('role:admin,manager,warehouse_manager,accountant');
+        Route::get('export', [PurchaseReturnController::class, 'export'])
+            ->name('export')
+            ->middleware('role:admin,manager,warehouse_manager,accountant');
         Route::post('{id}/confirm', [PurchaseReturnController::class, 'confirm'])
             ->name('confirm')
             ->middleware(['role:admin,manager', 'branch.isolation']);

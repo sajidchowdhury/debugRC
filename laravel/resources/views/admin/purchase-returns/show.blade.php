@@ -1,5 +1,11 @@
 @extends('layouts.admin')
 
+@push('css')
+<link rel="stylesheet" href="/assets/css/purchase-return-index.css">
+<link rel="stylesheet" href="/assets/css/purchase-index.css">
+<link rel="stylesheet" href="/assets/css/purchase-order-details.css">
+@endpush
+
 @section('content')
 @php
     $r = $return;
@@ -27,7 +33,7 @@
     $hasSupplierLedger = !empty($supplierLedgerEntries) && is_countable($supplierLedgerEntries) && count($supplierLedgerEntries) > 0;
 @endphp
 
-<div class="container-fluid py-2">
+<div class="purchase-return-app container-fluid py-2">
     {{-- Hero header (amber) --}}
     <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
             style="background: linear-gradient(135deg,#d97706,#b45309);">
@@ -42,7 +48,12 @@
                 · {{ \Carbon\Carbon::parse($r->return_date)->format('d M Y') }}
             </p>
         </div>
-        <div>
+        <div class="d-flex gap-2 flex-wrap">
+            {{-- Phase 4: Slip button (placeholder until Phase 6 creates the slip route) --}}
+            <button type="button" class="btn btn-outline-light btn-sm" id="printSlipBtn"
+                    title="Print return slip (Phase 6)">
+                <i class="fas fa-print me-1"></i> Slip
+            </button>
             <a href="{{ route('admin.purchase-returns.index') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-arrow-left me-1"></i> Back to list
             </a>
@@ -525,6 +536,16 @@
 @push('scripts')
 <script>
 $(function () {
+    // ====== Phase 4: Print slip button (placeholder until Phase 6 creates the slip route) ======
+    $('#printSlipBtn').on('click', function () {
+        Swal.fire({
+            icon: 'info',
+            title: 'Slip printing coming soon',
+            text: 'The printable return slip will be added in Phase 6 (PurchaseAudit + slip).',
+            confirmButtonText: 'OK',
+        });
+    });
+
     // ====== Confirm (draft → confirmed) ======
     $('#confirmBtn').on('click', function () {
         Swal.fire({

@@ -44,7 +44,15 @@
                 · {{ \Carbon\Carbon::parse($r->receive_date)->format('d M Y') }}
             </p>
         </div>
-        <div>
+        <div class="d-flex gap-2 flex-wrap">
+            @if ($r->isConfirmed() && ! $r->is_reversed)
+                {{-- Phase 4: Return against this GRN button (cross-linkage) --}}
+                <a href="{{ route('admin.purchase-returns.create', ['receive_id' => $r->id]) }}"
+                   class="btn btn-outline-light btn-sm"
+                   title="Create a purchase return against this GRN">
+                    <i class="fas fa-truck-arrow-right me-1"></i> Return against this GRN
+                </a>
+            @endif
             <a href="{{ route('admin.purchase-receives.index') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-arrow-left me-1"></i> Back to list
             </a>
@@ -564,6 +572,82 @@
             </div>
         </div>
     </div>
+
+    {{-- ─── Phase 4: Returns against this GRN ───────────────────── --}}
+    @if ($r->isConfirmed() && ! $r->is_reversed)
+    <section class="purch-po-detail-items mt-3">
+        <div class="purch-po-detail-items-head">
+            <h2><i class="fas fa-undo-alt me-1"></i> Returns against this GRN</h2>
+            <span class="text-muted small">{{ $grnReturns->count() }} return(s)</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Return #</th>
+                        <th>Date</th>
+                        <th>Supplier</th>
+                        <th>Branch</th>
+                        <th class="text-end">Items</th>
+                        <th class="text-end">Amount (Tk)</th>
+                        <th>Status</th>
+                        <th class="text-center">Reversed?</th>
+                        <th class="text-center">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @forelse ($grnReturns as $prt)
+                        @php
+                            $prtStatusBadge = [
+                                'draft'     => '<span class="badge bg-warning text-dark"><i class="fas fa-pen-to-square me-1"></i>Draft</span>',
+                                'confirmed' => '<span class="badge bg-info text-dark"><i class="fas fa-circle-check me-1"></i>Confirmed</span>',
+                                'cancelled' => '<span class="badge bg-secondary"><i class="fas fa-ban me-1"></i>Cancelled</span>',
+                            ][$prt->status] ?? '<span class="badge bg-light text-dark">' . e($prt->status) . '</span>';
+                        @endphp
+                        <tr class="{{ $prt->is_reversed ? 'table-danger' : '' }}">
+                            <td>
+                                <a href="{{ route('admin.purchase-returns.show', $prt) }}"
+                                   class="fw-bold text-decoration-none text-danger">
+                                    {{ $prt->return_code }}
+                                </a>
+                            </td>
+                            <td>{{ optional($prt->return_date)->format('d M Y') ?? '—' }}</td>
+                            <td>{{ e($prt->supplier?->supplier_name ?? '—') }}</td>
+                            <td>{{ e($prt->branch?->branch_name ?? '—') }}</td>
+                            <td class="text-end">{{ number_format($prt->items->count()) }}</td>
+                            <td class="text-end">{{ number_format((float) $prt->total_amount, 2) }}</td>
+                            <td>{!! $prtStatusBadge !!}</td>
+                            <td class="text-center">
+                                @if ($prt->is_reversed)
+                                    <span class="badge bg-danger" title="Reversed">
+                                        <i class="fas fa-rotate-left"></i> Yes
+                                    </span>
+                                @else
+                                    <span class="text-muted">—</span>
+                                @endif
+                            </td>
+                            <td class="text-center">
+                                <a href="{{ route('admin.purchase-returns.show', $prt) }}"
+                                   class="btn btn-sm btn-outline-secondary" title="View return">
+                                    <i class="fas fa-eye"></i>
+                                </a>
+                            </td>
+                        </tr>
+                    @empty
+                        <tr>
+                            <td colspan="9" class="text-center text-muted py-4">
+                                <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
+                                No returns yet against this GRN.
+                                <a href="{{ route('admin.purchase-returns.create', ['receive_id' => $r->id]) }}"
+                                   class="text-decoration-none">Return goods against this GRN →</a>
+                            </td>
+                        </tr>
+                    @endforelse
+                </tbody>
+            </table>
+        </div>
+    </section>
+    @endif
 </div>
 
 @push('scripts')

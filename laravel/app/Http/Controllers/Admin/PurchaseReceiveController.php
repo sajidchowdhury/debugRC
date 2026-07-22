@@ -355,11 +355,23 @@ class PurchaseReceiveController extends Controller
                 ->get();
         }
 
+        // Phase 4 — Returns against this GRN (cross-linkage list).
+        // Only confirmed GRNs can have returns against them.
+        $grnReturns = collect();
+        if ($receive->isConfirmed() && ! $receive->is_reversed) {
+            $grnReturns = \App\Models\PurchaseReturn::with(['items', 'supplier', 'branch'])
+                ->where('purchase_receive_id', $id)
+                ->orderBy('return_date', 'desc')
+                ->orderBy('id', 'desc')
+                ->get();
+        }
+
         return view('admin.purchase-receives.show', [
             'title' => 'GRN ' . $receive->receive_code,
             'receive' => $receive,
             'stockMovements' => $stockMovements,
             'supplierLedgerEntries' => $supplierLedgerEntries,
+            'grnReturns' => $grnReturns,
         ]);
     }
 
