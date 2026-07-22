@@ -243,6 +243,80 @@
             </table>
         </div>
     </section>
+
+    {{-- ─── Phase 3: Receives against this PO ───────────────────── --}}
+    @php
+        $poReceives = $po->relationLoaded('receives') ? $po->receives : $po->receives()->with('warehouse')->get();
+    @endphp
+    <section class="purch-po-detail-items">
+        <div class="purch-po-detail-items-head">
+            <h2><i class="fas fa-dolly me-1"></i> Receives against this PO</h2>
+            <span class="text-muted small">{{ $poReceives->count() }} GRN(s)</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>GRN #</th>
+                        <th>Date</th>
+                        <th>Warehouse</th>
+                        <th class="text-end">Amount</th>
+                        <th>Status</th>
+                        <th class="text-center">Reversed?</th>
+                        <th class="text-center">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @forelse ($poReceives as $grn)
+                        @php
+                            $grnStatusBadge = [
+                                'draft'     => '<span class="purch-badge purch-badge-draft">Draft</span>',
+                                'confirmed' => '<span class="purch-badge purch-badge-received">Confirmed</span>',
+                                'cancelled' => '<span class="purch-badge purch-badge-cancelled">Cancelled</span>',
+                            ][$grn->status] ?? '<span class="purch-badge purch-badge-draft">' . e($grn->status) . '</span>';
+                        @endphp
+                        <tr class="{{ $grn->is_reversed ? 'table-danger' : '' }}">
+                            <td>
+                                <a href="{{ route('admin.purchase-receives.show', $grn) }}"
+                                   class="fw-bold text-decoration-none">
+                                    {{ $grn->receive_code }}
+                                </a>
+                            </td>
+                            <td>{{ optional($grn->receive_date)->format('d M Y') ?? '—' }}</td>
+                            <td>{{ e($grn->warehouse?->warehouse_name ?? '—') }}</td>
+                            <td class="text-end">{{ number_format((float) $grn->total_amount, 2) }}</td>
+                            <td>{!! $grnStatusBadge !!}</td>
+                            <td class="text-center">
+                                @if ($grn->is_reversed)
+                                    <span class="badge bg-danger" title="Reversed">
+                                        <i class="fas fa-rotate-left"></i> Yes
+                                    </span>
+                                @else
+                                    <span class="text-muted">—</span>
+                                @endif
+                            </td>
+                            <td class="text-center">
+                                <a href="{{ route('admin.purchase-receives.show', $grn) }}"
+                                   class="btn btn-sm btn-outline-secondary" title="View GRN">
+                                    <i class="fas fa-eye"></i>
+                                </a>
+                            </td>
+                        </tr>
+                    @empty
+                        <tr>
+                            <td colspan="7" class="text-center text-muted py-4">
+                                <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
+                                No GRNs yet. @if ($canReceive)
+                                    <a href="{{ route('admin.purchase-receives.create', ['po_id' => $po->id]) }}"
+                                       class="text-decoration-none">Receive goods against this PO →</a>
+                                @endif
+                            </td>
+                        </tr>
+                    @endforelse
+                </tbody>
+            </table>
+        </div>
+    </section>
 </div>
 
 @push('scripts')

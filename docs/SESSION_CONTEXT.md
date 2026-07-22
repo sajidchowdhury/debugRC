@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-22 (Purchase module Phase 2 complete — PurchaseOrder UI parity (legacy-faithful). 4 PO blades restructured with same CSS class names as legacy; 3 new controller methods (searchProducts typeahead, export CSV, poDataTableJson server-side DataTables); 2 new routes; 5 UX/parity bugs fixed (BUG-11 through BUG-15). See §5.28 below.)
+> **Last updated:** 2026-07-22 (Purchase module Phase 3 complete — PurchaseReceive (GRN) UI parity (legacy-faithful). 3 GRN blades restructured + Receives-against-PO list added on PO show; 2 new controller methods (export CSV, grnDataTableJson server-side DataTables); 1 new route; 1 new model relation (PurchaseOrder::receives()); 7 UX/parity bugs fixed (BUG-16 through BUG-22). See §5.29 below.)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -1939,12 +1939,89 @@ Phase 3 (PurchaseReceive / GRN UI parity) can now start. The PO module is fully 
 
 ---
 
+### 5.29 Purchase module — Phase 3 (PurchaseReceive / GRN UI parity — legacy-faithful)
+
+**User ask (2026-07-22):** *"Phase 3 — PurchaseReceive (GRN) UI parity / update the docs/PURCHASE_PARITY_PLAN.md and update docs/SESSION_CONTEXT.md / when done push the update in to the github with ur context documentation so its never lost even z ai lost the conversation"*.
+
+**Phase 3 scope:** Restructure the 3 PurchaseReceive blade views (`index`, `create`, `show`) to be visually and behaviorally faithful to the legacy (lagachy) software. Use the same CSS class names so the already-ported `purchase-index.css` and `purchase-order-form.css` files work unmodified. Add the missing UX features: server-side DataTables, mobile card rendering, CSV export, localStorage filter persistence, custom typeahead product picker reusing the Phase 2 `search-products` endpoint (replacing Select2). Add the missing "Receives against this PO" cross-linkage list on the PO show page (with a new `receives()` HasMany relation on the `PurchaseOrder` model).
+
+**Verification method:** Could not run live HTTP tests (no `php`/`docker` CLI on host). Verified by:
+1. Brace/paren/bracket balance check on all 4 modified PHP files (all OK).
+2. Class-name parity check vs legacy `PurchaseReceive/{index,create,details}.php` views (1:1 match).
+3. CSS class existence check vs linked CSS files (all present).
+4. Blade directive balance across all 4 modified blades (3 GRN + 1 PO show).
+5. Blade escaping audit (no JS-embedded literal `@word(...)` patterns).
+6. Route conflict check (`export` route declared before resource, no 404/405).
+7. Endpoint reuse check (Phase 2 `search-products` endpoint reused, no duplicate).
+8. Eager-load check (`PurchaseOrderController::show()` now eager-loads `receives` with nested `warehouse`).
+9. No Select2 leak check (zero references to legacy `product-select` Select2 class on GRN create).
+
+**Bugs fixed in Phase 3 (7 UX/parity bugs):**
+
+1. **BUG-16 (Medium):** GRN index used Laravel-paginated query + client-side DataTables — no server-side DataTables, no mobile cards, no CSV export, no `?returned=1` toggle.
+
+   **Fix:** Added `grnDataTableJson()` private method on `PurchaseReceiveController` returning `{draw, recordsTotal, recordsFiltered, data}`. `index()` branches into JSON mode when `?datatables=1` is set. Index blade initializes DataTables with `serverSide: true`, custom `ajax.data` function that injects filter values, and a `drawCallback` that re-renders mobile cards + active filter bar on every page redraw. `?returned=1` query param flips to "Returned / cancelled GRNs" view (forces `status=cancelled` filter, hides status chips, shows "Active GRNs" back-button in hero).
+
+2. **BUG-17 (Medium):** GRN create used a `<select>` with up to 500 hardcoded products (Select2) — broken on catalogs with >500 SKUs and inconsistent with the Phase 2 PO create UX.
+
+   **Fix:** Replaced Select2 product dropdown with custom text-input typeahead reusing the Phase 2 `admin.purchase-orders.search-products` endpoint. Debounced `input` handler fires the AJAX, dropdown results populate a `.purch-po-product-dropdown` container, click handler sets hidden `product_id` + displays "Name (Code)" in the search box, outside-click closes dropdowns, qty-input gets focus after select. Also dropped Select2 on header selects (supplier/branch/warehouse) in favor of native `<select>` for legacy-faithful parity.
+
+3. **BUG-18 (Medium):** PO show page had no "Receives against this PO" list — user had to manually navigate to GRN index and filter by PO.
+
+   **Fix:** Added `receives()` HasMany relation on `PurchaseOrder` model (ordered by `receive_date desc, id desc`). Modified `PurchaseOrderController::show()` to eager-load `receives` with nested `warehouse` (no N+1). Added a new "Receives against this PO" list section on `purchase-orders/show.blade.php` below the PO items table. Columns: GRN # (link), Date, Warehouse, Amount, Status badge, Reversed badge, View button. Empty state shows "No GRNs yet" with link to "Receive goods against this PO" (if PO can receive).
+
+4. **BUG-19 (Low):** GRN create form lacked the legacy-faithful footer (`.purch-po-form-footer` + `.purch-po-total-label` + `.purch-po-form-actions`) — running total only appeared in the items table tfoot, not in a sticky action bar.
+
+   **Fix:** Added the legacy footer with running total + save/cancel actions. The footer total mirrors the items table tfoot total via a shared `recomputeTotals()` function that updates both `#totalAmount` (tfoot) and `#totalAmountFooter` (sticky footer).
+
+5. **BUG-20 (Low):** GRN show page lacked the legacy wrapper class (`.purch-index-app.purch-po-detail`) and CSS link — visual inconsistency with the rest of the purchase module.
+
+   **Fix:** Added `.purch-index-app.purch-po-detail` wrapper class on the show page container. Linked `purchase-index.css` + `purchase-order-details.css` via `@push('css')`. Kept the existing rich layout (stat cards + stock movements + GL + ledger cards + journal entry lines + supplier ledger entries) — Laravel is already better than legacy here.
+
+6. **BUG-21 (Low):** GRN index filters did not persist across page reloads — every refresh reset to defaults.
+
+   **Fix:** Added `localStorage` persistence under key `purchase_receive_filters_v1`. `saveFilters()` writes `{from, to, status, search}` on every table reload; `loadFilters()` restores on page boot. If persisted filters exist, the "month" preset is NOT auto-applied — the user's saved state takes precedence. For the "Returned" view, the status filter is force-set to `cancelled` regardless of persisted state.
+
+7. **BUG-22 (Low):** No CSV export on GRN index — users had to manually copy/paste from the table.
+
+   **Fix:** Added `export()` controller method + `GET admin/purchase-receives/export` route. Returns `text/csv` with UTF-8 BOM (for Excel) and `Content-Disposition: attachment; filename="Purchase_Receives_YYYY-MM-DD_HHmmss.csv"`. Headers: GRN Code, PO Code, Supplier, Branch, Warehouse, Receive Date, Item Count, Total Amount, Status, Reversed, Created By, Notes. Branch-scoped + same filter logic as `index()`.
+
+**Files touched in Phase 3:**
+
+- **`laravel/app/Models/PurchaseOrder.php`** — added `receives()` HasMany relation to `PurchaseReceive` (ordered by `receive_date desc, id desc`). Used by the new "Receives against this PO" list on the PO show page.
+- **`laravel/app/Http/Controllers/Admin/PurchaseOrderController.php`** — `show()` method modified to eager-load `receives` (with nested `warehouse`) so the new list section doesn't N+1.
+- **`laravel/app/Http/Controllers/Admin/PurchaseReceiveController.php`** — added 2 new methods: `export()` (CSV stream with UTF-8 BOM, branch-scoped, same filter logic as index) and `grnDataTableJson()` (private, server-side DataTables JSON response). `index()` modified to branch into DataTables JSON mode when `?datatables=1` is set. Search expanded to cover GRN code + supplier name + branch name + PO code (was only GRN code before).
+- **`laravel/routes/web.php`** — added 1 new route inside the existing `admin/purchase-receives` prefix group: `GET export` (RBAC `role:admin,manager,warehouse_manager,accountant`). No other route changes.
+- **`laravel/resources/views/admin/purchase-receives/index.blade.php`** — full legacy-faithful restructure (~470 lines). 5 stat cards (total/draft/confirmed/cancelled/total_value) + collapsible filter panel with date presets + status chips + smart search + active filter bar + server-side DataTables + mobile card container + SweetAlert2 confirm-GRN modal (explains stock/GL/ledger/PO impact) + SweetAlert2 cancel-GRN modal with required reason. `?returned=1` query param flips to "Returned / cancelled GRNs" view.
+- **`laravel/resources/views/admin/purchase-receives/create.blade.php`** — targeted restructure (~790 lines). Wrapped form in `.purch-po-form-app` + `.purch-po-form-layout`. Replaced Select2 product dropdown with custom text-input typeahead reusing Phase 2 `search-products` endpoint (debounced input + dropdown results + click-to-select + outside-click close + qty-input focus after select). Replaced Select2 on header selects (supplier/branch/warehouse) with native `<select>` for legacy-faithful parity. Added legacy-faithful footer (`.purch-po-form-footer` + `.purch-po-total-label` + `.purch-po-form-actions`) with running total that mirrors the items table tfoot total. SweetAlert2 submit guard for "no valid line items" / "incomplete items".
+- **`laravel/resources/views/admin/purchase-receives/show.blade.php`** — targeted restructure. Added `.purch-index-app.purch-po-detail` wrapper + linked `purchase-index.css` + `purchase-order-details.css`. Kept the rich layout (stat cards + stock movements + GL + ledger cards + journal entry lines + supplier ledger entries) — Laravel is already better than legacy here.
+- **`laravel/resources/views/admin/purchase-orders/show.blade.php`** — added new "Receives against this PO" list section after the PO items table. Shows GRN code (link), date, warehouse, amount, status badge, reversed badge, view button. Empty state with link to "Receive goods against this PO" (if PO can receive).
+- **2 docs updated** — `docs/PURCHASE_PARITY_PLAN.md` (Phase 3 Completion Summary at top + Phase 3 section in §8 marked complete + BUG-16/17/18/19/20/21/22 added to bug log) and `docs/SESSION_CONTEXT.md` (this section).
+
+**Phase 3 smoke-test checklist (user to run on local Docker — no migrations needed):**
+
+1. Login as admin → visit `/admin/purchase-receives`. Verify 5 stat cards render with real counts. "Filters" toggles collapse. "New receive" / "Returned" / "Export" buttons in hero.
+2. Click "New receive" → 2-col layout. Toggle "Direct receive (no PO)" — PO dropdown disables, "Add item" button appears. Type 3+ chars in product search → dropdown appears with matches. Click a product → search box populates, hidden `product_id` set, qty input gets focus. Add 2 line items with qty + rate + warehouse → footer total updates live. Save → redirected to GRN show.
+3. On GRN show → hero shows GRN code + status badge. Stat cards render. Stock movements table empty (draft). "Confirm" button visible.
+4. Click "Confirm" → SweetAlert2 confirm dialog explains what will happen (stock IN, GL Dr Inventory / Cr AP, supplier ledger credit, PO update). Confirm → status "Confirmed". Stock movements table populates. Journal entry lines render.
+5. Back on GRN index → "Filters" → set "From" to last month, status chip "Confirmed" → table reloads. Refresh page → filters persist. "Clear filters" → resets to "this month" preset.
+6. Resize browser to <768px → table disappears, mobile cards render one per row (GRN code, date, supplier, PO link or "Direct" badge, status badge, amount, action buttons).
+7. Click "Export" → CSV downloads. Open in Excel/Sheets → headers (GRN Code, PO Code, Supplier, Branch, Warehouse, Receive Date, Item Count, Total Amount, Status, Reversed, Created By, Notes) + rows match current filter.
+8. Visit a PO show page that has at least one confirmed GRN → verify new "Receives against this PO" list section appears below the PO items table. Each row shows GRN code (link), date, warehouse, amount, status badge, reversed badge (if applicable), View button. Click GRN code → navigates to GRN show page.
+
+**End of Phase 3 → Phase 4 handoff:**
+
+Phase 4 (PurchaseReturn UI parity + offcanvas + smart-sort + chip counts) can now start. The PO + GRN modules are fully functional with legacy-faithful UI. The `searchProducts()` endpoint added in Phase 2 (reused in Phase 3) will continue to be available for Phase 4's return forms if needed. Phase 4 will touch only blade views (3 Return views + 1 new partial), 1 controller (2 new AJAX endpoints: `summary` for chip counts + `search-receives` for GRN typeahead, plus datatables + export + smart-sort), GRN show blade (add Returns list + Return button), and link 2 CSS files (`purchase-return-index.css` + `purchase-return-create.css`). No further schema changes anticipated (the `condition` column on `purchase_return_items` is Phase 5). The full phase-by-phase plan lives in `docs/PURCHASE_PARITY_PLAN.md`.
+
+---
+
 ## 6. Open Work Items
 
 (Items the user has asked for but that are not yet done.)
 
-- **Purchase Phase 2 (PurchaseOrder UI parity)** — next phase to start after the user confirms Phase 1 smoke test passes. See `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 2 for the task list. Touches only 4 PO blade views + 1 controller method (search-products + datatables + export) + links 3 CSS files. No schema/route/middleware changes.
-- **Purchase Phases 3–8** — GRN UI parity, Return UI parity + offcanvas + smart-sort + chip counts, audit logs, PurchaseAudit checklist, Form Requests, mobile cards, CSV exports, end-to-end QA. See `docs/PURCHASE_PARITY_PLAN.md` §8 for the full plan.
+- **Purchase Phase 3 (PurchaseReceive / GRN UI parity)** — ✅ DONE 2026-07-22. See §5.29 below.
+- **Purchase Phase 4 (PurchaseReturn UI parity + offcanvas + smart-sort + chip counts)** — next phase to start after the user confirms Phase 3 smoke test passes. See `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 4 for the task list. Touches only 3 Return blade views + 1 new partial + 1 controller (2 new AJAX endpoints: `summary` for chip counts + `search-receives` for GRN typeahead, plus datatables + export + smart-sort) + GRN show blade (add Returns list + Return button) + links 2 CSS files (`purchase-return-index.css` + `purchase-return-create.css`). No schema changes (the `condition` column on `purchase_return_items` is Phase 5).
+- **Purchase Phases 5–7** — Damage condition + dual stock cap (Phase 5), printable Return slip + per-module audit logs + PurchaseAudit checklist (Phase 6), polish (Form Requests, mobile cards, CSV exports, end-to-end QA) (Phase 7). See `docs/PURCHASE_PARITY_PLAN.md` §8 for the full plan.
 - **Sales style parity (paused)** — Phase 2 extract inline styles, Phase 4+ color polish, mobile QA, cleanup. Can resume after purchase module reaches feature parity. User confirmed sales cart is "ok so far so good" before pivoting.
 - **R7 / R8 / R9** — numbers reserved for future sales items; not yet assigned.
 - **R24 / R25 (Telegram + FCM)** — dropped by user request (2026-07-22). Explicitly NOT being ported.
@@ -2354,6 +2431,34 @@ When the user gives the next instruction, append it here as a checkbox item. Whe
       `searchProducts()` endpoint will be reused by Phase 3 GRN
       create (Direct mode). No schema changes. `docs/PURCHASE_PARITY_PLAN.md`
       and `docs/SESSION_CONTEXT.md` updated. See §5.28 above for the
+      full 8-step smoke-test checklist the user must run on local
+      Docker.
+
+- [x] **Purchase Phase 3 (PurchaseReceive / GRN UI parity — legacy-faithful)**
+      — completed 2026-07-22. 7 UX/parity bugs fixed (BUG-16 through
+      BUG-22). 8 files touched: `PurchaseOrder.php` model (new
+      `receives()` HasMany relation), `PurchaseOrderController.php`
+      (`show()` eager-loads `receives` with nested `warehouse`),
+      `PurchaseReceiveController.php` (2 new methods: `grnDataTableJson`
+      private server-side DataTables JSON + `export` CSV stream;
+      `index()` branches into JSON mode; search expanded to cover
+      GRN code + supplier name + branch name + PO code), `routes/web.php`
+      (1 new route: `export` on `admin/purchase-receives`), 3 GRN
+      blades restructured to legacy-faithful DOM (`index` full
+      rewrite ~470 lines with 5 stat cards + collapsible filters +
+      status chips + smart search + server-side DataTables + mobile
+      cards + CSV export + `?returned=1` toggle + SweetAlert2 confirm
+      + cancel modals; `create` targeted restructure ~790 lines —
+      wrapped in `.purch-po-form-app`/`.purch-po-form-layout`,
+      replaced Select2 product dropdown with custom typeahead reusing
+      Phase 2 `search-products` endpoint, dropped Select2 on header
+      selects, added legacy-faithful footer with running total;
+      `show` targeted restructure — added `.purch-index-app.purch-po-detail`
+      wrapper + linked CSS, kept rich layout), `purchase-orders/show.blade.php`
+      (added "Receives against this PO" list section below PO items
+      table with status badges + reversed badges + view buttons +
+      empty state). No schema changes. `docs/PURCHASE_PARITY_PLAN.md`
+      and `docs/SESSION_CONTEXT.md` updated. See §5.29 above for the
       full 8-step smoke-test checklist the user must run on local
       Docker.
 

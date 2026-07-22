@@ -27,6 +27,11 @@ class PurchaseReceiveController extends Controller
         // Phase 1 (branch isolation): non-admin users see only their own branch.
         $branchId = $this->resolveBranchIdForRead($request->input('branch_id') ? (int) $request->input('branch_id') : null);
 
+        // Phase 3 — server-side DataTables JSON mode (same shape as PO index).
+        if ($request->boolean('datatables')) {
+            return $this->grnDataTableJson($request, $branchId);
+        }
+
         $query = PurchaseReceive::with(['supplier', 'branch', 'warehouse', 'purchaseOrder', 'items'])
             ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
             ->when($request->input('from_date'), fn($q, $d) => $q->where('receive_date', '>=', $d))
@@ -64,6 +69,177 @@ class PurchaseReceiveController extends Controller
             'branches' => $branches,
             'stats' => $stats,
             'filters' => $request->only(['from_date', 'to_date', 'supplier_id', 'branch_id', 'status', 'search']),
+        ]);
+    }
+
+    /**
+     * Phase 3 — Server-side DataTables JSON endpoint.
+     * Mirrors the legacy `PurchaseReceiveModel::getReceivesForDataTable()`
+     * response shape: {draw, recordsTotal, recordsFiltered, data:[...]}.
+     */
+    private function grnDataTableJson(Request $request, ?int $branchId)
+    {
+        $draw   = (int) $request->input('draw', 1);
+        $start  = (int) $request->input('start', 0);
+        $length = (int) $request->input('length', 25);
+        $length = $length > 0 ? $length : 25;
+        $search = (string) $request->input('search.value', $request->input('search', ''));
+        $fromDate = $request->input('date_from') ?: $request->input('from_date');
+        $toDate   = $request->input('date_to')   ?: $request->input('to_date');
+        $status   = $request->input('filterStatus') ?: $request->input('status');
+        // Legacy sends ?returned=1 to flip into "show cancelled" mode.
+        $showReturned = $request->boolean('returned');
+
+        $orderColIdx = (int) ($request->input('order.0.column', 0));
+        $orderDir    = strtolower((string) ($request->input('order.0.dir', 'desc'))) === 'asc' ? 'asc' : 'desc';
+        $orderMap = [
+            0 => 'receive_date',
+            1 => 'receive_code',
+            2 => 'purchase_order_id',  // PO code — fall back to id sort
+            3 => 'supplier_id',
+            4 => 'total_amount',
+            5 => 'status',
+            6 => 'created_by',
+        ];
+        $orderCol = $orderMap[$orderColIdx] ?? 'receive_date';
+
+        $base = PurchaseReceive::query()
+            ->with([
+                'supplier:id,supplier_name,supplier_code',
+                'branch:id,branch_name,branch_code',
+                'warehouse:id,warehouse_name,warehouse_code',
+                'purchaseOrder:id,po_code',
+                'items:id,purchase_receive_id',
+            ])
+            ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId));
+
+        $recordsTotal = (clone $base)->count();
+
+        $filtered = (clone $base)
+            ->when($fromDate, fn($q, $d) => $q->where('receive_date', '>=', $d))
+            ->when($toDate, fn($q, $d) => $q->where('receive_date', '<=', $d))
+            ->when($status && $status !== 'all', fn($q, $s) => $q->where('status', $s))
+            ->when($showReturned, fn($q) => $q->where('status', 'cancelled'))
+            ->when(! $showReturned && ! $status, fn($q) => $q->whereNotIn('status', ['cancelled']))
+            ->when($search !== '', function ($q) use ($search) {
+                $q->where(function ($qq) use ($search) {
+                    $qq->where('receive_code', 'ILIKE', "%{$search}%")
+                       ->orWhereHas('supplier', fn($sq) => $sq->where('supplier_name', 'ILIKE', "%{$search}%"))
+                       ->orWhereHas('branch', fn($bq) => $bq->where('branch_name', 'ILIKE', "%{$search}%"))
+                       ->orWhereHas('purchaseOrder', fn($pq) => $pq->where('po_code', 'ILIKE', "%{$search}%"));
+                });
+            });
+
+        $recordsFiltered = (clone $filtered)->count();
+
+        $rows = (clone $filtered)
+            ->orderBy($orderCol, $orderDir)
+            ->orderBy('id', 'desc')
+            ->skip($start)
+            ->take($length)
+            ->get();
+
+        $data = $rows->map(fn($r) => [
+            'id'              => $r->id,
+            'receive_code'    => $r->receive_code,
+            'receive_date'    => optional($r->receive_date)->format('Y-m-d'),
+            'po_code'         => $r->purchaseOrder?->po_code ?? '',
+            'po_show_url'     => $r->purchase_order_id ? route('admin.purchase-orders.show', $r->purchase_order_id) : '',
+            'supplier_name'   => $r->supplier?->supplier_name ?? '—',
+            'supplier_code'   => $r->supplier?->supplier_code ?? '',
+            'branch_name'     => $r->branch?->branch_name ?? '—',
+            'warehouse_name'  => $r->warehouse?->warehouse_name ?? '',
+            'item_count'      => $r->items?->count() ?? 0,
+            'total_amount'    => (float) $r->total_amount,
+            'status'          => $r->status,
+            'is_reversed'     => (bool) $r->is_reversed,
+            'created_by_name' => $r->created_by ? ('User #' . $r->created_by) : 'System',
+            'show_url'        => route('admin.purchase-receives.show', $r),
+            'confirm_url'     => route('admin.purchase-receives.confirm', $r),
+            'cancel_url'      => route('admin.purchase-receives.cancel', $r),
+            'can_confirm'     => $r->status === 'draft',
+            'can_cancel'      => $r->status === 'draft',
+        ])->values();
+
+        return response()->json([
+            'draw'            => $draw,
+            'recordsTotal'    => $recordsTotal,
+            'recordsFiltered' => $recordsFiltered,
+            'data'            => $data,
+        ]);
+    }
+
+    /**
+     * Phase 3 — CSV export of filtered GRNs (branch-scoped).
+     * Mirrors legacy `PurchaseReceiveController::export()`.
+     */
+    public function export(Request $request)
+    {
+        $branchId = $this->resolveBranchIdForRead($request->input('branch_id') ? (int) $request->input('branch_id') : null);
+
+        $fromDate = $request->input('date_from') ?: $request->input('from_date');
+        $toDate   = $request->input('date_to')   ?: $request->input('to_date');
+        $status   = $request->input('filterStatus') ?: $request->input('status');
+        $search   = (string) ($request->input('search') ?? '');
+        $showReturned = $request->boolean('returned');
+
+        $receives = PurchaseReceive::with(['supplier', 'branch', 'warehouse', 'purchaseOrder'])
+            ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
+            ->when($fromDate, fn($q, $d) => $q->where('receive_date', '>=', $d))
+            ->when($toDate, fn($q, $d) => $q->where('receive_date', '<=', $d))
+            ->when($status && $status !== 'all', fn($q, $s) => $q->where('status', $s))
+            ->when($showReturned, fn($q) => $q->where('status', 'cancelled'))
+            ->when(! $showReturned && ! $status, fn($q) => $q->whereNotIn('status', ['cancelled']))
+            ->when($search !== '', function ($q) use ($search) {
+                $q->where(function ($qq) use ($search) {
+                    $qq->where('receive_code', 'ILIKE', "%{$search}%")
+                       ->orWhereHas('supplier', fn($sq) => $sq->where('supplier_name', 'ILIKE', "%{$search}%"))
+                       ->orWhereHas('branch', fn($bq) => $bq->where('branch_name', 'ILIKE', "%{$search}%"))
+                       ->orWhereHas('purchaseOrder', fn($pq) => $pq->where('po_code', 'ILIKE', "%{$search}%"));
+                });
+            })
+            ->orderBy('receive_date', 'desc')
+            ->orderBy('id', 'desc')
+            ->get();
+
+        $filename = 'Purchase_Receives_' . now()->format('Y-m-d_His') . '.csv';
+
+        return response()->stream(function () use ($receives) {
+            $out = fopen('php://output', 'w');
+            fwrite($out, "\xEF\xBB\xBF"); // UTF-8 BOM for Excel
+            fputcsv($out, [
+                'GRN Code', 'PO Code', 'Supplier', 'Branch', 'Warehouse',
+                'Receive Date', 'Item Count', 'Total Amount',
+                'Status', 'Reversed', 'Created By', 'Notes',
+            ]);
+            foreach ($receives as $r) {
+                $statusLabel = [
+                    'draft'     => 'Draft',
+                    'confirmed' => 'Confirmed',
+                    'cancelled' => 'Cancelled',
+                ][$r->status] ?? ucfirst($r->status);
+
+                fputcsv($out, [
+                    $r->receive_code,
+                    $r->purchaseOrder?->po_code ?? '',
+                    $r->supplier?->supplier_name ?? '',
+                    $r->branch?->branch_name ?? '',
+                    $r->warehouse?->warehouse_name ?? '',
+                    optional($r->receive_date)->format('Y-m-d'),
+                    $r->items()->count(),
+                    number_format((float) $r->total_amount, 2, '.', ''),
+                    $statusLabel,
+                    $r->is_reversed ? 'Yes' : 'No',
+                    $r->created_by ? ('User #' . $r->created_by) : 'System',
+                    $r->notes ?? '',
+                ]);
+            }
+            fclose($out);
+        }, 200, [
+            'Content-Type'        => 'text/csv; charset=utf-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Pragma'              => 'no-cache',
+            'Expires'             => '0',
         ]);
     }
 

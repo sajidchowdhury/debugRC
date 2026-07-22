@@ -1,5 +1,10 @@
 @extends('layouts.admin')
 
+@push('css')
+<link rel="stylesheet" href="/assets/css/purchase-index.css">
+<link rel="stylesheet" href="/assets/css/purchase-order-details.css">
+@endpush
+
 @section('content')
 @php
     $r = $receive;
@@ -23,7 +28,7 @@
     $warehouseMap = \App\Models\Warehouse::pluck('warehouse_name', 'id');
 @endphp
 
-<div class="container-fluid py-2">
+<div class="purch-index-app purch-po-detail container-fluid py-2">
     {{-- Hero header (green) --}}
     <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
             style="background: linear-gradient(135deg,#16a34a,#15803d);">

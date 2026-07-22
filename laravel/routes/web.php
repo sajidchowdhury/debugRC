@@ -468,6 +468,10 @@ Route::middleware('auth')->group(function () {
         Route::get('po-details', [PurchaseReceiveController::class, 'getPoDetails'])
             ->name('po-details')
             ->middleware('role:admin,manager,warehouse_manager');
+        // Phase 3 — CSV export (branch-scoped like index).
+        Route::get('export', [PurchaseReceiveController::class, 'export'])
+            ->name('export')
+            ->middleware('role:admin,manager,warehouse_manager,accountant');
         Route::post('{id}/confirm', [PurchaseReceiveController::class, 'confirm'])
             ->name('confirm')
             ->middleware(['role:admin,manager', 'branch.isolation']);

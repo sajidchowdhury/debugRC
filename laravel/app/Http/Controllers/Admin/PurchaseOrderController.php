@@ -327,7 +327,10 @@ class PurchaseOrderController extends Controller
     public function show(int $id)
     {
         $po = PurchaseOrder::with([
-            'items.product', 'supplier', 'branch', 'warehouse'
+            'items.product', 'supplier', 'branch', 'warehouse',
+            // Phase 3 — eager-load the GRNs against this PO for the
+            // "Receives against this PO" list section on the show page.
+            'receives' => fn($q) => $q->with(['warehouse'])->orderBy('receive_date', 'desc')->orderBy('id', 'desc'),
         ])->findOrFail($id);
 
         return view('admin.purchase-orders.show', [

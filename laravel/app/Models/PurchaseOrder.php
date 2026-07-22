@@ -83,6 +83,17 @@ class PurchaseOrder extends Model
         return $this->hasMany(PurchaseOrderItem::class, 'purchase_order_id');
     }
 
+    /**
+     * Phase 3 — GRNs created against this PO.
+     * Used on the PO show page "Receives against this PO" list.
+     */
+    public function receives(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\PurchaseReceive::class, 'purchase_order_id')
+            ->orderBy('receive_date', 'desc')
+            ->orderBy('id', 'desc');
+    }
+
     public function supplier(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(Supplier::class, 'supplier_id');

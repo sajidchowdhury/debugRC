@@ -1,5 +1,10 @@
 @extends('layouts.admin')
 
+@push('css')
+<link rel="stylesheet" href="/assets/css/purchase-index.css">
+<link rel="stylesheet" href="/assets/css/purchase-order-form.css">
+@endpush
+
 @section('content')
 @php
     $today    = now()->format('Y-m-d');
@@ -35,21 +40,24 @@
             JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE
         );
     }
+
+    $branchName = $isAgainstPo
+        ? ($po->branch?->branch_name ?? (auth()->user()?->branch?->branch_name ?? 'Branch'))
+        : (auth()->user()?->branch?->branch_name ?? 'Branch');
 @endphp
 
-<div class="container-fluid py-2">
-    {{-- Hero header (green) --}}
-    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
-            style="background: linear-gradient(135deg,#16a34a,#15803d);">
+<div class="purch-index-app purch-po-form-app container-fluid py-2">
+    {{-- ─── Hero ──────────────────────────────────────────────────── --}}
+    <header class="purch-index-hero">
         <div>
-            <h1 class="h4 mb-1"><i class="fas fa-truck-ramp-box me-2"></i>{{ $title }}</h1>
-            <p class="mb-0 small opacity-75">
-                Receive goods into inventory. Draft created first — confirm to apply stock + GL + supplier ledger.
-            </p>
+            <h1><i class="fas fa-dolly me-2"></i>New purchase receive</h1>
+            <p>Record goods received from supplier — linked to PO or direct purchase.</p>
+            <span class="purch-index-tag"><i class="fas fa-building me-1"></i>{{ e($branchName) }}</span>
+            <span class="purch-index-tag is-alt"><i class="fas fa-warehouse me-1"></i>Stock in</span>
         </div>
-        <div>
-            <a href="{{ route('admin.purchase-receives.index') }}" class="btn btn-outline-light btn-sm">
-                <i class="fas fa-arrow-left me-1"></i> Back to list
+        <div class="purch-index-hero-actions">
+            <a href="{{ route('admin.purchase-receives.index') }}" class="btn btn-light btn-sm">
+                <i class="fas fa-arrow-left me-1"></i>List
             </a>
         </div>
     </header>
@@ -96,12 +104,11 @@
             <input type="hidden" name="purchase_order_id" id="po_id_hidden" value="{{ old('purchase_order_id') }}">
         @endif
 
+        <div class="purch-po-form-layout">
         {{-- Header card --}}
-        <div class="card border-0 shadow-sm mb-3">
-            <div class="card-header bg-white">
-                <h2 class="h6 mb-0"><i class="fas fa-circle-info me-1 text-success"></i> GRN header</h2>
-            </div>
-            <div class="card-body">
+        <section class="purch-po-form-card">
+            <div class="purch-po-form-card-head"><i class="fas fa-info-circle me-1"></i> GRN header</div>
+            <div class="purch-po-form-card-body">
                 <div class="row g-3">
                     {{-- Receive against PO section (only if NOT already against a PO) --}}
                     @if (!$isAgainstPo)
@@ -121,7 +128,7 @@
                                         </label>
                                     </div>
                                 </div>
-                                <select id="po_select" name="po_select" class="form-select select2">
+                                <select id="po_select" name="po_select" class="form-select">
                                     <option value="">Select a purchase order to load its items…</option>
                                     @foreach ($availablePos as $p)
                                         <option value="{{ $p->id }}"
@@ -146,7 +153,7 @@
                     <div class="col-md-4">
                         <label class="form-label" for="supplier_id">Supplier</label>
                         <select id="supplier_id" name="supplier_id"
-                                class="form-select select2 @error('supplier_id') is-invalid @enderror"
+                                class="form-select @error('supplier_id') is-invalid @enderror"
                                 @if ($isAgainstPo) disabled @endif>
                             <option value="">Select supplier</option>
                             @foreach ($suppliers as $s)
@@ -169,7 +176,7 @@
                     <div class="col-md-4">
                         <label class="form-label" for="branch_id">Branch</label>
                         <select id="branch_id" name="branch_id"
-                                class="form-select select2 @error('branch_id') is-invalid @enderror"
+                                class="form-select @error('branch_id') is-invalid @enderror"
                                 @if ($isAgainstPo) disabled @endif>
                             <option value="">Select branch</option>
                             @foreach ($branches as $b)
@@ -194,7 +201,7 @@
                             Warehouse <span class="text-danger">*</span>
                         </label>
                         <select id="warehouse_id" name="warehouse_id"
-                                class="form-select select2 @error('warehouse_id') is-invalid @enderror" required>
+                                class="form-select @error('warehouse_id') is-invalid @enderror" required>
                             <option value="">Select warehouse</option>
                             @foreach ($warehouses as $wh)
                                 @php
@@ -234,83 +241,86 @@
                     </div>
                 </div>
             </div>
-        </div>
+        </section>
 
         {{-- Items table --}}
-        <div class="card border-0 shadow-sm mb-3">
-            <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                <h2 class="h6 mb-0">
-                    <i class="fas fa-table-list me-1 text-success"></i> Items
+        <section class="purch-po-form-card purch-po-items-card">
+            <div class="purch-po-form-card-head d-flex justify-content-between align-items-center">
+                <span>
+                    <i class="fas fa-table-list me-1"></i> Items
                     <span class="badge bg-success-subtle text-success ms-1" id="itemCount">0</span>
-                </h2>
+                </span>
                 <button type="button" class="btn btn-sm btn-success d-none" id="addItemBtn">
                     <i class="fas fa-plus me-1"></i> Add item
                 </button>
             </div>
-            <div class="card-body p-0">
-                <div class="table-responsive">
-                    <table class="table table-sm table-hover align-middle mb-0" id="itemsTable">
-                        <thead class="table-light">
-                            <tr>
-                                <th style="width:32%;">Product</th>
-                                <th class="text-end" style="width:11%;">Qty to receive</th>
-                                <th class="text-end" style="width:11%;">Rate (Tk)</th>
-                                <th style="width:18%;">Warehouse</th>
-                                <th class="text-end" style="width:13%;">Amount (Tk)</th>
-                                <th class="text-center" style="width:5%;"></th>
-                            </tr>
-                        </thead>
-                        <tbody id="itemsBody">
-                            {{-- Rows injected by JS --}}
-                        </tbody>
-                        <tfoot>
-                            <tr class="table-light">
-                                <td colspan="4" class="text-end small text-muted">Sub-total</td>
-                                <td class="text-end fw-bold" id="subTotal">0.00</td>
-                                <td></td>
-                            </tr>
-                            <tr class="table-light">
-                                <td colspan="4" class="text-end small">
-                                    <label class="form-label mb-0 me-2">Discount (Tk)</label>
-                                    <input type="number" min="0" step="0.01" name="discount_amount"
-                                           id="discountAmount" class="form-control form-control-sm d-inline-block text-end"
-                                           style="width:140px;" value="{{ old('discount_amount', 0) }}">
-                                </td>
-                                <td class="text-end text-danger" id="discountDisplay">−0.00</td>
-                                <td></td>
-                            </tr>
-                            <tr class="table-light">
-                                <td colspan="4" class="text-end small">
-                                    <label class="form-label mb-0 me-2">Tax (Tk)</label>
-                                    <input type="number" min="0" step="0.01" name="tax_amount"
-                                           id="taxAmount" class="form-control form-control-sm d-inline-block text-end"
-                                           style="width:140px;" value="{{ old('tax_amount', 0) }}">
-                                </td>
-                                <td class="text-end" id="taxDisplay">+0.00</td>
-                                <td></td>
-                            </tr>
-                            <tr class="table-success fw-bold">
-                                <td colspan="4" class="text-end">Total amount</td>
-                                <td class="text-end" id="totalAmount">0.00</td>
-                                <td></td>
-                            </tr>
-                        </tfoot>
-                    </table>
-                </div>
-                <div class="p-3">
-                    <div class="text-danger small d-none" id="itemsError">
-                        <i class="fas fa-exclamation-circle me-1"></i> Add at least one item with a product and qty &gt; 0.
-                    </div>
+            <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle mb-0" id="itemsTable">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width:32%;">Product</th>
+                            <th class="text-end" style="width:11%;">Qty to receive</th>
+                            <th class="text-end" style="width:11%;">Rate (Tk)</th>
+                            <th style="width:18%;">Warehouse</th>
+                            <th class="text-end" style="width:13%;">Amount (Tk)</th>
+                            <th class="text-center" style="width:5%;"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="itemsBody">
+                        {{-- Rows injected by JS --}}
+                    </tbody>
+                    <tfoot>
+                        <tr class="table-light">
+                            <td colspan="4" class="text-end small text-muted">Sub-total</td>
+                            <td class="text-end fw-bold" id="subTotal">0.00</td>
+                            <td></td>
+                        </tr>
+                        <tr class="table-light">
+                            <td colspan="4" class="text-end small">
+                                <label class="form-label mb-0 me-2">Discount (Tk)</label>
+                                <input type="number" min="0" step="0.01" name="discount_amount"
+                                       id="discountAmount" class="form-control form-control-sm d-inline-block text-end"
+                                       style="width:140px;" value="{{ old('discount_amount', 0) }}">
+                            </td>
+                            <td class="text-end text-danger" id="discountDisplay">−0.00</td>
+                            <td></td>
+                        </tr>
+                        <tr class="table-light">
+                            <td colspan="4" class="text-end small">
+                                <label class="form-label mb-0 me-2">Tax (Tk)</label>
+                                <input type="number" min="0" step="0.01" name="tax_amount"
+                                       id="taxAmount" class="form-control form-control-sm d-inline-block text-end"
+                                       style="width:140px;" value="{{ old('tax_amount', 0) }}">
+                            </td>
+                            <td class="text-end" id="taxDisplay">+0.00</td>
+                            <td></td>
+                        </tr>
+                        <tr class="table-success fw-bold">
+                            <td colspan="4" class="text-end">Total amount</td>
+                            <td class="text-end" id="totalAmount">0.00</td>
+                            <td></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+            <p class="small text-muted px-3 py-2 mb-0">
+                Search by product name or code · at least one line required
+            </p>
+            <div class="p-3">
+                <div class="text-danger small d-none" id="itemsError">
+                    <i class="fas fa-exclamation-circle me-1"></i> Add at least one item with a product and qty &gt; 0.
                 </div>
             </div>
-        </div>
+        </section>
+        </div>{{-- /.purch-po-form-layout --}}
 
-        {{-- Submit --}}
-        <div class="card border-0 shadow-sm">
-            <div class="card-body d-flex gap-2 justify-content-end">
-                <a href="{{ route('admin.purchase-receives.index') }}" class="btn btn-outline-secondary">
-                    <i class="fas fa-times me-1"></i> Cancel
-                </a>
+        {{-- ─── Footer (total + actions) ──────────────────────────── --}}
+        <div class="purch-po-form-footer">
+            <div class="purch-po-total-label">
+                Total: <span id="totalAmountFooter">0.00</span>
+            </div>
+            <div class="purch-po-form-actions">
+                <a href="{{ route('admin.purchase-receives.index') }}" class="btn btn-outline-secondary">Cancel</a>
                 <button type="submit" class="btn btn-success" id="submitBtn">
                     <i class="fas fa-file-pen me-1"></i> Create Draft GRN
                 </button>
@@ -319,7 +329,7 @@
     </form>
 </div>
 
-{{-- Hidden warehouse options template --}}
+{{-- Hidden warehouse options template (Phase 3 — kept for per-line warehouse select) --}}
 <template id="warehouseOptionsTpl">
     <option value="">Select warehouse</option>
     @foreach ($warehouses as $wh)
@@ -327,23 +337,31 @@
     @endforeach
 </template>
 
-{{-- Hidden product options template --}}
-<template id="productOptionsTpl">
-    <option value="">Select product</option>
-    @foreach ($products as $p)
-        <option value="{{ $p->id }}">{{ $p->product_code }} — {{ $p->product_name }}</option>
-    @endforeach
-</template>
-
 @push('scripts')
 <script>
+window.GRN_FORM_BOOT = {
+    poDetailsUrl: @json(route('admin.purchase-receives.po-details')),
+    productSearchUrl: @json(route('admin.purchase-orders.search-products')),
+    csrf: @json(csrf_token()),
+    isAgainstPo: @json($isAgainstPo),
+    poItems: {!! $poItemsJson !!},
+    directReceiveOld: @json((bool) old('direct_receive')),
+    poIdOld: @json(old('purchase_order_id')),
+    itemsOld: @json(old('items')),
+    hasItemsOld: @json(is_array(old('items'))),
+};
+</script>
+<script>
 $(function () {
-    var poDetailsUrl  = '{{ route("admin.purchase-receives.po-details") }}';
+    var boot = window.GRN_FORM_BOOT || {};
+    var poDetailsUrl  = boot.poDetailsUrl;
+    var productSearchUrl = boot.productSearchUrl;
     var $form         = $('#receiveForm');
     var $tbody        = $('#itemsBody');
     var $headerWh     = $('#warehouse_id');
     var $subTotal     = $('#subTotal');
     var $totalAmount  = $('#totalAmount');
+    var $totalAmountFooter = $('#totalAmountFooter');
     var $discountIn   = $('#discountAmount');
     var $taxIn        = $('#taxAmount');
     var $discountDisp = $('#discountDisplay');
@@ -357,9 +375,7 @@ $(function () {
     var $branchSel    = $('#branch_id');
     var $directToggle = $('#directReceiveToggle');
     var rowIndex      = 0;
-
-    // Init select2 on header selects
-    $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
+    var productSearchCache = {}; // rowId -> { id, name, code }
 
     @if ($isAgainstPo)
         // ====== Against PO: pre-fill items from $po ======
@@ -483,11 +499,19 @@ $(function () {
         $tbody.empty();
         rowIndex = 0;
         oldItems.forEach(function (item) {
-            var $tr = buildRow(rowIndex++);
-            if (item.product_id)   $tr.find('.product-select').val(item.product_id).trigger('change');
-            if (item.qty)          $tr.find('.qty-input').val(item.qty);
-            if (item.rate)         $tr.find('.rate-input').val(item.rate);
-            if (item.warehouse_id) $tr.find('.wh-select').val(item.warehouse_id).trigger('change');
+            // Phase 3 — use typeahead; product name unknown after redirect,
+            // so seed empty search box + hidden product_id. User re-searches.
+            var $tr = buildRow(rowIndex++, {
+                product_id: item.product_id,
+                product_name: '',
+                product_code: '',
+                qty: item.qty,
+                rate: item.rate,
+                warehouse_id: item.warehouse_id
+            });
+            // After buildRow, the warehouse select needs to be set explicitly
+            // (since initial.warehouse_id is honored but we want to be sure).
+            if (item.warehouse_id) $tr.find('.wh-select').val(item.warehouse_id);
             recomputeRow($tr);
         });
     @endif
@@ -498,13 +522,13 @@ $(function () {
         locked  = !!locked;
         var $tr = $('<tr>').attr('data-row', idx);
 
-        // ---- Product cell ----
-        var $tdProduct = $('<td>');
+        // ---- Product cell (Phase 3: custom typeahead, not Select2) ----
+        var $tdProduct = $('<td class="purch-po-product-cell">');
         var $prodHidden = $('<input>').attr({ type: 'hidden', name: 'items[' + idx + '][product_id]', class: 'product-id-input' });
         var $poItemHidden = $('<input>').attr({ type: 'hidden', name: 'items[' + idx + '][purchase_order_item_id]', class: 'po-item-id-input' });
 
         if (locked && initial.product_id) {
-            // Read-only display
+            // Read-only display (when receiving against PO)
             $prodHidden.val(initial.product_id);
             $poItemHidden.val(initial.purchase_order_item_id || '');
             var $disp = $('<div>').addClass('fw-semibold small')
@@ -518,14 +542,22 @@ $(function () {
             }
             $tdProduct.append($disp).append($prodHidden).append($poItemHidden);
         } else {
-            // Select2 dropdown
-            var $sel = $('<select>').attr({
-                name: 'items[' + idx + '][product_id]',
-                class: 'form-select form-select-sm select2-row product-select',
-                required: true
-            }).append($($('#productOptionsTpl').html()).clone());
-            if (initial.product_id) $sel.val(initial.product_id);
-            $tdProduct.append($sel).append($poItemHidden);
+            // Custom text-input typeahead — reuses search-products endpoint from Phase 2.
+            var $search = $('<input type="text">').attr({
+                class: 'form-control form-control-sm product-search',
+                placeholder: 'Search product name or code…',
+                autocomplete: 'off',
+                'data-row-id': idx
+            });
+            if (initial.product_id && initial.product_name) {
+                $search.val(initial.product_name + ' (' + (initial.product_code || '') + ')');
+                $prodHidden.val(initial.product_id);
+            }
+            var $dropdown = $('<div>').attr({
+                class: 'purch-po-product-dropdown product-dropdown',
+                id: 'grn-dropdown-' + idx
+            });
+            $tdProduct.append($search).append($dropdown).append($prodHidden).append($poItemHidden);
         }
 
         // ---- Qty input ----
@@ -552,10 +584,10 @@ $(function () {
         });
         if (initial.rate !== undefined) $rate.val(Number(initial.rate).toFixed(2));
 
-        // ---- Warehouse select ----
+        // ---- Warehouse select (native — no Select2) ----
         var $wh = $('<select>').attr({
             name: 'items[' + idx + '][warehouse_id]',
-            class: 'form-select form-select-sm select2-row wh-select',
+            class: 'form-select form-select-sm wh-select',
             required: true
         }).append($($('#warehouseOptionsTpl').html()).clone());
         if (initial.warehouse_id) $wh.val(initial.warehouse_id);
@@ -584,12 +616,10 @@ $(function () {
 
         $tbody.append($tr);
 
-        // Init select2 on dynamic selects
-        $tr.find('.select2-row').each(function () {
-            $(this).select2({ theme: 'bootstrap-5', width: '100%', dropdownAutoWidth: true });
-        });
-
-        // Wire events
+        // Wire events — product typeahead (only if dynamic, not locked)
+        if (!locked) {
+            bindProductSearch($tr, idx);
+        }
         $qty.on('input',  function () { recomputeRow($tr); });
         $rate.on('input', function () { recomputeRow($tr); });
         $rm.on('click',   function () {
@@ -601,6 +631,81 @@ $(function () {
         recomputeRow($tr);
         return $tr;
     }
+
+    // ====== Product typeahead (Phase 3 — custom, reuses search-products endpoint) ======
+    function bindProductSearch($tr, rowId) {
+        var $search = $tr.find('.product-search');
+        if (!$search.length) return;
+        var $dropdown = $('#grn-dropdown-' + rowId);
+        var _debounce = null;
+
+        $search.on('input', function () {
+            if (_debounce) clearTimeout(_debounce);
+            _debounce = setTimeout(function () { searchProduct($search, rowId); }, 250);
+        });
+        $search.on('focus', function () {
+            if ($dropdown.children().length) $dropdown.show();
+        });
+    }
+
+    function searchProduct($input, rowId) {
+        var term = ($input.val() || '').trim();
+        var $dropdown = $('#grn-dropdown-' + rowId);
+        if (!$dropdown.length) return;
+        if (term.length < 1) { $dropdown.hide().empty(); return; }
+
+        $.ajax({
+            url: productSearchUrl,
+            method: 'GET',
+            data: { term: term },
+            dataType: 'json'
+        }).done(function (rows) {
+            if (!Array.isArray(rows)) rows = (rows && rows.data) ? rows.data : [];
+            if (!rows.length) {
+                $dropdown.html('<div class="p-2 text-muted small">No products found</div>');
+                $dropdown.show();
+                return;
+            }
+            var html = '';
+            rows.forEach(function (p) {
+                productSearchCache[rowId + ':' + p.id] = p;
+                html += '<button type="button" class="dropdown-item"' +
+                    ' data-row-id="' + rowId + '"' +
+                    ' data-product-id="' + escapeHtml(p.id) + '"' +
+                    ' data-product-name="' + escapeHtml(p.product_name) + '"' +
+                    ' data-product-code="' + escapeHtml(p.product_code || '') + '">' +
+                        '<strong>' + escapeHtml(p.product_name) + '</strong>' +
+                        ' <span class="text-muted">(' + escapeHtml(p.product_code || '') + ')</span>' +
+                    '</button>';
+            });
+            $dropdown.html(html).show();
+        }).fail(function () {
+            $dropdown.html('<div class="p-2 text-danger small">Search failed</div>').show();
+        });
+    }
+
+    function selectProduct(rowId, productId, productName, productCode) {
+        var $row = $('tr[data-row="' + rowId + '"]');
+        $row.find('.product-search').val(productName + ' (' + productCode + ')');
+        $row.find('.product-id-input').val(productId);
+        $('#grn-dropdown-' + rowId).hide().empty();
+        recomputeRow($row);
+        $row.find('.qty-input').focus();
+    }
+
+    // Delegated click handler for dropdown items (bound once on document).
+    $(document).off('click', '.purch-po-product-dropdown .dropdown-item')
+               .on('click', '.purch-po-product-dropdown .dropdown-item', function () {
+        selectProduct($(this).data('row-id'), $(this).data('product-id'),
+                      $(this).data('product-name'), $(this).data('product-code'));
+    });
+    // Outside click → close all dropdowns.
+    $(document).off('click.grnProductDropdown')
+               .on('click.grnProductDropdown', function (e) {
+        if (!$(e.target).closest('.product-search, .product-dropdown').length) {
+            $('.product-dropdown').hide();
+        }
+    });
 
     function recomputeRow($tr) {
         var qty  = parseFloat($tr.find('.qty-input').val())  || 0;
@@ -625,6 +730,7 @@ $(function () {
         $discountDisp.text('−' + disc.toFixed(2));
         $taxDisp.text('+' + tax.toFixed(2));
         $totalAmount.text(tot.toFixed(2));
+        if ($totalAmountFooter.length) $totalAmountFooter.text(tot.toFixed(2));
         $itemCount.text(rows);
         $itemsError.toggleClass('d-none', rows > 0);
     }
@@ -652,7 +758,7 @@ $(function () {
         }
         var invalid = 0;
         $tbody.find('tr').each(function () {
-            var pid = $(this).find('.product-id-input').val() || $(this).find('.product-select').val();
+            var pid = $(this).find('.product-id-input').val();
             var qty = parseFloat($(this).find('.qty-input').val());
             var wh  = $(this).find('.wh-select').val();
             if (!pid || !qty || qty <= 0 || !wh) invalid++;
