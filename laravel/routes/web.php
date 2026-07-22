@@ -28,6 +28,7 @@ use App\Http\Controllers\Admin\DamageController;
 use App\Http\Controllers\Admin\PurchaseOrderController;
 use App\Http\Controllers\Admin\PurchaseReceiveController;
 use App\Http\Controllers\Admin\PurchaseReturnController;
+use App\Http\Controllers\Admin\PurchaseAuditController;
 use App\Http\Controllers\Admin\SalesCartController;
 use App\Http\Controllers\Admin\SalesInvoiceController;
 use App\Http\Controllers\Admin\SalesChallanController;
@@ -533,6 +534,36 @@ Route::middleware('auth')->group(function () {
     Route::post('admin/purchase-returns', [PurchaseReturnController::class, 'store'])
         ->name('admin.purchase-returns.store')
         ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+
+    // ============================================================
+    // Phase 6: Printable Return slip + per-module audit-log pages +
+    // PurchaseAudit checklist dashboard.
+    // ------------------------------------------------------------
+    //   audit  (PO/GRN/Return) : admin, manager, accountant  (legacy route_roles.php matrix)
+    //   slip   (Return)        : admin, manager, warehouse_manager, accountant  (read-only, opens in new tab)
+    //   checklist + run_checks : admin, manager, accountant  (legacy PurchaseAuditController matrix)
+    // ============================================================
+    Route::get('admin/purchase-orders/audit', [PurchaseOrderController::class, 'audit'])
+        ->name('admin.purchase-orders.audit')
+        ->middleware('role:admin,manager,accountant');
+    Route::get('admin/purchase-receives/audit', [PurchaseReceiveController::class, 'audit'])
+        ->name('admin.purchase-receives.audit')
+        ->middleware('role:admin,manager,accountant');
+    Route::prefix('admin/purchase-returns')->name('admin.purchase-returns.')->group(function () {
+        Route::get('audit', [PurchaseReturnController::class, 'audit'])
+            ->name('audit')
+            ->middleware('role:admin,manager,accountant');
+        Route::get('{id}/slip', [PurchaseReturnController::class, 'slip'])
+            ->name('slip')
+            ->middleware('role:admin,manager,warehouse_manager,accountant');
+    });
+    // PurchaseAudit checklist — replaces the stub at admin/reports/purchase-audit.
+    Route::get('admin/purchase-audit', [PurchaseAuditController::class, 'checklist'])
+        ->name('admin.purchase-audit.checklist')
+        ->middleware('role:admin,manager,accountant');
+    Route::get('admin/purchase-audit/run', [PurchaseAuditController::class, 'runChecks'])
+        ->name('admin.purchase-audit.run')
+        ->middleware('role:admin,manager,accountant');
 
     // ============================================================
     // Phase 8.1: Sales Cart Service (per-user-per-customer draft cart)

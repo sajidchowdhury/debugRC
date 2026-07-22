@@ -429,10 +429,8 @@ SQL, [$data['from'], $data['to']]);
 
     public function purchaseAudit(Request $request)
     {
-        $data = $this->parseDateRange($request);
-        return view('admin.reports.purchase_audit', [
-            'meta' => ['title' => 'Purchase Audit Checklist', 'from_date' => $data['from']->format('Y-m-d'), 'to_date' => $data['to']->format('Y-m-d')],
-        ]);
+        // Phase 6: redirect the old stub URL to the real checklist dashboard.
+        return redirect()->route('admin.purchase-audit.checklist');
     }
 
     public function stocktakeVariance(Request $request)

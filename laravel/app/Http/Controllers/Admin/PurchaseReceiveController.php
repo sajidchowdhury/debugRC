@@ -375,6 +375,49 @@ class PurchaseReceiveController extends Controller
         ]);
     }
 
+    /**
+     * Phase 6: Per-module audit-log page for purchase receives (GRNs).
+     * Reads user_audit_log filtered by action prefix 'purchase_receive_'.
+     */
+    public function audit(Request $request)
+    {
+        $branchId = $this->resolveBranchIdForRead($request->input('branch_id') ? (int) $request->input('branch_id') : null);
+
+        $query = DB::table('user_audit_log as ual')
+            ->leftJoin('users as u', 'u.id', '=', 'ual.user_id')
+            ->leftJoin('employees as e', 'e.id', '=', 'u.employee_id')
+            ->leftJoin('branches as b', 'b.id', '=', 'ual.branch_id')
+            ->where('ual.action', 'LIKE', 'purchase_receive_%')
+            ->when($branchId > 0, fn($q) => $q->where('ual.branch_id', $branchId))
+            ->when($request->input('search'), function ($q, $search) {
+                $q->where(function ($qq) use ($search) {
+                    $qq->where('ual.action', 'ILIKE', "%{$search}%")
+                       ->orWhere('u.username', 'ILIKE', "%{$search}%")
+                       ->orWhere('e.name', 'ILIKE', "%{$search}%");
+                });
+            })
+            ->select(
+                'ual.id', 'ual.created_at as logged_at', 'ual.user_id',
+                'ual.action', 'ual.target_user_id as target_id',
+                'ual.branch_id', 'ual.details', 'ual.ip_address',
+                'u.username', 'e.name as employee_name',
+                'b.branch_name'
+            )
+            ->orderBy('ual.created_at', 'desc')
+            ->orderBy('ual.id', 'desc');
+
+        $logs = $query->paginate(100)->withQueryString();
+
+        return view('admin.purchase-receives.audit', [
+            'title' => 'Purchase Receive (GRN) — Audit Log',
+            'logs' => $logs,
+            'filters' => $request->only(['search', 'branch_id']),
+            'module' => 'purchase_receive',
+            'moduleLabel' => 'Purchase Receive (GRN)',
+            'indexRoute' => route('admin.purchase-receives.index'),
+        ]);
+    }
+
     public function confirm(Request $request, int $id)
     {
         $request->validate([

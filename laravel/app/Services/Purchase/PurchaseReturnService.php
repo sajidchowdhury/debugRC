@@ -3,6 +3,7 @@
 namespace App\Services\Purchase;
 
 use App\Models\PurchaseReturn;
+use App\Services\Auth\UserAuditLogger;
 use App\Services\Stock\StockService;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
@@ -125,8 +126,29 @@ class PurchaseReturnService
             }
             DB::table('purchase_return_items')->insert($itemRows);
 
-            return PurchaseReturn::with(['items.product', 'supplier', 'branch', 'purchaseReceive'])
+            $return = PurchaseReturn::with(['items.product', 'supplier', 'branch', 'purchaseReceive'])
                 ->find($returnId);
+
+            // Phase 6: audit log.
+            $goodCount = collect($items)->filter(fn($i) => ($i['condition'] ?? 'Good') === 'Good')->count();
+            $damageCount = count($items) - $goodCount;
+            UserAuditLogger::log(
+                userId: $data['created_by'] ?? null,
+                action: 'purchase_return_created',
+                targetUserId: $returnId,
+                details: [
+                    'return_code'         => $returnCode,
+                    'branch_id'           => $branchId,
+                    'supplier_id'         => $supplierId,
+                    'purchase_receive_id' => $receiveId,
+                    'total'               => round($totalAmount, 2),
+                    'item_count'          => count($items),
+                    'good_lines'          => $goodCount,
+                    'damage_lines'        => $damageCount,
+                ]
+            );
+
+            return $return;
         });
     }
 
@@ -218,6 +240,24 @@ class PurchaseReturnService
                     'updated_at' => now(),
                 ]);
 
+            // Phase 6: audit log.
+            $goodCount = $return->items->filter(fn($i) => $i->isGood())->count();
+            $damageCount = $return->items->count() - $goodCount;
+            UserAuditLogger::log(
+                userId: $confirmedBy,
+                action: 'purchase_return_confirmed',
+                targetUserId: $returnId,
+                details: [
+                    'return_code'      => $return->return_code,
+                    'branch_id'        => (int) $return->branch_id,
+                    'supplier_id'      => (int) $return->supplier_id,
+                    'total'            => (float) $return->total_amount,
+                    'journal_entry_id' => $journalEntryId,
+                    'good_lines'       => $goodCount,
+                    'damage_lines'     => $damageCount,
+                ]
+            );
+
             return PurchaseReturn::with([
                 'items.product', 'supplier', 'branch', 'purchaseReceive',
                 'journalEntry.lines.ledger'
@@ -296,6 +336,18 @@ class PurchaseReturnService
             DB::table('purchase_returns')
                 ->where('id', $returnId)
                 ->update(['status' => 'cancelled', 'updated_at' => now()]);
+
+            // Phase 6: audit log.
+            UserAuditLogger::log(
+                userId: $cancelledBy,
+                action: 'purchase_return_reversed',
+                targetUserId: $returnId,
+                details: [
+                    'return_code'  => $return->return_code,
+                    'reason'       => $reason,
+                    'was_confirmed' => $return->isConfirmed(),
+                ]
+            );
 
             return PurchaseReturn::find($returnId);
         });

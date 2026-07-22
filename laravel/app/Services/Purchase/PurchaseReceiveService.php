@@ -4,6 +4,7 @@ namespace App\Services\Purchase;
 
 use App\Models\PurchaseReceive;
 use App\Models\PurchaseReturn;
+use App\Services\Auth\UserAuditLogger;
 use App\Services\Stock\StockService;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
@@ -122,8 +123,25 @@ class PurchaseReceiveService
             }
             DB::table('purchase_receive_items')->insert($itemRows);
 
-            return PurchaseReceive::with(['items.product', 'supplier', 'branch', 'warehouse', 'purchaseOrder'])
+            $receive = PurchaseReceive::with(['items.product', 'supplier', 'branch', 'warehouse', 'purchaseOrder'])
                 ->find($receiveId);
+
+            // Phase 6: audit log.
+            UserAuditLogger::log(
+                userId: $data['created_by'] ?? null,
+                action: 'purchase_receive_created',
+                targetUserId: $receiveId,
+                details: [
+                    'receive_code'       => $receiveCode,
+                    'branch_id'          => $branchId,
+                    'supplier_id'        => $supplierId,
+                    'purchase_order_id'  => $poId,
+                    'total'              => round($total, 2),
+                    'item_count'         => count($items),
+                ]
+            );
+
+            return $receive;
         });
     }
 
@@ -201,6 +219,21 @@ class PurchaseReceiveService
                     'journal_entry_id' => $journalEntryId,
                     'updated_at' => now(),
                 ]);
+
+            // Phase 6: audit log.
+            UserAuditLogger::log(
+                userId: $confirmedBy,
+                action: 'purchase_receive_confirmed',
+                targetUserId: $receiveId,
+                details: [
+                    'receive_code'      => $receive->receive_code,
+                    'branch_id'         => (int) $receive->branch_id,
+                    'supplier_id'       => (int) $receive->supplier_id,
+                    'total'             => (float) $receive->total_amount,
+                    'journal_entry_id'  => $journalEntryId,
+                    'po_id'             => $receive->purchase_order_id,
+                ]
+            );
 
             return PurchaseReceive::with([
                 'items.product', 'supplier', 'branch', 'warehouse', 'purchaseOrder',
@@ -299,6 +332,18 @@ class PurchaseReceiveService
             DB::table('purchase_receives')
                 ->where('id', $receiveId)
                 ->update(['status' => 'cancelled', 'updated_at' => now()]);
+
+            // Phase 6: audit log.
+            UserAuditLogger::log(
+                userId: $cancelledBy,
+                action: 'purchase_receive_cancelled',
+                targetUserId: $receiveId,
+                details: [
+                    'receive_code' => $receive->receive_code,
+                    'reason'       => $reason,
+                    'was_confirmed' => $receive->isConfirmed(),
+                ]
+            );
 
             return PurchaseReceive::find($receiveId);
         });

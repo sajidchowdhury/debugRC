@@ -111,6 +111,14 @@ class PurchaseReturn extends Model
         return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'journal_entry_id');
     }
 
+    /**
+     * Phase 6: creator — used by the printable Return slip.
+     */
+    public function creator(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(\App\Models\User::class, 'created_by');
+    }
+
     public function isDraft(): bool { return $this->status === 'draft'; }
     public function isConfirmed(): bool { return $this->status === 'confirmed'; }
     public function isCancelled(): bool { return $this->status === 'cancelled'; }

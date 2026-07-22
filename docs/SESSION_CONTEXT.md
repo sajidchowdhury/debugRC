@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-22 (Purchase module Phase 5 complete — Damage condition (no-stock-movement returns) + dual stock cap (Good: GRN returnable AND warehouse available; Damage: GRN returnable only). New migration adds `condition` column to `purchase_return_items`; `PurchaseReturnItem` model gets `isDamage()`/`isGood()`/`conditionLabel()` accessors; `PurchaseReturnService::confirmReturn()` skips stock OUT for Damage; Return show blade shows color-coded Good/Damage badges + per-condition line-count summary; create form JS now reactively disables warehouse-select + relaxes qty cap when Damage is selected. See §5.31 below.)
+> **Last updated:** 2026-07-22 (Purchase module Phase 6 complete — Printable Return slip + per-module audit-log pages for PO/GRN/Return + PurchaseAudit checklist dashboard with 12 sections (live DB health-checks, AJAX re-run, 3 follow-up detail tables). New `PurchaseAuditService` (560 lines) ports legacy `PurchaseAuditModel::runHealthChecks` 1:1. New `PurchaseAuditController` with `checklist()` (HTML) + `runChecks()` (JSON) methods. New `slip()` method on `PurchaseReturnController` + new `slip.blade.php` with `@media print` CSS. New `audit()` method on all 3 purchase controllers + shared `audit-log-table.blade.php` partial. 10 `UserAuditLogger::log()` calls added across the 3 services (PO: 4, GRN: 3, Return: 3). 6 new routes. Old stub at `admin/reports/purchase-audit` now 302-redirects to the real checklist. See §5.32 below.)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -2170,6 +2170,112 @@ Phase 6 (Printable Return slip + per-module audit logs + PurchaseAudit checklist
 
 ---
 
+### 5.32 Purchase module — Phase 6 (Printable Return slip + per-module audit logs + PurchaseAudit checklist)
+
+**Goal:** Close the last feature-parity gap before polish/QA. Three deliverables: (1) printable Return slip, (2) per-module audit-log pages for PO/GRN/Return, (3) central PurchaseAudit checklist dashboard with 12-section health-check.
+
+**Why:** This was the final "missing legacy feature" flagged in the §4 gap analysis — legacy has `PurchaseReturn/slip.php`, `PurchaseOrder/audit.php`, `PurchaseReceive/audit.php`, `PurchaseReturn/audit.php`, and `PurchaseAudit/checklist.php`. The Laravel app had a stub at `admin/reports/purchase-audit` that said "coming in Phase 7". Phase 6 implements all of these.
+
+**Key technical decisions:**
+
+1. **Reuse the existing `UserAuditLogger`** (`app/Services/Auth/UserAuditLogger.php` from sales Phase 3) instead of creating a purchase-specific audit logger. The `user_audit_log` table already exists in the Laravel schema with columns `id, user_id, action, target_user_id, branch_id, details (jsonb), ip_address, user_agent, created_at`. The `target_user_id` column is overloaded to hold entity IDs (PO id, GRN id, Return id) for non-user entities — same convention as legacy `core/UserAudit.php`. Action prefixes are `purchase_order_*`, `purchase_receive_*`, `purchase_return_*` so the per-module audit pages can filter with a simple `LIKE` clause.
+
+2. **Audit log calls happen INSIDE the DB transaction** but the `UserAuditLogger::log()` method itself does NOT participate in the transaction (it has its own try/catch and falls back to file logging if the DB insert fails). This means: if the transaction commits but the audit log DB write fails, we still have the file log at `storage/logs/user_audit.log` for defense-in-depth. If the transaction rolls back, the audit log row is still written (because the logger doesn't participate in the txn) — this is intentional, so that "tried to create PO but failed" events are still auditable. Same behavior as the legacy logger.
+
+3. **`PurchaseAuditService` is a faithful port** of legacy `app/models/PurchaseAuditModel.php` — all 12 sections, all detail tables, all branch-scoping helpers (`branchFilter`, `branchWarehouseFilter`). Adapted for Laravel's query builder (DB::selectOne for scalar counts, DB::table for detail rows) and PostgreSQL syntax (uses `COALESCE(..., false) = false` instead of `COALESCE(..., 0) = 0` for booleans, `CURRENT_DATE - INTERVAL '365 days'` syntax is identical). The legacy MySQL-specific `CHECK (condition IN ('Good','Damage'))` constraint from Phase 5's migration is the same on PostgreSQL.
+
+4. **The `prt_damage` audit check (Phase 5 invariant)** is implemented as part of section 8 (Purchase return) of the checklist. It queries for any `purchase_return_items` row with `condition='Damage'` that has a matching `stock_transactions` row — if any exist, the check fails. The Phase 5 service-layer logic guarantees this invariant, but the audit check is a defensive backstop that runs on every checklist load.
+
+5. **The "Slip" button on the Return show page** (Phase 4 placeholder showing "coming soon" SweetAlert) is now wired to the real `admin/purchase-returns/{id}/slip` route. The slip blade opens in a new tab (`target="_blank"`) so the user keeps their place in the show page. The slip blade has its own "Print Slip" button that calls `window.print()`, and the `@media print` CSS hides the sidebar/navbar/buttons and forces black borders on table cells for clean printing.
+
+6. **Branch scoping on the checklist:** Non-admin users always audit their session branch only (via `resolveBranchIdForRead()`). Admins can pass `?branch_id=0` to audit all branches at once (the service accepts `null` for branchId to mean "all branches"). Same pattern as the PO/GRN/Return index pages.
+
+7. **The old stub at `admin/reports/purchase-audit`** (which was just a "coming in Phase 7" placeholder blade) now 302-redirects to the real checklist at `admin/purchase-audit`. This preserves backward compatibility with any bookmarks or menu links pointing at the old URL.
+
+**Files produced / modified:**
+
+NEW FILES (8):
+- `laravel/app/Services/Purchase/PurchaseAuditService.php` — 560 lines. 12-section health-check service. Methods: `runHealthChecks()`, `getNegativeStockRows()`, `getGrnsMissingJournalRows()`, `getReturnsMissingJournalRows()`, 12 private `sectionXxx()` methods, `scalarCount()`, `branchFilter()`, `branchWarehouseFilter()`, `item()` helper.
+- `laravel/app/Http/Controllers/Admin/PurchaseAuditController.php` — 65 lines. `checklist()` + `runChecks()` methods.
+- `laravel/resources/views/admin/purchase-returns/slip.blade.php` — 135 lines. Printable slip blade with `@media print` CSS, signature lines, items table with Good/Damage badges.
+- `laravel/resources/views/admin/purchase-returns/audit.blade.php` — 10 lines. Thin wrapper that includes the shared partial.
+- `laravel/resources/views/admin/purchase-receives/audit.blade.php` — 10 lines. Thin wrapper.
+- `laravel/resources/views/admin/purchase-orders/audit.blade.php` — 10 lines. Thin wrapper.
+- `laravel/resources/views/admin/purchase/partials/audit-log-table.blade.php` — 130 lines. Shared partial with hero + filter form + responsive table + pagination. Action badge color mapping: `*_created` = success (green), `*_updated`/`*_sent`/`*_confirmed` = info/primary (blue), `*_cancelled`/`*_reversed` = danger (red).
+- `laravel/resources/views/admin/purchase-audit/checklist.blade.php` — 210 lines. Mirrors legacy `PurchaseAudit/checklist.php`. Hero + meta + summary chips + TOC nav + 12 sections + 3 conditional detail tables + "Re-run checks" AJAX JS with SweetAlert success toast.
+
+MODIFIED FILES (10):
+- `laravel/app/Services/Purchase/PurchaseOrderService.php` — +58 lines. Added `use App\Services\Auth\UserAuditLogger;` + 4 log calls (create/update/sent/cancel).
+- `laravel/app/Services/Purchase/PurchaseReceiveService.php` — +47 lines. Added 3 log calls (create/confirm/cancel).
+- `laravel/app/Services/Purchase/PurchaseReturnService.php` — +54 lines. Added 3 log calls (create/confirm/cancel). Good/Damage line counts included in the details JSON for the audit log.
+- `laravel/app/Http/Controllers/Admin/PurchaseOrderController.php` — +43 lines. Added `audit(Request)` method.
+- `laravel/app/Http/Controllers/Admin/PurchaseReceiveController.php` — +43 lines. Added `audit(Request)` method.
+- `laravel/app/Http/Controllers/Admin/PurchaseReturnController.php` — +62 lines. Added `slip(int $id)` + `audit(Request)` methods.
+- `laravel/app/Http/Controllers/Admin/ReportController.php` — -3 lines. `purchaseAudit()` now just `return redirect()->route('admin.purchase-audit.checklist');` instead of returning the stub view.
+- `laravel/app/Models/PurchaseReturn.php` — +8 lines. Added `creator()` BelongsTo relation (used by the slip blade to show "Created By" username/employee name).
+- `laravel/resources/views/admin/purchase-returns/show.blade.php` — -8 lines. Replaced the placeholder `<button>` + SweetAlert JS with a real `<a href="route('admin.purchase-returns.slip', $r)" target="_blank">` link.
+- `laravel/routes/web.php` — +31 lines. Added `use App\Http\Controllers\Admin\PurchaseAuditController;` + 6 new routes (3 audit + 1 slip + 2 purchase-audit) with proper RBAC middleware.
+
+**Routes added (6):**
+
+| Method | URI | Name | RBAC | Purpose |
+|---|---|---|---|---|
+| GET | `admin/purchase-orders/audit` | `admin.purchase-orders.audit` | admin, manager, accountant | PO audit-log page |
+| GET | `admin/purchase-receives/audit` | `admin.purchase-receives.audit` | admin, manager, accountant | GRN audit-log page |
+| GET | `admin/purchase-returns/audit` | `admin.purchase-returns.audit` | admin, manager, accountant | Return audit-log page |
+| GET | `admin/purchase-returns/{id}/slip` | `admin.purchase-returns.slip` | admin, manager, warehouse_manager, accountant | Printable Return slip (opens in new tab) |
+| GET | `admin/purchase-audit` | `admin.purchase-audit.checklist` | admin, manager, accountant | PurchaseAudit checklist dashboard (HTML) |
+| GET | `admin/purchase-audit/run` | `admin.purchase-audit.run` | admin, manager, accountant | PurchaseAudit AJAX re-run (JSON) |
+
+**UserAuditLogger::log() calls added (10 total):**
+
+| Service | Method | Action | Details keys |
+|---|---|---|---|
+| PurchaseOrderService | createOrder | `purchase_order_created` | po_code, branch_id, supplier_id, total, item_count |
+| PurchaseOrderService | updateOrder | `purchase_order_updated` | po_code, branch_id, supplier_id, total, item_count |
+| PurchaseOrderService | markAsSent | `purchase_order_sent` | po_code |
+| PurchaseOrderService | cancelOrder | `purchase_order_cancelled` | po_code, reason |
+| PurchaseReceiveService | createReceive | `purchase_receive_created` | receive_code, branch_id, supplier_id, purchase_order_id, total, item_count |
+| PurchaseReceiveService | confirmReceive | `purchase_receive_confirmed` | receive_code, branch_id, supplier_id, total, journal_entry_id, po_id |
+| PurchaseReceiveService | cancelReceive | `purchase_receive_cancelled` | receive_code, reason, was_confirmed |
+| PurchaseReturnService | createReturn | `purchase_return_created` | return_code, branch_id, supplier_id, purchase_receive_id, total, item_count, good_lines, damage_lines |
+| PurchaseReturnService | confirmReturn | `purchase_return_confirmed` | return_code, branch_id, supplier_id, total, journal_entry_id, good_lines, damage_lines |
+| PurchaseReturnService | cancelReturn | `purchase_return_reversed` | return_code, reason, was_confirmed |
+
+**PurchaseAudit checklist — 12 sections (port of legacy `PurchaseAuditModel::runHealthChecks`):**
+
+1. **Purchase module scope** (5 informational items — masters, transactions, inventory impact, GL impact, reporting).
+2. **Products** (7 items — master is shared, prefer active SKUs, group assignment, distinct SKUs purchased last 12 mo, no inactive on confirmed GRNs/POs, no orphan product_id).
+3. **Suppliers** (6 items — master module, active pool available, confirmed GRNs have supplier_id, direct GRN includes supplier, GRNs use active suppliers, POs use active suppliers).
+4. **Warehouses & branches** (5 items — required warehouse_id, warehouse-branch relationship, valid warehouse, active warehouse, branch match).
+5. **Stock SSOT** (6 items — read from warehouse_stock, GRN return_qty is not on-hand, write via StockService only, movements logged, no negative balances, no orphan movements).
+6. **Purchase order** (7 items — no stock on create/cancel, no GL on draft, cancel = status only, GRN updates received_qty, direct GRN allowed, received_qty ≤ ordered qty, open PO lines count).
+7. **GRN** (7 items — create→stock IN+log, create→GL Dr Inv/Cr AP, cancel→stock OUT+log, cancel→reverse journal, confirmed have journal, confirmed have stock IN, cancelled reversed in GL).
+8. **Purchase return** (11 items — including **`prt_damage`** which verifies Phase 5's invariant that Damage lines have NO stock movements, plus printable slip availability).
+9. **Supplier payments & due** (6 items — two payable views, supplier transaction module, payments have supplier_ledger row, payments have GL journal, reversed payments reversed in GL, period activity count).
+10. **GL journal link columns** (3 informational items — purchase_receives.journal_entry_id, purchase_returns.journal_entry_id, supplier_payments.journal_entry_id).
+11. **Ledger & accounts (GL)** (5 items — supplier_payable nature, inventory nature, active inventory ledger configured, active AP ledger configured, reconcile with Trial Balance).
+12. **Reporting** (9 items — supplier-wise purchase, payable aging, product movement, planned reports, damage returns).
+
+Plus 3 detail tables (conditional): negative_stocks, missing_grn_journals, missing_return_journals. Each row deep-links to the relevant document show page.
+
+**Smoke-test checklist (6 steps):**
+
+1. **Slip print:** Create a return → click "Slip" on the show page → verify a new tab opens with the printable slip layout → click "Print Slip" → verify `@media print` hides sidebar/navbar/buttons and the slip prints cleanly on a single page.
+2. **Audit logs (per module):** Create a PO → visit `admin/purchase-orders/audit` → verify the `purchase_order_created` row appears with timestamp + username + action badge (green for created) + target ID link + details JSON. Repeat for GRN (`admin/purchase-receives/audit`) and Return (`admin/purchase-returns/audit`). Verify the search filter narrows by action / username / employee name.
+3. **PurchaseAudit checklist:** Visit `admin/purchase-audit` → verify the 12 sections render with pass/warn/fail/info badges. Verify the summary chips show correct counts. Verify the TOC nav jumps to each section. Verify the 3 detail tables appear only when there are rows. Click "Re-run checks" → verify the AJAX refresh re-renders all sections via JSON + shows a SweetAlert success toast.
+4. **Phase 5 invariant:** In the PurchaseAudit checklist → section 8 (Purchase return) → verify the `prt_damage` item shows "pass" with detail "OK" (meaning no Damage lines have stock movements — confirming Phase 5's invariant holds).
+5. **Branch isolation:** Login as a non-admin user → visit `admin/purchase-audit` → verify the checklist only shows results for the user's session branch. Login as admin → pass `?branch_id=0` → verify the checklist runs across all branches.
+6. **Redirect from old stub:** Visit `admin/reports/purchase-audit` → verify it 302-redirects to `admin/purchase-audit`.
+
+If all 6 steps pass, Phase 6 is verified.
+
+**End of Phase 6 → Phase 7 handoff:**
+
+Phase 7 (AJAX product typeahead + Form Requests + cross-linkage completion + mobile cards + CSV exports) can now start. The Phase 6 per-module audit-log pages are a good reference implementation for the upcoming Form Request refactor: the controllers are already thin, with all validation logic in the service layer. The shared `audit-log-table.blade.php` partial is a good template for any future paginated-table views. The `UserAuditLogger::log()` calls added in Phase 6 should be extended in Phase 7+ to cover any new write operations (e.g. when Form Request classes start validating, the audit log calls remain in the service layer). See `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 7 for the full task list.
+
+---
+
 ## 6. Open Work Items
 
 (Items the user has asked for but that are not yet done.)
@@ -2177,9 +2283,9 @@ Phase 6 (Printable Return slip + per-module audit logs + PurchaseAudit checklist
 - **Purchase Phase 3 (PurchaseReceive / GRN UI parity)** — ✅ DONE 2026-07-22. See §5.29 below.
 - **Purchase Phase 4 (PurchaseReturn UI parity + offcanvas + smart-sort + chip counts)** — ✅ DONE 2026-07-22. See §5.30 below.
 - **Purchase Phase 5 (Damage condition + dual stock cap)** — ✅ DONE 2026-07-22. See §5.31 below.
-- **Purchase Phase 6 (Printable Return slip + per-module audit logs + PurchaseAudit checklist)** — next phase to start after the user confirms Phase 5 smoke test passes. See `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 6 for the task list. The `prt_damage` audit check (Damage lines must have NO stock movements) is now enforceable because the `condition` column exists. The "Slip" button on the Return show page (Phase 4 placeholder showing "coming soon" SweetAlert) should be wired to the actual `admin/purchase-returns/{id}/slip` route. ~1,000 lines of new code across 5 new blade views (slip + 3 audit logs + checklist) + 1 shared partial, 4 controller methods (slip + 3 audit), 1 new service (`PurchaseAuditService`), 4 routes, 1 CSS file linked.
-- **Purchase Phase 7 (Polish: AJAX product search, Form Requests, cross-linkage completion, exports)** — see `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 7.
-- **Purchase Phase 8 (End-to-end QA + integration testing)** — see `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 8.
+- **Purchase Phase 6 (Printable Return slip + per-module audit logs + PurchaseAudit checklist)** — ✅ DONE 2026-07-22. See §5.32 below.
+- **Purchase Phase 7 (Polish: AJAX product search, Form Requests, cross-linkage completion, exports)** — next phase to start after the user confirms Phase 6 smoke test passes. See `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 7. ~600 lines of new code across 11 Form Request classes, 3 controllers (use Form Requests + search-products endpoint), 3 index blades (mobile card rendering).
+- **Purchase Phase 8 (End-to-end QA + integration testing)** — see `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 8. The Phase 8 E2E test plan Steps 11 (audit log check) and 12 (PurchaseAudit checklist) are now executable thanks to Phase 6.
 - **Sales style parity (paused)** — Phase 2 extract inline styles, Phase 4+ color polish, mobile QA, cleanup. Can resume after purchase module reaches feature parity. User confirmed sales cart is "ok so far so good" before pivoting.
 - **R7 / R8 / R9** — numbers reserved for future sales items; not yet assigned.
 - **R24 / R25 (Telegram + FCM)** — dropped by user request (2026-07-22). Explicitly NOT being ported.

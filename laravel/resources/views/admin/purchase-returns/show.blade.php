@@ -49,11 +49,12 @@
             </p>
         </div>
         <div class="d-flex gap-2 flex-wrap">
-            {{-- Phase 4: Slip button (placeholder until Phase 6 creates the slip route) --}}
-            <button type="button" class="btn btn-outline-light btn-sm" id="printSlipBtn"
-                    title="Print return slip (Phase 6)">
+            {{-- Phase 6: Slip button — opens printable slip in a new tab --}}
+            <a href="{{ route('admin.purchase-returns.slip', $r) }}" target="_blank"
+               class="btn btn-outline-light btn-sm" id="printSlipBtn"
+               title="Print return slip">
                 <i class="fas fa-print me-1"></i> Slip
-            </button>
+            </a>
             <a href="{{ route('admin.purchase-returns.index') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-arrow-left me-1"></i> Back to list
             </a>
@@ -578,15 +579,7 @@
 @push('scripts')
 <script>
 $(function () {
-    // ====== Phase 4: Print slip button (placeholder until Phase 6 creates the slip route) ======
-    $('#printSlipBtn').on('click', function () {
-        Swal.fire({
-            icon: 'info',
-            title: 'Slip printing coming soon',
-            text: 'The printable return slip will be added in Phase 6 (PurchaseAudit + slip).',
-            confirmButtonText: 'OK',
-        });
-    });
+    // ====== Phase 6: Print slip button now opens the real slip route in a new tab — no JS handler needed. ======
 
     // ====== Confirm (draft → confirmed) ======
     $('#confirmBtn').on('click', function () {
