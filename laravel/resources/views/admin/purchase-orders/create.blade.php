@@ -1,422 +1,425 @@
 @extends('layouts.admin')
 
+@push('css')
+<link rel="stylesheet" href="/assets/css/purchase-index.css">
+<link rel="stylesheet" href="/assets/css/purchase-order-form.css">
+@endpush
+
 @section('content')
 @php
-    $today    = now()->format('Y-m-d');
-    $oldDate  = old('po_date', $today);
-    $oldExp   = old('expected_date');
-    $oldSup   = old('supplier_id');
-    $oldBr    = old('branch_id');
-    $oldWh    = old('warehouse_id');
-    $oldDisc  = old('discount_amount', 0);
-    $oldTax   = old('tax_amount', 0);
+    $today    = old('po_date', now()->format('Y-m-d'));
+    $oldExp   = old('expected_date', '');
+    $oldSup   = old('supplier_id', '');
+    $oldBr    = old('branch_id', auth()->user()?->branch_id);
+    $oldWh    = old('warehouse_id', '');
+    $oldDisc  = old('discount_amount', '0');
+    $oldTax   = old('tax_amount', '0');
+    $oldNotes = old('notes', '');
+    $branchName = auth()->user()?->branch?->branch_name ?? 'Branch';
+
+    // Pre-validate old('items') shape for JS seed.
+    $seedItems = [];
+    if (is_array(old('items'))) {
+        foreach (old('items') as $row) {
+            if (!is_array($row)) continue;
+            $seedItems[] = [
+                'product_id' => (int) ($row['product_id'] ?? 0),
+                'product_name' => '', // unknown after redirect — user re-searches
+                'product_code' => '',
+                'qty'  => (float) ($row['qty']  ?? 0),
+                'rate' => (float) ($row['rate'] ?? 0),
+            ];
+        }
+    }
 @endphp
 
-<div class="container-fluid py-2">
-    {{-- Hero header --}}
-    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
-            style="background: linear-gradient(135deg,#2563eb,#1d4ed8);">
+<div class="purch-index-app purch-po-form-app container-fluid py-2">
+    {{-- ─── Hero ──────────────────────────────────────────────────── --}}
+    <header class="purch-index-hero">
         <div>
-            <h1 class="h4 mb-1"><i class="fas fa-cart-plus me-2"></i>{{ $title }}</h1>
-            <p class="mb-0 small opacity-75">
-                Create a draft purchase order — no stock movement or GL posting until goods are received (GRN).
-            </p>
+            <h1><i class="fas fa-file-invoice me-2"></i>New purchase order</h1>
+            <p>Plan supplier purchase — stock and payable post when you receive on a GRN</p>
+            <span class="purch-index-tag"><i class="fas fa-building me-1"></i>{{ e($branchName) }}</span>
         </div>
-        <div>
-            <a href="{{ route('admin.purchase-orders.index') }}" class="btn btn-outline-light btn-sm">
-                <i class="fas fa-arrow-left me-1"></i> Back to list
+        <div class="purch-index-hero-actions">
+            <a href="{{ route('admin.purchase-orders.index') }}" class="btn btn-light btn-sm">
+                <i class="fas fa-arrow-left me-1"></i> List
             </a>
         </div>
     </header>
 
-    {{-- Info banner --}}
-    <div class="alert alert-info d-flex align-items-start mb-3" role="alert">
-        <i class="fas fa-circle-info me-2 mt-1"></i>
-        <div>
-            <strong>PO is a draft document.</strong>
-            No stock movement or GL posting occurs when this PO is created. Goods are received via
-            <em>GRN</em> (Phase 7.2), which then posts stock and the purchase journal.
-        </div>
-    </div>
-
-    <form method="POST" action="{{ route('admin.purchase-orders.store') }}" id="poForm">
+    <form id="poForm" method="POST" action="{{ route('admin.purchase-orders.store') }}">
         @csrf
+        <input type="hidden" id="poFormMode" value="create">
+        <input type="hidden" id="poId" value="">
 
-        {{-- Header fields --}}
-        <div class="card border-0 shadow-sm mb-3">
-            <div class="card-header bg-white">
-                <h2 class="h6 mb-0"><i class="fas fa-sliders me-1 text-primary"></i> PO header</h2>
-            </div>
-            <div class="card-body">
-                <div class="row g-3">
-                    <div class="col-md-4">
-                        <label class="form-label" for="supplier_id">
-                            Supplier <span class="text-danger">*</span>
-                        </label>
-                        <select id="supplier_id" name="supplier_id"
-                                class="form-select select2 @error('supplier_id') is-invalid @enderror" required>
+        <div class="purch-po-form-layout">
+            {{-- ─── Order details card ─────────────────────────────── --}}
+            <section class="purch-po-form-card">
+                <div class="purch-po-form-card-head"><i class="fas fa-info-circle me-1"></i> Order details</div>
+                <div class="purch-po-form-card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Supplier <span class="text-danger">*</span></label>
+                        <select name="supplier_id" id="supplier_id" class="form-select" required>
                             <option value="">Select supplier</option>
                             @foreach ($suppliers as $s)
                                 <option value="{{ $s->id }}"
                                     {{ (string) $oldSup === (string) $s->id ? 'selected' : '' }}>
-                                    {{ $s->supplier_code }} — {{ $s->supplier_name }}
+                                    {{ e($s->supplier_name) }} ({{ e($s->supplier_code ?? '') }})
                                 </option>
                             @endforeach
                         </select>
-                        @error('supplier_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
                     </div>
 
-                    <div class="col-md-4">
-                        <label class="form-label" for="branch_id">
-                            Branch <span class="text-danger">*</span>
-                        </label>
-                        <select id="branch_id" name="branch_id"
-                                class="form-select select2 @error('branch_id') is-invalid @enderror" required>
-                            <option value="">Select branch</option>
+                    <div class="mb-3">
+                        <label class="form-label">Branch <span class="text-danger">*</span></label>
+                        <select name="branch_id" id="branch_id" class="form-select" required>
                             @foreach ($branches as $b)
                                 <option value="{{ $b->id }}"
                                     {{ (string) $oldBr === (string) $b->id ? 'selected' : '' }}>
-                                    {{ $b->branch_code }} — {{ $b->branch_name }}
+                                    {{ e($b->branch_name) }} ({{ e($b->branch_code ?? '') }})
                                 </option>
                             @endforeach
                         </select>
-                        @error('branch_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                        @if (!auth()->user()?->hasRole('admin'))
+                            <div class="form-text small">
+                                <i class="fas fa-lock me-1"></i>You can only create POs for your own branch.
+                            </div>
+                        @endif
                     </div>
 
-                    <div class="col-md-4">
-                        <label class="form-label" for="warehouse_id">
-                            Warehouse
-                            <span class="text-muted small">(where goods will be received)</span>
-                        </label>
-                        <select id="warehouse_id" name="warehouse_id"
-                                class="form-select select2 @error('warehouse_id') is-invalid @enderror">
-                            <option value="">— optional —</option>
-                            @foreach ($warehouses as $wh)
-                                <option value="{{ $wh->id }}"
-                                    {{ (string) $oldWh === (string) $wh->id ? 'selected' : '' }}>
-                                    {{ $wh->warehouse_code }} — {{ $wh->warehouse_name }}
-                                    @if ($wh->branch) ({{ $wh->branch->branch_name }}) @endif
+                    <div class="mb-3">
+                        <label class="form-label">Warehouse</label>
+                        <select name="warehouse_id" id="warehouse_id" class="form-select">
+                            <option value="">— not specified —</option>
+                            @foreach ($warehouses as $w)
+                                <option value="{{ $w->id }}"
+                                    {{ (string) $oldWh === (string) $w->id ? 'selected' : '' }}>
+                                    {{ e($w->warehouse_name) }}
+                                    @if ($w->branch) · {{ e($w->branch->branch_name) }}@endif
                                 </option>
                             @endforeach
                         </select>
-                        @error('warehouse_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
                     </div>
 
-                    <div class="col-md-4">
-                        <label class="form-label" for="po_date">
-                            PO date <span class="text-danger">*</span>
-                        </label>
-                        <input type="date" id="po_date" name="po_date"
-                               class="form-control @error('po_date') is-invalid @enderror"
-                               required value="{{ $oldDate }}">
-                        @error('po_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <label class="form-label">PO date <span class="text-danger">*</span></label>
+                            <input type="date" name="po_date" class="form-control" required
+                                   value="{{ e($today) }}">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">Expected date</label>
+                            <input type="date" name="expected_date" class="form-control"
+                                   value="{{ e($oldExp) }}">
+                        </div>
                     </div>
 
-                    <div class="col-md-4">
-                        <label class="form-label" for="expected_date">
-                            Expected delivery date
-                            <span class="text-muted small">(optional)</span>
-                        </label>
-                        <input type="date" id="expected_date" name="expected_date"
-                               class="form-control @error('expected_date') is-invalid @enderror"
-                               value="{{ $oldExp }}">
-                        @error('expected_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    <div class="mt-3">
+                        <label class="form-label">Notes</label>
+                        <textarea name="notes" class="form-control" rows="3"
+                                  placeholder="Notes for supplier or internal use">{{ e($oldNotes) }}</textarea>
                     </div>
 
-                    <div class="col-12">
-                        <label class="form-label" for="notes">Notes</label>
-                        <textarea id="notes" name="notes" rows="2" class="form-control"
-                                  placeholder="Internal notes — payment terms, delivery instructions, etc.">{{ old('notes') }}</textarea>
-                        @error('notes') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
-                    </div>
+                    <p class="small text-muted mb-0 mt-3">
+                        <i class="fas fa-building me-1"></i> Branch: {{ e($branchName) }}
+                        · Saved as <strong>draft</strong> until you receive goods on a GRN.
+                    </p>
                 </div>
-            </div>
-        </div>
+            </section>
 
-        {{-- Items table --}}
-        <div class="card border-0 shadow-sm mb-3">
-            <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                <h2 class="h6 mb-0">
-                    <i class="fas fa-table-list me-1 text-primary"></i> Items
-                    <span class="badge bg-primary-subtle text-primary ms-1" id="itemCount">0</span>
-                </h2>
-                <button type="button" class="btn btn-sm btn-primary" id="addItemBtn">
-                    <i class="fas fa-plus me-1"></i> Add item
-                </button>
-            </div>
-            <div class="card-body p-0">
+            {{-- ─── Line items card ────────────────────────────────── --}}
+            <section class="purch-po-form-card purch-po-items-card">
+                <div class="purch-po-form-card-head d-flex justify-content-between align-items-center">
+                    <span><i class="fas fa-boxes me-1"></i> Line items</span>
+                    <button type="button" class="btn btn-sm btn-success" id="btnAddPoItem">
+                        <i class="fas fa-plus me-1"></i> Add line
+                    </button>
+                </div>
                 <div class="table-responsive">
-                    <table class="table table-sm table-hover align-middle mb-0" id="itemsTable">
+                    <table class="table table-hover align-middle mb-0" id="itemTable">
                         <thead class="table-light">
                             <tr>
-                                <th style="width:45%;">Product</th>
-                                <th class="text-end" style="width:12%;">Qty</th>
-                                <th class="text-end" style="width:13%;">Rate (Tk)</th>
-                                <th class="text-end" style="width:15%;">Amount (Tk)</th>
-                                <th class="text-center" style="width:5%;"></th>
+                                <th>Product</th>
+                                <th style="width: 100px;">Qty</th>
+                                <th style="width: 110px;">Rate</th>
+                                <th class="text-end" style="width: 110px;">Amount</th>
+                                <th style="width: 44px;"></th>
                             </tr>
                         </thead>
-                        <tbody id="itemsBody">
-                            {{-- Rows injected by JS --}}
-                        </tbody>
-                        <tfoot>
-                            <tr class="table-light fw-bold">
-                                <td colspan="3" class="text-end">Sub-total</td>
-                                <td class="text-end" id="subTotal">0.00</td>
-                                <td></td>
-                            </tr>
-                        </tfoot>
+                        <tbody></tbody>
                     </table>
                 </div>
-                <div class="p-3">
-                    <div class="text-danger small d-none" id="itemsError">
-                        <i class="fas fa-exclamation-circle me-1"></i>
-                        Add at least one item with a product and qty &gt; 0.
+                <p class="small text-muted px-3 py-2 mb-0">
+                    Search by product name or code · at least one line required
+                </p>
+
+                {{-- ─── Discount + Tax (Laravel-only additions vs legacy) ─── --}}
+                <div class="purch-po-form-card-body border-top">
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <label class="form-label small mb-1">Discount amount</label>
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Tk</span>
+                                <input type="number" name="discount_amount" id="discount_amount"
+                                       class="form-control" step="0.01" min="0"
+                                       value="{{ e($oldDisc) }}">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small mb-1">Tax amount</label>
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Tk</span>
+                                <input type="number" name="tax_amount" id="tax_amount"
+                                       class="form-control" step="0.01" min="0"
+                                       value="{{ e($oldTax) }}">
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </div>
+            </section>
         </div>
 
-        {{-- Totals --}}
-        <div class="card border-0 shadow-sm mb-3">
-            <div class="card-header bg-white">
-                <h2 class="h6 mb-0"><i class="fas fa-calculator me-1 text-primary"></i> Totals</h2>
+        {{-- ─── Footer (total + actions) ──────────────────────────── --}}
+        <div class="purch-po-form-footer">
+            <div class="purch-po-total-label">
+                Total: <span id="totalAmount">0.00</span>
             </div>
-            <div class="card-body">
-                <div class="row g-3 justify-content-end">
-                    <div class="col-md-3">
-                        <label class="form-label" for="discount_amount">Discount amount (Tk)</label>
-                        <input type="number" id="discount_amount" name="discount_amount"
-                               class="form-control text-end @error('discount_amount') is-invalid @enderror"
-                               min="0" step="0.01" value="{{ old('discount_amount', 0) }}"
-                               placeholder="0.00">
-                        @error('discount_amount') <div class="invalid-feedback">{{ $message }}</div> @enderror
-                    </div>
-                    <div class="col-md-3">
-                        <label class="form-label" for="tax_amount">Tax amount (Tk)</label>
-                        <input type="number" id="tax_amount" name="tax_amount"
-                               class="form-control text-end @error('tax_amount') is-invalid @enderror"
-                               min="0" step="0.01" value="{{ old('tax_amount', 0) }}"
-                               placeholder="0.00">
-                        @error('tax_amount') <div class="invalid-feedback">{{ $message }}</div> @enderror
-                    </div>
-                    <div class="col-md-3">
-                        <label class="form-label text-muted">Sub-total (Tk)</label>
-                        <input type="text" id="subTotalDisplay"
-                               class="form-control text-end bg-light fw-semibold" readonly value="0.00">
-                    </div>
-                    <div class="col-md-3">
-                        <label class="form-label fw-bold">Total amount (Tk)</label>
-                        <input type="text" id="totalAmountDisplay"
-                               class="form-control text-end bg-primary-subtle text-primary fw-bold fs-5" readonly value="0.00">
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        {{-- Submit --}}
-        <div class="card border-0 shadow-sm">
-            <div class="card-body d-flex gap-2 justify-content-end">
-                <a href="{{ route('admin.purchase-orders.index') }}" class="btn btn-outline-secondary">
-                    <i class="fas fa-times me-1"></i> Cancel
-                </a>
+            <div class="purch-po-form-actions">
+                <a href="{{ route('admin.purchase-orders.index') }}" class="btn btn-outline-secondary">Cancel</a>
                 <button type="submit" class="btn btn-primary" id="submitBtn">
-                    <i class="fas fa-file-pen me-1"></i> Create Draft PO
+                    <i class="fas fa-save me-1"></i> Save purchase order
                 </button>
             </div>
         </div>
     </form>
 </div>
 
-{{-- Hidden product options template (rendered server-side for select2 to use) --}}
-<template id="productOptionsTpl">
-    <option value="">Select product</option>
-    @foreach ($products as $p)
-        <option value="{{ $p->id }}">{{ $p->product_code }} — {{ $p->product_name }}</option>
-    @endforeach
-</template>
-
 @push('scripts')
 <script>
-$(function () {
-    var $form         = $('#poForm');
-    var $tbody        = $('#itemsBody');
-    var $subTotal     = $('#subTotal');
-    var $subDisplay   = $('#subTotalDisplay');
-    var $totalDisplay = $('#totalAmountDisplay');
-    var $discount     = $('#discount_amount');
-    var $tax          = $('#tax_amount');
-    var $itemCount    = $('#itemCount');
-    var $itemsError   = $('#itemsError');
-    var rowIndex      = 0;
+window.PO_FORM_BOOT = {
+    mode: 'create',
+    searchUrl: @json(route('admin.purchase-orders.search-products')),
+    csrf: @json(csrf_token()),
+    seedItems: @json($seedItems),
+};
+</script>
+<script>
+(function () {
+    var boot = window.PO_FORM_BOOT || {};
+    var rowIndex = 0;
+    var productSearchCache = {}; // rowId → { id, name, code }
 
-    // Init select2 on header selects
-    $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
-
-    // ====== Item row helpers ======
-
-    function buildRow(idx) {
-        var productOpts = $($('#productOptionsTpl').html()).clone();
-        var $tr = $('<tr>').attr('data-row', idx);
-
-        // Product select
-        var $sel = $('<select>').attr({
-            name: 'items[' + idx + '][product_id]',
-            class: 'form-select form-select-sm product-select',
-            required: true
-        }).append(productOpts);
-
-        var $tdProduct = $('<td>').append($sel);
-
-        // Qty input
-        var $qty = $('<input>').attr({
-            type: 'number',
-            name: 'items[' + idx + '][qty]',
-            class: 'form-control form-control-sm text-end qty-input',
-            min: '0.001',
-            step: '0.001',
-            required: true,
-            placeholder: '0.000'
-        });
-
-        // Rate input
-        var $rate = $('<input>').attr({
-            type: 'number',
-            name: 'items[' + idx + '][rate]',
-            class: 'form-control form-control-sm text-end rate-input',
-            min: '0',
-            step: '0.01',
-            required: true,
-            placeholder: '0.00'
-        });
-
-        // Amount (display only)
-        var $amt = $('<input>').attr({
-            type: 'text',
-            class: 'form-control form-control-sm text-end amount-input bg-light',
-            readonly: true
-        });
-        $amt.val('0.00');
-
-        // Remove button
-        var $rm = $('<button>').attr({
-            type: 'button',
-            class: 'btn btn-sm btn-outline-danger remove-row',
-            title: 'Remove item'
-        }).html('<i class="fas fa-trash"></i>');
-
-        $tr.append($tdProduct)
-           .append($('<td class="text-end">').append($qty))
-           .append($('<td class="text-end">').append($rate))
-           .append($('<td class="text-end">').append($amt))
-           .append($('<td class="text-center">').append($rm));
-
-        $tbody.append($tr);
-
-        // Initialize select2 on the new product select
-        $sel.select2({ theme: 'bootstrap-5', width: '100%' });
-
-        // Wire events
-        $qty.on('input',  function () { recomputeRow($tr); });
-        $rate.on('input', function () { recomputeRow($tr); });
-        $rm.on('click',   function () {
-            $tr.remove();
-            recomputeTotal();
-        });
-
-        recomputeTotal();
-        return $tr;
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+    function formatMoney(n) {
+        return (parseFloat(n) || 0).toFixed(2);
     }
 
-    function recomputeRow($tr) {
-        var qty  = parseFloat($tr.find('.qty-input').val())  || 0;
-        var rate = parseFloat($tr.find('.rate-input').val()) || 0;
-        var amt  = qty * rate;
-        $tr.find('.amount-input').val(amt.toFixed(2));
-        recomputeTotal();
+    // ── Row template (legacy-faithful) ───────────────────────────
+    function buildProductRowHtml(rowId, opts) {
+        opts = opts || {};
+        var productName = opts.product_name || '';
+        var productCode = opts.product_code || '';
+        var productId   = opts.product_id   || '';
+        var qty         = opts.qty          || '';
+        var rate        = opts.rate         || '';
+        var readonly    = !!(opts.readonly && productName);
+        var displayVal  = readonly ? (productName + ' (' + productCode + ')') : '';
+
+        return '' +
+            '<td class="purch-po-product-cell">' +
+                '<input type="text" class="form-control product-search" placeholder="Search product name or code…"' +
+                    ' value="' + escapeHtml(displayVal) + '"' + (readonly ? ' readonly' : '') +
+                    ' autocomplete="off" data-row-id="' + rowId + '">' +
+                '<div class="purch-po-product-dropdown product-dropdown" id="dropdown-' + rowId + '"></div>' +
+                '<input type="hidden" class="product-id-input" name="items[' + rowId + '][product_id]" value="' + escapeHtml(productId) + '">' +
+            '</td>' +
+            '<td>' +
+                '<input type="number" class="form-control qty-input" name="items[' + rowId + '][qty]"' +
+                    ' value="' + escapeHtml(qty) + '" step="0.01" min="0.01" placeholder="Qty" required>' +
+            '</td>' +
+            '<td>' +
+                '<input type="number" class="form-control rate-input" name="items[' + rowId + '][rate]"' +
+                    ' value="' + escapeHtml(rate) + '" step="0.01" min="0" placeholder="Rate" required>' +
+            '</td>' +
+            '<td class="text-end align-middle">' +
+                '<strong class="row-amount">0.00</strong>' +
+            '</td>' +
+            '<td class="align-middle text-center">' +
+                '<button type="button" class="btn btn-sm btn-outline-danger btn-remove-row" title="Remove line">' +
+                    '<i class="fas fa-trash"></i>' +
+                '</button>' +
+            '</td>';
     }
 
-    function recomputeTotal() {
-        var subTotal = 0;
-        var rows = 0;
-        $tbody.find('tr').each(function () {
-            var amt = parseFloat($(this).find('.amount-input').val()) || 0;
-            subTotal += amt;
-            rows++;
+    function addItemRow(prefill) {
+        var rowId = rowIndex++;
+        var $tr = $('<tr id="item-row-' + rowId + '"></tr>');
+        $tr.html(buildProductRowHtml(rowId, prefill));
+        $('#itemTable tbody').append($tr);
+        bindRowEvents($tr, rowId);
+        if (prefill && prefill.product_name) {
+            productSearchCache[rowId] = { id: prefill.product_id, name: prefill.product_name, code: prefill.product_code };
+            calculateRowAmount(rowId);
+        } else if (!prefill || !prefill.readonly) {
+            $tr.find('.product-search').focus();
+        }
+        if (prefill && prefill.qty && prefill.rate) calculateRowAmount(rowId);
+    }
+
+    function bindRowEvents($tr, rowId) {
+        var $search = $tr.find('.product-search');
+        var $qty    = $tr.find('.qty-input');
+        var $rate   = $tr.find('.rate-input');
+        var $remove = $tr.find('.btn-remove-row');
+
+        var _debounce = null;
+        $search.on('input', function () {
+            if (_debounce) clearTimeout(_debounce);
+            _debounce = setTimeout(function () { searchProduct($search, rowId); }, 250);
         });
-        var discount = parseFloat($discount.val()) || 0;
-        var tax      = parseFloat($tax.val())      || 0;
-        var total    = subTotal - discount + tax;
-
-        $subTotal.text(subTotal.toFixed(2));
-        $subDisplay.val(subTotal.toFixed(2));
-        $totalDisplay.val(total.toFixed(2));
-        $itemCount.text(rows);
-        $itemsError.toggleClass('d-none', rows > 0);
+        $search.on('focus', function () {
+            if ($('#dropdown-' + rowId).children().length) showProductDropdown(rowId);
+        });
+        $qty.on('input', function () { calculateRowAmount(rowId); });
+        $rate.on('input', function () { calculateRowAmount(rowId); });
+        $remove.on('click', function () { removeRow(rowId); });
     }
 
-    // ====== Add item button ======
-    $('#addItemBtn').on('click', function () {
-        buildRow(rowIndex++);
-    });
+    function searchProduct($input, rowId) {
+        var term = ($input.val() || '').trim();
+        var $dropdown = $('#dropdown-' + rowId);
+        if (!$dropdown.length) return;
+        if (term.length < 1) { $dropdown.hide().empty(); return; }
 
-    // ====== Discount / tax input ======
-    $discount.on('input', recomputeTotal);
-    $tax.on('input',      recomputeTotal);
-
-    // ====== Pre-populate old input on validation errors ======
-    @if (old('items'))
-        var oldItems = @json(old('items'));
-        oldItems.forEach(function (item) {
-            var $tr = buildRow(rowIndex++);
-            if (item.product_id) {
-                $tr.find('.product-select').val(item.product_id).trigger('change');
+        $.ajax({
+            url: boot.searchUrl,
+            method: 'GET',
+            data: { term: term },
+            dataType: 'json',
+        }).done(function (rows) {
+            if (!Array.isArray(rows)) rows = (rows && rows.data) ? rows.data : [];
+            if (!rows.length) {
+                $dropdown.html('<div class="p-2 text-muted small">No products found</div>');
+                $dropdown.show();
+                return;
             }
-            if (item.qty)  $tr.find('.qty-input').val(item.qty);
-            if (item.rate) $tr.find('.rate-input').val(item.rate);
-            recomputeRow($tr);
+            var html = '';
+            rows.forEach(function (p) {
+                productSearchCache[rowId + ':' + p.id] = p;
+                html += '<button type="button" class="dropdown-item"' +
+                    ' data-row-id="' + rowId + '"' +
+                    ' data-product-id="' + escapeHtml(p.id) + '"' +
+                    ' data-product-name="' + escapeHtml(p.product_name) + '"' +
+                    ' data-product-code="' + escapeHtml(p.product_code || '') + '">' +
+                        '<strong>' + escapeHtml(p.product_name) + '</strong>' +
+                        ' <span class="text-muted">(' + escapeHtml(p.product_code || '') + ')</span>' +
+                    '</button>';
+            });
+            $dropdown.html(html).show();
+        }).fail(function () {
+            $dropdown.html('<div class="p-2 text-danger small">Search failed</div>').show();
         });
-    @else
-        // Seed with one empty row by default
-        buildRow(rowIndex++);
-    @endif
+    }
 
-    // ====== Submit guard ======
-    $form.on('submit', function (e) {
-        var rows = $tbody.find('tr').length;
-        if (rows === 0) {
-            e.preventDefault();
-            $itemsError.removeClass('d-none');
-            Swal.fire({
-                icon: 'error',
-                title: 'No items',
-                text: 'Add at least one product line before creating the PO.',
-                confirmButtonText: 'OK'
-            });
-            return false;
-        }
-        // Validate each row has product + qty
-        var invalid = 0;
-        $tbody.find('tr').each(function () {
-            var pid = $(this).find('.product-select').val();
-            var qty = parseFloat($(this).find('.qty-input').val());
-            var rate = parseFloat($(this).find('.rate-input').val());
-            if (!pid || !qty || qty <= 0 || isNaN(rate)) invalid++;
-        });
-        if (invalid > 0) {
-            e.preventDefault();
-            Swal.fire({
-                icon: 'error',
-                title: 'Incomplete items',
-                text: invalid + ' row(s) are missing a product, qty, or rate. Please fix or remove them.',
-                confirmButtonText: 'OK'
-            });
-            return false;
-        }
-        $('#submitBtn').prop('disabled', true)
-            .html('<i class="fas fa-spinner fa-spin me-1"></i> Saving…');
+    function showProductDropdown(rowId) {
+        var $dd = $('#dropdown-' + rowId);
+        if ($dd.children().length) $dd.show();
+    }
+
+    // Delegated click handler for dropdown items (bound once on body).
+    $(document).off('click', '.purch-po-product-dropdown .dropdown-item')
+               .on('click', '.purch-po-product-dropdown .dropdown-item', function () {
+        var rowId       = $(this).data('row-id');
+        var productId   = $(this).data('product-id');
+        var productName = $(this).data('product-name');
+        var productCode = $(this).data('product-code');
+        selectProduct(rowId, productId, productName, productCode);
     });
-});
+
+    // Outside click → close all dropdowns.
+    $(document).off('click.poProductDropdown')
+               .on('click.poProductDropdown', function (e) {
+        if (!$(e.target).closest('.product-search, .product-dropdown').length) {
+            $('.product-dropdown').hide();
+        }
+    });
+
+    function selectProduct(rowId, productId, productName, productCode) {
+        var $row = $('#item-row-' + rowId);
+        $row.find('.product-search').val(productName + ' (' + productCode + ')');
+        $row.find('.product-id-input').val(productId);
+        $('#dropdown-' + rowId).hide().empty();
+        calculateRowAmount(rowId);
+        $row.find('.qty-input').focus();
+    }
+
+    function calculateRowAmount(rowId) {
+        var $row = $('#item-row-' + rowId);
+        var qty  = parseFloat($row.find('.qty-input').val()) || 0;
+        var rate = parseFloat($row.find('.rate-input').val()) || 0;
+        $row.find('.row-amount').text(formatMoney(qty * rate));
+        calculateTotalAmount();
+    }
+
+    function calculateTotalAmount() {
+        var sum = 0;
+        $('#itemTable tbody .row-amount').each(function () {
+            sum += parseFloat($(this).text()) || 0;
+        });
+        var disc = parseFloat($('#discount_amount').val()) || 0;
+        var tax  = parseFloat($('#tax_amount').val()) || 0;
+        $('#totalAmount').text(formatMoney(Math.max(0, sum - disc + tax)));
+    }
+
+    function removeRow(rowId) {
+        $('#item-row-' + rowId).remove();
+        calculateTotalAmount();
+        if ($('#itemTable tbody tr').length === 0) addItemRow();
+    }
+
+    // ── Init ──────────────────────────────────────────────────────
+    $(function () {
+        // Seed from old() (after redirect-with-input on validation error).
+        if (boot.seedItems && boot.seedItems.length) {
+            boot.seedItems.forEach(function (it) { addItemRow(it); });
+        } else {
+            addItemRow(); // one empty row to start
+        }
+
+        $('#btnAddPoItem').on('click', function () { addItemRow(); });
+        $('#discount_amount, #tax_amount').on('input', calculateTotalAmount);
+
+        // Submit guard — at least one valid line (product_id + qty + rate).
+        $('#poForm').on('submit', function (e) {
+            var valid = 0;
+            $('#itemTable tbody tr').each(function () {
+                var pid = parseInt($(this).find('.product-id-input').val(), 10);
+                var qty = parseFloat($(this).find('.qty-input').val()) || 0;
+                var rate = parseFloat($(this).find('.rate-input').val()) || 0;
+                if (pid > 0 && qty > 0 && rate >= 0) valid++;
+            });
+            if (valid < 1) {
+                e.preventDefault();
+                Swal.fire({
+                    icon: 'error',
+                    title: 'No valid line items',
+                    text: 'Add at least one product with qty and rate before saving the PO.',
+                });
+                return false;
+            }
+            // Disable submit + show spinner.
+            $('#submitBtn').prop('disabled', true)
+                .html('<i class="fas fa-spinner fa-spin me-1"></i> Saving…');
+        });
+
+        calculateTotalAmount();
+    });
+})();
 </script>
 @endpush
 @endsection

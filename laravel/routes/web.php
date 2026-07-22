@@ -423,6 +423,14 @@ Route::middleware('auth')->group(function () {
     // by guessing its URL id.
     // ============================================================
     Route::prefix('admin/purchase-orders')->name('admin.purchase-orders.')->group(function () {
+        // Phase 2 — typeahead product search (GET, throttle 60/min).
+        Route::get('search-products', [PurchaseOrderController::class, 'searchProducts'])
+            ->middleware(['throttle:60,1', 'role:admin,manager,warehouse_manager'])
+            ->name('search-products');
+        // Phase 2 — CSV export (GET, branch-scoped like index).
+        Route::get('export', [PurchaseOrderController::class, 'export'])
+            ->middleware(['role:admin,manager,warehouse_manager,accountant'])
+            ->name('export');
         Route::post('{id}/mark-sent', [PurchaseOrderController::class, 'markAsSent'])
             ->name('markSent')
             ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);

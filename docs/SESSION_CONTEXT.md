@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-22 (Purchase module Phase 0 complete — 5 critical schema bugs + 1 functional gap + 1 cosmetic bug + 1 cleanup pass. 4 new migrations, 1 SQL spec reconciled, 2 services patched, 1 model patched, 1 blade patched, 6 dead JS files removed. See §5.26 below.)
+> **Last updated:** 2026-07-22 (Purchase module Phase 2 complete — PurchaseOrder UI parity (legacy-faithful). 4 PO blades restructured with same CSS class names as legacy; 3 new controller methods (searchProducts typeahead, export CSV, poDataTableJson server-side DataTables); 2 new routes; 5 UX/parity bugs fixed (BUG-11 through BUG-15). See §5.28 below.)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -1875,6 +1875,70 @@ Phase 2 (PurchaseOrder UI parity) can now start. The security perimeter is in pl
 
 ---
 
+### 5.28 Purchase module — Phase 2 (PurchaseOrder UI parity — legacy-faithful)
+
+**User ask (2026-07-22):** *"work on Phase 2 — PurchaseOrder UI parity (legacy-faithful) / update the docs/PURCHASE_PARITY_PLAN.md and update docs/SESSION_CONTEXT.md / when done push the update in to the github with ur context documentation so its never lost even z ai lost the conversation"* — followed by *"check all the phase done from Phase 2 — PurchaseOrder UI parity (legacy-faithful) if done then commit and push in git hub"*.
+
+**Phase 2 scope:** Restructure the 4 PurchaseOrder blade views (`index`, `create`, `edit`, `show`) to be visually and behaviorally faithful to the legacy (lagachy) software. Use the same CSS class names so the already-ported `purchase-index.css`, `purchase-order-form.css`, and `purchase-order-details.css` files work unmodified. Add the missing UX features: custom typeahead product picker (replacing the 500-product `<select>`), server-side DataTables, mobile card rendering, CSV export, localStorage filter persistence.
+
+**Verification method:** Could not run live HTTP tests (no `php`/`docker` CLI on host). Verified by:
+1. Brace/paren/bracket balance check on `PurchaseOrderController.php` and `routes/web.php` (all OK — all three counts at 0).
+2. Class-name parity check — grep'd every `purch-index-*`, `purch-po-*`, and `purch-badge-*` class used in the 4 new blades against the legacy `PurchaseOrder/{index,create,edit,details}.php` views. All class names match the legacy structure 1:1.
+3. CSS class existence check — confirmed every class used is defined in the linked CSS files. All present.
+4. Blade directive balance — every `@push`/`@endpush` and `@section`/`@endsection` pair balanced across all 4 blades.
+5. Blade escaping audit — no JS-embedded literal `@word(...)` patterns that would be miscompiled by the Blade engine.
+6. Layout dependency check — confirmed `layouts/admin.blade.php` already loads jQuery 3.6, DataTables, SweetAlert2, and Bootstrap 5 bundle.
+7. Route conflict check — `search-products` and `export` GET routes declared inside the `admin/purchase-orders` prefix group BEFORE the resource declaration, so they resolve ahead of the `show` verb. No 404/405 collisions.
+
+**Bugs fixed in Phase 2 (5 UX/parity bugs):**
+
+1. **BUG-11 (Medium):** PO index used Laravel-paginated query — no server-side DataTables, no mobile cards, no CSV export.
+
+   **Fix:** Added `poDataTableJson()` private method on `PurchaseOrderController` returning `{draw, recordsTotal, recordsFiltered, data}`. `index()` branches into JSON mode when `?datatables=1` is set. Index blade initializes DataTables with `serverSide: true`, custom `ajax.data` function that injects filter values, and a `drawCallback` that re-renders mobile cards + active filter bar on every page redraw.
+
+2. **BUG-12 (Medium):** PO create/edit used a `<select>` with up to 500 hardcoded products — broken on catalogs with >500 SKUs and slow to render.
+
+   **Fix:** Added `searchProducts()` controller method + `GET admin/purchase-orders/search-products?term=...` route returning top 20 matches by name OR code (ILIKE on Postgres). Blades now use a custom text-input typeahead: debounced `input` handler fires the AJAX, dropdown results populate a `.purch-po-product-dropdown` container, click handler sets hidden `product_id` + displays "Name (Code)" in the search box. Outside-click closes dropdowns.
+
+3. **BUG-13 (Low):** PO show page lacked the legacy progress bar (`purch-po-progress-wrap`) and 4-stat-card layout (`purch-po-detail-stats`).
+
+   **Fix:** Show blade restructured with 4 stat cards (order total / receipt progress % / supplier / created by), a progress bar that fills to `received_qty / qty` percentage, a 2-col grid for dates + notes, and the line items table now shows ordered/received/pending per row with color-coded rows (success = fully received, warning = partially received).
+
+4. **BUG-14 (Low):** PO index filters did not persist across page reloads — every refresh reset to defaults.
+
+   **Fix:** Added `localStorage` persistence under key `purchase_order_filters_v1`. `saveFilters()` writes `{from, to, status, search}` on every table reload; `loadFilters()` restores on page boot. If persisted filters exist, the "month" preset is NOT auto-applied — the user's saved state takes precedence.
+
+5. **BUG-15 (Low):** No CSV export on PO index — users had to manually copy/paste from the table.
+
+   **Fix:** Added `export()` controller method + `GET admin/purchase-orders/export` route. Returns `text/csv` with UTF-8 BOM (for Excel) and `Content-Disposition: attachment; filename="Purchase_Orders_YYYY-MM-DD_HHmmss.csv"`. Headers: PO Code, Supplier, Branch, Warehouse, PO Date, Expected Date, Total Amount, Status, Created By, Notes. Branch-scoped + same filter logic as `index()`.
+
+**Files touched in Phase 2:**
+
+- **`laravel/app/Http/Controllers/Admin/PurchaseOrderController.php`** — 3 new methods: `searchProducts()` (typeahead JSON, top 20 by name OR code), `export()` (CSV stream with UTF-8 BOM), `poDataTableJson()` (private, server-side DataTables JSON response). `index()` modified to branch into DataTables JSON mode when `?datatables=1` is set.
+- **`laravel/routes/web.php`** — 2 new routes inside the existing `admin/purchase-orders` prefix group: `GET search-products` (RBAC `role:admin,manager,warehouse_manager`, throttle 60/min) and `GET export` (RBAC `role:admin,manager,warehouse_manager,accountant`).
+- **`laravel/resources/views/admin/purchase-orders/index.blade.php`** — full legacy-faithful restructure (~560 lines). 7 stat cards (total/draft/sent/partial/received/cancelled/total_value) + collapsible filter panel with date presets + status chips + smart search + active filter bar + server-side DataTables + mobile card container + SweetAlert2 cancel-PO modal with required reason.
+- **`laravel/resources/views/admin/purchase-orders/create.blade.php`** — full legacy-faithful restructure (~425 lines). 2-col layout: order details card + line items card with custom typeahead. Footer with running total + save/cancel actions. SweetAlert2 submit guard for "no valid line items".
+- **`laravel/resources/views/admin/purchase-orders/edit.blade.php`** — full legacy-faithful restructure (~445 lines). Same shape as create; seeds line items from `$po->items` (product search box is readonly for existing lines — user must remove + re-search to change product).
+- **`laravel/resources/views/admin/purchase-orders/show.blade.php`** — full legacy-faithful restructure (~310 lines). 4 stat cards + progress bar + 2-col grid (dates / notes) + line items table with per-row received/pending + status pill. SweetAlert2 modals for Mark as Sent and Cancel.
+- **2 docs updated** — `docs/PURCHASE_PARITY_PLAN.md` (Phase 2 Completion Summary at top + Phase 2 section in §8 marked complete + BUG-11/12/13/14/15 added to bug log) and `docs/SESSION_CONTEXT.md` (this section).
+
+**Phase 2 smoke-test checklist (user to run on local Docker — no migrations needed):**
+
+1. Login as admin → visit `/admin/purchase-orders`. Verify 7 stat cards render with real counts. "Filters" toggles collapse. "New PO" / "Cancelled" / "Export" buttons in hero.
+2. Click "New PO" → 2-col layout. Type 3+ chars in product search → dropdown appears with matches. Click a product → search box populates, hidden `product_id` set, qty input gets focus. Add 3 line items → footer total updates live. Save → redirected to PO show.
+3. On PO show → 4 stat cards (order total, receipt progress 0%, supplier, created by). Progress bar empty. Line items table shows ordered/received/pending. Status pill "Draft".
+4. Click "Mark as Sent" → SweetAlert2 confirm → status "Sent". Edit button disappears (sent POs immutable).
+5. Click "Receive goods" → redirects to GRN create with `?po_id=` preselected (Phase 3 territory — just verify link works).
+6. Back on PO index → "Filters" → set "From" to last month, status chip "Sent" → table reloads. Refresh page → filters persist. "Clear filters" → resets to "this month" preset.
+7. Resize browser to <768px → table disappears, mobile cards render one per row (PO code, date, supplier, branch, status badge, amount, action buttons).
+8. Click "Export" → CSV downloads. Open in Excel/Sheets → headers + rows match current filter.
+
+**End of Phase 2 → Phase 3 handoff:**
+
+Phase 3 (PurchaseReceive / GRN UI parity) can now start. The PO module is fully functional with legacy-faithful UI. The `searchProducts()` endpoint added in Phase 2 will be reused by Phase 3's GRN create page (Direct mode). Phase 3 will touch only blade views (3 GRN views), 1 controller method (datatables + export on GRN), and add the "Receives against this PO" list section on `purchase-orders/show`. No further route/middleware/schema changes anticipated. The full phase-by-phase plan lives in `docs/PURCHASE_PARITY_PLAN.md`.
+
+---
+
 ## 6. Open Work Items
 
 (Items the user has asked for but that are not yet done.)
@@ -2269,6 +2333,27 @@ When the user gives the next instruction, append it here as a checkbox item. Whe
       non-admins, AJAX endpoints cross-branch 403). No schema
       changes. `docs/PURCHASE_PARITY_PLAN.md` and
       `docs/SESSION_CONTEXT.md` updated. See §5.27 above for the
+      full 8-step smoke-test checklist the user must run on local
+      Docker.
+
+- [x] **Purchase Phase 2 (PurchaseOrder UI parity — legacy-faithful)**
+      — completed 2026-07-22. 5 UX/parity bugs fixed (BUG-11 through
+      BUG-15). 6 files touched: `PurchaseOrderController.php` (3 new
+      methods: `searchProducts` typeahead JSON, `export` CSV stream,
+      `poDataTableJson` private server-side DataTables JSON), `routes/web.php`
+      (2 new routes: `search-products` throttled 60/min + `export`),
+      4 PO blades fully restructured to legacy-faithful DOM
+      (`index` ~560 lines with 7 stat cards + collapsible filters +
+      status chips + smart search + server-side DataTables + mobile
+      cards + CSV export button + SweetAlert2 cancel; `create` ~425
+      lines with 2-col layout + custom typeahead product picker +
+      live total + submit guard; `edit` ~445 lines mirroring create
+      with readonly seed items; `show` ~310 lines with 4 stat cards +
+      progress bar + line items table with per-row received/pending +
+      status pill + SweetAlert2 Mark as Sent + Cancel modals).
+      `searchProducts()` endpoint will be reused by Phase 3 GRN
+      create (Direct mode). No schema changes. `docs/PURCHASE_PARITY_PLAN.md`
+      and `docs/SESSION_CONTEXT.md` updated. See §5.28 above for the
       full 8-step smoke-test checklist the user must run on local
       Docker.
 
