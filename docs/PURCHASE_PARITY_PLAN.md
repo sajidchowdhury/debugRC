@@ -1,0 +1,1119 @@
+# Purchase Module — Lagachy → Laravel Parity Plan
+
+**Document type:** Gap analysis + phased implementation plan
+**Scope:** Purchase Order (PO) · Purchase Receive (GRN) · Purchase Return · Purchase Audit
+**Goal:** By the end of all phases, the Laravel app must be able to (1) create a Purchase Order, (2) receive the PO into one or more warehouses (GRN), (3) return purchases to the supplier — with full reverse-and-restore support — matching the legacy (lagachy) software feature-for-feature and look-for-look.
+**Source of truth:** Legacy files at `legacy/app/views/Purchase*/`, `legacy/app/controllers/Purchase*Controller.php`, `legacy/public/assets/js/Purchase*.js`, `legacy/public/assets/css/purchase-*.css`. Most logic and UI should be copied from legacy.
+**Created:** 2026-07-22
+**Status:** Planning — awaiting Phase 0 kickoff
+
+---
+
+## Table of Contents
+
+1. [Executive Summary](#1-executive-summary)
+2. [Scope & Goals](#2-scope--goals)
+3. [Current Laravel State](#3-current-laravel-state)
+4. [Legacy Reference Inventory](#4-legacy-reference-inventory)
+5. [Gap Analysis](#5-gap-analysis)
+6. [Critical Bugs & Blockers](#6-critical-bugs--blockers)
+7. [Decisions (Locked)](#7-decisions-locked)
+8. [Phase-by-Phase Implementation Plan](#8-phase-by-phase-implementation-plan)
+9. [Per-Phase Success Criteria](#9-per-phase-success-criteria)
+10. [Risks & Open Questions](#10-risks--open-questions)
+11. [Out of Scope / Net-New Features](#11-out-of-scope--net-new-features)
+12. [File Inventory (Legacy → Laravel mapping)](#12-file-inventory-legacy--laravel-mapping)
+
+---
+
+## 1. Executive Summary
+
+The Laravel codebase already contains a **substantial purchase skeleton** (~5,255 lines across controllers, services, models, and views) that implements the correct *business logic backbone*: transactional two-phase confirm/cancel flows, double-entry GL postings, supplier sub-ledger entries, and stock movements with weighted-average cost on GRN and original-rate on Return. This backbone is solid and should be **preserved, not rewritten**.
+
+What's missing is **legacy parity on three layers**:
+
+1. **UI / markup layer** — Laravel views use generic Bootstrap `.card` markup; legacy uses purpose-built `.purch-*` / `.prt-*` class families with custom CSS that gives the POS-style look the user wants. None of the 6 legacy purchase CSS files (`purchase-index.css`, `purchase-order-form.css`, etc.) are linked to Laravel views.
+2. **Feature layer** — Several legacy-only features are absent from Laravel: Damage condition (no-stock return), printable Return slip, per-module audit-log pages, PurchaseAudit checklist, offcanvas quick-return, live chip counts, smart-sort, CSV exports, AJAX product typeahead, cross-linkage buttons between PO/GRN/Return.
+3. **Hardening layer** — Laravel purchase routes have **no RBAC middleware** and **no branch isolation**. There are also **3-4 critical schema/code mismatches** (status columns missing from the SQL spec, expected_date missing, warehouse_id NOT NULL but not written) that need verification and migration.
+
+The plan below is split into **9 phases** (Phase 0 through Phase 8). Each phase is independently shippable. The phases are ordered so that the schema/hardening gaps are fixed first (Phase 0–1), then UI parity is layered on top (Phase 2–5), then the missing legacy features are added (Phase 6–7), and finally a full end-to-end QA pass (Phase 8).
+
+**Estimated total effort:** ~3,500–4,500 lines of net new code (HTML restructuring + new blade views + new AJAX endpoints + migrations + service tweaks) plus removal of ~2,500 lines of dead JS in `laravel/public/assets/js/Purchase*.js` / `purchase-*.js`.
+
+---
+
+## 2. Scope & Goals
+
+### 2.1 In Scope
+
+- **Purchase Order (PO):** list / create / edit / show / cancel / mark-sent.
+- **Purchase Receive (GRN):** list / create (PO-linked OR Direct) / show / confirm / cancel (with full reversal).
+- **Purchase Return:** list / create (always against a GRN) / show / confirm / cancel (with full reversal) / printable slip.
+- **Damage condition:** Good vs Damage return lines (Damage = no stock movement).
+- **Purchase Audit:** per-module audit-log pages + central checklist dashboard with 12 health-check sections.
+- **Cross-linkage:** PO ↔ GRN ↔ Return navigation buttons and "linked documents" sections.
+- **RBAC + branch isolation:** Role-gated routes + branch-scoped queries.
+- **Print/export:** Return slip (browser print) + CSV export on all 3 index pages.
+
+### 2.2 End-of-Plan Capability Matrix
+
+| Capability | After Phase |
+|---|---|
+| Create a draft PO with multiple line items | Phase 0 (already works) |
+| Edit a draft PO | Phase 0 (already works) |
+| Mark PO as sent / Cancel PO with reason | Phase 0 (already works) |
+| Create a GRN against a PO | Phase 3 |
+| Create a Direct GRN (no PO) | Phase 3 |
+| Split GRN items across multiple warehouses | Phase 3 |
+| Confirm GRN → stock IN + GL + supplier ledger | Phase 0 (already works) |
+| Cancel GRN → full reversal | Phase 0 (already works) |
+| Create a Return against a GRN | Phase 4 |
+| Return Good condition (stock OUT) | Phase 0 (already works) |
+| Return Damage condition (no stock movement) | **Phase 5** |
+| Confirm Return → GL + supplier ledger | Phase 0 (already works) |
+| Cancel/Reverse Return → restore stock + GL + ledger | Phase 0 (already works) |
+| Print Return slip | **Phase 6** |
+| View audit log per PO/GRN/Return | **Phase 6** |
+| View Purchase Audit checklist dashboard | **Phase 6** |
+| Branch-isolated queries | **Phase 1** |
+| Role-gated cancel/reverse actions | **Phase 1** |
+| UI matches legacy look (`.purch-*` / `.prt-*` classes) | **Phases 2–4** |
+
+### 2.3 Out of Scope (Net-New — See §11)
+
+- Tax / discount / transport on returns (legacy has none).
+- Unit conversion (case → piece) — legacy has none.
+- Foreign currency / exchange rate — legacy has none.
+- Approval workflows (PO/GRN/Return approval) — legacy has none.
+- PO/GRN printable slips — legacy only has Return slip.
+
+---
+
+## 3. Current Laravel State
+
+### 3.1 What's Already Built (Preserve)
+
+| Layer | Status | Notes |
+|---|---|---|
+| **Routes** | ✅ Complete | 22 routes across 3 resource controllers + 6 custom AJAX/action endpoints. |
+| **Controllers** | ✅ Complete | 3 thin controllers (~691 lines total) delegating to services. |
+| **Services** | ✅ Complete | `PurchaseOrderService`, `PurchaseReceiveService`, `PurchaseReturnService` — all transactional with `lockForUpdate()`, idempotent confirm/cancel. |
+| **Models** | ✅ Complete | 6 Eloquent models with relationships, status helpers (`isDraft()`, `isConfirmed()`, etc.), `SoftDeletes` trait. |
+| **GL integration** | ✅ Correct | GRN posts `Dr Inventory / Cr AP`. Return posts `Dr AP / Cr Inventory`. Cancel cascades via `JournalReversalService`. |
+| **Stock integration** | ✅ Correct | GRN IN at purchase rate (avg-cost recalc). Return OUT at **original receive rate** (cost integrity preserved). |
+| **Supplier ledger** | ✅ Correct | GRN = credit. Return = debit. Cancel = reversal row. |
+| **PO status auto-update** | ✅ Correct | GRN confirm increments `received_qty` → recompute status (draft→sent→partial→received). |
+| **GRN return_qty tracking** | ✅ Correct | Return confirm increments `return_qty` on GRN item. Cancel decrements via `GREATEST(0, return_qty - qty)`. |
+| **Code generation** | ✅ Correct | `DocumentSequenceService::nextCode()` with PostgreSQL advisory locks (race-safe). |
+| **AJAX endpoints** | ✅ Complete | `po-details` + `receive-details` for form pre-fill, with returnable-qty capping. |
+| **SweetAlert2 confirm UX** | ✅ Complete | All confirm/cancel actions prompt for reason; spinner during async. |
+
+### 3.2 What's Missing or Broken (See §5 + §6)
+
+- 3-4 schema/code mismatches (status columns, expected_date, warehouse_id NOT NULL).
+- No RBAC middleware on purchase routes.
+- No branch isolation on purchase routes.
+- 6 dead/orphaned JS files (~2,500 lines) in `laravel/public/assets/js/Purchase*.js`.
+- UI uses generic Bootstrap — none of the 6 legacy CSS files are linked.
+- No Damage condition support.
+- No printable Return slip.
+- No audit-log views.
+- No PurchaseAudit checklist.
+- No cross-linkage buttons (PO→GRN, GRN→Return, PO→list of GRNs, GRN→list of Returns).
+- No CSV exports.
+- No live chip counts on Return index.
+- No smart-sort on Return index.
+- No offcanvas quick-return.
+- Product dropdown capped at 500 — no AJAX search.
+- Stale UI text on PO show page ("Phase 7.2 not implemented").
+
+---
+
+## 4. Legacy Reference Inventory
+
+### 4.1 Files to Port From
+
+| Path | Lines | Purpose |
+|---|---|---|
+| `legacy/app/controllers/PurchaseOrderController.php` | 331 | PO controller (index/create/edit/Details/update/delete/search_products/export/audit) |
+| `legacy/app/controllers/PurchaseReceiveController.php` | 252 | GRN controller (index/create/store/details/cancel/get_po_details/export/audit) |
+| `legacy/app/controllers/PurchaseReturnController.php` | 316 | Return controller (index/create/store/details/slip/reverse/search_receive/get_receive_for_return/export/audit/return_filter_summary) |
+| `legacy/app/controllers/PurchaseAuditController.php` | 57 | Audit checklist controller (index/checklist/run_checks) |
+| `legacy/app/views/PurchaseOrder/index.php` | 112 | PO list page (DataTables shell) |
+| `legacy/app/views/PurchaseOrder/create.php` | 41 | PO create page wrapper |
+| `legacy/app/views/PurchaseOrder/edit.php` | 45 | PO edit page wrapper |
+| `legacy/app/views/PurchaseOrder/details.php` | 175 | PO detail page (4 stat cards + progress bar + items table) |
+| `legacy/app/views/PurchaseOrder/audit.php` | 102 | PO audit-log page |
+| `legacy/app/views/PurchaseOrder/partials/po_form.php` | 99 | Shared PO create/edit form (typeahead line items) |
+| `legacy/app/views/PurchaseReceive/index.php` | 109 | GRN list page |
+| `legacy/app/views/PurchaseReceive/create.php` | 161 | GRN create page (PO-linked OR Direct) |
+| `legacy/app/views/PurchaseReceive/details.php` | 120 | GRN detail page |
+| `legacy/app/views/PurchaseReceive/audit.php` | 107 | GRN audit-log page |
+| `legacy/app/views/PurchaseReturn/index.php` | 168 | Return list page (with offcanvas quick-create) |
+| `legacy/app/views/PurchaseReturn/create.php` | 41 | Return create page wrapper |
+| `legacy/app/views/PurchaseReturn/details.php` | 94 | Return detail page |
+| `legacy/app/views/PurchaseReturn/audit.php` | 118 | Return audit-log page |
+| `legacy/app/views/PurchaseReturn/slip.php` | 155 | Printable Return slip (browser print) |
+| `legacy/app/views/PurchaseReturn/partials/create_workspace.php` | 42 | Reusable 2-step Return workspace (find GRN → return form) |
+| `legacy/app/views/PurchaseAudit/checklist.php` | 235 | Central audit checklist (12 sections + 3 detail tables) |
+| `legacy/public/assets/js/PurchaseOrder.js` | 372 | PO create/edit JS (typeahead + form submit) |
+| `legacy/public/assets/js/PurchaseReceive.js` | 432 | GRN create JS (PO loader + direct + submit) |
+| `legacy/public/assets/js/PurchaseReturn.js` | 667 | Return workspace JS (search + load + submit) |
+| `legacy/public/assets/js/purchase-order-index.js` | 353 | PO index DataTables JS |
+| `legacy/public/assets/js/purchase-receive-index.js` | 279 | GRN index DataTables JS |
+| `legacy/public/assets/js/purchase-return-index.js` | 398 | Return index DataTables + chip counts + reverse + offcanvas JS |
+| `legacy/public/assets/css/purchase-index.css` | 335 | Shared PO/GRN index + PO form + PO details CSS |
+| `legacy/public/assets/css/purchase-order-form.css` | 118 | PO create/edit form CSS |
+| `legacy/public/assets/css/purchase-order-details.css` | 142 | PO details CSS |
+| `legacy/public/assets/css/purchase-return-create.css` | 355 | Return create workspace CSS |
+| `legacy/public/assets/css/purchase-return-index.css` | 309 | Return index + offcanvas CSS |
+| `legacy/public/assets/css/purchase-audit-checklist.css` | 211 | Audit checklist CSS |
+| **Total legacy reference** | **~5,886 lines** | |
+
+### 4.2 Legacy Route Surface (Convention-Based — `/Controller/method/params`)
+
+| METHOD | PATH | CONTROLLER@METHOD | PURPOSE |
+|---|---|---|---|
+| GET | `PurchaseOrder` | `index` | PO list page (HTML + DataTables JSON) |
+| GET | `PurchaseOrder?cancelled=1` | `index` | Cancelled-only view |
+| GET | `PurchaseOrder/create` | `create` | PO create form |
+| POST | `PurchaseOrder/store` | `store` | Create PO |
+| GET | `PurchaseOrder/edit/{id}` | `edit` | PO edit form (draft only) |
+| POST | `PurchaseOrder/update/{id}` | `update` | Update draft PO |
+| GET | `PurchaseOrder/Details/{id}` | `Details` | PO detail (capital D) |
+| POST | `PurchaseOrder/delete/{id}` | `delete` | Cancel (with reason) or hard-delete (without) |
+| POST | `PurchaseOrder/search_products` | `search_products` | Typeahead: product by name/code |
+| GET | `PurchaseOrder/export` | `export` | CSV export |
+| GET | `PurchaseOrder/audit` | `audit` | PO audit-log page |
+| GET | `PurchaseReceive` | `index` | GRN list page |
+| GET | `PurchaseReceive?returned=1` | `index` | Returned/Cancelled view |
+| GET | `PurchaseReceive/create` | `create` | GRN create form |
+| POST | `PurchaseReceive/get_po_details` | `get_po_details` | AJAX: PO + remaining lines |
+| POST | `PurchaseReceive/store` | `store` | Create GRN (posts stock + GL + ledger) |
+| GET | `PurchaseReceive/details/{id}` | `details` | GRN detail |
+| POST | `PurchaseReceive/cancel` | `cancel` | Cancel GRN (reverses stock + GL + ledger) |
+| GET | `PurchaseReceive/export` | `export` | CSV export |
+| GET | `PurchaseReceive/audit` | `audit` | GRN audit-log page |
+| GET | `PurchaseReturn` | `index` | Return list page |
+| GET | `PurchaseReturn?reversed=1` | `index` | Reversed-only view |
+| GET | `PurchaseReturn/return_filter_summary` | `return_filter_summary` | AJAX: live chip counts |
+| GET | `PurchaseReturn/create` | `create` | Return create page |
+| POST | `PurchaseReturn/search_receive` | `search_receive` | AJAX: GRN typeahead |
+| POST | `PurchaseReturn/get_receive_for_return` | `get_receive_for_return` | AJAX: full GRN + per-warehouse stock |
+| POST | `PurchaseReturn/store` | `store` | Create Return (stock OUT + GL + ledger) |
+| GET | `PurchaseReturn/details/{id}` | `details` | Return detail |
+| GET | `PurchaseReturn/slip/{id}` | `slip` | Printable Return slip |
+| POST | `PurchaseReturn/reverse` | `reverse` | Reverse Return (restores stock + GL + ledger) |
+| GET | `PurchaseReturn/export` | `export` | CSV export |
+| GET | `PurchaseReturn/audit` | `audit` | Return audit-log page |
+| GET | `PurchaseAudit` | `index` | Alias for `checklist` |
+| GET | `PurchaseAudit/checklist` | `checklist` | Audit checklist page |
+| GET | `PurchaseAudit/run_checks` | `run_checks` | AJAX: re-run health checks |
+
+### 4.3 Legacy State Machines
+
+#### 4.3.1 PurchaseOrder
+
+```
+                  create() / store()
+                        │
+                        ▼
+                    ┌──────┐
+                    │draft │ ←── edit/update allowed
+                    └───┬──┘
+       GRN against PO (any received_qty>0)
+                        │
+                        ▼
+                    ┌──────┐
+                    │pending│  (only if no GRN yet, but not draft — note: Laravel uses 'sent')
+                    └───┬──┘
+         partial GRN    │    full GRN (received_qty ≥ qty)
+            ┌───────────┴───────────┐
+            ▼                       ▼
+   ┌─────────────────────┐         ┌──────────┐
+   │partially_received   │───────→ │ received │  (terminal)
+   └─────────────────────┘  more   └──────────┘
+                            GRN
+
+   Any of draft/pending can be cancelled via delete + reason → 'cancelled' (terminal)
+```
+
+**Note on terminology:** Legacy uses `draft`, `pending`, `partially_received`, `received`, `cancelled`. Laravel uses `draft`, `sent`, `partial`, `received`, `cancelled`. The Laravel names are preferred (shorter, cleaner) — the port keeps Laravel's enum. The `mark-sent` button on Laravel (no legacy equivalent) is acceptable as an enhancement.
+
+#### 4.3.2 PurchaseReceive (GRN)
+
+```
+        store()
+          │
+          ▼
+      ┌─────────┐         cancel() with reason
+      │received │ ────────────────────────────→ ┌──────────┐
+      └─────────┘   (blocks if active returns    │cancelled │  (terminal)
+                    exist on this GRN)            └──────────┘
+```
+
+**Laravel equivalent:** `draft` → `confirmed` → `cancelled` (two-phase: draft is "saved but not posted", confirm applies stock+GL+ledger). Legacy does NOT have a draft state — store() immediately posts. **Laravel's two-phase pattern is preferred** (allows editing draft before committing stock). The port keeps Laravel's two-phase.
+
+#### 4.3.3 PurchaseReturn
+
+```
+        store()
+          │
+          ▼
+   ┌────────────┐         reverse() with reason
+   │is_reversed=0│ ─────────────────────────────→ ┌────────────┐
+   │  (active)   │   (admin/manager/accountant)    │is_reversed=1│  (terminal)
+   └────────────┘                                 └────────────┘
+```
+
+**Laravel equivalent:** `draft` → `confirmed` → `cancelled`. Same two-phase pattern as GRN. The port keeps Laravel's two-phase.
+
+### 4.4 Legacy CSS Class Families
+
+| File | Class families |
+|---|---|
+| `purchase-index.css` | `.purch-index-app`, `.purch-index-hero`, `.purch-index-tag`, `.purch-index-hero-actions`, `.purch-index-filters-shell`, `.purch-index-filters-toggle*`, `.purch-index-smart-panel`, `.purch-index-preset-row`, `.purch-index-preset-btn`, `.purch-index-search-wrap`, `.purch-index-search-input`, `.purch-index-status-chips`, `.purch-index-status-chip`, `.purch-index-active-bar`, `.purch-index-results-card`, `.purch-index-results-head`, `.purch-index-mobile-cards`, `.purch-index-mobile-card`, `.purch-index-amt`, `.purch-badge` + 9 state modifiers (draft/pending/partial/received/completed/cancelled/returned/reversed) |
+| `purchase-order-form.css` | `.purch-po-form-app`, `.purch-po-form-layout`, `.purch-po-form-card`, `.purch-po-form-card-head`, `.purch-po-form-card-body`, `.purch-po-product-cell`, `.purch-po-product-dropdown`, `.purch-po-form-footer`, `.purch-po-total-label`, `.purch-po-form-actions`, `.purch-po-items-card` |
+| `purchase-order-details.css` | `.purch-po-detail-stats`, `.purch-po-stat`, `.purch-po-progress-wrap`, `.purch-po-detail-grid`, `.purch-po-detail-card`, `.purch-po-remarks`, `.purch-po-detail-items`, `.purch-po-detail-items-head`, `.purch-po-status-pill` + 5 state modifiers |
+| `purchase-return-create.css` | `.prt-create-app`, `.prt-create-workspace` (with `--compact`), `.prt-create-hero`, `.prt-create-panel`, `.prt-create-step-find`, `.prt-create-find-head`, `.prt-create-step-badge`, `.prt-create-search-wrap`, `.prt-create-search-hint`, `.prt-create-results`, `.prt-create-results-msg`, `.prt-create-result-card`, `.prt-create-result-top`, `.prt-create-result-code`, `.prt-create-result-amt`, `.prt-create-result-meta`, `.prt-create-invoice-bar`, `.prt-create-change-invoice`, `.prt-create-form-card`, `.prt-create-form-card-head`, `.prt-create-total-strip`, `.prt-create-form-actions`, `.purchase-return-create-offcanvas` |
+| `purchase-return-index.css` | `.purchase-return-app`, `.purchase-return-hero`, `.purchase-return-branch-tag`, `.purchase-return-pending-badge`, `.purchase-return-filters-shell`, `.purchase-return-filters-toggle*`, `.purchase-return-smart-panel`, `.purchase-return-smart-label`, `.purchase-return-preset-row`, `.purchase-return-preset-btn`, `.purchase-return-search-wrap`, `.purchase-return-search-input`, `.purchase-return-status-chips`, `.purchase-return-status-chip` (with `.chip-count`), `.purchase-return-active-bar`, `.purchase-return-results-card`, `.purchase-return-results-head`, `.purchase-return-mobile-card` |
+| `purchase-audit-checklist.css` | `.purch-audit-app`, `.purch-audit-hero`, `.purch-audit-summary`, `.purch-audit-section`, `.purch-audit-section-head`, `.purch-audit-item` (with `.status-pass/warn/fail/info`), `.purch-audit-badge`, `.purch-audit-toc`, `.purch-audit-toc-link`, `.purch-audit-item-link`, `.purch-audit-links`, `.purch-audit-meta` |
+
+### 4.5 Legacy Notable Features (Must Port)
+
+These are distinctive legacy features that have no Laravel equivalent yet:
+
+| # | Feature | Description |
+|---|---|---|
+| F1 | **Damage condition** | Each Return line has a `condition` (`Good`/`Damage`). Good = stock OUT. Damage = NO stock movement (supplier claim only). Both still post GL + supplier_ledger. Audit checklist explicitly checks `prt_damage`. |
+| F2 | **Dual stock cap on Good returns** | `return_qty ≤ min(GRN returnable, warehouse available)`. The warehouse `<select>` carries `data-available` and JS enforces the cap per warehouse. Damage bypasses this check. |
+| F3 | **Direct Purchase (no PO)** | GRN can be created without a PO. Toggle in GRN create form. `purchase_order_id = NULL`, `supplier_id` required. |
+| F4 | **Per-line warehouse selection** | Each GRN line AND each Return line has its own `<select>` for warehouse. A single document can split items across multiple warehouses. |
+| F5 | **Printable Return slip** | `PurchaseReturn/slip/{id}` server-rendered HTML with embedded `@media print` CSS. Red header, "REMOTE CENTER / PURCHASE RETURN SLIP", 2-col info, items table, reason box, signature lines. No PDF library — just `window.print()`. |
+| F6 | **Per-module audit-log pages** | `PurchaseOrder/audit`, `PurchaseReceive/audit`, `PurchaseReturn/audit` — each shows `UserAudit` logs filtered by action prefix (`purchase_order_*`, `purchase_receive_*`, `purchase_return_*`). Table with timestamp/by/action/target/details/IP. |
+| F7 | **PurchaseAudit checklist** | Central dashboard with 12 health-check sections (products, suppliers, warehouses, stock SSOT, PO, GRN, Return, payments, GL links, ledger, reporting, scope). Each item has `pass/warn/fail/info` status. Re-runnable via AJAX. 3 detail tables for actionable issues (negative stock, missing GRN journals, missing Return journals). |
+| F8 | **Offcanvas quick-create on Return index** | Bootstrap offcanvas on Return index page that embeds the **same** `create_workspace` partial as the full-page create. After save, the index table auto-reloads via `purchaseReturn:created` custom event. |
+| F9 | **Live chip counts via separate AJAX** | Return index chips (All/Active/Reversed) display live counts via `PurchaseReturn/return_filter_summary`. Debounced 280ms after filter changes. |
+| F10 | **Smart-sort on Return index** | "Priority sort" checkbox. When enabled (default): `ORDER BY is_reversed ASC, return_date DESC, id DESC` (active first, then reversed). |
+| F11 | **Cumulative returned_qty tracking** | `purchase_receive_items.returned_qty` is incremented on Return create and decremented (via `GREATEST(0, x - qty)`) on Return reverse. Prevents over-returning across multiple returns on the same GRN line. |
+| F12 | **Reversal via stock_transactions audit trail** | Reverse Return reads `stock_transactions WHERE reference_type='purchase_return'` and restores each movement. New movements logged as `reference_type='purchase_return_reversal'`. `stock_transactions` is the SSOT for reversal. |
+| F13 | **Insufficient-stock blocking on GRN cancel** | `cancelReceive` throws if `warehouse_stock.qty < item.qty` for any line. Prevents cancelling a GRN whose stock has already been issued out via sales. |
+| F14 | **Custom typeahead (NOT Select2)** | Legacy uses custom text input + `.sales-search-input` style dropdown for product search. Same pattern as the sales cart (which we just ported). Laravel currently uses Select2 with a 500-product cap. |
+| F15 | **Server-side DataTables** | Legacy index pages use server-side DataTables (server does filtering/sorting/paging). Laravel uses client-side DataTables over paginated data (limited to 25 rows per page). |
+| F16 | **CSV export** | All 3 legacy index pages have `?export` CSV endpoint. Laravel has none. |
+| F17 | **localStorage filter persistence** | Legacy index pages persist filters in `localStorage` (`purchase_order_filters_v1`, etc.). Laravel does not. |
+| F18 | **Mobile card rendering on <768px** | Legacy index pages render `<div class="purch-index-mobile-cards">` with one card per row when viewport <768px. Laravel uses responsive DataTables only. |
+| F19 | **PO→GRN→Return navigation** | Legacy PO details page has "Receive goods" button → `PurchaseReceive/create`. Legacy GRN details page shows linked returns. Legacy Return details page links back to GRN. Laravel has none of these cross-links. |
+| F20 | **Random vs sequential code generation** | Legacy PO/GRN use `COUNT(*)+1` per day (race-unsafe). Legacy Return uses `rand(1000,9999)` (collision risk). Laravel uses `DocumentSequenceService::nextCode()` with advisory locks (race-safe). **Laravel wins — keep Laravel's.** |
+
+---
+
+## 5. Gap Analysis
+
+### 5.1 Routes
+
+| Capability | Legacy | Laravel | Gap |
+|---|---|---|---|
+| PO list | `GET PurchaseOrder` | `GET admin/purchase-orders` | ✅ |
+| PO create form | `GET PurchaseOrder/create` | `GET admin/purchase-orders/create` | ✅ |
+| PO store | `POST PurchaseOrder/store` | `POST admin/purchase-orders` | ✅ |
+| PO edit form | `GET PurchaseOrder/edit/{id}` | `GET admin/purchase-orders/{id}/edit` | ✅ |
+| PO update | `POST PurchaseOrder/update/{id}` | `PUT/PATCH admin/purchase-orders/{id}` | ✅ |
+| PO show | `GET PurchaseOrder/Details/{id}` | `GET admin/purchase-orders/{id}` | ✅ |
+| PO cancel | `POST PurchaseOrder/delete/{id}` (with reason) | `POST admin/purchase-orders/{id}/cancel` | ✅ |
+| PO mark-sent | (no equivalent) | `POST admin/purchase-orders/{id}/mark-sent` | ✅ Laravel enhancement |
+| PO product search | `POST PurchaseOrder/search_products` | (no AJAX, uses 500-product dropdown) | ❌ **Phase 7** |
+| PO CSV export | `GET PurchaseOrder/export` | (none) | ❌ **Phase 7** |
+| PO audit log | `GET PurchaseOrder/audit` | (none) | ❌ **Phase 6** |
+| GRN list | `GET PurchaseReceive` | `GET admin/purchase-receives` | ✅ |
+| GRN create form | `GET PurchaseReceive/create` | `GET admin/purchase-receives/create` | ✅ |
+| GRN store | `POST PurchaseReceive/store` (immediate post) | `POST admin/purchase-receives` (draft, two-phase) | ✅ Laravel enhancement |
+| GRN show | `GET PurchaseReceive/details/{id}` | `GET admin/purchase-receives/{id}` | ✅ |
+| GRN confirm | (no equivalent — store posts immediately) | `POST admin/purchase-receives/{id}/confirm` | ✅ Laravel enhancement |
+| GRN cancel | `POST PurchaseReceive/cancel` | `POST admin/purchase-receives/{id}/cancel` | ✅ |
+| GRN PO-details AJAX | `POST PurchaseReceive/get_po_details` | `GET admin/purchase-receives/po-details` | ✅ |
+| GRN CSV export | `GET PurchaseReceive/export` | (none) | ❌ **Phase 7** |
+| GRN audit log | `GET PurchaseReceive/audit` | (none) | ❌ **Phase 6** |
+| Return list | `GET PurchaseReturn` | `GET admin/purchase-returns` | ✅ |
+| Return create form | `GET PurchaseReturn/create` | `GET admin/purchase-returns/create` | ✅ |
+| Return store | `POST PurchaseReturn/store` (immediate post) | `POST admin/purchase-returns` (draft, two-phase) | ✅ Laravel enhancement |
+| Return show | `GET PurchaseReturn/details/{id}` | `GET admin/purchase-returns/{id}` | ✅ |
+| Return confirm | (no equivalent) | `POST admin/purchase-returns/{id}/confirm` | ✅ Laravel enhancement |
+| Return reverse | `POST PurchaseReturn/reverse` | `POST admin/purchase-returns/{id}/cancel` (with `confirm_reason`) | ✅ Laravel unifies |
+| Return GRN-details AJAX | `POST PurchaseReturn/get_receive_for_return` | `GET admin/purchase-returns/receive-details` | ✅ |
+| Return GRN search AJAX | `POST PurchaseReturn/search_receive` | (none — Laravel uses dropdown list of 100 GRNs) | ❌ **Phase 4** |
+| Return chip counts AJAX | `GET PurchaseReturn/return_filter_summary` | (none) | ❌ **Phase 4** |
+| Return slip print | `GET PurchaseReturn/slip/{id}` | (none) | ❌ **Phase 6** |
+| Return CSV export | `GET PurchaseReturn/export` | (none) | ❌ **Phase 7** |
+| Return audit log | `GET PurchaseReturn/audit` | (none) | ❌ **Phase 6** |
+| Audit checklist | `GET PurchaseAudit/checklist` | `GET admin/reports/purchase-audit` (stub) | ❌ **Phase 6** |
+| Audit run-checks AJAX | `GET PurchaseAudit/run_checks` | (none) | ❌ **Phase 6** |
+
+### 5.2 Database Schema
+
+| Table | Column / Concern | Legacy | Laravel | Gap |
+|---|---|---|---|---|
+| `purchase_orders` | `expected_date` | ✅ exists | ✅ in code, ❌ **missing from `05_purchase.sql`** | ❌ **Phase 0** |
+| `purchase_orders` | `sub_total`, `discount_amount`, `tax_amount` | ❌ none | ✅ exists | Laravel enhancement |
+| `purchase_orders` | `warehouse_id` (header) | ❌ none | ✅ nullable | Laravel enhancement |
+| `purchase_orders` | `status` enum values | `draft/pending/partially_received/received/cancelled` | `draft/sent/partial/received/cancelled` | Laravel renames — keep Laravel |
+| `purchase_orders` | `cancelled_at`, `cancelled_by`, `cancel_reason` | ✅ exists | ❌ cancel reason appended to `notes` | Minor — keep Laravel pattern |
+| `purchase_orders` | `journal_entry_id` | ✅ exists (always NULL on PO) | ❌ not in schema | OK — PO doesn't post GL |
+| `purchase_order_items` | `amount` column | ❌ computed in code | ✅ GENERATED ALWAYS AS (qty * rate) STORED | Laravel enhancement |
+| `purchase_order_items` | `received_qty` | ✅ DEFAULT 0 | ✅ DEFAULT 0 | ✅ |
+| `purchase_receives` | `status` | ✅ `received/cancelled` | ✅ in code, ❌ **missing from `05_purchase.sql`** | ❌ **Phase 0** |
+| `purchase_receives` | `is_reversed`, `reversed_at`, `reversed_by`, `reverse_reason` | ✅ exists | ✅ exists | ✅ |
+| `purchase_receives` | `journal_entry_id` | ✅ exists | ✅ exists | ✅ |
+| `purchase_receives` | `sub_total`, `discount_amount`, `tax_amount` | ❌ none | ✅ exists | Laravel enhancement |
+| `purchase_receives` | `warehouse_id` (header) | ❌ per-line only | ✅ NOT NULL on header | Laravel differs — keep Laravel |
+| `purchase_receive_items` | `returned_qty` | ✅ DEFAULT 0 | ✅ DEFAULT 0 (column name is `return_qty`) | Minor naming |
+| `purchase_receive_items` | `condition` | ✅ always `'Good'` on GRN | ❌ not in schema | OK — GRN doesn't need condition |
+| `purchase_receive_items` | `warehouse_id` | ✅ per-line NOT NULL | ✅ per-line NULL | OK — service enforces |
+| `purchase_receive_items` | `purchase_order_item_id` | ✅ nullable | ✅ nullable | ✅ |
+| `purchase_returns` | `status` | (uses `is_reversed` only) | ✅ in code, ❌ **missing from `05_purchase.sql`** | ❌ **Phase 0** |
+| `purchase_returns` | `warehouse_id` (header) | ❌ per-line only | ✅ NOT NULL on header, ❌ **service doesn't write it** | ❌ **Phase 0** |
+| `purchase_returns` | `is_reversed`, `reversed_at`, `reversed_by`, `reverse_reason` | ✅ exists | ✅ exists | ✅ |
+| `purchase_returns` | `journal_entry_id` | ✅ exists | ✅ exists | ✅ |
+| `purchase_returns` | `sub_total`, `discount_amount`, `tax_amount` | ❌ none | ❌ none | ✅ (matches legacy) |
+| `purchase_return_items` | `condition` (`Good`/`Damage`) | ✅ exists | ❌ **NOT in schema** | ❌ **Phase 5** |
+| `purchase_return_items` | `warehouse_id` | ✅ per-line | ✅ per-line | ✅ |
+| `purchase_return_items` | `purchase_receive_item_id` | ✅ required | ✅ nullable | Minor — service enforces |
+
+### 5.3 Business Logic
+
+| Logic | Legacy | Laravel | Gap |
+|---|---|---|---|
+| PO is draft-only (no GL/stock/ledger) | ✅ | ✅ | ✅ |
+| GRN posts `Dr Inventory / Cr AP` | ✅ | ✅ | ✅ |
+| GRN stock IN at purchase rate (avg-cost recalc) | ✅ | ✅ | ✅ |
+| GRN supplier ledger credit | ✅ | ✅ | ✅ |
+| GRN cancel reverses stock + GL + ledger + PO received_qty | ✅ | ✅ | ✅ |
+| GRN cancel blocks if active returns exist | ✅ | ❌ **not enforced** | ❌ **Phase 0** |
+| GRN cancel blocks if insufficient warehouse_stock | ✅ | ❓ (depends on StockService) | Verify in Phase 0 |
+| Return posts `Dr AP / Cr Inventory` | ✅ | ✅ | ✅ |
+| Return stock OUT at ORIGINAL receive rate | ✅ | ✅ | ✅ |
+| Return supplier ledger debit | ✅ | ✅ | ✅ |
+| Return reverse restores via stock_transactions | ✅ | ✅ (via `StockService::reverseTransaction`) | ✅ |
+| Return reverse decrements return_qty via `GREATEST(0, x-qty)` | ✅ | ✅ | ✅ |
+| **Damage condition = no stock movement** | ✅ | ❌ | ❌ **Phase 5** |
+| **Dual cap: return_qty ≤ min(GRN returnable, warehouse available)** | ✅ | ❌ (only GRN returnable cap) | ❌ **Phase 5** |
+| Two-phase draft → confirm | ❌ (store posts immediately) | ✅ | Laravel enhancement — keep |
+| Idempotent cancel (guard: already cancelled) | ✅ | ✅ | ✅ |
+| Race-safe code generation | ❌ (`COUNT(*)+1` / `rand()`) | ✅ (advisory locks) | Laravel wins — keep |
+
+### 5.4 UI / Views
+
+| Page | Legacy look | Laravel look | Gap |
+|---|---|---|---|
+| PO index | `.purch-index-app` + hero + smart-panel + status chips + results card | Generic Bootstrap hero + 7 stat cards + filter card + table card | ❌ **Phase 2** |
+| PO create | `.purch-po-form-app` + 2-col layout + typeahead line items | Generic Bootstrap card + Select2 line items (500-product cap) | ❌ **Phase 2** |
+| PO edit | Same as create | Same as create | ❌ **Phase 2** |
+| PO show | `.purch-po-detail` + 4 stat cards + progress bar + items table | Generic Bootstrap 2-col + items table + actions card | ❌ **Phase 2** |
+| PO show "Receive goods" button | ✅ | ❌ (stale text "Phase 7.2 not implemented") | ❌ **Phase 3** |
+| PO show "Receives against this PO" list | ❌ | ❌ | Both missing — **Phase 3** |
+| GRN index | `.purch-index-app` (shared with PO) | Generic Bootstrap | ❌ **Phase 3** |
+| GRN create | Bootstrap card + Direct Purchase toggle + per-line warehouse | Bootstrap card + Direct toggle + per-line warehouse (close) | ❌ **Phase 3** (mostly restyle) |
+| GRN show | Stat cards + journal block + items table + linked returns | Stat cards + items + stock movements + GL + ledger cards (richer) | Laravel is richer — keep |
+| GRN show "Return against this GRN" button | ❌ (legacy does it from index offcanvas) | ❌ | **Phase 4** |
+| GRN show "Returns against this GRN" list | ✅ (in details.php) | ❌ | ❌ **Phase 4** |
+| Return index | `.purchase-return-app` + chips with counts + offcanvas quick-create + smart-sort | Generic Bootstrap | ❌ **Phase 4** |
+| Return create | `.prt-create-workspace` 2-step wizard (find GRN → return form) | Bootstrap card with GRN `<select>` dropdown | ❌ **Phase 4** |
+| Return show | Stat cards + reason alert + journal block + items table | Stat cards + items + stock movements + GL + ledger cards (richer) | Laravel is richer — keep |
+| Return slip print | ✅ `slip.php` with `@media print` | ❌ | ❌ **Phase 6** |
+| PO audit log | ✅ `audit.php` | ❌ | ❌ **Phase 6** |
+| GRN audit log | ✅ `audit.php` | ❌ | ❌ **Phase 6** |
+| Return audit log | ✅ `audit.php` | ❌ | ❌ **Phase 6** |
+| PurchaseAudit checklist | ✅ `checklist.php` (12 sections + 3 detail tables) | ❌ (stub at `reports/purchase-audit`) | ❌ **Phase 6** |
+
+### 5.5 JS / AJAX
+
+| Concern | Legacy | Laravel | Gap |
+|---|---|---|---|
+| PO create product typeahead | `POST PurchaseOrder/search_products` | ❌ (Select2 with 500-product `<template>`) | ❌ **Phase 7** |
+| GRN create Direct product typeahead | `POST PurchaseOrder/search_products` (reused) | ❌ (same Select2) | ❌ **Phase 7** |
+| Return GRN typeahead | `POST PurchaseReturn/search_receive` | ❌ (dropdown of 100 GRNs) | ❌ **Phase 4** |
+| Return chip counts | `GET PurchaseReturn/return_filter_summary` | ❌ | ❌ **Phase 4** |
+| Return offcanvas quick-create | `purchaseReturn:created` event | ❌ | ❌ **Phase 4** |
+| localStorage filter persistence | `purchase_*_filters_v1` | ❌ | ❌ **Phase 7** |
+| Server-side DataTables | ✅ | ❌ (client-side over paginated 25/page) | ❌ **Phase 7** |
+| Mobile card rendering <768px | ✅ `.purch-index-mobile-cards` | ❌ | ❌ **Phase 7** |
+| Dead JS files | N/A | 6 files (~2,500 lines) reference stale DOM IDs + enums | ❌ **Phase 0** (delete) |
+
+### 5.6 Cross-Cutting Concerns
+
+| Concern | Legacy | Laravel | Gap |
+|---|---|---|---|
+| RBAC on routes | `route_roles.php` gates admin/manager vs warehouse_manager | ❌ only `auth` middleware | ❌ **Phase 1** |
+| Branch isolation | `$_SESSION['branch_id']` filters create/search/details (but NOT DataTables queries — latent bug) | ❌ no enforcement | ❌ **Phase 1** |
+| Supplier selection | Plain `<select>` from `getActiveSuppliers()` | Select2 from `Supplier::active()->get()` | Minor — keep Laravel |
+| Product selection | Custom typeahead (`PurchaseOrder/search_products`) | Select2 capped at 500 | ❌ **Phase 7** |
+| Tax/discount/transport on PO | ❌ none | ✅ discount + tax (no transport) | Laravel enhancement — keep |
+| Tax/discount/transport on GRN | ❌ none | ✅ discount + tax (no transport) | Laravel enhancement — keep |
+| Tax/discount/transport on Return | ❌ none | ❌ none | ✅ (matches legacy) |
+| Unit conversion (case → piece) | ❌ none | ❌ none | Out of scope |
+| Foreign currency / FX | ❌ none | ❌ none | Out of scope |
+| Approval workflow | ❌ none | ❌ none | Out of scope |
+| PO→Receive→Return linkage in DB | ✅ nullable FKs both ways | ✅ same | ✅ |
+
+---
+
+## 6. Critical Bugs & Blockers
+
+These must be addressed in Phase 0 before any UI work begins. Each is a runtime-breaking issue or a security hole.
+
+### 6.1 BUG-1: `purchase_receives.status` column missing from schema (CRITICAL)
+
+The Laravel service code writes `status='draft'`, `status='confirmed'`, `status='cancelled'` on every INSERT and UPDATE. The model has `isDraft()` / `isConfirmed()` / `isCancelled()` helpers that read this column. The controller filters by `status` in index queries. **But the column does NOT exist in `database/sql/05_purchase.sql`.**
+
+**Verification needed:** Run `\d purchase_receives` in the live PostgreSQL container (`rcerp_postgres`) to confirm whether the column exists. If it does, the SQL file is just stale. If it doesn't, every GRN operation is broken.
+
+**Fix:** Add a Laravel migration `2025_01_24_000001_add_status_to_purchase_receives.php` (idempotent, guarded by `Schema::hasColumn`) that adds:
+```sql
+status VARCHAR(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','cancelled'))
+```
+Also update `05_purchase.sql` to match.
+
+### 6.2 BUG-2: `purchase_returns.status` column missing from schema (CRITICAL)
+
+Same issue as BUG-1 but for `purchase_returns`. Same fix pattern.
+
+### 6.3 BUG-3: `purchase_orders.expected_date` column missing from schema (CRITICAL)
+
+Controller validates `expected_date => 'nullable|date'`. Service writes `'expected_date' => $data['expected_date'] ?? null`. Model casts `'expected_date' => 'date'`. **But the column does NOT exist in `database/sql/05_purchase.sql`.**
+
+**Fix:** Add migration `2025_01_24_000002_add_expected_date_to_purchase_orders.php` (idempotent) that adds:
+```sql
+expected_date DATE NULL
+```
+
+### 6.4 BUG-4: `purchase_returns.warehouse_id` NOT NULL but service doesn't write it (CRITICAL)
+
+Schema declares `warehouse_id integer NOT NULL FK→warehouses`. The `PurchaseReturnService::createReturn()` method does NOT set `warehouse_id` on the `purchase_returns` insert (only on `purchase_return_items`). This will cause a NOT NULL violation on every Return create.
+
+**Verification needed:** Confirm via live DB. If the column is actually NULL-able in the live DB (because the SQL file is stale), no fix needed beyond updating the SQL file. If it's NOT NULL, the service needs a one-line fix: `'warehouse_id' => $receive->warehouse_id` (inherit from GRN).
+
+**Fix:** Update the service to inherit `warehouse_id` from the GRN. Also update `05_purchase.sql` to either keep NOT NULL (and ensure service writes it) or make it nullable (and treat per-line warehouse as authoritative — matches legacy pattern).
+
+### 6.5 BUG-5: GRN cancel doesn't block if active returns exist (FUNCTIONAL GAP)
+
+Legacy `PurchaseReceiveModel::cancelReceive` throws if any active (non-reversed) `purchase_returns` exist on the GRN. This prevents inconsistent state where stock has been returned to supplier but the original receipt is cancelled (which would re-add stock that's already gone).
+
+Laravel's `PurchaseReceiveService::cancelReceive` does NOT have this check.
+
+**Fix:** Add a guard at the top of `cancelReceive`:
+```
+if (PurchaseReturn::where('purchase_receive_id', $id)
+    ->where('is_reversed', false)
+    ->where('status', 'confirmed')
+    ->exists()) {
+    throw new \Exception('Cannot cancel GRN: active returns exist. Reverse them first.');
+}
+```
+
+### 6.6 BUG-6: No RBAC middleware on purchase routes (SECURITY)
+
+Any authenticated user (including a salesman) can access every purchase endpoint — including cancel/reverse. Legacy gates these to admin/manager/accountant only.
+
+**Fix:** Add `->middleware(['role:admin,manager,accountant'])` to the purchase route group. Optionally split: read access for `warehouse_manager`, write access for `admin/manager` only.
+
+### 6.7 BUG-7: No branch isolation on purchase routes (SECURITY)
+
+A user logged into Branch A can see/filter/create data for Branch B by passing `?branch_id=B` in the URL.
+
+**Fix:** Add `->middleware(['branch.isolation'])` (if it exists) or implement a middleware that overrides any client-supplied `branch_id` with `session('branch_id')`.
+
+### 6.8 BUG-8: Stale UI text on PO show page (COSMETIC)
+
+`purchase-orders/show.blade.php` line ~340-348 contains: *"This PO can receive goods via GRN (Phase 7.2). Goods receipt will be available once Phase 7.2 is implemented."* — but Phase 7.2 IS implemented. Replace with a "Receive against this PO" button linking to `route('admin.purchase-receives.create', ['po_id' => $po->id])`.
+
+### 6.9 BUG-9: Dead JS files in `laravel/public/assets/js/` (CLEANUP)
+
+Six JS files (~2,500 lines) reference stale DOM IDs (`#purchase-order-app`, `#filterStatus`, `window.PURCHASE_ORDER_BOOT`) and stale status enums (`pending`, `partially_received`). They are not referenced by any blade view. They were likely copied from legacy during the initial Laravel scaffold and never reconciled.
+
+**Fix:** Delete all 6 files in Phase 0. They will be re-implemented as inline `@push('scripts')` blocks during Phases 2–4 (matching the sales-cart pattern).
+
+---
+
+## 7. Decisions (Locked)
+
+These decisions were made based on the audit findings. They are NOT open for re-debate unless a Phase 0 verification reveals a blocker.
+
+| # | Decision | Rationale |
+|---|---|---|
+| D1 | **Keep Laravel's two-phase draft → confirm pattern** for GRN and Return. | Allows editing draft before committing stock/GL. Legacy's immediate-post pattern is less forgiving. |
+| D2 | **Keep Laravel's status enums** (`draft/sent/partial/received/cancelled` for PO; `draft/confirmed/cancelled` for GRN/Return). | Cleaner than legacy's `pending/partially_received`. Less renames needed. |
+| D3 | **Keep Laravel's `markAsSent` action** on PO (no legacy equivalent). | Useful business state — PO is "sent to supplier" but no GRN yet. |
+| D4 | **Keep Laravel's `DocumentSequenceService`** (advisory-locked code generation). | Race-safe vs legacy's `COUNT(*)+1` / `rand()`. |
+| D5 | **Keep Laravel's `discount_amount` + `tax_amount`** on PO and GRN. | Laravel enhancement over legacy. Useful for VAT-registered suppliers. |
+| D6 | **Do NOT add `discount_amount` / `tax_amount` to Returns.** | Matches legacy. Returns are qty × rate only. |
+| D7 | **Do NOT add `transport_cost` to any purchase entity.** | Legacy has none. If needed later, add as net-new feature. |
+| D8 | **Port the Damage condition** (no-stock-movement returns). | Legacy feature F1. Required for supplier-claim workflows (damaged in transit). |
+| D9 | **Port the dual stock cap** (GRN returnable AND warehouse available) for Good returns. | Legacy feature F2. Prevents returning stock that's been issued out via sales. |
+| D10 | **Port the printable Return slip** via `window.print()`. | Legacy feature F5. No PDF library needed. |
+| D11 | **Port the per-module audit-log pages** (PO/GRN/Return). | Legacy feature F6. Required for SOX-style traceability. |
+| D12 | **Port the PurchaseAudit checklist** with 12 health-check sections. | Legacy feature F7. The only "health dashboard" in the purchase module. |
+| D13 | **Port the offcanvas quick-create** on Return index. | Legacy feature F8. Major UX win — cashier can create a return without leaving the index. |
+| D14 | **Port the live chip counts** on Return index. | Legacy feature F9. Better than Laravel's static "stats" cards. |
+| D15 | **Port the smart-sort** on Return index. | Legacy feature F10. Surfaces active returns above reversed ones. |
+| D16 | **Replace Select2 with custom typeahead** for product search. | Matches the sales-cart pattern we just established (commit `c2bd5c7`). Removes the 500-product cap. |
+| D17 | **Replace client-side DataTables with server-side DataTables** on index pages. | Legacy pattern. Allows >10k-row datasets without browser strain. |
+| D18 | **Add `transport_cost` is OUT OF SCOPE.** | Legacy has none. If needed, add as net-new feature in a later phase. |
+| D19 | **Approval workflow is OUT OF SCOPE.** | Legacy has none. If needed, add as net-new feature in a later phase. |
+| D20 | **Foreign currency / exchange rate is OUT OF SCOPE.** | Legacy has none. All amounts in BDT. |
+| D21 | **Unit conversion (case → piece) is OUT OF SCOPE.** | Legacy has none. All qty in product's base unit. |
+| D22 | **Use the same `layouts.admin` layout** as the rest of the Laravel app. | Consistency with sales cart. Legacy `main.php` layout is not being ported. |
+| D23 | **Use `@push('css')` to link the 6 legacy purchase CSS files** on the relevant pages. | Same pattern as the sales cart's `sales-pos.css` link. |
+| D24 | **Use `@push('scripts')` for inline JS** (no external JS files). | Matches the sales cart pattern. Avoids the dead-JS-file problem. |
+| D25 | **Add Form Request classes** for PO/GRN/Return validation. | Replaces inline `$request->validate()`. More testable, more reusable. |
+| D26 | **PO/GRN/Return `audit` log pages are NEW routes** (`admin/purchase-orders/audit`, etc.) — NOT replacing any existing route. | Legacy has them; Laravel doesn't. Additive. |
+| D27 | **The PurchaseAudit checklist replaces the stub** at `admin/reports/purchase-audit`. | The stub is currently a placeholder. Replace with the real checklist. |
+| D28 | **Cross-linkage buttons (PO→GRN, GRN→Return, PO→list of GRNs, GRN→list of Returns)** are mandatory. | Legacy has them implicitly via the "Receive goods" button and the linked-returns table. Laravel has none. |
+| D29 | **CSV export** on all 3 index pages. | Legacy has it. Useful for accounting reconciliation. |
+| D30 | **Mobile card rendering on <768px** for all 3 index pages. | Legacy has it. Laravel currently uses responsive DataTables only (not great on phones). |
+
+---
+
+## 8. Phase-by-Phase Implementation Plan
+
+Each phase is independently shippable. A phase is "done" when all its success criteria (§9) are met AND the user has signed off on a smoke test.
+
+### Phase 0 — Schema reconciliation + critical bug fixes + cleanup
+
+**Goal:** Make the existing Laravel purchase module *actually work correctly* before adding any new features.
+
+**Tasks:**
+1. Verify live DB schema by running `\d purchase_orders`, `\d purchase_receives`, `\d purchase_returns`, `\d purchase_return_items` inside the `rcerp_postgres` container.
+2. Create migration `2025_01_24_000001_add_status_to_purchase_receives.php` — adds `status` column if missing. Update `05_purchase.sql` to match.
+3. Create migration `2025_01_24_000002_add_status_to_purchase_returns.php` — same.
+4. Create migration `2025_01_24_000003_add_expected_date_to_purchase_orders.php` — adds `expected_date` if missing. Update `05_purchase.sql`.
+5. Fix BUG-4: Update `PurchaseReturnService::createReturn()` to inherit `warehouse_id` from the GRN (or update SQL to make the column nullable — decide based on Phase 0 verification).
+6. Fix BUG-5: Add the "active returns exist" guard to `PurchaseReceiveService::cancelReceive()`.
+7. Fix BUG-8: Replace the stale "Phase 7.2 not implemented" text on `purchase-orders/show.blade.php` with a real "Receive against this PO" button.
+8. Delete the 6 dead JS files:
+   - `laravel/public/assets/js/PurchaseOrder.js`
+   - `laravel/public/assets/js/PurchaseReceive.js`
+   - `laravel/public/assets/js/PurchaseReturn.js`
+   - `laravel/public/assets/js/purchase-order-index.js`
+   - `laravel/public/assets/js/purchase-receive-index.js`
+   - `laravel/public/assets/js/purchase-return-index.js`
+9. Smoke-test: Create a PO, create+confirm a GRN against it, create+confirm a Return against the GRN, cancel the Return, cancel the GRN. Verify stock + GL + supplier_ledger reconcile at each step.
+
+**Files touched:** ~3 migrations, 1 SQL file, 1 service, 1 blade view, 6 JS file deletions.
+
+---
+
+### Phase 1 — RBAC + branch isolation
+
+**Goal:** Lock down purchase routes so only authorized roles can access them, and users can only see/create data for their own branch.
+
+**Tasks:**
+1. Audit existing middleware: does `branch.isolation` exist? (Check `app/Http/Middleware/`.) If not, create it.
+2. Add `->middleware(['role:admin,manager,accountant'])` to the purchase route group in `routes/web.php`.
+3. Add `->middleware(['branch.isolation'])` to the same group.
+4. Define role matrix:
+   - `admin` / `manager`: full access (create, edit, cancel, reverse, audit, export).
+   - `accountant`: read access + cancel/reverse (no create/edit).
+   - `warehouse_manager`: read access + create GRN (no cancel/reverse).
+   - `salesman`: no access to purchase module.
+5. Update controllers to enforce the role matrix on a per-method basis (use `Gate` facades or `authorize()` calls).
+6. Update `index()` queries in all 3 controllers to scope by `session('branch_id')` instead of accepting a client-supplied `branch_id` filter (admin can override with an explicit "all branches" toggle).
+7. Smoke-test: Log in as each role; verify access matrix. Log in as Branch A user; verify Branch B data is invisible.
+
+**Files touched:** `routes/web.php`, 3 controllers, possibly a new middleware.
+
+---
+
+### Phase 2 — PurchaseOrder UI parity (legacy-faithful)
+
+**Goal:** PO index / create / edit / show pages look and behave like legacy.
+
+**Tasks:**
+1. Link `purchase-index.css`, `purchase-order-form.css`, `purchase-order-details.css` via `@push('css')` on the relevant blades.
+2. Restructure `purchase-orders/index.blade.php`:
+   - Wrap in `<div class="purch-index-app">`.
+   - Hero header with `.purch-index-hero` + `.purch-index-tag` + `.purch-index-hero-actions`.
+   - Collapsible filter panel with `.purch-index-filters-shell` + `.purch-index-smart-panel` + `.purch-index-preset-row`.
+   - Status chips with `.purch-index-status-chips` + `.purch-index-status-chip`.
+   - Search input with `.purch-index-search-wrap` + `.purch-index-search-input`.
+   - Active filter bar with `.purch-index-active-bar`.
+   - Results card with `.purch-index-results-card` + `.purch-index-mobile-cards`.
+   - Use `.purch-badge` + state modifiers for status pills.
+3. Restructure `purchase-orders/create.blade.php` and `edit.blade.php`:
+   - Wrap in `<div class="purch-po-form-app">`.
+   - 2-col layout with `.purch-po-form-layout`.
+   - Header card with `.purch-po-form-card` + `.purch-po-form-card-head` + `.purch-po-form-card-body`.
+   - Items card with `.purch-po-items-card`.
+   - Product cell with `.purch-po-product-cell` + `.purch-po-product-dropdown` (custom typeahead — NOT Select2).
+   - Footer with `.purch-po-form-footer` + `.purch-po-total-label` + `.purch-po-form-actions`.
+4. Restructure `purchase-orders/show.blade.php`:
+   - Wrap in `<div class="purch-po-detail">` (or similar).
+   - 4 stat cards with `.purch-po-detail-stats` + `.purch-po-stat`.
+   - Progress bar with `.purch-po-progress-wrap`.
+   - 2-col grid with `.purch-po-detail-grid` + `.purch-po-detail-card`.
+   - Items table with `.purch-po-detail-items`.
+   - Status pill with `.purch-po-status-pill` + state modifier.
+5. Replace Select2 product dropdown with custom text-input typeahead (same pattern as the sales cart). Add new AJAX endpoint `GET admin/purchase-orders/search-products?term=...` returning JSON `[{id, product_code, product_name, unit}, ...]`.
+6. Replace client-side DataTables with server-side DataTables on PO index. Add `?datatables=1` mode to `index()` controller method that returns JSON `{draw, recordsTotal, recordsFiltered, data}`.
+7. Add localStorage filter persistence (`purchase_order_filters_v1`).
+8. Add mobile card rendering on `<768px` (use the same DataTables `drawCallback` pattern as legacy).
+9. Add CSV export endpoint `GET admin/purchase-orders/export` (returns `Content-Type: text/csv`).
+10. Smoke-test: Create a PO with 10+ line items using the typeahead. Verify the form submits, the show page renders with the progress bar, and the index page filters/sorts/exports correctly.
+
+**Files touched:** 4 blade views (index/create/edit/show), 1 controller method (search-products + datatables mode + export), 3 CSS files linked, ~600 lines of new inline JS across the 4 blades.
+
+---
+
+### Phase 3 — PurchaseReceive (GRN) UI parity
+
+**Goal:** GRN index / create / show pages look and behave like legacy. Add the missing "Receive against this PO" cross-linkage.
+
+**Tasks:**
+1. Link `purchase-index.css` (already linked in Phase 2 — shared) on GRN index.
+2. Restructure `purchase-receives/index.blade.php`:
+   - Same `.purch-index-app` shape as PO index.
+   - Use `.purch-grn` modifier class (if defined in CSS).
+   - "Show returned/cancelled" toggle via `?returned=1` query param.
+3. Restructure `purchase-receives/create.blade.php`:
+   - Use `.purch-po-form-app` shape (shared with PO create — same CSS).
+   - Direct Purchase toggle (already in Laravel — restyle to match legacy).
+   - Per-line warehouse `<select>` (already in Laravel — restyle).
+   - Replace Select2 product dropdown with custom typeahead (reuse the endpoint from Phase 2).
+   - "Remaining" column on PO-linked mode (already in Laravel — restyle).
+4. Restructure `purchase-receives/show.blade.php`:
+   - Keep the rich layout (stat cards + stock movements + GL + ledger cards) — Laravel is already better than legacy here.
+   - Add `.purch-index-app` wrapper for visual consistency.
+5. Add "Receive against this PO" button on `purchase-orders/show.blade.php` (already added in Phase 0 — verify it links correctly).
+6. Add "Receives against this PO" list section on `purchase-orders/show.blade.php`:
+   - Query: `PurchaseReceive::where('purchase_order_id', $po->id)->with('items')->get()`.
+   - Render as a small table below the PO items table.
+   - Show receive_code (link to GRN show), receive_date, total_amount, status, reversed badge.
+7. Replace client-side DataTables with server-side DataTables on GRN index.
+8. Add CSV export on GRN index.
+9. Add localStorage filter persistence (`purchase_receive_filters_v1`).
+10. Smoke-test: Create a PO, receive it partially (GRN 1), receive the remainder (GRN 2). Verify PO status transitions to `partial` then `received`. Verify both GRNs appear in the "Receives against this PO" list on PO show.
+
+**Files touched:** 3 blade views (index/create/show), 1 controller (datatables mode + export), PO show blade (add Receives list), ~400 lines of new inline JS.
+
+---
+
+### Phase 4 — PurchaseReturn UI parity + offcanvas + smart-sort + chip counts
+
+**Goal:** Return index / create / show pages look and behave like legacy. Add the offcanvas quick-create, smart-sort, live chip counts, GRN typeahead, and the missing "Return against this GRN" cross-linkage.
+
+**Tasks:**
+1. Link `purchase-return-index.css` and `purchase-return-create.css` via `@push('css')`.
+2. Restructure `purchase-returns/index.blade.php`:
+   - Wrap in `<div class="purchase-return-app">`.
+   - Hero with `.purchase-return-hero` + `.purchase-return-branch-tag` + `.purchase-return-pending-badge`.
+   - Collapsible filter panel with `.purchase-return-filters-shell` + `.purchase-return-smart-panel` + `.purchase-return-preset-row`.
+   - Search input with `.purchase-return-search-wrap` + `.purchase-return-search-input`.
+   - **Live chip counts** with `.purchase-return-status-chips` + `.purchase-return-status-chip` (with `.chip-count` child).
+   - Active filter bar with `.purchase-return-active-bar`.
+   - Results card with `.purchase-return-results-card` + `.purchase-return-mobile-card`.
+   - **Smart-sort checkbox** (`.purchase-return-smart-label`).
+   - **Offcanvas quick-create** button (`.purchase-return-create-offcanvas`).
+3. Add new AJAX endpoint `GET admin/purchase-returns/summary?from_date=&to_date=&search=` returning JSON `{total, active, reversed}` for chip counts.
+4. Add new AJAX endpoint `GET admin/purchase-returns/search-receives?term=` returning JSON list of confirmed non-reversed GRNs with returnable items.
+5. Restructure `purchase-returns/create.blade.php`:
+   - Wrap in `<div class="prt-create-app">`.
+   - 2-step workspace with `.prt-create-workspace`:
+     - Step 1 "Find GRN": `.prt-create-step-find` + `.prt-create-find-head` + `.prt-create-step-badge` + `.prt-create-search-wrap` + `.prt-create-search-hint` + `.prt-create-results` + `.prt-create-result-card` (with `.prt-create-result-top` + `.prt-create-result-code` + `.prt-create-result-amt` + `.prt-create-result-meta`).
+     - Step 2 "Return form": `.prt-create-invoice-bar` + `.prt-create-change-invoice` + `.prt-create-form-card` + `.prt-create-form-card-head` + `.prt-create-lines-table` + `.prt-create-total-strip` + `.prt-create-form-actions`.
+   - Keyboard navigation (↑↓ Enter Esc) on the GRN search results.
+   - Per-row warehouse `<select>` with `data-available` for client-side stock cap (Good condition only — see Phase 5).
+6. Create reusable partial `resources/views/admin/purchase-returns/partials/create-workspace.blade.php` (mirrors legacy `partials/create_workspace.php`). Use it on BOTH the full-page create AND the index offcanvas.
+7. Restructure `purchase-returns/show.blade.php`:
+   - Keep the rich layout (stat cards + stock movements + GL + ledger cards).
+   - Add `.prt-create-app` wrapper (or `.purchase-return-app`) for visual consistency.
+   - Add "Slip" button linking to the printable slip (Phase 6).
+8. Add "Return against this GRN" button on `purchase-receives/show.blade.php` (links to `route('admin.purchase-returns.create', ['receive_id' => $receive->id])`).
+9. Add "Returns against this GRN" list section on `purchase-receives/show.blade.php`:
+   - Query: `PurchaseReturn::where('purchase_receive_id', $receive->id)->with('items')->get()`.
+   - Render as a small table below the GRN items table.
+   - Show return_code (link to Return show), return_date, total_amount, status, reversed badge.
+10. Wire the offcanvas: opening it bootstraps a `PurchaseReturnWorkspace` instance pointing at the offcanvas's workspace div. After successful save, dispatch `purchaseReturn:created` event → index table reloads + chip counts refresh.
+11. Replace client-side DataTables with server-side DataTables on Return index.
+12. Add CSV export on Return index.
+13. Add localStorage filter persistence (`purchase_return_filters_v1`).
+14. Smoke-test: Open the offcanvas on Return index. Search for a GRN. Pick it. Return 2 of 5 items. Save. Verify the index table reloads and the chip counts update. Verify the GRN show page now lists this return.
+
+**Files touched:** 3 blade views (index/create/show) + 1 new partial, 1 controller (2 new AJAX endpoints + datatables + export + smart-sort), GRN show blade (add Returns list + Return button), ~800 lines of new inline JS.
+
+---
+
+### Phase 5 — Damage condition + dual stock cap
+
+**Goal:** Support Good vs Damage return conditions. Damage = no stock movement, supplier claim only. Both still post GL + supplier_ledger. Implement dual stock cap (GRN returnable AND warehouse available) for Good returns.
+
+**Tasks:**
+1. Add migration `2025_01_25_000001_add_condition_to_purchase_return_items.php`:
+   ```sql
+   condition VARCHAR(10) NOT NULL DEFAULT 'Good' CHECK (condition IN ('Good','Damage'))
+   ```
+2. Update `PurchaseReturnItem` model: add `condition` to `$fillable`, add accessor for boolean `isDamage()`.
+3. Update `PurchaseReturnController::store()` validation: add `'items.*.condition' => 'nullable|in:Good,Damage'` (default `Good`).
+4. Update `PurchaseReturnService::createReturn()`:
+   - Save `condition` on each item.
+   - For total_amount calculation: sum ALL items (both Good and Damage) — Damage still affects AP.
+5. Update `PurchaseReturnService::confirmReturn()`:
+   - For each item: if `condition === 'Good'`, do stock OUT + log movement (current behavior).
+   - If `condition === 'Damage'`, **skip** the stock OUT + log movement. Still increment `return_qty` on the GRN item. Still post GL + supplier_ledger.
+6. Update `PurchaseReturnService::cancelReturn()` (reversal):
+   - For each item: if `condition === 'Good'`, reverse the stock movement (current behavior).
+   - If `condition === 'Damage'`, no stock reversal needed (nothing was moved). Still decrement `return_qty`.
+7. Update `getReceiveDetails()` AJAX response to include per-warehouse `available_qty` for each item (so the JS can enforce the dual cap).
+8. Update Return create form JS:
+   - Add a `<select class="form-select condition-select">` per row with options `Good` / `Damage`.
+   - When condition = `Good`: enable the warehouse `<select>`, set `max` on the qty input to `min(returnable, available)`.
+   - When condition = `Damage`: disable the warehouse `<select>` (or set to "N/A"), set `max` on the qty input to `returnable` only (no warehouse cap).
+   - SweetAlert warning if user tries to return Good qty > warehouse available.
+9. Update Return show page to display the `condition` column in the items table.
+10. Update PurchaseAudit checklist (Phase 6) to include the `prt_damage` check (Damage lines must not have stock movements).
+11. Smoke-test: Create a GRN with 10 units. Create a Return with 3 Good + 2 Damage. Confirm. Verify: stock movement only for 3 units, GL + supplier_ledger for all 5 units' value, GRN item `return_qty` = 5. Cancel the return. Verify: stock restored only for 3 units, `return_qty` back to 0.
+
+**Files touched:** 1 migration, 1 model, 1 controller, 1 service, 1 AJAX endpoint, 2 blade views (create + show), ~150 lines of new JS.
+
+---
+
+### Phase 6 — Printable Return slip + per-module audit logs + PurchaseAudit checklist
+
+**Goal:** Add the printable Return slip, per-module audit-log pages (PO/GRN/Return), and the central PurchaseAudit checklist dashboard with 12 health-check sections.
+
+**Tasks:**
+1. **Printable Return slip:**
+   - Add route `GET admin/purchase-returns/{id}/slip` named `admin.purchase-returns.slip`.
+   - Add controller method `slip(int $id)` that loads the return + items + supplier + GRN + branch.
+   - Create blade `resources/views/admin/purchase-returns/slip.blade.php` that mirrors legacy `PurchaseReturn/slip.php`:
+     - Max-width 900px centered card.
+     - Red header with "REMOTE CENTER / PURCHASE RETURN SLIP" + return_code.
+     - 2-col info row: Supplier (name + mobile) + GRN Reference (left); Branch + Date + Created By (right).
+     - Items table: #, Product (name + code), Warehouse, Return Qty, Rate, Amount, Condition.
+     - Footer total row.
+     - Reason box.
+     - Signature lines ("Received By (Supplier)" / "Authorized By").
+     - Embedded `<style>@media print { ... }</style>` to hide sidebar/navbar/buttons.
+     - "Print" button calling `window.print()`.
+   - Add "Print Slip" button on Return show page (opens slip in new tab).
+2. **Per-module audit-log pages:**
+   - Add routes: `GET admin/purchase-orders/audit`, `GET admin/purchase-receives/audit`, `GET admin/purchase-returns/audit`.
+   - Add controller methods `audit(Request)` on each controller.
+   - Each method queries the `user_audits` table filtered by action prefix (`purchase_order_*`, `purchase_receive_*`, `purchase_return_*`), paginated 100/page.
+   - Create 3 blade views (one per module) using a shared partial `resources/views/admin/purchase/partials/audit-log-table.blade.php`:
+     - Card with header (title + back button + "view cancelled/reversed" toggle).
+     - Responsive table with columns: Timestamp, By (username), Action (badge), Target ID, Details (JSON pretty-printed), IP.
+     - Action badge color mapping: `*_created` = success, `*_updated` = info, `*_cancelled` / `*_reversed` = danger.
+3. **UserAudit log calls** — add `UserAudit::log()` calls to all service methods that don't already have them:
+   - `PurchaseOrderService::createOrder` → `purchase_order_created`
+   - `PurchaseOrderService::updateOrder` → `purchase_order_updated`
+   - `PurchaseOrderService::markAsSent` → `purchase_order_sent`
+   - `PurchaseOrderService::cancelOrder` → `purchase_order_cancelled`
+   - `PurchaseReceiveService::createReceive` → `purchase_receive_created`
+   - `PurchaseReceiveService::confirmReceive` → `purchase_receive_confirmed`
+   - `PurchaseReceiveService::cancelReceive` → `purchase_receive_cancelled`
+   - `PurchaseReturnService::createReturn` → `purchase_return_created`
+   - `PurchaseReturnService::confirmReturn` → `purchase_return_confirmed`
+   - `PurchaseReturnService::cancelReturn` → `purchase_return_reversed`
+4. **PurchaseAudit checklist:**
+   - Create model `app/Services/PurchaseAuditService.php` with method `runHealthChecks()` that returns the 12-section report (mirror legacy `PurchaseAuditModel::runHealthChecks`):
+     1. Purchase module scope (info).
+     2. Products (purchase SKUs).
+     3. Suppliers.
+     4. Warehouses & branches.
+     5. Stock — single source of truth.
+     6. Purchase order.
+     7. Goods received (GRN).
+     8. Purchase return.
+     9. Supplier payments & due.
+     10. GL journal link columns.
+     11. Ledger & accounts (GL).
+     12. Reporting (catalog).
+   - Add routes: `GET admin/purchase-audit` (HTML page), `GET admin/purchase-audit/run` (JSON AJAX).
+   - Replace the stub `admin/reports/purchase-audit` route with the real checklist.
+   - Create blade `resources/views/admin/purchase-audit/checklist.blade.php`:
+     - Wrap in `<div class="purch-audit-app">`.
+     - Hero with `.purch-audit-hero`.
+     - Summary chips with `.purch-audit-summary` (pass/warn/fail/info counts).
+     - TOC nav with `.purch-audit-toc` + `.purch-audit-toc-link`.
+     - 12 sections with `.purch-audit-section` + `.purch-audit-section-head` + `.purch-audit-item` (with `.status-pass/warn/fail/info`) + `.purch-audit-badge`.
+     - 3 detail tables (conditional): negative stock, GRNs missing journal, Returns missing journal.
+     - "Re-run checks" button → fetch JSON from `admin/purchase-audit/run` → re-render sections via SweetAlert confirmation.
+   - Link `purchase-audit-checklist.css` via `@push('css')`.
+5. Smoke-test: Create a PO, GRN, Return. Visit each module's audit page → verify all 4 actions are logged. Visit the PurchaseAudit checklist → verify all 12 sections render with correct pass/warn/fail statuses. Click "Re-run checks" → verify AJAX refresh works. Create a Return → click "Print Slip" → verify the slip renders in a new tab and prints cleanly.
+
+**Files touched:** 5 new blade views (slip + 3 audit logs + checklist) + 1 shared partial, 4 controller methods (slip + 3 audit), 1 new service (`PurchaseAuditService`), 4 routes, 1 CSS file linked, ~1,000 lines of new code.
+
+---
+
+### Phase 7 — Polish: AJAX product search, Form Requests, cross-linkage completion, exports
+
+**Goal:** Close the remaining parity gaps: AJAX product typeahead (>500 product support), Form Request classes, any remaining cross-linkage buttons, mobile card rendering.
+
+**Tasks:**
+1. **AJAX product search** — replace the 500-product `<template>` dropdown on PO create/edit AND GRN create (Direct mode) with a custom text-input typeahead:
+   - Reuse the endpoint from Phase 2: `GET admin/purchase-orders/search-products?term=...`.
+   - Same `.sales-search-input` + `.sales-suggest-list` pattern as the sales cart.
+   - Each result row: product_name (bold) + product_code + unit.
+   - Keyboard nav: ↑↓ to move, Enter to pick, Esc to close.
+   - Barcode scanner support (same as sales cart — debounced input + Enter fallback).
+2. **Form Request classes:**
+   - `app/Http/Requests/PurchaseOrder/StorePurchaseOrderRequest.php`
+   - `app/Http/Requests/PurchaseOrder/UpdatePurchaseOrderRequest.php`
+   - `app/Http/Requests/PurchaseOrder/CancelPurchaseOrderRequest.php`
+   - `app/Http/Requests/PurchaseReceive/StorePurchaseReceiveRequest.php`
+   - `app/Http/Requests/PurchaseReceive/ConfirmPurchaseReceiveRequest.php`
+   - `app/Http/Requests/PurchaseReceive/CancelPurchaseReceiveRequest.php`
+   - `app/Http/Requests/PurchaseReceive/GetPoDetailsRequest.php`
+   - `app/Http/Requests/PurchaseReturn/StorePurchaseReturnRequest.php`
+   - `app/Http/Requests/PurchaseReturn/ConfirmPurchaseReturnRequest.php`
+   - `app/Http/Requests/PurchaseReturn/CancelPurchaseReturnRequest.php`
+   - `app/Http/Requests/PurchaseReturn/GetReceiveDetailsRequest.php`
+   - Update all 3 controllers to use these instead of inline `$request->validate()`.
+3. **Cross-linkage audit** — verify all 4 cross-links work:
+   - PO show → "Receive against this PO" button → GRN create with `?po_id=` (Phase 3).
+   - PO show → "Receives against this PO" list (Phase 3).
+   - GRN show → "Return against this GRN" button → Return create with `?receive_id=` (Phase 4).
+   - GRN show → "Returns against this GRN" list (Phase 4).
+4. **Mobile card rendering** — on all 3 index pages, render `<div class="purch-index-mobile-cards">` / `<div class="purchase-return-mobile-cards">` with one card per row when viewport `<768px`. Use the DataTables `drawCallback` to populate the mobile card container from the same JSON.
+5. **CSV exports** — verify all 3 export endpoints work and produce well-formed CSVs with headers: `Code, Date, Supplier, Branch, Total, Status, Created By`.
+6. Smoke-test: Open PO create on a catalog with 2,000 products. Verify the typeahead returns results within 200ms. Submit an invalid form (missing supplier) → verify the Form Request returns proper error messages. Resize the browser to <768px → verify the index pages show mobile cards instead of the table.
+
+**Files touched:** 11 Form Request classes, 3 controllers (use Form Requests + search-products endpoint), 3 index blades (mobile card rendering), ~600 lines of new code.
+
+---
+
+### Phase 8 — End-to-end QA + integration testing
+
+**Goal:** Verify the entire PO → GRN → Return → Reverse flow works correctly with the legacy UI. Verify stock, GL, and supplier_ledger reconcile at every step.
+
+**Tasks:**
+1. **E2E test script** (manual or automated):
+   - **Setup:** Login as admin at Branch A. Pick a supplier with no outstanding balance. Pick a product with 0 stock at Branch A's warehouse.
+   - **Step 1 — Create PO:** Create a PO for 10 units of the product at rate 100. Verify PO status = `draft`, no stock movement, no GL, no supplier_ledger entry.
+   - **Step 2 — Mark PO as Sent:** Click "Mark as Sent". Verify PO status = `sent`.
+   - **Step 3 — Create GRN (partial):** Click "Receive against this PO". Receive 6 units into Warehouse 1. Save as draft. Verify GRN status = `draft`, no stock movement yet.
+   - **Step 4 — Confirm GRN:** Click "Confirm GRN". Verify:
+     - GRN status = `confirmed`.
+     - `warehouse_stock` for product at Warehouse 1 = 6 (was 0).
+     - `stock_transactions` has 1 IN movement of 6 units at rate 100 (avg_cost = 100).
+     - `journal_entries` has 1 entry with 2 lines: Dr Inventory 600, Cr AP 600.
+     - `supplier_ledger` has 1 credit entry of 600.
+     - PO `received_qty` = 6, status = `partial`.
+   - **Step 5 — Create Return (Good):** From GRN show, click "Return against this GRN". Return 2 units (Good condition). Save as draft. Confirm.
+     - Verify: `warehouse_stock` = 4 (was 6).
+     - `stock_transactions` has 1 OUT movement of 2 units at rate 100 (original receive rate).
+     - `journal_entries` has 1 entry: Dr AP 200, Cr Inventory 200.
+     - `supplier_ledger` has 1 debit entry of 200.
+     - `purchase_receive_items.returned_qty` = 2.
+   - **Step 6 — Create Return (Damage):** From GRN show, click "Return against this GRN". Return 1 unit (Damage condition). Confirm.
+     - Verify: `warehouse_stock` UNCHANGED at 4 (Damage = no stock movement).
+     - `stock_transactions` has NO new movement.
+     - `journal_entries` has 1 entry: Dr AP 100, Cr Inventory 100.
+     - `supplier_ledger` has 1 debit entry of 100.
+     - `purchase_receive_items.returned_qty` = 3 (2 Good + 1 Damage).
+   - **Step 7 — Reverse the Damage Return:** From Return index, click "Reverse" on the Damage return. Provide a reason.
+     - Verify: `warehouse_stock` UNCHANGED at 4 (no stock to restore).
+     - `journal_entries` has 1 reversing entry linked to the original.
+     - `supplier_ledger` has 1 reversal credit entry of 100.
+     - `purchase_receive_items.returned_qty` = 2 (back to Good-only).
+     - Return `is_reversed` = true, `reversed_at` set.
+   - **Step 8 — Cancel the GRN:** Try to cancel the GRN. Verify it FAILS with "active returns exist" (the Good return from Step 5 is still active).
+   - **Step 9 — Reverse the Good Return:** Reverse the Good return. Verify stock restored to 6, GL reversed, ledger reversed, `return_qty` = 0.
+   - **Step 10 — Cancel the GRN (again):** Now it should succeed. Verify stock back to 0, GL reversed, ledger reversed, PO `received_qty` = 0, PO status = `sent` (or `draft` — depends on implementation).
+   - **Step 11 — Audit log check:** Visit each module's audit page. Verify all actions are logged with correct timestamps, users, actions, and details.
+   - **Step 12 — PurchaseAudit checklist:** Visit the checklist. Verify all 12 sections render. Verify the negative-stock table is empty. Verify the missing-journal tables are empty.
+2. **Branch isolation test:** Login as Branch B user. Try to access Branch A's PO via URL. Verify 403 or redirect.
+3. **RBAC test:** Login as warehouse_manager. Verify can create GRN but cannot cancel. Login as salesman. Verify cannot access any purchase route.
+4. **Mobile test:** Resize to <768px. Verify all 3 index pages show mobile cards. Verify the offcanvas quick-return works on mobile.
+5. **Performance test:** Load 10,000 POs into the DB. Verify the index page loads in <1s (server-side DataTables). Verify the typeahead returns results in <200ms.
+6. **Print test:** Print a Return slip. Verify the layout is clean (no sidebar/navbar/buttons).
+7. **CSV export test:** Export all 3 index pages. Verify the CSVs open cleanly in Excel.
+
+**Files touched:** None (QA-only phase). May produce bug-fix commits if issues are found.
+
+---
+
+## 9. Per-Phase Success Criteria
+
+| Phase | "Done" when… |
+|---|---|
+| **0** | Live DB schema matches code. All 4 critical bugs fixed. 6 dead JS files deleted. PO→GRN→Return→Cancel flow works without errors. |
+| **1** | All purchase routes are role-gated. Branch A user cannot see Branch B data. Each role sees only its allowed actions. |
+| **2** | PO index/create/edit/show pages use legacy `.purch-*` classes. Product typeahead works (no Select2, no 500-product cap). Server-side DataTables works. CSV export works. |
+| **3** | GRN index/create/show pages use legacy `.purch-*` classes. PO show has "Receive against PO" button + "Receives against PO" list. Direct Purchase toggle works. Per-line warehouse works. |
+| **4** | Return index/create/show pages use legacy `.prt-*` / `.purchase-return-*` classes. Offcanvas quick-create works. Smart-sort works. Live chip counts work. GRN show has "Return against GRN" button + "Returns against GRN" list. |
+| **5** | Damage condition column exists. Good returns move stock; Damage returns don't. Dual stock cap enforced on Good returns. GRN item `return_qty` tracks both. |
+| **6** | Return slip prints cleanly. All 3 audit-log pages show user actions. PurchaseAudit checklist renders 12 sections with pass/warn/fail statuses. "Re-run checks" works. |
+| **7** | AJAX product typeahead replaces Select2 on PO + GRN. All 11 Form Request classes exist and are used. All 4 cross-linkage buttons work. Mobile cards render on <768px. All 3 CSV exports work. |
+| **8** | All 12 E2E test steps pass. Branch isolation works. RBAC works. Mobile works. Performance <1s on 10k rows. Print works. CSV works. |
+
+---
+
+## 10. Risks & Open Questions
+
+### 10.1 Schema verification (HIGH RISK)
+
+The Laravel audit found 4 schema/code mismatches. **We don't know if these are real bugs or just stale SQL files.** Phase 0 MUST verify by running `\d` on the live DB. If the columns are actually missing, every GRN/Return operation is currently broken and the user has been hitting silent errors (or the module is unused).
+
+**Mitigation:** Run `\d purchase_receives` and `\d purchase_returns` in the `rcerp_postgres` container BEFORE starting Phase 0. Document the actual live schema. If columns are missing, prioritize Phase 0 above all other work.
+
+### 10.2 Branch isolation middleware (MEDIUM RISK)
+
+The audit notes "branch.isolation" middleware may or may not exist. Need to verify in `app/Http/Middleware/`. If it doesn't exist, Phase 1 includes creating it — which is a non-trivial task (intercepting every request, overriding `branch_id` input with session value, except for admin "all branches" mode).
+
+**Mitigation:** Check `app/Http/Middleware/` and `app/Providers/HttpServiceProvider.php` (or `bootstrap/app.php` for Laravel 11+) for registered middleware aliases. If not found, write it from scratch — pattern: ~30 lines of code.
+
+### 10.3 UserAudit table (MEDIUM RISK)
+
+Phase 6 assumes a `user_audits` table exists. The legacy code uses `UserAudit::log(userId, action, targetId, detailsArray)` which writes to such a table. Need to verify Laravel has the same table + helper. If not, Phase 6 includes creating the table + helper.
+
+**Mitigation:** Check `app/Models/UserAudit.php` (or similar) and the migrations dir for `*_create_user_audits_*`. If missing, add as part of Phase 6.
+
+### 10.4 Server-side DataTables refactor (MEDIUM RISK)
+
+Legacy uses server-side DataTables. Laravel currently uses client-side over paginated 25/page. Switching to server-side is a non-trivial refactor: the controller `index()` method needs a `?datatables=1` mode that returns JSON in DataTables' specific format (`{draw, recordsTotal, recordsFiltered, data}`), and the JS needs to use `ajax.url` instead of inline data.
+
+**Mitigation:** The sales module already uses server-side DataTables on the Today's Sales page (R21 commit `7a8da29`). Reuse that pattern.
+
+### 10.5 Offcanvas quick-create state management (LOW RISK)
+
+The offcanvas on Return index needs to share state between the index DataTables and the workspace inside the offcanvas. After save, the index must reload AND the chip counts must refresh AND the offcanvas must close. Legacy handles this via the `purchaseReturn:created` custom event.
+
+**Mitigation:** Use the same custom-event pattern. Listen for the event on `document` from both the DataTables init and the chip-counts init.
+
+### 10.6 Open question: do we port the legacy "delete" hard-delete path?
+
+Legacy `PurchaseOrderController::delete` has a hard-delete path (when called without a reason). Laravel's `cancel` is soft-only. **Decision D-implicit: drop the hard-delete path.** Drafts that need to be removed should be cancelled (soft) for audit trail. Confirm with user before Phase 0.
+
+### 10.7 Open question: GRN `warehouse_id` (header) vs per-line
+
+Legacy has per-line `warehouse_id` only (no header column). Laravel has BOTH a header `warehouse_id` (NOT NULL) and a per-line `warehouse_id` (nullable). This is a divergence. **Tentative decision: keep Laravel's pattern** (header = default warehouse, per-line = override). Confirm with user before Phase 3.
+
+### 10.8 Open question: should the PO `markAsSent` action be ported back to legacy?
+
+Laravel has `markAsSent`. Legacy has no equivalent — POs go from `draft` to `pending` automatically when the first GRN is created. **Decision D3: keep Laravel's `markAsSent`** as an enhancement. Document in the audit log.
+
+---
+
+## 11. Out of Scope / Net-New Features
+
+These are NOT being ported from legacy (legacy doesn't have them). They could be added as net-new features in a future phase, but are explicitly OUT OF SCOPE for this plan:
+
+| Feature | Why Out of Scope |
+|---|---|
+| Tax / discount / transport on Returns | Legacy has none. Returns are qty × rate only. |
+| Transport cost on PO / GRN | Legacy has none. If needed, add as net-new. |
+| Unit conversion (case → piece) | Legacy has none. All qty in base unit. |
+| Foreign currency / exchange rate | Legacy has none. All amounts in BDT. |
+| Approval workflow (PO/GRN/Return approval) | Legacy has none. All documents are immediately active on save (or on confirm in Laravel's two-phase pattern). |
+| PO printable slip | Legacy has none. Only Return has a slip. |
+| GRN printable slip | Legacy has none. Only Return has a slip. |
+| Multi-currency supplier accounts | Legacy has none. |
+| Supplier rating / performance scorecard | Legacy has none. |
+| Purchase requisition (pre-PO) | Legacy has none. PO is the first document in the chain. |
+| RFQ (Request for Quotation) | Legacy has none. |
+| Supplier portal (supplier self-service PO/GRN view) | Legacy has none. |
+| Auto-PO from reorder level | Legacy has none. |
+
+---
+
+## 12. File Inventory (Legacy → Laravel mapping)
+
+This is the master mapping for the porting agent. Each row shows what the legacy file maps to in Laravel (or "NEW" if it doesn't exist yet).
+
+### 12.1 Controllers
+
+| Legacy file | Lines | Laravel equivalent | Phase |
+|---|---|---|---|
+| `PurchaseOrderController.php` | 331 | `app/Http/Controllers/Admin/PurchaseOrderController.php` (221 lines) — ✅ exists, needs `audit()` + `export()` + `searchProducts()` methods | Phase 2, 6, 7 |
+| `PurchaseReceiveController.php` | 252 | `app/Http/Controllers/Admin/PurchaseReceiveController.php` (237 lines) — ✅ exists, needs `audit()` + `export()` methods | Phase 3, 6, 7 |
+| `PurchaseReturnController.php` | 316 | `app/Http/Controllers/Admin/PurchaseReturnController.php` (233 lines) — ✅ exists, needs `audit()` + `export()` + `slip()` + `searchReceives()` + `summary()` methods | Phase 4, 6, 7 |
+| `PurchaseAuditController.php` | 57 | **NEW** — `app/Http/Controllers/Admin/PurchaseAuditController.php` | Phase 6 |
+
+### 12.2 Models
+
+| Legacy table | Laravel model | Phase |
+|---|---|---|
+| `purchase_orders` | `app/Models/PurchaseOrder.php` (121 lines) ✅ | — |
+| `purchase_order_items` | `app/Models/PurchaseOrderItem.php` (64 lines) ✅ | — |
+| `purchase_receives` | `app/Models/PurchaseReceive.php` (132 lines) ✅ | — |
+| `purchase_receive_items` | `app/Models/PurchaseReceiveItem.php` (66 lines) ✅ | — |
+| `purchase_returns` | `app/Models/PurchaseReturn.php` (107 lines) ✅ | — |
+| `purchase_return_items` | `app/Models/PurchaseReturnItem.php` (63 lines) ✅ — needs `condition` column added | Phase 5 |
+
+### 12.3 Views
+
+| Legacy view | Lines | Laravel blade | Phase |
+|---|---|---|---|
+| `PurchaseOrder/index.php` | 112 | `resources/views/admin/purchase-orders/index.blade.php` (319 lines) — ✅ exists, restructure to `.purch-index-app` | Phase 2 |
+| `PurchaseOrder/create.php` | 41 | `resources/views/admin/purchase-orders/create.blade.php` (422 lines) — ✅ exists, restructure to `.purch-po-form-app` + replace Select2 with typeahead | Phase 2 |
+| `PurchaseOrder/edit.php` | 45 | `resources/views/admin/purchase-orders/edit.blade.php` (437 lines) — ✅ exists, same restructure as create | Phase 2 |
+| `PurchaseOrder/details.php` | 175 | `resources/views/admin/purchase-orders/show.blade.php` (424 lines) — ✅ exists, restructure to `.purch-po-detail` | Phase 2 |
+| `PurchaseOrder/audit.php` | 102 | **NEW** — `resources/views/admin/purchase-orders/audit.blade.php` | Phase 6 |
+| `PurchaseOrder/partials/po_form.php` | 99 | Inline in create.blade.php and edit.blade.php (no partial needed) | Phase 2 |
+| `PurchaseReceive/index.php` | 109 | `resources/views/admin/purchase-receives/index.blade.php` (308 lines) — ✅ exists, restructure to `.purch-index-app` | Phase 3 |
+| `PurchaseReceive/create.php` | 161 | `resources/views/admin/purchase-receives/create.blade.php` (687 lines) — ✅ exists, restructure + replace Select2 with typeahead | Phase 3 |
+| `PurchaseReceive/details.php` | 120 | `resources/views/admin/purchase-receives/show.blade.php` (632 lines) — ✅ exists, richer than legacy — keep | Phase 3 (minor restyle) |
+| `PurchaseReceive/audit.php` | 107 | **NEW** — `resources/views/admin/purchase-receives/audit.blade.php` | Phase 6 |
+| `PurchaseReturn/index.php` | 168 | `resources/views/admin/purchase-returns/index.blade.php` (300 lines) — ✅ exists, restructure to `.purchase-return-app` + add offcanvas + smart-sort + chip counts | Phase 4 |
+| `PurchaseReturn/create.php` | 41 | `resources/views/admin/purchase-returns/create.blade.php` (442 lines) — ✅ exists, restructure to `.prt-create-workspace` 2-step wizard | Phase 4 |
+| `PurchaseReturn/details.php` | 94 | `resources/views/admin/purchase-returns/show.blade.php` (593 lines) — ✅ exists, richer than legacy — keep | Phase 4 (minor restyle) |
+| `PurchaseReturn/audit.php` | 118 | **NEW** — `resources/views/admin/purchase-returns/audit.blade.php` | Phase 6 |
+| `PurchaseReturn/slip.php` | 155 | **NEW** — `resources/views/admin/purchase-returns/slip.blade.php` | Phase 6 |
+| `PurchaseReturn/partials/create_workspace.php` | 42 | **NEW** — `resources/views/admin/purchase-returns/partials/create-workspace.blade.php` (shared by full-page create AND index offcanvas) | Phase 4 |
+| `PurchaseAudit/checklist.php` | 235 | **NEW** — `resources/views/admin/purchase-audit/checklist.blade.php` (replaces the stub at `reports/purchase-audit.blade.php`) | Phase 6 |
+
+### 12.4 JavaScript
+
+| Legacy JS file | Lines | Laravel equivalent | Phase |
+|---|---|---|---|
+| `PurchaseOrder.js` | 372 | Inline `@push('scripts')` in `purchase-orders/create.blade.php` and `edit.blade.php` | Phase 2 |
+| `PurchaseReceive.js` | 432 | Inline `@push('scripts')` in `purchase-receives/create.blade.php` | Phase 3 |
+| `PurchaseReturn.js` | 667 | Inline `@push('scripts')` in `purchase-returns/create.blade.php` AND the offcanvas partial | Phase 4 |
+| `purchase-order-index.js` | 353 | Inline `@push('scripts')` in `purchase-orders/index.blade.php` | Phase 2 |
+| `purchase-receive-index.js` | 279 | Inline `@push('scripts')` in `purchase-receives/index.blade.php` | Phase 3 |
+| `purchase-return-index.js` | 398 | Inline `@push('scripts')` in `purchase-returns/index.blade.php` | Phase 4 |
+| (none) | — | `laravel/public/assets/js/Purchase*.js` (6 dead files, ~2,500 lines) — DELETE in Phase 0 | Phase 0 |
+
+### 12.5 CSS
+
+| Legacy CSS file | Lines | Laravel equivalent | Phase |
+|---|---|---|---|
+| `purchase-index.css` | 335 | `laravel/public/assets/css/purchase-index.css` — link via `@push('css')` on PO/GRN index + PO form + PO details blades | Phase 2 |
+| `purchase-order-form.css` | 118 | `laravel/public/assets/css/purchase-order-form.css` — link on PO create/edit blades | Phase 2 |
+| `purchase-order-details.css` | 142 | `laravel/public/assets/css/purchase-order-details.css` — link on PO show blade | Phase 2 |
+| `purchase-return-create.css` | 355 | `laravel/public/assets/css/purchase-return-create.css` — link on Return create + offcanvas blades | Phase 4 |
+| `purchase-return-index.css` | 309 | `laravel/public/assets/css/purchase-return-index.css` — link on Return index blade | Phase 4 |
+| `purchase-audit-checklist.css` | 211 | `laravel/public/assets/css/purchase-audit-checklist.css` — link on PurchaseAudit checklist blade | Phase 6 |
+
+**Note:** All 6 CSS files already exist at `laravel/public/assets/css/` (copied from legacy during initial scaffold). They just need to be LINKED on the relevant blades via `@push('css')` — same pattern as the sales cart's `sales-pos.css` link (commit `f7274fb`).
+
+### 12.6 Services (Laravel-only — no legacy equivalent)
+
+| Laravel service | Lines | Status |
+|---|---|---|
+| `app/Services/PurchaseOrderService.php` | (exists) | ✅ — add `UserAudit::log()` calls in Phase 6 |
+| `app/Services/PurchaseReceiveService.php` | (exists) | ✅ — add "active returns exist" guard in Phase 0, add `UserAudit::log()` calls in Phase 6 |
+| `app/Services/PurchaseReturnService.php` | (exists) | ✅ — add Damage condition branching in Phase 5, add `UserAudit::log()` calls in Phase 6 |
+| `app/Services/PurchaseAuditService.php` | **NEW** | Phase 6 |
+
+### 12.7 Form Requests (Laravel-only — no legacy equivalent)
+
+All 11 Form Request classes are **NEW** in Phase 7. See §8 Phase 7 task 2 for the full list.
+
+### 12.8 Migrations
+
+| Migration | Table | Phase |
+|---|---|---|
+| `2025_01_24_000001_add_status_to_purchase_receives.php` | `purchase_receives` | Phase 0 (if column missing) |
+| `2025_01_24_000002_add_status_to_purchase_returns.php` | `purchase_returns` | Phase 0 (if column missing) |
+| `2025_01_24_000003_add_expected_date_to_purchase_orders.php` | `purchase_orders` | Phase 0 (if column missing) |
+| `2025_01_25_000001_add_condition_to_purchase_return_items.php` | `purchase_return_items` | Phase 5 |
+| (Update) `database/sql/05_purchase.sql` | all 6 tables | Phase 0 (reconcile with migrations) |
+
+---
+
+## End of Document
+
+**Next action:** Confirm Phase 0 kickoff. The first concrete step is to run `\d purchase_receives` and `\d purchase_returns` in the `rcerp_postgres` container to verify whether the `status` column actually exists. This determines whether Phase 0 is a 30-minute schema fix or a 5-minute no-op.
+
+**Approval gates:** Each phase requires user sign-off on the success criteria (§9) before the next phase begins. No phase should be merged to `main` without a smoke test passing.
