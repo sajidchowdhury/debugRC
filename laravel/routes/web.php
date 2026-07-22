@@ -441,11 +441,12 @@ Route::middleware('auth')->group(function () {
     });
     Route::resource('admin/purchase-orders', PurchaseOrderController::class)
         ->only(['index', 'create', 'show', 'edit'])   // store + update split out below for tighter RBAC
+        ->parameters(['admin/purchase-orders' => 'id'])  // override buggy inflector (would produce 'purchase_order' which is fine here, but force 'id' for consistency)
         ->names('admin.purchase-orders')
         ->middleware([
             'role:admin,manager,warehouse_manager,accountant',   // baseline read for the whole resource
         ])
-        ->whereNumber('purchase_order'); // BUGFIX: prevent /create, /edit etc. from matching {purchase_order}
+        ->whereNumber('id'); // BUGFIX: prevent /create, /edit etc. from matching {id}
     // Tighten the write verbs on the resource to drop accountant and add branch.isolation.
     Route::put('admin/purchase-orders/{id}', [PurchaseOrderController::class, 'update'])
         ->name('admin.purchase-orders.update')
@@ -482,14 +483,19 @@ Route::middleware('auth')->group(function () {
             ->name('cancel')
             ->middleware(['role:admin,manager', 'branch.isolation']);
     });
-    Route::resource('admin/purchase-receives', PurchaseReceiveController::class)
-        ->only(['index', 'show'])
-        ->names('admin.purchase-receives')
-        ->middleware('role:admin,manager,warehouse_manager,accountant')
-        ->whereNumber('purchase_receive'); // BUGFIX: prevent /create from matching {purchase_receive}
+    // IMPORTANT: register /create BEFORE the resource so Laravel matches it before {id}.
+    // Also force the resource param name to 'id' via ->parameters() — Laravel's inflector
+    // wrongly singularizes 'receives' -> 'receife' (treating it like 'wives' -> 'wife'),
+    // which would otherwise cause /create to match the show() route with param 'purchase_receife'.
     Route::get('admin/purchase-receives/create', [PurchaseReceiveController::class, 'create'])
         ->name('admin.purchase-receives.create')
         ->middleware('role:admin,manager,warehouse_manager');
+    Route::resource('admin/purchase-receives', PurchaseReceiveController::class)
+        ->only(['index', 'show'])
+        ->parameters(['admin/purchase-receives' => 'id'])  // override buggy inflector (was 'purchase_receife')
+        ->names('admin.purchase-receives')
+        ->middleware('role:admin,manager,warehouse_manager,accountant')
+        ->whereNumber('id'); // BUGFIX: prevent /create from matching {id}
     Route::post('admin/purchase-receives', [PurchaseReceiveController::class, 'store'])
         ->name('admin.purchase-receives.store')
         ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
@@ -527,14 +533,17 @@ Route::middleware('auth')->group(function () {
             ->name('cancel')
             ->middleware(['role:admin,manager,accountant', 'branch.isolation']);
     });
-    Route::resource('admin/purchase-returns', PurchaseReturnController::class)
-        ->only(['index', 'show'])
-        ->names('admin.purchase-returns')
-        ->middleware('role:admin,manager,warehouse_manager,accountant')
-        ->whereNumber('purchase_return'); // BUGFIX: prevent /create from matching {purchase_return}
+    // IMPORTANT: register /create BEFORE the resource so Laravel matches it before {id}.
+    // Force resource param name to 'id' via ->parameters() for consistency with receives.
     Route::get('admin/purchase-returns/create', [PurchaseReturnController::class, 'create'])
         ->name('admin.purchase-returns.create')
         ->middleware('role:admin,manager,warehouse_manager');
+    Route::resource('admin/purchase-returns', PurchaseReturnController::class)
+        ->only(['index', 'show'])
+        ->parameters(['admin/purchase-returns' => 'id'])  // override inflector for consistency
+        ->names('admin.purchase-returns')
+        ->middleware('role:admin,manager,warehouse_manager,accountant')
+        ->whereNumber('id'); // BUGFIX: prevent /create from matching {id}
     Route::post('admin/purchase-returns', [PurchaseReturnController::class, 'store'])
         ->name('admin.purchase-returns.store')
         ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
