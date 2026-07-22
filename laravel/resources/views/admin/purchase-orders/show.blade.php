@@ -336,15 +336,17 @@
                         </form>
                     @endif
 
-                    {{-- Receive goods (sent or partial) --}}
+                    {{-- Receive goods (sent or partial) — Phase 0 BUG-8 fix:
+                         Replaced stale "Phase 7.2 not implemented" alert with
+                         a real "Receive against this PO" button that links to
+                         the GRN create page with ?po_id= pre-fill. The GRN
+                         module (Phase 7.2) has been implemented since the
+                         initial Laravel scaffold. --}}
                     @if ($po->canReceive())
-                        <div class="alert alert-info small mb-0">
-                            <i class="fas fa-truck-ramp-box me-1"></i>
-                            This PO can receive goods via <strong>GRN</strong> (Phase 7.2).
-                            <div class="mt-1 text-muted">
-                                Goods receipt will be available once Phase 7.2 is implemented.
-                            </div>
-                        </div>
+                        <a href="{{ route('admin.purchase-receives.create', ['po_id' => $po->id]) }}"
+                           class="btn btn-success w-100">
+                            <i class="fas fa-truck-ramp-box me-1"></i> Receive against this PO
+                        </a>
                     @endif
 
                     @if ($po->isReceived())

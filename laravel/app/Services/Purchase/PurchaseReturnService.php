@@ -71,9 +71,18 @@ class PurchaseReturnService
         $returnCode = $this->generateReturnCode();
         $supplierId = (int) $receive->supplier_id;
         $branchId = (int) $receive->branch_id;
+        // BUG-4 fix (Phase 0): purchase_returns.warehouse_id is NOT NULL in the
+        // schema, but the original createReturn() did not write it — every
+        // INSERT was failing. Inherit the GRN's header warehouse_id so the row
+        // is persisted. Per-line warehouse_id (on purchase_return_items) is
+        // still authoritative for the stock OUT movement; this header value is
+        // the "default warehouse" for the return document as a whole — same
+        // pattern Laravel uses for purchase_receives.
+        $warehouseId = (int) $receive->warehouse_id;
 
         return DB::transaction(function () use (
-            $data, $items, $totalAmount, $returnCode, $receiveId, $supplierId, $branchId
+            $data, $items, $totalAmount, $returnCode,
+            $receiveId, $supplierId, $branchId, $warehouseId
         ) {
             $returnId = DB::table('purchase_returns')->insertGetId([
                 'return_code' => $returnCode,
@@ -81,6 +90,7 @@ class PurchaseReturnService
                 'purchase_receive_id' => $receiveId,
                 'supplier_id' => $supplierId,
                 'branch_id' => $branchId,
+                'warehouse_id' => $warehouseId,
                 'total_amount' => round($totalAmount, 2),
                 'status' => 'draft',
                 'is_reversed' => false,

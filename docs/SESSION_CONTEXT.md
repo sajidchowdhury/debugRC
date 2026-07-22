@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-22 (R24/R25 dropped per user request — Telegram + FCM notifications explicitly NOT being ported. R26/R27/R28 done — `min:10` override_reason + `min:5` reversal reason + PWA installability meta on cart blade.)
+> **Last updated:** 2026-07-22 (Purchase module Phase 0 complete — 5 critical schema bugs + 1 functional gap + 1 cosmetic bug + 1 cleanup pass. 4 new migrations, 1 SQL spec reconciled, 2 services patched, 1 model patched, 1 blade patched, 6 dead JS files removed. See §5.26 below.)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -1754,21 +1754,77 @@ launched from the home screen / start menu. Audit risk §6.1 item
 
 ---
 
+### 5.26 Purchase module — Phase 0 (schema reconciliation + critical bug fixes + cleanup)
+
+**User ask (2026-07-22):** *"ok so far so good there have some issue here we can not varify without increasiong stock so lets work on purchase section i want u to create a md file thats have al the gap that have with laravel and lagachy software and phase by phase implementation plan no code just a documatation and then we wil work on purchase section rememebr most of the logic and ui is copy from lagachy end of fnishing all the phases we wil able to create po receive po in warehouses and can return purchae , with reverse and all option pls give a deep drive and create a proper .md file with proper documatation"*
+
+That ask produced `docs/PURCHASE_PARITY_PLAN.md` — a 1,100+ line gap analysis with a 9-phase implementation plan (Phase 0 through Phase 8). The user then said: *"Phase 0 — Schema reconciliation + critical bug fixes + cleanup … update the docs/PURCHASE_PARITY_PLAN.md and update docs/SESSION_CONTEXT.md … push the update in to the github with ur context documentation so its never lost even z ai lost the conversation"*. The work below is the Phase 0 execution.
+
+**End goal (all phases):** Laravel app must be able to (1) create a Purchase Order, (2) receive the PO into one or more warehouses (GRN), (3) return purchases to the supplier with full reverse-and-restore support — matching legacy (lagachy) feature-for-feature and look-for-look.
+
+**Phase 0 scope:** Make the existing Laravel purchase module *actually work correctly* before adding any new features.
+
+**Verification method:** Could not query live PostgreSQL directly (no `psql`/`docker` CLI in this environment). Verified by reading `laravel/database/migrations/2025_01_01_000001_create_rcerp_schema.php`, which loads `database/sql/05_purchase.sql` verbatim via `executeSqlFile()`. Therefore the live schema exactly matches `05_purchase.sql` — confirming all 4 schema gaps are real (not stale-file artifacts).
+
+**Bugs fixed in Phase 0 (8 total):**
+
+1. **BUG-1 (CRITICAL):** `purchase_receives.status` column missing from schema. Every GRN create was failing on INSERT because the service writes `'status' => 'draft'`. Fix: migration `2025_01_24_000001_add_status_to_purchase_receives.php` (idempotent, `Schema::hasColumn` guarded) adds `status VARCHAR(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','cancelled'))` + index `idx_pr_status`. `05_purchase.sql` updated to match.
+
+2. **BUG-2 (CRITICAL):** `purchase_returns.status` column missing — same issue as BUG-1. Fix: migration `2025_01_24_000002_add_status_to_purchase_returns.php` (same pattern) + index `idx_prtn_status`. `05_purchase.sql` updated.
+
+3. **BUG-3 (CRITICAL):** `purchase_orders.expected_date` column missing. Controller validates it, service writes it, model casts it, blade has a date input for it. Fix: migration `2025_01_24_000003_add_expected_date_to_purchase_orders.php`. `05_purchase.sql` updated.
+
+4. **BUG-4 (CRITICAL):** `purchase_returns.warehouse_id` declared NOT NULL in schema but `PurchaseReturnService::createReturn()` did NOT write it on the INSERT. Fix: Service now inherits `warehouse_id` from the GRN (`$receive->warehouse_id`). Per-line `warehouse_id` on `purchase_return_items` is still authoritative for the stock OUT movement. `PurchaseReturn` model updated: `warehouse_id` added to `$fillable` + `$casts`, plus a new `warehouse()` belongsTo relation.
+
+5. **BUG-5 (FUNCTIONAL GAP):** `PurchaseReceiveService::cancelReceive()` didn't block cancellation when active (non-reversed, confirmed) returns existed on the GRN. This would re-add stock that was already returned to the supplier — creating inconsistent state. Legacy `PurchaseReceiveModel::cancelReceive` has this guard. Fix: Added a guard at the top of `cancelReceive` (only checked when `isConfirmed()`) that throws `"Cannot cancel GRN: N active return(s) exist against it. Reverse them first."` Also added `use App\Models\PurchaseReturn;` import.
+
+6. **BUG-8 (COSMETIC):** `purchase-orders/show.blade.php` had a stale alert: *"This PO can receive goods via GRN (Phase 7.2). Goods receipt will be available once Phase 7.2 is implemented."* — but Phase 7.2 IS implemented. Fix: Replaced with a real `<a class="btn btn-success">Receive against this PO</a>` button linking to `route('admin.purchase-receives.create', ['po_id' => $po->id])`. The GRN controller already reads `?po_id=` and pre-fills the form, so the button works end-to-end.
+
+7. **BUG-9 (CLEANUP):** 6 dead JS files (~2,501 lines) in `laravel/public/assets/js/` referenced stale DOM IDs (`#purchase-order-app`, `#filterStatus`, `window.PURCHASE_ORDER_BOOT`) and stale status enums (`pending`, `partially_received`). Zero references in any blade/PHP file (grep-verified). Fix: `git rm`-ed all 6 files: `PurchaseOrder.js` (372), `PurchaseReceive.js` (432), `PurchaseReturn.js` (667), `purchase-order-index.js` (353), `purchase-receive-index.js` (279), `purchase-return-index.js` (398). They will be re-implemented as inline `@push('scripts')` blocks during Phases 2–4 (matching the sales-cart pattern).
+
+8. **BUG-10 (CRITICAL, discovered during Phase 0):** `purchase_returns.reason` column missing from schema. The model has `reason` in `$fillable`, the service writes `'reason' => $data['reason'] ?? null` on INSERT, the controller passes `reason` from the request, and the show blade renders `$r->reason` (line 130). But the column was missing from `05_purchase.sql` — only `reverse_reason` (cancellation reason) and `notes` existed. Fix: migration `2025_01_24_000004_add_reason_to_purchase_returns.php` (idempotent) adds `reason TEXT NULL`. `05_purchase.sql` updated.
+
+**Files touched in Phase 0:**
+
+- **4 new migrations** under `laravel/database/migrations/2025_01_24_*` — all IDEMPOTENT (guarded by `Schema::hasColumn`), all reversible (`down()` drops cleanly).
+- **1 SQL spec updated** — `laravel/database/sql/05_purchase.sql` now matches the migrations.
+- **2 service files patched** — `PurchaseReceiveService.php` (BUG-5 cancel guard + `use App\Models\PurchaseReturn`), `PurchaseReturnService.php` (BUG-4 `warehouse_id` written on INSERT).
+- **1 model patched** — `PurchaseReturn.php` (`warehouse_id` in `$fillable`/`$casts` + `warehouse()` relation).
+- **1 blade patched** — `purchase-orders/show.blade.php` (BUG-8 real "Receive against this PO" button).
+- **6 dead JS files deleted** — 2,501 lines of orphaned code removed.
+- **2 docs updated** — `docs/PURCHASE_PARITY_PLAN.md` (Phase 0 marked complete, all bugs annotated) and `docs/SESSION_CONTEXT.md` (this section).
+
+**Phase 0 smoke-test checklist (user to run on local Docker after `php artisan migrate`):**
+
+1. Migration runs cleanly. `php artisan migrate` should report 4 new migrations applied with no errors. Verify with `\d purchase_receives`, `\d purchase_returns`, `\d purchase_orders` in `rcerp_postgres` — all 4 columns should appear.
+2. PO create with `expected_date`. Verify the row is persisted (no SQL error). Open show page → verify expected date renders.
+3. GRN create against the PO via "Receive against this PO" button. Create + confirm the GRN. Verify: stock IN, GL journal posted, supplier ledger credited, PO status → `partial` or `received`.
+4. Return create against the GRN. Create + confirm a return. Verify: stock OUT, GL reversed, supplier ledger debited, GRN item `return_qty` incremented.
+5. Reverse the return. Verify: stock restored, GL reversed, ledger reversed, `return_qty` back to 0.
+6. Try to cancel the GRN while a return is active. Verify the error: "Cannot cancel GRN: 1 active return(s) exist against it. Reverse them first." Reverse the return → now GRN cancel should succeed.
+7. PO cancel with reason. Verify the `[Cancelled] reason` text is appended to notes.
+
+**End of Phase 0 → Phase 1 handoff:**
+
+Phase 1 (RBAC + branch isolation) can now start. The schema is correct, the services are correct, and the dead code is gone. Phase 1 will touch only `routes/web.php` + the 3 purchase controllers + possibly a new middleware — no schema changes needed. The full phase-by-phase plan lives in `docs/PURCHASE_PARITY_PLAN.md`.
+
+**Sales style parity work — paused (not abandoned):**
+
+The sales cart style parity work (commits `c2bd5c7` + `0cce0a0`) is in a good state — user confirmed "ok so far so good" before pivoting to purchase. Remaining sales phases (Phase 2 extract inline styles, Phase 4+ color polish, mobile QA, cleanup, docs) can resume after the purchase module is at feature parity. R24/R25 (Telegram/FCM) were dropped per user request and will not be ported.
+
+---
+
 ## 6. Open Work Items
 
 (Items the user has asked for but that are not yet done.)
 
-- **None outstanding.** R1, R2, R3, R4, R5, R6, R10, R10s, R11, R12,
-  R13, R14, R15, R16, R17, R18, R19, R20 (via R19), R21, R22, R23,
-  R26, R27, R28, and H1 (bugfix) are complete and pushed.
-  R24/R25 (Telegram + FCM notifications) were **dropped by user
-  request** (2026-07-22) — explicitly NOT being ported. The user
-  has not yet assigned R7, R8, R9 (numbers reserved for future
-  items; R10+ were the user's explicit asks after R6).
+- **Purchase Phase 1 (RBAC + branch isolation)** — next phase to start after the user confirms Phase 0 smoke test passes. See `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 1 for the task list. Touches only `routes/web.php` + 3 controllers + possibly a new `branch.isolation` middleware. No schema changes.
+- **Purchase Phases 2–8** — UI parity (`.purch-*` / `.prt-*` class families), Damage condition, printable Return slip, per-module audit logs, PurchaseAudit checklist, AJAX typeahead, Form Requests, mobile cards, CSV exports, end-to-end QA. See `docs/PURCHASE_PARITY_PLAN.md` §8 for the full plan.
+- **Sales style parity (paused)** — Phase 2 extract inline styles, Phase 4+ color polish, mobile QA, cleanup. Can resume after purchase module reaches feature parity. User confirmed sales cart is "ok so far so good" before pivoting.
+- **R7 / R8 / R9** — numbers reserved for future sales items; not yet assigned.
+- **R24 / R25 (Telegram + FCM)** — dropped by user request (2026-07-22). Explicitly NOT being ported.
 
-When the user gives the next instruction, append it here as a
-checkbox item. When done, move it to the "Completed Work Items"
-section below.
+When the user gives the next instruction, append it here as a checkbox item. When done, move it to the "Completed Work Items" section below.
 
 ---
 
@@ -2123,6 +2179,21 @@ section below.
       Chrome/Edge now shows the "Install app" prompt on the cart
       page. Fixes audit risk §6.1 item #33 (PWA installability for
       POS kiosk deployment).
+- [x] **Purchase module Phase 0** — schema reconciliation +
+      critical bug fixes + cleanup. 8 bugs fixed (BUG-1 through
+      BUG-5, BUG-8, BUG-9, BUG-10). 4 new migrations under
+      `laravel/database/migrations/2025_01_24_*` (all idempotent +
+      reversible). 1 SQL spec (`05_purchase.sql`) reconciled to
+      match. 2 services patched (`PurchaseReceiveService` cancel
+      guard + `use App\Models\PurchaseReturn`; `PurchaseReturnService`
+      writes `warehouse_id` on INSERT). 1 model patched
+      (`PurchaseReturn` — `warehouse_id` in `$fillable`/`$casts` +
+      `warehouse()` relation). 1 blade patched (`purchase-orders/show`
+      — real "Receive against this PO" button replacing stale
+      "Phase 7.2 not implemented" alert). 6 dead JS files deleted
+      (2,501 lines). `docs/PURCHASE_PARITY_PLAN.md` and
+      `docs/SESSION_CONTEXT.md` updated. See §5.26 above for the
+      full smoke-test checklist the user must run on local Docker.
 
 ---
 

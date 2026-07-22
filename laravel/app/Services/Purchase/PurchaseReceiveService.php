@@ -3,6 +3,7 @@
 namespace App\Services\Purchase;
 
 use App\Models\PurchaseReceive;
+use App\Models\PurchaseReturn;
 use App\Services\Stock\StockService;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
@@ -228,6 +229,27 @@ class PurchaseReceiveService
             }
             if ($receive->isCancelled()) {
                 throw new \RuntimeException("GRN is already cancelled.");
+            }
+
+            // BUG-5 fix (Phase 0): Block cancel if active (non-reversed, confirmed)
+            // returns exist on this GRN. Without this guard, cancelling the GRN
+            // would re-add stock that was already returned to the supplier —
+            // creating inconsistent state (stock present but supplier ledger says
+            // it was returned). User must reverse the returns first.
+            //
+            // Legacy parity: legacy PurchaseReceiveModel::cancelReceive has the
+            // same guard. We mirror it here.
+            if ($receive->isConfirmed()) {
+                $activeReturns = PurchaseReturn::where('purchase_receive_id', $receiveId)
+                    ->where('is_reversed', false)
+                    ->where('status', 'confirmed')
+                    ->count();
+                if ($activeReturns > 0) {
+                    throw new \RuntimeException(
+                        "Cannot cancel GRN: {$activeReturns} active return(s) exist against it. "
+                        . "Reverse them first."
+                    );
+                }
             }
 
             if ($receive->isConfirmed()) {

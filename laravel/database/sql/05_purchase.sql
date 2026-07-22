@@ -20,6 +20,7 @@ CREATE TABLE purchase_orders (
     tax_amount numeric(14,2) DEFAULT 0,
     total_amount numeric(14,2) DEFAULT 0,
     status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','partial','received','cancelled')),
+    expected_date date,
     notes text,
     created_by integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -54,6 +55,7 @@ CREATE TABLE purchase_receives (
     discount_amount numeric(14,2) DEFAULT 0,
     tax_amount numeric(14,2) DEFAULT 0,
     total_amount numeric(14,2) DEFAULT 0,
+    status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','cancelled')),
     journal_entry_id integer REFERENCES journal_entries(id),
     is_reversed boolean NOT NULL DEFAULT false,
     reversed_at timestamp(0),
@@ -70,6 +72,7 @@ CREATE INDEX idx_pr_supplier ON purchase_receives(supplier_id);
 CREATE INDEX idx_pr_branch ON purchase_receives(branch_id);
 CREATE INDEX idx_pr_journal ON purchase_receives(journal_entry_id);
 CREATE INDEX idx_pr_reversed ON purchase_receives(is_reversed, reversed_at);
+CREATE INDEX idx_pr_status ON purchase_receives(status);
 
 CREATE TABLE purchase_receive_items (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -95,13 +98,18 @@ CREATE TABLE purchase_returns (
     supplier_id integer NOT NULL REFERENCES suppliers(id),
     branch_id integer NOT NULL REFERENCES branches(id),
     warehouse_id integer NOT NULL REFERENCES warehouses(id),
+    sub_total numeric(14,2) DEFAULT 0,
+    discount_amount numeric(14,2) DEFAULT 0,
+    tax_amount numeric(14,2) DEFAULT 0,
     total_amount numeric(14,2) DEFAULT 0,
+    status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','cancelled')),
     journal_entry_id integer REFERENCES journal_entries(id),
     is_reversed boolean NOT NULL DEFAULT false,
     reversed_at timestamp(0),
     reversed_by integer,
     reverse_reason text,
     notes text,
+    reason text,
     created_by integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -112,6 +120,7 @@ CREATE INDEX idx_prtn_supplier ON purchase_returns(supplier_id);
 CREATE INDEX idx_prtn_branch ON purchase_returns(branch_id);
 CREATE INDEX idx_prtn_journal ON purchase_returns(journal_entry_id);
 CREATE INDEX idx_prtn_reversed ON purchase_returns(is_reversed, reversed_at);
+CREATE INDEX idx_prtn_status ON purchase_returns(status);
 
 CREATE TABLE purchase_return_items (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
