@@ -429,3 +429,32 @@ Stage Summary:
   5. **Keep Laravel's richer schema** (warehouse_id, discount_amount, tax_amount, sub_total, notes) — adapt legacy form layout to include these.
   6. **Keep Laravel's richer action set** (Mark as Sent, Cancel via SweetAlert2, Receive against this PO) — adopt legacy's visual layout for show page (4 stat cards + progress bar + dates/notes grid + items table).
   7. **Add `?cancelled=1` mode + export endpoint** if full parity is desired (optional — could be deferred).
+
+---
+Task ID: phase-5
+Agent: Super Z (main agent)
+Task: Execute Purchase module Phase 5 — Damage condition + dual stock cap. Add `condition` column to `purchase_return_items`; make service layer condition-aware (Damage = no stock movement, GL + ledger still posted); show color-coded Good/Damage badges on Return show page; add reactive `applyCondition()` to create form JS. Update docs/PURCHASE_PARITY_PLAN.md + docs/SESSION_CONTEXT.md. Commit + push to GitHub main.
+
+Work Log:
+- Synced local with GitHub (Phase 4 commit `f63bef4` already on main).
+- Read PURCHASE_PARITY_PLAN.md §Phase 5 spec (lines 1143-1175) + gap analysis tables.
+- Read all relevant files: PurchaseReturnItem model (63 lines), PurchaseReturnService (379 lines), PurchaseReturnController (620 lines), Return show blade (614 lines), Return create blade (677 lines), migration 2025_01_24_000002 (existing pattern reference), SQL 05_purchase.sql.
+- Confirmed Phase 4 already made UI Phase-5-ready: create blade renders per-row Condition `<select>`, sends `condition` in items array, and enforces dual stock cap on submit (Good only).
+- Confirmed `getReceiveDetails()` already returns per-warehouse `available_qty` (Phase 4 BUG-26 fix) — no endpoint work needed in Phase 5.
+- Created migration `2025_01_25_000001_add_condition_to_purchase_return_items.php` (idempotent, guarded by Schema::hasColumn, adds CHECK constraint + idx_prti_condition index).
+- Updated SQL file `database/sql/05_purchase.sql` so fresh installs include the `condition` column + CHECK + index.
+- Updated PurchaseReturnItem model: added `condition` to $fillable + $casts; added `isDamage()`, `isGood()`, `conditionLabel()` accessors.
+- Updated PurchaseReturnController: added `items.*.condition => 'nullable|in:Good,Damage'` validation rule to `store()`.
+- Updated PurchaseReturnService: (a) createReturn persists `condition` on itemRows; (b) confirmReturn branches on `$item->isDamage()` — Damage skips `stockService->applyTransaction()` but still increments GRN `return_qty`; Good does existing stock OUT + return_qty++; (c) cancelReturn documented that stock_transactions query naturally returns only Good items (Damage never created any) — `return_qty` decrement loop covers ALL items; (d) added `normalizeCondition()` helper; (e) validateItems passes through `condition` field.
+- Updated Return show blade: added `<th>Condition</th>` column (6 cols total); rendered Good badge (green, success-subtle) + Damage badge (red, danger-subtle) with icons + tooltips; updated empty-state colspan to 6; updated tfoot to keep total in Amount column position with empty cell under Condition; Damage rows show warehouse as `— / N/A (Damage)`; added Good/Damage line-count + qty-total summary to Quick facts card (only shown when Damage items exist).
+- Updated Return create blade: added `applyCondition(row)` method to PurchaseReturnWorkspace class; wired to `condition-select` change event AND called once on initial render; when Damage: disables warehouse-select, preserves value in dataset.prevValue, appends N/A (Damage) placeholder option, sets qty max to GRN returnable only; when Good: re-enables warehouse-select, removes N/A placeholder, restores previous selection, re-applies dual cap via `applyRowQtyCap(row)`.
+- Wrote static verifier script `/home/z/my-project/scripts/phase5_verify.py` (11-point check covering PHP brace balance, blade directive balance, blade escaping audit, migration filename/structure, model fillable consistency, controller validation, service condition branching, show blade Condition column, create blade condition listener, SQL file fresh-install column, endpoint reuse). Ran it: 52 info checks passed, 0 warnings, 0 errors.
+- Updated `docs/PURCHASE_PARITY_PLAN.md`: updated status line at top to add "✅ Phase 5 complete"; inserted Phase 5 Completion Summary block (Goal, Verification outcome, Deliverables table with 13 rows, Files touched, Bugs fixed (BUG-31/32/33), Smoke-test checklist (6 steps), Notes for Phase 6+); updated gap analysis tables to mark Phase 5 done; updated Phase 5 spec section header to "✅ COMPLETE (2026-07-22)"; updated files-touched count.
+- Updated `docs/SESSION_CONTEXT.md`: updated "Last updated" header; inserted new section §5.31 (Phase 5) with user ask, scope, key design decision (Damage semantics), verification method (11-point static verifier), bugs fixed (BUG-31/32/33), files touched, smoke-test checklist (6 steps), Phase 5 → Phase 6 handoff; updated Open Work Items section to mark Phase 5 DONE and add Phase 6 as next phase.
+
+Stage Summary:
+- 7 files modified, ~470 lines changed (1 new migration + 1 SQL file + 1 model + 1 controller + 1 service + 2 blades + 2 docs).
+- 3 bugs fixed: BUG-31 (High — `condition` column missing + service treated all items as Good), BUG-32 (Medium — show page had no Condition column), BUG-33 (Low — create form JS had no condition-select change listener).
+- All 11 static-verification points pass. Live HTTP tests deferred to user (no php/docker on host).
+- Ready for user to run `docker exec -i rcerp_app php artisan migrate` + the 6-step smoke-test checklist.
+- Next phase: Phase 6 (Printable Return slip + per-module audit logs + PurchaseAudit checklist) — see `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 6.
