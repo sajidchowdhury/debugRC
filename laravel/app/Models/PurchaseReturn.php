@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use App\Models\Scopes\BranchScope;
 use App\Traits\AuditableMasterData;
 
 /**
@@ -26,6 +27,7 @@ use App\Traits\AuditableMasterData;
  * @property int $purchase_receive_id
  * @property int $supplier_id
  * @property int $branch_id
+ * @property int $warehouse_id
  * @property string $total_amount
  * @property string $status draft|confirmed|cancelled
  * @property int|null $journal_entry_id
@@ -33,6 +35,7 @@ use App\Traits\AuditableMasterData;
  * @property string|null $reversed_at
  * @property int|null $reversed_by
  * @property string|null $reverse_reason
+ * @property string|null $notes
  * @property string|null $reason
  * @property int|null $created_by
  */
@@ -46,12 +49,25 @@ class PurchaseReturn extends Model
 
     protected $dates = ['deleted_at'];
 
+    /**
+     * Phase 8 (BUG-40 fix): Apply BranchScope global scope so non-admin
+     * users can only read returns from their own session branch. This
+     * closes the cross-branch read leak in show()/slip() — findOrFail
+     * now throws ModelNotFoundException (404) instead of returning the
+     * other branch's record. Admins bypass the scope (see BranchScope).
+     */
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new BranchScope);
+    }
+
     protected $fillable = [
         'return_code',
         'return_date',
         'purchase_receive_id',
         'supplier_id',
         'branch_id',
+        'warehouse_id',
         'total_amount',
         'status',
         'journal_entry_id',
@@ -59,6 +75,7 @@ class PurchaseReturn extends Model
         'reversed_at',
         'reversed_by',
         'reverse_reason',
+        'notes',
         'reason',
         'created_by',
     ];
@@ -71,6 +88,7 @@ class PurchaseReturn extends Model
         'purchase_receive_id' => 'integer',
         'supplier_id' => 'integer',
         'branch_id' => 'integer',
+        'warehouse_id' => 'integer',
         'journal_entry_id' => 'integer',
         'created_by' => 'integer',
         'reversed_by' => 'integer',
@@ -96,9 +114,22 @@ class PurchaseReturn extends Model
         return $this->belongsTo(Branch::class, 'branch_id');
     }
 
+    public function warehouse(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(Warehouse::class, 'warehouse_id');
+    }
+
     public function journalEntry(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'journal_entry_id');
+    }
+
+    /**
+     * Phase 6: creator — used by the printable Return slip.
+     */
+    public function creator(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(\App\Models\User::class, 'created_by');
     }
 
     public function isDraft(): bool { return $this->status === 'draft'; }

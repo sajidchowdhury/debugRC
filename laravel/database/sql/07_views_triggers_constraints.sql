@@ -194,9 +194,7 @@ CREATE INDEX IF NOT EXISTS idx_ledgers_active_by_type
 
 -- P0: Customer ledger balance (every invoice finalize + credit check)
 -- Query: SELECT SUM(debit) - SUM(credit) FROM customer_ledger WHERE customer_id = ? AND is_reversed = false
-CREATE INDEX IF NOT EXISTS idx_cl_balance_covering
-    ON customer_ledger (customer_id, is_reversed)
-    INCLUDE (debit, credit);
+
 
 -- P0: Outstanding invoices per customer (payment allocation AJAX)
 -- Query: SELECT id, invoice_code, invoice_date, total_amount, paid_amount, due_amount

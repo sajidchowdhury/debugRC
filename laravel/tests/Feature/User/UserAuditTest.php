@@ -145,22 +145,24 @@ class UserAuditTest extends TestCase
 
     public function test_updated_audit_entry_only_includes_changed_fields_in_new(): void
     {
+        // Use is_active as the "changed" field — it is the only optional field
+        // besides username that UserController::validationRules accepts
+        // (telegram_user_id was removed when R24/R25 were dropped).
         $user = $this->createUserViaHttp([
-            'username'    => 'stable_audit_user',
-            'telegram_user_id' => null,
+            'username'  => 'stable_audit_user',
+            'is_active' => true,
         ]);
 
-        // Change only telegram_user_id; username should NOT appear in 'new'
+        // Change only is_active; username should NOT appear in 'new'
         $this->put(route('admin.users.update', $user), [
-            'username'         => 'stable_audit_user', // unchanged
-            'telegram_user_id' => 999888,
-            'is_active'        => true,
+            'username'  => 'stable_audit_user', // unchanged
+            'is_active' => false,
         ]);
 
         $entry = $this->auditEntriesFor($user, 'master_data_updated')->first();
         $details = json_decode($entry->details, true);
 
-        $this->assertArrayHasKey('telegram_user_id', $details['new']);
+        $this->assertArrayHasKey('is_active', $details['new']);
         $this->assertArrayNotHasKey('username', $details['new']);
     }
 

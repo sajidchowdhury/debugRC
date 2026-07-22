@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use App\Models\Scopes\BranchScope;
 use App\Traits\AuditableMasterData;
 
 /**
@@ -49,6 +50,18 @@ class PurchaseOrder extends Model
 
     protected $dates = ['deleted_at'];
 
+    /**
+     * Phase 8 (BUG-40 fix): Apply BranchScope global scope so non-admin
+     * users can only read POs from their own session branch. Closes the
+     * cross-branch read leak in show()/edit() — findOrFail now throws
+     * ModelNotFoundException (404) instead of returning another branch's
+     * record. Admins bypass the scope (see BranchScope).
+     */
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new BranchScope);
+    }
+
     protected $fillable = [
         'po_code',
         'po_date',
@@ -81,6 +94,17 @@ class PurchaseOrder extends Model
     public function items(): \Illuminate\Database\Eloquent\Relations\HasMany
     {
         return $this->hasMany(PurchaseOrderItem::class, 'purchase_order_id');
+    }
+
+    /**
+     * Phase 3 — GRNs created against this PO.
+     * Used on the PO show page "Receives against this PO" list.
+     */
+    public function receives(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\PurchaseReceive::class, 'purchase_order_id')
+            ->orderBy('receive_date', 'desc')
+            ->orderBy('id', 'desc');
     }
 
     public function supplier(): \Illuminate\Database\Eloquent\Relations\BelongsTo

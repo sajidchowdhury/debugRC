@@ -1,0 +1,44 @@
+{
+  "name": "RC ERP — Sales Cart",
+  "short_name": "RC POS",
+  "description": "RC ERP Sales Cart — POS kiosk interface for invoice creation and payment receipt.",
+  "start_url": "/admin/sales/cart",
+  "scope": "/admin/sales/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#4f46e5",
+  "background_color": "#ffffff",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["business", "productivity", "finance"],
+  "icons": [
+    {
+      "src": "/assets/images/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/images/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Today's Sales",
+      "short_name": "Today",
+      "description": "View today's sales invoices",
+      "url": "/admin/sales-invoices",
+      "icons": [{ "src": "/assets/images/icon.svg", "sizes": "96x96", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Customer Payments",
+      "short_name": "Payments",
+      "description": "Record a customer payment",
+      "url": "/admin/customer-payments",
+      "icons": [{ "src": "/assets/images/icon.svg", "sizes": "96x96", "type": "image/svg+xml" }]
+    }
+  ]
+}

@@ -3,6 +3,7 @@
 namespace App\Services\Purchase;
 
 use App\Models\PurchaseReturn;
+use App\Services\Auth\UserAuditLogger;
 use App\Services\Stock\StockService;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
@@ -19,15 +20,25 @@ use Illuminate\Support\Facades\Log;
  *
  * On confirm (3 operations, all atomic):
  *   1. Stock OUT via StockService at ORIGINAL receive rate (from GRN item)
- *   2. GL: Dr Accounts Payable / Cr Inventory (reverse of GRN)
- *   3. Supplier ledger: debit entry (we owe the supplier less)
- *   4. GRN item return_qty updated (cumulative returns tracking)
+ *      — SKIPPED for Damage condition lines (Phase 5).
+ *   2. GL: Dr Accounts Payable / Cr Inventory (reverse of GRN) — posted for
+ *      ALL items (Good + Damage) since Damage still reduces AP.
+ *   3. Supplier ledger: debit entry (we owe the supplier less) — posted for
+ *      ALL items.
+ *   4. GRN item return_qty updated (cumulative returns tracking) — for ALL
+ *      items (both Good and Damage reduce the supplier-returnable quota).
  *
  * Rate semantics: stock leaves at the ORIGINAL receive rate from the GRN
  * (NOT current avg_cost). This preserves cost integrity — the return
  * reverses the exact cost at which the stock was received.
  *
  * Return qty cap: returnable_qty = received_qty - already_returned.
+ *
+ * Phase 5 (Damage condition):
+ *   - Good = stock OUT + GL + supplier_ledger + GRN return_qty++
+ *   - Damage = NO stock movement + GL + supplier_ledger + GRN return_qty++
+ *     (supplier claim only — stock was never received in usable condition,
+ *      so it never entered warehouse_stock, so no OUT movement needed)
  */
 class PurchaseReturnService
 {
@@ -71,9 +82,18 @@ class PurchaseReturnService
         $returnCode = $this->generateReturnCode();
         $supplierId = (int) $receive->supplier_id;
         $branchId = (int) $receive->branch_id;
+        // BUG-4 fix (Phase 0): purchase_returns.warehouse_id is NOT NULL in the
+        // schema, but the original createReturn() did not write it — every
+        // INSERT was failing. Inherit the GRN's header warehouse_id so the row
+        // is persisted. Per-line warehouse_id (on purchase_return_items) is
+        // still authoritative for the stock OUT movement; this header value is
+        // the "default warehouse" for the return document as a whole — same
+        // pattern Laravel uses for purchase_receives.
+        $warehouseId = (int) $receive->warehouse_id;
 
         return DB::transaction(function () use (
-            $data, $items, $totalAmount, $returnCode, $receiveId, $supplierId, $branchId
+            $data, $items, $totalAmount, $returnCode,
+            $receiveId, $supplierId, $branchId, $warehouseId
         ) {
             $returnId = DB::table('purchase_returns')->insertGetId([
                 'return_code' => $returnCode,
@@ -81,6 +101,7 @@ class PurchaseReturnService
                 'purchase_receive_id' => $receiveId,
                 'supplier_id' => $supplierId,
                 'branch_id' => $branchId,
+                'warehouse_id' => $warehouseId,
                 'total_amount' => round($totalAmount, 2),
                 'status' => 'draft',
                 'is_reversed' => false,
@@ -99,12 +120,35 @@ class PurchaseReturnService
                     'warehouse_id' => $item['warehouse_id'],
                     'qty' => $item['qty'],
                     'rate' => $item['rate'],
+                    // Phase 5: persist condition (default Good for back-compat).
+                    'condition' => $item['condition'] ?? 'Good',
                 ];
             }
             DB::table('purchase_return_items')->insert($itemRows);
 
-            return PurchaseReturn::with(['items.product', 'supplier', 'branch', 'purchaseReceive'])
+            $return = PurchaseReturn::with(['items.product', 'supplier', 'branch', 'purchaseReceive'])
                 ->find($returnId);
+
+            // Phase 6: audit log.
+            $goodCount = collect($items)->filter(fn($i) => ($i['condition'] ?? 'Good') === 'Good')->count();
+            $damageCount = count($items) - $goodCount;
+            UserAuditLogger::log(
+                userId: $data['created_by'] ?? null,
+                action: 'purchase_return_created',
+                targetUserId: $returnId,
+                details: [
+                    'return_code'         => $returnCode,
+                    'branch_id'           => $branchId,
+                    'supplier_id'         => $supplierId,
+                    'purchase_receive_id' => $receiveId,
+                    'total'               => round($totalAmount, 2),
+                    'item_count'          => count($items),
+                    'good_lines'          => $goodCount,
+                    'damage_lines'        => $damageCount,
+                ]
+            );
+
+            return $return;
         });
     }
 
@@ -130,7 +174,23 @@ class PurchaseReturnService
             $returnDate = $return->return_date->format('Y-m-d');
 
             // 1. Stock OUT for each item at the ORIGINAL receive rate.
+            //    Phase 5: Damage condition items SKIP stock movement entirely
+            //    (supplier claim only — stock was never usable). GL + ledger
+            //    still posted below for ALL items (Good + Damage).
             foreach ($return->items as $item) {
+                if ($item->isDamage()) {
+                    // Damage: skip stock OUT. Still increment GRN return_qty so
+                    // the supplier-returnable quota is correctly tracked.
+                    if ($item->purchase_receive_item_id) {
+                        DB::table('purchase_receive_items')
+                            ->where('id', $item->purchase_receive_item_id)
+                            ->update([
+                                'return_qty' => DB::raw('COALESCE(return_qty, 0) + ' . (float) $item->qty),
+                            ]);
+                    }
+                    continue;
+                }
+
                 $this->stockService->applyTransaction([
                     'warehouse_id' => $item->warehouse_id,
                     'product_id' => $item->product_id,
@@ -180,6 +240,24 @@ class PurchaseReturnService
                     'updated_at' => now(),
                 ]);
 
+            // Phase 6: audit log.
+            $goodCount = $return->items->filter(fn($i) => $i->isGood())->count();
+            $damageCount = $return->items->count() - $goodCount;
+            UserAuditLogger::log(
+                userId: $confirmedBy,
+                action: 'purchase_return_confirmed',
+                targetUserId: $returnId,
+                details: [
+                    'return_code'      => $return->return_code,
+                    'branch_id'        => (int) $return->branch_id,
+                    'supplier_id'      => (int) $return->supplier_id,
+                    'total'            => (float) $return->total_amount,
+                    'journal_entry_id' => $journalEntryId,
+                    'good_lines'       => $goodCount,
+                    'damage_lines'     => $damageCount,
+                ]
+            );
+
             return PurchaseReturn::with([
                 'items.product', 'supplier', 'branch', 'purchaseReceive',
                 'journalEntry.lines.ledger'
@@ -206,6 +284,8 @@ class PurchaseReturnService
 
             if ($return->isConfirmed()) {
                 // Reverse GL + linked supplier_ledger via JournalReversalService (cascade).
+                // Phase 5: GL reversal cascades for ALL items (Good + Damage)
+                // because the journal_entry_id links the whole return document.
                 if ($return->journal_entry_id) {
                     $this->journalReversal->reverseByJournalEntry(
                         $return->journal_entry_id, $cancelledBy,
@@ -214,6 +294,9 @@ class PurchaseReturnService
                 }
 
                 // Reverse each stock movement.
+                // Phase 5: Damage items never created a stock movement, so the
+                // stock_transactions query below naturally returns only Good
+                // items' transactions — no extra branching needed here.
                 $stockTxs = DB::table('stock_transactions')
                     ->where('reference_type', 'purchase_return')
                     ->where('reference_id', $returnId)
@@ -228,6 +311,8 @@ class PurchaseReturnService
                 }
 
                 // Decrement GRN item return_qty.
+                // Phase 5: decrement for ALL items (Good + Damage) since both
+                // had their return_qty incremented on confirm.
                 foreach ($return->items as $item) {
                     if ($item->purchase_receive_item_id) {
                         DB::table('purchase_receive_items')
@@ -251,6 +336,18 @@ class PurchaseReturnService
             DB::table('purchase_returns')
                 ->where('id', $returnId)
                 ->update(['status' => 'cancelled', 'updated_at' => now()]);
+
+            // Phase 6: audit log.
+            UserAuditLogger::log(
+                userId: $cancelledBy,
+                action: 'purchase_return_reversed',
+                targetUserId: $returnId,
+                details: [
+                    'return_code'  => $return->return_code,
+                    'reason'       => $reason,
+                    'was_confirmed' => $return->isConfirmed(),
+                ]
+            );
 
             return PurchaseReturn::find($returnId);
         });
@@ -359,11 +456,24 @@ class PurchaseReturnService
                 'qty' => $qty,
                 'rate' => $rate,
                 'purchase_receive_item_id' => $receiveItemId > 0 ? $receiveItemId : null,
+                // Phase 5: persist condition; normalize to 'Good' default.
+                'condition' => $this->normalizeCondition($item['condition'] ?? 'Good'),
             ];
         }
         if (empty($validated)) {
             throw new \InvalidArgumentException('At least one valid item is required.');
         }
         return $validated;
+    }
+
+    /**
+     * Phase 5: normalize the condition value to 'Good' or 'Damage'.
+     * Accepts case-insensitive input; defaults to 'Good'.
+     */
+    private function normalizeCondition(string $value): string
+    {
+        $v = trim($value);
+        if ($v === '') return 'Good';
+        return strcasecmp($v, 'Damage') === 0 ? 'Damage' : 'Good';
     }
 }

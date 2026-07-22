@@ -94,15 +94,15 @@ RC_ERP_v2/
 - Telegram login notifications — removed
 - `verify_2fa` view and route — removed
 - `users.totp_secret`, `users.totp_enabled` columns — dropped
-- Telegram business alerts — **replaced** with Laravel native notifications (Phase 10)
-- Firebase FCM push — **replaced** with Laravel notifications + broadcast (Phase 10)
+- Telegram business alerts — **removed** (2026-07-22). Laravel native notifications (`ERPNotification` + `NotificationService`) cover operational visibility. See `docs/sales_entry_Lg_vs_La.md` R24.
+- Firebase FCM push — **removed** (2026-07-22). `fcm_tokens` table + `users.telegram_user_id` column dropped in migration `2025_01_20_000010_drop_fcm_and_telegram_fields.php`. In-app inbox + Listen/Notify realtime fanout covers the use case. See `docs/sales_entry_Lg_vs_La.md` R25.
 
 ---
 
 ## Manual action still required (cannot be done in code)
 
-- [ ] Rotate Telegram bot token (old one leaked in public repo history)
-- [ ] Rotate FCM server key + VAPID key pair (if still needed — Laravel notifications may replace)
+- [x] ~~Rotate Telegram bot token~~ — N/A, Telegram integration removed entirely (2026-07-22)
+- [x] ~~Rotate FCM server key + VAPID key pair~~ — N/A, FCM integration removed entirely (2026-07-22)
 - [ ] Reset all production user passwords (bcrypt hashes were in the public SQL dump)
 - [ ] Delete or make-private the old public repo `sajidchowdhury/RC_ERP`
 - [ ] Delete or make-private the public repo `sajidchowdhury/RC_ERP_Laravel`

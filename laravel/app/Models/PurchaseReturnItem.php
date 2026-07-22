@@ -5,7 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * Purchase Return Item — Phase 7.3.
+ * Purchase Return Item — Phase 7.3 + Phase 5 (condition).
  *
  * @property int $id
  * @property int $purchase_return_id
@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $qty
  * @property string $rate
  * @property string $amount GENERATED: qty × rate
+ * @property string $condition 'Good' | 'Damage' — Damage = no stock movement
  */
 class PurchaseReturnItem extends Model
 {
@@ -29,6 +30,7 @@ class PurchaseReturnItem extends Model
         'warehouse_id',
         'qty',
         'rate',
+        'condition',
     ];
 
     protected $casts = [
@@ -39,7 +41,26 @@ class PurchaseReturnItem extends Model
         'purchase_receive_item_id' => 'integer',
         'product_id' => 'integer',
         'warehouse_id' => 'integer',
+        'condition' => 'string',
     ];
+
+    /**
+     * Phase 5: True if this return line is a Damage condition (no stock
+     * movement — supplier claim only). GL + supplier_ledger still posted.
+     */
+    public function isDamage(): bool
+    {
+        return strcasecmp((string) $this->condition, 'Damage') === 0;
+    }
+
+    /**
+     * Phase 5: True if this return line is a Good condition (stock OUT +
+     * GL + supplier_ledger — the default pre-Phase-5 behavior).
+     */
+    public function isGood(): bool
+    {
+        return !$this->isDamage();
+    }
 
     public function return(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
@@ -59,5 +80,13 @@ class PurchaseReturnItem extends Model
     public function amount(): float
     {
         return (float) $this->qty * (float) $this->rate;
+    }
+
+    /**
+     * Phase 5: Human-readable condition label for blade views.
+     */
+    public function conditionLabel(): string
+    {
+        return $this->isDamage() ? 'Damage' : 'Good';
     }
 }

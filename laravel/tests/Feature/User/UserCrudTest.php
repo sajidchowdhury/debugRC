@@ -108,18 +108,6 @@ class UserCrudTest extends TestCase
         });
     }
 
-    public function test_index_stats_include_telegram_count(): void
-    {
-        $this->makeTelegramUser(123456);
-        $this->makeTelegramUser(789012);
-
-        $response = $this->get(route('admin.users.index'));
-
-        $response->assertViewHas('stats', function ($stats): bool {
-            return isset($stats['telegram']) && $stats['telegram'] >= 2;
-        });
-    }
-
     public function test_index_data_tables_endpoint_returns_created_user(): void
     {
         $user = $this->makeUser();
@@ -572,22 +560,6 @@ class UserCrudTest extends TestCase
             'username'  => 'taken_uname',
             'is_active' => true,
         ])->assertSessionHasErrors('username');
-    }
-
-    public function test_update_with_telegram_user_id(): void
-    {
-        $user = $this->makeUser();
-
-        $this->put(route('admin.users.update', $user), [
-            'username'         => $user->username,
-            'telegram_user_id' => 123456789,
-            'is_active'        => true,
-        ])->assertRedirect();
-
-        $this->assertDatabaseHas('users', [
-            'id'               => $user->id,
-            'telegram_user_id' => 123456789,
-        ]);
     }
 
     public function test_update_is_active_not_silently_flipped_when_omitted(): void

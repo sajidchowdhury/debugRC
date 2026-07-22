@@ -83,7 +83,8 @@ class SalesInvoiceController extends Controller
             'notes' => 'nullable|string|max:1000',
             'is_soft_hold' => 'nullable|boolean',
             'credit_limit_override' => 'nullable|boolean',
-            'override_reason' => 'nullable|string|max:500',
+            // R26 (2026-07-22): min:10 parity with Legacy SalesInvoiceOperationsTrait.
+            'override_reason' => 'nullable|string|min:10|max:500',
             'idempotency_token' => 'required|string|uuid',
             'dispatcher_ids'   => 'nullable|array',
             'dispatcher_ids.*' => 'integer|exists:employees,id',
@@ -203,7 +204,8 @@ class SalesInvoiceController extends Controller
             'notes' => 'nullable|string|max:1000',
             'is_soft_hold' => 'nullable|boolean',
             'credit_limit_override' => 'nullable|boolean',
-            'override_reason' => 'nullable|string|max:500',
+            // R26 (2026-07-22): min:10 parity with Legacy SalesInvoiceOperationsTrait.
+            'override_reason' => 'nullable|string|min:10|max:500',
             'dispatcher_ids'   => 'nullable|array',
             'dispatcher_ids.*' => 'integer|exists:employees,id',
         ]);
@@ -592,5 +594,326 @@ class SalesInvoiceController extends Controller
             'new_balance' => round($newBalance, 2),
             'invoice_amount' => round($amount, 2),
         ]);
+    }
+
+    /**
+     * R19: Inline receive-payment modal — returns the HTML body for
+     * the #receivePaymentModal on the Today's Sales / sales-invoices
+     * index page. Loaded via AJAX when the user clicks the "Receive"
+     * button on a row with due_amount > 0.
+     *
+     * Mirrors Legacy sales/receive_modal/{id} endpoint which is
+     * fetched by sales-today-index.js and injected into #receiveModalContent.
+     *
+     * Returns a Blade partial with the invoice summary, payment form
+     * (mode/amount/bank/reference/notes), and a list of payments
+     * already recorded against this invoice. The form posts to the
+     * existing admin.customer-payments.store route — no new write
+     * endpoint is created (R2 idempotency-token flow is reused).
+     */
+    public function receiveModal(int $id)
+    {
+        $invoice = SalesInvoice::with([
+            'customer', 'branch',
+            'allocations' => function ($q) {
+                $q->with('payment.branch', 'payment.bank')
+                    ->orderByDesc('id');
+            },
+        ])->findOrFail($id);
+
+        // Outstanding payments already allocated to this invoice
+        // (uses the invoice_payment_allocations table joined via
+        // SalesInvoice::allocations() → InvoicePaymentAllocation::payment()).
+        // received_by_name is resolved from the users table via the
+        // CustomerPayment::created_by FK (no formal model relationship
+        // — we look it up here so the modal can display who collected it).
+        $userIds = $invoice->allocations
+            ->map(fn ($a) => $a->payment?->created_by)
+            ->filter()
+            ->unique()
+            ->all();
+        $userNames = $userIds
+            ? \App\Models\User::whereIn('id', $userIds)->pluck('username', 'id')
+            : collect();
+
+        $payments = $invoice->allocations->map(function ($alloc) use ($userNames) {
+            $p = $alloc->payment;
+            return [
+                'payment_id'        => $p?->id ?? 0,
+                'payment_code'      => $p?->payment_code ?? '—',
+                'payment_date'      => $p?->payment_date ?? null,
+                'allocated_amount'  => (float) $alloc->allocated_amount,
+                'payment_mode'      => $p?->payment_mode ?? 'cash',
+                'bank_name'         => $p?->bank?->bank_name ?? '',
+                'received_by_name'  => $userNames[$p?->created_by ?? 0] ?? '—',
+            ];
+        });
+
+        $banks = \App\Models\Bank::active()->orderBy('bank_name')->get();
+        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
+
+        // Default branch = invoice's branch (or session branch as fallback)
+        $defaultBranchId = (int) ($invoice->branch_id ?? session('branch_id', 0));
+
+        $grandTotal = (float) $invoice->total_amount;
+        $amountPaid = (float) $invoice->paid_amount;
+        $balance   = max(0.0, round($grandTotal - $amountPaid, 2));
+
+        return view('admin.sales-invoices._receive_modal_body', [
+            'invoice'        => $invoice,
+            'payments'       => $payments,
+            'banks'          => $banks,
+            'branches'       => $branches,
+            'defaultBranchId' => $defaultBranchId,
+            'grandTotal'     => $grandTotal,
+            'amountPaid'     => $amountPaid,
+            'balance'        => $balance,
+        ]);
+    }
+
+    /**
+     * R21: Server-side DataTables endpoint for the sales-invoices
+     * index page. Returns DataTables SSP JSON (draw / recordsTotal /
+     * recordsFiltered / data) so the index table can paginate + sort
+     * + search on the server instead of loading 25 rows at a time
+     * through Laravel's paginator + a client-side DataTable on top.
+     *
+     * Mirrors Legacy `sales/datatable_invoices` (called from
+     * sales-today-index.js::initDataTable). Supports:
+     *
+     *   - Standard DataTables paging params: draw / start / length
+     *   - Standard DataTables ordering params: order[i][column] /
+     *     order[i][dir]; columns[j][data] is used to map the column
+     *     index to a real DB column.
+     *   - Standard DataTables search[value] (when "smart" search is on)
+     *   - R21 filter params (from the index page's filter form):
+     *       from_date, to_date, customer_id, branch_id, status,
+     *       search, smart_sort
+     *   - R22 status-chip params (override the `status` filter):
+     *       status_chip=awaiting_payment | draft | confirmed |
+     *       cancelled | reversed | all
+     *
+     * Smart sort (R21): when smart_sort=1 AND the user has not
+     * explicitly clicked a column header to sort, the rows are
+     * ordered "unpaid first, then oldest invoice date" — mirroring
+     * Legacy `sales-today-index.js` `#filterSmartSort` checkbox.
+     * The "unpaid first" rule is implemented as a CASE expression
+     * that puts invoices with `due_amount > 0.01 AND status NOT IN
+     * ('cancelled','reversed')` before everything else.
+     */
+    public function datatable(Request $request)
+    {
+        $filters = $this->buildInvoiceFilterQuery($request);
+
+        // recordsTotal = unfiltered count of all invoices (DataTables
+        // SSP contract). Computed from a fresh query — the filter
+        // query is reused below for recordsFiltered + the actual page.
+        $recordsTotal = SalesInvoice::count();
+
+        // recordsFiltered = filtered count (before pagination).
+        $recordsFiltered = (clone $filters)->count();
+
+        // Apply ordering.
+        $order = $request->input('order', []);
+        $columns = $request->input('columns', []);
+        $smartSort = $request->boolean('smart_sort', true);
+
+        if (is_array($order) && count($order) > 0) {
+            // DataTables column ordering — user clicked a header.
+            $colMap = [
+                'invoice_code' => 'invoice_code',
+                'invoice_date' => 'invoice_date',
+                'customer_name' => 'customer_id',  // proxy via FK; real name join would need a subquery
+                'branch_name'   => 'branch_id',
+                'items_count'   => 'id',           // not directly orderable; fall back to id
+                'total_amount'  => 'total_amount',
+                'paid_amount'   => 'paid_amount',
+                'due_amount'    => 'due_amount',
+                'status'        => 'status',
+            ];
+            foreach ($order as $o) {
+                $colIdx = (int) ($o['column'] ?? 0);
+                $colData = $columns[$colIdx]['data'] ?? null;
+                $dir = strtolower($o['dir'] ?? 'asc') === 'desc' ? 'desc' : 'asc';
+                $dbCol = $colMap[$colData] ?? null;
+                if ($dbCol) {
+                    $filters->orderBy($dbCol, $dir);
+                }
+            }
+            // Always add a stable tiebreaker.
+            $filters->orderBy('id', 'desc');
+        } elseif ($smartSort) {
+            // R21 smart sort: unpaid first (asc=0), then oldest date.
+            $filters->orderByRaw(
+                "(CASE WHEN due_amount > 0.01 AND status NOT IN ('cancelled','reversed') THEN 0 ELSE 1 END) ASC"
+            )->orderBy('invoice_date', 'asc')->orderBy('id', 'asc');
+        } else {
+            // Default: newest first.
+            $filters->orderBy('invoice_date', 'desc')->orderBy('id', 'desc');
+        }
+
+        $start  = max(0, (int) $request->input('start', 0));
+        $length = max(1, min(500, (int) $request->input('length', 25)));
+
+        $rows = $filters->with(['customer', 'branch', 'items'])
+            ->skip($start)->take($length)->get();
+
+        $data = $rows->map(function ($inv) {
+            return [
+                'id'             => $inv->id,
+                'invoice_code'   => $inv->invoice_code,
+                'invoice_date'   => optional($inv->invoice_date)->format('Y-m-d'),
+                'customer_name'  => $inv->customer?->customer_name ?? '',
+                'customer_code'  => $inv->customer?->customer_code ?? '',
+                'branch_name'    => $inv->branch?->branch_name ?? '',
+                'items_count'    => $inv->items->count(),
+                'total_amount'   => (float) $inv->total_amount,
+                'paid_amount'    => (float) $inv->paid_amount,
+                'due_amount'     => (float) $inv->due_amount,
+                'status'         => $inv->status,
+                'is_soft_hold'   => (bool) $inv->is_soft_hold,
+                'is_reversed'    => (bool) $inv->is_reversed,
+                'show_receive'   => (float) $inv->due_amount > 0.01
+                                     && $inv->status !== 'cancelled'
+                                     && !$inv->is_reversed,
+                'show_url'       => route('admin.sales-invoices.show', $inv),
+            ];
+        });
+
+        return response()->json([
+            'draw'            => (int) $request->input('draw', 0),
+            'recordsTotal'    => $recordsTotal,
+            'recordsFiltered' => $recordsFiltered,
+            'data'            => $data,
+        ]);
+    }
+
+    /**
+     * R22: Live counts for the status-chip row on the sales-invoices
+     * index page. Returns JSON with one count per chip, computed
+     * against the current filter set (date range / customer / branch /
+     * search) — but NOT against the active chip itself, so the user
+     * can see how many invoices are in each bucket without losing
+     * their filter context. Mirrors Legacy
+     * `sales/today_filter_summary` (called from
+     * sales-today-index.js::refreshSummary).
+     *
+     * Chip buckets:
+     *   - all               = total in current filter scope
+     *   - awaiting_payment  = due_amount > 0.01 AND status NOT IN cancelled,reversed
+     *   - draft             = status = draft
+     *   - confirmed         = status = confirmed
+     *   - cancelled         = status = cancelled
+     *   - reversed          = is_reversed = true
+     *   - total_value       = SUM(total_amount) EXCLUDING cancelled (display only)
+     */
+    public function summary(Request $request)
+    {
+        $base = $this->buildInvoiceFilterQuery($request, excludeStatusChip: true);
+
+        // Clone for each bucket so we don't mutate the base query.
+        $countAll = (clone $base)->count();
+        $countAwaiting = (clone $base)
+            ->where('due_amount', '>', 0.01)
+            ->whereNotIn('status', ['cancelled'])
+            ->where('is_reversed', false)
+            ->count();
+        $countDraft = (clone $base)->where('status', 'draft')->count();
+        $countConfirmed = (clone $base)->where('status', 'confirmed')->count();
+        $countCancelled = (clone $base)->where('status', 'cancelled')->count();
+        $countReversed = (clone $base)->where('is_reversed', true)->count();
+        $totalValue = (float) (clone $base)
+            ->whereNotIn('status', ['cancelled'])
+            ->sum('total_amount');
+
+        return response()->json([
+            'status'            => 'success',
+            'total'             => $countAll,
+            'awaiting_payment'  => $countAwaiting,
+            'draft'             => $countDraft,
+            'confirmed'         => $countConfirmed,
+            'cancelled'         => $countCancelled,
+            'reversed'          => $countReversed,
+            'total_value'       => $totalValue,
+        ]);
+    }
+
+    /**
+     * Shared filter-query builder used by both datatable() and
+     * summary(). Mirrors the filter logic in index() so chip counts
+     * and table rows stay in sync.
+     *
+     * When $excludeStatusChip is true (summary mode), the status
+     * chip / status filter is NOT applied — the summary must return
+     * counts for ALL buckets regardless of which chip is currently
+     * active, otherwise clicking "Draft" would zero-out every other
+     * chip's count.
+     */
+    private function buildInvoiceFilterQuery(Request $request, bool $excludeStatusChip = false)
+    {
+        $q = SalesInvoice::query();
+
+        if ($d = $request->input('from_date')) {
+            $q->where('invoice_date', '>=', $d);
+        }
+        if ($d = $request->input('to_date')) {
+            $q->where('invoice_date', '<=', $d);
+        }
+        if ($cid = $request->input('customer_id')) {
+            $q->where('customer_id', $cid);
+        }
+        if ($bid = $request->input('branch_id')) {
+            $q->where('branch_id', $bid);
+        }
+
+        // Smart search: invoice_code, customer name/code/mobile,
+        // branch name. Mirrors Legacy sales-today-index.js search
+        // hint "invoice, customer, mobile, branch, salesman, product".
+        if ($s = $request->input('search')) {
+            if (is_array($s)) { $s = $s['value'] ?? ''; }
+            $s = trim((string) $s);
+            if ($s !== '') {
+                $q->where(function ($qq) use ($s) {
+                    $qq->where('invoice_code', 'ILIKE', "%{$s}%")
+                       ->orWhereHas('customer', function ($qc) use ($s) {
+                           $qc->where('customer_name', 'ILIKE', "%{$s}%")
+                              ->orWhere('customer_code', 'ILIKE', "%{$s}%")
+                              ->orWhere('mobile', 'ILIKE', "%{$s}%");
+                       })
+                       ->orWhereHas('branch', function ($qb) use ($s) {
+                           $qb->where('branch_name', 'ILIKE', "%{$s}%")
+                              ->orWhere('branch_code', 'ILIKE', "%{$s}%");
+                       });
+                });
+            }
+        }
+
+        if (! $excludeStatusChip) {
+            // R22 status chip overrides the simple `status` param when present.
+            $chip = $request->input('status_chip');
+            $plainStatus = $request->input('status');
+            if ($chip && $chip !== 'all') {
+                switch ($chip) {
+                    case 'awaiting_payment':
+                        $q->where('due_amount', '>', 0.01)
+                          ->whereNotIn('status', ['cancelled'])
+                          ->where('is_reversed', false);
+                        break;
+                    case 'reversed':
+                        $q->where('is_reversed', true);
+                        break;
+                    case 'draft':
+                    case 'confirmed':
+                    case 'cancelled':
+                        $q->where('status', $chip);
+                        $q->where('is_reversed', false);
+                        break;
+                }
+            } elseif ($plainStatus) {
+                $q->where('status', $plainStatus);
+            }
+        }
+
+        return $q;
     }
 }

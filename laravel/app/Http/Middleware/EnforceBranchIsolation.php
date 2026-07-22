@@ -141,6 +141,10 @@ class EnforceBranchIsolation
 
     /**
      * Infer the DB table from the request URI path.
+     *
+     * Phase 1 (purchase parity): added purchase-orders, purchase-receives,
+     * purchase-returns so that non-admin users cannot access another branch's
+     * PO/GRN/Return by guessing its URL id (e.g. /admin/purchase-orders/{id}).
      */
     private function inferTableFromUri(string $path): ?string
     {
@@ -156,6 +160,16 @@ class EnforceBranchIsolation
         }
         if (str_contains($path, 'customer-payments')) {
             return 'customer_payments';
+        }
+        // --- Phase 1 (purchase parity) ---
+        if (str_contains($path, 'purchase-orders')) {
+            return 'purchase_orders';
+        }
+        if (str_contains($path, 'purchase-receives')) {
+            return 'purchase_receives';
+        }
+        if (str_contains($path, 'purchase-returns')) {
+            return 'purchase_returns';
         }
         return null;
     }

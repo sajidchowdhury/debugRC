@@ -3,6 +3,8 @@
 namespace App\Services\Purchase;
 
 use App\Models\PurchaseReceive;
+use App\Models\PurchaseReturn;
+use App\Services\Auth\UserAuditLogger;
 use App\Services\Stock\StockService;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
@@ -80,6 +82,20 @@ class PurchaseReceiveService
             if (!$po) {
                 throw new \InvalidArgumentException("PO {$poId} not found.");
             }
+            // Phase 8 (BUG-39 fix): Verify the PO is in a receivable state
+            // (sent or partial). Without this guard, a GRN could be created
+            // against a draft PO (jumping it directly to partial/received),
+            // an already-received PO (over-receiving beyond ordered qty), or
+            // a cancelled PO (resurrecting it). The controller's create()
+            // method already calls canReceive() on the PO pre-fill path, but
+            // the service is also reachable from jobs/tests/other controllers
+            // — defense in depth.
+            if (!in_array($po->status, ['sent', 'partial'], true)) {
+                throw new \RuntimeException(
+                    "PO {$poId} cannot receive goods (current status: {$po->status}). "
+                    . "Allowed statuses: sent, partial."
+                );
+            }
             $supplierId = (int) $po->supplier_id;
             $branchId = (int) $po->branch_id;
         }
@@ -121,8 +137,25 @@ class PurchaseReceiveService
             }
             DB::table('purchase_receive_items')->insert($itemRows);
 
-            return PurchaseReceive::with(['items.product', 'supplier', 'branch', 'warehouse', 'purchaseOrder'])
+            $receive = PurchaseReceive::with(['items.product', 'supplier', 'branch', 'warehouse', 'purchaseOrder'])
                 ->find($receiveId);
+
+            // Phase 6: audit log.
+            UserAuditLogger::log(
+                userId: $data['created_by'] ?? null,
+                action: 'purchase_receive_created',
+                targetUserId: $receiveId,
+                details: [
+                    'receive_code'       => $receiveCode,
+                    'branch_id'          => $branchId,
+                    'supplier_id'        => $supplierId,
+                    'purchase_order_id'  => $poId,
+                    'total'              => round($total, 2),
+                    'item_count'         => count($items),
+                ]
+            );
+
+            return $receive;
         });
     }
 
@@ -201,6 +234,21 @@ class PurchaseReceiveService
                     'updated_at' => now(),
                 ]);
 
+            // Phase 6: audit log.
+            UserAuditLogger::log(
+                userId: $confirmedBy,
+                action: 'purchase_receive_confirmed',
+                targetUserId: $receiveId,
+                details: [
+                    'receive_code'      => $receive->receive_code,
+                    'branch_id'         => (int) $receive->branch_id,
+                    'supplier_id'       => (int) $receive->supplier_id,
+                    'total'             => (float) $receive->total_amount,
+                    'journal_entry_id'  => $journalEntryId,
+                    'po_id'             => $receive->purchase_order_id,
+                ]
+            );
+
             return PurchaseReceive::with([
                 'items.product', 'supplier', 'branch', 'warehouse', 'purchaseOrder',
                 'journalEntry.lines.ledger'
@@ -228,6 +276,27 @@ class PurchaseReceiveService
             }
             if ($receive->isCancelled()) {
                 throw new \RuntimeException("GRN is already cancelled.");
+            }
+
+            // BUG-5 fix (Phase 0): Block cancel if active (non-reversed, confirmed)
+            // returns exist on this GRN. Without this guard, cancelling the GRN
+            // would re-add stock that was already returned to the supplier —
+            // creating inconsistent state (stock present but supplier ledger says
+            // it was returned). User must reverse the returns first.
+            //
+            // Legacy parity: legacy PurchaseReceiveModel::cancelReceive has the
+            // same guard. We mirror it here.
+            if ($receive->isConfirmed()) {
+                $activeReturns = PurchaseReturn::where('purchase_receive_id', $receiveId)
+                    ->where('is_reversed', false)
+                    ->where('status', 'confirmed')
+                    ->count();
+                if ($activeReturns > 0) {
+                    throw new \RuntimeException(
+                        "Cannot cancel GRN: {$activeReturns} active return(s) exist against it. "
+                        . "Reverse them first."
+                    );
+                }
             }
 
             if ($receive->isConfirmed()) {
@@ -277,6 +346,18 @@ class PurchaseReceiveService
             DB::table('purchase_receives')
                 ->where('id', $receiveId)
                 ->update(['status' => 'cancelled', 'updated_at' => now()]);
+
+            // Phase 6: audit log.
+            UserAuditLogger::log(
+                userId: $cancelledBy,
+                action: 'purchase_receive_cancelled',
+                targetUserId: $receiveId,
+                details: [
+                    'receive_code' => $receive->receive_code,
+                    'reason'       => $reason,
+                    'was_confirmed' => $receive->isConfirmed(),
+                ]
+            );
 
             return PurchaseReceive::find($receiveId);
         });

@@ -173,6 +173,70 @@ class SalesCartController extends Controller
     }
 
     /**
+     * R11: AJAX list all open draft carts for the current user (+ branch).
+     *
+     * Ported from Legacy `SalesController::list_draft_carts` +
+     * `SalesCartOperationsTrait::listDraftCarts()`. Drives the
+     * `#draft-tabs` dock in `cart.blade.php` so the cashier can see
+     * every customer-cart they have in flight, switch between them
+     * without losing items, and close any cart they no longer need.
+     *
+     * GET /admin/sales/cart/list-drafts
+     * Returns: [{customer_id, label, shop_name, customer_name, mobile,
+     *            item_count, subtotal, is_soft_hold, updated_at}, ...]
+     *
+     * Only non-empty carts are returned (empty carts don't earn a tab).
+     * Sorted by item_count DESC then updated_at DESC.
+     */
+    public function listDrafts(Request $request)
+    {
+        $branchId = (int) session('branch_id', 0);
+
+        return response()->json(
+            $this->cartService->listCarts(auth()->id(), $branchId)
+        );
+    }
+
+    /**
+     * R14: AJAX live customer credit snapshot for the cart page.
+     *
+     * Ported from Legacy `SalesController::customer_details`. Returns
+     * the customer's credit_limit, current AR balance (current_due),
+     * and balance_left (= credit_limit − current_due) so the cart
+     * blade can render an inline credit panel. The frontend combines
+     * this with the cart subtotal to compute a projected new balance
+     * — giving the cashier an early warning before finalize.
+     *
+     * RBAC: salesman/manager/admin.
+     * Rate limit: 60 req/min (matches Legacy guardJsonApi limit for
+     * sales/customer_details).
+     *
+     * GET /admin/sales/cart/customer-details?customer_id=...
+     * Returns: {customer_id, customer_name, shop_name, mobile, address,
+     *           credit_limit, current_due, due_left}
+     */
+    public function customerDetails(Request $request)
+    {
+        $customerId = (int) $request->input('customer_id', 0);
+        if ($customerId <= 0) {
+            return response()->json([
+                'customer_id'   => 0,
+                'customer_name' => '',
+                'shop_name'     => '',
+                'mobile'        => '',
+                'address'       => '',
+                'credit_limit'  => 0.0,
+                'current_due'   => 0.0,
+                'due_left'      => 0.0,
+            ]);
+        }
+
+        return response()->json(
+            $this->cartService->getCustomerDetails($customerId)
+        );
+    }
+
+    /**
      * AJAX: Load the cart for a customer.
      */
     public function load(Request $request)

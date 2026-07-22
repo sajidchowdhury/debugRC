@@ -1,9 +1,6 @@
 @extends('layouts.admin', ['title' => $title ?? 'Go-Live Checklist / সেলস Go-Live চেকলিস্ট'])
 
 @push('css')
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/assets/css/sales-guide.css">
 <meta name="theme-color" content="#059669">
 @endpush

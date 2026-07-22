@@ -3,6 +3,7 @@
 namespace App\Services\Purchase;
 
 use App\Services\Accounting\DocumentSequenceService;
+use App\Services\Auth\UserAuditLogger;
 use App\Models\PurchaseOrder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -85,7 +86,23 @@ class PurchaseOrderService
             }
             DB::table('purchase_order_items')->insert($itemRows);
 
-            return PurchaseOrder::with(['items.product', 'supplier', 'branch', 'warehouse'])->find($poId);
+            $po = PurchaseOrder::with(['items.product', 'supplier', 'branch', 'warehouse'])->find($poId);
+
+            // Phase 6: audit log.
+            UserAuditLogger::log(
+                userId: $data['created_by'] ?? null,
+                action: 'purchase_order_created',
+                targetUserId: $poId,
+                details: [
+                    'po_code'     => $poCode,
+                    'branch_id'   => (int) ($data['branch_id'] ?? 0),
+                    'supplier_id' => (int) ($data['supplier_id'] ?? 0),
+                    'total'       => round($total, 2),
+                    'item_count'  => count($items),
+                ]
+            );
+
+            return $po;
         });
     }
 
@@ -145,7 +162,23 @@ class PurchaseOrderService
             }
             DB::table('purchase_order_items')->insert($itemRows);
 
-            return PurchaseOrder::with(['items.product', 'supplier', 'branch', 'warehouse'])->find($poId);
+            $po = PurchaseOrder::with(['items.product', 'supplier', 'branch', 'warehouse'])->find($poId);
+
+            // Phase 6: audit log.
+            UserAuditLogger::log(
+                userId: $data['created_by'] ?? auth()->id(),
+                action: 'purchase_order_updated',
+                targetUserId: $poId,
+                details: [
+                    'po_code'     => $po->po_code,
+                    'branch_id'   => (int) ($data['branch_id'] ?? 0),
+                    'supplier_id' => (int) ($data['supplier_id'] ?? 0),
+                    'total'       => round($total, 2),
+                    'item_count'  => count($items),
+                ]
+            );
+
+            return $po;
         });
     }
 
@@ -166,6 +199,16 @@ class PurchaseOrderService
             'status' => 'sent',
             'updated_at' => now(),
         ]);
+
+        // Phase 6: audit log.
+        UserAuditLogger::log(
+            userId: auth()->id(),
+            action: 'purchase_order_sent',
+            targetUserId: $poId,
+            details: [
+                'po_code' => $po->po_code,
+            ]
+        );
 
         return PurchaseOrder::find($poId);
     }
@@ -188,6 +231,17 @@ class PurchaseOrderService
             'notes' => trim(($po->notes ?? '') . "\n\n[Cancelled] " . $reason),
             'updated_at' => now(),
         ]);
+
+        // Phase 6: audit log.
+        UserAuditLogger::log(
+            userId: $cancelledBy,
+            action: 'purchase_order_cancelled',
+            targetUserId: $poId,
+            details: [
+                'po_code' => $po->po_code,
+                'reason'  => $reason,
+            ]
+        );
 
         return PurchaseOrder::find($poId);
     }
