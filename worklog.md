@@ -353,3 +353,79 @@ Stage Summary:
 - No new migration, no new routes, no new tests, no API V1 changes (Blade-only scope, matching R10/R11/R12/R13/R14).
 - All 4 audit-table verdicts that said "Missing" for these features now say "✅ Done".
 - User should pull main and browse to /admin/sales/cart — the #customerRecentsRow chips appear beneath the customer Select2 (after picking at least one customer); the #posStickyBar appears at the bottom of the viewport when the cart has items; on mobile (<768px) the cart table is replaced by .sales-cart-line cards with swipe-left-to-delete; the Add Product card no longer has a separate Barcode toggle (the Select2 search box handles both typing and scanning).
+
+---
+Task ID: AUDIT-1
+Agent: Explore subagent
+Task: Audit legacy PO + current Laravel PO files for Phase 2 parity port (research-only, no modifications)
+
+Work Log:
+- Read prior worklog (355 lines) for context: Tasks 37–42 + R1/R10/R11/R12/R13/R14/R15/R16/R17/R10s all completed for the sales/cart parity track. PO Phase 2 parity is a NEW track that has not yet started.
+- Verified all 11 legacy PO source files exist under /home/z/my-project/debugRC/legacy/ (index/create/edit/details/partials/po_form views + PurchaseOrderController + PurchaseOrder.js + purchase-order-index.js + 3 CSS files). Also noted legacy/app/views/PurchaseOrder/audit.php exists but is out of scope for this audit.
+- Verified all current Laravel PO source files exist: 4 blades (index/create/edit/show) + PurchaseOrderController + PurchaseOrderService (located at app/Services/Purchase/, NOT app/Services/ root) + PurchaseOrder model + PurchaseOrderItem model + routes/web.php purchase-orders group (lines 425–445).
+- Verified Laravel admin layout: /home/z/my-project/debugRC/laravel/resources/views/layouts/admin.blade.php (231 lines). Has @stack('head_meta'), @stack('css'), @stack('scripts') (line 36 + line 229). jQuery 3.6 + Select2 4.1 + DataTables 1.13.7 + SweetAlert2 11 + Bootstrap 5.3 all served locally from /assets/.
+- Verified legacy layout: /home/z/my-project/debugRC/legacy/app/views/layouts/main.php (123 lines). Wraps content via $content variable + includes header.php + sidebar.php + footer.php + _flash.php.
+- Confirmed all 3 purchase CSS files have ALREADY been copied from legacy → laravel byte-for-byte (diff -q returned no output for purchase-index.css, purchase-order-form.css, purchase-order-details.css). NO COPY NEEDED.
+- Confirmed legacy index.php references sales-dt-mobile.css (line 8) but that file is MISSING from both legacy AND laravel public/assets/css/ — a pre-existing dangling reference in legacy that will need handling when porting (either copy from somewhere, ignore the missing link, or remove the reference).
+- Audited the sales cart typeahead pattern (cart.blade.php lines 1973–2173) — there are two parallel typeahead widgets (#customerSearch + #productSearch) both using jQuery input + debounce + custom dropdown div + ajaxGet() helper hitting R1 endpoints (admin.sales.cart.search-customer / admin.sales.cart.search-product). This is the established Laravel pattern that the PO create/edit form should mirror for its per-line product search.
+- Read all 4 Laravel PO blades fully + the Laravel controller + service + model. Confirmed the current Laravel PO UI is a generic Bootstrap scaffold (linear-gradient blue hero, 7 stat cards on index, simple Select2 dropdown for products on create/edit form, simple DataTables client-side on index) — none of the legacy purch-* CSS classes are used, the legacy smart-filter panel / status chips / mobile cards / progress bar / stat-pill design language is entirely absent.
+- Composed comprehensive audit report covering: every legacy view's full markup, every legacy CSS selector glossary, every JS function/AJAX endpoint, the full Laravel current state, and 15 specific Q&A items the user requested.
+
+Stage Summary:
+- 0 files modified (research-only audit). Worklog updated with this AUDIT-1 entry.
+- Deliverable: a single comprehensive markdown report returned in the agent's final message containing all the source material needed to port legacy PO UI to Laravel. Key findings the porting agent must know:
+  1. CSS files are ALREADY in laravel/public/assets/css/ — no copy needed.
+  2. sales-dt-mobile.css is referenced by legacy index.php line 8 but MISSING from both codebases — investigate or drop the link.
+  3. Laravel PO create/edit currently uses Select2 with all products server-rendered in a <template> (limit 500) — the legacy uses a per-line text input + custom dropdown + POST /PurchaseOrder/search_products AJAX. The established Laravel typeahead pattern is in cart.blade.php (#productSearch + #productSuggestions + ajaxGet(ENDPOINTS.searchProduct)).
+  4. Legacy PO status enum differs from Laravel: legacy uses {draft, pending, partially_received, received, cancelled} (note: `partially_received` with underscore, `pending` not `sent`). Laravel uses {draft, sent, partial, received, cancelled} (note: `sent` not `pending`, `partial` not `partially_received`). This is a SEMANTIC GAP that affects the status filter chips, status badges, and the action button visibility logic.
+  5. Laravel show.blade.php has a richer set of actions (Mark as Sent, Cancel via SweetAlert2 prompt, Receive against this PO link to /admin/purchase-receives/create?po_id=) — legacy details.php has only Receive/Edit/List buttons. Port should keep Laravel's richer action set but adopt legacy's visual layout (stat cards + progress bar + items table + 2-column dates/notes grid).
+  6. Legacy has a dedicated "Cancelled POs" view (index.php with ?cancelled=1) + a separate audit page (PurchaseOrder/audit) — neither exists in Laravel yet.
+  7. Laravel index() passes: title, pos (LengthAwarePaginator), suppliers, branches, stats (7 keys: total/draft/sent/partial/received/cancelled/total_value), filters (6 keys: from_date/to_date/supplier_id/branch_id/status/search). Legacy index() passes only title + showCancelled boolean (all rows come via DataTables server-side ajax).
+  8. Laravel store() validation accepts: supplier_id, branch_id, warehouse_id (nullable), po_date, expected_date (nullable), notes (max 1000), discount_amount, tax_amount, items[].{product_id, qty, rate}. Service signature adds created_by. Legacy store() accepts: supplier_id, po_date, expected_date, remarks, total_amount, items (JSON), branch_id (from session) — NO branch_id/warehouse_id/discount/tax/notes fields.
+- Next agent (Build subagent) can use this report to plan the Phase 2 PO parity port: replace generic Laravel scaffold with legacy purch-* design language, add per-line product typeahead (mirroring cart.blade.php), add smart filter panel + status chips + mobile cards to index, add stat cards + progress bar + dates/notes grid to show, and resolve the status-enum mismatch.
+
+---
+Task ID: AUDIT-1 (continuation)
+Agent: Explore subagent
+Task: Complete AUDIT-1 report after prior message was cut off mid-quote of details.php
+
+Work Log:
+- Previous AUDIT-1 message was cut off mid-quote of `legacy/app/views/PurchaseOrder/details.php` (around line 76, the second `.purch-po-stat` card).
+- All 20 source files were already fully read in the previous turn; no additional reads were needed. This continuation completes the report by:
+  1. Finishing the verbatim quote of details.php (lines 76–175).
+  2. Quoting po_form.php fully (99 lines).
+  3. Listing all 11 controller methods + quoting `index()`, `Details()`, `search_products()`, `export()` verbatim.
+  4. Listing all PurchaseOrder.js functions + 2 AJAX endpoints + quoting the `searchProduct()` typeahead function (lines 175–222) verbatim + the `buildProductRowHtml()` template (lines 51–90).
+  5. Listing all purchase-order-index.js functions + quoting the DataTables config block (lines 75–134), `buildActions()` (136–146), `renderCards()` mobile-cards drawCallback (187–212), status-chip click handler (43–48), cancel-PO click handler (148–185).
+  6. Listing all 40 selectors in purchase-index.css with 1-line descriptions.
+  7. Listing all 11 selectors in purchase-order-form.css with descriptions.
+  8. Listing all 16 selectors in purchase-order-details.css with descriptions.
+  9. Quoting Laravel index.blade.php fully (319 lines).
+  10. Summarizing Laravel create.blade.php (422 lines) with structure + key class hooks.
+  11. Summarizing Laravel edit.blade.php (437 lines) with diff vs create.
+  12. Quoting Laravel show.blade.php fully (426 lines).
+  13. Quoting Laravel PurchaseOrderController methods verbatim: index(), create(), store(), show(), edit(), update(), markAsSent(), cancel().
+  14. Quoting routes/web.php purchase-orders section (lines 425–445) fully.
+  15. Listing all 8 PurchaseOrderService methods + the createOrder() data shape + computed fields.
+  16. Listing PurchaseOrder $fillable (13 fields), $casts (10 fields), 4 relations, 8 status helpers.
+  17. Quoting admin.blade.php @stack sections (head_meta/css/scripts) + sidebar nav structure.
+  18. Quoting ~30 lines of sales cart `initProductSearch()` typeahead pattern + the ENDPOINTS + helper functions (ajaxGet, parseSalesListResponse, productCache).
+  19. Listing all 69 files in laravel/public/assets/css/ + confirming all 3 purchase-*.css files ALREADY EXIST and are byte-identical to legacy (no copy needed) + flagging sales-dt-mobile.css as missing from both codebases.
+  20. Answering all 6 specific Q&A items + identifying 10 key gaps (A–J) the porting agent must resolve.
+
+Stage Summary:
+- 0 files modified (research-only continuation). Worklog updated with this AUDIT-1 continuation entry.
+- Total report length: ~1500 lines of structured audit material across 2 messages.
+- The porting agent (Build subagent) now has everything needed to plan and execute the Phase 2 PO parity port:
+  - Full legacy markup (verbatim quotes of all 5 view files + partial + JS + CSS selectors).
+  - Full Laravel current state (verbatim quotes of all 4 blades + controller + service + model + routes + layout).
+  - The established Laravel typeahead pattern to mirror (cart.blade.php `initProductSearch`).
+  - 10 explicit gaps (A–J) flagged with the recommended resolution for each.
+- Key takeaways for the porting agent:
+  1. **CSS already in place** — no file copies needed. Just `@push('css')` the 3 links in each blade.
+  2. **Drop sales-dt-mobile.css link** — pre-existing dangling reference.
+  3. **Add `searchProducts` route + controller method** + mirror the cart.blade.php typeahead pattern in create/edit blades.
+  4. **Resolve status-enum mismatch** (legacy pending/partially_received → Laravel sent/partial) — preferably by adjusting ported JS/CSS to use Laravel's enum.
+  5. **Keep Laravel's richer schema** (warehouse_id, discount_amount, tax_amount, sub_total, notes) — adapt legacy form layout to include these.
+  6. **Keep Laravel's richer action set** (Mark as Sent, Cancel via SweetAlert2, Receive against this PO) — adopt legacy's visual layout for show page (4 stat cards + progress bar + dates/notes grid + items table).
+  7. **Add `?cancelled=1` mode + export endpoint** if full parity is desired (optional — could be deferred).
