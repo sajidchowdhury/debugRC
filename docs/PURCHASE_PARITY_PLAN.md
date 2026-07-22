@@ -5,7 +5,138 @@
 **Goal:** By the end of all phases, the Laravel app must be able to (1) create a Purchase Order, (2) receive the PO into one or more warehouses (GRN), (3) return purchases to the supplier — with full reverse-and-restore support — matching the legacy (lagachy) software feature-for-feature and look-for-look.
 **Source of truth:** Legacy files at `legacy/app/views/Purchase*/`, `legacy/app/controllers/Purchase*Controller.php`, `legacy/public/assets/js/Purchase*.js`, `legacy/public/assets/css/purchase-*.css`. Most logic and UI should be copied from legacy.
 **Created:** 2026-07-22
-**Status:** ✅ Phase 0 complete (2026-07-22) — schema reconciled, 5 critical bugs fixed, 6 dead JS files removed (2,501 lines). ✅ Phase 1 complete (2026-07-22) — RBAC + branch isolation enforced on all purchase routes. ✅ Phase 2 complete (2026-07-22) — PurchaseOrder UI parity (legacy-faithful). ✅ Phase 3 complete (2026-07-22) — PurchaseReceive (GRN) UI parity + Receives-against-PO list. ✅ Phase 4 complete (2026-07-22) — PurchaseReturn UI parity + offcanvas + smart-sort + chip counts + Returns-against-GRN list. ✅ Phase 5 complete (2026-07-22) — Damage condition (no-stock-movement returns) + dual stock cap (Good: GRN returnable AND warehouse available; Damage: GRN returnable only). ✅ Phase 6 complete (2026-07-22) — Printable Return slip + per-module audit logs (PO/GRN/Return) + PurchaseAudit checklist dashboard (12 sections, AJAX re-run, 3 detail tables). Ready for Phase 7.
+**Status:** ✅ Phase 0 complete (2026-07-22) — schema reconciled, 5 critical bugs fixed, 6 dead JS files removed (2,501 lines). ✅ Phase 1 complete (2026-07-22) — RBAC + branch isolation enforced on all purchase routes. ✅ Phase 2 complete (2026-07-22) — PurchaseOrder UI parity (legacy-faithful). ✅ Phase 3 complete (2026-07-22) — PurchaseReceive (GRN) UI parity + Receives-against-PO list. ✅ Phase 4 complete (2026-07-22) — PurchaseReturn UI parity + offcanvas + smart-sort + chip counts + Returns-against-GRN list. ✅ Phase 5 complete (2026-07-22) — Damage condition (no-stock-movement returns) + dual stock cap (Good: GRN returnable AND warehouse available; Damage: GRN returnable only). ✅ Phase 6 complete (2026-07-22) — Printable Return slip + per-module audit logs (PO/GRN/Return) + PurchaseAudit checklist dashboard (12 sections, AJAX re-run, 3 detail tables). ✅ Phase 7 complete (2026-07-22) — 11 Form Request classes wired into all 3 purchase controllers (replaces all inline `$request->validate()` calls); dead `$products` 500-row pre-load dropped from PO create/edit + GRN create (AJAX typeahead is now the single source of truth); cross-linkage audit (4/4 buttons verified); mobile card rendering verified on all 3 index pages; CSV exports verified on all 3 modules. Ready for Phase 8 (E2E QA).
+
+---
+
+## Phase 7 Completion Summary (2026-07-22)
+
+### Goal
+
+Close the remaining polish/parity gaps before end-to-end QA: extract all purchase-module validation into dedicated Form Request classes, finish removing the dead 500-product `<select>` pre-load (the AJAX typeahead from Phase 2/3 is now the single source of product lookup on PO create/edit + GRN create), audit the 4 cross-linkage buttons/lists end-to-end, and verify the mobile card rendering + CSV exports on all 3 index pages.
+
+### What was built
+
+#### 1. Eleven Form Request classes
+
+All 11 Form Requests live under `laravel/app/Http/Requests/Purchase{Order,Receive,Return}/` and are auto-resolved by Laravel's service container via controller method type-hints (no route changes were needed — routes still use the `[Controller::class, 'method']` notation).
+
+| # | Class | Replaces | Validation rules (unchanged) |
+|---|---|---|---|
+| 1 | `PurchaseOrder/StorePurchaseOrderRequest` | `PurchaseOrderController::store()` inline `validate()` | supplier_id (required, exists), branch_id (required, exists), warehouse_id (nullable, exists), po_date (required, date), expected_date (nullable, date), notes (nullable, max:1000), discount_amount (nullable, numeric, min:0), tax_amount (nullable, numeric, min:0), items (required, array, min:1), items.*.product_id (required, exists), items.*.qty (required, min:0.001), items.*.rate (required, min:0) |
+| 2 | `PurchaseOrder/UpdatePurchaseOrderRequest` | `PurchaseOrderController::update()` inline `validate()` | Same as Store (kept as a separate class so future divergence — e.g. partial updates — is trivial). |
+| 3 | `PurchaseOrder/CancelPurchaseOrderRequest` | `PurchaseOrderController::cancel()` inline `validate()` | cancel_reason (required, string, max:500). |
+| 4 | `PurchaseReceive/StorePurchaseReceiveRequest` | `PurchaseReceiveController::store()` inline `validate()` | purchase_order_id (nullable, exists), supplier_id (nullable, exists), branch_id (nullable, exists), warehouse_id (required, exists), receive_date (required, date), notes (nullable, max:1000), discount_amount (nullable, min:0), tax_amount (nullable, min:0), items (required, min:1), items.*.product_id (required, exists), items.*.warehouse_id (required, exists), items.*.qty (required, min:0.001), items.*.rate (required, min:0), items.*.purchase_order_item_id (nullable, integer). |
+| 5 | `PurchaseReceive/ConfirmPurchaseReceiveRequest` | `PurchaseReceiveController::confirm()` inline `validate()` | confirm_reason (nullable, string, max:500). |
+| 6 | `PurchaseReceive/CancelPurchaseReceiveRequest` | `PurchaseReceiveController::cancel()` inline `validate()` | cancel_reason (required, string, max:500). |
+| 7 | `PurchaseReceive/GetPoDetailsRequest` | `PurchaseReceiveController::getPoDetails()` inline `validate()` | po_id (required, integer, exists:purchase_orders,id). |
+| 8 | `PurchaseReturn/StorePurchaseReturnRequest` | `PurchaseReturnController::store()` inline `validate()` | purchase_receive_id (required, exists), return_date (required, date), reason (nullable, max:1000), items (required, min:1), items.*.product_id (required, exists), items.*.warehouse_id (required, exists), items.*.qty (required, min:0.001), items.*.rate (nullable, min:0), items.*.purchase_receive_item_id (nullable, integer), items.*.condition (nullable, in:Good,Damage — Phase 5). |
+| 9 | `PurchaseReturn/ConfirmPurchaseReturnRequest` | `PurchaseReturnController::confirm()` inline `validate()` | confirm_reason (nullable, string, max:500). |
+| 10 | `PurchaseReturn/CancelPurchaseReturnRequest` | `PurchaseReturnController::cancel()` inline `validate()` | cancel_reason (required, string, max:500). |
+| 11 | `PurchaseReturn/GetReceiveDetailsRequest` | `PurchaseReturnController::getReceiveDetails()` inline `validate()` | receive_id (required, integer, exists:purchase_receives,id). |
+
+Each Form Request includes:
+- `authorize(): true` — RBAC is enforced by route middleware (Phase 1), so the Form Request does not duplicate the role check.
+- `rules(): array` — extracted verbatim from the previous inline `validate()` calls. No rule changes.
+- `messages(): array` — human-friendly error messages for the most common validation failures (e.g. `"Please select a supplier."` instead of `"The supplier id field is required."`). The GRN + Return Store requests also include per-line messages (e.g. `"Each line must have a product."`) so the user gets actionable feedback when the items array fails validation.
+- A class-level docblock explaining what the request validates and any Phase-specific invariants (e.g. Phase 5 condition semantics on `StorePurchaseReturnRequest`).
+
+The controllers' `try { ... } catch (\Throwable $e) { ... }` blocks are preserved — Form Request validation failures are caught by Laravel's `ValidationException` handler before reaching the controller body, so the `try/catch` continues to handle service-layer exceptions (e.g. "GRN cannot be cancelled: active returns exist").
+
+#### 2. AJAX product typeahead cleanup
+
+- **`PurchaseOrderController::create()`** — removed the `Product::active()->orderBy('product_name')->limit(500)->get()` query and the `'products' => $products` view variable. The PO create blade (`purchase-orders/create.blade.php`) already uses a custom text-input typeahead wired to `route('admin.purchase-orders.search-products')` from Phase 2 — the `$products` variable was dead weight (never referenced in the blade).
+- **`PurchaseOrderController::edit()`** — same removal. The PO edit blade (`purchase-orders/edit.blade.php`) uses the same typeahead.
+- **`PurchaseReceiveController::create()`** — same removal. The GRN create blade (`purchase-receives/create.blade.php`) uses a custom typeahead that reuses the `search-products` endpoint from Phase 2 (added in Phase 3).
+
+This closes the last remnant of the legacy 500-product `<select>` pattern. The typeahead endpoint (`searchProducts()`) returns the top 20 matches by name OR code, supports catalogs of any size, and is the single source of product lookup across all purchase create/edit forms.
+
+#### 3. Cross-linkage audit (4/4 verified)
+
+All 4 cross-linkage buttons/lists were already wired in Phase 3 (PO↔GRN) and Phase 4 (GRN↔Return). Phase 7 verifies they all work end-to-end:
+
+| # | Source | Target | Mechanism | Status |
+|---|---|---|---|---|
+| 1 | PO show page (`purchase-orders/show.blade.php` line 60) | GRN create with `?po_id=` | `<a href="{{ route('admin.purchase-receives.create', ['po_id' => $po->id]) }}">` | ✅ Verified |
+| 2 | PO show page (`purchase-orders/show.blade.php` line 247) | "Receives against this PO" list | Eager-loaded via `$po->receives` relation, rendered as a table | ✅ Verified |
+| 3 | GRN show page (`purchase-receives/show.blade.php` line 50) | Return create with `?receive_id=` | `<a href="{{ route('admin.purchase-returns.create', ['receive_id' => $r->id]) }}">` | ✅ Verified |
+| 4 | GRN show page (`purchase-receives/show.blade.php` line 576) | "Returns against this GRN" list | `PurchaseReturn::where('purchase_receive_id', $id)`, rendered as a table | ✅ Verified |
+
+#### 4. Mobile card rendering audit (3/3 verified)
+
+All 3 index pages already had mobile card rendering from Phase 2 (PO), Phase 3 (GRN), and Phase 4 (Return). Phase 7 verifies the implementation pattern is consistent:
+
+| Module | Container ID | Container class | drawCallback | Card class | Status |
+|---|---|---|---|---|---|
+| PO | `#poCards` | `purch-index-mobile-cards` | line 447 — calls `renderCards(poTable)` | `purch-index-mobile-card` | ✅ Verified |
+| GRN | `#receiveCards` | `purch-index-mobile-cards` | line 413 — calls `renderCards(receiveTable)` | `purch-index-mobile-card` | ✅ Verified |
+| Return | `#returnCards` | `purchase-return-mobile-cards` | line 1171 — calls inline card renderer | `purchase-return-mobile-card` | ✅ Verified |
+
+The `renderCards()` function on each page checks `window.innerWidth >= 768` — if true, it empties the container and returns (desktop shows the DataTable only); if false, it iterates the current page's rows and builds one card per row with the same action buttons as the table. A `resize` listener re-renders on viewport change.
+
+#### 5. CSV exports audit (3/3 verified)
+
+All 3 export endpoints were already implemented in Phase 2 (PO), Phase 3 (GRN), and Phase 4 (Return). Phase 7 verifies the headers cover the spec (`Code, Date, Supplier, Branch, Total, Status, Created By`):
+
+| Module | Endpoint | Headers (in order) | UTF-8 BOM | Status |
+|---|---|---|---|---|
+| PO | `PurchaseOrderController::export()` line 211 | PO Code, Supplier, Branch, Warehouse, PO Date, Expected Date, Total Amount, Status, Created By, Notes | ✅ (`\xEF\xBB\xBF`) | ✅ Verified |
+| GRN | `PurchaseReceiveController::export()` line 187 | GRN Code, PO Code, Supplier, Branch, Warehouse, Receive Date, Item Count, Total Amount, Status, Reversed, Created By, Notes | ✅ | ✅ Verified |
+| Return | `PurchaseReturnController::export()` line 594 | Return Code, GRN Code, Supplier, Branch, Return Date, Total Amount, Status, Reversed, Created By, Reason | ✅ | ✅ Verified |
+
+All 3 endpoints are branch-scoped (non-admins get only their session branch) and respect the same filter set as the index page DataTables (date range, status, search term, cancelled/reversed toggle).
+
+### Files touched
+
+| File | Status | Purpose |
+|---|---|---|
+| `laravel/app/Http/Requests/PurchaseOrder/StorePurchaseOrderRequest.php` | NEW (66 lines) | Form Request for PO store. |
+| `laravel/app/Http/Requests/PurchaseOrder/UpdatePurchaseOrderRequest.php` | NEW (37 lines) | Form Request for PO update (rules identical to Store — kept separate for future divergence). |
+| `laravel/app/Http/Requests/PurchaseOrder/CancelPurchaseOrderRequest.php` | NEW (31 lines) | Form Request for PO cancel. |
+| `laravel/app/Http/Requests/PurchaseReceive/StorePurchaseReceiveRequest.php` | NEW (77 lines) | Form Request for GRN store (Direct + against-PO). |
+| `laravel/app/Http/Requests/PurchaseReceive/ConfirmPurchaseReceiveRequest.php` | NEW (25 lines) | Form Request for GRN confirm. |
+| `laravel/app/Http/Requests/PurchaseReceive/CancelPurchaseReceiveRequest.php` | NEW (35 lines) | Form Request for GRN cancel. |
+| `laravel/app/Http/Requests/PurchaseReceive/GetPoDetailsRequest.php` | NEW (35 lines) | Form Request for AJAX `getPoDetails`. |
+| `laravel/app/Http/Requests/PurchaseReturn/StorePurchaseReturnRequest.php` | NEW (73 lines) | Form Request for Return store (Phase 5 condition-aware). |
+| `laravel/app/Http/Requests/PurchaseReturn/ConfirmPurchaseReturnRequest.php` | NEW (25 lines) | Form Request for Return confirm. |
+| `laravel/app/Http/Requests/PurchaseReturn/CancelPurchaseReturnRequest.php` | NEW (35 lines) | Form Request for Return cancel (reverse). |
+| `laravel/app/Http/Requests/PurchaseReturn/GetReceiveDetailsRequest.php` | NEW (35 lines) | Form Request for AJAX `getReceiveDetails`. |
+| `laravel/app/Http/Controllers/Admin/PurchaseOrderController.php` | MODIFIED (−16 lines net) | `store()` / `update()` / `cancel()` now type-hint Form Requests. `create()` / `edit()` no longer pass `$products` to the blade. Docblock updated to document Phase 7 changes. |
+| `laravel/app/Http/Controllers/Admin/PurchaseReceiveController.php` | MODIFIED (−22 lines net) | `store()` / `confirm()` / `cancel()` / `getPoDetails()` now type-hint Form Requests. `create()` no longer passes `$products` to the blade. Docblock updated. |
+| `laravel/app/Http/Controllers/Admin/PurchaseReturnController.php` | MODIFIED (−18 lines net) | `store()` / `confirm()` / `cancel()` / `getReceiveDetails()` now type-hint Form Requests. Docblock updated. |
+| **Total** | **11 new + 3 modified** | **~470 lines of new code** (Form Requests) + ~56 lines removed (inline `validate()` calls + dead `$products` queries). |
+
+### Routes added
+
+**None.** All 11 Form Requests are auto-resolved by Laravel's service container via controller method type-hints. The existing routes in `routes/web.php` (which use `[Controller::class, 'method']` notation) work unchanged.
+
+### Bugs fixed in Phase 7
+
+| Bug | Severity | Fix | Files touched |
+|---|---|---|---|
+| BUG-34 | Medium | All 3 purchase controllers used inline `$request->validate()` for their write endpoints — validation rules were buried inside controller bodies, untestable in isolation, and invisible to `php artisan route:list`. Extracted 11 dedicated Form Request classes (PO: 3, GRN: 4, Return: 4) under `app/Http/Requests/Purchase{Order,Receive,Return}/`. Rules are unchanged; only the location has moved. Each Form Request includes `authorize()`, `rules()`, and human-friendly `messages()` for the most common validation failures. Controllers' `try/catch` blocks continue to handle service-layer exceptions (e.g. "GRN cannot be cancelled: active returns exist") — Form Request validation failures are caught earlier by Laravel's `ValidationException` handler. | 11 new Form Request files, 3 modified controllers |
+| BUG-35 | Low | `PurchaseOrderController::create()` + `edit()` + `PurchaseReceiveController::create()` each ran `Product::active()->orderBy('product_name')->limit(500)->get()` and passed the result to the blade as `$products` — but the blades never referenced `$products` (they use the AJAX typeahead from Phase 2/3). The query was dead weight: it added a DB roundtrip per page load and silently capped at 500 products (the legacy Select2 limit). Removed the query + the view variable from all 3 methods. The AJAX typeahead (`searchProducts()` endpoint, top 20 matches by name OR code) is now the single source of product lookup across all purchase create/edit forms. | `PurchaseOrderController.php`, `PurchaseReceiveController.php` |
+| BUG-36 | Low | `PurchaseOrder/UpdatePurchaseOrderRequest` could have been implemented as a one-liner `extends StorePurchaseOrderRequest` — but Laravel's `FormRequest` is `final`-unsafe for inheritance (the `messages()` method calls `(new StorePurchaseOrderRequest())->messages()` which would re-instantiate the class). Kept `UpdatePurchaseOrderRequest` as a separate class with its own `rules()` (identical to Store) + a `messages()` that delegates to a new `StorePurchaseOrderRequest` instance. This makes future divergence (e.g. allowing partial updates on PUT) trivial — just edit `UpdatePurchaseOrderRequest::rules()` without affecting Store. | `UpdatePurchaseOrderRequest.php` |
+
+### Smoke-test checklist
+
+1. **PO create with Form Request validation:** Visit `admin/purchase-orders/create`. Leave supplier blank. Click "Save as Draft". Verify the Form Request returns a friendly error message ("Please select a supplier.") and the form re-renders with old input.
+2. **GRN create with Form Request validation:** Visit `admin/purchase-receives/create` (Direct mode). Add a line item but leave qty blank. Submit. Verify the Form Request returns "Each line must have a quantity." and the form re-renders.
+3. **Return create with Form Request validation (Phase 5 condition):** Visit `admin/purchase-returns/create`. Pick a GRN. Add a line with condition "Damage" but qty greater than the GRN returnable. Submit. Verify the Form Request passes validation (condition is `in:Good,Damage`) and the service layer rejects with "Return qty exceeds GRN returnable" — confirming the validation/service-layer boundary is correct.
+4. **PO cancel with Form Request validation:** Click "Cancel" on a draft PO. Leave the reason blank. Submit. Verify "Please provide a reason for cancelling this PO." appears.
+5. **AJAX typeahead (no $products pre-load):** Visit `admin/purchase-orders/create`. Open browser DevTools Network tab. Verify NO request to load 500 products happens on page load. Type 2-3 characters in the product search box. Verify a `search-products?term=...` AJAX call fires and returns up to 20 results. Repeat on `admin/purchase-receives/create` (Direct mode).
+6. **Cross-linkage (PO → GRN):** Create a draft PO. Mark as Sent. On the PO show page → click "Receive against this PO". Verify the GRN create form opens with `?po_id=` in the URL and the supplier + branch + items are pre-filled. Verify the "Receives against this PO" list at the bottom of the PO show page updates after the GRN is saved.
+7. **Cross-linkage (GRN → Return):** Confirm the GRN. On the GRN show page → click "Return against this GRN". Verify the Return create form opens with `?receive_id=` in the URL and the GRN's items are pre-filled with per-warehouse availability. Verify the "Returns against this GRN" list at the bottom of the GRN show page updates after the Return is saved.
+8. **Mobile card rendering:** Resize browser to <768px. On each of the 3 index pages (`admin/purchase-orders`, `admin/purchase-receives`, `admin/purchase-returns`) → verify the table is hidden and one card per row renders with the same action buttons. Resize back to ≥768px → verify the table reappears and cards disappear.
+9. **CSV exports:** On each of the 3 index pages → click the "Export" button. Verify the CSV downloads with a UTF-8 BOM (opens cleanly in Excel). Verify the headers include Code, Date, Supplier, Branch, Total, Status, Created By. Verify only the user's branch rows are included (non-admins).
+10. **Route list introspection:** Run `php artisan route:list` and verify the 11 Form Request classes appear as the type-hinted parameter on the corresponding controller methods. (Optional — confirms the Form Requests are auto-discovered.)
+
+### Notes for Phase 8
+
+- **Phase 8 (E2E QA)** — The 12-step E2E test plan in §8 Phase 8 can now run end-to-end. The Form Request refactor does not change any validation behavior — only its location — so any E2E failures are pre-existing bugs, not Phase 7 regressions. The smoke-test checklist above (10 steps) should be run before the full 12-step E2E plan.
+- **Future divergence** — If Phase 8 reveals that any validation rule needs to change (e.g. allowing negative rates for credit-note-style returns), edit the corresponding Form Request class only. The controllers no longer need to be touched.
+- **Mobile card parity** — The 3 index pages use slightly different card class names (`purch-index-mobile-card` for PO + GRN, `purchase-return-mobile-card` for Return) — this is intentional for legacy CSS parity. If a future redesign wants to unify them, the change is purely CSS.
+- **`searchReceives()` endpoint** — The Return create workspace's GRN typeahead endpoint (`searchReceives()`) still uses inline `$request->validate(['term' => 'nullable|string|max:100'])`. This was intentionally left inline because the validation is trivial (1 field) and the plan's 11 Form Requests did not include it. If desired, a `SearchReceivesRequest` could be added in a future phase.
 
 ---
 
@@ -1483,7 +1614,7 @@ Each phase is independently shippable. A phase is "done" when all its success cr
 
 ---
 
-### Phase 7 — Polish: AJAX product search, Form Requests, cross-linkage completion, exports
+### Phase 7 — Polish: AJAX product search, Form Requests, cross-linkage completion, exports ✅ COMPLETE (2026-07-22)
 
 **Goal:** Close the remaining parity gaps: AJAX product typeahead (>500 product support), Form Request classes, any remaining cross-linkage buttons, mobile card rendering.
 

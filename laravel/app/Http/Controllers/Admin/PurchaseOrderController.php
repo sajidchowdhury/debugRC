@@ -3,6 +3,9 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\PurchaseOrder\CancelPurchaseOrderRequest;
+use App\Http\Requests\PurchaseOrder\StorePurchaseOrderRequest;
+use App\Http\Requests\PurchaseOrder\UpdatePurchaseOrderRequest;
 use App\Models\PurchaseOrder;
 use App\Models\Product;
 use App\Services\Purchase\PurchaseOrderService;
@@ -16,6 +19,12 @@ use Illuminate\Support\Carbon;
  * Full CRUD + mark-as-sent + cancel.
  *
  * Status flow: draft → sent → partial → received → cancelled
+ *
+ * Phase 7 — all write endpoints now use dedicated Form Request classes
+ * (StorePurchaseOrderRequest, UpdatePurchaseOrderRequest,
+ * CancelPurchaseOrderRequest) instead of inline $request->validate().
+ * The create()/edit() methods no longer pass $products to the blade —
+ * the AJAX typeahead (Phase 2) is the single source of product lookup.
  */
 class PurchaseOrderController extends Controller
 {
@@ -271,33 +280,21 @@ class PurchaseOrderController extends Controller
         $suppliers = \App\Models\Supplier::active()->orderBy('supplier_name')->get();
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
         $warehouses = \App\Models\Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
-        $products = \App\Models\Product::active()->orderBy('product_name')->limit(500)->get();
+        // Phase 7: $products no longer pre-loaded — PO create uses the AJAX
+        // typeahead (admin/purchase-orders/search-products) from Phase 2.
+        // This removes the 500-row cap that the legacy Select2 had.
 
         return view('admin.purchase-orders.create', [
             'title' => 'New Purchase Order',
             'suppliers' => $suppliers,
             'branches' => $branches,
             'warehouses' => $warehouses,
-            'products' => $products,
         ]);
     }
 
-    public function store(Request $request)
+    public function store(StorePurchaseOrderRequest $request)
     {
-        $validated = $request->validate([
-            'supplier_id' => 'required|integer|exists:suppliers,id',
-            'branch_id' => 'required|integer|exists:branches,id',
-            'warehouse_id' => 'nullable|integer|exists:warehouses,id',
-            'po_date' => 'required|date',
-            'expected_date' => 'nullable|date',
-            'notes' => 'nullable|string|max:1000',
-            'discount_amount' => 'nullable|numeric|min:0',
-            'tax_amount' => 'nullable|numeric|min:0',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.qty' => 'required|numeric|min:0.001',
-            'items.*.rate' => 'required|numeric|min:0',
-        ]);
+        $validated = $request->validated();
 
         // Phase 1 (branch isolation): non-admin users cannot write to
         // another branch — force the session branch.
@@ -394,7 +391,8 @@ class PurchaseOrderController extends Controller
         $suppliers = \App\Models\Supplier::active()->orderBy('supplier_name')->get();
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
         $warehouses = \App\Models\Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
-        $products = \App\Models\Product::active()->orderBy('product_name')->limit(500)->get();
+        // Phase 7: $products no longer pre-loaded — edit blade uses the
+        // same AJAX typeahead as create.
 
         return view('admin.purchase-orders.edit', [
             'title' => 'Edit PO ' . $po->po_code,
@@ -402,26 +400,12 @@ class PurchaseOrderController extends Controller
             'suppliers' => $suppliers,
             'branches' => $branches,
             'warehouses' => $warehouses,
-            'products' => $products,
         ]);
     }
 
-    public function update(Request $request, int $id)
+    public function update(UpdatePurchaseOrderRequest $request, int $id)
     {
-        $validated = $request->validate([
-            'supplier_id' => 'required|integer|exists:suppliers,id',
-            'branch_id' => 'required|integer|exists:branches,id',
-            'warehouse_id' => 'nullable|integer|exists:warehouses,id',
-            'po_date' => 'required|date',
-            'expected_date' => 'nullable|date',
-            'notes' => 'nullable|string|max:1000',
-            'discount_amount' => 'nullable|numeric|min:0',
-            'tax_amount' => 'nullable|numeric|min:0',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.qty' => 'required|numeric|min:0.001',
-            'items.*.rate' => 'required|numeric|min:0',
-        ]);
+        $validated = $request->validated();
 
         // Phase 1 (branch isolation): non-admin users cannot move a PO
         // to another branch — force the session branch.
@@ -464,14 +448,10 @@ class PurchaseOrderController extends Controller
     /**
      * Cancel a draft or sent PO.
      */
-    public function cancel(Request $request, int $id)
+    public function cancel(CancelPurchaseOrderRequest $request, int $id)
     {
-        $request->validate([
-            'cancel_reason' => 'required|string|max:500',
-        ]);
-
         try {
-            $po = $this->poService->cancelOrder($id, auth()->id(), $request->input('cancel_reason'));
+            $po = $this->poService->cancelOrder($id, auth()->id(), $request->validated('cancel_reason'));
             return redirect()->route('admin.purchase-orders.show', $po)
                 ->with('success', "PO {$po->po_code} cancelled.");
         } catch (\Throwable $e) {

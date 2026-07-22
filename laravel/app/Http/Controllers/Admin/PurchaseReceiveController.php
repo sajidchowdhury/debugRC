@@ -3,6 +3,10 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\PurchaseReceive\CancelPurchaseReceiveRequest;
+use App\Http\Requests\PurchaseReceive\ConfirmPurchaseReceiveRequest;
+use App\Http\Requests\PurchaseReceive\GetPoDetailsRequest;
+use App\Http\Requests\PurchaseReceive\StorePurchaseReceiveRequest;
 use App\Models\PurchaseReceive;
 use App\Services\Purchase\PurchaseReceiveService;
 use App\Services\Stock\StockService;
@@ -14,6 +18,13 @@ use Illuminate\Support\Facades\DB;
  *
  * Two-phase: create draft → confirm (stock + GL + supplier_ledger + PO update) → cancel.
  * Can be against a PO or direct (no PO).
+ *
+ * Phase 7 — all write endpoints now use dedicated Form Request classes
+ * (StorePurchaseReceiveRequest, ConfirmPurchaseReceiveRequest,
+ * CancelPurchaseReceiveRequest, GetPoDetailsRequest). The create() method
+ * no longer passes $products to the blade — the AJAX typeahead (reuses
+ * admin/purchase-orders/search-products from Phase 2) is the single
+ * source of product lookup.
  */
 class PurchaseReceiveController extends Controller
 {
@@ -248,7 +259,9 @@ class PurchaseReceiveController extends Controller
         $suppliers = \App\Models\Supplier::active()->orderBy('supplier_name')->get();
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
         $warehouses = \App\Models\Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
-        $products = \App\Models\Product::active()->orderBy('product_name')->limit(500)->get();
+        // Phase 7: $products no longer pre-loaded — GRN create (Direct mode)
+        // uses the AJAX typeahead (admin/purchase-orders/search-products)
+        // re-used from Phase 2.
 
         // If po_id is passed, load the PO for pre-fill.
         // Phase 1 (branch isolation): non-admin users cannot pre-fill from
@@ -276,29 +289,13 @@ class PurchaseReceiveController extends Controller
             'suppliers' => $suppliers,
             'branches' => $branches,
             'warehouses' => $warehouses,
-            'products' => $products,
             'po' => $po,
         ]);
     }
 
-    public function store(Request $request)
+    public function store(StorePurchaseReceiveRequest $request)
     {
-        $validated = $request->validate([
-            'purchase_order_id' => 'nullable|integer|exists:purchase_orders,id',
-            'supplier_id' => 'nullable|integer|exists:suppliers,id',
-            'branch_id' => 'nullable|integer|exists:branches,id',
-            'warehouse_id' => 'required|integer|exists:warehouses,id',
-            'receive_date' => 'required|date',
-            'notes' => 'nullable|string|max:1000',
-            'discount_amount' => 'nullable|numeric|min:0',
-            'tax_amount' => 'nullable|numeric|min:0',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.warehouse_id' => 'required|integer|exists:warehouses,id',
-            'items.*.qty' => 'required|numeric|min:0.001',
-            'items.*.rate' => 'required|numeric|min:0',
-            'items.*.purchase_order_item_id' => 'nullable|integer',
-        ]);
+        $validated = $request->validated();
 
         // Phase 1 (branch isolation): non-admin users cannot create a GRN
         // for another branch — force the session branch. If no branch_id
@@ -418,12 +415,8 @@ class PurchaseReceiveController extends Controller
         ]);
     }
 
-    public function confirm(Request $request, int $id)
+    public function confirm(ConfirmPurchaseReceiveRequest $request, int $id)
     {
-        $request->validate([
-            'confirm_reason' => 'nullable|string|max:500',
-        ]);
-
         try {
             $receive = $this->receiveService->confirmReceive($id, auth()->id());
             return redirect()->route('admin.purchase-receives.show', $receive)
@@ -433,14 +426,10 @@ class PurchaseReceiveController extends Controller
         }
     }
 
-    public function cancel(Request $request, int $id)
+    public function cancel(CancelPurchaseReceiveRequest $request, int $id)
     {
-        $request->validate([
-            'cancel_reason' => 'required|string|max:500',
-        ]);
-
         try {
-            $receive = $this->receiveService->cancelReceive($id, auth()->id(), $request->input('cancel_reason'));
+            $receive = $this->receiveService->cancelReceive($id, auth()->id(), $request->validated('cancel_reason'));
             return redirect()->route('admin.purchase-receives.show', $receive)
                 ->with('success', "GRN {$receive->receive_code} cancelled.");
         } catch (\Throwable $e) {
@@ -456,14 +445,10 @@ class PurchaseReceiveController extends Controller
      * pre-filling the receive form with another branch's PO data via
      * ?po_id=<guessed_id>.
      */
-    public function getPoDetails(Request $request)
+    public function getPoDetails(GetPoDetailsRequest $request)
     {
-        $request->validate([
-            'po_id' => 'required|integer|exists:purchase_orders,id',
-        ]);
-
         $po = \App\Models\PurchaseOrder::with(['items.product', 'supplier', 'branch', 'warehouse'])
-            ->findOrFail($request->input('po_id'));
+            ->findOrFail($request->validated('po_id'));
 
         // Phase 1: branch isolation — deny cross-branch access for non-admins.
         if (!$request->user()->isAdmin()) {

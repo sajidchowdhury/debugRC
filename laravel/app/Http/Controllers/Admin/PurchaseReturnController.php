@@ -3,6 +3,10 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\PurchaseReturn\CancelPurchaseReturnRequest;
+use App\Http\Requests\PurchaseReturn\ConfirmPurchaseReturnRequest;
+use App\Http\Requests\PurchaseReturn\GetReceiveDetailsRequest;
+use App\Http\Requests\PurchaseReturn\StorePurchaseReturnRequest;
 use App\Models\PurchaseReturn;
 use App\Services\Purchase\PurchaseReturnService;
 use Illuminate\Http\Request;
@@ -21,6 +25,11 @@ use Illuminate\Support\Facades\DB;
  *   - export(): CSV export of filtered returns
  *   - getReceiveDetails(): now returns per-item per-warehouse availability
  *     (warehouse_stock physical + available) for the client-side dual cap.
+ *
+ * Phase 7 — all write endpoints now use dedicated Form Request classes
+ * (StorePurchaseReturnRequest, ConfirmPurchaseReturnRequest,
+ * CancelPurchaseReturnRequest, GetReceiveDetailsRequest) instead of
+ * inline $request->validate().
  */
 class PurchaseReturnController extends Controller
 {
@@ -121,21 +130,9 @@ class PurchaseReturnController extends Controller
         ]);
     }
 
-    public function store(Request $request)
+    public function store(StorePurchaseReturnRequest $request)
     {
-        $validated = $request->validate([
-            'purchase_receive_id' => 'required|integer|exists:purchase_receives,id',
-            'return_date' => 'required|date',
-            'reason' => 'nullable|string|max:1000',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.warehouse_id' => 'required|integer|exists:warehouses,id',
-            'items.*.qty' => 'required|numeric|min:0.001',
-            'items.*.rate' => 'nullable|numeric|min:0',
-            'items.*.purchase_receive_item_id' => 'nullable|integer',
-            // Phase 5: Damage condition — Damage lines skip stock OUT.
-            'items.*.condition' => 'nullable|in:Good,Damage',
-        ]);
+        $validated = $request->validated();
 
         try {
             $return = $this->returnService->createReturn([
@@ -250,12 +247,8 @@ class PurchaseReturnController extends Controller
         ]);
     }
 
-    public function confirm(Request $request, int $id)
+    public function confirm(ConfirmPurchaseReturnRequest $request, int $id)
     {
-        $request->validate([
-            'confirm_reason' => 'nullable|string|max:500',
-        ]);
-
         try {
             $return = $this->returnService->confirmReturn($id, auth()->id());
             return redirect()->route('admin.purchase-returns.show', $return)
@@ -265,14 +258,10 @@ class PurchaseReturnController extends Controller
         }
     }
 
-    public function cancel(Request $request, int $id)
+    public function cancel(CancelPurchaseReturnRequest $request, int $id)
     {
-        $request->validate([
-            'cancel_reason' => 'required|string|max:500',
-        ]);
-
         try {
-            $return = $this->returnService->cancelReturn($id, auth()->id(), $request->input('cancel_reason'));
+            $return = $this->returnService->cancelReturn($id, auth()->id(), $request->validated('cancel_reason'));
             return redirect()->route('admin.purchase-returns.show', $return)
                 ->with('success', "Return {$return->return_code} cancelled.");
         } catch (\Throwable $e) {
@@ -286,16 +275,12 @@ class PurchaseReturnController extends Controller
      * Phase 1 (branch isolation): non-admin users can only fetch GRNs
      * from their own branch.
      */
-    public function getReceiveDetails(Request $request)
+    public function getReceiveDetails(GetReceiveDetailsRequest $request)
     {
-        $request->validate([
-            'receive_id' => 'required|integer|exists:purchase_receives,id',
-        ]);
-
         $receive = \App\Models\PurchaseReceive::with(['items.product', 'supplier', 'branch'])
             ->where('status', 'confirmed')
             ->where('is_reversed', false)
-            ->findOrFail($request->input('receive_id'));
+            ->findOrFail($request->validated('receive_id'));
 
         // Phase 1: deny cross-branch access for non-admins.
         if (!$request->user()->isAdmin()) {
