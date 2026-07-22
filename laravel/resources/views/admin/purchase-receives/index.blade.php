@@ -221,7 +221,6 @@
 <script>
 window.PURCHASE_RECEIVE_BOOT = {
     indexUrl: @json(route('admin.purchase-receives.index', ['returned' => $showReturned ? 1 : null])),
-    showUrl:  @json(route('admin.purchase-receives.show', ['id' => '__ID__'])),
     csrf:     @json(csrf_token()),
     showReturned: @json($showReturned),
     statusLabels: @json($statusLabel),

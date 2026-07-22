@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-22 (Purchase module Phase 7 complete — 11 Form Request classes wired into all 3 purchase controllers, replacing all inline `$request->validate()` calls. New files: `app/Http/Requests/PurchaseOrder/{Store,Update,Cancel}PurchaseOrderRequest.php`, `app/Http/Requests/PurchaseReceive/{Store,Confirm,Cancel,GetPoDetails}PurchaseReceiveRequest.php`, `app/Http/Requests/PurchaseReturn/{Store,Confirm,Cancel,GetReceiveDetails}PurchaseReturnRequest.php`. Each Form Request has `authorize()` + `rules()` (unchanged) + human-friendly `messages()`. Dead `Product::active()->limit(500)->get()` pre-load removed from `PurchaseOrderController::create()/edit()` + `PurchaseReceiveController::create()` — the AJAX typeahead from Phase 2/3 is now the single source of product lookup. Cross-linkage audit verified (4/4 buttons work end-to-end). Mobile card rendering verified on all 3 index pages. CSV exports verified on all 3 modules. 3 bugs logged (BUG-34/35/36). No new routes — Form Requests are auto-resolved by Laravel's service container. Ready for Phase 8 E2E QA. See §5.33 below.)
+> **Last updated:** 2026-07-23 (Purchase module Phase 8 complete — E2E QA via static code audit. Two parallel subagents traced all 12 test steps + 6 cross-cutting tests through the codebase. 12/12 steps PASS at code-trace level. 5 bugs found and fixed: BUG-37 (route param `['id' => '__ID__']` mismatch on PO+GRN index blades — this was the `Missing required parameter for [Route: admin.purchase-*.show]` error the user reported on all 3 purchase index pages), BUG-38 (PurchaseReceive model missing `canCancel()` method — added for API consistency with PurchaseOrder), BUG-39 (GRN service missing PO state guard — added `canReceive()` check in createReceive), BUG-40 (cross-branch read leak in show/slip of all 3 purchase controllers — fixed by adding BranchScope global scope to all 3 purchase models, mirroring the SalesInvoice/SalesChallan/SalesReturn/CustomerPayment pattern), BUG-41 (cross-branch write leak in PurchaseReturnController::store — fixed with controller-level GRN branch check before calling createReturn). 7 files modified, +95/−4 lines net. All 8 phases of the Purchase Parity Plan are now complete. See §5.34 below.)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -2343,6 +2343,83 @@ Phase 8 (End-to-end QA + integration testing) can now start. The 12-step E2E tes
 
 ---
 
+### 5.34 Purchase module — Phase 8 (E2E QA + integration testing — static code audit + 5 bug fixes)
+
+**User ask (2026-07-23):** *"admin/purchase-receives showing Missing required parameter for [Route: admin.purchase-receives.show] [URI: admin/purchase-receives/{purchase_receife}] [Missing parameter: purchase_receife]. same admin/purchase-orders, admin/purchase-returns then work on Phase 8 — End-to-end QA + integration testing / docs/PURCHASE_PARITY_PLAN.md and update docs/SESSION_CONTEXT.md / when done push the update in to the github with ur context documentation so its never lost even z ai lost the conversation / [REDACTED:github_token] / https://github.com/sajidchowdhury/debugRC.git"*
+
+**Phase 8 scope:** (1) Fix the `Missing required parameter` routing error blocking all 3 purchase index pages. (2) Execute the 12-step E2E test plan + 6 cross-cutting tests from `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 8. Since no PHP runtime was available, the E2E was executed as a static code audit: two parallel subagents traced each test step through the actual service/controller/model code, verifying expected behavior (stock movements, GL journals, supplier_ledger entries, status transitions, RBAC, branch isolation).
+
+**Phase 8 audit method:**
+
+- **Phase8-audit-1** (PO + GRN flow) — reviewed 1,470 lines across 6 files: PurchaseOrderService, PurchaseReceiveService, StockService, PurchaseOrder model, PurchaseReceive model, JournalReversalService.
+- **Phase8-audit-2** (Return + cross-cutting) — reviewed 3,945 lines across 19 files: PurchaseReturnService, PurchaseAuditService, PurchaseReturnController, PurchaseAuditController, slip blade, routes/web.php, Controller base, EnforceBranchIsolation middleware, BranchScope, UserAuditLogger, all 3 purchase models, all 3 controllers for branch-isolation pattern comparison, StorePurchaseReturnRequest.
+- Both audit agents appended their findings to `/home/z/my-project/worklog.md` (worklog grew from 460 → 757 lines, +297 lines of structured audit findings).
+
+**12-step E2E test results (all 12 PASS at code-trace level):**
+
+| Step | Description | Status |
+|---|---|---|
+| 1 | Create PO (draft, no stock/GL/ledger) | ✅ PASS |
+| 2 | Mark PO as Sent (status only) | ✅ PASS |
+| 3 | Create GRN partial (draft, no side effects) | ✅ PASS |
+| 4 | Confirm GRN (stock IN + GL Dr Inv/Cr AP + supplier_ledger credit + PO received_qty=6, status=partial) | ✅ PASS |
+| 5 | Create Return Good (stock OUT + GL Dr AP/Cr Inv + supplier_ledger debit + GRN return_qty=2) | ✅ PASS |
+| 6 | Create Return Damage (NO stock movement — Phase 5 invariant upheld; GL + ledger still posted; return_qty=3) | ✅ PASS |
+| 7 | Reverse Damage Return (no stock restore; GL + ledger reversed; return_qty=2; is_reversed=true) | ✅ PASS |
+| 8 | Cancel GRN with active returns (THROWS) | ✅ PASS |
+| 9 | Reverse Good Return (stock restored + GL/ledger reversed + return_qty=0) | ✅ PASS |
+| 10 | Cancel GRN after all returns reversed | ✅ PASS |
+| 11 | Audit log check (all 3 services call UserAuditLogger::log) | ✅ PASS |
+| 12 | PurchaseAudit checklist (12 sections render; prt_damage check exists) | ✅ PASS |
+
+**6 cross-cutting test results:** RBAC ✅, Mobile ✅, Performance ✅ (static — server-side DataTables + limit(20) typeahead), Print ✅, CSV export ✅. Branch isolation was ⚠️ PARTIAL FAIL → FIXED (BUG-40 + BUG-41).
+
+**5 bugs found and fixed in Phase 8:**
+
+- **BUG-37 (High)** — PO index blade (lines 260-262) + GRN index blade (line 224) used `route('admin.purchase-{orders,receives}.{show,edit,cancel}', ['id' => '__ID__'])` to build URL templates for JS-side replacement. The route param name is actually `purchase_order` / `purchase_receive` (singular snake_case of the resource name, auto-generated by Laravel's `Route::resource()`). Laravel's `route()` helper validates ALL required params are present — passing `['id' => '__ID__']` left the real param missing → threw `Missing required parameter for [Route: admin.purchase-receives.show] [URI: admin/purchase-receives/{purchase_receife}] [Missing parameter: purchase_receife]` on every page load. The `showUrl`/`editUrl`/`cancelUrl` template variables were dead code (JS never reads them — the DataTables JSON provides `show_url`/`edit_url`/`cancel_url` per row, built correctly server-side via `route(..., $model)`). Removed the 4 dead `@json(route(...))` lines from both blades. **This was the user-reported error blocking all 3 purchase index pages.**
+
+- **BUG-38 (Low)** — `PurchaseReceive` model had `isDraft()`/`isConfirmed()`/`isCancelled()`/`isDirect()` but NO `canCancel()` method — inconsistent with `PurchaseOrder::canCancel()`. Added `canCancel()` returning `!isCancelled() && (isDraft() || isConfirmed())`. The active-returns guard stays in the service (needs a DB query against `purchase_returns`).
+
+- **BUG-39 (Medium)** — `PurchaseReceiveService::createReceive()` fetched the PO (lines 80-87) to pull supplier_id/branch_id but did NOT verify `$po->canReceive()` (status is `sent` or `partial`). Consequences: a GRN could be created against a draft PO (jumping it directly to partial/received, skipping `sent`), an already-received PO (over-receiving), or a cancelled PO (resurrecting it). Added a status guard right after the PO lookup: throws `RuntimeException` if `!in_array($po->status, ['sent', 'partial'], true)`.
+
+- **BUG-40 (Medium-High)** — Cross-branch read leak in `show()` and `slip()` of all 3 purchase controllers. `Purchase{Order,Receive,Return}::with(...)->findOrFail($id)` had no branch scoping — the resource routes only attach `role:` middleware (no `branch.isolation`), and the 3 purchase models did NOT apply the `BranchScope` global scope (unlike `SalesInvoice`/`SalesChallan`/`SalesReturn`/`CustomerPayment`). A non-admin user (manager, warehouse_manager, or accountant — all role-permitted on these routes) could view ANY record from ANY branch by guessing/enumerating the URL `{id}`. **Fix:** added `protected static function booted(): void { static::addGlobalScope(new BranchScope); }` to all 3 purchase models. Now `findOrFail()` on a cross-branch record throws `ModelNotFoundException` (404) for non-admins. Admins bypass the scope.
+
+- **BUG-41 (Medium-High)** — `PurchaseReturnController::store()` did NOT verify the user has access to the supplied `purchase_receive_id`'s branch. The route's `branch.isolation` middleware was a no-op because (1) the request body has no `branch_id` (the service inherits it from the GRN) and (2) the URL has no `{id}` param. A non-admin could POST directly with another branch's `purchase_receive_id` and create a return against it — polluting that branch's financials + stock. **Fix:** added a branch check in `store()` before calling `createReturn()` — loads the GRN, verifies `branch_id === session branch_id` for non-admins, returns "You do not have access to that GRN." error if mismatch.
+
+**Files touched in Phase 8 (7 modified, +95/−4 lines net):**
+
+- `laravel/resources/views/admin/purchase-orders/index.blade.php` — MODIFIED (−3 lines). BUG-37 fix: removed 3 dead `@json(route(..., ['id' => '__ID__']))` lines.
+- `laravel/resources/views/admin/purchase-receives/index.blade.php` — MODIFIED (−1 line). BUG-37 fix: removed 1 dead `showUrl` line.
+- `laravel/app/Models/PurchaseOrder.php` — MODIFIED (+13 lines). BUG-40 fix: added `booted()` + BranchScope global scope.
+- `laravel/app/Models/PurchaseReceive.php` — MODIFIED (+31 lines). BUG-40 fix: added `booted()` + BranchScope. BUG-38 fix: added `canCancel()` method.
+- `laravel/app/Models/PurchaseReturn.php` — MODIFIED (+13 lines). BUG-40 fix: added `booted()` + BranchScope.
+- `laravel/app/Services/Purchase/PurchaseReceiveService.php` — MODIFIED (+14 lines). BUG-39 fix: added PO state guard in `createReceive()`.
+- `laravel/app/Http/Controllers/Admin/PurchaseReturnController.php` — MODIFIED (+21 lines). BUG-41 fix: added GRN branch check in `store()`.
+- 2 docs updated — `docs/PURCHASE_PARITY_PLAN.md` (Phase 8 Completion Summary at top + §8 Phase 8 marked ✅ COMPLETE + BUG-37/38/39/40/41 added to bug log) and `docs/SESSION_CONTEXT.md` (this section).
+
+**Phase 8 smoke-test checklist (user to run on local Docker):**
+
+1. **BUG-37 regression:** Visit `admin/purchase-orders`, `admin/purchase-receives`, `admin/purchase-returns` index pages. Verify all 3 load WITHOUT the `Missing required parameter` error. Verify DataTables renders rows with working show/edit/cancel buttons.
+2. **BUG-38 regression:** On a GRN show page, verify the "Cancel" button visibility check still works. Cancel a draft GRN → success. Cancel a confirmed GRN with active returns → active-returns error. Cancel a confirmed GRN with no returns → success.
+3. **BUG-39 regression:** Try to create a GRN against a draft PO (via direct POST with `purchase_order_id=<draft_po_id>`) → verify service throws "PO {id} cannot receive goods (current status: draft). Allowed statuses: sent, partial." Try against `sent` PO → success. Try against `received` PO → error.
+4. **BUG-40 regression (read-side branch isolation):** Login as non-admin at Branch A. Try `admin/purchase-orders/{id_of_branch_b_po}` directly → verify 404. Repeat for `admin/purchase-receives/{id}`, `admin/purchase-returns/{id}`, `admin/purchase-returns/{id}/slip`. Login as admin → verify can still access any branch's records.
+5. **BUG-41 regression (write-side branch isolation):** Login as non-admin at Branch A. POST to `admin/purchase-returns` with `purchase_receive_id=<branch_b_grn_id>` → verify controller rejects with "You do not have access to that GRN." and does NOT create the return.
+6. **Phase 5 invariant still holds:** Create a Damage return → confirm → verify NO stock movement. Reverse it → verify NO stock restoration. Run PurchaseAudit checklist → section 8 `prt_damage` should show "pass".
+7. **Cross-linkage still works:** PO show → "Receive against this PO" → GRN create with `?po_id=`. GRN show → "Return against this GRN" → Return create with `?receive_id=`.
+8. **Full E2E flow:** Run the 12-step E2E test plan from §8 Phase 8 Tasks. All 12 should pass at runtime.
+
+**Observations (NOT bugs, deferred to future phases):**
+
+- **`prt_damage` false-positive risk** — The `prt_damage` check counts Damage items that have ANY `stock_transactions` matching `reference_type='purchase_return' AND reference_id=prt.id AND product_id=pri.product_id`. Since `stock_transactions` has no `condition` column, the SQL cannot distinguish Good vs Damage stock movements on the same product within the same return. If a single return mixes Good (qty=2, has stock tx) and Damage (qty=1, no stock tx) lines for the SAME `product_id`, the EXISTS subquery would find the Good line's stock_transaction and falsely flag the Damage line. Low severity for the E2E test (Steps 5/6 use separate Good-only and Damage-only returns). Proposed fix: add `condition` column to `stock_transactions`, then filter `st.condition = 'Good'` in the EXISTS subquery. Schema migration required.
+- **Audit log action name inconsistency** — `cancelReturn` logs `purchase_return_reversed` while PO/GRN log `*_cancelled`. For draft returns (nothing actually reversed), the name `reversed` is misleading. Cosmetic only — the audit controller's `LIKE 'purchase_return_%'` filter catches both names.
+- **Audit log branch_id uses session branch** — `UserAuditLogger::log` reads `branch_id` from `session('branch_id')`, not from the record being acted upon. When an admin operates on a Branch B return while their session is Branch A, the audit log row has `branch_id=Branch A`. Minor visibility issue (filtering the Return audit page by Branch B wouldn't show the admin's action) — not a security bug.
+
+**End of Phase 8 — Purchase Parity Plan complete:**
+
+All 8 phases of the Purchase Parity Plan are now complete. The Laravel purchase module matches the legacy (lagachy) software feature-for-feature and look-for-look: PO → GRN → Return → Reverse flow with full stock + GL + supplier_ledger reconciliation, RBAC + branch isolation enforced on all routes, legacy-faithful UI on all 9 blade views (3 modules × 3 views), printable Return slip, per-module audit-log pages, PurchaseAudit checklist dashboard with 12 health-check sections, 11 Form Request classes, AJAX product typeahead (no Select2 / no 500-product cap), mobile card rendering on all 3 index pages, CSV exports on all 3 modules. 41 bugs logged and fixed across all 8 phases (BUG-1 through BUG-41). The user-side smoke-test (8 steps above) is the authoritative verification — if any step fails at runtime, log a new BUG-NN and patch.
+
+---
+
 ## 6. Open Work Items
 
 (Items the user has asked for but that are not yet done.)
@@ -2352,7 +2429,8 @@ Phase 8 (End-to-end QA + integration testing) can now start. The 12-step E2E tes
 - **Purchase Phase 5 (Damage condition + dual stock cap)** — ✅ DONE 2026-07-22. See §5.31 below.
 - **Purchase Phase 6 (Printable Return slip + per-module audit logs + PurchaseAudit checklist)** — ✅ DONE 2026-07-22. See §5.32 below.
 - **Purchase Phase 7 (Polish: AJAX product search, Form Requests, cross-linkage completion, exports)** — ✅ DONE 2026-07-22. See §5.33 below.
-- **Purchase Phase 8 (End-to-end QA + integration testing)** — next phase to start after the user confirms Phase 7 smoke test passes. See `docs/PURCHASE_PARITY_PLAN.md` §8 Phase 8. The Phase 8 E2E test plan (12 steps covering PO→GRN→Return→Reverse flow, branch isolation, RBAC, mobile, performance, print, CSV) is fully executable. Phase 7's 10-step smoke-test should be run first to confirm the Form Request refactor didn't break anything. Phase 8 is QA-only — no code changes anticipated unless bugs are found.
+- **Purchase Phase 8 (End-to-end QA + integration testing)** — ✅ DONE 2026-07-23. See §5.34 below. Static code audit of all 12 E2E test steps + 6 cross-cutting tests. 12/12 steps PASS at code-trace level. 5 bugs found and fixed (BUG-37 through BUG-41). All 8 phases of the Purchase Parity Plan are now complete.
+- **Purchase module parity work** — ✅ COMPLETE 2026-07-23. All 8 phases done. 41 bugs logged and fixed across all phases (BUG-1 through BUG-41). See `docs/PURCHASE_PARITY_PLAN.md` for the full plan + completion summaries. See §5.27 through §5.34 below for per-phase session context. Next major work item is up to the user — possible directions include: (a) resuming the paused Sales style parity work (§6 below), (b) addressing the 3 deferred observations from Phase 8 (`prt_damage` false-positive risk on mixed-condition returns, audit log action name inconsistency, audit log branch_id using session branch), (c) starting a new module audit, or (d) deploying the purchase module to production.
 - **Sales style parity (paused)** — Phase 2 extract inline styles, Phase 4+ color polish, mobile QA, cleanup. Can resume after purchase module reaches feature parity. User confirmed sales cart is "ok so far so good" before pivoting.
 - **R7 / R8 / R9** — numbers reserved for future sales items; not yet assigned.
 - **R24 / R25 (Telegram + FCM)** — dropped by user request (2026-07-22). Explicitly NOT being ported.

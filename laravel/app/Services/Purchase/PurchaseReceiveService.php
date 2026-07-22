@@ -82,6 +82,20 @@ class PurchaseReceiveService
             if (!$po) {
                 throw new \InvalidArgumentException("PO {$poId} not found.");
             }
+            // Phase 8 (BUG-39 fix): Verify the PO is in a receivable state
+            // (sent or partial). Without this guard, a GRN could be created
+            // against a draft PO (jumping it directly to partial/received),
+            // an already-received PO (over-receiving beyond ordered qty), or
+            // a cancelled PO (resurrecting it). The controller's create()
+            // method already calls canReceive() on the PO pre-fill path, but
+            // the service is also reachable from jobs/tests/other controllers
+            // — defense in depth.
+            if (!in_array($po->status, ['sent', 'partial'], true)) {
+                throw new \RuntimeException(
+                    "PO {$poId} cannot receive goods (current status: {$po->status}). "
+                    . "Allowed statuses: sent, partial."
+                );
+            }
             $supplierId = (int) $po->supplier_id;
             $branchId = (int) $po->branch_id;
         }

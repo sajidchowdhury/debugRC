@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use App\Models\Scopes\BranchScope;
 use App\Traits\AuditableMasterData;
 
 /**
@@ -47,6 +48,18 @@ class PurchaseReturn extends Model
     public $timestamps = true;
 
     protected $dates = ['deleted_at'];
+
+    /**
+     * Phase 8 (BUG-40 fix): Apply BranchScope global scope so non-admin
+     * users can only read returns from their own session branch. This
+     * closes the cross-branch read leak in show()/slip() — findOrFail
+     * now throws ModelNotFoundException (404) instead of returning the
+     * other branch's record. Admins bypass the scope (see BranchScope).
+     */
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new BranchScope);
+    }
 
     protected $fillable = [
         'return_code',

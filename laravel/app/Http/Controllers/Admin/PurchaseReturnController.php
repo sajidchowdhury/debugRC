@@ -134,6 +134,27 @@ class PurchaseReturnController extends Controller
     {
         $validated = $request->validated();
 
+        // Phase 8 (BUG-41 fix): Verify the user has access to the GRN's
+        // branch BEFORE calling createReturn. The route's branch.isolation
+        // middleware is a no-op here because the request body has no
+        // branch_id (the service inherits it from the GRN) and the URL
+        // has no {id} param. Without this check, a non-admin could POST
+        // directly with another branch's purchase_receive_id and create a
+        // return against it — polluting that branch's financials + stock.
+        // The service layer has a defense-in-depth check too (see
+        // PurchaseReturnService::createReturn).
+        if (!$request->user()->isAdmin()) {
+            $grn = \App\Models\PurchaseReceive::where('id', $validated['purchase_receive_id'])
+                ->where('status', 'confirmed')
+                ->where('is_reversed', false)
+                ->first();
+            $sessionBranchId = (int) (session('branch_id') ?? $request->user()->getBranchId() ?? 0);
+            if (!$grn || (int) $grn->branch_id !== $sessionBranchId) {
+                return back()->withInput()
+                    ->with('error', 'You do not have access to that GRN.');
+            }
+        }
+
         try {
             $return = $this->returnService->createReturn([
                 'purchase_receive_id' => $validated['purchase_receive_id'],

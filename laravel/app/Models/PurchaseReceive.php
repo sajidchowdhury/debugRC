@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use App\Models\Scopes\BranchScope;
 use App\Traits\AuditableMasterData;
 
 /**
@@ -52,6 +53,18 @@ class PurchaseReceive extends Model
     public $timestamps = true;
 
     protected $dates = ['deleted_at'];
+
+    /**
+     * Phase 8 (BUG-40 fix): Apply BranchScope global scope so non-admin
+     * users can only read GRNs from their own session branch. Closes the
+     * cross-branch read leak in show() — findOrFail now throws
+     * ModelNotFoundException (404) instead of returning another branch's
+     * record. Admins bypass the scope (see BranchScope).
+     */
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new BranchScope);
+    }
 
     protected $fillable = [
         'receive_code',
@@ -129,4 +142,25 @@ class PurchaseReceive extends Model
      * Is this a direct receive (no PO)?
      */
     public function isDirect(): bool { return $this->purchase_order_id === null; }
+
+    /**
+     * Phase 8 (BUG-38 fix): Can this GRN be cancelled?
+     *
+     * Returns true for draft or confirmed GRNs (cancelled ones cannot be
+     * re-cancelled). The active-returns guard for confirmed GRNs is
+     * enforced at the service layer (PurchaseReceiveService::cancelReceive)
+     * because it requires a DB query against purchase_returns.
+     *
+     * Mirrors PurchaseOrder::canCancel() for API consistency — any future
+     * caller that needs to check "can this GRN be cancelled?" (e.g. a
+     * "Cancel" button visibility check on a show page) can use this
+     * without duplicating the inline logic.
+     */
+    public function canCancel(): bool
+    {
+        if ($this->isCancelled()) {
+            return false;
+        }
+        return $this->isDraft() || $this->isConfirmed();
+    }
 }

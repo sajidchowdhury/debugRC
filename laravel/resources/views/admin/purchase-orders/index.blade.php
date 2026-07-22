@@ -257,9 +257,6 @@
 window.PURCHASE_ORDER_BOOT = {
     baseUrl: '/',
     indexUrl: @json(route('admin.purchase-orders.index', ['cancelled' => $showCancelled ? 1 : null])),
-    showUrl:  @json(route('admin.purchase-orders.show', ['id' => '__ID__'])),
-    editUrl:  @json(route('admin.purchase-orders.edit', ['id' => '__ID__'])),
-    cancelUrl: @json(route('admin.purchase-orders.cancel', ['id' => '__ID__'])),
     csrf:     @json(csrf_token()),
     showCancelled: @json($showCancelled),
     statusLabels: @json($statusLabel),
