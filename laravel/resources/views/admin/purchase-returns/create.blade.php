@@ -414,8 +414,67 @@ window.PURCHASE_RETURN_BOOT = @json([
                     this.validateStock(sel);
                 });
             });
+            // Phase 5: condition-select listener — when Damage, disable the
+            // warehouse-select (no stock OUT needed) and relax the qty cap to
+            // GRN returnable only (no warehouse availability check). When
+            // switched back to Good, re-enable warehouse-select and re-apply
+            // the dual cap (returnable AND warehouse available).
+            form.querySelectorAll('.condition-select').forEach((sel) => {
+                sel.addEventListener('change', () => this.applyCondition(sel.closest('tr')));
+                // Initialize the row state once on render.
+                this.applyCondition(sel.closest('tr'));
+            });
             form.querySelector('[data-action="cancel-form"]').addEventListener('click', () => this.resetWorkspace());
             form.addEventListener('submit', (e) => this.submitReturn(e));
+        }
+
+        /**
+         * Phase 5: Apply condition-driven row state.
+         * - Good: warehouse-select enabled, qty cap = min(returnable, available).
+         * - Damage: warehouse-select disabled (with N/A option), qty cap = returnable only.
+         */
+        applyCondition(row) {
+            if (!row) return;
+            const conditionSel = row.querySelector('.condition-select');
+            const warehouseSel = row.querySelector('.warehouse-select');
+            const returnQtyInput = row.querySelector('.return-qty');
+            if (!conditionSel || !warehouseSel || !returnQtyInput) return;
+
+            const isDamage = String(conditionSel.value).toLowerCase() === 'damage';
+            const returnable = parseFloat(returnQtyInput.dataset.returnable || 0);
+
+            if (isDamage) {
+                warehouseSel.disabled = true;
+                warehouseSel.classList.add('bg-light', 'text-muted');
+                // Preserve current selection so we can restore on switch-back.
+                if (!warehouseSel.dataset.prevValue) {
+                    warehouseSel.dataset.prevValue = warehouseSel.value;
+                }
+                // Try to select a "(N/A — Damage)" placeholder if present, else keep current.
+                let naOption = warehouseSel.querySelector('option[data-damage-na="1"]');
+                if (!naOption) {
+                    naOption = document.createElement('option');
+                    naOption.value = warehouseSel.value;
+                    naOption.text = 'N/A (Damage)';
+                    naOption.dataset.damageNa = '1';
+                    warehouseSel.appendChild(naOption);
+                }
+                warehouseSel.value = naOption.value;
+                returnQtyInput.max = String(returnable);
+            } else {
+                warehouseSel.disabled = false;
+                warehouseSel.classList.remove('bg-light', 'text-muted');
+                // Remove the N/A placeholder if it exists.
+                const naOption = warehouseSel.querySelector('option[data-damage-na="1"]');
+                if (naOption) naOption.remove();
+                // Restore previous selection if available.
+                if (warehouseSel.dataset.prevValue) {
+                    warehouseSel.value = warehouseSel.dataset.prevValue;
+                    delete warehouseSel.dataset.prevValue;
+                }
+                // Re-apply the dual cap (returnable AND warehouse available).
+                this.applyRowQtyCap(row);
+            }
         }
 
         applyRowQtyCap(row) {

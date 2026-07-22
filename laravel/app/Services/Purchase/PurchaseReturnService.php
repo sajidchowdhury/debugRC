@@ -19,15 +19,25 @@ use Illuminate\Support\Facades\Log;
  *
  * On confirm (3 operations, all atomic):
  *   1. Stock OUT via StockService at ORIGINAL receive rate (from GRN item)
- *   2. GL: Dr Accounts Payable / Cr Inventory (reverse of GRN)
- *   3. Supplier ledger: debit entry (we owe the supplier less)
- *   4. GRN item return_qty updated (cumulative returns tracking)
+ *      — SKIPPED for Damage condition lines (Phase 5).
+ *   2. GL: Dr Accounts Payable / Cr Inventory (reverse of GRN) — posted for
+ *      ALL items (Good + Damage) since Damage still reduces AP.
+ *   3. Supplier ledger: debit entry (we owe the supplier less) — posted for
+ *      ALL items.
+ *   4. GRN item return_qty updated (cumulative returns tracking) — for ALL
+ *      items (both Good and Damage reduce the supplier-returnable quota).
  *
  * Rate semantics: stock leaves at the ORIGINAL receive rate from the GRN
  * (NOT current avg_cost). This preserves cost integrity — the return
  * reverses the exact cost at which the stock was received.
  *
  * Return qty cap: returnable_qty = received_qty - already_returned.
+ *
+ * Phase 5 (Damage condition):
+ *   - Good = stock OUT + GL + supplier_ledger + GRN return_qty++
+ *   - Damage = NO stock movement + GL + supplier_ledger + GRN return_qty++
+ *     (supplier claim only — stock was never received in usable condition,
+ *      so it never entered warehouse_stock, so no OUT movement needed)
  */
 class PurchaseReturnService
 {
@@ -109,6 +119,8 @@ class PurchaseReturnService
                     'warehouse_id' => $item['warehouse_id'],
                     'qty' => $item['qty'],
                     'rate' => $item['rate'],
+                    // Phase 5: persist condition (default Good for back-compat).
+                    'condition' => $item['condition'] ?? 'Good',
                 ];
             }
             DB::table('purchase_return_items')->insert($itemRows);
@@ -140,7 +152,23 @@ class PurchaseReturnService
             $returnDate = $return->return_date->format('Y-m-d');
 
             // 1. Stock OUT for each item at the ORIGINAL receive rate.
+            //    Phase 5: Damage condition items SKIP stock movement entirely
+            //    (supplier claim only — stock was never usable). GL + ledger
+            //    still posted below for ALL items (Good + Damage).
             foreach ($return->items as $item) {
+                if ($item->isDamage()) {
+                    // Damage: skip stock OUT. Still increment GRN return_qty so
+                    // the supplier-returnable quota is correctly tracked.
+                    if ($item->purchase_receive_item_id) {
+                        DB::table('purchase_receive_items')
+                            ->where('id', $item->purchase_receive_item_id)
+                            ->update([
+                                'return_qty' => DB::raw('COALESCE(return_qty, 0) + ' . (float) $item->qty),
+                            ]);
+                    }
+                    continue;
+                }
+
                 $this->stockService->applyTransaction([
                     'warehouse_id' => $item->warehouse_id,
                     'product_id' => $item->product_id,
@@ -216,6 +244,8 @@ class PurchaseReturnService
 
             if ($return->isConfirmed()) {
                 // Reverse GL + linked supplier_ledger via JournalReversalService (cascade).
+                // Phase 5: GL reversal cascades for ALL items (Good + Damage)
+                // because the journal_entry_id links the whole return document.
                 if ($return->journal_entry_id) {
                     $this->journalReversal->reverseByJournalEntry(
                         $return->journal_entry_id, $cancelledBy,
@@ -224,6 +254,9 @@ class PurchaseReturnService
                 }
 
                 // Reverse each stock movement.
+                // Phase 5: Damage items never created a stock movement, so the
+                // stock_transactions query below naturally returns only Good
+                // items' transactions — no extra branching needed here.
                 $stockTxs = DB::table('stock_transactions')
                     ->where('reference_type', 'purchase_return')
                     ->where('reference_id', $returnId)
@@ -238,6 +271,8 @@ class PurchaseReturnService
                 }
 
                 // Decrement GRN item return_qty.
+                // Phase 5: decrement for ALL items (Good + Damage) since both
+                // had their return_qty incremented on confirm.
                 foreach ($return->items as $item) {
                     if ($item->purchase_receive_item_id) {
                         DB::table('purchase_receive_items')
@@ -369,11 +404,24 @@ class PurchaseReturnService
                 'qty' => $qty,
                 'rate' => $rate,
                 'purchase_receive_item_id' => $receiveItemId > 0 ? $receiveItemId : null,
+                // Phase 5: persist condition; normalize to 'Good' default.
+                'condition' => $this->normalizeCondition($item['condition'] ?? 'Good'),
             ];
         }
         if (empty($validated)) {
             throw new \InvalidArgumentException('At least one valid item is required.');
         }
         return $validated;
+    }
+
+    /**
+     * Phase 5: normalize the condition value to 'Good' or 'Damage'.
+     * Accepts case-insensitive input; defaults to 'Good'.
+     */
+    private function normalizeCondition(string $value): string
+    {
+        $v = trim($value);
+        if ($v === '') return 'Good';
+        return strcasecmp($v, 'Damage') === 0 ? 'Damage' : 'Good';
     }
 }

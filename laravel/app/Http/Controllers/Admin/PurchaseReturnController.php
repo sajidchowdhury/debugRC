@@ -133,6 +133,8 @@ class PurchaseReturnController extends Controller
             'items.*.qty' => 'required|numeric|min:0.001',
             'items.*.rate' => 'nullable|numeric|min:0',
             'items.*.purchase_receive_item_id' => 'nullable|integer',
+            // Phase 5: Damage condition — Damage lines skip stock OUT.
+            'items.*.condition' => 'nullable|in:Good,Damage',
         ]);
 
         try {

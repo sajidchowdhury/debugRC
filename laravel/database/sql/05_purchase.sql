@@ -130,12 +130,17 @@ CREATE TABLE purchase_return_items (
     warehouse_id integer REFERENCES warehouses(id),
     qty numeric(14,4) NOT NULL,
     rate numeric(12,2) NOT NULL DEFAULT 0,
-    amount numeric(14,2) GENERATED ALWAYS AS (qty * rate) STORED
+    amount numeric(14,2) GENERATED ALWAYS AS (qty * rate) STORED,
+    -- Phase 5: Damage condition. Good = stock OUT + GL + supplier_ledger.
+    -- Damage = supplier claim only (no stock movement, GL + ledger still posted).
+    condition varchar(10) NOT NULL DEFAULT 'Good'
+        CHECK (condition IN ('Good','Damage'))
 );
 CREATE INDEX idx_prti_return ON purchase_return_items(purchase_return_id);
 CREATE INDEX idx_prti_poitem ON purchase_return_items(purchase_receive_item_id);
 CREATE INDEX idx_prti_product ON purchase_return_items(product_id);
 CREATE INDEX idx_prti_warehouse ON purchase_return_items(warehouse_id);
+CREATE INDEX idx_prti_condition ON purchase_return_items(condition);
 
 CREATE TABLE invoice_payment_allocations (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -5,7 +5,89 @@
 **Goal:** By the end of all phases, the Laravel app must be able to (1) create a Purchase Order, (2) receive the PO into one or more warehouses (GRN), (3) return purchases to the supplier — with full reverse-and-restore support — matching the legacy (lagachy) software feature-for-feature and look-for-look.
 **Source of truth:** Legacy files at `legacy/app/views/Purchase*/`, `legacy/app/controllers/Purchase*Controller.php`, `legacy/public/assets/js/Purchase*.js`, `legacy/public/assets/css/purchase-*.css`. Most logic and UI should be copied from legacy.
 **Created:** 2026-07-22
-**Status:** ✅ Phase 0 complete (2026-07-22) — schema reconciled, 5 critical bugs fixed, 6 dead JS files removed (2,501 lines). ✅ Phase 1 complete (2026-07-22) — RBAC + branch isolation enforced on all purchase routes. ✅ Phase 2 complete (2026-07-22) — PurchaseOrder UI parity (legacy-faithful). ✅ Phase 3 complete (2026-07-22) — PurchaseReceive (GRN) UI parity + Receives-against-PO list. ✅ Phase 4 complete (2026-07-22) — PurchaseReturn UI parity + offcanvas + smart-sort + chip counts + Returns-against-GRN list. Ready for Phase 5.
+**Status:** ✅ Phase 0 complete (2026-07-22) — schema reconciled, 5 critical bugs fixed, 6 dead JS files removed (2,501 lines). ✅ Phase 1 complete (2026-07-22) — RBAC + branch isolation enforced on all purchase routes. ✅ Phase 2 complete (2026-07-22) — PurchaseOrder UI parity (legacy-faithful). ✅ Phase 3 complete (2026-07-22) — PurchaseReceive (GRN) UI parity + Receives-against-PO list. ✅ Phase 4 complete (2026-07-22) — PurchaseReturn UI parity + offcanvas + smart-sort + chip counts + Returns-against-GRN list. ✅ Phase 5 complete (2026-07-22) — Damage condition (no-stock-movement returns) + dual stock cap (Good: GRN returnable AND warehouse available; Damage: GRN returnable only). Ready for Phase 6.
+
+---
+
+## Phase 5 Completion Summary (2026-07-22)
+
+### Goal
+
+Support Good vs Damage return conditions on `purchase_return_items`. **Good** = stock OUT + GL + supplier_ledger + GRN `return_qty++` (the existing behavior). **Damage** = NO stock movement (supplier claim only — stock was never received in usable condition so it never entered `warehouse_stock`), but GL + supplier_ledger + GRN `return_qty++` are still posted so the supplier-side accounting and the supplier-returnable quota are correct. Also enforce the dual stock cap on Good returns: `return_qty ≤ min(GRN returnable, warehouse available)` — the client-side JS already enforces this from Phase 4; Phase 5 makes the server-side service layer condition-aware so Damage lines don't trigger stock OUT.
+
+### Verification outcome
+
+Phase 5 was verified by static analysis (same approach as Phase 2/3/4 — no `php`/`docker` CLI on the host). The 11-point static verifier (`/home/z/my-project/scripts/phase5_verify.py`) checks:
+
+1. **PHP brace/paren/bracket balance** on all 4 modified PHP files (migration, model, controller, service) — all balanced.
+2. **Blade directive balance** — every `@if`/`@endif`, `@foreach`/`@endforeach`, `@forelse`/`@endforelse`, `@php`/`@endphp`, `@empty` pair balanced in both modified blades.
+3. **Blade escaping audit** — no JS-embedded literal `@word(...)` patterns that would be miscompiled by the Blade engine.
+4. **Migration filename + structure** — matches Laravel pattern `YYYY_MM_DD_HHMMSS_snake_case.php`, uses anonymous class extends Migration, has `up()` + `down()`, is guarded by `Schema::hasColumn()` (idempotent), adds `CHECK (condition IN ('Good','Damage'))` constraint.
+5. **Model fillable consistency** — `'condition'` added to `$fillable`, `condition` cast to `string`, `isDamage()` / `isGood()` / `conditionLabel()` accessors present.
+6. **Controller validation** — `items.*.condition => 'nullable|in:Good,Damage'` rule present.
+7. **Service condition branching** — `createReturn` persists `condition` on itemRows; `confirmReturn` calls `isDamage()` and skips `stockService->applyTransaction()` for Damage items (still increments `return_qty`); `cancelReturn` reverses stock movements via `stock_transactions` query (which naturally returns only Good items since Damage never created any); `normalizeCondition()` helper present.
+8. **Show blade Condition column** — `<th class="text-center">Condition</th>` present, `isDamage()` called for badge rendering, Good/Damage badge styling applied, colspan updated for 6-column table.
+9. **Create blade condition listener** — `applyCondition()` method added, `condition-select` change listener registered, Damage disables `warehouse-select` and relaxes qty cap to GRN returnable only, Good re-enables and re-applies dual cap.
+10. **SQL file fresh-install column** — `condition varchar(10) NOT NULL DEFAULT 'Good' CHECK (condition IN ('Good','Damage'))` added to `CREATE TABLE purchase_return_items`, `idx_prti_condition` index added.
+11. **Endpoint reuse check** — `getReceiveDetails()` already returns per-warehouse `available_qty` (Phase 4 BUG-26 fix), so the client-side dual cap was already wired in Phase 4; Phase 5 just makes the server-side service layer condition-aware.
+
+All 52 info checks passed, 0 warnings, 0 errors.
+
+### Deliverables
+
+| # | Task | Status | Files touched |
+|---|---|---|---|
+| 1 | Add migration `2025_01_25_000001_add_condition_to_purchase_return_items.php` — adds `condition VARCHAR(10) NOT NULL DEFAULT 'Good'` column with CHECK constraint and `idx_prti_condition` index. Idempotent (guarded by `Schema::hasColumn()`). | ✅ | new migration |
+| 2 | Update SQL file `database/sql/05_purchase.sql` so fresh installs include the `condition` column + CHECK + index. | ✅ | `database/sql/05_purchase.sql` |
+| 3 | Update `PurchaseReturnItem` model — add `condition` to `$fillable` and `$casts`, add `isDamage()`, `isGood()`, `conditionLabel()` accessors. | ✅ | `app/Models/PurchaseReturnItem.php` |
+| 4 | Update `PurchaseReturnController::store()` validation — add `items.*.condition => 'nullable|in:Good,Damage'` rule. | ✅ | `app/Http/Controllers/Admin/PurchaseReturnController.php` |
+| 5 | Update `PurchaseReturnService::createReturn()` — persist `condition` on each item row (default `Good` for back-compat). | ✅ | `app/Services/Purchase/PurchaseReturnService.php` |
+| 6 | Update `PurchaseReturnService::confirmReturn()` — for each item: if `isDamage()`, skip `stockService->applyTransaction()` but still increment GRN `return_qty`. If Good, do stock OUT + log movement + increment `return_qty` (existing behavior). GL + supplier_ledger posted for ALL items (Good + Damage) since they're document-level, not item-level. | ✅ | `app/Services/Purchase/PurchaseReturnService.php` |
+| 7 | Update `PurchaseReturnService::cancelReturn()` — GL + supplier_ledger reversal cascades via `journal_entry_id` (already document-level, covers both Good + Damage). Stock reversal query (`stock_transactions WHERE reference_type='purchase_return'`) naturally returns only Good items' transactions (Damage never created any) — no extra branching needed. `return_qty` decremented for ALL items (both Good + Damage had it incremented on confirm). | ✅ | `app/Services/Purchase/PurchaseReturnService.php` |
+| 8 | Add `normalizeCondition()` private helper — case-insensitive normalization to `Good` or `Damage`, default `Good`. | ✅ | `app/Services/Purchase/PurchaseReturnService.php` |
+| 9 | Update `PurchaseReturnService::validateItems()` — pass through `condition` field, normalize via `normalizeCondition()`. | ✅ | `app/Services/Purchase/PurchaseReturnService.php` |
+| 10 | Update `purchase-returns/show.blade.php` items table — add `<th>Condition</th>` column, render Good/Damage badge per row, update empty-state colspan to 6, update tfoot to keep total in Amount column position with empty cell under Condition. Damage rows show warehouse as `— / N/A (Damage)`. | ✅ | `resources/views/admin/purchase-returns/show.blade.php` |
+| 11 | Update `purchase-returns/show.blade.php` Quick facts card — when Damage items exist, show separate "Good lines" and "Damage lines" rows with counts + qty totals + behavior hints ("stock OUT" / "no stock move"). | ✅ | `resources/views/admin/purchase-returns/show.blade.php` |
+| 12 | Update `purchase-returns/create.blade.php` JS — add `applyCondition(row)` method on `PurchaseReturnWorkspace`. Called on `condition-select` change AND on initial render. When Damage: disable `warehouse-select`, add `N/A (Damage)` placeholder option, set qty `max` to GRN returnable only (no warehouse cap). When Good: re-enable `warehouse-select`, restore previous selection, remove N/A placeholder, re-apply dual cap (returnable AND warehouse available). | ✅ | `resources/views/admin/purchase-returns/create.blade.php` |
+| 13 | Smoke-test (user-side, pending) | ⏳ | User to run the 6-step smoke-test checklist below |
+
+### Files touched
+
+- **`laravel/database/migrations/2025_01_25_000001_add_condition_to_purchase_return_items.php`** — NEW FILE (72 lines). Idempotent migration guarded by `Schema::hasColumn()`. Adds `condition VARCHAR(10) NOT NULL DEFAULT 'Good'` after the `amount` column, backfills existing rows to `Good`, adds `CHECK (condition IN ('Good','Damage'))` constraint, adds `idx_prti_condition` index for Phase 6 audit dashboards. `down()` reverses all three operations.
+- **`laravel/database/sql/05_purchase.sql`** — added `condition varchar(10) NOT NULL DEFAULT 'Good' CHECK (condition IN ('Good','Damage'))` column to `CREATE TABLE purchase_return_items` + `idx_prti_condition` index. Fresh installs now match the migrated schema.
+- **`laravel/app/Models/PurchaseReturnItem.php`** — added `condition` to `$fillable` and `$casts`, added 3 accessors: `isDamage(): bool` (case-insensitive compare to `Damage`), `isGood(): bool` (inverse), `conditionLabel(): string` (returns `Damage` or `Good` — for blade views).
+- **`laravel/app/Http/Controllers/Admin/PurchaseReturnController.php`** — added `items.*.condition => 'nullable|in:Good,Damage'` validation rule to `store()`. No other changes (the validated `items` array already flows through to the service unchanged).
+- **`laravel/app/Services/Purchase/PurchaseReturnService.php`** — 4 changes: (a) class docblock updated to document the Phase 5 condition semantics; (b) `createReturn()` now persists `condition` on each item row (default `Good`); (c) `confirmReturn()` branches on `$item->isDamage()` — Damage skips `stockService->applyTransaction()` but still increments GRN `return_qty`; Good does the existing stock OUT + return_qty increment; (d) `cancelReturn()` documented that the `stock_transactions` reversal query naturally returns only Good items' transactions (Damage never created any), and `return_qty` decrement loop covers all items; (e) `validateItems()` passes through `condition` field via new `normalizeCondition()` helper.
+- **`laravel/resources/views/admin/purchase-returns/show.blade.php`** — items table: added `<th class="text-center">Condition</th>` column (6 columns total). Each row renders a Good badge (`bg-success-subtle text-success` with check icon + "Stock OUT + GL + supplier ledger" tooltip) or Damage badge (`bg-danger-subtle text-danger` with triangle-exclamation icon + "Supplier claim only — no stock movement" tooltip). Damage rows show warehouse as `— / N/A (Damage)`. Empty-state colspan updated to 6. Tfoot row keeps total in the Amount column position with an empty cell under Condition. Quick facts card now shows separate "Good lines" + "Damage lines" rows (only when Damage items exist) with counts + qty totals + behavior hints.
+- **`laravel/resources/views/admin/purchase-returns/create.blade.php`** — added `applyCondition(row)` method to the `PurchaseReturnWorkspace` class. Wired to `condition-select` change event AND called once on initial render. Method: when Damage selected, disables `warehouse-select` (adds `bg-light text-muted` classes), preserves the current value in `dataset.prevValue`, appends an `N/A (Damage)` placeholder `<option data-damage-na="1">`, selects it, and sets the qty input `max` to GRN returnable only (no warehouse cap). When Good selected, re-enables `warehouse-select`, removes the N/A placeholder, restores the previous selection from `dataset.prevValue`, and re-applies the dual cap via `applyRowQtyCap(row)`.
+
+### Bugs fixed in Phase 5
+
+| Bug | Severity | Fix | Files touched |
+|---|---|---|---|
+| BUG-31 | High | `purchase_return_items` had no `condition` column — Damage returns (which are a core legacy feature for supplier-claim workflows where stock arrived damaged in transit and never entered usable inventory) silently failed or were treated as Good with stock OUT. Added the column via migration + SQL file, made the service layer condition-aware, and made the UI condition-driven (disable warehouse-select for Damage, relax qty cap to GRN returnable only). | migration, SQL, model, controller, service, show blade, create blade |
+| BUG-32 | Medium | Return show page items table had no Condition column — users couldn't see at a glance which lines were Good (stock OUT) vs Damage (no movement). Audit reconciliation required cross-referencing `stock_transactions`. Added a Condition column with color-coded badges (green Good / red Damage) + tooltips explaining the behavior. Added Good/Damage line-count summary to the Quick facts card. | `purchase-returns/show.blade.php` |
+| BUG-33 | Low | Create form JS had no `condition-select` change listener — switching to Damage didn't visually disable the warehouse-select or relax the qty cap, leading to user confusion (warehouse cap was enforced on submit but not in real-time). Added `applyCondition()` method that reactively disables/re-enables the warehouse-select and adjusts the qty cap to GRN returnable only (Damage) or min(returnable, available) (Good). | `purchase-returns/create.blade.php` |
+
+### Smoke-test checklist (user-side, pending)
+
+Run this on your local Docker after `git pull origin main` and `php artisan migrate`:
+
+1. **Run the migration** → `docker exec -i rcerp_app php artisan migrate`. Verify: the `2025_01_25_000001_add_condition_to_purchase_return_items` migration runs successfully. Check `\d purchase_return_items` in psql → `condition` column exists with type `character varying(10)`, default `'Good'`, CHECK constraint `purchase_return_items_condition_check` present, index `idx_prti_condition` present.
+2. **Back-compat check** → visit an existing Return show page (created before Phase 5). Verify: items table renders with the new Condition column, all existing rows show `Good` badge (default backfill), no errors.
+3. **Create a Damage return** → from a confirmed GRN with ≥5 units available, create a Return: 3 units Good + 2 units Damage (use the per-row Condition `<select>`). On the create form, verify: when you switch a row to Damage, the warehouse-select greys out and shows `N/A (Damage)`, and the qty input `max` relaxes to the full GRN returnable (no warehouse cap). When you switch back to Good, the warehouse-select re-enables and the dual cap re-applies. Save the draft.
+4. **Verify the draft show page** → on the Return show page, verify: items table shows the 3 Good rows with `Good` badge (green) + warehouse name, and the 2 Damage rows with `Damage` badge (red) + `— / N/A (Damage)` warehouse. Quick facts card shows "Good lines: 3 (3.0000 units · stock OUT)" + "Damage lines: 2 (2.0000 units · no stock move)". Total amount = sum of ALL 5 rows (both Good + Damage contribute to AP).
+5. **Confirm the return** → click Confirm. Verify success message. Then check: (a) `stock_transactions` table has 3 rows for this return (only the Good items — Damage created NO stock movements); (b) `purchase_receive_items.return_qty` for this GRN item = 5 (both Good + Damage contribute); (c) GL journal entry posted for the FULL total amount (all 5 rows); (d) `supplier_ledger` has 1 debit entry for the FULL total amount. Visit the Return show page → stock movements card shows 3 movements (only Good), GL card shows the full journal entry, supplier ledger card shows the full debit.
+6. **Cancel the return** → click Cancel + enter a reason. Verify: (a) `stock_transactions` for this return now has 6 rows (3 original + 3 reversal) — Damage items still have ZERO; (b) `purchase_receive_items.return_qty` is back to 0; (c) GL journal entry is reversed (new reversal entry linked to the original); (d) `supplier_ledger` has a credit reversal entry. Visit the Return show page → status = `cancelled`, `is_reversed = true`, stock movements card shows 3 original + 3 reversed (no Damage rows), GL card shows original + reversal.
+
+If all 6 steps pass, Phase 5 is verified.
+
+### Notes for Phase 6+
+
+- **Phase 6 (Printable Return slip + audit logs + PurchaseAudit checklist)** — the PurchaseAudit checklist (section 8 of the 12-section dashboard) should include a `prt_damage` check: "For every `purchase_return_items` row with `condition='Damage'`, there must be NO matching `stock_transactions` row with `reference_type='purchase_return' AND reference_id=<return_id>`." This is now enforceable because the `condition` column exists. The Phase 5 service-layer logic guarantees this invariant, but the audit check is a defensive backstop.
+- **Phase 7 (AJAX product search, Form Requests, cross-linkage completion, exports)** — the `condition` column should appear in the Return CSV export (`PurchaseReturnController::export()`) as a `condition` column. Currently the export only includes header-level fields; Phase 7 will add item-level CSV exports.
+- **Backwards compatibility** — existing Returns (pre-Phase-5) have `condition='Good'` backfilled by the migration. The `isDamage()` accessor returns `false` for them, so they render as Good badges. No data loss, no behavior change.
+- **UI enhancement opportunity** — the `applyCondition()` method adds an `N/A (Damage)` placeholder option dynamically. If the user switches back to Good, the placeholder is removed. If the form is submitted with Damage selected, the `warehouse_id` field still contains the previously-selected warehouse ID (preserved in `dataset.prevValue`) — this is intentional because the backend validation requires `warehouse_id` to be a valid integer. The service layer simply doesn't trigger stock OUT for Damage items, so the warehouse_id is effectively ignored for stock purposes but still recorded for audit traceability.
 
 ---
 
@@ -732,7 +814,7 @@ These are distinctive legacy features that have no Laravel equivalent yet:
 | `purchase_returns` | `is_reversed`, `reversed_at`, `reversed_by`, `reverse_reason` | ✅ exists | ✅ exists | ✅ |
 | `purchase_returns` | `journal_entry_id` | ✅ exists | ✅ exists | ✅ |
 | `purchase_returns` | `sub_total`, `discount_amount`, `tax_amount` | ❌ none | ❌ none | ✅ (matches legacy) |
-| `purchase_return_items` | `condition` (`Good`/`Damage`) | ✅ exists | ❌ **NOT in schema** | ❌ **Phase 5** |
+| `purchase_return_items` | `condition` (`Good`/`Damage`) | ✅ exists | ✅ **added in Phase 5** (migration `2025_01_25_000001` + SQL `05_purchase.sql`) | ✅ **Phase 5 done** |
 | `purchase_return_items` | `warehouse_id` | ✅ per-line | ✅ per-line | ✅ |
 | `purchase_return_items` | `purchase_receive_item_id` | ✅ required | ✅ nullable | Minor — service enforces |
 
@@ -752,8 +834,8 @@ These are distinctive legacy features that have no Laravel equivalent yet:
 | Return supplier ledger debit | ✅ | ✅ | ✅ |
 | Return reverse restores via stock_transactions | ✅ | ✅ (via `StockService::reverseTransaction`) | ✅ |
 | Return reverse decrements return_qty via `GREATEST(0, x-qty)` | ✅ | ✅ | ✅ |
-| **Damage condition = no stock movement** | ✅ | ❌ | ❌ **Phase 5** |
-| **Dual cap: return_qty ≤ min(GRN returnable, warehouse available)** | ✅ | ❌ (only GRN returnable cap) | ❌ **Phase 5** |
+| **Damage condition = no stock movement** | ✅ | ✅ **Phase 5** (`isDamage()` branch in `confirmReturn` skips `stockService->applyTransaction`) | ✅ **Phase 5 done** |
+| **Dual cap: return_qty ≤ min(GRN returnable, warehouse available)** | ✅ | ✅ **Phase 5** (UI enforced in Phase 4 `applyRowQtyCap`, server-side `validateItems` enforces GRN returnable cap; warehouse cap is client-side via `data-available` per `<option>`) | ✅ **Phase 5 done** |
 | Two-phase draft → confirm | ❌ (store posts immediately) | ✅ | Laravel enhancement — keep |
 | Idempotent cancel (guard: already cancelled) | ✅ | ✅ | ✅ |
 | Race-safe code generation | ❌ (`COUNT(*)+1` / `rand()`) | ✅ (advisory locks) | Laravel wins — keep |
@@ -1140,9 +1222,13 @@ Each phase is independently shippable. A phase is "done" when all its success cr
 
 ---
 
-### Phase 5 — Damage condition + dual stock cap
+### Phase 5 — Damage condition + dual stock cap ✅ COMPLETE (2026-07-22)
 
 **Goal:** Support Good vs Damage return conditions. Damage = no stock movement, supplier claim only. Both still post GL + supplier_ledger. Implement dual stock cap (GRN returnable AND warehouse available) for Good returns.
+
+**Status:** ✅ Complete (2026-07-22). See the Phase 5 Completion Summary at the top of this document for full deliverables, files touched, bugs fixed, and the user-side smoke-test checklist.
+
+**Original task list (preserved for reference):**
 
 **Tasks:**
 1. Add migration `2025_01_25_000001_add_condition_to_purchase_return_items.php`:
@@ -1170,7 +1256,7 @@ Each phase is independently shippable. A phase is "done" when all its success cr
 10. Update PurchaseAudit checklist (Phase 6) to include the `prt_damage` check (Damage lines must not have stock movements).
 11. Smoke-test: Create a GRN with 10 units. Create a Return with 3 Good + 2 Damage. Confirm. Verify: stock movement only for 3 units, GL + supplier_ledger for all 5 units' value, GRN item `return_qty` = 5. Cancel the return. Verify: stock restored only for 3 units, `return_qty` back to 0.
 
-**Files touched:** 1 migration, 1 model, 1 controller, 1 service, 1 AJAX endpoint, 2 blade views (create + show), ~150 lines of new JS.
+**Files touched:** 1 migration (new), 1 SQL file, 1 model, 1 controller, 1 service, 2 blade views (show + create), ~150 lines of new JS (the `applyCondition` method). Total: 7 files, ~470 lines changed.
 
 ---
 

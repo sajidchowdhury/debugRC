@@ -172,6 +172,7 @@
                                     <th class="text-end">Qty</th>
                                     <th class="text-end">Rate (Tk)</th>
                                     <th class="text-end">Amount (Tk)</th>
+                                    <th class="text-center">Condition</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -186,9 +187,12 @@
                                             @endif
                                         </td>
                                         <td>
-                                            @if ($item->warehouse)
+                                            @if ($item->warehouse && !$item->isDamage())
                                                 {{ $item->warehouse->warehouse_name }}
                                                 <div class="small text-muted">{{ $item->warehouse->warehouse_code }}</div>
+                                            @elseif ($item->isDamage())
+                                                <span class="text-muted">—</span>
+                                                <div class="small text-muted">N/A (Damage)</div>
                                             @else
                                                 <span class="text-muted">—</span>
                                             @endif
@@ -196,10 +200,23 @@
                                         <td class="text-end">{{ number_format((float) $item->qty, 4) }}</td>
                                         <td class="text-end">{{ number_format((float) $item->rate, 2) }}</td>
                                         <td class="text-end">{{ number_format((float) $item->amount(), 2) }}</td>
+                                        <td class="text-center">
+                                            @if ($item->isDamage())
+                                                <span class="badge bg-danger-subtle text-danger border border-danger-subtle"
+                                                      title="Supplier claim only — no stock movement">
+                                                    <i class="fas fa-triangle-exclamation me-1"></i>Damage
+                                                </span>
+                                            @else
+                                                <span class="badge bg-success-subtle text-success border border-success-subtle"
+                                                      title="Stock OUT + GL + supplier ledger">
+                                                    <i class="fas fa-check me-1"></i>Good
+                                                </span>
+                                            @endif
+                                        </td>
                                     </tr>
                                 @empty
                                     <tr>
-                                        <td colspan="5" class="text-center text-muted py-4">No items.</td>
+                                        <td colspan="6" class="text-center text-muted py-4">No items.</td>
                                     </tr>
                                 @endforelse
                             </tbody>
@@ -207,6 +224,7 @@
                                 <tr class="table-warning fw-bold">
                                     <td colspan="4" class="text-end">Total amount</td>
                                     <td class="text-end">Tk {{ number_format((float) $r->total_amount, 2) }}</td>
+                                    <td></td>
                                 </tr>
                             </tfoot>
                         </table>
@@ -499,6 +517,30 @@
                         <span class="text-muted">Items</span>
                         <strong>{{ $r->items->count() }}</strong>
                     </div>
+                    @php
+                        $goodCount = $r->items->filter(fn($i) => !$i->isDamage())->count();
+                        $damageCount = $r->items->filter(fn($i) => $i->isDamage())->count();
+                        $goodQty = (float) $r->items->filter(fn($i) => !$i->isDamage())->sum(fn($i) => (float) $i->qty);
+                        $damageQty = (float) $r->items->filter(fn($i) => $i->isDamage())->sum(fn($i) => (float) $i->qty);
+                    @endphp
+                    @if ($damageCount > 0)
+                        <div class="d-flex justify-content-between py-1 border-bottom">
+                            <span class="text-muted">
+                                <i class="fas fa-check text-success me-1"></i>Good lines
+                            </span>
+                            <strong>
+                                {{ $goodCount }} <span class="text-muted small">({{ number_format($goodQty, 4) }} units · stock OUT)</span>
+                            </strong>
+                        </div>
+                        <div class="d-flex justify-content-between py-1 border-bottom">
+                            <span class="text-muted">
+                                <i class="fas fa-triangle-exclamation text-danger me-1"></i>Damage lines
+                            </span>
+                            <strong>
+                                {{ $damageCount }} <span class="text-muted small">({{ number_format($damageQty, 4) }} units · no stock move)</span>
+                            </strong>
+                        </div>
+                    @endif
                     <div class="d-flex justify-content-between py-1 border-bottom">
                         <span class="text-muted">Total amount</span>
                         <strong>Tk {{ number_format((float) $r->total_amount, 2) }}</strong>
