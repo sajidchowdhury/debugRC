@@ -245,7 +245,10 @@ class CustomerPaymentController extends Controller
     public function cancel(Request $request, int $id)
     {
         $request->validate([
-            'cancel_reason' => 'required|string|max:500',
+            // R27 (2026-07-22): min:5 parity with Legacy
+            // SalesPaymentOperationsTrait::reverseCustomerPayment() —
+            // runtime check `if (strlen($reason) < 5) { return error; }`.
+            'cancel_reason' => 'required|string|min:5|max:500',
         ]);
 
         try {

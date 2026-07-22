@@ -572,6 +572,28 @@
 </div>
 @endsection
 
+{{-- ============================================================
+     R28 (2026-07-22): PWA installability meta tags.
+     The cart page is the primary POS kiosk surface — making it
+     installable lets a kiosk device run it as a standalone app
+     (no browser chrome, larger viewport, native install prompt).
+     Manifest lives at /manifest.json (served from /public).
+     Service worker lives at /sw.js (registered below in @@push('scripts')).
+     ============================================================ --}}
+@push('head_meta')
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/svg+xml" href="/assets/images/icon.svg">
+    <link rel="apple-touch-icon" href="/assets/images/icon.svg">
+    <meta name="theme-color" content="#4f46e5">
+    <meta name="application-name" content="RC ERP POS">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="RC POS">
+    <meta name="msapplication-TileColor" content="#4f46e5">
+    <meta name="msapplication-tap-highlight" content="no">
+@endpush
+
 @push('css')
 <style>
     /* ============================================================
@@ -2942,6 +2964,40 @@
         // state. (updatePosStickyBar is also called from renderAll on
         // every cart mutation, so this just covers the initial paint.)
         updatePosStickyBar();
+    });
+})();
+</script>
+
+{{-- ============================================================
+     R28 (2026-07-22): PWA service worker registration.
+     Registered only on HTTPS or localhost (Chrome requirement).
+     Failure is non-fatal — the page works fine without a SW; it
+     just won't show the "Install app" prompt in Chrome/Edge.
+     ============================================================ --}}
+<script>
+(function () {
+    'use strict';
+    if (!('serviceWorker' in navigator)) return;
+    // Only register on secure contexts (HTTPS or localhost/127.0.0.1).
+    // Insecure HTTP will silently fail registration in Chrome.
+    if (!window.isSecureContext) return;
+    window.addEventListener('load', function () {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' })
+            .then(function (reg) {
+                // Successful registration — Chrome will now show the
+                // install prompt after the user engages with the page.
+                // (No further action needed; the SW handles its own
+                // lifecycle: install / activate / fetch.)
+                if (window.console && console.debug) {
+                    console.debug('[R28] SW registered for scope:', reg.scope);
+                }
+            })
+            .catch(function (err) {
+                // Non-fatal — page works without SW. Log for debugging.
+                if (window.console) {
+                    console.warn('[R28] SW registration failed:', err);
+                }
+            });
     });
 })();
 </script>

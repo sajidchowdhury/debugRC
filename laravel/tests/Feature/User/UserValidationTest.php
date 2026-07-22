@@ -15,7 +15,10 @@ use Tests\TestCase;
  *   - username:         required|string|max:50|unique:users,username,{id}
  *   - employee_id:      required|exists:employees,id
  *   - is_active:        boolean
- *   - telegram_user_id: nullable|integer
+ *
+ * NOTE (2026-07-22): The telegram_user_id rules + tests were removed when
+ * R24/R25 (Telegram + FCM notifications) were dropped per user request.
+ * Migration 2025_01_20_000010_drop_fcm_and_telegram_fields drops the column.
  *
  * Phase 14 also includes:
  *   - is_active defaults to true when omitted (DB default applies)
@@ -281,50 +284,6 @@ class UserValidationTest extends TestCase
     }
 
     // ====================================================================
-    // telegram_user_id — nullable, integer
-    // ====================================================================
-
-    public function test_telegram_user_id_is_optional(): void
-    {
-        $employee = $this->makeEmployee();
-
-        $this->post(route('admin.users.store'), [
-            'username'    => 'no_telegram_user',
-            'employee_id' => $employee->id,
-            'password'    => 'secret123',
-        ])->assertRedirect();
-    }
-
-    public function test_telegram_user_id_must_be_integer(): void
-    {
-        $employee = $this->makeEmployee();
-
-        $this->post(route('admin.users.store'), [
-            'username'         => 'bad_telegram_user',
-            'employee_id'      => $employee->id,
-            'password'         => 'secret123',
-            'telegram_user_id' => 'not-an-int',
-        ])->assertSessionHasErrors('telegram_user_id');
-    }
-
-    public function test_telegram_user_id_accepts_integer(): void
-    {
-        $employee = $this->makeEmployee();
-
-        $this->post(route('admin.users.store'), [
-            'username'         => 'good_telegram_user',
-            'employee_id'      => $employee->id,
-            'password'         => 'secret123',
-            'telegram_user_id' => 123456789,
-        ])->assertRedirect();
-
-        $this->assertDatabaseHas('users', [
-            'username'         => 'good_telegram_user',
-            'telegram_user_id' => 123456789,
-        ]);
-    }
-
-    // ====================================================================
     // is_active — boolean + default
     // ====================================================================
 
@@ -394,10 +353,9 @@ class UserValidationTest extends TestCase
             'username'         => '',                  // required
             'employee_id'      => 999999,              // exists
             'password'         => '12345',             // min:6
-            'telegram_user_id' => 'not-an-int',        // integer
         ]);
 
-        $response->assertSessionHasErrors(['username', 'employee_id', 'password', 'telegram_user_id']);
+        $response->assertSessionHasErrors(['username', 'employee_id', 'password']);
     }
 
     // ====================================================================

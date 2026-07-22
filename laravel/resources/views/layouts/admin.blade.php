@@ -6,6 +6,11 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{{ config('app.name') }} — {{ $title ?? 'Dashboard' }}</title>
 
+    {{-- Per-page <head> meta tags (PWA manifest link, theme-color, apple-*
+         tags, etc.) — pushed by individual blade templates via
+         @push('head_meta'). Empty by default. --}}
+    @stack('head_meta')
+
     {{-- All assets served locally from /assets/ — no CDN dependency
          (CDN unreachable from some regions caused "site is only text" bug) --}}
     <link href="/assets/css/bootstrap.min.css" rel="stylesheet">

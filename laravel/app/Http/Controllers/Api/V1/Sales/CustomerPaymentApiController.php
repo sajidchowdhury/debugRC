@@ -219,7 +219,11 @@ class CustomerPaymentApiController extends Controller
     public function cancel(Request $request, int $id): JsonResponse
     {
         $validated = $request->validate([
-            'reason' => 'required|string|min:10|max:500',
+            // R27 (2026-07-22): min:5 parity with Legacy
+            // SalesPaymentOperationsTrait::reverseCustomerPayment() —
+            // `if (strlen($reason) < 5) { return error; }`.
+            // (Previously min:10 — relaxed to match Legacy exactly.)
+            'reason' => 'required|string|min:5|max:500',
         ]);
 
         $payment = CustomerPayment::findOrFail($id);

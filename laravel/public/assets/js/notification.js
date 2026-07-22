@@ -1,8 +1,9 @@
   // === NOTIFICATION FUNCTIONS ===
-  // Laravel Push Notification system — database + broadcast channels.
-  // Firebase/FCM removed in favor of Laravel's native notification system.
+  // Laravel native notification system — database + broadcast channels.
   // Phase 1E (Task 31): Upgraded from AJAX polling to SSE (Server-Sent Events)
   // with automatic fallback to polling if SSE is unavailable.
+  // NOTE (2026-07-22): Telegram + FCM push notifications are intentionally
+  // NOT implemented — see docs/sales_entry_Lg_vs_La.md R24/R25 (removed).
 
   const BASE_URL = '/remote-center-erp/';
 

@@ -6,7 +6,7 @@ use Illuminate\Support\Facades\DB;
 /**
  * P1-7 — Seed notification_rules for the 3 new sales return events.
  *
- * Legacy had 5 sales-specific Telegram events including return_created +
+ * Legacy had 5 sales-specific notification events including return_created +
  * return_received. Laravel had 4 sales events (sales_finalize, challan_create,
  * godown_create, payment_receive) but NO return events.
  *
@@ -18,6 +18,9 @@ use Illuminate\Support\Facades\DB;
  *
  * All rules default to 'database' channel (in-app notifications). Admins can
  * toggle to 'broadcast' (live WebSocket) or 'both' via the notification rules UI.
+ *
+ * NOTE (2026-07-22): Telegram/FCM channels were removed per user request (R24/R25
+ * dropped). Only 'database' and 'broadcast' channels are now used.
  *
  * Idempotent: checks if rules already exist before inserting.
  */

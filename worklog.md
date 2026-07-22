@@ -256,3 +256,56 @@ Stage Summary:
 - R23 closes audit §6.1 item #16 (mobile cards variant for Today's Sales).
 - All Blade directives verified balanced. No Unicode escape sequences.
 - Ready to commit and push.
+
+---
+Task ID: R24-R28
+Agent: Main (Super Z)
+Task: Remove R24/R25 (Telegram + FCM notifications) + implement R26 (min:10 override_reason) + R27 (min:5 payment cancel reason) + R28 (PWA installability meta on cart blade) + docs + push
+
+Work Log:
+- Read worklog.md to recover context from prior R1–R23 work.
+- Pushed pending commits (R21/R22/R23) to origin/main — was 5 commits ahead.
+- R24/R25 removal:
+  * Audit report docs/sales_entry_Lg_vs_La.md §6.2 (notifications table rows 17+18) + §9.3 (R24/R25 backlog rows) updated with struck-through ~~R24~~ / ~~R25~~ entries explicitly marked as "Removed by user request (2026-07-22)".
+  * README.md "Removed features" section updated — Telegram business alerts + FCM push listed as fully removed (was previously "replaced"). "Manual action still required" checklist updated to mark Telegram bot token + FCM key rotation as N/A (struck through with [x]).
+  * laravel/public/assets/js/notification.js header comment updated — removed "Firebase/FCM removed in favor of Laravel's native notification system" and replaced with a clean note pointing at R24/R25.
+  * laravel/database/migrations/2025_01_09_000003_seed_return_notification_rules.php docblock updated — "Telegram events" → "notification events" with an added NOTE pointing at R24/R25.
+  * Stale tests cleaned up:
+    - tests/Helpers/InsertsUserDependencies.php: removed makeTelegramUser() helper + updated trait docblock.
+    - tests/Feature/User/UserValidationTest.php: removed 3 test methods (test_telegram_user_id_is_optional / _must_be_integer / _accepts_integer) + removed telegram_user_id from test_multiple_validation_errors_are_all_reported + updated class docblock.
+    - tests/Feature/User/UserCrudTest.php: removed test_index_stats_include_telegram_count + test_update_with_telegram_user_id.
+    - tests/Feature/User/UserAuditTest.php: rewrote test_updated_audit_entry_only_includes_changed_fields_in_new to use is_active as the "changed" field instead of telegram_user_id (since UserController::validationRules no longer accepts telegram_user_id).
+  * Migration 2025_01_20_000010_drop_fcm_and_telegram_fields.php kept as-is (it actively drops the columns — exactly what we want).
+- R26 implementation (validation-time parity with Legacy strlen >= 10):
+  * laravel/app/Http/Requests/Api/V1/Sales/FinalizeInvoiceRequest.php: override_reason rule changed from 'nullable|string|max:500' → 'nullable|string|min:10|max:500'.
+  * laravel/app/Http/Controllers/Admin/SalesInvoiceController.php: 2 inline validate() calls tightened (store + update) — both override_reason rules changed to 'nullable|string|min:10|max:500'.
+  * Service-layer re-check inside DB transaction (R5 authoritative re-check) is kept as defense-in-depth.
+- R27 implementation (validation-time parity with Legacy strlen >= 5):
+  * laravel/app/Http/Controllers/Admin/CustomerPaymentController.php::cancel() — cancel_reason rule changed from 'required|string|max:500' → 'required|string|min:5|max:500'.
+  * laravel/app/Http/Controllers/Api/V1/Sales/CustomerPaymentApiController.php::cancel() — reason rule changed from 'required|string|min:10|max:500' → 'required|string|min:5|max:500' (relaxed from min:10 to match Legacy exactly).
+- R28 implementation (PWA installability):
+  * laravel/resources/views/layouts/admin.blade.php — added @stack('head_meta') in <head> after the existing meta tags (empty by default, pushed by individual blade templates).
+  * laravel/resources/views/admin/sales/cart.blade.php — added @push('head_meta') block with: manifest link, favicon (SVG), apple-touch-icon, theme-color (#4f46e5), application-name, mobile-web-app-capable, apple-mobile-web-app-capable, apple-mobile-web-app-status-bar-style (black-translucent), apple-mobile-web-app-title (RC POS), msapplication-TileColor, msapplication-tap-highlight. Also added SW registration snippet at end of @push('scripts') (feature-detected via 'serviceWorker' in navigator + window.isSecureContext, registered on window.load, non-fatal on failure).
+  * Lesson from HOTFIX-CART (commit fcf1927) applied: the literal @push('scripts') inside a Blade comment is escaped as @@push('scripts') to prevent Blade from parsing it as a real directive.
+  * laravel/public/manifest.json (new) — name=RC ERP — Sales Cart, short_name=RC POS, start_url=/admin/sales/cart, scope=/admin/sales/, display=standalone, theme_color=#4f46e5, background_color=#ffffff, icons SVG 192+512 with both "any" and "maskable" purpose, 2 shortcuts (Today's Sales + Customer Payments).
+  * laravel/public/sw.js (new) — minimal service worker. Cache version 'rc-erp-pos-v1'. Install: pre-caches 17 offline-shell assets (cart route + CSS + JS + icon + manifest). Activate: cleans old cache versions. Fetch: cache-first for /assets/* and /manifest.json; network-first with cart-shell fallback for HTML navigations; pass-through for everything else (including all non-GET — never intercept writes).
+  * laravel/public/assets/images/icon.svg (new) — 512×512 SVG. Indigo→purple gradient background (matches cart hero header), white shopping-cart glyph centered (maskable-safe: cart inside inner 80%), small "RC" badge in bottom-right. Single SVG scales from favicon (16px) to install icon (512px).
+- Verified structural integrity:
+  * cart.blade.php: @push/@endpush balance 3/3 (head_meta + css + scripts). @section/@endsection 1/1. The literal @push('scripts') inside Blade comment escaped as @@push.
+  * All modified PHP files have balanced braces (verified via grep -c "{" vs grep -c "}").
+- Documentation:
+  * docs/sales_entry_Lg_vs_La.md: §6.2 notifications table rows 17+18 updated with struck-through entries; §9.3 R24/R25 backlog rows updated with struck-through entries pointing at the user-requested removal; R26/R27/R28 rows marked ✅ Done with full implementation summaries.
+  * docs/SESSION_CONTEXT.md: Last updated stamp updated; §3 backlog table updated with R24/R25 (dropped) + R26/R27/R28 (done) rows; §5.23/5.24/5.25 deep-dive sections added (R26/R27/R28 with What changed / Why / What was NOT changed / Files modified); §6 Open Work Items updated; §7 Completed Work Items appended with R24/R25 dropped + R26/R27/R28 done entries.
+
+Stage Summary:
+- 11 source files modified: FinalizeInvoiceRequest.php, SalesInvoiceController.php (2 validate calls), CustomerPaymentController.php, CustomerPaymentApiController.php, cart.blade.php, admin.blade.php, notification.js, 2025_01_09_000003_seed_return_notification_rules.php, 4 test files (InsertsUserDependencies, UserValidationTest, UserCrudTest, UserAuditTest).
+- 3 new files: manifest.json, sw.js, icon.svg.
+- 3 docs updated: sales_entry_Lg_vs_La.md, SESSION_CONTEXT.md, README.md.
+- 1 worklog updated (this entry).
+- No backend migrations, no new routes, no new write endpoints.
+- R24/R25 explicitly dropped — Telegram + FCM notifications NOT being ported (Laravel native notification system covers the use case).
+- R26 closes audit §6.1 item #20 (min:10 override_reason parity).
+- R27 closes audit §6.1 item #21 (min:5 payment cancel reason parity).
+- R28 closes audit §6.1 item #33 (PWA installability for POS kiosk deployment).
+- All Blade directives verified balanced. All PHP braces verified balanced.
+- Ready to commit and push.

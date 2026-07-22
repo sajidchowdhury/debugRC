@@ -83,7 +83,8 @@ class SalesInvoiceController extends Controller
             'notes' => 'nullable|string|max:1000',
             'is_soft_hold' => 'nullable|boolean',
             'credit_limit_override' => 'nullable|boolean',
-            'override_reason' => 'nullable|string|max:500',
+            // R26 (2026-07-22): min:10 parity with Legacy SalesInvoiceOperationsTrait.
+            'override_reason' => 'nullable|string|min:10|max:500',
             'idempotency_token' => 'required|string|uuid',
             'dispatcher_ids'   => 'nullable|array',
             'dispatcher_ids.*' => 'integer|exists:employees,id',
@@ -203,7 +204,8 @@ class SalesInvoiceController extends Controller
             'notes' => 'nullable|string|max:1000',
             'is_soft_hold' => 'nullable|boolean',
             'credit_limit_override' => 'nullable|boolean',
-            'override_reason' => 'nullable|string|max:500',
+            // R26 (2026-07-22): min:10 parity with Legacy SalesInvoiceOperationsTrait.
+            'override_reason' => 'nullable|string|min:10|max:500',
             'dispatcher_ids'   => 'nullable|array',
             'dispatcher_ids.*' => 'integer|exists:employees,id',
         ]);

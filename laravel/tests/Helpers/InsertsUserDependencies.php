@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Hash;
 
 /**
  * User Phase 14 test helpers — direct table inserts and factory shortcuts
- * for user-specific test states (locked, inactive, with telegram, etc.).
+ * for user-specific test states (locked, inactive, recently-logged-in, etc.).
  *
  * Used by:
  *  - tests/Unit/User/UserDeactivationUnitTest
@@ -22,7 +22,11 @@ use Illuminate\Support\Facades\Hash;
  * NOTE: Tests\Helpers\BuildsRoleUsers already creates Employee + User chains
  * via factories for RBAC tests. The User CRUD/Audit/Validation test classes
  * use BOTH traits — BuildsRoleUsers for authenticated role users + this
- * trait for direct inserts of locked/inactive/telegram user states.
+ * trait for direct inserts of locked/inactive user states.
+ *
+ * NOTE (2026-07-22): The Telegram helper was removed when R24/R25 were
+ * dropped per user request. Migration 2025_01_20_000010_drop_fcm_and_telegram_fields
+ * drops the users.telegram_user_id column.
  */
 trait InsertsUserDependencies
 {
@@ -66,16 +70,6 @@ trait InsertsUserDependencies
     {
         return $this->makeUser(array_merge([
             'is_active' => false,
-        ], $overrides));
-    }
-
-    /**
-     * Create a User with a linked Telegram account.
-     */
-    protected function makeTelegramUser(int $telegramId, array $overrides = []): User
-    {
-        return $this->makeUser(array_merge([
-            'telegram_user_id' => $telegramId,
         ], $overrides));
     }
 

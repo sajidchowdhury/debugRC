@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-22 (R21/R22/R23 pushed — server-side DataTables + status chips with live counts + mobile cards variant on sales-invoices index)
+> **Last updated:** 2026-07-22 (R24/R25 dropped per user request — Telegram + FCM notifications explicitly NOT being ported. R26/R27/R28 done — `min:10` override_reason + `min:5` reversal reason + PWA installability meta on cart blade.)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -143,6 +143,11 @@ Items are tackled in order. Each item has its own entry in
 | R21 | Port server-side DataTables with smart sort + smart search on sales-invoices index | ✅ done      | New backend endpoint `GET /admin/sales-invoices/datatable` returns DataTables SSP JSON (draw / recordsTotal / recordsFiltered / data). New `SalesInvoiceController::datatable()` method (~85 lines) builds a filter query via shared `buildInvoiceFilterQuery()` helper, applies DataTables column ordering OR smart sort OR default ordering, paginates via skip/take, and returns row data (id, invoice_code, invoice_date, customer_name, customer_code, branch_name, items_count, total_amount, paid_amount, due_amount, status, is_soft_hold, is_reversed, show_receive bool, show_url). Smart sort: when `#filterSmartSort` is checked AND no column header clicked, server applies `CASE WHEN due_amount > 0.01 AND status NOT IN ('cancelled','reversed') THEN 0 ELSE 1 END ASC, invoice_date ASC, id ASC` — unpaid first, then oldest. Column-click sort overrides smart sort. Smart search matches invoice_code + customer name/code/mobile + branch name/code (ILIKE). The index blade was rewritten: replaced the Blade `@forelse` tbody + Laravel paginator with a server-side DataTables instance. Filter form (date / customer / branch / search / smart_sort / status_chip) is injected into every AJAX request via the `data` callback — page never reloads on filter change. Smart search input is debounced 320ms. Fixes audit risk §6.1 item #14. |
 | R22 | Port status chips with live counts on sales-invoices index                    | ✅ done      | New backend endpoint `GET /admin/sales-invoices/summary` returns JSON with counts per chip bucket (all, awaiting_payment, draft, confirmed, cancelled, reversed) + total_value. New `SalesInvoiceController::summary()` method (~30 lines) uses shared `buildInvoiceFilterQuery($request, excludeStatusChip: true)` so counts are computed against the current filter set (date / customer / branch / search) but NOT against the active chip itself — so the user always sees how many invoices are in each bucket without losing filter context. Six chips (All / Awaiting payment / Draft / Confirmed / Cancelled / Reversed) replace the old Status `<select>` dropdown. Each chip has a count badge refreshed via AJAX (debounced 280ms) whenever filters change. Clicking a chip sets hidden `#status_chip` input + reloads DataTable + refreshes summary. Chip colours: All=indigo, Awaiting=red, Draft=amber, Confirmed=green, Cancelled=slate, Reversed=dark red. Bucket definitions adapted to Laravel's status model (draft/confirmed/cancelled + is_reversed flag) since Laravel doesn't have Legacy's godown_issued/challan_completed invoice statuses. Shared `buildInvoiceFilterQuery()` private method on the controller keeps chip counts and table rows in sync. Mirrors Legacy `sales/today_filter_summary` endpoint. Fixes audit risk §6.1 item #15. |
 | R23 | Port mobile cards variant for Today's Sales / sales-invoices index           | ✅ done      | New `#invoiceCards` container above the desktop table in `admin/sales-invoices/index.blade.php`, hidden on desktop by CSS `@media (max-width: 767.98px)` and shown on narrow screens. Populated by DataTables `drawCallback` → `renderMobileCards(api)` from the current page's data — same data as the desktop table, just a different layout. Each card shows: invoice code (link) + date + customer name + branch name + status badge + total + due/Paid + soft-hold badge + View/Receive buttons. Card left border color signals status: red=due, green=paid, slate=cancelled, dark red=reversed. Window resize handler (debounced 180ms) re-renders cards on viewport changes. The delegated `.btn-receive-payment` click handler (from R19) works for both desktop table rows AND mobile card buttons (same class) — no duplicate wiring needed. Mirrors Legacy `sales-today-index.js::renderInvoiceCards`. Fixes audit risk §6.1 item #16. |
+| ~~R24~~ | ~~Port Telegram notifications~~                                       | ❌ **dropped** | **Removed by user request (2026-07-22).** Telegram notifications are NOT being ported. Laravel's native database + broadcast notification system (`ERPNotification` + `NotificationService` + `ListenNotifyService` for PostgreSQL NOTIFY) covers operational visibility without external chat-bot dependency. Migration `2025_01_20_000010_drop_fcm_and_telegram_fields.php` drops the `users.telegram_user_id` column. Stale tests in `tests/Feature/User/*` referencing `telegram_user_id` were cleaned up; `Tests\Helpers\InsertsUserDependencies::makeTelegramUser()` removed. |
+| ~~R25~~ | ~~Port FCM push notifications (or SSE via Listen/Notify)~~            | ❌ **dropped** | **Removed by user request (2026-07-22).** FCM push notifications are NOT being ported. The existing in-app inbox (`admin/notifications/inbox` + `ListenNotifyService` realtime fanout) is sufficient. `fcm_tokens` table dropped in migration `2025_01_20_000010_drop_fcm_and_telegram_fields.php`. `laravel/public/assets/js/notification.js` header comment updated to document the deliberate non-implementation. |
+| R26 | Add `min:10` to `override_reason` in `FinalizeInvoiceRequest`               | ✅ done      | Validation rule is now `nullable\|string\|min:10\|max:500` in three places: (a) `app/Http/Requests/Api/V1/Sales/FinalizeInvoiceRequest.php` (mobile API), (b) `app/Http/Controllers/Admin/SalesInvoiceController::store()` validate call (web finalize), (c) `app/Http/Controllers/Admin/SalesInvoiceController::update()` validate call (web edit). Mirrors Legacy `SalesInvoiceOperationsTrait::finalizeInvoice()` runtime check `if (strlen($overrideReason) < 10) { return error; }`. The service-layer `strlen($overrideReason) < 10` re-check inside the DB transaction (R5 authoritative re-check) is unchanged — now the request fails fast at validation instead of after the credit-limit check. |
+| R27 | Add `min:5` to reversal reason in payment cancel                          | ✅ done      | Two controller `validate()` calls tightened: (a) `app/Http/Controllers/Admin/CustomerPaymentController::cancel()` web controller — `cancel_reason` rule changed from `required\|string\|max:500` → `required\|string\|min:5\|max:500`. (b) `app/Http/Controllers/Api/V1/Sales/CustomerPaymentApiController::cancel()` API controller — `reason` rule changed from `required\|string\|min:10\|max:500` → `required\|string\|min:5\|max:500` (relaxed to match Legacy exactly). Mirrors Legacy `SalesPaymentOperationsTrait::reverseCustomerPayment()` runtime check `if (strlen($reason) < 5) { return error; }`. The service-layer `CustomerPaymentService::cancelPayment` runs unchanged. |
+| R28 | Add PWA installability meta tags to cart blade                            | ✅ done      | New `@stack('head_meta')` added to `layouts/admin.blade.php` `<head>` (after the existing meta tags). Cart blade pushes PWA meta via `@push('head_meta')`: manifest link, favicon, apple-touch-icon, theme-color (#4f46e5), application-name, mobile-web-app-capable, apple-mobile-web-app-capable, apple-mobile-web-app-status-bar-style, apple-mobile-web-app-title, msapplication-TileColor, msapplication-tap-highlight. New `laravel/public/manifest.json` (name=RC ERP — Sales Cart, short_name=RC POS, start_url=/admin/sales/cart, scope=/admin/sales/, display=standalone, theme_color=#4f46e5, background_color=#ffffff, icons SVG 192+512 maskable+any, 2 shortcuts to Today's Sales + Customer Payments). New `laravel/public/sw.js` minimal service worker (cache version `rc-erp-pos-v1`, pre-caches 17 offline-shell assets on install, cleans old caches on activate, fetch handler: cache-first for /assets/* + /manifest.json, network-first with cart-shell fallback for HTML navigations, pass-through for everything else including all non-GET). New `laravel/public/assets/images/icon.svg` POS-themed SVG icon (shopping cart on indigo→purple gradient with RC badge, 512×512, maskable-safe). SW registration snippet added to cart blade `@push('scripts')` (feature-detected via `'serviceWorker' in navigator` + `window.isSecureContext`, registered only on HTTPS/localhost, non-fatal on failure). Chrome/Edge now shows the "Install app" prompt on the cart page. Fixes audit risk §6.1 item #33. |
 
 > When the user assigns the next R# item, add a row here and create a
 > matching section in `REMEDIATION_LOG.md`. **Do not start work without
@@ -1589,6 +1594,164 @@ Files modified:
   function, resize handler, and CSS for the cards + the desktop/
   mobile visibility toggle.
 
+### 5.23 R26: min:10 on override_reason (validation-time parity)
+
+**What changed:** The `override_reason` field on sales invoice
+finalization (and edit) is now validated as `nullable|string|min:10
+|max:500` instead of `nullable|string|max:500`. Applied in three
+places: (a) `app/Http/Requests/Api/V1/Sales/FinalizeInvoiceRequest
+.php` (mobile API Form Request), (b) `app/Http/Controllers/Admin/
+SalesInvoiceController::store()` inline `validate()` call (web
+finalize), (c) `app/Http/Controllers/Admin/SalesInvoiceController::
+update()` inline `validate()` call (web edit).
+
+**Why:** Mirrors Legacy `SalesInvoiceOperationsTrait::finalizeInvoice
+()` L42: `if (strlen($overrideReason) < 10) { return error; }`. The
+Laravel service layer (`SalesInvoiceService::finalizeFromCart` +
+`updateInvoice`) already enforced this at runtime inside the DB
+transaction (R5 authoritative re-check), but only after the credit
+limit check had already passed — meaning the user got a runtime
+exception after they thought they were past validation. Moving the
+rule into the Form Request + controller `validate()` lets the
+request fail fast at validation time with a friendly error message.
+
+**What was NOT changed:**
+- The service-layer `strlen($overrideReason) < 10` re-check inside
+  the DB transaction is kept as defense-in-depth (R5 race-condition
+  protection — a concurrent finalize could change the credit-limit
+  state between validation and transaction commit).
+- Legacy's "only enforced when `credit_limit_override = true` AND
+  `creditCheck['exceeds'] = true`" conditional is NOT replicated at
+  the validation-rule level. Laravel validates `override_reason`
+  length regardless of whether the override is actually triggered.
+  This is intentionally stricter — it catches the case where a user
+  submits `override_reason = "ok"` without checking the override
+  box, then later toggles the override box (e.g. via the API) and
+  expects the same payload to work. The service layer still does
+  the conditional check before posting the override.
+
+**Files modified:**
+- `laravel/app/Http/Requests/Api/V1/Sales/FinalizeInvoiceRequest.php`
+- `laravel/app/Http/Controllers/Admin/SalesInvoiceController.php`
+  (2 validate calls — store + update)
+
+### 5.24 R27: min:5 on payment cancel reason (validation-time parity)
+
+**What changed:** Two controller `validate()` calls tightened to
+match Legacy `SalesPaymentOperationsTrait::reverseCustomerPayment()`
+L200: `if (strlen($reason) < 5) { return error; }`:
+- Web: `CustomerPaymentController::cancel()` — `cancel_reason` rule
+  changed from `required|string|max:500` →
+  `required|string|min:5|max:500`.
+- API: `CustomerPaymentApiController::cancel()` — `reason` rule
+  changed from `required|string|min:10|max:500` →
+  `required|string|min:5|max:500` (relaxed from min:10 down to
+  Legacy's min:5 — the API was previously stricter than Legacy,
+  which would have caused client-side friction).
+
+**Why:** Legacy requires ≥5 chars; Laravel previously enforced
+nothing on the web path and 10 chars on the API path. Both are now
+exactly min:5, matching Legacy parity. The service-layer
+`CustomerPaymentService::cancelPayment` runs unchanged — it never
+had a length check (Legacy's check is in the controller-layer trait).
+
+**What was NOT changed:**
+- No service-layer re-check added. The Legacy check is in the
+  controller-layer trait, not the service, so there's no
+  defense-in-depth re-check to port.
+- The `max:500` cap is kept (Legacy doesn't specify one but the
+  column is `text` so any reasonable cap is fine).
+- The cancel endpoint is not changed to use a Form Request class
+  (it uses inline `$request->validate([...])`). Converting to a
+  Form Request is out of scope for R27.
+
+**Files modified:**
+- `laravel/app/Http/Controllers/Admin/CustomerPaymentController.php`
+- `laravel/app/Http/Controllers/Api/V1/Sales/CustomerPaymentApiController.php`
+
+### 5.25 R28: PWA installability for cart blade
+
+**What changed:** The sales cart page (`/admin/sales/cart`) is now
+installable as a Progressive Web App on Chrome/Edge/Firefox. New
+files:
+- `laravel/public/manifest.json` — PWA web app manifest. Name="RC
+  ERP — Sales Cart", short_name="RC POS", start_url=/admin/sales/cart
+  (deep-links straight into the cart after install), scope=/
+  admin/sales/ (the SW controls the sales module namespace),
+  display=standalone (no browser chrome), theme_color=#4f46e5
+  (matches the hero header gradient), background_color=#ffffff,
+  2 shortcuts to Today's Sales + Customer Payments (long-press the
+  installed icon on mobile to see them), 2 icon entries (SVG, both
+  `any` and `maskable` purpose so Android adaptive icons render
+  correctly).
+- `laravel/public/sw.js` — minimal service worker. Cache version
+  `rc-erp-pos-v1`. Install: pre-caches 17 offline-shell assets
+  (cart route + all CSS/JS/fonts from /assets/). Activate: cleans
+  up old cache versions. Fetch handler: cache-first for /assets/*
+  and /manifest.json (immutable static assets), network-first for
+  HTML navigations with cart-shell fallback (so the page can be
+  opened offline after first visit), pass-through for everything
+  else (including all non-GET — never intercept writes). The SW is
+  intentionally minimal: its job is to make Chrome show the install
+  prompt, not to be a full offline-first POS.
+- `laravel/public/assets/images/icon.svg` — 512×512 SVG icon.
+  Indigo→purple gradient background (matches the cart hero header),
+  white shopping-cart glyph centered (maskable-safe: cart sits
+  inside the inner 80%), small "RC" badge in the bottom-right
+  corner. Single SVG scales from favicon (16px) to install icon
+  (512px) without needing multiple PNGs.
+
+**Layout change:** New `@stack('head_meta')` added to `layouts/
+admin.blade.php` `<head>` (after the existing meta tags, before
+the title). This is a per-page meta-tag stack — empty by default,
+pushed by individual blade templates via `@push('head_meta')`.
+
+**Cart blade changes:**
+- New `@push('head_meta')` block: manifest link, favicon,
+  apple-touch-icon, theme-color (#4f46e5), application-name,
+  mobile-web-app-capable, apple-mobile-web-app-capable,
+  apple-mobile-web-app-status-bar-style (black-translucent),
+  apple-mobile-web-app-title (RC POS), msapplication-TileColor,
+  msapplication-tap-highlight.
+- New `<script>` block at the end of `@push('scripts')`: SW
+  registration. Feature-detected via `'serviceWorker' in
+  navigator` + `window.isSecureContext` (Chrome requires HTTPS or
+  localhost). Registered on `window.load` with scope `/`. Failure
+  is non-fatal — the page works fine without a SW; it just won't
+  show the install prompt. Logs to `console.debug` on success,
+  `console.warn` on failure.
+- The `@push` directive inside the Blade comment is escaped as
+  `@@push` (lesson from HOTFIX-CART commit fcf1927 — Blade scans
+  the whole template regardless of context).
+
+**Why:** The cart page is the primary POS kiosk surface. Making it
+installable means a kiosk device can run it as a standalone app —
+no browser chrome, larger viewport, native install prompt, can be
+launched from the home screen / start menu. Audit risk §6.1 item
+#33.
+
+**What was NOT changed:**
+- No offline invoice creation. POS workflows that need to post
+  invoices while offline are out of scope (would require IndexedDB
+  queue + sync logic — significant work).
+- No push notifications (R25 was dropped per user request).
+- No background sync.
+- Other admin pages (sales-invoices index, customer-payments, etc.)
+  are NOT installable — only the cart. The manifest's `scope` is
+  `/admin/sales/` so the install prompt only appears on sales
+  pages.
+- The `start_url` is `/admin/sales/cart` — when launched from the
+  home screen, the user lands directly on the cart (after auth).
+
+**Files modified:**
+- `laravel/resources/views/layouts/admin.blade.php` (added
+  `@stack('head_meta')`)
+- `laravel/resources/views/admin/sales/cart.blade.php` (added
+  `@push('head_meta')` + SW registration script)
+- `laravel/public/manifest.json` (new)
+- `laravel/public/sw.js` (new)
+- `laravel/public/assets/images/icon.svg` (new)
+
 ---
 
 ## 6. Open Work Items
@@ -1597,9 +1760,11 @@ Files modified:
 
 - **None outstanding.** R1, R2, R3, R4, R5, R6, R10, R10s, R11, R12,
   R13, R14, R15, R16, R17, R18, R19, R20 (via R19), R21, R22, R23,
-  and H1 (bugfix) are complete and pushed. The user has not yet
-  assigned R7, R8, R9 (numbers reserved for future items; R10+ were
-  the user's explicit asks after R6).
+  R26, R27, R28, and H1 (bugfix) are complete and pushed.
+  R24/R25 (Telegram + FCM notifications) were **dropped by user
+  request** (2026-07-22) — explicitly NOT being ported. The user
+  has not yet assigned R7, R8, R9 (numbers reserved for future
+  items; R10+ were the user's explicit asks after R6).
 
 When the user gives the next instruction, append it here as a
 checkbox item. When done, move it to the "Completed Work Items"
@@ -1890,6 +2055,74 @@ section below.
       desktop table rows AND mobile card buttons (same class) — no
       duplicate wiring needed. Mirrors Legacy
       `sales-today-index.js::renderInvoiceCards`.
+- [x] **R24/R25 DROPPED (2026-07-22)** — Telegram + FCM push
+      notifications are NOT being ported, per explicit user request.
+      Migration `2025_01_20_000010_drop_fcm_and_telegram_fields.php`
+      drops `fcm_tokens` table + `users.telegram_user_id` column.
+      Stale tests in `tests/Feature/User/{UserValidationTest,
+      UserCrudTest, UserAuditTest}.php` cleaned up;
+      `Tests\Helpers\InsertsUserDependencies::makeTelegramUser()`
+      helper removed. `laravel/public/assets/js/notification.js`
+      header comment + `2025_01_09_000003_seed_return_notification_
+      rules.php` docblock updated to document the deliberate
+      non-implementation. `README.md` "Removed features" + "Manual
+      action still required" sections updated to reflect that
+      Telegram/FCM are gone entirely (not just "replaced"). Audit
+      report `sales_entry_Lg_vs_La.md` §6.2 notifications table +
+      §9.3 remediation backlog updated with `~~R24~~` / `~~R25~~`
+      struck-through rows pointing at this entry. Laravel's native
+      `ERPNotification` + `NotificationService` + `ListenNotifyService`
+      (PostgreSQL NOTIFY) cover operational visibility + realtime
+      fanout without external chat-bot or web-push infrastructure.
+- [x] **R26** — Add `min:10` to `override_reason` validation in
+      `FinalizeInvoiceRequest`. Rule is now
+      `nullable|string|min:10|max:500` in 3 places: the API Form
+      Request + both controller-side `validate()` calls (store +
+      update). Mirrors Legacy
+      `SalesInvoiceOperationsTrait::finalizeInvoice()` runtime
+      `if (strlen($overrideReason) < 10) { return error; }`.
+      Service-layer re-check inside the DB transaction (R5
+      authoritative re-check) is unchanged — now the request fails
+      fast at validation instead of after the credit-limit check.
+- [x] **R27** — Add `min:5` to reversal reason in payment cancel.
+      Web controller `CustomerPaymentController::cancel()`:
+      `cancel_reason` rule changed from `required|string|max:500` →
+      `required|string|min:5|max:500`. API controller
+      `CustomerPaymentApiController::cancel()`: `reason` rule
+      changed from `min:10` → `min:5` (relaxed to match Legacy
+      exactly). Mirrors Legacy
+      `SalesPaymentOperationsTrait::reverseCustomerPayment()`
+      runtime `if (strlen($reason) < 5) { return error; }`.
+      Service-layer `CustomerPaymentService::cancelPayment` runs
+      unchanged.
+- [x] **R28** — Add PWA installability meta tags to cart blade.
+      New `@stack('head_meta')` in `layouts/admin.blade.php` `<head>`
+      (after the existing meta tags). Cart blade pushes PWA meta via
+      `@push('head_meta')`: manifest link + favicon + apple-touch-icon
+      + theme-color (#4f46e5) + application-name + mobile-web-app-
+      capable + apple-mobile-web-app-capable + apple-mobile-web-app-
+      status-bar-style + apple-mobile-web-app-title + msapplication-
+      TileColor + msapplication-tap-highlight. New
+      `laravel/public/manifest.json` (name=RC ERP — Sales Cart,
+      short_name=RC POS, start_url=/admin/sales/cart,
+      scope=/admin/sales/, display=standalone, theme_color=#4f46e5,
+      background_color=#ffffff, icons SVG 192+512 maskable+any,
+      2 shortcuts to Today's Sales + Customer Payments). New
+      `laravel/public/sw.js` minimal service worker (cache version
+      `rc-erp-pos-v1`, pre-caches 17 offline-shell assets on install,
+      cleans old caches on activate, fetch handler: cache-first for
+      /assets/* + /manifest.json, network-first with cart-shell
+      fallback for HTML navigations, pass-through for everything else
+      including all non-GET). New
+      `laravel/public/assets/images/icon.svg` POS-themed SVG icon
+      (shopping cart on indigo→purple gradient with RC badge,
+      512×512, maskable-safe). SW registration snippet added to
+      cart blade `@push('scripts')` (feature-detected via
+      `'serviceWorker' in navigator` + `window.isSecureContext`,
+      registered only on HTTPS/localhost, non-fatal on failure).
+      Chrome/Edge now shows the "Install app" prompt on the cart
+      page. Fixes audit risk §6.1 item #33 (PWA installability for
+      POS kiosk deployment).
 
 ---
 
