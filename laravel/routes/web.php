@@ -524,6 +524,12 @@ Route::middleware('auth')->group(function () {
     // P1-1: edit/update — salesman/manager/admin (legacy edit/update).
     // ============================================================
     Route::prefix('admin/sales-invoices')->name('admin.sales-invoices.')->group(function () {
+        // R21: Server-side DataTables JSON endpoint (smart sort + smart search).
+        Route::get('datatable', [SalesInvoiceController::class, 'datatable'])
+            ->name('datatable')->middleware('role:salesman,accountant,manager,admin');
+        // R22: Live status-chip counts JSON endpoint.
+        Route::get('summary', [SalesInvoiceController::class, 'summary'])
+            ->name('summary')->middleware('role:salesman,accountant,manager,admin');
         // G-10: Call It A Day batch operation (remove invoices from daily collection list)
         Route::post('call-it-a-day', [SalesInvoiceController::class, 'callItADay'])
             ->name('call-it-a-day')->middleware(['role:salesman,accountant,manager,admin', 'branch.isolation']);

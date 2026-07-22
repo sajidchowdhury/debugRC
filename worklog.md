@@ -205,3 +205,54 @@ Stage Summary:
 - R19 closes the inline receive-payment modal gap (audit §6.1 item #12) + R20 quick-amount chips (item #13) as a side effect
 - All Blade directives verified balanced. All ASCII chars (no Unicode escape sequences in Blade).
 - Ready to commit and push.
+
+---
+Task ID: R21-R23
+Agent: Main (Super Z)
+Task: R21 Port server-side DataTables + R22 Port status chips with live counts + R23 Port mobile cards variant on Today's Sales / sales-invoices index + docs + push
+
+Work Log:
+- Read legacy sales-today-index.js (548 lines) + sales/today.php to understand the Legacy reference implementation for: server-side DataTables, smart sort (unpaid first then oldest), smart search (invoice/customer/mobile/branch), status chips with live counts, mobile cards variant rendered from DataTables data on draw.
+- Read existing Laravel admin/sales-invoices/index.blade.php (525 lines) + SalesInvoiceController.php to understand the current state: Laravel paginator (25/page) + a client-side DataTables on top of the current page only, simple <select> status filter, no chips, no mobile variant.
+- R21 implementation (controller + routes + blade):
+  * Added new `SalesInvoiceController::datatable(Request $request)` method (~85 lines): builds filter query via shared `buildInvoiceFilterQuery()`, applies DataTables column ordering OR smart sort (CASE expression: unpaid first → oldest invoice_date → id) OR default (newest first), returns SSP JSON with draw/recordsTotal/recordsFiltered/data.
+  * Added new route `GET admin/sales-invoices/datatable` (named `admin.sales-invoices.datatable`, middleware `role:salesman,accountant,manager,admin`).
+  * Each row's JSON includes: id, invoice_code, invoice_date (Y-m-d), customer_name, customer_code, branch_name, items_count, total_amount, paid_amount, due_amount, status, is_soft_hold, is_reversed, show_receive (bool), show_url (route).
+  * Smart search matches against invoice_code, customer name/code/mobile, branch name/code (ILIKE).
+  * Added "Smart sort" checkbox (#filterSmartSort) to the filter form — defaults to ON. When ON and no column header is clicked, server applies unpaid-first-then-oldest. When user clicks a column header, that takes precedence.
+  * Replaced the Blade @forelse tbody with an empty tbody — DataTables fills it via AJAX.
+  * Removed Laravel paginator links — DataTables provides its own pagination.
+  * Smart search input is debounced (320ms) — triggers dt.ajax.reload() + summary refresh + export link update.
+- R22 implementation (controller + routes + blade):
+  * Added new `SalesInvoiceController::summary(Request $request)` method (~30 lines): returns JSON with counts per chip bucket (all, awaiting_payment, draft, confirmed, cancelled, reversed) + total_value. Excludes the status_chip filter so all bucket counts are visible regardless of which chip is active.
+  * Added new route `GET admin/sales-invoices/summary` (named `admin.sales-invoices.summary`).
+  * Added shared private `buildInvoiceFilterQuery(Request, bool $excludeStatusChip = false)` helper used by both datatable() and summary() so chip counts and table rows stay in sync.
+  * Added 6 status chips above the table: All | Awaiting payment | Draft | Confirmed | Cancelled | Reversed. Each chip has a live count fetched via AJAX from the summary endpoint, refreshed (debounced 280ms) whenever filters change.
+  * Clicking a chip sets hidden #status_chip input + reloads DataTable + refreshes summary.
+  * Removed the old Status <select> dropdown filter — chips replace it (matches Legacy pattern).
+  * Chip colours: All=indigo, Awaiting=red, Draft=amber, Confirmed=green, Cancelled=slate, Reversed=dark red.
+- R23 implementation (blade + CSS):
+  * Added #invoiceCards container above the desktop table (hidden by default, shown via CSS @media max-width: 767.98px).
+  * Added `drawCallback` on the DataTable that calls `renderMobileCards(api)` — populates #invoiceCards from the current page's data on every draw.
+  * Mobile card shows: invoice code (link), date, customer name, branch name, status badge, total, due (or "Paid" if 0), soft-hold badge if applicable, View + Receive buttons.
+  * Card left border color signals status: red=due, green=paid, slate=cancelled, dark red=reversed.
+  * Window resize handler (debounced 180ms) re-renders cards.
+- Kept R19 receive-payment modal shell + delegated .btn-receive-payment handler (now works for both desktop table rows AND mobile card buttons — same class, same handler).
+- Kept the 5 global stat cards at the top (Total / Draft / Confirmed / Cancelled / Total value) — these show GLOBAL counts (not filter-aware), complementing the R22 chips which are filter-aware.
+- Verified Blade structural integrity:
+  * index.blade.php: @section/@endsection 1/1, @push/@endpush 2/2 (scripts + css), @php/@endphp 1/1, @foreach/@endforeach 1/1
+  * No @word( directives inside JS comments or strings (lesson from prior @push escaping bug)
+  * The literal text "@push('css')" appears once inside a Blade comment `{{-- ... --}}` (line 242) — Blade strips comments before parsing, so this is safe.
+- Updated docs/sales_entry_Lg_vs_La.md: marked R21/R22/R23 as ✅ Done with implementation summaries.
+- Updated docs/SESSION_CONTEXT.md: added R21/R22/R23 to §3 backlog table, §5.x deep-dive section, §6 open work items, §7 completed work items; updated Last updated stamp.
+
+Stage Summary:
+- 3 source files modified: SalesInvoiceController.php (added datatable() + summary() + buildInvoiceFilterQuery()), web.php (2 new routes), admin/sales-invoices/index.blade.php (full rewrite — server-side DataTables, chips, mobile cards).
+- 2 docs updated: sales_entry_Lg_vs_La.md, SESSION_CONTEXT.md.
+- 1 worklog updated (this entry).
+- No backend migrations, no new write endpoints (R21/R22/R23 are read-only — datatable + summary JSON endpoints).
+- R21 closes audit §6.1 item #14 (server-side DataTables with smart sort + smart search).
+- R22 closes audit §6.1 item #15 (status chips with live counts).
+- R23 closes audit §6.1 item #16 (mobile cards variant for Today's Sales).
+- All Blade directives verified balanced. No Unicode escape sequences.
+- Ready to commit and push.

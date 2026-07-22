@@ -6,7 +6,7 @@
 > (long conversation, model restart, etc.), any future agent MUST read
 > this file FIRST to recover full context before doing any work.
 >
-> **Last updated:** 2026-07-22 (R18/R19 + R20 [via R19] pushed — keyboard shortcuts + inline receive-payment modal on sales-invoices index)
+> **Last updated:** 2026-07-22 (R21/R22/R23 pushed — server-side DataTables + status chips with live counts + mobile cards variant on sales-invoices index)
 > **Maintained by:** Super Z (AI assistant)
 > **Repository:** `sajidchowdhury/debugRC` (branch: `main`)
 
@@ -140,6 +140,9 @@ Items are tackled in order. Each item has its own entry in
 | R18 | Port keyboard shortcuts (Enter to select, ArrowUp/ArrowDown)                  | ✅ done      | Mirrors Legacy `sales-create.js` keyboard flow (`selectProductCreate` L96–100, L615–621): (a) Select2's built-in ArrowUp/ArrowDown/Enter already covers suggestion-list navigation that Legacy implemented manually — no extra JS needed. (b) R10s already added Enter-on-empty fallback → `productByCode` endpoint for exact-code lookup. (c) New R18 flow: after a product is picked (Select2 `change`), `#addQty` is auto-focused + content-selected so the cashier can immediately type a new qty (or press Enter to accept default of 1). (d) Enter on `#addQty` now focuses + selects `#addRate` (NOT submit) — matches Legacy's two-step confirmation pattern so the cashier can review/override the rate before adding to cart. (e) Enter on `#addRate` calls `addToCart()`. (f) After a successful add, `#addProduct` Select2 is re-opened (`select2('open')`) so the cashier can immediately scan/type the next product without reaching for the mouse. Closes the keyboard-only POS operation gap — a cashier with a barcode scanner + numeric keypad can now run a full session without touching the mouse. Fixes audit risk §6.1 item #11 (keyboard shortcuts). |
 | R19 | Port inline receive-payment modal on Today's Sales / sales-invoices index     | ✅ done      | New backend endpoint `GET /admin/sales-invoices/{id}/receive-modal` (mirrors Legacy `sales/receive_modal/{id}`) returns a Blade partial `_receive_modal_body.blade.php` with: invoice summary (3 stat cells: invoice total / paid so far / balance due), payment form (amount with quick-amount chips [25%/50%/Full due/Clear], payment mode radio [Cash/Bank/Mobile/Cheque], conditional bank+reference panel, notes), and a "Payments on this invoice" history list with print-receipt buttons. Form posts to the existing `admin.customer-payments.store` route — no new write endpoint created (R2 idempotency-token flow protects against double-submit; fresh UUID generated server-side on every modal open). New `SalesInvoice::allocations()` HasMany relationship added (uses existing `InvoicePaymentAllocation` model). Frontend in `admin/sales-invoices/index.blade.php`: each row with `due_amount > 0.01 && status !== 'cancelled' && !is_reversed` gets a green "Receive payment" button; clicking fetches the modal body via AJAX and injects into a single reusable `#receivePaymentModal` shell. Submit does a traditional form POST so the store endpoint's redirect to `customer-payments.show` works normally — no SPA-style response handling needed. Over-payment scenarios trigger a SweetAlert confirm before submit. Fixes audit risk §6.1 item #12 (inline receive-payment modal) + item #13 (quick-amount chips — implemented as part of this modal). |
 | R20 | Port quick-amount chips (50% / Full due / Clear)                              | ✅ done (via R19) | Implemented as part of the R19 receive-payment modal — no separate work. Four chips appear below the amount input: 25% (quarter), 50% (half), Full due, Clear. Each computes against the current `balance` data attribute and triggers `input` on the field so the validation hint re-renders. Mirrors Legacy `receive_modal.php` L110–114. Fixes audit risk §6.1 item #13. |
+| R21 | Port server-side DataTables with smart sort + smart search on sales-invoices index | ✅ done      | New backend endpoint `GET /admin/sales-invoices/datatable` returns DataTables SSP JSON (draw / recordsTotal / recordsFiltered / data). New `SalesInvoiceController::datatable()` method (~85 lines) builds a filter query via shared `buildInvoiceFilterQuery()` helper, applies DataTables column ordering OR smart sort OR default ordering, paginates via skip/take, and returns row data (id, invoice_code, invoice_date, customer_name, customer_code, branch_name, items_count, total_amount, paid_amount, due_amount, status, is_soft_hold, is_reversed, show_receive bool, show_url). Smart sort: when `#filterSmartSort` is checked AND no column header clicked, server applies `CASE WHEN due_amount > 0.01 AND status NOT IN ('cancelled','reversed') THEN 0 ELSE 1 END ASC, invoice_date ASC, id ASC` — unpaid first, then oldest. Column-click sort overrides smart sort. Smart search matches invoice_code + customer name/code/mobile + branch name/code (ILIKE). The index blade was rewritten: replaced the Blade `@forelse` tbody + Laravel paginator with a server-side DataTables instance. Filter form (date / customer / branch / search / smart_sort / status_chip) is injected into every AJAX request via the `data` callback — page never reloads on filter change. Smart search input is debounced 320ms. Fixes audit risk §6.1 item #14. |
+| R22 | Port status chips with live counts on sales-invoices index                    | ✅ done      | New backend endpoint `GET /admin/sales-invoices/summary` returns JSON with counts per chip bucket (all, awaiting_payment, draft, confirmed, cancelled, reversed) + total_value. New `SalesInvoiceController::summary()` method (~30 lines) uses shared `buildInvoiceFilterQuery($request, excludeStatusChip: true)` so counts are computed against the current filter set (date / customer / branch / search) but NOT against the active chip itself — so the user always sees how many invoices are in each bucket without losing filter context. Six chips (All / Awaiting payment / Draft / Confirmed / Cancelled / Reversed) replace the old Status `<select>` dropdown. Each chip has a count badge refreshed via AJAX (debounced 280ms) whenever filters change. Clicking a chip sets hidden `#status_chip` input + reloads DataTable + refreshes summary. Chip colours: All=indigo, Awaiting=red, Draft=amber, Confirmed=green, Cancelled=slate, Reversed=dark red. Bucket definitions adapted to Laravel's status model (draft/confirmed/cancelled + is_reversed flag) since Laravel doesn't have Legacy's godown_issued/challan_completed invoice statuses. Shared `buildInvoiceFilterQuery()` private method on the controller keeps chip counts and table rows in sync. Mirrors Legacy `sales/today_filter_summary` endpoint. Fixes audit risk §6.1 item #15. |
+| R23 | Port mobile cards variant for Today's Sales / sales-invoices index           | ✅ done      | New `#invoiceCards` container above the desktop table in `admin/sales-invoices/index.blade.php`, hidden on desktop by CSS `@media (max-width: 767.98px)` and shown on narrow screens. Populated by DataTables `drawCallback` → `renderMobileCards(api)` from the current page's data — same data as the desktop table, just a different layout. Each card shows: invoice code (link) + date + customer name + branch name + status badge + total + due/Paid + soft-hold badge + View/Receive buttons. Card left border color signals status: red=due, green=paid, slate=cancelled, dark red=reversed. Window resize handler (debounced 180ms) re-renders cards on viewport changes. The delegated `.btn-receive-payment` click handler (from R19) works for both desktop table rows AND mobile card buttons (same class) — no duplicate wiring needed. Mirrors Legacy `sales-today-index.js::renderInvoiceCards`. Fixes audit risk §6.1 item #16. |
 
 > When the user assigns the next R# item, add a row here and create a
 > matching section in `REMEDIATION_LOG.md`. **Do not start work without
@@ -1426,6 +1429,166 @@ ends up on the `customer-payments.show` page with the success flash.
 This matches Legacy `sales-receive-payment.js::doSubmit` which also
 does `form.submit()` (not `$.ajax`). Simpler + no logic duplication.
 
+### 5.20 R21: Server-side DataTables with smart sort + smart search
+
+Before R21, the sales-invoices index page used Laravel's built-in
+paginator (25 rows/page) + a client-side DataTable layered on top
+of just the current page's rows. This meant:
+
+- Sorting and searching only worked on the current 25 rows, not
+  the full filtered set.
+- Page reload on every filter change (the filter form was a
+  traditional GET form).
+- No "smart sort" — the user couldn't say "show me unpaid invoices
+  first, then by oldest date" which is the Legacy default.
+
+With R21, the index page now uses DataTables' server-side processing
+mode. The browser sends `draw / start / length / order[i][column] /
+order[i][dir] / search[value]` to `GET /admin/sales-invoices/datatable`,
+and the server returns the matching rows + total counts as JSON.
+The page never reloads on filter change — every filter input change
+triggers `dt.ajax.reload()` instead.
+
+**Smart sort** is implemented as a checkbox (`#filterSmartSort`,
+default ON). When checked AND the user hasn't clicked a column
+header to sort, the server applies:
+
+```sql
+ORDER BY
+  (CASE WHEN due_amount > 0.01 AND status NOT IN ('cancelled','reversed')
+        THEN 0 ELSE 1 END) ASC,
+  invoice_date ASC,
+  id ASC
+```
+
+— unpaid invoices first, then oldest date, then by id. This matches
+the Legacy `sales-today-index.js::#filterSmartSort` checkbox. When
+the user clicks a column header, DataTables sends `order[i]` and
+the server applies that instead — smart sort is overridden. This
+gives the user the best of both worlds: a sensible default order,
+plus per-column sort on demand.
+
+**Smart search** matches the `#filterSearch` input (debounced 320ms)
+against: invoice_code + customer name/code/mobile + branch
+name/code (ILIKE). The Legacy hint says "invoice, customer, mobile,
+branch, salesman, product" — we cover everything except salesman
+(Laravel doesn't have a salesman relationship on the invoice) and
+product (would require a join through `sales_invoice_items`, which
+is expensive on large datasets — left for a future optimization).
+
+Files modified:
+- `laravel/app/Http/Controllers/Admin/SalesInvoiceController.php`:
+  added `datatable()` method (~85 lines) + shared private
+  `buildInvoiceFilterQuery()` helper.
+- `laravel/routes/web.php`: added `GET admin/sales-invoices/datatable`
+  route (named `admin.sales-invoices.datatable`, middleware
+  `role:salesman,accountant,manager,admin`).
+- `laravel/resources/views/admin/sales-invoices/index.blade.php`:
+  full rewrite — replaced Blade `@forelse` tbody + Laravel paginator
+  with empty `<tbody>` that DataTables fills via AJAX. Added
+  `#filterSmartSort` checkbox to filter form. Smart search input
+  debounced 320ms.
+
+The 5 global stat cards at the top of the page (Total / Draft /
+Confirmed / Cancelled / Total value) are unchanged — they show
+GLOBAL counts (not filter-aware), complementing the R22 status
+chips which ARE filter-aware.
+
+### 5.21 R22: Status chips with live counts
+
+The Legacy sales-today page has 6 status chips above the invoice
+table: All / Awaiting payment / In progress / Draft / Godown
+issued / Challan done. Each chip shows a live count fetched via
+`sales/today_filter_summary`. Clicking a chip sets a hidden status
+filter and reloads the table.
+
+Before R22, the Laravel sales-invoices index had a simple Status
+`<select>` dropdown with no counts. The user had to guess which
+status would have results before clicking.
+
+With R22, the Laravel page now has 6 status chips that mirror the
+Legacy pattern (adapted to Laravel's status model — Laravel doesn't
+have Legacy's godown_issued/challan_completed invoice statuses,
+so those are replaced with Confirmed and Reversed):
+
+- **All** (indigo) — total in current filter scope
+- **Awaiting payment** (red) — `due_amount > 0.01 AND status NOT IN
+  ('cancelled') AND is_reversed = false`
+- **Draft** (amber) — `status = 'draft' AND is_reversed = false`
+- **Confirmed** (green) — `status = 'confirmed' AND is_reversed = false`
+- **Cancelled** (slate) — `status = 'cancelled'`
+- **Reversed** (dark red) — `is_reversed = true`
+
+Each chip has a count badge that's refreshed via AJAX (debounced
+280ms) whenever filters change. Clicking a chip sets hidden
+`#status_chip` input + reloads DataTable + refreshes summary.
+
+A critical detail: the summary endpoint excludes the status_chip
+filter (via `buildInvoiceFilterQuery($request, excludeStatusChip:
+true)`). This means the counts always reflect the size of EVERY
+bucket, regardless of which chip is currently active. Without this,
+clicking "Draft" would zero-out every other chip's count, making
+it impossible to compare bucket sizes.
+
+Files modified:
+- `laravel/app/Http/Controllers/Admin/SalesInvoiceController.php`:
+  added `summary()` method (~30 lines) reusing the shared
+  `buildInvoiceFilterQuery()` helper.
+- `laravel/routes/web.php`: added `GET admin/sales-invoices/summary`
+  route (named `admin.sales-invoices.summary`).
+- `laravel/resources/views/admin/sales-invoices/index.blade.php`:
+  removed the Status `<select>` dropdown; added 6-chip row with
+  count badges; added JS to fetch summary + update chip counts +
+  handle chip clicks.
+
+### 5.22 R23: Mobile cards variant for Today's Sales
+
+The Legacy sales-today page renders invoice rows as cards on
+mobile (window width < 768px) and as a table on desktop. The cards
+are populated from the DataTables API on every draw — same data,
+just a different layout. This is critical for field staff using
+phones to collect payments.
+
+Before R23, the Laravel sales-invoices index had no mobile variant.
+The desktop table was usable on mobile (thanks to Bootstrap's
+`table-responsive` horizontal scrolling), but reading a wide
+invoice row required horizontal scrolling — a poor UX.
+
+With R23, the Laravel page now has a `#invoiceCards` container
+above the desktop table. CSS `@media (max-width: 767.98px)` hides
+the desktop table and shows the cards container. The DataTables
+`drawCallback` calls `renderMobileCards(api)` which iterates the
+current page's data and renders each invoice as a card.
+
+Each card shows:
+- Invoice code (as a link to the show page) + date
+- Customer name (large)
+- Branch name (small, muted)
+- Status badge + Total + Due (or "Paid" if 0)
+- Soft-hold badge if applicable
+- View + Receive buttons
+
+Card left border color signals status at a glance:
+- Red = due amount > 0
+- Green = paid in full
+- Slate = cancelled (dimmed)
+- Dark red = reversed (red background tint)
+
+A window resize handler (debounced 180ms) re-renders the cards on
+viewport changes — important for users who rotate their phone or
+resize their browser window.
+
+The R19 `.btn-receive-payment` delegated click handler works for
+both desktop table rows AND mobile card buttons because both use
+the same CSS class. No duplicate wiring needed — the handler is
+bound to `document` and survives DataTables redraws.
+
+Files modified:
+- `laravel/resources/views/admin/sales-invoices/index.blade.php`:
+  added `#invoiceCards` container, `renderMobileCards()` JS
+  function, resize handler, and CSS for the cards + the desktop/
+  mobile visibility toggle.
+
 ---
 
 ## 6. Open Work Items
@@ -1433,10 +1596,10 @@ does `form.submit()` (not `$.ajax`). Simpler + no logic duplication.
 (Items the user has asked for but that are not yet done.)
 
 - **None outstanding.** R1, R2, R3, R4, R5, R6, R10, R10s, R11, R12,
-  R13, R14, R15, R16, R17, R18, R19, R20 (via R19), and H1 (bugfix)
-  are complete and pushed. The user has not yet assigned R7, R8, R9
-  (numbers reserved for future items; R10+ were the user's explicit
-  asks after R6).
+  R13, R14, R15, R16, R17, R18, R19, R20 (via R19), R21, R22, R23,
+  and H1 (bugfix) are complete and pushed. The user has not yet
+  assigned R7, R8, R9 (numbers reserved for future items; R10+ were
+  the user's explicit asks after R6).
 
 When the user gives the next instruction, append it here as a
 checkbox item. When done, move it to the "Completed Work Items"
@@ -1667,6 +1830,66 @@ section below.
       Full due, Clear. Each computes against the current `balance`
       and triggers `input` so the validation hint re-renders. Mirrors
       Legacy `receive_modal.php` L110–114.
+- [x] **R21** — Port server-side DataTables with smart sort + smart
+      search on the sales-invoices index page. New backend endpoint
+      `GET /admin/sales-invoices/datatable` returns DataTables SSP
+      JSON (draw / recordsTotal / recordsFiltered / data). New
+      `SalesInvoiceController::datatable()` method (~85 lines)
+      builds a filter query via shared `buildInvoiceFilterQuery()`
+      helper, applies DataTables column ordering OR smart sort OR
+      default ordering, paginates via skip/take, and returns row
+      data. Smart sort: when `#filterSmartSort` is checked AND no
+      column header clicked, server applies
+      `CASE WHEN due_amount > 0.01 AND status NOT IN
+      ('cancelled','reversed') THEN 0 ELSE 1 END ASC, invoice_date
+      ASC, id ASC` — unpaid first, then oldest. Column-click sort
+      overrides smart sort. Smart search matches invoice_code +
+      customer name/code/mobile + branch name/code (ILIKE). The
+      index blade was rewritten: replaced the Blade `@forelse`
+      tbody + Laravel paginator with a server-side DataTables
+      instance. Filter form (date / customer / branch / search /
+      smart_sort / status_chip) is injected into every AJAX request
+      via the `data` callback — page never reloads on filter change.
+      Smart search input is debounced 320ms. Mirrors Legacy
+      `sales/datatable_invoices` endpoint.
+- [x] **R22** — Port status chips with live counts on the
+      sales-invoices index page. New backend endpoint
+      `GET /admin/sales-invoices/summary` returns JSON with counts
+      per chip bucket (all, awaiting_payment, draft, confirmed,
+      cancelled, reversed) + total_value. New
+      `SalesInvoiceController::summary()` method (~30 lines) uses
+      shared `buildInvoiceFilterQuery($request, excludeStatusChip:
+      true)` so counts are computed against the current filter set
+      but NOT against the active chip itself — so the user always
+      sees how many invoices are in each bucket without losing
+      filter context. Six chips (All / Awaiting payment / Draft /
+      Confirmed / Cancelled / Reversed) replace the old Status
+      `<select>` dropdown. Each chip has a count badge refreshed via
+      AJAX (debounced 280ms) whenever filters change. Clicking a
+      chip sets hidden `#status_chip` input + reloads DataTable +
+      refreshes summary. Chip colours: All=indigo, Awaiting=red,
+      Draft=amber, Confirmed=green, Cancelled=slate, Reversed=dark
+      red. Bucket definitions adapted to Laravel's status model
+      (draft/confirmed/cancelled + is_reversed flag) since Laravel
+      doesn't have Legacy's godown_issued/challan_completed invoice
+      statuses. Mirrors Legacy `sales/today_filter_summary` endpoint.
+- [x] **R23** — Port mobile cards variant for Today's Sales /
+      sales-invoices index. New `#invoiceCards` container above the
+      desktop table in `admin/sales-invoices/index.blade.php`,
+      hidden on desktop by CSS `@media (max-width: 767.98px)` and
+      shown on narrow screens. Populated by DataTables
+      `drawCallback` → `renderMobileCards(api)` from the current
+      page's data — same data as the desktop table, just a
+      different layout. Each card shows: invoice code (link) + date
+      + customer name + branch name + status badge + total + due/Paid
+      + soft-hold badge + View/Receive buttons. Card left border
+      color signals status: red=due, green=paid, slate=cancelled,
+      dark red=reversed. Window resize handler (debounced 180ms)
+      re-renders cards on viewport changes. The delegated
+      `.btn-receive-payment` click handler (from R19) works for both
+      desktop table rows AND mobile card buttons (same class) — no
+      duplicate wiring needed. Mirrors Legacy
+      `sales-today-index.js::renderInvoiceCards`.
 
 ---
 
