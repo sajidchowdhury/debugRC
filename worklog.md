@@ -1378,3 +1378,32 @@ Stage Summary:
 - BUG-46 fixed. User should be able to: open Purchase Return → search/select a confirmed GRN → see the receive items list with warehouse dropdowns and per-warehouse stock quantities — without an SQL error.
 - No view:clear needed — this is a controller code change, Laravel picks it up on next request (or run `docker compose exec rcerp_app php artisan optimize:clear` if opcache is sticky).
 - Awaiting user verification: reload /admin/purchase-returns/create, search for a GRN, confirm the items panel populates.
+
+---
+Task ID: BUG-47 + empty-state
+Agent: Main (Super Z)
+Task: Two issues reported by user:
+  (1) "Nothing left to return on this GRN — quantities may already be fully returned" — what does it mean?
+  (2) /admin/purchase-orders?cancelled=1 not showing cancelled POs.
+
+Work Log:
+
+(1) Empty-state message explanation + improvement
+- Meaning: the user picked a confirmed GRN where every line's qty has already been returned on prior confirmed purchase returns. The controller filters items by returnable_qty > 0 (line 362 of PurchaseReturnController.php), and when that filter produces an empty list, the JS shows this message.
+- Problem: the message was vague and gave no evidence. Also, because the controller FILTERED items before sending the JSON, the browser couldn't show what WAS returned vs received.
+- Fix:
+  * Controller: getReceiveDetails now returns BOTH 'items' (filtered, returnable > 0) AND 'all_items' (unfiltered). The unfiltered list lets the empty-state panel show the full received vs already-returned breakdown.
+  * Blade (create.blade.php + index.blade.php): empty-state panel replaced the bare <p> with a structured panel that shows: GRN code, plain-language reason, a table with columns {Product, Received, Already returned, Returnable}, and a tip to pick a different GRN.
+
+(2) BUG-47: cancelled POs hidden by stale date filter
+- Reproduction: user visits /admin/purchase-orders (active view) and applies some date filter (or accepts the default "month" preset). The filter is saved to localStorage. User then clicks "Cancelled POs" in the header → /admin/purchase-orders?cancelled=1.
+- Root cause: page boot JS runs loadFilters() which restores the stale {from, to} dates from localStorage (saved during the active-PO view). If loadFilters returned true, the default "month" preset was skipped. Either way, the AJAX call to poDataTableJson received non-empty date_from/date_to filters that excluded cancelled POs created in earlier months.
+- Fix: when boot.showCancelled is true, clear the #filterDateFrom and #filterDateTo inputs BEFORE DataTables initializes. The AJAX call then sends empty dates, so the query has no po_date range constraint and ALL cancelled POs are visible. Don't save these cleared values back to localStorage — that would also wipe the active-PO view's saved filters.
+- Verified the backend SQL path is correct (poDataTableJson lines 134-136 of PurchaseOrderController.php already honor cancelled=1 by adding ->where('status', 'cancelled') and skipping the ->whereNotIn('status', ['cancelled']) default). The bug was purely on the client-side date filter pre-fill.
+
+Stage Summary:
+- Both issues fixed in commit 2fd8bcc, pushed to origin/main.
+- User should run: docker compose exec rcerp_app php artisan view:clear
+- Then verify:
+  * /admin/purchase-returns/create — search a fully-returned GRN → should see the breakdown table explaining what was already returned.
+  * /admin/purchase-orders?cancelled=1 → should show ALL cancelled POs regardless of date.
