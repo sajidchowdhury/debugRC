@@ -1587,3 +1587,103 @@ Stage Summary:
 - BUG-51 PART 2 (explanations) delivered in this worklog entry + the chat response to the user.
 - User action required: docker compose exec rcerp_app php artisan view:clear
 - Awaiting user verification: reload /admin/sales/cart, click Finalize Invoice → modal should be leaner (no Sales Person, no Dispatchers).
+
+---
+Task ID: BUG-52
+Agent: Main (Super Z)
+Task: User request: 'When user creates an invoice he can see it in today invoice list. After creating it will also go to challan menu from where warehouse manager will do the godown copy and challan copy — it's not a 1-man job. Sales manager creates an invoice and it passes to warehouse manager for further work. Sales manager cannot create blank godown copy or challan copy. Creating challan and godown copy is completely done by warehouse manager. Check if our Laravel works like that, if not rearrange.'
+
+Work Log:
+
+PART 1 — Audit
+
+- Dispatched an Explore subagent to audit 10 areas: routes/web.php, routes/api.php, SalesInvoiceController, SalesChallanController, SalesChallanService, sales-invoices/show.blade.php, sales-invoices/index.blade.php, sales-challans/ directory, layouts/admin.blade.php + MenuService, models/User.php + config/roles.php.
+- 12 gaps identified. 7 high/medium priority gaps fixed in this commit. 5 low-priority gaps documented for later.
+
+Audit key findings:
+- ✅ Web route middleware already correctly denies salesmen access to godown/challan creation routes.
+- ✅ Web route middleware already correctly denies warehouse_manager access to invoice create/edit/cancel routes.
+- ❌ API route middleware was MISSING for /api/v1/sales/challans/{godown,issue,cancel} — any authenticated API user could issue a challan via API.
+- ❌ warehouse_manager was EXCLUDED from admin/sales-invoices index/show — no UI entry point to find invoices awaiting godown prep.
+- ❌ Print Godown Copy + Print Blank Godown buttons rendered for everyone — salesmen saw them, got 403 on click.
+- ❌ No 'Prepare Godown' or 'Issue Challan' handoff buttons on the invoice show page — even for warehouse_manager.
+- ❌ No 'Today' filter chip; menu label 'Today Invoice' was misleading (showed ALL invoices).
+- ❌ No 'Pending Godown' or 'Pending Challan' filter chips — warehouse manager had no queue view.
+- ❌ Stale 'Godown prep & challan issue will be available in Phase 8.3' alert on show page (Phase 8.3 is shipped).
+- ⚠️ Menu visibility is per-user DB flag, not role-based — salesman could be granted 'Challan' menu link, click it, get 403.
+- ⚠️ MenuService line 156 bug: 'audit' action maps to admin.sales-invoices.index instead of admin.sales.audit.
+- ⚠️ No 'sales_manager' role exists in config/roles.php — system has only salesman + manager.
+- ⚠️ config/roles.php:35 says salesman has 'challans (read)' but routes exclude salesman — contradiction.
+
+PART 2 — Fixes Applied (commit 261d38b, pushed to origin/main)
+
+1. routes/web.php:
+   - Added warehouse_manager to admin/sales-invoices resource index/show middleware (line 706).
+   - Added warehouse_manager to admin/sales-invoices/datatable middleware (line 668).
+   - Added warehouse_manager to admin/sales-invoices/summary middleware (line 671).
+   - All 3 with explanatory BUG-52 comments.
+
+2. routes/api.php:
+   - Added 'api.auth:warehouse_manager,dispatcher,manager,admin' middleware to:
+     * POST /api/v1/sales/challans/godown (line 148)
+     * POST /api/v1/sales/challans/issue (line 150)
+   - Added 'api.auth:manager,admin' middleware to:
+     * POST /api/v1/sales/challans/{id}/cancel (line 156)
+
+3. app/Http/Controllers/Admin/SalesInvoiceController.php:
+   - index() now reads ?scope= query param. Supports: today, pending_godown, pending_challan.
+   - index() $stats now includes 'today', 'pending_godown', 'pending_challan' counts.
+   - index() $query now applies forcePendingGodown / forcePendingChallan filters when scope is set.
+   - summary() now returns 'today', 'pending_godown', 'pending_challan' buckets.
+   - buildInvoiceFilterQuery() now honors ?scope= when $excludeStatusChip=false (datatables path).
+
+4. resources/views/admin/sales-invoices/index.blade.php:
+   - Added 3 new scope chips to $statusChips array: today (calendar-day icon), pending_godown (warehouse icon), pending_challan (truck icon).
+   - Chip rendering now distinguishes data-scope (workflow chip) vs data-status (status chip) via @php @endphp block.
+   - Added hidden #scope input alongside #status_chip.
+   - currentFilterParams() JS function now includes scope: $scopeInput.val().
+   - DataTables ajax.data now sends d.scope alongside d.status_chip.
+   - updateChipCounts() now maps today / pending_godown / pending_challan keys.
+   - Unified .status-chip click handler — reads either data-status or data-scope; clears the other input so scope takes precedence over status_chip.
+   - Clear Filters button now also clears #scope input.
+   - Added CSS: distinct colors for scope chips (.status-chip[data-scope="today"].active = indigo, pending_godown = cyan, pending_challan = purple).
+   - Default scope = 'today' on first visit (when no scope and no explicit dates) — so the 'Today Invoice' menu label finally matches reality.
+
+5. resources/views/admin/sales-invoices/show.blade.php:
+   - Edit Invoice button now gated by @if($invoice->isDraft() && auth()->user()->hasRole('salesman','manager','admin','superadmin')).
+   - Cancel Invoice form/button same gating.
+   - Print Invoice button: unchanged (already accessible to all roles that can view the invoice).
+   - Print Godown Copy + Print Blank Godown buttons now wrapped in @if(auth()->user()->hasRole('warehouse_manager','manager','admin','superadmin')).
+   - NEW: 'Prepare Godown Copy' button — visible to warehouse_manager/dispatcher/manager/admin/superadmin when $invoice->isConfirmed() && !$invoice->is_godown_prepared && !$invoice->is_reversed. Links to route('admin.sales-challans.godown', $invoice->id).
+   - NEW: 'Issue Challan' button — same role set, visible when $invoice->is_godown_prepared && !$invoice->is_challan_issued && !$invoice->is_reversed. Links to route('admin.sales-challans.challan-form', $invoice->id).
+   - Replaced stale 'Phase 8.3 will be available' alert with state-aware messaging:
+     * Confirmed + no godown → 'Awaiting godown prep' (+ role-aware CTA)
+     * Godown prepared + no challan → 'Godown prepared — awaiting challan issue' (+ role-aware CTA)
+     * Challan issued → 'Challan issued. Stock has moved OUT. Awaiting customer payment.' (success alert)
+
+6. scripts/check_sales_workflow_bug52.py — new regression checker:
+   Verifies 7 invariants stay intact. Run: python3 scripts/check_sales_workflow_bug52.py → PASS.
+
+PART 3 — Gaps NOT Fixed (Documented for Future)
+
+- Menu visibility is still per-user DB flag, not role-based. An admin could still grant 'Challan' menu to a salesman and they'd see it but get 403. Recommended future fix: add a 'required_role' column to menus table + filter in MenuService::buildMenuTree().
+- MenuService line 156 bug: 'audit' action still maps to admin.sales-invoices.index instead of admin.sales.audit. Low priority.
+- No 'sales_manager' role in config/roles.php. User's audit description assumes one exists. If a distinct Sales Manager persona is needed (between salesman and manager), it must be added to config/roles.php + threaded through middleware.
+- config/roles.php:35 says salesman has 'challans (read)' but routes exclude salesman. Either remove from role description OR add salesman to challan index/show middleware (low priority — depends on intended behavior).
+- sales-challans/index.blade.php lists only issued challans — no 'Pending Godown Prep' tab. The new 'Pending Godown' chip on the invoices index page partially addresses this, but a dedicated queue tab on the challan page would be cleaner.
+
+Stage Summary:
+- BUG-52 fixed in commit 261d38b, pushed to origin/main.
+- 6 files changed: routes/web.php, routes/api.php, SalesInvoiceController.php, sales-invoices/index.blade.php, sales-invoices/show.blade.php, + new scripts/check_sales_workflow_bug52.py.
+- 434 insertions, 51 deletions.
+- API RBAC hole closed (salesman can no longer issue challans via API).
+- Warehouse manager now has full read access to invoices + actionable handoff buttons on the invoice show page.
+- Salesman no longer sees Print Godown / Print Blank Godown buttons (no more 403 on click).
+- 'Today' chip is now the default scope on the invoices index — the 'Today Invoice' menu label matches reality.
+- 'Pending Godown' + 'Pending Challan' chips give the warehouse manager a one-click queue view.
+- Stale 'Phase 8.3 will be available' alert replaced with state-aware messaging.
+- User action required:
+    docker compose exec rcerp_app php artisan view:clear
+    docker compose exec rcerp_app php artisan route:clear
+    docker compose exec rcerp_app php artisan optimize:clear
+- Awaiting user verification.
