@@ -1309,3 +1309,27 @@ Stage Summary:
 - Admin override path preserves the ability to operate cross-branch with user_audit_log branch_override audit trail.
 - Awaiting user smoke test on local Docker: run the 8-step checklist from PURCHASE_PARITY_PLAN.md §"Phase 1 Completion Summary".
 - Next phase: Phase 2 (PurchaseOrder UI parity) — touches only 4 PO blade views + 1 controller method (search-products + datatables + export) + links 3 CSS files. No further route/middleware/schema changes.
+
+---
+Task ID: BUG-45
+Agent: Main (Super Z)
+Task: Fix ParseError on /admin/purchase-returns index page — "Unclosed '[' on line 201 does not match ')'" thrown from compiled blade view at source line 204.
+
+Work Log:
+- Read resources/views/admin/purchase-returns/index.blade.php around the @json blocks (lines 194-230).
+- Root cause: Blade's @json() directive uses a naive explode(',', $expr, 2) internally to separate the value from the optional $options/$depth args. When the @json array literal contains a complex PHP expression with commas (like the inline trim((string) (request()->input('grn') ?? request()->input('q') ?? '')) call on the old line 199), the explode splits at the wrong comma and produces invalid PHP in the compiled view — hence "Unclosed '[' does not match ')'".
+- Confirmed by comparing with create.blade.php (which works): the create page computes $prefill in a @php block at line 15 and only references the variable inside @json([...]). The index page was inlining the trim() call directly in the array literal — pattern mismatch.
+- Applied the same pattern to index.blade.php:
+  * Added $prefill = trim((string) (request()->input('grn') ?? request()->input('q') ?? '')); to the existing @php block (lines 31-36).
+  * Defensively also hoisted $smartSort = (bool) ($filters['smart_sort'] ?? true); out of the second @json block (lines 38-39) — same risk pattern.
+  * Replaced the inline expressions inside both @json blocks with the new variables.
+- Wrote scripts/check_returns_blade.py — verifies @php/@push/@section pairing, @json block closure, and that no trim() call remains inside any @json block. Run with `python3 scripts/check_returns_blade.py`. PASSES on the patched file.
+- Committed as 1d54f5f.
+
+Stage Summary:
+- BUG-45 fixed. /admin/purchase-returns should now render without ParseError.
+- User needs to clear compiled blade cache for the fix to take effect:
+    docker compose exec rcerp_app php artisan view:clear
+  (or simply hard-refresh — Laravel recompiles blades when source changes).
+- Rule of thumb going forward: NEVER inline function calls, casts, or any complex PHP expression inside @json() directives. Always compute the value in a @php block first and reference the variable.
+- Awaiting user verification: reload /admin/purchase-returns and confirm the page renders.
