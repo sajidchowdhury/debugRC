@@ -27,6 +27,16 @@
 
     // URL params that override localStorage persistence (same as legacy).
     $forceUrlParams = request()->hasAny(['date_from', 'date_to', 'status', 'q', 'grn']);
+
+    // Pre-fill term for the offcanvas workspace (mirrors create.blade.php).
+    // Computed OUTSIDE @json() because Blade's @json directive uses a naive
+    // explode(',', $expr, 2) internally — inlining trim((string)(...)) inside
+    // the array literal triggers a parse error in the compiled view
+    // ("Unclosed '[' does not match ')'" — BUG-45).
+    $prefill = trim((string) (request()->input('grn') ?? request()->input('q') ?? ''));
+
+    // Same reason — keep ALL function-call-style expressions out of @json().
+    $smartSort = (bool) ($filters['smart_sort'] ?? true);
 @endphp
 
 <div id="purchase-return-app" class="purchase-return-app container-fluid py-2">
@@ -196,7 +206,7 @@
 <script>
 window.PURCHASE_RETURN_CREATE_BOOT = @json([
     'workspace_id' => 'purchaseReturnOffcanvasRoot',
-    'prefill'      => trim((string) (request()->input('grn') ?? request()->input('q') ?? '')),
+    'prefill'      => $prefill,
 ]);
 </script>
 <script>
@@ -206,7 +216,7 @@ window.PURCHASE_RETURN_BOOT = @json([
     'date_to'        => $filters['date_to']   ?? $today,
     'status'         => $filters['status']    ?? 'active',
     'search'         => $filters['search']    ?? '',
-    'smart_sort'     => (bool) ($filters['smart_sort'] ?? true),
+    'smart_sort'     => $smartSort,
     'date_preset'    => $filters['date_preset'] ?? 'today',
     'forceUrlParams' => $forceUrlParams,
     'csrf'           => $csrf,
