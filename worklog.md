@@ -1436,3 +1436,43 @@ Stage Summary:
 - Then verify:
   * /admin/sales/cart → should load (no FatalError)
   * /admin/purchase-returns/create → search a confirmed GRN with unreceived items → should show the editable form rows (not the empty-state panel)
+
+---
+Task ID: BUG-50
+Agent: Main (Super Z)
+Task: User reports "The items field must be an array." error when clicking Save return on /admin/purchase-returns/create against GRN-20260723-0003 (screenshot: upload/Remote-Center-ERP-—-Purchase-Returns-07-23-2026_07_05_AM.png). Form was rendering correctly post-BUG-49 fix, but submission failed validation.
+
+Work Log:
+- VLM-analyzed the uploaded screenshot:
+  * Error modal: red X icon, title "Error", message "The items field must be an array."
+  * Background form shows GRN-20260723-0003 selected, supplier=s1, return qty field EMPTY, rate Tk 90, amount Tk 810, warehouse W1 — 191 in s, condition Good.
+- Confirmed the validation rule in app/Http/Requests/PurchaseReturn/StorePurchaseReturnRequest.php line 37: `'items' => 'required|array|min:1'`. The "must be an array" message comes specifically from the `array` rule failing — meaning `items` arrived as something OTHER than an array (a string in this case).
+- Inspected the JS submit handler in create.blade.php line 666:
+    const formData = new FormData(form);
+    formData.set('items', JSON.stringify(items));
+    formData.set('total_amount', totalAmount.toFixed(2));
+  → This was the bug. JSON.stringify(items) produces a string like '[{"product_id":1,"qty":2,...}]'. PHP's request parser sees this as a string scalar, not a nested array. Laravel's `array` validator then fails with "The items field must be an array."
+- Cross-referenced with the standard codebase pattern (purchase-orders/create.blade.php lines 239-246, purchase-receives/create.blade.php lines 593-655) — they all use indexed form input names like `items[0][product_id]`, `items[0][qty]`, etc., which PHP's request parser natively reconstructs into a nested array.
+- The purchase-returns create.blade.php was the only file that used class-based hidden inputs (`.pri-id`, `.product-id`, `.item-rate`) without `name="items[...][...]"` attributes, then dynamically collected them in JS and JSON.stringified them. Same pattern existed in index.blade.php (the offcanvas "quick create" form).
+- Fix applied to BOTH blade files:
+  * Replaced `formData.set('items', JSON.stringify(items));` with a forEach loop that appends each item field as `items[idx][key]` using Laravel's standard form-encoded array notation. Fields appended: purchase_receive_item_id, product_id, warehouse_id, qty, return_qty, rate, condition.
+  * Updated misleading comment in index.blade.php line 833 ("Laravel store() expects form-encoded POST with items as JSON string" — was wrong even before this fix) to correctly describe the indexed array field pattern.
+  * Added a multi-line BUG-50 comment block at the fix site explaining the previous buggy pattern and why the new pattern is correct, so future maintainers don't regress this.
+- Wrote scripts/check_returns_blade_bug50.py — regression checker that scans both purchase-returns/create.blade.php and purchase-returns/index.blade.php for:
+  1. The forbidden `formData.set('items', JSON.stringify(...))` pattern in actual CODE (ignores matches inside JS comments — important because the BUG-50 comment block references the old buggy line for documentation)
+  2. The required `formData.append(\`items[${idx}][...]\`, ...)` pattern
+  Run: `python3 scripts/check_returns_blade_bug50.py` → PASS.
+- Re-ran scripts/check_returns_blade.py (BUG-45 regression checker) — still PASS.
+- Verified brace/paren/bracket balance on both modified blade files — the pre-existing MISMATCH in index.blade.php (parens=-1, brackets=+1) was already present BEFORE my edit and is a false positive from Blade directives like `@json(...)` and `{!! !!}` that use unbalanced characters in source. My edit added 0 net imbalance.
+- Committed as 90ffd06, pushed to origin/main.
+
+Stage Summary:
+- BUG-50 fixed. User can now successfully save a purchase return.
+- 2 blade files patched (create.blade.php + index.blade.php — same JS pattern, same fix).
+- 1 new regression checker added (scripts/check_returns_blade_bug50.py).
+- No backend changes — the StorePurchaseReturnRequest validation rules were correct all along; the bug was purely client-side payload serialization.
+- User action required:
+    docker compose exec rcerp_app php artisan view:clear
+  Then reload /admin/purchase-returns/create, search a confirmed GRN, enter return qty, click Save return — should succeed and redirect to the return show page.
+- Hard rule going forward: NEVER use `formData.set('field', JSON.stringify(array))` to submit a structured array to a Laravel endpoint. Always use indexed form field names: `field[0][key1]`, `field[0][key2]`, `field[1][key1]`, etc. — Laravel's request parser handles this natively without any custom middleware or casts.
+- Awaiting user verification.
