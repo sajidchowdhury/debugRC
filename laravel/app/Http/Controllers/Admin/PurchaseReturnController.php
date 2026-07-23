@@ -365,6 +365,13 @@ class PurchaseReturnController extends Controller
         // the editable form rows.
         $returnableItems = $allItems->filter(fn($i) => $i['returnable_qty'] > 0.0001)->values();
 
+        // BUG-49 fix: nest items + all_items INSIDE the 'receive' object so
+        // the client-side renderReturnForm(receive) call has access to them.
+        // Previously they were top-level keys on the response, but the JS
+        // only passed response.receive to renderReturnForm — so the items
+        // array was always empty in the browser, producing the spurious
+        // "This GRN has no receivable items" empty-state panel even when
+        // the GRN had freshly-received items.
         return response()->json([
             'status' => 'success',
             'receive' => [
@@ -374,13 +381,13 @@ class PurchaseReturnController extends Controller
                 'supplier_name'  => $receive->supplier?->supplier_name,
                 'branch_id'      => $receive->branch_id,
                 'total_amount'   => (float) $receive->total_amount,
+                // 'items' = filtered (returnable > 0) — used by the form rows.
+                // 'all_items' = unfiltered — used by the empty-state panel so
+                //               the user sees WHY nothing is left (received vs
+                //               already-returned breakdown) instead of guessing.
+                'items'          => $returnableItems,
+                'all_items'      => $allItems,
             ],
-            // 'items' = filtered (returnable only) — used by the form.
-            // 'all_items' = unfiltered — used by the empty-state panel so the
-            //               user can see WHY there's nothing left (received vs
-            //               already-returned breakdown) instead of guessing.
-            'items'      => $returnableItems,
-            'all_items'  => $allItems,
         ]);
     }
 

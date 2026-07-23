@@ -148,29 +148,17 @@ class SalesCartController extends Controller
         return response()->json(['status' => 'success', 'data' => $product]);
     }
 
-    /**
-     * Resolve the effective branch ID for a read request.
-     *
-     * - If the user passed an explicit branch_id and it is an active branch,
-     *   honour it (managers/admins with override permission).
-     * - Otherwise fall back to the session branch.
-     *
-     * Mirrors Legacy SalesModel::resolveBranchIdForRead().
-     */
-    private function resolveBranchIdForRead(int $requestedBranchId): int
-    {
-        if ($requestedBranchId > 0) {
-            $active = DB::table('branches')
-                ->where('id', $requestedBranchId)
-                ->where('is_active', true)
-                ->exists();
-            if ($active) {
-                return $requestedBranchId;
-            }
-        }
-
-        return (int) session('branch_id', 0);
-    }
+    // ───────────────────────────────────────────────────────────────
+    // Branch resolution
+    //
+    // BUG-48 fix: this subclass previously redeclared resolveBranchIdForRead()
+    // as `private` with a different signature, which caused PHP 8.4 to throw
+    // "Access level … must be protected (as in class Controller) or weaker"
+    // on every request to /admin/sales/cart. The base Controller's
+    // resolveBranchIdForRead() is already correct (admin override + session
+    // fallback) and is what every other controller in the app uses, so we
+    // simply delete the override and inherit the parent.
+    // ───────────────────────────────────────────────────────────────
 
     /**
      * R11: AJAX list all open draft carts for the current user (+ branch).
