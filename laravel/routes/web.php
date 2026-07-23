@@ -631,11 +631,6 @@ Route::middleware('auth')->group(function () {
             ->middleware('throttle:120,1')
             ->name('cart.product-by-code');
 
-        // Phase 8.2: Invoice finalize
-        Route::post('finalize', [SalesInvoiceController::class, 'finalize'])->name('finalize');
-        Route::get('cart-data', [SalesInvoiceController::class, 'getCartData'])->name('cart-data');
-        Route::get('credit-check', [SalesInvoiceController::class, 'checkCreditLimit'])->name('credit-check');
-
         // P1-2: Manual stale-draft cancellation (manager+admin only)
         Route::post('cancel-stale-drafts', [SalesInvoiceController::class, 'cancelStaleDrafts'])
             ->name('cancel-stale-drafts')->middleware('role:manager,admin');
@@ -652,6 +647,36 @@ Route::middleware('auth')->group(function () {
         Route::get('go-live-checklist', [GoLiveChecklistController::class, 'index'])
             ->name('go-live-checklist')->middleware('role:accountant,warehouse_manager,manager,admin');
     });
+
+    // BUG-53: Phase 8.2 — Invoice finalize.
+    // Pulled OUT of the admin/sales group above so we can drop the
+    // branch.isolation middleware. Per user requirement, a salesman at
+    // one branch MUST be able to finalize an invoice with branch_id set
+    // to a DIFFERENT branch (e.g., Head Office salesman creates an
+    // invoice dispatched from Branch-B). The invoice then appears in
+    // Branch-B's warehouse manager's challan menu (filtered by
+    // invoice.branch_id via BranchScope), not in Head Office's.
+    //
+    // branch.isolation would 403 this scenario for non-admin users.
+    // We keep the role middleware (salesman/manager/admin only) — only
+    // the branch check is dropped. EnforceBranchIsolation still applies
+    // to invoice edit/update/cancel routes (which DO require the
+    // request to be on the invoice's own branch).
+    Route::post('admin/sales/finalize', [SalesInvoiceController::class, 'finalize'])
+        ->name('admin.sales.finalize')
+        ->middleware('role:salesman,manager,admin');
+
+    // Phase 8.2: cart-data + credit-check are GET endpoints (read-only).
+    // Pulled out of the admin/sales group above (same as finalize) so
+    // they are NOT subject to branch.isolation. The cart may target a
+    // different dispatch branch than the user's session branch, so these
+    // read endpoints must work cross-branch.
+    Route::get('admin/sales/cart-data', [SalesInvoiceController::class, 'getCartData'])
+        ->name('admin.sales.cart-data')
+        ->middleware('role:salesman,manager,admin');
+    Route::get('admin/sales/credit-check', [SalesInvoiceController::class, 'checkCreditLimit'])
+        ->name('admin.sales.credit-check')
+        ->middleware('role:salesman,manager,admin');
 
     // ============================================================
     // Phase 8.2: Sales Invoices (list + show + cancel + edit)

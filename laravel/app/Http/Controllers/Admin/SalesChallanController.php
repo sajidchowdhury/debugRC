@@ -34,32 +34,117 @@ class SalesChallanController extends Controller
 
     public function index(Request $request)
     {
-        $query = SalesChallan::with(['salesInvoice.customer', 'branch', 'salesInvoice.items'])
+        // BUG-53: This page is the warehouse manager's workflow queue.
+        // It shows THREE collections side-by-side so the WM can see
+        // everything that needs their attention in one place:
+        //
+        //   1. pending_godown — invoices just finalized by salesmen,
+        //      awaiting godown prep (warehouse assignment). Status=draft,
+        //      is_godown_prepared=false, not reversed.
+        //
+        //   2. pending_challan — invoices with godown prep done, awaiting
+        //      challan issue (physical stock OUT + COGS). is_godown_prepared=true,
+        //      is_challan_issued=false, not reversed.
+        //
+        //   3. issued_challans — SalesChallan rows (already issued).
+        //      Historical record of what has been dispatched.
+        //
+        // Branch filtering:
+        //   - SalesInvoice has BranchScope global scope → non-admin users
+        //     only see invoices where invoice.branch_id == their session
+        //     branch. This is the intended behavior per BUG-53:
+        //       * If a Head Office salesman creates an invoice with
+        //         branch_id = Branch-B (because Branch-B should dispatch it),
+        //         the invoice shows up in Branch-B's WM challan menu — NOT
+        //         in Head Office's. The invoice "belongs" to the chosen
+        //         dispatch branch, not the creator's branch.
+        //   - SalesChallan also has BranchScope → same rule applies to
+        //     issued challans.
+        //   - Admins/superadmins bypass BranchScope and see all branches.
+        //
+        // Menu visibility for this page is permission-based (per-user
+        // UserMenuPermission row, see MenuService). An admin can grant
+        // any user access to this menu without changing their role.
+
+        // --- Collection 1: Pending Godown Prep ---
+        // Status=draft means "just finalized, awaiting godown prep".
+        // Once godown is prepared, prepareGodown() flips status→confirmed.
+        $pendingGodownQuery = SalesInvoice::with(['customer', 'branch', 'items'])
+            ->where('status', 'draft')
+            ->where('is_godown_prepared', false)
+            ->where('is_reversed', false)
+            ->when($request->input('search'), function ($q, $search) {
+                $q->where('invoice_code', 'ILIKE', "%{$search}%")
+                  ->orWhereHas('customer', function ($qc) use ($search) {
+                      $qc->where('customer_name', 'ILIKE', "%{$search}%")
+                         ->orWhere('customer_code', 'ILIKE', "%{$search}%");
+                  });
+            })
+            ->orderBy('invoice_date', 'asc')   // oldest first — FIFO workflow
+            ->orderBy('id', 'asc');
+
+        // --- Collection 2: Pending Challan Issue ---
+        // Godown prepared (status=confirmed) but challan not yet issued.
+        $pendingChallanQuery = SalesInvoice::with(['customer', 'branch', 'items.warehouse'])
+            ->where('status', 'confirmed')
+            ->where('is_godown_prepared', true)
+            ->where('is_challan_issued', false)
+            ->where('is_reversed', false)
+            ->when($request->input('search'), function ($q, $search) {
+                $q->where('invoice_code', 'ILIKE', "%{$search}%")
+                  ->orWhereHas('customer', function ($qc) use ($search) {
+                      $qc->where('customer_name', 'ILIKE', "%{$search}%")
+                         ->orWhere('customer_code', 'ILIKE', "%{$search}%");
+                  });
+            })
+            ->orderBy('godown_prepared_at', 'asc')   // oldest godown first
+            ->orderBy('id', 'asc');
+
+        // --- Collection 3: Issued Challans (existing behavior, kept) ---
+        $issuedChallansQuery = SalesChallan::with(['salesInvoice.customer', 'branch', 'salesInvoice.items'])
             ->when($request->input('from_date'), fn($q, $d) => $q->where('challan_date', '>=', $d))
             ->when($request->input('to_date'), fn($q, $d) => $q->where('challan_date', '<=', $d))
-            ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
             ->when($request->input('search'), function ($q, $search) {
-                $q->where('challan_code', 'ILIKE', "%{$search}%");
+                $q->where('challan_code', 'ILIKE', "%{$search}%")
+                  ->orWhereHas('salesInvoice', function ($qi) use ($search) {
+                      $qi->where('invoice_code', 'ILIKE', "%{$search}%");
+                  });
             })
             ->orderBy('challan_date', 'desc')
             ->orderBy('id', 'desc');
 
-        $challans = $query->paginate(25);
+        $pendingGodown  = $pendingGodownQuery->limit(50)->get();
+        $pendingChallan = $pendingChallanQuery->limit(50)->get();
+        $challans       = $issuedChallansQuery->paginate(25);
+
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
+        // Stats: workflow queue counts (scoped by BranchScope automatically).
         $stats = [
-            'total' => SalesChallan::count(),
-            'active' => SalesChallan::where('is_reversed', false)->count(),
-            'reversed' => SalesChallan::where('is_reversed', true)->count(),
-            'total_cogs' => SalesChallan::where('is_reversed', false)->sum('issue_cost'),
+            'total'           => SalesChallan::count(),
+            'active'          => SalesChallan::where('is_reversed', false)->count(),
+            'reversed'        => SalesChallan::where('is_reversed', true)->count(),
+            'total_cogs'      => SalesChallan::where('is_reversed', false)->sum('issue_cost'),
+            // Workflow queue counts — these are the WM's "what needs doing" metrics.
+            'pending_godown'  => SalesInvoice::where('status', 'draft')
+                                    ->where('is_godown_prepared', false)
+                                    ->where('is_reversed', false)
+                                    ->count(),
+            'pending_challan' => SalesInvoice::where('status', 'confirmed')
+                                    ->where('is_godown_prepared', true)
+                                    ->where('is_challan_issued', false)
+                                    ->where('is_reversed', false)
+                                    ->count(),
         ];
 
         return view('admin.sales-challans.index', [
-            'title' => 'Sales Challans',
-            'challans' => $challans,
-            'branches' => $branches,
-            'stats' => $stats,
-            'filters' => $request->only(['from_date', 'to_date', 'branch_id', 'search']),
+            'title'           => 'Sales Challans',
+            'challans'        => $challans,
+            'pendingGodown'   => $pendingGodown,
+            'pendingChallan'  => $pendingChallan,
+            'branches'        => $branches,
+            'stats'           => $stats,
+            'filters'         => $request->only(['from_date', 'to_date', 'branch_id', 'search']),
         ]);
     }
 
