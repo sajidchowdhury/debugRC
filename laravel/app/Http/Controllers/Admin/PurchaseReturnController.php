@@ -328,7 +328,7 @@ class PurchaseReturnController extends Controller
         // physical − sales-pipeline (matching legacy Helper::Get_Warehouse_Wise_Product_Stock).
         $branchId = (int) $receive->branch_id;
 
-        $items = $receive->items->map(function ($item) use ($branchId) {
+        $allItems = $receive->items->map(function ($item) use ($branchId) {
             $alreadyReturned = DB::table('purchase_return_items')
                 ->where('purchase_receive_item_id', $item->id)
                 ->whereIn('purchase_return_id', function ($q) {
@@ -359,7 +359,11 @@ class PurchaseReturnController extends Controller
                 'warehouse_id'      => $item->warehouse_id,
                 'warehouses'        => $warehouses,
             ];
-        })->filter(fn($i) => $i['returnable_qty'] > 0.0001)->values();
+        })->values();
+
+        // Items the user can actually return (returnable > 0). Used to render
+        // the editable form rows.
+        $returnableItems = $allItems->filter(fn($i) => $i['returnable_qty'] > 0.0001)->values();
 
         return response()->json([
             'status' => 'success',
@@ -371,7 +375,12 @@ class PurchaseReturnController extends Controller
                 'branch_id'      => $receive->branch_id,
                 'total_amount'   => (float) $receive->total_amount,
             ],
-            'items' => $items,
+            // 'items' = filtered (returnable only) — used by the form.
+            // 'all_items' = unfiltered — used by the empty-state panel so the
+            //               user can see WHY there's nothing left (received vs
+            //               already-returned breakdown) instead of guessing.
+            'items'      => $returnableItems,
+            'all_items'  => $allItems,
         ]);
     }
 

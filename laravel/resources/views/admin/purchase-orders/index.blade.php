@@ -535,11 +535,26 @@ window.PURCHASE_ORDER_BOOT = {
     $(function () {
         if (!$('#purchase-order-app').length) return;
         // Default = "month" preset (unless persisted filters override).
+        //
+        // BUG-47 fix: when the user is on the cancelled-PO view (?cancelled=1),
+        // do NOT apply a default month preset and do NOT auto-restore the
+        // previously-saved active-PO date filter — both hide cancelled POs
+        // that were created in earlier months. Instead, start with an empty
+        // date range so ALL cancelled POs are visible, matching what the user
+        // expects from clicking "Cancelled POs" in the header.
         var loaded = loadFilters();
-        if (!loaded) {
+        if (boot.showCancelled) {
+            // Clear any stale date filters carried over from the active-PO view.
+            $('#filterDateFrom').val('');
+            $('#filterDateTo').val('');
+            $('.purch-index-preset-btn').removeClass('active');
+            // Don't save these cleared values back to localStorage — that would
+            // also wipe the active-PO view's filters on next visit. Only the
+            // in-DOM inputs need to be empty so the AJAX call sends empty dates.
+        } else if (!loaded) {
             applyDatePreset('month', false);
         } else {
-            // If persisted filters exist, don't force 'month'.
+            // Persisted filters exist for the active view — don't force 'month'.
             $('.purch-index-preset-btn').removeClass('active');
         }
         syncStatusChips();

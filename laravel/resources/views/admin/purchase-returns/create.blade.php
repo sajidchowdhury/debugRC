@@ -299,15 +299,58 @@ window.PURCHASE_RETURN_BOOT = {!! $mainBoot !!};
         }
 
         renderReturnForm(receive) {
+            // 'items' is filtered to returnable > 0 by the server.
+            // 'all_items' is the unfiltered list — used to render the empty-state
+            // breakdown so the user sees WHY nothing is left (received vs already-returned).
+            const allItems = (receive.all_items || receive.items || []);
             const returnableItems = (receive.items || []).filter(
                 (item) => parseFloat(item.returnable_qty || 0) > 0
             );
 
             if (returnableItems.length === 0) {
+                // Build a breakdown table showing received vs already-returned
+                // so the user understands WHY there's nothing left (instead of
+                // a bare "Nothing left to return" with no evidence).
+                let breakdownRows = '';
+                if (allItems.length > 0) {
+                    breakdownRows = allItems.map((item) => {
+                        const received  = parseFloat(item.received_qty     || 0);
+                        const returned  = parseFloat(item.already_returned || 0);
+                        const returnable = parseFloat(item.returnable_qty  || 0);
+                        return `
+                            <tr>
+                                <td>${escapeHtml(item.product_code || item.product_name || ('#' + item.product_id))}</td>
+                                <td class="text-end">${formatQty(received)}</td>
+                                <td class="text-end">${formatQty(returned)}</td>
+                                <td class="text-end text-muted">${formatQty(returnable)}</td>
+                            </tr>`;
+                    }).join('');
+                }
+
                 this.detailsDiv.innerHTML = `
-                    <p class="prt-create-results-msg is-warn">
-                        Nothing left to return on this GRN — quantities may already be fully returned.
-                    </p>`;
+                    <div class="prt-create-results-msg is-warn">
+                        <p class="mb-2">
+                            <strong>Nothing left to return on GRN ${escapeHtml(receive.receive_code || '')}.</strong>
+                            ${allItems.length === 0
+                                ? 'This GRN has no receivable items.'
+                                : 'Every line on this GRN has already been fully returned — returnable qty is 0 for all rows.'}
+                        </p>
+                        ${breakdownRows ? `
+                        <table class="table table-sm table-bordered mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Product</th>
+                                    <th class="text-end">Received</th>
+                                    <th class="text-end">Already returned</th>
+                                    <th class="text-end">Returnable</th>
+                                </tr>
+                            </thead>
+                            <tbody>${breakdownRows}</tbody>
+                        </table>` : ''}
+                        <p class="mt-2 mb-0 small text-muted">
+                            Tip: pick a different GRN from the search box above.
+                        </p>
+                    </div>`;
                 return;
             }
 
