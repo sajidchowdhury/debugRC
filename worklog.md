@@ -1355,3 +1355,26 @@ Stage Summary:
 - User must clear compiled blade cache: `docker compose exec rcerp_app php artisan view:clear`
 - Hard rule going forward: NEVER use @json([...]) with array literals. Only @json($scalar_var) or @json($array_var) are safe. For any structured JSON, compute json_encode() in @php and emit via {!! $json !!}.
 - Awaiting user verification: reload /admin/purchase-returns.
+
+---
+Task ID: BUG-46
+Agent: Main (Super Z)
+Task: Fix SQLSTATE[42703] Undefined column: 7 ERROR: column ws.physical_qty does not exist — thrown when user opens a confirmed GRN from the Purchase Return create page to start a return. Screenshot: upload/Remote-Center-ERP-—-Purchase-Returns-07-23-2026_06_34_AM.png
+
+Work Log:
+- VLM-analyzed the uploaded screenshot: red error modal on Purchase Return page, SQL snippet was `select "w"."id", "w"."warehouse_name", COALESCE(ws.physical_qty, 0) AS physical_qty ... from warehouse_stock as ws`.
+- Searched codebase for `ws.physical_qty` — found 1 source: PurchaseReturnController.php line 343 (getReceiveDetails AJAX endpoint).
+- Verified actual warehouse_stock schema (database/sql/03_stock.sql:60-65): columns are `qty` and `avg_cost` — NOT `physical_qty` and NOT `available_qty`.
+- Confirmed legacy equivalent (legacy/app/models/PurchaseReturnModel.php:60-116 getReceiveForReturn) delegates to Helper::Get_Warehouse_Wise_Product_Stock → StockAvailabilityService::getWarehouseWiseStock — the SSOT.
+- Found Laravel port already has StockAvailabilityService::getBranchWarehouseBreakdown(productId, branchId) which returns exactly the shape the controller needs: {id, warehouse_name, physical_qty, pipeline_qty, available_qty}, computed as physical = warehouse_stock.qty, available = physical − sales-pipeline.
+- Fix: replaced the hand-rolled `DB::table('warehouse_stock as ws')->...` block with `$this->stockService->getBranchWarehouseBreakdown((int) $item->product_id, $branchId)`.
+  * Added `use App\Services\Stock\StockAvailabilityService;` to controller imports.
+  * Added `private StockAvailabilityService $stockService` to constructor (Laravel auto-resolves — no binding needed since the service has no constructor deps).
+  * Added BUG-46 comment block explaining why the SSOT service is used instead of inline SQL.
+- Verified with scripts/check_returns_controller.py — all bracket pairs balanced, no `ws.physical_qty` / `ws.available_qty` references remain.
+- Committed as 4e4c405, pushed to origin/main.
+
+Stage Summary:
+- BUG-46 fixed. User should be able to: open Purchase Return → search/select a confirmed GRN → see the receive items list with warehouse dropdowns and per-warehouse stock quantities — without an SQL error.
+- No view:clear needed — this is a controller code change, Laravel picks it up on next request (or run `docker compose exec rcerp_app php artisan optimize:clear` if opcache is sticky).
+- Awaiting user verification: reload /admin/purchase-returns/create, search for a GRN, confirm the items panel populates.
