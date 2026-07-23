@@ -1476,3 +1476,114 @@ Stage Summary:
   Then reload /admin/purchase-returns/create, search a confirmed GRN, enter return qty, click Save return — should succeed and redirect to the return show page.
 - Hard rule going forward: NEVER use `formData.set('field', JSON.stringify(array))` to submit a structured array to a Laravel endpoint. Always use indexed form field names: `field[0][key1]`, `field[0][key2]`, `field[1][key1]`, etc. — Laravel's request parser handles this natively without any custom middleware or casts.
 - Awaiting user verification.
+
+---
+Task ID: BUG-51
+Agent: Main (Super Z)
+Task: User request: 'In the Finalize Invoice modal we don't need Sales Person (optional) as we will select it during creating invoice; Dispatchers as we will select it during challan copy create. Also explain: Mark as soft-hold (awaiting godown) and Override credit limit (if exceeded) — what do they do, what impact on invoice/stock/process?'
+
+Work Log:
+
+PART 1 — Remove Sales Person + Dispatchers from Finalize modal
+
+- Inspected cart.blade.php finalizeInvoice() (lines 2969-3245). The modal was built with Swal.fire({html: '...'}) — a long string-concatenation that included:
+    * <input id="finSalesPerson"> — free-text sales person name
+    * <select id="finDispatchers" multiple> — multi-select populated via AJAX
+- didOpen() fired \$.get(ENDPOINTS.branchDispatchers, {branch_id}) → Select2 init.
+- preConfirm() read both values and POSTed them to /admin/sales/finalize.
+
+- Reviewed the canonical sales workflow (legacy/app/views/sales/go_live_checklist.php line 88 + SalesAuditModel line 715):
+    Cart → Finalize (creates draft invoice, posts GL Dr AR / Cr Revenue, posts customer_ledger debit, creates sales_invoice_dispatches rows with warehouse_id=NULL — branch-level soft hold)
+         → Invoice edit (assign salesman_id, adjust rates/discount, etc.)
+         → Godown prep (assign warehouse_id per line — converts branch soft-hold into a specific warehouse pick)
+         → Challan copy-create (assign dispatchers — sales_invoice_dispatchers pivot rows)
+         → Challan complete (physical stock OUT from warehouse + COGS post)
+- Conclusion: salesman_id belongs to Invoice edit step. Dispatchers belong to Challan copy-create step. Both were redundant in Finalize.
+
+- Verified backend is forward-compatible with omission:
+    * SalesInvoiceController::finalize() validation (lines 75-91): both 'sales_person' => 'nullable|string|max:100' and 'dispatcher_ids' => 'nullable|array' — omission is allowed.
+    * SalesInvoiceController::finalize() service call (lines 107-121): null-coalesces both to null / [].
+    * SalesInvoiceService::finalizeFromCart() (line 180): 'sales_person' => $data['sales_person'] ?? null — null is fine.
+    * SalesInvoiceService::finalizeFromCart() (line 269): $dispatcherIds = $data['dispatcher_ids'] ?? []; if (!empty($dispatcherIds)) { ... } — empty array skips the dispatcher pivot insert entirely. No DB error.
+
+- Edits applied to cart.blade.php (single file, 1 commit):
+    1. Removed the Sales Person input HTML block (was lines 3035-3036).
+    2. Removed the Dispatchers select HTML block (was lines 3038-3041).
+    3. Removed the dispatcher AJAX loader in didOpen() (was lines 3092-3117).
+    4. Removed salesPerson + dispatcherIds reads from preConfirm() (was lines 3124 + 3129).
+    5. Removed 'sales_person' + 'dispatcher_ids' keys from the POST /finalize payload.
+    6. Left ENDPOINTS.branchDispatchers defined (line 789) — unused but harmless; may be needed again later.
+    7. Added 3 BUG-51 comment blocks explaining what was removed and why.
+    8. Used /* ... */ block-comment syntax (not //) inside the string-concatenation HTML region — // would have broken JS parsing.
+
+- Committed as 97a02c3, pushed to origin/main.
+- User action: docker compose exec rcerp_app php artisan view:clear
+
+PART 2 — Explanation of the two remaining options
+
+(2a) "Mark as soft-hold (awaiting godown)" — checkbox id #finSoftHold
+
+Behavior trace:
+- preConfirm() reads isSoftHold = $popup.find('#finSoftHold').is(':checked')
+- POST /finalize sends is_soft_hold: true|false
+- SalesInvoiceController::finalize() validates 'is_soft_hold' => 'nullable|boolean'
+- SalesInvoiceService::finalizeFromCart() (line 193) writes 'is_soft_hold' => $data['is_soft_hold'] ?? false into the sales_invoices row.
+- That's IT. The flag is stored on the invoice and... nothing else fires.
+
+Functional impact on the invoice / stock / GL / customer_ledger:
+- ZERO direct impact. GL is still posted (Dr AR / Cr Revenue). Customer ledger debit still posted. Sales_invoice_dispatches rows still created with warehouse_id=NULL (branch-level soft hold — same as any draft invoice). Stock pipeline still counts this invoice's qty as "spoken for" (StockAvailabilityService subtracts it from available_qty).
+- The flag is purely a workflow MARKER. It tells the godown team / dashboard / reports: 'this invoice is on hold — do not dispatch yet, the customer is not ready to receive'.
+
+Why it exists (from legacy/app/views/sales/go_live_checklist.php line 88):
+- 'Invoice finalize → soft hold; challan complete → physical OUT + hold release'
+- Original legacy intent: the warehouse/godown operator scans the soft-hold list and decides which invoices to release for packing. The flag was a manual pause button.
+
+Practical effect today:
+- The invoice IS created, the customer DOES owe the money, stock IS reserved. The flag is informational.
+- Future dashboards / godown UI will likely filter on is_soft_hold = true to show "pending release" invoices.
+- There is a SEPARATE Soft Hold button on the cart toolbar (line 368, btnSoftHold) that toggles is_soft_hold on the CART (not the invoice) — that one just freezes the cart from auto-clearing. The Finalize-modal checkbox sets the flag on the resulting INVOICE — different surface, different table (sales_draft_carts vs sales_invoices), same flag name.
+
+Recommendation: leave it UNCHECKED for normal sales. Tick it only if you need to mark the resulting invoice as 'customer not ready — do not dispatch'.
+
+(2b) "Override credit limit (if exceeded)" — checkbox id #finOverride + reason field #finOverrideReason
+
+Behavior trace:
+- preConfirm() reads override + overrideReason from the modal.
+- Step 3: ajaxGet(ENDPOINTS.creditCheck, {customer_id, amount: total}) — server returns {exceeds, current_balance, credit_limit, new_balance}.
+- If credit.exceeds && !override → Swal.showValidationMessage blocks the finalize with the credit numbers shown.
+- If credit.exceeds && override && overrideReason.length < 10 → blocks with 'Override reason must be at least 10 characters'.
+- Otherwise: POST /finalize with credit_limit_override: true, override_reason: '...'.
+
+Backend (SalesInvoiceService::finalizeFromCart, lines 115-130 + 144-149 + 297-313):
+- Two-layer credit check: a fast pre-check OUTSIDE the DB transaction (UX fast-fail), then an authoritative re-check INSIDE the transaction with SELECT ... FOR UPDATE on the customer row (prevents race conditions where two concurrent finalizes both pass the check).
+- If exceeds && !override → throws RuntimeException → 422 response.
+- If exceeds && override && reason < 10 chars → throws.
+- If exceeds && override && reason >= 10 chars → proceeds.
+- If not exceeds → proceeds regardless of override flag.
+
+Functional impact:
+- WITHOUT override + credit exceeded → invoice is NOT created. Customer_ledger NOT debited. GL NOT posted. Stock NOT reserved. Cart is NOT cleared. The user is forced to either reduce the cart, take a partial payment, or tick override.
+- WITH override + reason ≥ 10 chars + credit exceeded → invoice IS created. Everything proceeds normally (GL, ledger, stock reservation, cart clear). PLUS an audit log row is inserted into user_audit_log:
+    action: 'credit_limit_override'
+    target_user_id: null
+    branch_id: <current branch>
+    details: {invoice_id, invoice_code, customer_id, total_amount, credit_limit, current_balance, override_reason}
+- The override reason text is also stored on the invoice (sales_invoices.override_reason column, lines 334 + 365 of SalesInvoiceController) and surfaced as a chip on the invoice show page.
+
+Stock impact of override:
+- NONE. Override does NOT change stock reservation. The stock check (qty ≤ available_qty) is a SEPARATE check that runs in the transaction regardless of override. If stock is insufficient, the invoice fails with 'Insufficient stock for product X' — override does not bypass that.
+
+Total process impact of override:
+- The customer's AR balance goes above their credit_limit. The invoice is still valid (financially binding), but it's flagged for audit. The override reason is auditable and becomes part of the invoice's permanent record.
+- Useful for trusted customers with temporary over-limit needs (e.g. big festival order), or when the credit_limit was set conservatively and the user has verbal approval from management to exceed it.
+
+Recommendation: leave UNCHECKED for normal sales. Tick + write a real reason ONLY when (a) the customer's credit is genuinely exceeded AND (b) you have authorization to allow it. The reason is auditable — write something a reviewer can understand ('Owner approved verbally, festival bulk order').
+
+Stage Summary:
+- BUG-51 PART 1 fixed in commit 97a02c3, pushed to origin/main.
+- Finalize modal now contains only: Invoice Date, Discount, Transport, Notes, Soft-hold checkbox, Override-credit-limit checkbox + reason field, Subtotal + Estimated Total.
+- 1 file changed: laravel/resources/views/admin/sales/cart.blade.php (16 insertions, 39 deletions).
+- No backend changes — validation already nullable for both removed fields.
+- BUG-51 PART 2 (explanations) delivered in this worklog entry + the chat response to the user.
+- User action required: docker compose exec rcerp_app php artisan view:clear
+- Awaiting user verification: reload /admin/sales/cart, click Finalize Invoice → modal should be leaner (no Sales Person, no Dispatchers).
