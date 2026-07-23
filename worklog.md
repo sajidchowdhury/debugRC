@@ -1333,3 +1333,25 @@ Stage Summary:
   (or simply hard-refresh — Laravel recompiles blades when source changes).
 - Rule of thumb going forward: NEVER inline function calls, casts, or any complex PHP expression inside @json() directives. Always compute the value in a @php block first and reference the variable.
 - Awaiting user verification: reload /admin/purchase-returns and confirm the page renders.
+
+---
+Task ID: BUG-45-v2
+Agent: Main (Super Z)
+Task: BUG-45 not fully fixed — /admin/purchase-returns still throws ParseError "Unclosed '[' on line 211" after the first patch. Stack trace points to source line 214 (the SECOND @json([...]) block on the index page).
+
+Work Log:
+- Re-analyzed the failure. My first fix removed `trim()` and `(bool)` casts from inside @json([...]), but the SAME parse error fired on the next @json([...]) block (the larger one with route() calls and nested endpoints array).
+- Root cause confirmed: Blade's @json() directive uses `explode(',', $expr, 2)` internally to split the value expression from the optional $options argument. This means ANY @json([...]) array literal with multiple comma-separated entries breaks compilation — not just ones with function calls. The compiled PHP ends up as `json_encode([partial_array, 0)` with an unclosed `[`.
+- Verified the same risky pattern exists in create.blade.php (2 @json blocks). User only hit index first because that's what's linked from the purchase-receives page.
+- Definitive fix: bypass @json() entirely for arrays. Compute json_encode() in @php block, emit via {!! $jsonVar !!}.
+  * index.blade.php: added $createBoot + $mainBoot = json_encode(...) in @php; replaced both @json([...]) with {!! $createBoot !!} / {!! $mainBoot !!}
+  * create.blade.php: same pattern — added $createBoot + $mainBoot, replaced both @json([...]) blocks
+  * Left @json($csrf) alone — that's a single scalar variable, no commas, no risk
+- Updated scripts/check_returns_blade.py to scan ALL 6 blade files under purchase-returns/ and reject any `@json([` literal-opening pattern. Run: `python3 scripts/check_returns_blade.py` → PASS.
+- Committed as 2c20432 and pushed to origin/main.
+
+Stage Summary:
+- BUG-45 properly fixed. /admin/purchase-returns AND /admin/purchase-returns/create should both render now.
+- User must clear compiled blade cache: `docker compose exec rcerp_app php artisan view:clear`
+- Hard rule going forward: NEVER use @json([...]) with array literals. Only @json($scalar_var) or @json($array_var) are safe. For any structured JSON, compute json_encode() in @php and emit via {!! $json !!}.
+- Awaiting user verification: reload /admin/purchase-returns.
