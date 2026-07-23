@@ -3032,14 +3032,13 @@
                     '<input type="number" id="finTransport" class="form-control form-control-sm" min="0" step="0.01" value="0"></div>' +
                     '</div>' +
 
-                    '<div class="mb-2"><label class="form-label small fw-semibold">Sales Person (optional)</label>' +
-                    '<input type="text" id="finSalesPerson" class="form-control form-control-sm" maxlength="100" placeholder="Free-text name"></div>' +
-
-                    '<div class="mb-2"><label class="form-label small fw-semibold">Dispatchers</label>' +
-                    '<select id="finDispatchers" class="form-select form-select-sm select2" multiple data-placeholder="Select dispatchers…">' +
-                    '<option value="" disabled>Loading…</option></select>' +
-                    '<div class="small text-muted mt-1">Assign delivery personnel for this invoice.</div></div>' +
-
+                    /* BUG-51: Sales Person + Dispatchers removed from the
+                     * Finalize modal — they will be chosen during invoice
+                     * creation (salesman_id) and challan copy-create
+                     * (dispatchers), respectively. Sending them here forced
+                     * the user to make a dispatching decision before the
+                     * invoice was even drafted.
+                     */
                     '<div class="mb-2"><label class="form-label small fw-semibold">Notes (optional)</label>' +
                     '<textarea id="finNotes" class="form-control form-control-sm" rows="2" maxlength="1000"></textarea></div>' +
 
@@ -3089,44 +3088,21 @@
                         }
                     });
 
-                    // Load dispatchers for current branch via AJAX.
-                    var $sel = $popup.find('#finDispatchers');
-                    $sel.empty().append('<option value="" disabled>Loading…</option>');
-                    $.get(ENDPOINTS.branchDispatchers, { branch_id: BRANCH_ID }, function (data) {
-                        $sel.empty();
-                        if (data && data.length) {
-                            data.forEach(function (emp) {
-                                $sel.append(
-                                    '<option value="' + emp.id + '">' +
-                                    escHtml(emp.name) + (emp.employee_code ? ' (' + escHtml(emp.employee_code) + ')' : '') +
-                                    '</option>'
-                                );
-                            });
-                        } else {
-                            $sel.append('<option value="" disabled>No dispatchers available</option>');
-                        }
-                        // Initialize Select2 on the dynamic select.
-                        $sel.select2({
-                            width: '100%',
-                            placeholder: 'Select dispatchers…',
-                            allowClear: true,
-                            dropdownParent: $popup,
-                        });
-                    }).fail(function () {
-                        $sel.empty().append('<option value="" disabled>Failed to load dispatchers</option>');
-                    });
+                    // BUG-51: dispatcher AJAX loader removed — dispatchers are
+                    // now chosen during challan copy-create, not at finalize.
                 },
                 preConfirm: function () {
                     var $popup = $(Swal.getPopup());
                     var invoiceDate = $popup.find('#finInvoiceDate').val();
                     var discount = parseFloat($popup.find('#finDiscount').val()) || 0;
                     var transport = parseFloat($popup.find('#finTransport').val()) || 0;
-                    var salesPerson = $popup.find('#finSalesPerson').val().trim();
                     var notes = $popup.find('#finNotes').val().trim();
                     var isSoftHold = $popup.find('#finSoftHold').is(':checked');
                     var override = $popup.find('#finOverride').is(':checked');
                     var overrideReason = $popup.find('#finOverrideReason').val().trim();
-                    var dispatcherIds = $popup.find('#finDispatchers').val() || [];
+                    // BUG-51: salesPerson + dispatcherIds removed — chosen at
+                    // invoice-create (salesman_id) and challan copy-create
+                    // (dispatchers) respectively, not at finalize.
 
                     if (!invoiceDate) {
                         Swal.showValidationMessage('Invoice date is required.');
@@ -3172,19 +3148,20 @@
                         }
 
                         // Step 4: POST to finalize endpoint.
+                        // BUG-51: sales_person + dispatcher_ids omitted —
+                        // salesman_id is set during invoice create/edit,
+                        // dispatchers during challan copy-create.
                         return ajaxPost(ENDPOINTS.finalize, {
                             customer_id: customerId,
                             branch_id: BRANCH_ID,
                             invoice_date: invoiceDate,
-                            sales_person: salesPerson || null,
                             discount_amount: discount,
                             transport_cost: transport,
                             notes: notes,
                             is_soft_hold: isSoftHold,
                             credit_limit_override: override,
                             override_reason: override ? overrideReason : '',
-                            idempotency_token: idempotencyToken,
-                            dispatcher_ids: dispatcherIds
+                            idempotency_token: idempotencyToken
                         }).then(function (resp) {
                             return resp;
                         }).catch(function (xhr) {
