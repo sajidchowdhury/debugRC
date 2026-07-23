@@ -19,6 +19,25 @@
         $rcv = \App\Models\PurchaseReceive::find((int) request()->input('receive_id'));
         if ($rcv) $prefill = $rcv->receive_code;
     }
+
+    // BUG-45 (revised): see index.blade.php — Blade's @json() directive
+    // cannot safely encode multi-key array literals, so we pre-encode here.
+    $createBoot = json_encode([
+        'workspace_id' => 'purchaseReturnCreateRoot',
+        'prefill'      => $prefill,
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+
+    $mainBoot = json_encode([
+        'csrf'      => $csrf,
+        'endpoints' => [
+            'datatables'     => route('admin.purchase-returns.index'),
+            'summary'        => route('admin.purchase-returns.summary'),
+            'search_receives'=> route('admin.purchase-returns.search-receives'),
+            'receive_details'=> route('admin.purchase-returns.receive-details'),
+            'store'          => route('admin.purchase-returns.store'),
+            'export'         => route('admin.purchase-returns.export'),
+        ],
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
 @endphp
 
 <div id="prt-create-page" class="prt-create-app container-fluid py-2">
@@ -48,21 +67,8 @@
 <script>window.CSRF_TOKEN = @json($csrf);</script>
 <script>
 window.PURCHASE_RETURN_BASE = '{{ rtrim(route('admin.purchase-returns.index'), '/') }}/';
-window.PURCHASE_RETURN_CREATE_BOOT = @json([
-    'workspace_id' => 'purchaseReturnCreateRoot',
-    'prefill'      => $prefill,
-]);
-window.PURCHASE_RETURN_BOOT = @json([
-    'csrf'      => $csrf,
-    'endpoints' => [
-        'datatables'     => route('admin.purchase-returns.index'),
-        'summary'        => route('admin.purchase-returns.summary'),
-        'search_receives'=> route('admin.purchase-returns.search-receives'),
-        'receive_details'=> route('admin.purchase-returns.receive-details'),
-        'store'          => route('admin.purchase-returns.store'),
-        'export'         => route('admin.purchase-returns.export'),
-    ],
-]);
+window.PURCHASE_RETURN_CREATE_BOOT = {!! $createBoot !!};
+window.PURCHASE_RETURN_BOOT = {!! $mainBoot !!};
 </script>
 
 {{-- ─────────────── PurchaseReturn.js (workspace JS, inlined) ───────────────

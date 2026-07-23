@@ -29,14 +29,40 @@
     $forceUrlParams = request()->hasAny(['date_from', 'date_to', 'status', 'q', 'grn']);
 
     // Pre-fill term for the offcanvas workspace (mirrors create.blade.php).
-    // Computed OUTSIDE @json() because Blade's @json directive uses a naive
-    // explode(',', $expr, 2) internally — inlining trim((string)(...)) inside
-    // the array literal triggers a parse error in the compiled view
-    // ("Unclosed '[' does not match ')'" — BUG-45).
     $prefill = trim((string) (request()->input('grn') ?? request()->input('q') ?? ''));
-
-    // Same reason — keep ALL function-call-style expressions out of @json().
     $smartSort = (bool) ($filters['smart_sort'] ?? true);
+
+    // BUG-45 (revised): Blade's @json() directive uses explode(',', $expr, 2)
+    // internally to split the value from the optional $options/$depth args.
+    // ANY array literal with multiple comma-separated entries therefore breaks
+    // the compiled PHP ("Unclosed '[' does not match ')'"), regardless of how
+    // simple the values are. The fix is to NOT use @json([...]) for multi-key
+    // arrays — compute json_encode() in @php and emit via {!! !!} instead.
+    $createBoot = json_encode([
+        'workspace_id' => 'purchaseReturnOffcanvasRoot',
+        'prefill'      => $prefill,
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+
+    $mainBoot = json_encode([
+        'date_from'      => $filters['date_from'] ?? $today,
+        'date_to'        => $filters['date_to']   ?? $today,
+        'status'         => $filters['status']    ?? 'active',
+        'search'         => $filters['search']    ?? '',
+        'smart_sort'     => $smartSort,
+        'date_preset'    => $filters['date_preset'] ?? 'today',
+        'forceUrlParams' => $forceUrlParams,
+        'csrf'           => $csrf,
+        'endpoints'      => [
+            'datatables'     => route('admin.purchase-returns.index'),
+            'summary'        => route('admin.purchase-returns.summary'),
+            'search_receives'=> route('admin.purchase-returns.search-receives'),
+            'receive_details'=> route('admin.purchase-returns.receive-details'),
+            'store'          => route('admin.purchase-returns.store'),
+            'cancel'         => '',
+            'show'           => '',
+            'export'         => route('admin.purchase-returns.export'),
+        ],
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
 @endphp
 
 <div id="purchase-return-app" class="purchase-return-app container-fluid py-2">
@@ -204,33 +230,11 @@
 @push('scripts')
 <script>window.CSRF_TOKEN = @json($csrf);</script>
 <script>
-window.PURCHASE_RETURN_CREATE_BOOT = @json([
-    'workspace_id' => 'purchaseReturnOffcanvasRoot',
-    'prefill'      => $prefill,
-]);
+window.PURCHASE_RETURN_CREATE_BOOT = {!! $createBoot !!};
 </script>
 <script>
 window.PURCHASE_RETURN_BASE = '{{ rtrim(route('admin.purchase-returns.index'), '/') }}/';
-window.PURCHASE_RETURN_BOOT = @json([
-    'date_from'      => $filters['date_from'] ?? $today,
-    'date_to'        => $filters['date_to']   ?? $today,
-    'status'         => $filters['status']    ?? 'active',
-    'search'         => $filters['search']    ?? '',
-    'smart_sort'     => $smartSort,
-    'date_preset'    => $filters['date_preset'] ?? 'today',
-    'forceUrlParams' => $forceUrlParams,
-    'csrf'           => $csrf,
-    'endpoints'      => [
-        'datatables'     => route('admin.purchase-returns.index'),
-        'summary'        => route('admin.purchase-returns.summary'),
-        'search_receives'=> route('admin.purchase-returns.search-receives'),
-        'receive_details'=> route('admin.purchase-returns.receive-details'),
-        'store'          => route('admin.purchase-returns.store'),
-        'cancel'         => '',
-        'show'           => '',
-        'export'         => route('admin.purchase-returns.export'),
-    ],
-]);
+window.PURCHASE_RETURN_BOOT = {!! $mainBoot !!};
 </script>
 
 {{-- ─────────────── PurchaseReturn.js (workspace JS, inlined) ─────────────── --}}
