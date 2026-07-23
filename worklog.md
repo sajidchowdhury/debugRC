@@ -1407,3 +1407,32 @@ Stage Summary:
 - Then verify:
   * /admin/purchase-returns/create — search a fully-returned GRN → should see the breakdown table explaining what was already returned.
   * /admin/purchase-orders?cancelled=1 → should show ALL cancelled POs regardless of date.
+
+---
+Task ID: BUG-48 + BUG-49
+Agent: Main (Super Z)
+Task: User reported 2 bugs:
+  (1) /admin/sales/cart → Symfony FatalError: Access level to SalesCartController::resolveBranchIdForRead() must be protected (as in class Controller) or weaker.
+  (2) /admin/purchase-returns/create against a freshly-received GRN (90pc) shows 'Nothing left to return on GRN GRN-20260723-0003. This GRN has no receivable items.' even though nothing has been returned yet.
+
+Work Log:
+
+BUG-48 (SalesCartController FatalError):
+- Inspected SalesCartController.php line 160: `private function resolveBranchIdForRead(int $requestedBranchId): int`.
+- Inspected base Controller.php line 41: `protected function resolveBranchIdForRead(?int $requestedBranchId = null): int`.
+- Two violations: (a) visibility weakened (private < protected), (b) signature incompatible (mandatory int vs nullable).
+- Fix: deleted the override entirely. The base implementation is more correct (admin override check + user-aware fallback chain via auth()->user()?->getBranchId()) and is what every other controller uses. Call sites at lines 120 and 137 pass `(int) $request->input('branch_id', 0)` which is compatible with the parent's ?int signature.
+- Verified no other admin controller has the same `private function resolveBranchIdForRead` pattern.
+
+BUG-49 (false-positive empty-state on returns):
+- Inspected the JS call path: getReceiveDetails returns {status, receive: {...}, items: [...], all_items: [...]}. The JS at line 270 calls renderReturnForm(response.receive) — but response.receive was a separate object with only {id, receive_code, supplier_id, supplier_name, branch_id, total_amount}. No items, no all_items.
+- Inside renderReturnForm, `const allItems = (receive.all_items || receive.items || [])` therefore resolved to [] → 'allItems.length === 0' branch fired → 'This GRN has no receivable items' message displayed, even when the GRN had freshly-received items in DB.
+- Pre-existing bug from Phase 4 (commit f63bef4). Masked before my BUG-46 work because the OLD empty-state message was generic ('Nothing left to return — quantities may already be fully returned') with no breakdown — user had no way to see the contradiction.
+- Fix: nest 'items' and 'all_items' INSIDE the 'receive' object in the controller response. Verified both blades (create + index) only access them through response.receive.items / response.receive.all_items via renderReturnForm(response.receive).
+
+Stage Summary:
+- Both bugs fixed in commit 50f114a, pushed to origin/main.
+- User action: docker compose exec rcerp_app php artisan optimize:clear
+- Then verify:
+  * /admin/sales/cart → should load (no FatalError)
+  * /admin/purchase-returns/create → search a confirmed GRN with unreceived items → should show the editable form rows (not the empty-state panel)
