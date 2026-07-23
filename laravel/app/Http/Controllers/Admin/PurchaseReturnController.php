@@ -9,6 +9,7 @@ use App\Http\Requests\PurchaseReturn\GetReceiveDetailsRequest;
 use App\Http\Requests\PurchaseReturn\StorePurchaseReturnRequest;
 use App\Models\PurchaseReturn;
 use App\Services\Purchase\PurchaseReturnService;
+use App\Services\Stock\StockAvailabilityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -34,7 +35,8 @@ use Illuminate\Support\Facades\DB;
 class PurchaseReturnController extends Controller
 {
     public function __construct(
-        private PurchaseReturnService $returnService
+        private PurchaseReturnService $returnService,
+        private StockAvailabilityService $stockService,
     ) {}
 
     public function index(Request $request)
@@ -317,7 +319,16 @@ class PurchaseReturnController extends Controller
         // Calculate returnable_qty for each item + per-warehouse availability.
         // Phase 4: include warehouse_breakdown for the client-side dual cap
         // (return qty ≤ GRN returnable AND ≤ warehouse_stock available).
-        $items = $receive->items->map(function ($item) {
+        //
+        // BUG-46 fix: previously hand-rolled SQL referenced `ws.physical_qty`
+        // and `ws.available_qty` which DON'T EXIST in warehouse_stock — the
+        // actual columns are `qty` and `avg_cost`. Use the SSOT service
+        // StockAvailabilityService::getBranchWarehouseBreakdown() instead,
+        // which already returns the correct shape and computes available as
+        // physical − sales-pipeline (matching legacy Helper::Get_Warehouse_Wise_Product_Stock).
+        $branchId = (int) $receive->branch_id;
+
+        $items = $receive->items->map(function ($item) use ($branchId) {
             $alreadyReturned = DB::table('purchase_return_items')
                 ->where('purchase_receive_item_id', $item->id)
                 ->whereIn('purchase_return_id', function ($q) {
@@ -329,29 +340,11 @@ class PurchaseReturnController extends Controller
 
             $returnable = (float) $item->qty - (float) $alreadyReturned;
 
-            // Per-warehouse availability from warehouse_stock.
-            // Mirrors legacy PurchaseReturnModel::getReceiveForReturn() which
-            // joins warehouse_stock and returns each warehouse's physical_qty
-            // and available_qty (physical - committed-out).
-            $warehouses = DB::table('warehouse_stock as ws')
-                ->join('warehouses as w', 'w.id', '=', 'ws.warehouse_id')
-                ->where('ws.product_id', $item->product_id)
-                ->where('w.is_active', true)
-                ->select([
-                    'w.id',
-                    'w.warehouse_name',
-                    DB::raw('COALESCE(ws.physical_qty, 0) AS physical_qty'),
-                    DB::raw('COALESCE(ws.available_qty, ws.physical_qty, 0) AS available_qty'),
-                ])
-                ->get()
-                ->map(fn($w) => [
-                    'id'             => $w->id,
-                    'warehouse_name' => $w->warehouse_name,
-                    'physical_qty'   => (float) $w->physical_qty,
-                    'available_qty'  => (float) $w->available_qty,
-                ])
-                ->values()
-                ->all();
+            // SSOT: physical = warehouse_stock.qty; available = physical − sales pipeline.
+            $warehouses = $this->stockService->getBranchWarehouseBreakdown(
+                (int) $item->product_id,
+                $branchId
+            );
 
             return [
                 'id'                => $item->id,
