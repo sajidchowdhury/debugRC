@@ -663,7 +663,28 @@ window.PURCHASE_RETURN_BOOT = {!! $mainBoot !!};
             }
 
             const formData = new FormData(form);
-            formData.set('items', JSON.stringify(items));
+            // BUG-50 fix: previously this line was:
+            //     formData.set('items', JSON.stringify(items));
+            // That sent `items` as a JSON-encoded STRING, which caused
+            // Laravel's 'items' => 'required|array' validation rule in
+            // StorePurchaseReturnRequest to fail with
+            // "The items field must be an array." — because a JSON string
+            // is a string, not an array, from PHP's perspective.
+            //
+            // Fix: append each item as items[index][key] using Laravel's
+            // standard form-encoded array notation. PHP's request parser
+            // then reconstructs these into a proper nested array, satisfying
+            // the 'array' validation rule. Same pattern as purchase-orders/
+            // create.blade.php and purchase-receives/create.blade.php.
+            items.forEach((item, idx) => {
+                formData.append(`items[${idx}][purchase_receive_item_id]`, item.purchase_receive_item_id ?? '');
+                formData.append(`items[${idx}][product_id]`,                item.product_id ?? '');
+                formData.append(`items[${idx}][warehouse_id]`,              item.warehouse_id ?? '');
+                formData.append(`items[${idx}][qty]`,                       item.qty ?? 0);
+                formData.append(`items[${idx}][return_qty]`,                item.return_qty ?? 0);
+                formData.append(`items[${idx}][rate]`,                      item.rate ?? 0);
+                formData.append(`items[${idx}][condition]`,                 item.condition ?? 'Good');
+            });
             formData.set('total_amount', totalAmount.toFixed(2));
 
             Swal.fire({
