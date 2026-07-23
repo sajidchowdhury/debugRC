@@ -661,11 +661,14 @@ Route::middleware('auth')->group(function () {
     // ============================================================
     Route::prefix('admin/sales-invoices')->name('admin.sales-invoices.')->group(function () {
         // R21: Server-side DataTables JSON endpoint (smart sort + smart search).
+        // BUG-52: warehouse_manager included — they need datatable JSON to
+        // render the invoice list (which is now their entry point for
+        // finding invoices awaiting godown prep).
         Route::get('datatable', [SalesInvoiceController::class, 'datatable'])
-            ->name('datatable')->middleware('role:salesman,accountant,manager,admin');
+            ->name('datatable')->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
         // R22: Live status-chip counts JSON endpoint.
         Route::get('summary', [SalesInvoiceController::class, 'summary'])
-            ->name('summary')->middleware('role:salesman,accountant,manager,admin');
+            ->name('summary')->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
         // G-10: Call It A Day batch operation (remove invoices from daily collection list)
         Route::post('call-it-a-day', [SalesInvoiceController::class, 'callItADay'])
             ->name('call-it-a-day')->middleware(['role:salesman,accountant,manager,admin', 'branch.isolation']);
@@ -694,11 +697,16 @@ Route::middleware('auth')->group(function () {
         Route::get('{id}/receive-modal', [SalesInvoiceController::class, 'receiveModal'])
             ->name('receive-modal')->middleware('role:salesman,accountant,manager,admin');
     });
-    // index + show — accountant included (read access)
+    // index + show — accountant + warehouse_manager included (read access).
+    // BUG-52: warehouse_manager was previously excluded — but they NEED
+    // to see the invoice list + detail to discover invoices awaiting
+    // godown prep. They have no other entry point. The WM cannot mutate
+    // invoices (edit/update/cancel/finalize routes still exclude them),
+    // so this is purely read access — safe to grant.
     Route::resource('admin/sales-invoices', SalesInvoiceController::class)
         ->only(['index', 'show'])->where(['warehouse' => '[0-9]+'])
         ->names('admin.sales-invoices')
-        ->middleware('role:salesman,accountant,manager,admin');
+        ->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
 
     // CSV export — invoices
     Route::get('admin/sales-invoices/export-csv', [CsvExportController::class, 'exportInvoices'])

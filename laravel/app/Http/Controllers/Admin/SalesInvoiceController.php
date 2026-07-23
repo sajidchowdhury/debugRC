@@ -30,12 +30,48 @@ class SalesInvoiceController extends Controller
 
     public function index(Request $request)
     {
+        // BUG-52: support new workflow chips — 'today', 'pending_godown',
+        // 'pending_challan'. These pre-set the standard filter combos so
+        // sales/warehouse users have one-click queues instead of having
+        // to manually set from_date/to_date each time.
+        $today = now()->format('Y-m-d');
+        $scope = $request->input('scope');
+
+        // Resolve scope → effective date range + status filters.
+        $effectiveFrom = $request->input('from_date');
+        $effectiveTo   = $request->input('to_date');
+        $forcePendingGodown  = false;
+        $forcePendingChallan = false;
+
+        if ($scope === 'today') {
+            $effectiveFrom = $effectiveFrom ?? $today;
+            $effectiveTo   = $effectiveTo   ?? $today;
+        } elseif ($scope === 'pending_godown') {
+            // Invoices awaiting godown prep: status confirmed (i.e. not draft),
+            // is_godown_prepared=false, not reversed. Across all dates so the
+            // warehouse manager sees the full backlog, not just today's.
+            $forcePendingGodown = true;
+        } elseif ($scope === 'pending_challan') {
+            // Godown prepared but challan not yet issued.
+            $forcePendingChallan = true;
+        }
+
         $query = SalesInvoice::with(['customer', 'branch', 'items'])
-            ->when($request->input('from_date'), fn($q, $d) => $q->where('invoice_date', '>=', $d))
-            ->when($request->input('to_date'), fn($q, $d) => $q->where('invoice_date', '<=', $d))
+            ->when($effectiveFrom, fn($q, $d) => $q->where('invoice_date', '>=', $d))
+            ->when($effectiveTo,   fn($q, $d) => $q->where('invoice_date', '<=', $d))
             ->when($request->input('customer_id'), fn($q, $cid) => $q->where('customer_id', $cid))
             ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
-            ->when($request->input('status'), fn($q, $s) => $q->where('status', $s))
+            ->when($forcePendingGodown, function ($q) {
+                $q->where('status', 'confirmed')
+                  ->where('is_godown_prepared', false)
+                  ->where('is_reversed', false);
+            })
+            ->when($forcePendingChallan, function ($q) {
+                $q->where('is_godown_prepared', true)
+                  ->where('is_challan_issued', false)
+                  ->where('is_reversed', false);
+            })
+            ->when(!$forcePendingGodown && !$forcePendingChallan && $request->input('status'), fn($q, $s) => $q->where('status', $s))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('invoice_code', 'ILIKE', "%{$search}%");
             })
@@ -47,21 +83,34 @@ class SalesInvoiceController extends Controller
         $customers = \App\Models\Customer::active()->orderBy('customer_name')->limit(500)->get();
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
+        // BUG-52: extended stats with workflow-relevant counts so the
+        // index page can render Today / Pending Godown / Pending Challan
+        // chips with live counts.
         $stats = [
-            'total' => SalesInvoice::count(),
-            'draft' => SalesInvoice::where('status', 'draft')->count(),
-            'confirmed' => SalesInvoice::where('status', 'confirmed')->count(),
-            'cancelled' => SalesInvoice::where('status', 'cancelled')->count(),
-            'total_value' => SalesInvoice::whereNotIn('status', ['cancelled'])->sum('total_amount'),
+            'total'           => SalesInvoice::count(),
+            'today'           => SalesInvoice::where('invoice_date', $today)->count(),
+            'draft'           => SalesInvoice::where('status', 'draft')->count(),
+            'confirmed'       => SalesInvoice::where('status', 'confirmed')->count(),
+            'cancelled'       => SalesInvoice::where('status', 'cancelled')->count(),
+            'pending_godown'  => SalesInvoice::where('status', 'confirmed')
+                                    ->where('is_godown_prepared', false)
+                                    ->where('is_reversed', false)
+                                    ->count(),
+            'pending_challan' => SalesInvoice::where('is_godown_prepared', true)
+                                    ->where('is_challan_issued', false)
+                                    ->where('is_reversed', false)
+                                    ->count(),
+            'total_value'     => SalesInvoice::whereNotIn('status', ['cancelled'])->sum('total_amount'),
         ];
 
         return view('admin.sales-invoices.index', [
-            'title' => 'Sales Invoices',
+            'title'    => 'Sales Invoices',
             'invoices' => $invoices,
-            'customers' => $customers,
+            'customers'=> $customers,
             'branches' => $branches,
-            'stats' => $stats,
-            'filters' => $request->only(['from_date', 'to_date', 'customer_id', 'branch_id', 'status', 'search']),
+            'stats'    => $stats,
+            'filters'  => $request->only(['from_date', 'to_date', 'customer_id', 'branch_id', 'status', 'search', 'scope']),
+            'scope'    => $scope,
         ]);
     }
 
@@ -826,14 +875,31 @@ class SalesInvoiceController extends Controller
             ->whereNotIn('status', ['cancelled'])
             ->sum('total_amount');
 
+        // BUG-52: workflow buckets for the new chips.
+        $today = now()->format('Y-m-d');
+        $countToday = (clone $base)->where('invoice_date', $today)->count();
+        $countPendingGodown = (clone $base)
+            ->where('status', 'confirmed')
+            ->where('is_godown_prepared', false)
+            ->where('is_reversed', false)
+            ->count();
+        $countPendingChallan = (clone $base)
+            ->where('is_godown_prepared', true)
+            ->where('is_challan_issued', false)
+            ->where('is_reversed', false)
+            ->count();
+
         return response()->json([
             'status'            => 'success',
             'total'             => $countAll,
+            'today'             => $countToday,
             'awaiting_payment'  => $countAwaiting,
             'draft'             => $countDraft,
             'confirmed'         => $countConfirmed,
             'cancelled'         => $countCancelled,
             'reversed'          => $countReversed,
+            'pending_godown'    => $countPendingGodown,
+            'pending_challan'   => $countPendingChallan,
             'total_value'       => $totalValue,
         ]);
     }
@@ -892,7 +958,23 @@ class SalesInvoiceController extends Controller
             // R22 status chip overrides the simple `status` param when present.
             $chip = $request->input('status_chip');
             $plainStatus = $request->input('status');
-            if ($chip && $chip !== 'all') {
+            // BUG-52: scope chip (today / pending_godown / pending_challan)
+            // is a sibling of the status chip — handled here so the
+            // DataTables AJAX endpoint honors it just like index() does.
+            $scope = $request->input('scope');
+            if ($scope === 'today') {
+                $today = now()->format('Y-m-d');
+                if (! $request->input('from_date')) { $q->where('invoice_date', '>=', $today); }
+                if (! $request->input('to_date'))   { $q->where('invoice_date', '<=', $today); }
+            } elseif ($scope === 'pending_godown') {
+                $q->where('status', 'confirmed')
+                  ->where('is_godown_prepared', false)
+                  ->where('is_reversed', false);
+            } elseif ($scope === 'pending_challan') {
+                $q->where('is_godown_prepared', true)
+                  ->where('is_challan_issued', false)
+                  ->where('is_reversed', false);
+            } elseif ($chip && $chip !== 'all') {
                 switch ($chip) {
                     case 'awaiting_payment':
                         $q->where('due_amount', '>', 0.01)

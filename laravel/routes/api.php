@@ -140,16 +140,20 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
     // ---------- Sales Challans — 30/60 req/min ----------
     Route::get('sales/challans', [SalesChallanApiController::class, 'index'])
         ->middleware('api.rate:60');
+    // BUG-52: godown/issue/cancel API routes were missing role enforcement —
+    // any authenticated API user (incl. salesman) could issue a challan.
+    // Now restricted to warehouse_manager/dispatcher/manager/admin, mirroring
+    // the web route middleware in routes/web.php (lines 715-725).
     Route::post('sales/challans/godown', [SalesChallanApiController::class, 'godown'])
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:warehouse_manager,dispatcher,manager,admin', 'api.rate:30');
     Route::post('sales/challans/issue', [SalesChallanApiController::class, 'issue'])
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:warehouse_manager,dispatcher,manager,admin', 'api.rate:30');
     Route::get('sales/challans/{id}', [SalesChallanApiController::class, 'show'])
         ->where('id', '[0-9]+')
         ->middleware('api.rate:60');
     Route::post('sales/challans/{id}/cancel', [SalesChallanApiController::class, 'cancel'])
         ->where('id', '[0-9]+')
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:manager,admin', 'api.rate:30');
 
     // ---------- Sales Returns — 30/60 req/min ----------
     Route::get('sales/returns', [SalesReturnApiController::class, 'index'])

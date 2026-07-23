@@ -666,8 +666,10 @@
                     <h2 class="h6 mb-0"><i class="fas fa-bolt me-1" style="color:#7c3aed;"></i> Actions</h2>
                 </div>
                 <div class="card-body d-grid gap-2">
-                    {{-- Draft: Edit invoice (P1-1) --}}
-                    @if ($invoice->isDraft())
+                    {{-- Draft: Edit invoice (P1-1) — only for sales-side roles.
+                        Warehouse managers can view but cannot edit (their
+                        job starts AFTER the invoice is confirmed). --}}
+                    @if ($invoice->isDraft() && auth()->user()->hasRole('salesman', 'manager', 'admin', 'superadmin'))
                         <a href="{{ route('admin.sales-invoices.edit', $invoice->id) }}" class="btn btn-primary w-100">
                             <i class="fas fa-pen-to-square me-1"></i> Edit Invoice
                         </a>
@@ -677,19 +679,64 @@
                         </div>
                     @endif
 
-                    {{-- P1-6: Print buttons --}}
+                    {{-- P1-6: Print Invoice (customer copy) — all sales-side
+                        roles can print this; the route allows salesman,
+                        accountant, manager, admin. --}}
                     <a href="{{ route('admin.sales-invoices.print-invoice', $invoice->id) }}" class="btn btn-outline-primary w-100" target="_blank">
                         <i class="fas fa-print me-1"></i> Print Invoice
                     </a>
-                    <a href="{{ route('admin.sales-invoices.print-godown', $invoice->id) }}" class="btn btn-outline-secondary w-100" target="_blank">
-                        <i class="fas fa-warehouse me-1"></i> Print Godown Copy
-                    </a>
-                    <a href="{{ route('admin.sales-invoices.print-blank-godown', $invoice->id) }}" class="btn btn-outline-warning w-100" target="_blank">
-                        <i class="fas fa-pen me-1"></i> Print Blank Godown
-                    </a>
 
-                    {{-- Draft: Cancel invoice --}}
-                    @if ($invoice->isDraft())
+                    {{-- BUG-52: Print Godown Copy + Print Blank Godown —
+                        gated by role. Routes allow only warehouse_manager,
+                        manager, admin. The previous version rendered these
+                        for everyone, so salesmen saw the buttons, clicked
+                        them, and got redirected to the dashboard with a
+                        "You do not have permission" flash — confusing UX. --}}
+                    @if (auth()->user()->hasRole('warehouse_manager', 'manager', 'admin', 'superadmin'))
+                        <a href="{{ route('admin.sales-invoices.print-godown', $invoice->id) }}" class="btn btn-outline-secondary w-100" target="_blank">
+                            <i class="fas fa-warehouse me-1"></i> Print Godown Copy
+                        </a>
+                        <a href="{{ route('admin.sales-invoices.print-blank-godown', $invoice->id) }}" class="btn btn-outline-warning w-100" target="_blank">
+                            <i class="fas fa-pen me-1"></i> Print Blank Godown
+                        </a>
+                    @endif
+
+                    {{-- BUG-52: Sales → Warehouse handoff buttons.
+                        These are the entry points the warehouse manager
+                        uses to start their work on this invoice. Only
+                        rendered for warehouse_manager/manager/admin
+                        (matches the routes for admin.sales-challans.godown
+                        and admin.sales-challans.challan-form). The buttons
+                        are state-aware:
+                          - Confirmed + no godown prep  → "Prepare Godown"
+                          - Godown prepared, no challan → "Issue Challan"
+                          - Challan issued              → link to challan show --}}
+                    @php
+                        $canWarehouse = auth()->user()->hasRole('warehouse_manager', 'dispatcher', 'manager', 'admin', 'superadmin');
+                        $isConfirmedNoGodown = $invoice->isConfirmed() && !$invoice->is_godown_prepared && !$invoice->is_reversed;
+                        $isGodownNoChallan   = $invoice->is_godown_prepared && !$invoice->is_challan_issued && !$invoice->is_reversed;
+                    @endphp
+                    @if ($canWarehouse && $isConfirmedNoGodown)
+                        <a href="{{ route('admin.sales-challans.godown', $invoice->id) }}" class="btn btn-info w-100 text-white">
+                            <i class="fas fa-warehouse me-1"></i> Prepare Godown Copy
+                        </a>
+                        <div class="alert alert-info small mb-0">
+                            <i class="fas fa-circle-info me-1"></i>
+                            Assign a source warehouse to each line item. Stock does not move yet — that happens at challan issue.
+                        </div>
+                    @endif
+                    @if ($canWarehouse && $isGodownNoChallan)
+                        <a href="{{ route('admin.sales-challans.challan-form', $invoice->id) }}" class="btn btn-success w-100">
+                            <i class="fas fa-truck me-1"></i> Issue Challan
+                        </a>
+                        <div class="alert alert-warning small mb-0">
+                            <i class="fas fa-triangle-exclamation me-1"></i>
+                            Issuing the challan moves stock OUT of the warehouse at avg_cost and posts GL Dr COGS / Cr Inventory.
+                        </div>
+                    @endif
+
+                    {{-- Draft: Cancel invoice — only for sales-side roles. --}}
+                    @if ($invoice->isDraft() && auth()->user()->hasRole('salesman', 'manager', 'admin', 'superadmin'))
                         <form method="POST" action="{{ route('admin.sales-invoices.cancel', $invoice->id) }}" id="cancelForm">
                             @csrf
                             <input type="hidden" name="cancel_reason" id="cancelReasonInput" value="">
@@ -703,12 +750,36 @@
                         </div>
                     @endif
 
-                    {{-- Confirmed: info --}}
-                    @if ($invoice->isConfirmed())
-                        <div class="alert alert-info small mb-0">
-                            <i class="fas fa-circle-info me-1"></i>
-                            This invoice is <strong>confirmed</strong>. Godown preparation &amp; challan issue will be available in Phase 8.3.
-                        </div>
+                    {{-- BUG-52: Confirmed-invoice info — replaced the stale
+                        "Phase 8.3 will be available" alert with an actionable
+                        status reflecting the actual godown/challan state. --}}
+                    @if ($invoice->isConfirmed() && !$invoice->is_reversed)
+                        @if (!$invoice->is_godown_prepared)
+                            <div class="alert alert-info small mb-0">
+                                <i class="fas fa-circle-info me-1"></i>
+                                <strong>Awaiting godown prep.</strong>
+                                @if ($canWarehouse)
+                                    Click <em>Prepare Godown Copy</em> above to assign warehouses.
+                                @else
+                                    The warehouse manager will prepare the godown copy next.
+                                @endif
+                            </div>
+                        @elseif (!$invoice->is_challan_issued)
+                            <div class="alert alert-info small mb-0">
+                                <i class="fas fa-circle-info me-1"></i>
+                                <strong>Godown prepared — awaiting challan issue.</strong>
+                                @if ($canWarehouse)
+                                    Click <em>Issue Challan</em> above to dispatch stock.
+                                @else
+                                    The warehouse manager will issue the challan next.
+                                @endif
+                            </div>
+                        @else
+                            <div class="alert alert-success small mb-0">
+                                <i class="fas fa-circle-check me-1"></i>
+                                <strong>Challan issued.</strong> Stock has moved OUT. Awaiting customer payment.
+                            </div>
+                        @endif
                     @endif
 
                     {{-- Cancelled / reversed --}}

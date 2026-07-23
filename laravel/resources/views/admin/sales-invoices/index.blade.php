@@ -16,12 +16,27 @@
         'smart_sort'  => '1',
     ], is_array($filters ?? null) ? $filters : []);
 
+    // BUG-52: scope chip — 'today', 'pending_godown', 'pending_challan'.
+    // Defaults to 'today' on first visit so the menu label "Today Invoice"
+    // finally matches reality. User can click "All" to clear.
+    $scope = $scope ?? ($filters['scope'] ?? null);
+    if (!in_array($scope, ['today', 'pending_godown', 'pending_challan', 'all', null], true)) {
+        $scope = null;
+    }
+    // First-visit default: if no scope and no explicit dates, show today.
+    if ($scope === null && !$filters['from_date'] && !$filters['to_date']) {
+        $scope = 'today';
+    }
+
     $stats = array_merge([
-        'total'       => 0,
-        'draft'       => 0,
-        'confirmed'   => 0,
-        'cancelled'   => 0,
-        'total_value' => 0,
+        'total'           => 0,
+        'today'           => 0,
+        'draft'           => 0,
+        'confirmed'       => 0,
+        'cancelled'       => 0,
+        'pending_godown'  => 0,
+        'pending_challan' => 0,
+        'total_value'     => 0,
     ], $stats ?? []);
 
     // R22 status chip definitions. The chip's data-status value is
@@ -32,6 +47,9 @@
     // each bucket without losing their filter context.
     $statusChips = [
         'all'              => ['label' => 'All',                'icon' => 'fa-list'],
+        'today'            => ['label' => 'Today',              'icon' => 'fa-calendar-day'],
+        'pending_godown'   => ['label' => 'Pending Godown',     'icon' => 'fa-warehouse'],
+        'pending_challan'  => ['label' => 'Pending Challan',    'icon' => 'fa-truck'],
         'awaiting_payment' => ['label' => 'Awaiting payment',   'icon' => 'fa-hand-holding-dollar'],
         'draft'            => ['label' => 'Draft',              'icon' => 'fa-pen-to-square'],
         'confirmed'        => ['label' => 'Confirmed',          'icon' => 'fa-circle-check'],
@@ -205,9 +223,10 @@
         </div>
     </div>
 
-    {{-- R22: Status chips with live counts.
-        Active chip is highlighted; clicking a chip sets the hidden
-        #status_chip input + reloads the DataTable + refreshes summary. --}}
+    {{-- R22 + BUG-52: Workflow chips (scope) + Status chips with live counts.
+        Scope chips (today/pending_godown/pending_challan/all) take precedence
+        over status_chip when set. Clicking a scope chip sets the hidden
+        #scope input + reloads the DataTable + refreshes summary. --}}
     <div class="card border-0 shadow-sm mb-3">
         <div class="card-body py-2">
             <div class="d-flex flex-wrap gap-2 align-items-center" id="statusChipRow">
@@ -216,15 +235,26 @@
                     <small class="text-muted fw-normal">(live counts)</small>:
                 </span>
                 @foreach ($statusChips as $key => $chip)
+                    @php
+                        // BUG-52: today / pending_godown / pending_challan are
+                        // scope chips; the rest are status_chip values. We
+                        // render them all in one row for simplicity but tag
+                        // them differently via data-scope vs data-status.
+                        $isScope = in_array($key, ['today', 'pending_godown', 'pending_challan'], true);
+                        $isActive = $isScope
+                            ? ($scope === $key)
+                            : ($scope === null && $filters['status_chip'] === $key);
+                    @endphp
                     <button type="button"
-                            class="btn btn-sm status-chip {{ $filters['status_chip'] === $key ? 'active' : '' }}"
-                            data-status="{{ $key }}">
+                            class="btn btn-sm status-chip {{ $isActive ? 'active' : '' }}"
+                            @if ($isScope) data-scope="{{ $key }}" @else data-status="{{ $key }}" @endif>
                         <i class="fas {{ $chip['icon'] }} me-1"></i>
                         <span class="chip-label">{{ $chip['label'] }}</span>
                         <span class="chip-count badge bg-secondary ms-1">0</span>
                     </button>
                 @endforeach
                 <input type="hidden" id="status_chip" name="status_chip" value="{{ $filters['status_chip'] }}">
+                <input type="hidden" id="scope" name="scope" value="{{ $scope ?? '' }}">
             </div>
         </div>
     </div>
@@ -313,6 +343,7 @@ $(function () {
     var $search = $('#filterSearch');
     var $form = $('#invoiceFilterForm');
     var $chipInput = $('#status_chip');
+    var $scopeInput = $('#scope');
     var searchDebounce = null;
 
     function currentFilterParams() {
@@ -324,6 +355,10 @@ $(function () {
             search:      $search.val(),
             smart_sort:  $('#filterSmartSort').is(':checked') ? '1' : '0',
             status_chip: $chipInput.val() || 'all',
+            // BUG-52: scope chip (today / pending_godown / pending_challan).
+            // Sent alongside status_chip — the server gives it precedence
+            // when set (see SalesInvoiceController::buildInvoiceFilterQuery).
+            scope:       $scopeInput.val() || '',
         };
     }
 
@@ -355,6 +390,7 @@ $(function () {
                 d.branch_id   = p.branch_id;
                 d.smart_sort  = p.smart_sort;
                 d.status_chip = p.status_chip;
+                d.scope       = p.scope;
                 // If the user has typed something in #filterSearch,
                 // use it as the global search value (overrides DT's
                 // own search box).
@@ -522,6 +558,9 @@ $(function () {
     function updateChipCounts(data) {
         var map = {
             all:              data.total ?? 0,
+            today:            data.today ?? 0,
+            pending_godown:   data.pending_godown ?? 0,
+            pending_challan:  data.pending_challan ?? 0,
             awaiting_payment: data.awaiting_payment ?? 0,
             draft:            data.draft ?? 0,
             confirmed:        data.confirmed ?? 0,
@@ -529,18 +568,36 @@ $(function () {
             reversed:         data.reversed ?? 0,
         };
         $('.status-chip').each(function () {
-            var key = $(this).data('status');
-            $(this).find('.chip-count').text(map[key] ?? 0);
+            // BUG-52: chip may carry either data-status (status chip) or
+            // data-scope (workflow chip). Look up by whichever is set.
+            var key = $(this).data('status') || $(this).data('scope');
+            if (key) {
+                $(this).find('.chip-count').text(map[key] ?? 0);
+            }
         });
     }
 
+    // BUG-52: unified click handler — supports both data-status (status
+    // chip) and data-scope (workflow chip) attributes. Clicking a scope
+    // chip clears status_chip so the scope takes precedence; clicking a
+    // status chip clears scope. 'all' is treated as a status chip that
+    // also clears scope (so the user sees everything).
     $('.status-chip').on('click', function () {
-        var key = $(this).data('status');
-        $chipInput.val(key);
+        var statusKey = $(this).data('status');
+        var scopeKey  = $(this).data('scope');
+
+        if (scopeKey) {
+            $scopeInput.val(scopeKey);
+            $chipInput.val('all');
+        } else {
+            $scopeInput.val('');
+            $chipInput.val(statusKey);
+        }
         $('.status-chip').removeClass('active');
         $(this).addClass('active');
         dt.ajax.reload();
         scheduleSummary();
+        updateExportLink();
     });
 
     // ============================================================
@@ -561,6 +618,8 @@ $(function () {
         $('#customer_id, #branch_id').val('').trigger('change');
         $search.val('');
         $('#filterSmartSort').prop('checked', true);
+        // BUG-52: clear both scope and status_chip on reset.
+        $scopeInput.val('');
         $chipInput.val('all');
         $('.status-chip').removeClass('active');
         $('.status-chip[data-status="all"]').addClass('active');
@@ -914,6 +973,11 @@ $(function () {
     .status-chip[data-status="confirmed"].active        { background: #16a34a; }
     .status-chip[data-status="cancelled"].active        { background: #64748b; }
     .status-chip[data-status="reversed"].active         { background: #b91c1c; }
+    /* BUG-52: scope chips — distinct colors so the workflow queue
+       chips are visually distinguishable from the status chips. */
+    .status-chip[data-scope="today"].active           { background: #4f46e5; }
+    .status-chip[data-scope="pending_godown"].active  { background: #0891b2; }
+    .status-chip[data-scope="pending_challan"].active { background: #7c3aed; }
 
     /* R23: Mobile cards variant. Hidden on desktop, shown on mobile.
        The cards themselves are styled below to match the Legacy
