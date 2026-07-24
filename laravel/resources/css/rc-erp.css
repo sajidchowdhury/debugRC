@@ -1,0 +1,156 @@
+/* ==================================================================
+   RC ERP — Tailwind v4 design-system layer (coexists with Bootstrap 5)
+   ==================================================================
+
+   COEXISTENCE RULES (binding — see docs/ui-revamp-plan.md):
+   1. Preflight (Tailwind base reset) is SKIPPED. We import only
+      `tailwindcss/theme` + `tailwindcss/utilities`. Bootstrap's Reboot
+      remains the global base. DO NOT add `@import "tailwindcss/preflight"`.
+   2. Tailwind utilities live in @layer utilities. Unlayered Bootstrap
+      rules win the cascade — so inside <x-erp-*> components NEVER mix
+      Tailwind utility classes with Bootstrap classes on the same element.
+      Components use Tailwind-only markup.
+   3. No global body/element resets here. Every custom rule is class-scoped
+      so it cannot leak onto Bootstrap pages.
+   4. This file is compiled by @tailwindcss/cli to
+      public/assets/css/rc-erp.css and linked in the layout AFTER
+      bootstrap.min.css + custom.css. Build: `npm run build:css`.
+   ================================================================== */
+
+@import "tailwindcss/theme" layer(theme);
+@import "tailwindcss/utilities" layer(utilities);
+
+/* ---- Design tokens ----
+   Fonts: Inter (latin) + Noto Sans Bengali (বাংলা). The app avoids CDN,
+   so these are declared as the preferred stack with system-ui fallback.
+   A later phase may self-host the font files under /assets/fonts/. */
+@theme {
+  --font-sans: "Inter", "Noto Sans Bengali", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-bengali: "Noto Sans Bengali", "Inter", system-ui, sans-serif;
+}
+
+/* ==================================================================
+   Custom class-scoped utilities (ported from rc-erp-ui-showcase.html)
+   ================================================================== */
+
+/* Amber-tinted thin scrollbar — applied only to .custom-scroll elements */
+.custom-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scroll::-webkit-scrollbar-track {
+  background: #fef3c7; /* amber-100 */
+}
+.custom-scroll::-webkit-scrollbar-thumb {
+  background: #d97706; /* amber-600 */
+  border-radius: 3px;
+}
+.custom-scroll::-webkit-scrollbar-thumb:hover {
+  background: #b45309; /* amber-700 */
+}
+
+/* Write-in cells — printable blank-godown form (dispatcher fills by hand) */
+.write-in {
+  border: 2px dashed #9ca3af; /* gray-400 */
+  background: #f5f5f5;
+  min-height: 24px;
+  min-width: 60px;
+}
+.write-in-hint {
+  font-size: 8px;
+  color: #aaa;
+  text-decoration: underline;
+  text-decoration-style: dashed;
+  float: right;
+  position: relative;
+}
+
+/* Diagonal watermark — blank-godown print copy. Scoped to .watermark. */
+.watermark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-45deg);
+  font-size: 72px;
+  font-weight: bold;
+  color: rgba(200, 200, 200, 0.15);
+  letter-spacing: 15px;
+  white-space: nowrap;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Top-nav tab button (design-system nav) */
+.nav-btn {
+  transition: all 0.2s;
+}
+.nav-btn.active {
+  background: #d97706; /* amber-600 */
+  color: #fff;
+}
+.nav-btn:not(.active):hover {
+  background: #fef3c7; /* amber-100 */
+}
+
+/* Pulsing notification badge */
+.pulse {
+  animation: rc-pulse 2s infinite;
+}
+@keyframes rc-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Print helpers — class-scoped, safe alongside existing print pages */
+.page-break {
+  page-break-after: always;
+}
+.print-only {
+  display: none;
+}
+/* .no-print is visible on screen, hidden in print (see @media print below) */
+
+/* Print-page wrapper — opt-in. Apply <body class="rc-erp-print-page"> on
+   erp print layouts only. Does NOT affect existing print.blade.php. */
+.rc-erp-print-page {
+  background: #fff;
+}
+
+/* ==================================================================
+   Print media — class-scoped, opt-in via .rc-erp-print-page wrapper.
+   Existing print pages (no .rc-erp-print-page) are UNAFFECTED.
+   ================================================================== */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .rc-erp-print-page {
+    margin: 15mm 10mm;
+    font-size: 11px;
+    background: #fff !important;
+  }
+  .rc-erp-print-page .page-break {
+    page-break-after: always;
+  }
+  .watermark {
+    opacity: 0.15;
+  }
+  .rc-erp-print-page .print-section {
+    border: none;
+    box-shadow: none;
+  }
+  /* Avoid breaking table rows across pages inside erp print layouts */
+  .rc-erp-print-page table {
+    page-break-inside: auto;
+  }
+  .rc-erp-print-page tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+  .rc-erp-print-page thead {
+    display: table-header-group;
+  }
+}

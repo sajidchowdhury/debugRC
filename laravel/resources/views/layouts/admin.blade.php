@@ -21,6 +21,11 @@
     <link rel="stylesheet" href="/assets/css/custom.css">
     <link rel="stylesheet" href="/assets/css/footer-dropup.css">
 
+    {{-- RC ERP design-system (Tailwind v4, no preflight — coexists with Bootstrap).
+        Additive utilities + class-scoped custom rules; zero impact on existing
+        Bootstrap pages. Build: `npm run build:css` (or `npm run dev:css` for watch). --}}
+    <link rel="stylesheet" href="/assets/css/rc-erp.css">
+
     {{-- jQuery 3.6 + SweetAlert2 --}}
     <script src="/assets/js/bootstrep/jquery-3.6.0.min.js"></script>
     <script src="/assets/js/bootstrep/sweetalert2@11.js"></script>

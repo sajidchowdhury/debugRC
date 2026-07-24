@@ -3,10 +3,14 @@
     "type": "module",
     "scripts": {
         "dev": "vite",
-        "build": "vite build"
+        "build": "vite build",
+        "dev:css": "tailwindcss -i resources/css/rc-erp.css -o public/assets/css/rc-erp.css --watch",
+        "build:css": "tailwindcss -i resources/css/rc-erp.css -o public/assets/css/rc-erp.css --minify"
     },
     "devDependencies": {
+        "@tailwindcss/cli": "^4.3.3",
         "laravel-vite-plugin": "^1.0",
+        "tailwindcss": "^4.3.3",
         "vite": "^6.0"
     }
 }

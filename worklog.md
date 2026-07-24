@@ -1687,3 +1687,29 @@ Stage Summary:
     docker compose exec rcerp_app php artisan route:clear
     docker compose exec rcerp_app php artisan optimize:clear
 - Awaiting user verification.
+
+---
+Task ID: UI-Phase-0 (Laravel)
+Agent: main
+Task: UI/UX Revamp Phase 0 (Laravel) — Tailwind v4 coexistence foundation. Pivot from the obsolete Next.js debugRC work (wiped by force-push) to the actual Laravel 12 project. Introduce Tailwind v4 ALONGSIDE the existing Bootstrap 5, scoped so existing pages are untouched. Foundation only — no visible change.
+
+Work Log:
+- Discovered the remote was force-pushed: it is now a Laravel 12 migration project (laravel/ folder + legacy/ + docker). The old Next.js debugRC is a reference submodule. Reset local to origin/main. Cleaned orphan Next.js files at repo root (next-env.d.ts, .next/, root node_modules/, tsconfig.tsbuildinfo).
+- Audited the Laravel app: Bootstrap 5 + jQuery + Select2 + DataTables + SweetAlert2; brand green #61bc91; CSS served from /assets/css/ (NOT via @vite — the layout loads /assets/ directly, no CDN). No PHP/Composer in this sandbox → runtime verification is the team's step; I verify via the Tailwind CLI build + static checks.
+- Chose coexistence strategy: Tailwind v4 via standalone @tailwindcss/cli (NOT the vite plugin), compiling resources/css/rc-erp.css → public/assets/css/rc-erp.css, linked in the layout like the other /assets/css/*.css files. No @vite directive, no manifest, no breakage to the current vite-free workflow.
+- docs/ui-revamp-plan.md (new): granular 13-phase plan (0–12) with binding coexistence rules. Each phase = one commit, independently deliverable.
+- laravel/package.json: added tailwindcss + @tailwindcss/cli (v4.3.3) devDeps; added scripts dev:css (watch) + build:css (minified).
+- laravel/resources/css/rc-erp.css (new source): imports tailwindcss/theme + tailwindcss/utilities ONLY (preflight SKIPPED so Bootstrap Reboot stays global). @theme tokens for --font-sans (Inter + Noto Sans Bengali + system-ui) and --font-bengali. Custom class-scoped utilities: .custom-scroll, .write-in, .write-in-hint, .watermark, .nav-btn, .pulse, .page-break, .print-only, .no-print, .rc-erp-print-page. @media print block is class-scoped to .rc-erp-print-page so existing print pages are UNAFFECTED.
+- laravel/public/assets/css/rc-erp.css (compiled, 49KB): produced via `bun run build:css`. Verified contains Tailwind utilities (.flex, .bg-amber-500, ...) + custom classes (.write-in, .watermark, ...) and ZERO preflight resets (grep box-sizing:border-box = 0).
+- laravel/resources/views/layouts/admin.blade.php: added one <link rel="stylesheet" href="/assets/css/rc-erp.css"> after custom.css + footer-dropup.css. Additive only; zero impact on Bootstrap pages (preflight off, all custom rules class-scoped).
+- laravel/config/branches.php (new): canonical branch→color map (HO=Red #dc2626, PAT=Blue #2563eb, NOW=Green #16a34a, TAR=Orange #ea580c) with Tailwind class helpers.
+- laravel/app/Support/BranchColor.php (new): accessor over config('branches.colors') — get/hex/tint/bgClass/textClass/borderClass.
+- laravel/app/Support/StatusPalette.php (new): invoice status → {label, label_bn, color, badge_class, icon} map. draft=gray, finalized=amber(Needs Godown), blank_godown_created=orange, godown_prepared=cyan(Ready for Challan), challan_issued=green(Completed), cancelled=red. Plus workflowStatuses() helper.
+- laravel/app/Support/Accents.php (new): accent color → literal Tailwind class strings (8 accents × 14 class keys). Tailwind v4 needs verbatim class strings, so this map avoids unsafe dynamic interpolation.
+- Verified: `bun run build:css` succeeds. No PHP runtime here — team must run `composer dump-autoload` (so App\Support\* classes autoload) and eyeball an existing admin page to confirm no visual regression after adding the rc-erp.css <link>.
+
+Stage Summary:
+- Phase 0 (Laravel) complete and pushed. Tailwind v4 now coexists with Bootstrap 5; preflight skipped; all custom CSS class-scoped.
+- Design-token helpers (BranchColor, StatusPalette, Accents) are the single sources of truth for Phase 1+ Blade components.
+- No existing Blade view modified (only one <link> added to the shared admin layout).
+- Next: Phase 1 — Icon + core display Blade components (<x-erp.icon>, <x-erp.stat-card>, <x-erp.left-accent-card>, <x-erp.status-pill>, <x-erp.branch-pill>, <x-erp.empty-state>, <x-erp.skeleton>).
