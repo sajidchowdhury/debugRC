@@ -8,17 +8,18 @@
         ['key' => 'total',    'header' => 'Total (৳)', 'header_class' => 'text-right', 'cell_class' => 'text-right font-semibold', 'raw' => true],
     ]" :rows="$invoices" :row-key="fn($r) => $r['code']" />
 
-  Or via slots (full control over cells):
-    <x-erp.data-table :columns="[['key'=>'code','header'=>'Code'],['key'=>'total','header'=>'Total']]"
-        :rows="$invoices" row-key="code">
-        <x-slot:cell-code="{ row }">
-            <span class="font-medium text-amber-900">{{ $row['code'] }}</span>
-        </x-slot:cell-code>
-    </x-erp.data-table>
+  Or via render closure (for custom per-row cells — the correct Blade pattern,
+  since named slots can't access the component's foreach $row variable):
+    <x-erp.data-table :cols="[
+        ['key' => 'code', 'header' => 'Invoice Code'],
+        ['key' => 'status', 'header' => 'Status', 'render' => fn($row) => \App\Support\StatusPalette::pillHtml($row['status'])],
+    ]" :rows="$invoices" row-key="code" />
 
-  cols[] fields: key, header, header_bn?, header_class?, cell_class?, raw?
-    - raw=true → cell prints row[$key] without Blade auto-escaping (use ONLY for trusted HTML/closures)
-    - raw absent/false → cell prints e(row[$key]) (escaped)
+  cols[] fields: key, header, header_bn?, header_class?, cell_class?, raw?, render?
+    - render=closure → cell calls render($row) and outputs returned HTML (raw).
+      Use this for custom per-row cell markup (Blade-safe, no slot scoping issues).
+    - raw=true → cell prints row[$key] without escaping (for trusted HTML strings).
+    - neither → cell prints e(row[$key]) (escaped).
   rows: array of arrays/objects. Each row[$col['key']] is the cell value.
   rowKey: closure or string column name (default: row index).
 
@@ -88,14 +89,14 @@
                         <tr class="hover:bg-amber-50/30 border-b border-gray-100 transition-colors">
                             @foreach ($cols as $col)
                                 @php
-                                    $slotName = 'cell-' . $col['key'];
                                     $cellClass = $col['cell_class'] ?? '';
                                     $value = $getValue($row, $col['key']);
                                     $isRaw = $col['raw'] ?? false;
+                                    $hasRender = !empty($col['render']) && is_callable($col['render']);
                                 @endphp
                                 <td class="px-4 py-3 text-gray-700 {{ $cellClass }}">
-                                    @if ($slot->has($slotName))
-                                        {{ $slot->{$slotName} }}
+                                    @if ($hasRender)
+                                        {!! call_user_func($col['render'], $row) !!}
                                     @elseif ($isRaw)
                                         {!! $value !!}
                                     @else

@@ -1779,3 +1779,23 @@ Stage Summary:
 - Phase 3 (Laravel) complete. 7 navigation/table/feedback components built. Total: 21 components.
 - The full design-system component library is now ready: icons, display (stat-card, left-accent-card, status-pill, branch-pill, empty-state, skeleton), buttons (primary, gradient, outline), forms (input, select, textarea, checkbox-card), navigation (journey-stepper, step-indicator, filter-chips), table (data-table), feedback (sticky-action-bar, warning-callout, signature-row).
 - Next: Phase 4 — build a /ui-preview route that renders every component with sample data, so the team can visually verify the whole library in the browser before any sales view is rebuilt. This is the milestone where the team can finally SEE the design system.
+
+---
+Task ID: UI-Phase-4 (Laravel)
+Agent: main
+Task: UI/UX Revamp Phase 4 (Laravel) — UI Preview route. Build a storybook-style /ui-preview route that renders all 21 design-system components with sample data, so the team can visually verify the library before any sales view is rebuilt. This is the milestone where the design system becomes VISIBLE in the browser.
+
+Work Log:
+- app/Http/Controllers/UiPreviewController.php (new) — single index() method returning the erp.ui-preview view with sample data arrays (stats, statuses, branches, workflowSteps, invoiceRows, invoiceCols, filterChips, dispatchers, signers). Each array is tailored to exercise its corresponding component.
+- resources/views/layouts/erp-preview.blade.php (new) — minimal layout (no admin sidebar/nav). Loads the same Bootstrap + custom.css + rc-erp.css stylesheets as admin.blade.php so Tailwind utilities are available, but skips the sidebar/flash chrome. Body has the showcase gradient bg. Used as <x-layouts.erp-preview> wrapper.
+- resources/views/erp/ui-preview.blade.php (new) — the showcase view. Renders every one of the 21 <x-erp.*> components inside <x-erp.left-accent-card> sections: Hero + Journey Stepper, Stat Cards (4), Status Pills (6 + 3 bilingual), Branch Pills (4 + 1 bn), Step Indicator (4-step), Left Accent Cards (4 variants), Buttons (5), Form Controls (5 inputs), Checkbox Cards (3 dispatchers), Filter Chips (5), Data Table (4 rows with status pills via render closure), Warning Callout, Empty State + Skeleton, Sticky Action Bar, Signature Row. Has a sticky header with Back to Dashboard link + "21 components" counter.
+- routes/web.php — added GET /ui-preview route inside the auth middleware group (auth-protected, team-only). Named 'ui-preview'. Uses fully-qualified App\Http\Controllers\UiPreviewController so it doesn't need a top-level use statement.
+- Fixed a Blade scoping bug in data-table: the original slot-based approach (<x-slot:cell-status> using $row) doesn't work because Blade named slots are compiled in the PARENT view's scope, where $row (a variable from the component's @foreach) doesn't exist. Switched to a render-closure approach: cols can now specify ['render' => fn($row) => ...] which the component calls via call_user_func($col['render'], $row) inside the foreach. This is the correct Blade pattern for custom per-row cells.
+- Added StatusPalette::pillHtml($status) method — returns the full HTML string for a status pill (including inline SVG icon). Used by the data-table's render closure, since Blade components can't be nested inside PHP closures. Includes a private iconSvgPath() helper that mirrors the x-erp.icon SVG registry for the 6 status icons.
+- Updated UiPreviewController: invoiceCols status column now uses 'render' => fn($row) => StatusPalette::pillHtml($row['status']) instead of the non-working 'raw' => true + slot approach.
+- Verified: bun run build:css succeeds; CSS grew 58KB → 61KB. New utilities from the view (via-amber-600, max-w-6xl, min-h-screen, space-y-8, h-8) all present. Zero muted-foreground.
+
+Stage Summary:
+- Phase 4 (Laravel) complete. The /ui-preview route is the verification gate — the team can now SEE all 21 design-system components in the browser at /ui-preview (after composer dump-autoload + login).
+- The data-table component now correctly supports render closures for custom per-row cells (Blade-safe), plus raw/escaped modes for simpler columns.
+- Next: Phase 5 — Sales layout shell (layouts/erp.blade.php) that the rebuilt sales views will extend. Then Phase 6+ rebuild each sales view (dashboard, invoice detail, blank godown, godown prep, challan issue, prints).

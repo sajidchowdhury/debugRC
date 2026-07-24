@@ -78,6 +78,11 @@ Route::middleware('auth')->group(function () {
     Route::get('dashboard/sales-trend', [DashboardController::class, 'salesTrendAjax'])
         ->name('dashboard.salesTrend');
 
+    // UI Preview — Phase 4 dev/design tool (storybook-style component showcase).
+    // Renders all <x-erp.*> design-system components with sample data.
+    Route::get('ui-preview', [App\Http\Controllers\UiPreviewController::class, 'index'])
+        ->name('ui-preview');
+
     // ============================================================
     // Phase 4: Master Data Modules
     // ============================================================

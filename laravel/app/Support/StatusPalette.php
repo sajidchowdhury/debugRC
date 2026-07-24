@@ -65,6 +65,41 @@ class StatusPalette
         return self::get($status)['icon'];
     }
 
+    /**
+     * Return the full HTML for a status pill (for use in render closures
+     * inside data-table cols, where Blade components can't be nested).
+     *
+     * Usage in a col definition:
+     *   ['key' => 'status', 'header' => 'Status', 'render' => fn($row) => StatusPalette::pillHtml($row['status'])]
+     */
+    public static function pillHtml(?string $status, bool $bilingual = false): string
+    {
+        $config = self::get($status);
+        $label = $bilingual
+            ? $config['label'] . ' / ' . $config['label_bn']
+            : $config['label'];
+        $iconPath = self::iconSvgPath($config['icon']);
+        $classes = 'font-medium text-xs rounded-full px-2 py-0.5 inline-flex items-center gap-1 ' . $config['badge_class'];
+        return '<span class="' . e($classes) . '">'
+            . '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-3" aria-hidden="true">' . $iconPath . '</svg>'
+            . e($label)
+            . '</span>';
+    }
+
+    /** SVG path inner content for a given icon name (matches x-erp.icon registry). */
+    private static function iconSvgPath(string $name): string
+    {
+        $paths = [
+            'file-edit' => '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><polyline points="14 2 14 8 20 8"/><path d="M10.4 12.6 8 15l1.4 1.4"/><path d="M8 15h6"/>',
+            'clock' => '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+            'clipboard-list' => '<rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
+            'warehouse' => '<path d="M22 8.35V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8.35A2 2 0 0 1 3.26 6.5l8-3.2a2 2 0 0 1 1.48 0l8 3.2A2 2 0 0 1 22 8.35Z"/><path d="M6 18h12"/><path d="M6 14h12"/><path d="M6 10h12"/>',
+            'check-circle' => '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
+            'x-circle' => '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+        ];
+        return $paths[$name] ?? $paths['file-edit'];
+    }
+
     /** Ordered list of workflow statuses for dashboard stat cards / filter chips. */
     public static function workflowStatuses(): array
     {
