@@ -2,209 +2,189 @@
 @extends('layouts.print')
 
 @section('print_content')
-{{-- Blank Godown Copy = handwriting template for manual picking --}}
-{{-- Bengali/English bilingual labels, blank write-in cells, 17 items per page --}}
-
 @php
+    $branchColorHex = \App\Support\BranchColor::hex($branchCode);
+    $branchColorName = \App\Support\BranchColor::get($branchCode)['color_name'] ?? 'Branch';
+    $branchNameBn = \App\Support\BranchColor::get($branchCode)['name_bn'] ?? 'শাখা';
+
     $allItems = $invoice->items;
     $itemsPerPage = 17;
     $itemPages = $allItems->chunk($itemsPerPage);
     $totalPages = $itemPages->count();
     $globalSl = 0;
-    $branchColorHex = \App\Support\BranchColor::hex($branchCode);
+
+    $totalQty = (float) $allItems->sum(fn($i) => (float) $i->qty);
+    $subTotal = (float) ($invoice->sub_total ?? 0);
+    $transportCost = (float) ($invoice->transport_cost ?? 0);
+    $grandTotal = (float) ($invoice->total_amount ?? 0);
 @endphp
 
 @foreach ($itemPages as $pageIndex => $pageItems)
-<div class="print-page position-relative">
-    {{-- BLANK GODOWN watermark --}}
+<div class="print-page" style="position:relative;">
     <div class="watermark">BLANK GODOWN</div>
 
-    {{-- Company header --}}
-    <div class="company-header d-flex justify-content-between align-items-start">
-        <div>
-            <div class="company-name">{{ config('app.name', 'Remote Center ERP') }}</div>
-            @if ($invoice->branch)
-                <div class="small text-muted">{{ $invoice->branch->branch_name }} শাখা / {{ \App\Support\BranchColor::get($branchCode)['color_name'] ?? '' }} Branch</div>
-            @endif
-        </div>
-        <div class="text-end">
-            <div class="doc-title">খালি গোডাউন কপি / BLANK GODOWN</div>
-            <div class="small text-muted">Manual Picking Sheet / ম্যানুয়াল পিকিং শিট</div>
-        </div>
-    </div>
-
-    {{-- Banner --}}
-    <div class="mb-2 p-2 rounded" style="background:{{ $branchColorHex }}15; border:1px dashed {{ $branchColorHex }};">
-        <div class="d-flex justify-content-between align-items-center">
-            <span class="fw-semibold small"><i class="fas fa-pen me-1"></i> ম্যানুয়াল পিকিং শিট — Handwrite warehouse, carton & pick confirmation</span>
-            <span class="badge text-dark" style="background:{{ $branchColorHex }}33;">পৃষ্ঠা {{ $pageIndex + 1 }} / {{ $totalPages }}</span>
-        </div>
-        <div class="d-flex gap-3 small mt-1">
-            <span>ইনভয়েস: <strong>{{ $invoice->invoice_code }}</strong></span>
-            <span>মোট আইটেম: <strong>{{ $allItems->count() }}</strong></span>
-        </div>
-    </div>
-
-    {{-- Invoice meta --}}
-    <div class="meta-grid">
-        <div>
-            <div class="meta-label">ইনভয়েস নং / Invoice No.</div>
-            <div class="meta-value">{{ $invoice->invoice_code }}</div>
-        </div>
-        <div class="text-end">
-            <div class="meta-label">ইনভয়েস তারিখ / Date</div>
-            <div class="meta-value">{{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}</div>
-        </div>
-        <div>
-            <div class="meta-label">নাম / Customer</div>
-            <div class="meta-value">{{ $invoice->customer?->customer_name ?? '—' }}</div>
-        </div>
-        <div class="text-end">
-            <div class="meta-label">মোবাইল / Mobile</div>
-            <div class="meta-value">{{ $invoice->customer?->mobile ?? $invoice->customer?->phone ?? '—' }}</div>
-        </div>
-        @if ($invoice->salesman)
-        <div>
-            <div class="meta-label">বিক্রয়কর্মী / Salesman</div>
-            <div class="meta-value">{{ $invoice->salesman->name }}</div>
-        </div>
-        @endif
-        <div class="text-end">
-            <div class="meta-label">প্রিন্ট / Print</div>
-            <div class="meta-value">{{ now()->format('d M Y') }}</div>
-        </div>
-    </div>
-
-    {{-- Customer address block (first page only) --}}
-    @if ($pageIndex === 0 && $invoice->customer)
-    <div class="mb-2 p-2 border rounded small">
-        <div class="row">
-            <div class="col-2 text-muted">ঠিকানা / Address:</div>
-            <div class="col-10">{{ $invoice->customer->address ?? '—' }}</div>
-        </div>
-        <div class="row">
-            <div class="col-2 text-muted">শাখা / Branch:</div>
-            <div class="col-10">{{ $invoice->branch?->branch_name ?? '—' }}</div>
-        </div>
-    </div>
-    @endif
-
-    {{-- Picking list table — BLANK write-in cells using .write-in class --}}
-    <table class="table table-sm table-bordered items-table">
-        <thead>
-            <tr>
-                <th style="width:5%;">ক্রম / #</th>
-                <th style="width:30%;">পণ্যের নাম / Product</th>
-                <th class="text-end" style="width:12%;">চাহিদা / Demand</th>
-                <th class="text-center" style="width:18%;">গুদাম / Warehouse (লিখুন)</th>
-                <th class="text-center" style="width:12%;">কার্টন / CTN</th>
-                <th class="text-center" style="width:13%;">পিস তোলা / Picked</th>
-                <th class="text-center" style="width:10%;">স্বাক্ষর / Sign</th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach ($pageItems as $item)
-                @php $globalSl++; @endphp
-                <tr>
-                    <td class="text-center">{{ $globalSl }}</td>
-                    <td>
-                        {{ $item->product?->product_name ?? 'Product #' . $item->product_id }}
-                        @if ($item->product?->product_code)
-                            <br><small class="text-muted">{{ $item->product->product_code }}</small>
-                        @endif
-                    </td>
-                    <td class="text-end fw-semibold">{{ number_format((float) $item->qty, 2) }}</td>
-                    {{-- Warehouse — write-in cell --}}
-                    <td class="text-center">
-                        @if ($item->warehouse)
-                            <span style="font-size:0.75rem; color:#999;">{{ $item->warehouse->warehouse_name }}</span>
-                        @else
-                            <span class="write-in d-inline-block" style="width:90%; min-height:20px;">&nbsp;</span>
-                        @endif
-                    </td>
-                    {{-- Carton — write-in --}}
-                    <td class="text-center">
-                        <span class="write-in d-inline-block" style="width:70%; min-height:20px;">&nbsp;</span>
-                    </td>
-                    {{-- Pieces picked — write-in --}}
-                    <td class="text-center">
-                        <span class="write-in d-inline-block" style="width:70%; min-height:20px;">&nbsp;</span>
-                    </td>
-                    {{-- Signature — write-in --}}
-                    <td class="text-center">
-                        <span class="write-in d-inline-block" style="width:90%; min-height:20px;">&nbsp;</span>
-                    </td>
-                </tr>
-            @endforeach
-
-            {{-- Fill remaining rows to keep consistent page height --}}
-            @for ($i = $pageItems->count(); $i < $itemsPerPage; $i++)
-                <tr style="height:28px;">
-                    <td>&nbsp;</td>
-                    <td>&nbsp;</td>
-                    <td>&nbsp;</td>
-                    <td>&nbsp;</td>
-                    <td>&nbsp;</td>
-                    <td>&nbsp;</td>
-                    <td>&nbsp;</td>
-                </tr>
-            @endfor
-        </tbody>
-    </table>
-
-    {{-- Last page: dispatcher write-in + signatures --}}
-    @if ($pageIndex === $totalPages - 1)
-        {{-- Summary --}}
-        <div class="totals-section">
-            <dl class="row mb-0">
-                <dt class="col-7">মোট আইটেম / Total Items</dt>
-                <dd class="col-5">{{ $allItems->count() }}</dd>
-                <dt class="col-7">মোট পরিমাণ / Total Qty</dt>
-                <dd class="col-5">{{ number_format($allItems->sum(fn($i) => (float) $i->qty), 2) }}</dd>
-            </dl>
-        </div>
-
-        {{-- Dispatcher write-in block --}}
-        <div class="mt-3 p-2 border rounded" style="background:{{ $branchColorHex }}11;">
-            <div class="small fw-semibold mb-1">ডিসপ্যাচার / Dispatcher</div>
-            @if ($invoice->dispatchers && $invoice->dispatchers->count() > 0)
-                <div class="small mb-1">সিস্টেম: {{ $invoice->dispatchers->pluck('name')->join(', ') }}</div>
-            @endif
-            <div class="row g-1">
-                <div class="col-6">
-                    <div class="small text-muted">ডিসপ্যাচার নাম / Name</div>
-                    <div class="write-in" style="min-height:25px;">&nbsp;</div>
+    <div style="position:relative; z-index:1;">
+        {{-- Branch Header --}}
+        <div style="text-align:center; border-bottom:3px solid {{ $branchColorHex }}; padding-bottom:8px; margin-bottom:12px;">
+            <div style="display:inline-flex; align-items:center; justify-content:center; gap:12px; vertical-align:middle;">
+                <div style="display:inline-flex; align-items:center; justify-content:center; width:48px; height:48px; border-radius:8px; border:2px solid {{ $branchColorHex }}; background:{{ $branchColorHex }}22;">
+                    <svg viewBox="0 0 40 40" width="30" height="30" style="display:block;">
+                        <rect x="2" y="2" width="36" height="36" rx="6" fill="none" stroke="{{ $branchColorHex }}" stroke-width="3"></rect>
+                        <text x="20" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="{{ $branchColorHex }}">{{ strtoupper((string) $branchCode) ?: 'RC' }}</text>
+                        <line x1="8" y1="28" x2="32" y2="28" stroke="{{ $branchColorHex }}" stroke-width="2"></line>
+                    </svg>
                 </div>
-                <div class="col-6">
-                    <div class="small text-muted">তারিখ / সময় / Date & Time</div>
-                    <div class="write-in" style="min-height:25px;">&nbsp;</div>
+                <div style="text-align:left;">
+                    <div style="font-weight:700; font-size:18px; color:{{ $branchColorHex }};">{{ $invoice->branch?->branch_name ?? 'RC ERP' }} — {{ $branchColorName }} Branch</div>
+                    <div style="font-size:13px; color:#6b7280;">RC DISTRIBUTION / আর সি বণিক</div>
+                    <div style="font-size:11px; color:#9ca3af;">{{ $invoice->branch?->branch_name ?? '' }} / {{ $branchNameBn }} শাখা</div>
                 </div>
             </div>
         </div>
 
-        {{-- Instructions --}}
-        <div class="mt-2 p-2 rounded small" style="background:#fef9c3; border:1px dashed #eab308;">
-            <i class="fas fa-triangle-exclamation me-1"></i>
-            <strong>নির্দেশনা / Instructions:</strong>
-            পিস তোলা অবশ্যই চাহিদার সমান হতে হবে। কম পিস দেওয়া যাবে না। কার্টন শুধু প্যাকিং।<br>
-            Picked pieces must equal demand. Short delivery not allowed. Cartons are for packing only.
+        {{-- Bilingual Title Box --}}
+        <div style="text-align:center; font-weight:700; padding:6px 0; margin-bottom:10px; border:2px solid {{ $branchColorHex }}; color:{{ $branchColorHex }};">
+            <div style="font-size:18px;">খালি গোডাউন কপি</div>
+            <div style="font-size:12px;">BLANK GODOWN COPY · Manual Picking Sheet</div>
         </div>
 
-        {{-- Signatures --}}
-        <x-erp.signature-row :signers="[
-            ['label' => 'Dispatcher', 'label_bn' => 'ডিসপ্যাচার'],
-            ['label' => 'Godown Manager', 'label_bn' => 'গোডাউন ম্যানেজার'],
-            ['label' => 'Verified By', 'label_bn' => 'যাচাইকারী'],
-        ]" />
-
-        {{-- Footer --}}
-        <div class="text-muted text-center mt-2" style="font-size:0.7rem;">
-            Blank Godown · {{ now()->format('d-m-Y h:i A') }} · {{ $invoice->invoice_code }}
+        {{-- Customer & Invoice Info Grid (2-col, bilingual bold labels) --}}
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 16px; margin-bottom:12px; font-size:13px;">
+            <div><span style="font-weight:700; color:#6b7280;">ক্রেতা / Customer:</span> {{ $invoice->customer?->customer_name ?? '—' }}@if ($invoice->customer?->customer_code) ({{ $invoice->customer->customer_code }})@endif</div>
+            <div><span style="font-weight:700; color:#6b7280;">শাখা / Branch:</span> {{ $invoice->branch?->branch_name ?? '—' }} ({{ strtoupper((string) $branchCode) }})</div>
+            <div><span style="font-weight:700; color:#6b7280;">মোবাইল / Mobile:</span> {{ $invoice->customer?->mobile ?? $invoice->customer?->phone ?? '—' }}</div>
+            <div><span style="font-weight:700; color:#6b7280;">চালান / Invoice:</span> {{ $invoice->invoice_code }}</div>
+            <div><span style="font-weight:700; color:#6b7280;">ঠিকানা / Address:</span> {{ $invoice->customer?->address ?? '—' }}</div>
+            <div><span style="font-weight:700; color:#6b7280;">তারিখ / Date:</span> {{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d/m/Y') }}</div>
+            @if ($invoice->salesman)
+                <div><span style="font-weight:700; color:#6b7280;">বিক্রেতা / Salesman:</span> {{ $invoice->salesman->name }}</div>
+            @endif
+            <div><span style="font-weight:700; color:#6b7280;">মোট / Total:</span> <span style="font-weight:700; color:{{ $branchColorHex }};">Tk {{ number_format($grandTotal, 2) }}</span></div>
         </div>
-    @else
-        {{-- Continuation note on non-last pages --}}
-        <p class="text-muted text-center small mt-2">… পরবর্তী পৃষ্ঠায় চালিয়ে যান / Continued on next page</p>
-    @endif
+
+        {{-- Items Table with write-in cells --}}
+        <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:8px;">
+            <thead>
+                <tr style="background:{{ $branchColorHex }}22;">
+                    <th style="border:1px solid #d1d5db; padding:6px 8px; text-align:center; font-weight:700; width:32px;">ক্রম<br><span style="font-size:9px;">Sl</span></th>
+                    <th style="border:1px solid #d1d5db; padding:6px 8px; text-align:left; font-weight:700; min-width:120px;">পণ্যের নাম<br><span style="font-size:9px;">Product Name</span></th>
+                    <th style="border:1px solid #d1d5db; padding:6px 8px; text-align:center; font-weight:700; width:60px;">চাহিদা<br><span style="font-size:9px;">Demand</span></th>
+                    <th class="write-in" style="border:2px dashed #999; padding:6px 8px; text-align:center; font-weight:700; width:90px;">গুদাম<br><span style="font-size:9px;">Warehouse (লিখুন)</span></th>
+                    <th class="write-in" style="border:2px dashed #999; padding:6px 8px; text-align:center; font-weight:700; width:60px;">কার্টন<br><span style="font-size:9px;">CTN</span></th>
+                    <th class="write-in" style="border:2px dashed #999; padding:6px 8px; text-align:center; font-weight:700; width:70px;">পিস তোলা<br><span style="font-size:9px;">Picked</span></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach ($pageItems as $item)
+                    @php $globalSl++; @endphp
+                    <tr>
+                        <td style="border:1px solid #d1d5db; padding:6px 8px; text-align:center; font-weight:600;">{{ $globalSl }}</td>
+                        <td style="border:1px solid #d1d5db; padding:6px 8px; text-align:left;">
+                            <div style="font-weight:600;">{{ $item->product?->product_name ?? 'Product #' . $item->product_id }}</div>
+                            @if ($item->product?->product_code || $item->product?->unit)
+                                <div style="font-size:9px; color:#6b7280;">{{ $item->product?->product_code ?? '' }}@if ($item->product?->unit) @if ($item->product?->product_code) • @endif {{ $item->product->unit }}@endif</div>
+                            @endif
+                        </td>
+                        <td style="border:1px solid #d1d5db; padding:6px 8px; text-align:center; font-weight:700;">{{ number_format((float) $item->qty, 0) }}</td>
+                        <td class="write-in" style="border:2px dashed #ccc; padding:6px 8px; text-align:center; background:#f5f5f5;">
+                            @if ($item->warehouse)
+                                <span style="font-size:10px; color:#9ca3af;">{{ $item->warehouse->warehouse_name }}</span>
+                            @else
+                                &nbsp;<span style="font-size:8px; color:#aaa; float:right; text-decoration:underline dashed;">(লিখুন)</span>
+                            @endif
+                        </td>
+                        <td class="write-in" style="border:2px dashed #ccc; padding:6px 8px; text-align:center; background:#f5f5f5;">&nbsp;</td>
+                        <td class="write-in" style="border:2px dashed #ccc; padding:6px 8px; text-align:center; background:#f5f5f5;">&nbsp;</td>
+                    </tr>
+                @endforeach
+
+                {{-- Fill remaining rows to 17 --}}
+                @for ($i = $pageItems->count(); $i < $itemsPerPage; $i++)
+                    <tr style="height:26px;">
+                        <td style="border:1px solid #d1d5db; padding:4px 8px;">&nbsp;</td>
+                        <td style="border:1px solid #d1d5db; padding:4px 8px;">&nbsp;</td>
+                        <td style="border:1px solid #d1d5db; padding:4px 8px;">&nbsp;</td>
+                        <td class="write-in" style="border:2px dashed #ccc; padding:4px 8px; background:#f5f5f5;">&nbsp;</td>
+                        <td class="write-in" style="border:2px dashed #ccc; padding:4px 8px; background:#f5f5f5;">&nbsp;</td>
+                        <td class="write-in" style="border:2px dashed #ccc; padding:4px 8px; background:#f5f5f5;">&nbsp;</td>
+                    </tr>
+                @endfor
+
+                {{-- Total row (always on every page) --}}
+                <tr style="background:{{ $branchColorHex }}15; font-weight:700;">
+                    <td style="border:1px solid #d1d5db; padding:6px 8px; text-align:center;" colspan="2">মোট / Total</td>
+                    <td style="border:1px solid #d1d5db; padding:6px 8px; text-align:center; font-weight:700;">{{ number_format($totalQty, 0) }}</td>
+                    <td class="write-in" style="border:2px dashed #ccc; padding:6px 8px; background:#f5f5f5;">&nbsp;</td>
+                    <td class="write-in" style="border:2px dashed #ccc; padding:6px 8px; text-align:center; background:#f5f5f5;">&nbsp;</td>
+                    <td class="write-in" style="border:2px dashed #ccc; padding:6px 8px; background:#f5f5f5;">&nbsp;</td>
+                </tr>
+            </tbody>
+        </table>
+
+        @if ($pageIndex === $totalPages - 1)
+            {{-- Amount Summary (3 cols) --}}
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; font-size:13px; margin:8px 0;">
+                <div style="border:1px solid #d1d5db; border-radius:4px; padding:8px;"><span style="font-weight:700; color:#6b7280;">Subtotal / সাবটোটাল:</span> Tk {{ number_format($subTotal, 2) }}</div>
+                <div style="border:1px solid #d1d5db; border-radius:4px; padding:8px;"><span style="font-weight:700; color:#6b7280;">Transport / পরিবহন:</span> Tk {{ number_format($transportCost, 2) }}</div>
+                <div style="border:2px solid {{ $branchColorHex }}; border-radius:4px; padding:8px; font-weight:700; color:{{ $branchColorHex }};">Total / মোট: Tk {{ number_format($grandTotal, 2) }}</div>
+            </div>
+
+            {{-- Dispatcher Block --}}
+            <div style="border:1px solid #d1d5db; padding:10px; background:#f9fafb; margin-bottom:8px;">
+                <div style="font-weight:700; font-size:13px; margin-bottom:4px; color:{{ $branchColorHex }};">ডিসপ্যাচার / Dispatchers</div>
+                @if ($invoice->dispatchers && $invoice->dispatchers->count() > 0)
+                    <div style="font-size:12px; color:#374151; margin-bottom:4px;">
+                        @foreach ($invoice->dispatchers as $disp)
+                            <span style="margin-right:10px;">{{ $disp->name }}@if ($disp->phone) · {{ $disp->phone }}@endif</span>
+                        @endforeach
+                    </div>
+                @else
+                    <div style="font-size:12px; color:#9ca3af; margin-bottom:4px;">— নির্বাচিত নয় / Not assigned —</div>
+                @endif
+                <div style="font-size:12px; color:#6b7280; margin-bottom:6px;"><span style="font-weight:700;">WM নির্দেশনা / Instructions:</span> প্রথমে গোডাউন-৩ যান, তারপর গোডাউন-১</div>
+                <div style="font-size:11px; color:#6b7280; margin-bottom:4px;">অতিরিক্ত নোট / Additional Notes:</div>
+                <div style="border:2px dashed #9ca3af; background:white; min-height:36px; padding:4px;">&nbsp;</div>
+            </div>
+
+            {{-- Instructions Box (branch-colored) --}}
+            <div style="border:2px solid {{ $branchColorHex }}; padding:10px; margin-bottom:8px; background:{{ $branchColorHex }}11;">
+                <div style="font-weight:700; font-size:13px; color:{{ $branchColorHex }};">📋 নির্দেশনা / Instructions</div>
+                <div style="font-size:11px; margin-top:4px; color:{{ $branchColorHex }}cc;">
+                    <p style="margin:0 0 4px 0;">ডিসপ্যাচার: প্রতিটি পণ্যের জন্য গুদামের নাম (Warehouse Name) ও কার্টন সংখ্যা (CTN) এবং পিস তোলা (Picked) হাতে লিখে পূরণ করুন। পূরণ হওয়া কপি Warehouse Manager এর কাছে ফিরিয়ে দিতে হবে।</p>
+                    <p style="margin:0;">Dispatcher: Fill in the Warehouse Name, CTN, and Picked columns for each product by hand. The filled copy must be returned to the Warehouse Manager.</p>
+                </div>
+            </div>
+
+            {{-- Signatures (3 columns, 140px each, 40px top margin line) --}}
+            <div style="display:flex; justify-content:space-between; margin-top:32px;">
+                <div style="text-align:center; width:140px;">
+                    <div style="height:40px;"></div>
+                    <div style="border-top:1px solid #000;"></div>
+                    <div style="font-size:11px; font-weight:600; margin-top:4px;">ডিসপ্যাচার / Dispatcher</div>
+                </div>
+                <div style="text-align:center; width:140px;">
+                    <div style="height:40px;"></div>
+                    <div style="border-top:1px solid #000;"></div>
+                    <div style="font-size:11px; font-weight:600; margin-top:4px;">গোডাউন ম্যানেজার / Godown Manager</div>
+                </div>
+                <div style="text-align:center; width:140px;">
+                    <div style="height:40px;"></div>
+                    <div style="border-top:1px solid #000;"></div>
+                    <div style="font-size:11px; font-weight:600; margin-top:4px;">যাচাইকারী / Verifier</div>
+                </div>
+            </div>
+
+            {{-- Footer --}}
+            <div style="text-align:center; font-size:9px; color:#9ca3af; margin-top:8px; border-top:1px solid #e5e7eb; padding-top:4px;">
+                Page {{ $pageIndex + 1 }} of {{ $totalPages }} · {{ $invoice->invoice_code }} · {{ $invoice->branch?->branch_name ?? '' }}
+            </div>
+        @else
+            {{-- Continuation note on non-last pages --}}
+            <div style="text-align:center; font-size:11px; color:#9ca3af; margin-top:8px; border-top:1px solid #e5e7eb; padding-top:4px;">
+                Page {{ $pageIndex + 1 }} of {{ $totalPages }} · {{ $invoice->invoice_code }} · … পরবর্তী পৃষ্ঠায় চালিয়ে যান / Continued on next page
+            </div>
+        @endif
+    </div>
 </div>
 @endforeach
 @endsection

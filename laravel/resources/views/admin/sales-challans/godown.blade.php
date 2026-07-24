@@ -20,205 +20,271 @@
     $invoiceTotal = (float) ($invoice->total_amount ?? 0);
 
     // Pre-compute disabled state for the submit button (must NOT use @if inside
-    // an <x-*> component tag — the '>' in $warehouses->isEmpty() breaks Blade's
-    // ComponentTagCompiler regex, orphaning the closing tag's endif).
+    // an <x-*> component tag — raw <button> used below).
     $warehousesEmpty = $warehouses->isEmpty();
 @endphp
 
 <div class="space-y-6">
-    {{-- Hero header (amber/orange gradient — showcase spec) --}}
+    <!-- Hero header (amber/orange gradient — showcase PAGE 3) -->
     <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
         <div class="flex items-center justify-between flex-wrap gap-4">
             <div>
-                <h1 class="text-2xl font-bold text-white">গোডাউন কপি প্রস্তুতি</h1>
+                <h1 class="text-2xl font-bold text-white">গোডাউন কপি প্রস্তুতি / Godown Preparation</h1>
                 <p class="text-amber-100 text-sm mt-1">{{ $title }}</p>
-                <p class="text-amber-200 text-xs mt-0.5">Step 1 of 2 — Assign a source warehouse to each invoice line</p>
+                <p class="text-amber-200 text-xs mt-0.5">Step 2 of 4 — Assign a source warehouse to each invoice line</p>
             </div>
             <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors">
-                <x-erp.icon name="arrow-left" class="size-4" /> Back to invoice
+                <i class="fas fa-arrow-left"></i> Back to invoice
             </a>
         </div>
-        {{-- 4-step workflow indicator --}}
-        <div class="mt-6">
-            <x-erp.step-indicator :steps="[
-                ['label' => 'Invoice', 'label_bn' => 'চালান', 'icon' => 'file-text', 'state' => 'done'],
-                ['label' => 'Godown Prep', 'label_bn' => 'গোডাউন প্রস্তুতি', 'icon' => 'warehouse', 'state' => 'active'],
-                ['label' => 'Challan Issue', 'label_bn' => 'চালান ইস্যু', 'icon' => 'truck', 'state' => 'pending'],
-                ['label' => 'Completed', 'label_bn' => 'সম্পন্ন', 'icon' => 'check-circle', 'state' => 'pending'],
-            ]" />
+
+        <!-- 4-step workflow indicator (raw markup, matches showcase template) -->
+        <div class="mt-6 flex items-center gap-2 flex-wrap">
+            <!-- 1. Invoice (done) -->
+            <div class="flex items-center gap-2">
+                <div class="size-8 rounded-full bg-green-100 border-2 border-green-400 text-green-600 flex items-center justify-center">
+                    <i class="fas fa-check text-xs"></i>
+                </div>
+                <span class="text-xs font-medium text-green-600">Invoice ✓</span>
+            </div>
+            <div class="w-4 h-0.5 bg-gray-300"></div>
+
+            <!-- 2. Godown Prep (active) -->
+            <div class="flex items-center gap-2">
+                <div class="size-8 rounded-full bg-amber-500 border-2 border-amber-600 text-white flex items-center justify-center">
+                    <i class="fas fa-warehouse text-xs"></i>
+                </div>
+                <span class="text-xs font-medium text-amber-700">Godown Prep</span>
+            </div>
+            <div class="w-4 h-0.5 bg-gray-300"></div>
+
+            <!-- 3. Challan Issue (pending) -->
+            <div class="flex items-center gap-2">
+                <div class="size-8 rounded-full bg-gray-100 border-2 border-gray-300 text-gray-400 flex items-center justify-center">
+                    <i class="fas fa-truck text-xs"></i>
+                </div>
+                <span class="text-xs font-medium text-gray-400">Challan Issue</span>
+            </div>
+            <div class="w-4 h-0.5 bg-gray-300"></div>
+
+            <!-- 4. Completed (pending) -->
+            <div class="flex items-center gap-2">
+                <div class="size-8 rounded-full bg-gray-100 border-2 border-gray-300 text-gray-400 flex items-center justify-center">
+                    <i class="fas fa-check-circle text-xs"></i>
+                </div>
+                <span class="text-xs font-medium text-gray-400">Completed</span>
+            </div>
         </div>
     </div>
 
-    {{-- Invoice summary card --}}
-    <x-erp.left-accent-card accent="amber" icon="file-text" title="Invoice Summary" title-bn="চালান সারসংক্ষেপ">
-        <div class="row g-3">
-            <div class="col-md-3">
-                <div class="text-muted small">Invoice code</div>
-                <div class="fw-semibold">
-                    <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="text-decoration-none">
-                        {{ $invoice->invoice_code }}
-                    </a>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="text-muted small">Invoice date</div>
-                <div class="fw-semibold">
-                    {{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="text-muted small">Customer</div>
-                <div class="fw-semibold">
+    <!-- Invoice summary card (orange left accent — matches template PAGE 3) -->
+    <div class="bg-white rounded-xl shadow-sm border-l-4 border-l-orange-500 p-4">
+        <div class="pb-2 mb-3 border-b border-gray-100">
+            <h3 class="text-lg font-medium">
+                <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="hover:text-amber-700 transition-colors">
+                    {{ $invoice->invoice_code }}
+                </a>
+            </h3>
+            <p class="text-sm text-gray-500">
+                {{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}
+                —
+                @if ($invoice->customer){{ $invoice->customer->customer_name }}@else—@endif
+            </p>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+                <span class="text-gray-500 block text-xs">Customer</span>
+                <span class="font-medium">
                     @if ($invoice->customer)
                         {{ $invoice->customer->customer_name }}
-                        <div class="small text-muted">{{ $invoice->customer->customer_code }}</div>
+                        <span class="text-xs text-gray-500">{{ $invoice->customer->customer_code }}</span>
                     @else
-                        <span class="text-muted">—</span>
+                        —
                     @endif
-                </div>
+                </span>
             </div>
-            <div class="col-md-3">
-                <div class="text-muted small">Branch</div>
-                <div class="fw-semibold">
+            <div>
+                <span class="text-gray-500 block text-xs">Branch</span>
+                <span class="font-medium">
                     @if ($invoice->branch)
                         {{ $invoice->branch->branch_name }}
-                        <span class="small text-muted">({{ $invoice->branch->branch_code }})</span>
+                        <span class="text-xs text-gray-500">({{ $invoice->branch->branch_code }})</span>
                     @else
-                        <span class="text-muted">—</span>
+                        —
                     @endif
-                </div>
+                </span>
             </div>
-            <div class="col-md-3">
-                <div class="text-muted small">Total amount</div>
-                <div class="fw-semibold text-amber-700">Tk {{ number_format($invoiceTotal, 2) }}</div>
+            <div>
+                <span class="text-gray-500 block text-xs">Line items</span>
+                <span class="font-medium">{{ number_format($invoice->items->count()) }}</span>
             </div>
-            <div class="col-md-3">
-                <div class="text-muted small">Line items</div>
-                <div class="fw-semibold">{{ number_format($invoice->items->count()) }}</div>
+            <div>
+                <span class="text-gray-500 block text-xs">Total amount</span>
+                <span class="font-bold text-amber-900">Tk {{ number_format($invoiceTotal, 2) }}</span>
             </div>
         </div>
-    </x-erp.left-accent-card>
+    </div>
 
-    {{-- Info banner --}}
-    @if ($warehouses->isEmpty())
-        <x-erp.warning-callout title="No active warehouses" title-bn="কোনো সক্রিয় গুদাম নেই">
-            <p>No active warehouses configured for this branch. Please add warehouses before assigning godown.</p>
-        </x-erp.warning-callout>
+    <!-- Info / warning banner -->
+    @if ($warehousesEmpty)
+        <div class="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
+            <i class="fas fa-triangle-exclamation text-red-600 mt-0.5"></i>
+            <div>
+                <p class="font-medium text-red-800">No active warehouses / কোনো সক্রিয় গুদাম নেই</p>
+                <p class="text-sm text-red-700 mt-1">No active warehouses configured for this branch. Please add warehouses before assigning godown.</p>
+            </div>
+        </div>
     @else
-        <x-erp.warning-callout title="Assign warehouses" title-bn="গুদাম নির্বাচন করুন">
-            <p>Assign a warehouse for each product. Stock availability shown per warehouse for this branch. Stock does not move yet — that happens at challan issue.</p>
-        </x-erp.warning-callout>
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
+            <i class="fas fa-circle-info text-amber-600 mt-0.5"></i>
+            <div>
+                <p class="font-medium text-amber-800">Assign warehouses / গুদাম নির্বাচন করুন</p>
+                <p class="text-sm text-amber-700 mt-1">Assign a warehouse for each product. Stock availability shown per warehouse for this branch. Stock does not move yet — that happens at challan issue.</p>
+            </div>
+        </div>
     @endif
 
-    {{-- Godown assignment form --}}
+    <!-- Godown assignment form -->
     <form method="POST" action="{{ route('admin.sales-challans.storeGodown', $invoice) }}">
         @csrf
-        <x-erp.left-accent-card accent="cyan" icon="warehouse" title="Godown Assignment" title-bn="গুদাম বরাদ্দ" body-class="!p-0">
-            <x-slot:actions>
-                <span class="badge bg-primary-subtle text-primary">
+
+        <!-- Warehouse assignment card (matches template PAGE 3 table) -->
+        <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+            <div class="px-4 py-3 border-b border-amber-100 flex items-center justify-between flex-wrap gap-2">
+                <div>
+                    <h3 class="text-base flex items-center gap-2 font-medium">
+                        <i class="fas fa-warehouse text-amber-600"></i>
+                        Warehouse Assignment
+                    </h3>
+                    <p class="text-xs text-gray-500">Enter the warehouse name as filled by dispatcher</p>
+                </div>
+                <span class="bg-amber-100 border border-amber-300 text-amber-700 rounded-full px-2 py-0.5 text-xs font-medium">
                     {{ $invoice->items->count() }} line(s)
                 </span>
-            </x-slot:actions>
-                <div class="table-responsive">
-                    <table class="table table-sm table-striped table-hover align-middle mb-0">
-                        <thead class="table-light">
-                            <tr>
-                                <th style="min-width:240px;">Product</th>
-                                <th class="text-end">Qty needed</th>
-                                <th style="min-width:260px;">Warehouse</th>
-                                <th style="min-width:280px;">Available qty (per warehouse)</th>
-                                <th class="text-end">Avg cost (Tk)</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach ($invoice->items as $item)
-                                @php
-                                    $rows = $availForProduct($item->product_id);
-                                    $totalAvail = $totalAvailForProduct($item->product_id);
-                                    $short = $totalAvail < (float) $item->qty;
-                                @endphp
-                                <tr class="{{ $short ? 'table-warning' : '' }}">
-                                    <td>
-                                        @if ($item->product)
-                                            <div class="fw-semibold">{{ $item->product->product_name }}</div>
-                                            <div class="small text-muted">{{ $item->product->product_code }}</div>
-                                        @else
-                                            <span class="text-muted">Product #{{ $item->product_id }}</span>
-                                        @endif
-                                    </td>
-                                    <td class="text-end fw-semibold">{{ number_format((float) $item->qty, 2) }}</td>
-                                    <td>
-                                        @if ($warehouses->isEmpty())
-                                            <span class="badge bg-danger-subtle text-danger">
-                                                <i class="fas fa-ban me-1"></i>No warehouses
-                                            </span>
-                                        @else
-                                            <select name="warehouse_assignments[{{ $item->id }}]"
-                                                    class="form-select form-select-sm warehouse-select"
-                                                    data-item-id="{{ $item->id }}"
-                                                    data-product-id="{{ $item->product_id }}"
-                                                    data-qty="{{ $item->qty }}"
-                                                    required>
-                                                <option value="">— select warehouse —</option>
-                                                @foreach ($warehouses as $w)
-                                                    @php
-                                                        $row = $rows->firstWhere('warehouse_id', $w->id);
-                                                        $wQty = $row ? (float) $row->qty : 0.0;
-                                                        $wCost = $row ? (float) $row->avg_cost : 0.0;
-                                                    @endphp
-                                                    <option value="{{ $w->id }}"
-                                                            data-qty="{{ $wQty }}"
-                                                            data-avg-cost="{{ $wCost }}"
-                                                            @if ($wQty < (float) $item->qty) disabled @endif>
-                                                        {{ $w->warehouse_name }}
-                                                        · {{ number_format($wQty, 2) }} on hand
-                                                        @if ($wQty < (float) $item->qty) · insufficient @endif
-                                                    </option>
-                                                @endforeach
-                                            </select>
-                                        @endif
-                                    </td>
-                                    <td>
-                                        @if ($rows->isEmpty())
-                                            <span class="badge bg-danger-subtle text-danger">
-                                                <i class="fas fa-triangle-exclamation me-1"></i>No stock in any warehouse
-                                            </span>
-                                        @else
-                                            <ul class="list-unstyled mb-0 small">
-                                                @foreach ($rows as $row)
-                                                    <li>
-                                                        <span class="text-muted">{{ $row->warehouse_name }}:</span>
-                                                        <span class="fw-semibold
-                                                              {{ (float) $row->qty >= (float) $item->qty ? 'text-success' : 'text-danger' }}">
-                                                            {{ number_format((float) $row->qty, 2) }}
-                                                        </span>
-                                                        <span class="text-muted">@ {{ number_format((float) $row->avg_cost, 2) }}</span>
-                                                    </li>
-                                                @endforeach
-                                            </ul>
-                                        @endif
-                                    </td>
-                                    <td class="text-end">
-                                        @if ($rows->isNotEmpty())
-                                            <span class="avg-cost-display text-muted" id="avg-cost-{{ $item->id }}">—</span>
-                                        @else
-                                            <span class="text-muted">—</span>
-                                        @endif
-                                    </td>
-                                </tr>
-                            @endforeach
-                        </tbody>
-                    </table>
-                </div>
-        </x-erp.left-accent-card>
+            </div>
 
-        {{-- Sticky action bar --}}
-        <x-erp.sticky-action-bar>
-            <x-erp.outline-button href="{{ route('admin.sales-invoices.show', $invoice) }}">Cancel / বাতিল</x-erp.outline-button>
-            <x-erp.primary-button accent="amber" icon="save" type="submit" :disabled="$warehousesEmpty">
-                Confirm Godown Assignment
-            </x-erp.primary-button>
-        </x-erp.sticky-action-bar>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="bg-amber-50/50">
+                            <th class="px-4 py-3 text-left font-medium">Product</th>
+                            <th class="px-4 py-3 text-center font-medium">Ordered Qty</th>
+                            <th class="px-4 py-3 text-left font-medium">Warehouse</th>
+                            <th class="px-4 py-3 text-left font-medium">Available Stock</th>
+                            <th class="px-4 py-3 text-right font-medium">Avg Cost (Tk)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach ($invoice->items as $item)
+                            @php
+                                $rows = $availForProduct($item->product_id);
+                                $totalAvail = $totalAvailForProduct($item->product_id);
+                                $short = $totalAvail < (float) $item->qty;
+                            @endphp
+                            <tr class="hover:bg-amber-50/30 border-b border-gray-100">
+                                <td class="px-4 py-3">
+                                    @if ($item->product)
+                                        <div class="font-medium">{{ $item->product->product_name }}</div>
+                                        <div class="text-xs text-gray-500">{{ $item->product->product_code }}</div>
+                                    @else
+                                        <span class="text-gray-500">Product #{{ $item->product_id }}</span>
+                                    @endif
+                                </td>
+                                <td class="px-4 py-3 text-center font-semibold">{{ number_format((float) $item->qty, 2) }}</td>
+                                <td class="px-4 py-3">
+                                    @if ($warehouses->isEmpty())
+                                        <span class="bg-red-100 text-red-700 border border-red-300 font-semibold text-xs rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                            <i class="fas fa-ban"></i> No warehouses
+                                        </span>
+                                    @else
+                                        <select name="warehouse_assignments[{{ $item->id }}]"
+                                                class="form-select form-select-sm warehouse-select"
+                                                style="width:240px;"
+                                                data-item-id="{{ $item->id }}"
+                                                data-product-id="{{ $item->product_id }}"
+                                                data-qty="{{ $item->qty }}"
+                                                required>
+                                            <option value="">— select warehouse —</option>
+                                            @foreach ($warehouses as $w)
+                                                @php
+                                                    $row = $rows->firstWhere('warehouse_id', $w->id);
+                                                    $wQty = $row ? (float) $row->qty : 0.0;
+                                                    $wCost = $row ? (float) $row->avg_cost : 0.0;
+                                                @endphp
+                                                <option value="{{ $w->id }}"
+                                                        data-qty="{{ $wQty }}"
+                                                        data-avg-cost="{{ $wCost }}"
+                                                        @if ($wQty < (float) $item->qty) disabled @endif>
+                                                    {{ $w->warehouse_name }}
+                                                    · {{ number_format($wQty, 2) }} on hand
+                                                    @if ($wQty < (float) $item->qty) · insufficient @endif
+                                                </option>
+                                            @endforeach
+                                        </select>
+                                    @endif
+                                </td>
+                                <td class="px-4 py-3">
+                                    @if ($rows->isEmpty())
+                                        <span class="bg-red-100 text-red-700 border border-red-300 font-semibold text-xs rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                            <i class="fas fa-triangle-exclamation"></i> No stock in any warehouse
+                                        </span>
+                                    @else
+                                        <div class="flex flex-wrap gap-1">
+                                            @foreach ($rows as $row)
+                                                @php
+                                                    $rowQty = (float) $row->qty;
+                                                    $sufficient = $rowQty >= (float) $item->qty;
+                                                    $hasAny = $rowQty > 0;
+                                                @endphp
+                                                @if ($sufficient)
+                                                    <span class="bg-green-100 text-green-700 border border-green-300 font-semibold text-xs rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                                        <i class="fas fa-check"></i>
+                                                        {{ $row->warehouse_name }}: {{ number_format($rowQty, 2) }}
+                                                    </span>
+                                                @elseif ($hasAny)
+                                                    <span class="bg-yellow-100 text-yellow-700 border border-yellow-300 font-semibold text-xs rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                                        <i class="fas fa-triangle-exclamation"></i>
+                                                        {{ $row->warehouse_name }}: {{ number_format($rowQty, 2) }}
+                                                    </span>
+                                                @else
+                                                    <span class="bg-red-100 text-red-700 border border-red-300 font-semibold text-xs rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                                        <i class="fas fa-ban"></i>
+                                                        {{ $row->warehouse_name }}: 0
+                                                    </span>
+                                                @endif
+                                                <span class="text-xs text-gray-500 self-center">
+                                                    @ {{ number_format((float) $row->avg_cost, 2) }}
+                                                </span>
+                                            @endforeach
+                                        </div>
+                                    @endif
+                                </td>
+                                <td class="px-4 py-3 text-right">
+                                    @if ($rows->isNotEmpty())
+                                        <span class="avg-cost-display text-muted" id="avg-cost-{{ $item->id }}">—</span>
+                                    @else
+                                        <span class="text-gray-400">—</span>
+                                    @endif
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Sticky save bar (matches template PAGE 3) -->
+        <div class="flex gap-3 sticky bottom-4 bg-white/80 backdrop-blur-sm py-4 px-4 border-t rounded-t-lg shadow-lg mt-4 items-center justify-end flex-wrap">
+            <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="border border-gray-200 hover:bg-gray-50 rounded-lg px-4 py-2 text-sm">
+                Cancel / বাতিল
+            </a>
+            <button type="submit"
+                    @if ($warehousesEmpty) disabled @endif
+                    class="bg-amber-500 hover:bg-amber-600 text-white gap-2 rounded-lg px-4 py-2 font-medium inline-flex items-center text-sm shadow-md disabled:bg-gray-300 disabled:cursor-not-allowed">
+                <i class="fas fa-save"></i>
+                Save Godown Copy
+            </button>
+        </div>
     </form>
 </div>
 
