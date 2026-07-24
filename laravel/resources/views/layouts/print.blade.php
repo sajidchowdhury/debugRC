@@ -16,10 +16,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ $title ?? 'Print' }}</title>
-    <link href="/assets/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="/assets/css/all.min.css">
-    {{-- RC ERP design-system (Tailwind v4 + custom .write-in/.watermark classes) --}}
-    <link rel="stylesheet" href="/assets/css/rc-erp.css">
+    {{-- Cache-busted CSS links — filemtime() query param forces browser re-fetch
+         after any CSS file change. Without this, nginx's "expires 1y; immutable"
+         cache header can serve a stale (or previously-404) CSS response forever. --}}
+    <link href="/assets/css/bootstrap.min.css?v={{ filemtime(public_path('assets/css/bootstrap.min.css')) }}" rel="stylesheet">
+    <link href="/assets/css/all.min.css?v={{ filemtime(public_path('assets/css/all.min.css')) }}" rel="stylesheet">
+    <link href="/assets/css/rc-erp.css?v={{ filemtime(public_path('assets/css/rc-erp.css')) }}" rel="stylesheet">
     @php
         $branchCode = $branchCode ?? null;
         $branchColorHex = \App\Support\BranchColor::hex($branchCode);
