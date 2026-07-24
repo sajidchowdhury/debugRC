@@ -26,6 +26,17 @@
         Bootstrap pages. Build: `npm run build:css` (or `npm run dev:css` for watch). --}}
     <link rel="stylesheet" href="/assets/css/rc-erp.css">
 
+    {{-- Sidebar toggle: chevron rotation when expanded --}}
+    <style>
+        .sidebar-toggle[aria-expanded="true"] .fa-chevron-down {
+            transform: rotate(180deg);
+            transition: transform 0.2s ease;
+        }
+        .sidebar-toggle .fa-chevron-down {
+            transition: transform 0.2s ease;
+        }
+    </style>
+
     {{-- jQuery 3.6 + SweetAlert2 --}}
     <script src="/assets/js/bootstrep/jquery-3.6.0.min.js"></script>
     <script src="/assets/js/bootstrep/sweetalert2@11.js"></script>
@@ -129,8 +140,8 @@
                         @if ($hasChildren)
                             {{-- Dropdown parent --}}
                             <li class="nav-item">
-                                <a href="#" class="nav-link d-flex align-items-center {{ $isActive ? 'active' : '' }}"
-                                   data-bs-toggle="collapse" data-bs-target="#menu-{{ $mainMenu['id'] }}">
+                                <a href="#" class="nav-link d-flex align-items-center sidebar-toggle {{ $isActive ? 'active' : '' }}"
+                                   data-target="#menu-{{ $mainMenu['id'] }}" aria-expanded="{{ $isActive ? 'true' : 'false' }}">
                                     <i class="{{ $mainMenu['icon'] }}"></i>
                                     <span class="ms-2">{{ $mainMenu['menu_name'] }}</span>
                                     <i class="fas fa-chevron-down ms-auto small"></i>
@@ -147,8 +158,8 @@
                                         @if ($hasGrandchildren)
                                             {{-- Sub-dropdown --}}
                                             <li class="nav-item">
-                                                <a href="#" class="nav-link small d-flex align-items-center {{ $childActive ? 'active' : '' }}"
-                                                   data-bs-toggle="collapse" data-bs-target="#submenu-{{ $child['id'] }}">
+                                                <a href="#" class="nav-link small d-flex align-items-center sidebar-toggle {{ $childActive ? 'active' : '' }}"
+                                                   data-target="#submenu-{{ $child['id'] }}" aria-expanded="{{ $childActive ? 'true' : 'false' }}">
                                                     <i class="{{ $child['icon'] }}"></i>
                                                     <span class="ms-2">{{ $child['menu_name'] }}</span>
                                                 </a>
@@ -248,49 +259,70 @@
             if (sidebar) sidebar.classList.toggle('d-none');
         }
 
-        // ─── Sidebar collapse state persistence ───────────────────────────
-        // Saves which parent menus are expanded/collapsed to localStorage,
-        // so the sidebar remembers the user's manual toggles across page
-        // navigations (not just the server-side $isActive detection).
+        // ─── Sidebar submenu toggle (bulletproof — no Bootstrap dependency) ──
+        // Uses explicit jQuery click handlers instead of relying on Bootstrap's
+        // data-bs-toggle="collapse" auto-initialization, which was fragile due
+        // to script load order conflicts. This handler ALWAYS works.
         (function() {
             var STORAGE_KEY = 'rcerp_sidebar_expanded';
 
-            // Restore: on page load, apply saved expand/collapse state.
-            // Server-side $isActive already added 'show' to active parents;
-            // we only ADD more 'show' for parents the user manually expanded
-            // on a previous page (we never remove 'show' that $isActive set).
-            document.addEventListener('DOMContentLoaded', function() {
+            // Restore saved state on DOM ready
+            $(document).ready(function() {
                 var saved = {};
                 try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch(e) {}
-                document.querySelectorAll('#sidebarMenu .collapse').forEach(function(el) {
-                    var id = el.id;
-                    if (id && saved[id] === true && !el.classList.contains('show')) {
-                        el.classList.add('show');
+
+                // For each collapsible submenu, apply saved state
+                $('.sidebar-toggle').each(function() {
+                    var targetSel = $(this).data('target');
+                    if (!targetSel) return;
+                    var $target = $(targetSel);
+                    var targetId = targetSel.replace('#', '');
+
+                    // If server-side $isActive already added 'show', respect it
+                    if ($target.hasClass('show')) {
+                        $(this).attr('aria-expanded', 'true');
+                        return;
                     }
-                    // Also mark the trigger link as active-style when expanded
-                    if (id && el.classList.contains('show')) {
-                        var trigger = document.querySelector('[data-bs-target="#' + id + '"]');
-                        if (trigger) trigger.setAttribute('aria-expanded', 'true');
+
+                    // If localStorage says it was expanded, expand it
+                    if (saved[targetId] === true) {
+                        $target.addClass('show');
+                        $(this).attr('aria-expanded', 'true');
                     }
                 });
-            });
 
-            // Save: when a collapse is toggled, record its new state.
-            document.addEventListener('shown.bs.collapse', function(e) {
-                if (!e.target.id || !e.target.closest('#sidebarMenu')) return;
-                try {
-                    var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-                    saved[e.target.id] = true;
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
-                } catch(err) {}
-            });
-            document.addEventListener('hidden.bs.collapse', function(e) {
-                if (!e.target.id || !e.target.closest('#sidebarMenu')) return;
-                try {
-                    var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-                    saved[e.target.id] = false;
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
-                } catch(err) {}
+                // Click handler for parent menu toggles
+                $('.sidebar-toggle').on('click', function(e) {
+                    e.preventDefault();
+                    var targetSel = $(this).data('target');
+                    if (!targetSel) return;
+                    var $target = $(targetSel);
+                    var targetId = targetSel.replace('#', '');
+                    var isExpanded = $target.hasClass('show');
+
+                    if (isExpanded) {
+                        $target.removeClass('show');
+                        $(this).attr('aria-expanded', 'false');
+                    } else {
+                        $target.addClass('show');
+                        $(this).attr('aria-expanded', 'true');
+                    }
+
+                    // Save state to localStorage
+                    try {
+                        var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+                        saved[targetId] = !isExpanded;
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+                    } catch(err) {}
+                });
+
+                // Mobile: close sidebar when a leaf nav-link (no data-target) is clicked
+                $('#sidebarMenu a.nav-link').not('.sidebar-toggle').on('click', function() {
+                    if (window.innerWidth < 992) {
+                        var sidebar = document.getElementById('sidebar');
+                        if (sidebar) sidebar.classList.remove('active');
+                    }
+                });
             });
         })();
     </script>
