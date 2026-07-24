@@ -178,20 +178,67 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 4: Install Node dependencies + build Vite assets
+# Step 4: Install Node dependencies + build frontend assets
 # ---------------------------------------------------------------------------
+# IMPORTANT: node_modules is a Docker named volume (app_node_modules) which
+# persists across container restarts. We MUST re-run `npm install` whenever
+# package.json changes, otherwise the volume stays stale (this was the root
+# cause of the "tailwindcss: not found" bug — tailwind was added to
+# package.json after the first `npm install`, so the volume never got it).
+#
+# Strategy: checksum package.json and compare to the last-installed hash
+# stored in node_modules/.package-hash. Re-install only when changed.
+# ---------------------------------------------------------------------------
+echo "▶ Step 4: Ensuring frontend dependencies..."
+
+NEEDS_INSTALL=false
+if [ ! -d node_modules ]; then
+    echo "  node_modules missing — will install"
+    NEEDS_INSTALL=true
+elif [ -f package.json ]; then
+    CURRENT_HASH=$(md5sum package.json | cut -d' ' -f1)
+    STORED_HASH=""
+    if [ -f node_modules/.package-hash ]; then
+        STORED_HASH=$(cat node_modules/.package-hash)
+    fi
+    if [ "$CURRENT_HASH" != "$STORED_HASH" ]; then
+        echo "  package.json changed since last install — will reinstall"
+        NEEDS_INSTALL=true
+    fi
+fi
+
+if [ "$NEEDS_INSTALL" = true ] && [ -f package.json ]; then
+    echo "  Installing npm dependencies..."
+    npm install 2>&1 || {
+        echo "  ⚠ npm install failed — frontend tooling may be unavailable"
+    }
+    if [ -d node_modules ]; then
+        md5sum package.json | cut -d' ' -f1 > node_modules/.package-hash
+    fi
+    echo "  ✓ npm dependencies installed"
+else
+    echo "  ✓ npm dependencies up to date"
+fi
+
+# Build the Tailwind design-system CSS (rc-erp.css). This is fast (~200ms)
+# and ensures the CSS is always in sync with the Blade component sources.
+# Falls back gracefully to the committed rc-erp.css if the build fails.
+if [ -f package.json ] && grep -q '"build:css"' package.json; then
+    echo "  Building rc-erp.css (Tailwind)..."
+    npm run build:css 2>&1 || echo "  ⚠ build:css failed — using committed rc-erp.css"
+fi
+
+# Build Vite assets (public/build) if not already present
 if [ ! -d public/build ]; then
-    echo "▶ Step 4: Building frontend assets..."
     if [ -f package.json ]; then
-        npm install 2>&1 || true
         npm run build 2>&1 || {
             echo "  ⚠ Vite build failed — frontend assets may be missing"
             echo "  This is OK if you only need backend functionality."
         }
     fi
-    echo "  ✓ Frontend assets built"
+    echo "  ✓ Vite assets built"
 else
-    echo "▶ Step 4: Frontend assets already present — skipping"
+    echo "  ✓ Vite assets already present"
 fi
 
 # ---------------------------------------------------------------------------

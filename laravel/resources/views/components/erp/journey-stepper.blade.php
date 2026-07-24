@@ -2,8 +2,8 @@
   x-erp.journey-stepper — 3-step hero indicator (Invoice → Godown → Challan).
 
   Usage:
-    <x-erp.journey-stepper />   {{-- defaults: Invoice / Godown / Challan --}}
-    <x-erp.journey-stepper :steps="$customSteps" />
+    <x-erp.journey-stepper />           (uses defaults: Invoice / Godown / Challan)
+    <x-erp.journey-stepper :steps="$steps" />
 
   Designed to render ON the dark gradient hero (text-white). Each step is a
   size-12 rounded-full circle with colored border + icon, bilingual labels below,

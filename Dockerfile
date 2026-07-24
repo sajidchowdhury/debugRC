@@ -58,7 +58,13 @@ RUN docker-php-ext-install pdo_mysql mysqli
 # -----------------------------------------------------------------------------
 # PHP Configuration
 # -----------------------------------------------------------------------------
+# NOTE: Strip Windows CRLF (\r) after COPY — same fix as entrypoint.sh.
+# Git on Windows may convert LF -> CRLF on checkout, and PHP's ini parser
+# on Linux chokes on \r (symptom: "syntax error, unexpected '='").
+# .gitattributes enforces LF, but this sed is defense-in-depth for any
+# working-tree copies that already have CRLF.
 COPY docker/php/php.ini /usr/local/etc/php/conf.d/rcerp-custom.ini
+RUN sed -i 's/\r$//' /usr/local/etc/php/conf.d/rcerp-custom.ini
 
 # -----------------------------------------------------------------------------
 # Node.js + npm (for building Vite frontend assets)

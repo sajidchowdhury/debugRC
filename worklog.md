@@ -1799,3 +1799,24 @@ Stage Summary:
 - Phase 4 (Laravel) complete. The /ui-preview route is the verification gate — the team can now SEE all 21 design-system components in the browser at /ui-preview (after composer dump-autoload + login).
 - The data-table component now correctly supports render closures for custom per-row cells (Blade-safe), plus raw/escaped modes for simpler columns.
 - Next: Phase 5 — Sales layout shell (layouts/erp.blade.php) that the rebuilt sales views will extend. Then Phase 6+ rebuild each sales view (dashboard, invoice detail, blank godown, godown prep, challan issue, prints).
+
+---
+Task ID: FIX-Blocking-1-3
+Agent: main
+Task: Fix 3 blocking issues reported by the team before continuing to Phase 5. (1) Tailwind not installed in Docker, (2) PHP ini syntax error, (3) UI Preview $customSteps undefined variable.
+
+Work Log:
+- Issue 1 (Tailwind not installed):
+  - Root cause: docker-compose.yml mounts a named volume `app_node_modules` at /var/www/laravel/node_modules. This volume is populated ONCE on first container start. entrypoint.sh Step 4 only ran `npm install` when `public/build` was missing — so when Phase 0 added tailwindcss to package.json, the existing volume never got the new dep (public/build already existed from the first start).
+  - Fix: rewrote entrypoint.sh Step 4 to use a package.json checksum (md5sum stored in node_modules/.package-hash). Re-runs `npm install` whenever package.json changes. Also always runs `npm run build:css` to compile rc-erp.css (fast ~200ms, ensures CSS stays in sync with Blade sources, falls back to committed CSS on failure).
+- Issue 2 (PHP ini syntax error "unexpected ="):
+  - Root cause: Dockerfile COPYs docker/php/php.ini as-is with NO CRLF strip (unlike entrypoint.sh which gets `sed -i 's/\r$//'`). On Windows, git may have checked out the file with CRLF before .gitattributes took effect; the CRLF persists into the container and PHP's ini parser chokes on \r.
+  - Fix: added `RUN sed -i 's/\r$//' /usr/local/etc/php/conf.d/rcerp-custom.ini` after the COPY in Dockerfile (defense-in-depth, matching the existing entrypoint.sh pattern). Also ran `git add --renormalize .` to force .gitattributes LF normalization on all existing files.
+- Issue 3 (Undefined variable $customSteps):
+  - Root cause: journey-stepper.blade.php line 5 had a NESTED `{{-- defaults: ... --}}` inside the outer docblock comment. Blade comments do NOT nest — the first `--}}` (from the nested comment) closes the outer comment early. This exposed line 6 `<x-erp.journey-stepper :steps="$customSteps" />` as LIVE code that the ComponentTagCompiler compiled and evaluated ($customSteps is undefined).
+  - Fix: removed the nested `{{-- --}}` markers. The docblock is now a single continuous `{{-- ... --}}` block with one open and one close. Changed the example variable from $customSteps to $steps (the actual prop name) for clarity. Verified the file now has exactly 1 `--}}` (the proper closer). Also audited all 21 erp components for unbalanced Blade comments — all balanced.
+- Verified: bun run build:css succeeds. journey-stepper has 1 `--}}`. entrypoint.sh is LF. Dockerfile sed line in place.
+
+Stage Summary:
+- All 3 blocking issues fixed. Team needs to: git pull, rebuild the Docker image (docker compose build rcerp_app), delete the stale node_modules volume (docker volume rm rcerp_app_node_modules), and docker compose up -d. Then verify: npm list @tailwindcss/cli, npm run build:css, php -i (no ini warning), and /ui-preview renders all 21 components.
+- The entrypoint now self-heals: future package.json changes will trigger automatic npm install via the checksum check.
