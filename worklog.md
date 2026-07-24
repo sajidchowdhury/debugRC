@@ -1713,3 +1713,26 @@ Stage Summary:
 - Design-token helpers (BranchColor, StatusPalette, Accents) are the single sources of truth for Phase 1+ Blade components.
 - No existing Blade view modified (only one <link> added to the shared admin layout).
 - Next: Phase 1 — Icon + core display Blade components (<x-erp.icon>, <x-erp.stat-card>, <x-erp.left-accent-card>, <x-erp.status-pill>, <x-erp.branch-pill>, <x-erp.empty-state>, <x-erp.skeleton>).
+
+---
+Task ID: UI-Phase-1 (Laravel)
+Agent: main
+Task: UI/UX Revamp Phase 1 (Laravel) — Icon + core display Blade components. Build the first 7 reusable design-system components as anonymous Blade components under resources/views/components/erp/. Each is a single .blade.php file (no separate class file) using @props + @php for Support-class lookups — lowest autoloading risk given no PHP runtime in this sandbox.
+
+Work Log:
+- Created resources/views/components/erp/ directory (7 component files).
+- icon.blade.php — <x-erp.icon name="warehouse" class="size-5 text-amber-500" />. Inline SVG registry of 25 Lucide-style icons (warehouse, truck, clock, clipboard-list, check-circle, x-circle, file-edit, file-text, alert-triangle, chevron-right, chevron-down, printer, users, package, banknote, pencil, x, bell, map-pin, inbox, arrow-left, arrow-right, layout-grid, eye, plus, search, save, box). Uses @switch($name) + @php to build $svgContent, renders <svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">. Default size-4 via $attributes->merge; caller overrides via class. Unknown name falls back to 'box'.
+- stat-card.blade.php — <x-erp.stat-card label="" label-bn="" value="4" accent="amber" icon="clock" />. Resolves accent classes via App\Support\Accents::get(). Renders bg-white rounded-xl border-l-4 border-l-{accent}-500 shadow-sm p-4, label (sm gray-500), optional Bengali label (11px gray-400), big colored value (2xl bold), faded icon top-right (absolute, opacity-20). Matches showcase dashboard stat card.
+- left-accent-card.blade.php — <x-erp.left-accent-card accent="amber" icon="package" title="..." title-bn="..." :strong="true">slot</x-erp.left-accent-card>. Optional header (icon + bilingual title + $actions named slot). Body = default $slot. border-l-400 by default, border-l-500 when strong=true. Named slot checked via @isset($actions) (most compatible Blade pattern).
+- status-pill.blade.php — <x-erp.status-pill status="blank_godown_created" />. Resolves full config via App\Support\StatusPalette::get($status). Renders pill with badge_class (bg/text/border per status), icon (from config['icon']), label (EN default, or BN via bn=true, or bilingual via bilingual=true). 6 statuses covered.
+- branch-pill.blade.php — <x-erp.branch-pill branch-code="HO" />. Resolves via App\Support\BranchColor::get(). Renders pill with bg/border/text classes from branch config + map-pin icon + branch name + optional code in parentheses.
+- empty-state.blade.php — <x-erp.empty-state icon="inbox" title="..." title-bn="..." message="..." message-bn="..." />. Centered column: amber-50 circle with icon, bilingual title, message, optional $action named slot. For no-data table/list states.
+- skeleton.blade.php — <x-erp.skeleton type="card|row|text|circle|table" :rows="5" />. @switch on type, renders amber-tinted animate-pulse blocks. type=table renders N rows.
+- Fixed a Tailwind v4 issue: replaced all `text-muted-foreground` (shadcn/ui custom color, NOT a default Tailwind utility) with `text-gray-500` / `text-gray-400`. Verified zero `muted-foreground` remaining in component files.
+- Rebuilt public/assets/css/rc-erp.css via `bun run build:css` — grew from 49KB to 51KB. Verified Tailwind v4 auto-detection IS scanning .blade.php files: spot-checked 13 utilities that only appear in the Blade components (.border-l-cyan-500, .border-l-orange-400, .bg-cyan-100, .text-cyan-700, .rounded-xl, .animate-pulse, .size-14, .opacity-20, .text-gray-500, .text-gray-400, .text-gray-700, .backdrop-blur, .border-l-red-500) — all present (count=1 each).
+- No PHP runtime in sandbox — team must run `composer dump-autoload` (already needed from Phase 0 for App\Support\* classes), then the components are usable as <x-erp.icon>, <x-erp.stat-card>, etc. in any Blade view.
+
+Stage Summary:
+- Phase 1 (Laravel) complete. 7 core display components built as anonymous Blade components.
+- All components use Tailwind-only markup (coexists with Bootstrap per Phase 0 rules), resolve design tokens from the Phase 0 Support helpers (Accents, StatusPalette, BranchColor), and nest <x-erp.icon> for icons.
+- Next: Phase 2 — Buttons + form components (<x-erp.primary-button>, <x-erp.gradient-button>, <x-erp.outline-button>, <x-erp.form.input>, <x-erp.form.select>, <x-erp.form.textarea>, <x-erp.checkbox-card>). Then Phase 3 — navigation/table/feedback components (steppers, data-table, filter-chips, sticky-action-bar, warning-callout, signature-row). Then Phase 4 — /ui-preview route to visually verify all components.
