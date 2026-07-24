@@ -256,7 +256,14 @@
         window.CSRF_TOKEN = '{{ csrf_token() }}';
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
-            if (sidebar) sidebar.classList.toggle('d-none');
+            if (!sidebar) return;
+            // On mobile the sidebar is hidden by `d-none` (display:none) AND
+            // positioned off-screen (left:-300px). To reveal it we must remove
+            // `d-none` (so it renders) and add `.active` (so it slides into
+            // view). Toggling both keeps behaviour consistent with
+            // closeSidebarOnMobile() in custom.js.
+            sidebar.classList.toggle('d-none');
+            sidebar.classList.toggle('active');
         }
 
         // ─── Sidebar submenu toggle (bulletproof — no Bootstrap dependency) ──
@@ -320,7 +327,10 @@
                 $('#sidebarMenu a.nav-link').not('.sidebar-toggle').on('click', function() {
                     if (window.innerWidth < 992) {
                         var sidebar = document.getElementById('sidebar');
-                        if (sidebar) sidebar.classList.remove('active');
+                        if (sidebar) {
+                            sidebar.classList.remove('active');
+                            sidebar.classList.add('d-none'); // fully hide (matches toggleSidebar)
+                        }
                     }
                 });
             });

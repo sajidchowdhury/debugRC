@@ -11,9 +11,16 @@
             if (typeof syncFooterSidebarOffset === 'function') syncFooterSidebarOffset();
             if (typeof initFooterDropup === 'function') initFooterDropup();
 
-            // Mobile sidebar close
-            $('#sidebarMenu a.nav-link').on('click', function() {
-                if (!$(this).attr('data-bs-toggle')) closeSidebarOnMobile();
+            // Mobile sidebar close — ONLY for leaf navigation links (actual
+            // page navigations). Parent menu toggles (.sidebar-toggle / links
+            // carrying a data-target) MUST be excluded, otherwise clicking a
+            // parent to expand its submenu would immediately call
+            // closeSidebarOnMobile() and slide the whole sidebar away — making
+            // the submenu appear to "open then instantly disappear".
+            $('#sidebarMenu a.nav-link').not('.sidebar-toggle').on('click', function() {
+                if (!$(this).attr('data-bs-toggle') && !$(this).attr('data-target')) {
+                    closeSidebarOnMobile();
+                }
             });
         });
         
@@ -31,7 +38,13 @@
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
-            if (sidebar) sidebar.classList.toggle('active');
+            if (sidebar) {
+                // On mobile the sidebar is hidden by both `d-none` (display:none)
+                // and being positioned off-screen (left:-300px via .active).
+                // Toggle both so it shows/hides consistently.
+                sidebar.classList.toggle('d-none');
+                sidebar.classList.toggle('active');
+            }
             if (overlay) overlay.classList.toggle('active');
         }
 
@@ -39,7 +52,10 @@
             if (window.innerWidth < 992) {
                 const sidebar = document.getElementById('sidebar');
                 const overlay = document.getElementById('sidebarOverlay');
-                if (sidebar) sidebar.classList.remove('active');
+                if (sidebar) {
+                    sidebar.classList.remove('active');
+                    sidebar.classList.add('d-none'); // fully hide (matches toggleSidebar)
+                }
                 if (overlay) overlay.classList.remove('active');
             }
         }
