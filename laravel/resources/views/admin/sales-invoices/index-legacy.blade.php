@@ -1,9 +1,6 @@
-<x-layouts.erp :title="$title ?? 'Sales Invoices'" :tabs="[
-    ['label' => 'Dashboard', 'href' => route('dashboard')],
-    ['label' => 'Invoices', 'href' => route('admin.sales-invoices.index'), 'active' => true],
-    ['label' => 'Challans', 'href' => route('admin.sales-challans.index')],
-    ['label' => 'UI Preview', 'href' => route('ui-preview')],
-]">
+@extends('layouts.admin')
+
+@section('content')
 @php
     // Defaults for filter controls (initial page render only —
     // subsequent filter changes are dispatched via DataTables AJAX
@@ -61,132 +58,218 @@
     ];
 @endphp
 
-<div class="space-y-6">
-    {{-- Hero header (amber/orange gradient — showcase spec) --}}
-    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
-        <div class="flex items-center justify-between flex-wrap gap-4">
-            <div>
-                <h1 class="text-2xl font-bold text-white">গোডাউন ও চালান</h1>
-                <p class="text-amber-100 text-sm mt-1">Sales Invoices — {{ $title }}</p>
-            </div>
-            <a href="{{ route('admin.sales.cart') }}" class="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors">
-                <x-erp.icon name="plus" class="size-4" /> New Sale / নতুন বিক্রয়
+<div class="container-fluid py-2 sales-invoices-app">
+    {{-- Hero header (purple/indigo = revenue) --}}
+    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
+            style="background: linear-gradient(135deg,#7c3aed,#4f46e5);">
+        <div>
+            <h1 class="h4 mb-1"><i class="fas fa-file-invoice-dollar me-2"></i>{{ $title }}</h1>
+            <p class="mb-0 small opacity-75">
+                Sales workflow — finalize cart → draft invoice → confirmed → godown → challan → payment.
+                GL + customer ledger posted at finalize. Stock moves on challan (Phase 8.3).
+            </p>
+        </div>
+        <div>
+            <a href="{{ route('admin.sales.cart') }}" class="btn btn-light btn-sm">
+                <i class="fas fa-cart-plus me-1"></i> New Sale
             </a>
         </div>
-        {{-- Journey stepper --}}
-        <div class="mt-6">
-            <x-erp.journey-stepper />
-        </div>
-    </div>
+    </header>
 
-    {{-- Stat cards — showcase design (4 cards) --}}
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <x-erp.stat-card label="Pending Godown" label-bn="গোডাউন বাকি" :value="number_format((int) $stats['pending_godown'])" accent="amber" icon="clock" />
-        <x-erp.stat-card label="Pending Challan" label-bn="চালান বাকি" :value="number_format((int) $stats['pending_challan'])" accent="orange" icon="clipboard-list" />
-        <x-erp.stat-card label="Total Invoices" label-bn="মোট চালান" :value="number_format((int) $stats['total'])" accent="cyan" icon="file-text" />
-        <x-erp.stat-card label="Total Value" label-bn="মোট মূল্য" :value="'৳' . number_format((float) $stats['total_value'], 0)" accent="green" icon="banknote" />
+    {{-- Global stats cards (5 cards — global counts, NOT filter-aware).
+        These complement the R22 status chips (which ARE filter-aware). --}}
+    <div class="row g-3 mb-3">
+        <div class="col-sm-6 col-lg">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#7c3aed;">
+                        <i class="fas fa-list"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">{{ number_format((int) $stats['total']) }}</div>
+                        <div class="text-muted small">Total</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-lg">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#d97706;">
+                        <i class="fas fa-pen-to-square"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">{{ number_format((int) $stats['draft']) }}</div>
+                        <div class="text-muted small">Draft</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-lg">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#16a34a;">
+                        <i class="fas fa-circle-check"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">{{ number_format((int) $stats['confirmed']) }}</div>
+                        <div class="text-muted small">Confirmed</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-lg">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#64748b;">
+                        <i class="fas fa-ban"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">{{ number_format((int) $stats['cancelled']) }}</div>
+                        <div class="text-muted small">Cancelled</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-lg">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#4f46e5;">
+                        <i class="fas fa-taka-sign"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">Tk {{ number_format((float) $stats['total_value'], 2) }}</div>
+                        <div class="text-muted small">Total value (ex. cancelled)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     {{-- Filter form (R21 — drives DataTables AJAX params) --}}
-    <x-erp.left-accent-card accent="amber" icon="search" title="Filters" title-bn="ফিল্টার">
-        <form id="invoiceFilterForm" class="row g-2 align-items-end" autocomplete="off">
-            <div class="col-md-2">
-                <label class="form-label small text-muted mb-1" for="from_date">From date</label>
-                <input type="date" id="from_date" name="from_date" class="form-control form-control-sm"
-                       value="{{ $filters['from_date'] }}">
-            </div>
-            <div class="col-md-2">
-                <label class="form-label small text-muted mb-1" for="to_date">To date</label>
-                <input type="date" id="to_date" name="to_date" class="form-control form-control-sm"
-                       value="{{ $filters['to_date'] }}">
-            </div>
-            <div class="col-md-3">
-                <label class="form-label small text-muted mb-1" for="customer_id">Customer</label>
-                <select id="customer_id" name="customer_id" class="form-select form-select-sm select2-filter">
-                    <option value="">All customers</option>
-                    @foreach ($customers as $c)
-                        <option value="{{ $c->id }}"
-                            {{ (string) $filters['customer_id'] === (string) $c->id ? 'selected' : '' }}>
-                            {{ $c->customer_code }} — {{ $c->customer_name }}
-                        </option>
-                    @endforeach
-                </select>
-            </div>
-            <div class="col-md-2">
-                <label class="form-label small text-muted mb-1" for="branch_id">Branch</label>
-                <select id="branch_id" name="branch_id" class="form-select form-select-sm select2-filter">
-                    <option value="">All branches</option>
-                    @foreach ($branches as $b)
-                        <option value="{{ $b->id }}"
-                            {{ (string) $filters['branch_id'] === (string) $b->id ? 'selected' : '' }}>
-                            {{ $b->branch_code }} — {{ $b->branch_name }}
-                        </option>
-                    @endforeach
-                </select>
-            </div>
-            <div class="col-md-2">
-                <label class="form-label small text-muted mb-1" for="filterSearch">Smart search</label>
-                <div class="input-group input-group-sm">
-                    <span class="input-group-text"><i class="fas fa-search"></i></span>
-                    <input type="search" id="filterSearch" name="search" class="form-control"
-                           placeholder="Invoice, customer, mobile, branch…"
-                           value="{{ $filters['search'] }}" autocomplete="off">
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body">
+            <form id="invoiceFilterForm" class="row g-2 align-items-end" autocomplete="off">
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1" for="from_date">From date</label>
+                    <input type="date" id="from_date" name="from_date" class="form-control form-control-sm"
+                           value="{{ $filters['from_date'] }}">
                 </div>
-            </div>
-            <div class="col-md-1 d-flex align-items-end">
-                <div class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" role="switch"
-                           id="filterSmartSort" name="smart_sort" value="1"
-                           {{ $filters['smart_sort'] !== '0' ? 'checked' : '' }}>
-                    <label class="form-check-label small" for="filterSmartSort"
-                           title="Unpaid first, then oldest invoice date">Smart sort</label>
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1" for="to_date">To date</label>
+                    <input type="date" id="to_date" name="to_date" class="form-control form-control-sm"
+                           value="{{ $filters['to_date'] }}">
                 </div>
-            </div>
-            <div class="col-12 d-flex gap-2 justify-content-end flex-wrap">
-                <button type="button" id="applyFiltersBtn" class="btn btn-primary btn-sm">
-                    <i class="fas fa-filter me-1"></i> Apply
-                </button>
-                <button type="button" id="clearFiltersBtn" class="btn btn-outline-secondary btn-sm">
-                    <i class="fas fa-eraser me-1"></i> Clear
-                </button>
-                <a id="csvExportBtn" href="{{ route('admin.sales-invoices.export-csv') }}"
-                   class="btn btn-outline-success btn-sm" target="_blank">
-                    <i class="fas fa-file-csv me-1"></i> Export CSV
-                </a>
-            </div>
-        </form>
-    </x-erp.left-accent-card>
-
-    {{-- R22 + BUG-52: Workflow chips (scope) + Status chips with live counts. --}}
-    <x-erp.left-accent-card accent="orange" icon="clipboard-list" title="Filter" title-bn="ফিল্টার" body-class="!py-2">
-        <div class="d-flex flex-wrap gap-2 align-items-center" id="statusChipRow">
-            <span class="text-muted small me-2">
-                <i class="fas fa-filter me-1"></i>Status
-                <small class="text-muted fw-normal">(live counts)</small>:
-            </span>
-            @foreach ($statusChips as $key => $chip)
-                @php
-                    $isScope = in_array($key, ['today', 'pending_godown', 'pending_challan'], true);
-                    $isActive = $isScope
-                        ? ($scope === $key)
-                        : ($scope === null && $filters['status_chip'] === $key);
-                @endphp
-                <button type="button"
-                        class="btn btn-sm status-chip {{ $isActive ? 'active' : '' }}"
-                        @if ($isScope) data-scope="{{ $key }}" @else data-status="{{ $key }}" @endif>
-                    <i class="fas {{ $chip['icon'] }} me-1"></i>
-                    <span class="chip-label">{{ $chip['label'] }}</span>
-                    <span class="chip-count badge bg-secondary ms-1">0</span>
-                </button>
-            @endforeach
-            <input type="hidden" id="status_chip" name="status_chip" value="{{ $filters['status_chip'] }}">
-            <input type="hidden" id="scope" name="scope" value="{{ $scope ?? '' }}">
+                <div class="col-md-3">
+                    <label class="form-label small text-muted mb-1" for="customer_id">Customer</label>
+                    <select id="customer_id" name="customer_id" class="form-select form-select-sm select2-filter">
+                        <option value="">All customers</option>
+                        @foreach ($customers as $c)
+                            <option value="{{ $c->id }}"
+                                {{ (string) $filters['customer_id'] === (string) $c->id ? 'selected' : '' }}>
+                                {{ $c->customer_code }} — {{ $c->customer_name }}
+                            </option>
+                        @endforeach
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1" for="branch_id">Branch</label>
+                    <select id="branch_id" name="branch_id" class="form-select form-select-sm select2-filter">
+                        <option value="">All branches</option>
+                        @foreach ($branches as $b)
+                            <option value="{{ $b->id }}"
+                                {{ (string) $filters['branch_id'] === (string) $b->id ? 'selected' : '' }}>
+                                {{ $b->branch_code }} — {{ $b->branch_name }}
+                            </option>
+                        @endforeach
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1" for="filterSearch">Smart search</label>
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text"><i class="fas fa-search"></i></span>
+                        <input type="search" id="filterSearch" name="search" class="form-control"
+                               placeholder="Invoice, customer, mobile, branch…"
+                               value="{{ $filters['search'] }}" autocomplete="off">
+                    </div>
+                </div>
+                <div class="col-md-1 d-flex align-items-end">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch"
+                               id="filterSmartSort" name="smart_sort" value="1"
+                               {{ $filters['smart_sort'] !== '0' ? 'checked' : '' }}>
+                        <label class="form-check-label small" for="filterSmartSort"
+                               title="Unpaid first, then oldest invoice date">Smart sort</label>
+                    </div>
+                </div>
+                <div class="col-12 d-flex gap-2 justify-content-end flex-wrap">
+                    <button type="button" id="applyFiltersBtn" class="btn btn-primary btn-sm">
+                        <i class="fas fa-filter me-1"></i> Apply
+                    </button>
+                    <button type="button" id="clearFiltersBtn" class="btn btn-outline-secondary btn-sm">
+                        <i class="fas fa-eraser me-1"></i> Clear
+                    </button>
+                    <a id="csvExportBtn" href="{{ route('admin.sales-invoices.export-csv') }}"
+                       class="btn btn-outline-success btn-sm" target="_blank">
+                        <i class="fas fa-file-csv me-1"></i> Export CSV
+                    </a>
+                </div>
+            </form>
         </div>
-    </x-erp.left-accent-card>
+    </div>
 
-    {{-- R21: Invoices table (server-side DataTables) --}}
-    <x-erp.left-accent-card accent="cyan" icon="file-text" title="Invoices" title-bn="চালান তালিকা" body-class="!p-0">
-            {{-- R23: Mobile cards container --}}
+    {{-- R22 + BUG-52: Workflow chips (scope) + Status chips with live counts.
+        Scope chips (today/pending_godown/pending_challan/all) take precedence
+        over status_chip when set. Clicking a scope chip sets the hidden
+        #scope input + reloads the DataTable + refreshes summary. --}}
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body py-2">
+            <div class="d-flex flex-wrap gap-2 align-items-center" id="statusChipRow">
+                <span class="text-muted small me-2">
+                    <i class="fas fa-filter me-1"></i>Filter
+                    <small class="text-muted fw-normal">(live counts)</small>:
+                </span>
+                @foreach ($statusChips as $key => $chip)
+                    @php
+                        // BUG-52: today / pending_godown / pending_challan are
+                        // scope chips; the rest are status_chip values. We
+                        // render them all in one row for simplicity but tag
+                        // them differently via data-scope vs data-status.
+                        $isScope = in_array($key, ['today', 'pending_godown', 'pending_challan'], true);
+                        $isActive = $isScope
+                            ? ($scope === $key)
+                            : ($scope === null && $filters['status_chip'] === $key);
+                    @endphp
+                    <button type="button"
+                            class="btn btn-sm status-chip {{ $isActive ? 'active' : '' }}"
+                            @if ($isScope) data-scope="{{ $key }}" @else data-status="{{ $key }}" @endif>
+                        <i class="fas {{ $chip['icon'] }} me-1"></i>
+                        <span class="chip-label">{{ $chip['label'] }}</span>
+                        <span class="chip-count badge bg-secondary ms-1">0</span>
+                    </button>
+                @endforeach
+                <input type="hidden" id="status_chip" name="status_chip" value="{{ $filters['status_chip'] }}">
+                <input type="hidden" id="scope" name="scope" value="{{ $scope ?? '' }}">
+            </div>
+        </div>
+    </div>
+
+    {{-- R21: Invoices table (server-side DataTables).
+        The tbody is filled by DataTables AJAX from the
+        admin.sales-invoices.datatable endpoint. Column headers are
+        clickable for sorting — but when the #filterSmartSort checkbox
+        is on, default ordering is "unpaid first, then oldest" (the
+        server applies this when no explicit order is requested). --}}
+    <div class="card border-0 shadow-sm">
+        <div class="card-body">
+            {{-- R23: Mobile cards container — populated by DataTables
+                 drawCallback when window width < 768px. Hidden on
+                 desktop by CSS (see @push('css') at bottom). --}}
             <div id="invoiceCards" class="sales-invoices-mobile-cards"></div>
 
             <div class="table-responsive sales-invoices-desktop-table">
@@ -210,7 +293,8 @@
                     <tbody></tbody>
                 </table>
             </div>
-    </x-erp.left-accent-card>
+        </div>
+    </div>
 </div>
 
 {{--
@@ -228,8 +312,6 @@
         </div>
     </div>
 </div>
-
-</x-layouts.erp>
 
 @push('scripts')
 <script>
@@ -936,3 +1018,4 @@ $(function () {
     }
 </style>
 @endpush
+@endsection

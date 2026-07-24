@@ -1847,3 +1847,26 @@ Stage Summary:
 - Phase 5 (Laravel) complete. The sales layout shell is ready for Phase 6+ to consume.
 - Branch switching is real (sets session → RLS middleware picks up next request), not mock. Role badge is read-only (intentional — real role switching requires re-login). Notification bell is wired to the existing rules page; Phase 10 will enhance with unread count + slide-out panel.
 - Next: Phase 6 — rebuild the dashboard / invoice list (sales-invoices/index.blade.php) to use <x-layouts.erp> + the 21 design-system components.
+
+---
+Task ID: FIX-Sidebar + UI-Phase-6 (Laravel)
+Agent: main
+Task: Fix sidebar submenu collapse bug, then rebuild the sales invoice list (Phase 6) using <x-layouts.erp> + the 21 design-system components.
+
+Sidebar Fix:
+- Root cause 1: $isActive logic in admin.blade.php had a BACKWARDS str_contains($mainMenu['url'], $currentUri) — should be str_starts_with($currentUri, $childPath). After navigating to a child page, the parent wasn't marked active → no 'show' class → submenu collapsed. Fixed with str_starts_for precise prefix matching on all 3 active checks ($isActive, $childActive, leaf-active).
+- Root cause 2: No state persistence — manual expand/collapse was lost on page reload. Added localStorage persistence: restores 'show' on DOMContentLoaded, saves on shown.bs.collapse/hidden.bs.collapse events. Key: 'rcerp_sidebar_expanded'.
+- Root cause 3: custom.js closeSidebarOnMobile() referenced document.getElementById('sidebarOverlay') without null check — no sidebarOverlay element exists → TypeError on mobile. Added null guards on both sidebar and overlay in toggleSidebar() and closeSidebarOnMobile().
+
+Phase 6 — Invoice List Rebuild:
+- Backed up old view as index-legacy.blade.php.
+- Rebuilt index.blade.php in-place: replaced @extends('layouts.admin') + @section('content') with <x-layouts.erp :title :tabs>. Replaced purple-gradient hero with amber-gradient showcase hero + <x-erp.journey-stepper>. Replaced 5 Bootstrap stat cards with 4 <x-erp.stat-card> (Pending Godown/amber, Pending Challan/orange, Total Invoices/cyan, Total Value/green). Wrapped filter form in <x-erp.left-accent-card accent="amber">. Wrapped status chips in <x-erp.left-accent-card accent="orange">. Wrapped DataTables table in <x-erp.left-accent-card accent="cyan" body-class="!p-0">.
+- ALL JavaScript preserved verbatim (~700 lines): DataTables init, AJAX, column render functions, status chip click handlers, summary refresh, mobile card rendering, receive-payment modal, CSV export. All element IDs preserved (#invoiceTable, #filterSearch, #invoiceFilterForm, #status_chip, #scope, #from_date, #to_date, #customer_id, #branch_id, #filterSmartSort, #invoiceCards, #receivePaymentModal, #applyFiltersBtn, #clearFiltersBtn, #csvExportBtn, .select2-filter, .status-chip). The JS works unchanged because it references IDs/classes, not layout structure.
+- @push('scripts') and @push('css') blocks moved outside </x-layouts.erp> (Blade @push works anywhere, but this is cleaner). Removed @endsection.
+- Verified: bun run build:css succeeds. No @extends/@endsection remain. All 15 JS-referenced IDs present. File reduced from 1021 to 938 lines (design-system components are more compact than Bootstrap cards).
+- The old admin layout (with sidebar) is still used by all other admin pages. The invoice list now uses the new erp layout (top-nav with tabs, no sidebar). Users can navigate back to the dashboard via the tab strip or the user dropdown.
+
+Stage Summary:
+- Sidebar fix pushed as separate commit (21bfd9f).
+- Phase 6 pushed: invoice list rebuilt with new design. DataTables AJAX, filters, chips, summary refresh — all functional. The visual layer (hero, stats, cards, table wrapper) uses the showcase amber/orange design.
+- Next: Phase 7 — rebuild invoice detail (show.blade.php) using <x-layouts.erp> + design-system components.
