@@ -1736,3 +1736,25 @@ Stage Summary:
 - Phase 1 (Laravel) complete. 7 core display components built as anonymous Blade components.
 - All components use Tailwind-only markup (coexists with Bootstrap per Phase 0 rules), resolve design tokens from the Phase 0 Support helpers (Accents, StatusPalette, BranchColor), and nest <x-erp.icon> for icons.
 - Next: Phase 2 — Buttons + form components (<x-erp.primary-button>, <x-erp.gradient-button>, <x-erp.outline-button>, <x-erp.form.input>, <x-erp.form.select>, <x-erp.form.textarea>, <x-erp.checkbox-card>). Then Phase 3 — navigation/table/feedback components (steppers, data-table, filter-chips, sticky-action-bar, warning-callout, signature-row). Then Phase 4 — /ui-preview route to visually verify all components.
+
+---
+Task ID: UI-Phase-2 (Laravel)
+Agent: main
+Task: UI/UX Revamp Phase 2 (Laravel) — Buttons + form components. Build 7 more anonymous Blade components: 3 buttons (polymorphic <a>/<button>) + 3 form controls (with old() repopulation + $errors validation) + 1 multi-select checkbox card.
+
+Work Log:
+- primary-button.blade.php — <x-erp.primary-button accent="amber" icon="save" href="..." type="submit">Label</x-erp.primary-button>. Polymorphic: renders <a> if href set, else <button>. Accent-tinted solid (bg-{accent}-500 hover:bg-{accent}-600). Uses App\Support\Accents::get(). Strips href/type from passthrough $attributes to avoid duplicate attributes. Nest <x-erp.icon> for optional icon prop.
+- gradient-button.blade.php — <x-erp.gradient-button icon="truck" type="submit">Issue Challan</x-erp.gradient-button>. Brand CTA: bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600, min-w-[200px]. Same polymorphic href/button pattern.
+- outline-button.blade.php — <x-erp.outline-button icon="arrow-left" href="...">Cancel</x-erp.outline-button>. Secondary: border border-gray-200 hover:bg-gray-50 text-gray-700. Same polymorphic pattern.
+- form-input.blade.php — <x-erp.form-input name="transport_cost" type="number" label="Transport Cost" label-bn="পরিবহন খরচ" :value="150" required field-class="md:col-span-2" />. Bilingual label with required asterisk. Repopulates via old($name, $value). Error from $errors->first($name) with red border (border-red-400) + red focus ring (focus:ring-red-300) + inline error message. Pass-through attributes (placeholder, min, max, step, disabled, readonly). fieldClass wraps label+input+error in a container for grid placement.
+- form-select.blade.php — <x-erp.form-select name="warehouse_id" label="Warehouse" :options="[...]" placeholder="Select..." />. Accepts options as assoc array [value => label] OR array of {value, label, labelBn?} objects. Normalizes internally. Bilingual option labels. Repopulates selected via old($name, $selected). Same error handling.
+- form-textarea.blade.php — <x-erp.form-textarea name="notes" :rows="3" label="..." />. resize-y, focus:ring-amber-300. Same old()/error pattern.
+- checkbox-card.blade.php — <x-erp.checkbox-card name="dispatchers[]" value="emp-1" label="Karim Uddin" sublabel="EMP-DSP-HO-01 • phone" accent="red" :checked="..." />. Multi-select card for dispatcher picker. Selected: border-2 border-{accent}-400 bg-{accent}-50 + check-circle icon. Unselected: border-2 border-gray-200 hover:border-amber-300. Static $checkboxAccentMap for the accent-{c}-600 utility (Tailwind v4 safe — no dynamic interpolation). Disabled state supported.
+- Fixed a compile issue in primary-button: initial attempt used PHP string concatenation to build <x-erp.icon> tags (Blade doesn't compile tags inside @php strings). Rewrote with proper @if/@endif Blade syntax around the icon component.
+- Verified: bun run build:css succeeds; CSS grew 51KB → 54KB. Spot-checked 9 Phase 2 utilities (from-amber-500, to-orange-600, min-w-[200px] via "200px", accent-red-600, accent-amber-600, border-red-400, focus:ring-red-300, resize-y, placeholder:text-gray-400, disabled:bg-gray-50) — ALL present. Zero muted-foreground in any Phase 2 file.
+- Form components integrate with Laravel's validation flow: old() repopulation after redirect + $errors->first($name) inline display. The $errors variable is guarded with isset() for safety outside web request context.
+
+Stage Summary:
+- Phase 2 (Laravel) complete. 7 buttons/form components built. Total erp component count: 14 (7 Phase 1 + 7 Phase 2).
+- Buttons are polymorphic (href → <a>, else <button>) with optional icons. Forms support bilingual labels, required asterisks, old() repopulation, and inline $errors display with red error styling.
+- Next: Phase 3 — Navigation, table, feedback components (<x-erp.journey-stepper>, <x-erp.step-indicator>, <x-erp.data-table>, <x-erp.filter-chips>, <x-erp.sticky-action-bar>, <x-erp.warning-callout>, <x-erp.signature-row>). Then Phase 4 — /ui-preview route to visually verify all 14+ components together.
