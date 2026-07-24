@@ -1896,3 +1896,23 @@ Work Log:
 Stage Summary:
 - Phase 7 complete. Invoice detail page now uses the showcase amber/orange design with left-accent cards, while preserving all role-gated actions, the GL/customer-ledger tables, the workflow tracker, and the SweetAlert cancel flow.
 - Next: Phase 8 — rebuild the blank godown creation page (sales-challans/godown.blade.php).
+
+---
+Task ID: UI-Phase-8 (Laravel)
+Agent: main
+Task: UI/UX Revamp Phase 8 (Laravel) — Blank godown creation rebuild. Rebuilt sales-challans/godown.blade.php to use <x-layouts.erp> + design-system components. Old view backed up as godown-legacy.blade.php.
+
+Work Log:
+- Backed up old view to godown-legacy.blade.php.
+- Replaced @extends('layouts.admin') + @section('content') with <x-layouts.erp :title :tabs>. PHP setup block (availability helpers, invoiceTotal) preserved unchanged.
+- Hero: purple gradient -> amber gradient with bilingual title "গোডাউন কপি প্রস্তুতি" + "Step 1 of 2" subtitle + Back to invoice button (bg-white/20 backdrop-blur + x-erp.icon). Added <x-erp.step-indicator> showing the 4-step workflow (Invoice=done, Godown Prep=active, Challan=pending, Completed=pending).
+- Invoice summary: Bootstrap card -> <x-erp.left-accent-card accent="amber" icon="file-text">. All 6 fields preserved (invoice code, date, customer, branch, total amount, line items). Total amount color changed from purple #7c3aed to amber-700.
+- Info banner: Bootstrap alert-info -> <x-erp.warning-callout>. Two variants: "No active warehouses" (when warehouses empty) vs "Assign warehouses" (normal). Body text preserved.
+- Godown assignment form: Bootstrap card -> <x-erp.left-accent-card accent="cyan" icon="warehouse" body-class="!p-0"> with line count badge in $actions slot. The entire table preserved verbatim — all columns (Product, Qty needed, Warehouse select, Available qty per warehouse, Avg cost), all data attributes (data-item-id, data-product-id, data-qty, data-avg-cost), all Select2 classes (.warehouse-select), all per-row avg-cost display spans (#avg-cost-{item-id}), all stock-insufficient highlighting (table-warning, disabled options, text-danger/text-success).
+- Card footer: replaced with <x-erp.sticky-action-bar> containing <x-erp.outline-button> (Cancel) + <x-erp.primary-button accent="amber" icon="save" type="submit"> (Confirm Godown Assignment). The disabled-when-no-warehouses logic preserved.
+- @push('scripts') block preserved verbatim (Select2 init, select2:select avg-cost handler, pre-fill on back-with-input, submit validation with SweetAlert2). Swal.fire confirmButtonColor changed from purple #7c3aed to amber #d97706 to match new theme.
+- Verified: bun run build:css succeeds. No @extends/@endsection remain. All JS-referenced classes/IDs present (.warehouse-select x1, avg-cost- x3, select2:select x1, Swal.fire x1). Form action + CSRF + warehouse_assignments present. Zero muted-foreground. File 274 -> 275 lines.
+
+Stage Summary:
+- Phase 8 complete. Godown prep page now uses the showcase amber/orange design with step indicator, left-accent cards, warning callout, and sticky action bar. All form fields, Select2 wiring, avg-cost display, and submit validation preserved.
+- Next: Phase 9 — rebuild the challan issue form (sales-challans/issue.blade.php).

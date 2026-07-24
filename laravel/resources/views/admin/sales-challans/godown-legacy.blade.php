@@ -1,9 +1,6 @@
-<x-layouts.erp :title="$title" :tabs="[
-    ['label' => 'Dashboard', 'href' => route('dashboard')],
-    ['label' => 'Invoices', 'href' => route('admin.sales-invoices.index')],
-    ['label' => 'Challans', 'href' => route('admin.sales-challans.index')],
-    ['label' => 'UI Preview', 'href' => route('ui-preview')],
-]">
+@extends('layouts.admin')
+
+@section('content')
 @php
     // Pre-compute per-product availability helpers
     $availability = $availability ?? [];
@@ -20,100 +17,101 @@
     $invoiceTotal = (float) ($invoice->total_amount ?? 0);
 @endphp
 
-<div class="space-y-6">
-    {{-- Hero header (amber/orange gradient — showcase spec) --}}
-    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
-        <div class="flex items-center justify-between flex-wrap gap-4">
-            <div>
-                <h1 class="text-2xl font-bold text-white">গোডাউন কপি প্রস্তুতি</h1>
-                <p class="text-amber-100 text-sm mt-1">{{ $title }}</p>
-                <p class="text-amber-200 text-xs mt-0.5">Step 1 of 2 — Assign a source warehouse to each invoice line</p>
-            </div>
-            <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors">
-                <x-erp.icon name="arrow-left" class="size-4" /> Back to invoice
+<div class="container-fluid py-2">
+    {{-- Hero header --}}
+    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
+            style="background: linear-gradient(135deg,#7c3aed,#4f46e5);">
+        <div>
+            <h1 class="h4 mb-1">
+                <i class="fas fa-warehouse me-2"></i>{{ $title }}
+            </h1>
+            <p class="mb-0 small opacity-75">
+                Step 1 of 2 — Assign a source warehouse to each invoice line before issuing the delivery challan.
+            </p>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-arrow-left me-1"></i> Back to invoice
             </a>
         </div>
-        {{-- 4-step workflow indicator --}}
-        <div class="mt-6">
-            <x-erp.step-indicator :steps="[
-                ['label' => 'Invoice', 'label_bn' => 'চালান', 'icon' => 'file-text', 'state' => 'done'],
-                ['label' => 'Godown Prep', 'label_bn' => 'গোডাউন প্রস্তুতি', 'icon' => 'warehouse', 'state' => 'active'],
-                ['label' => 'Challan Issue', 'label_bn' => 'চালান ইস্যু', 'icon' => 'truck', 'state' => 'pending'],
-                ['label' => 'Completed', 'label_bn' => 'সম্পন্ন', 'icon' => 'check-circle', 'state' => 'pending'],
-            ]" />
+    </header>
+
+    {{-- Invoice summary card --}}
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <div class="text-muted small">Invoice code</div>
+                    <div class="fw-semibold">
+                        <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="text-decoration-none">
+                            {{ $invoice->invoice_code }}
+                        </a>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Invoice date</div>
+                    <div class="fw-semibold">
+                        {{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Customer</div>
+                    <div class="fw-semibold">
+                        @if ($invoice->customer)
+                            {{ $invoice->customer->customer_name }}
+                            <div class="small text-muted">{{ $invoice->customer->customer_code }}</div>
+                        @else
+                            <span class="text-muted">—</span>
+                        @endif
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Branch</div>
+                    <div class="fw-semibold">
+                        @if ($invoice->branch)
+                            {{ $invoice->branch->branch_name }}
+                            <span class="small text-muted">({{ $invoice->branch->branch_code }})</span>
+                        @else
+                            <span class="text-muted">—</span>
+                        @endif
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Total amount</div>
+                    <div class="fw-semibold" style="color:#7c3aed;">Tk {{ number_format($invoiceTotal, 2) }}</div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">Line items</div>
+                    <div class="fw-semibold">{{ number_format($invoice->items->count()) }}</div>
+                </div>
+            </div>
         </div>
     </div>
 
-    {{-- Invoice summary card --}}
-    <x-erp.left-accent-card accent="amber" icon="file-text" title="Invoice Summary" title-bn="চালান সারসংক্ষেপ">
-        <div class="row g-3">
-            <div class="col-md-3">
-                <div class="text-muted small">Invoice code</div>
-                <div class="fw-semibold">
-                    <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="text-decoration-none">
-                        {{ $invoice->invoice_code }}
-                    </a>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="text-muted small">Invoice date</div>
-                <div class="fw-semibold">
-                    {{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="text-muted small">Customer</div>
-                <div class="fw-semibold">
-                    @if ($invoice->customer)
-                        {{ $invoice->customer->customer_name }}
-                        <div class="small text-muted">{{ $invoice->customer->customer_code }}</div>
-                    @else
-                        <span class="text-muted">—</span>
-                    @endif
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="text-muted small">Branch</div>
-                <div class="fw-semibold">
-                    @if ($invoice->branch)
-                        {{ $invoice->branch->branch_name }}
-                        <span class="small text-muted">({{ $invoice->branch->branch_code }})</span>
-                    @else
-                        <span class="text-muted">—</span>
-                    @endif
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="text-muted small">Total amount</div>
-                <div class="fw-semibold text-amber-700">Tk {{ number_format($invoiceTotal, 2) }}</div>
-            </div>
-            <div class="col-md-3">
-                <div class="text-muted small">Line items</div>
-                <div class="fw-semibold">{{ number_format($invoice->items->count()) }}</div>
-            </div>
-        </div>
-    </x-erp.left-accent-card>
-
     {{-- Info banner --}}
-    @if ($warehouses->isEmpty())
-        <x-erp.warning-callout title="No active warehouses" title-bn="কোনো সক্রিয় গুদাম নেই">
-            <p>No active warehouses configured for this branch. Please add warehouses before assigning godown.</p>
-        </x-erp.warning-callout>
-    @else
-        <x-erp.warning-callout title="Assign warehouses" title-bn="গুদাম নির্বাচন করুন">
-            <p>Assign a warehouse for each product. Stock availability shown per warehouse for this branch. Stock does not move yet — that happens at challan issue.</p>
-        </x-erp.warning-callout>
-    @endif
+    <div class="alert alert-info d-flex align-items-start mb-3" role="alert">
+        <i class="fas fa-circle-info me-2 mt-1"></i>
+        <div>
+            Assign a warehouse for each product. Stock availability shown per warehouse for this branch.
+            @if ($warehouses->isEmpty())
+                <strong class="text-danger">No active warehouses configured for this branch.</strong>
+            @endif
+        </div>
+    </div>
 
     {{-- Godown assignment form --}}
     <form method="POST" action="{{ route('admin.sales-challans.storeGodown', $invoice) }}">
         @csrf
-        <x-erp.left-accent-card accent="cyan" icon="warehouse" title="Godown Assignment" title-bn="গুদাম বরাদ্দ" body-class="!p-0">
-            <x-slot:actions>
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white d-flex align-items-center justify-content-between">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-boxes-stacked me-1" style="color:#7c3aed;"></i> Godown assignment
+                </h2>
                 <span class="badge bg-primary-subtle text-primary">
                     {{ $invoice->items->count() }} line(s)
                 </span>
-            </x-slot:actions>
+            </div>
+            <div class="card-body p-0">
                 <div class="table-responsive">
                     <table class="table table-sm table-striped table-hover align-middle mb-0">
                         <thead class="table-light">
@@ -205,19 +203,19 @@
                         </tbody>
                     </table>
                 </div>
-        </x-erp.left-accent-card>
-
-        {{-- Sticky action bar --}}
-        <x-erp.sticky-action-bar>
-            <x-erp.outline-button href="{{ route('admin.sales-invoices.show', $invoice) }}">Cancel / বাতিল</x-erp.outline-button>
-            <x-erp.primary-button accent="amber" icon="save" type="submit" @if ($warehouses->isEmpty()) disabled @endif>
-                Confirm Godown Assignment
-            </x-erp.primary-button>
-        </x-erp.sticky-action-bar>
+            </div>
+            <div class="card-footer bg-white d-flex justify-content-between align-items-center">
+                <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="btn btn-outline-secondary btn-sm">
+                    <i class="fas fa-times me-1"></i> Cancel
+                </a>
+                <button type="submit" class="btn btn-primary btn-sm"
+                        @if ($warehouses->isEmpty()) disabled @endif>
+                    <i class="fas fa-check me-1"></i> Confirm Godown Assignment
+                </button>
+            </div>
+        </div>
     </form>
 </div>
-
-</x-layouts.erp>
 
 @push('scripts')
 <script>
@@ -266,10 +264,11 @@ $(function () {
                 icon: 'warning',
                 title: 'Incomplete assignment',
                 text: 'Please assign a warehouse to every line item before confirming.',
-                confirmButtonColor: '#d97706'
+                confirmButtonColor: '#7c3aed'
             });
         }
     });
 });
 </script>
 @endpush
+@endsection
