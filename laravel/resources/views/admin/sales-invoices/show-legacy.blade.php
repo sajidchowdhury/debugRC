@@ -1,9 +1,6 @@
-<x-layouts.erp :title="'Invoice ' . $invoice->invoice_code" :tabs="[
-    ['label' => 'Dashboard', 'href' => route('dashboard')],
-    ['label' => 'Invoices', 'href' => route('admin.sales-invoices.index')],
-    ['label' => 'Challans', 'href' => route('admin.sales-challans.index')],
-    ['label' => 'UI Preview', 'href' => route('ui-preview')],
-]">
+@extends('layouts.admin')
+
+@section('content')
 @php
     $statusBadge = function (bool $large = false) use ($invoice): string {
         $cls = $large ? ' fs-5' : ' fs-6';
@@ -56,31 +53,30 @@
     }
 @endphp
 
-<div class="space-y-6">
-    {{-- Hero header (amber/orange gradient — showcase spec) --}}
-    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
-        <div class="flex items-center justify-between flex-wrap gap-4">
-            <div>
-                <div class="flex items-center gap-3 flex-wrap">
-                    <h1 class="text-2xl font-bold text-white">Invoice {{ $invoice->invoice_code }}</h1>
-                    {!! $statusBadge() !!}
-                </div>
-                <p class="text-amber-100 text-sm mt-1">
-                    @if ($invoice->customer){{ $invoice->customer->customer_name }}@endif
-                    @if ($invoice->branch) · {{ $invoice->branch->branch_name }}@endif
-                    · {{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}
-                </p>
-            </div>
-            <div class="flex items-center gap-2">
-                <button type="button" class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors" onclick="window.print()">
-                    <x-erp.icon name="printer" class="size-4" /> Print
-                </button>
-                <a href="{{ route('admin.sales-invoices.index') }}" class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors">
-                    <x-erp.icon name="arrow-left" class="size-4" /> Back to list
-                </a>
-            </div>
+<div class="container-fluid py-2">
+    {{-- Hero header (purple/indigo) --}}
+    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
+            style="background: linear-gradient(135deg,#7c3aed,#4f46e5);">
+        <div>
+            <h1 class="h4 mb-1">
+                <i class="fas fa-file-invoice-dollar me-2"></i>Invoice {{ $invoice->invoice_code }}
+                {!! $statusBadge() !!}
+            </h1>
+            <p class="mb-0 small opacity-75">
+                @if ($invoice->customer){{ $invoice->customer->customer_name }}@endif
+                @if ($invoice->branch) · {{ $invoice->branch->branch_name }}@endif
+                · {{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}
+            </p>
         </div>
-    </div>
+        <div class="d-flex gap-2">
+            <button type="button" class="btn btn-outline-light btn-sm" onclick="window.print()">
+                <i class="fas fa-print me-1"></i> Print
+            </button>
+            <a href="{{ route('admin.sales-invoices.index') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-arrow-left me-1"></i> Back to list
+            </a>
+        </div>
+    </header>
 
     {{-- Reversal / Cancel alert --}}
     @if ($invoice->is_reversed || $invoice->isCancelled())
@@ -111,7 +107,13 @@
         {{-- Left: main details --}}
         <div class="col-lg-8">
             {{-- Invoice details card --}}
-            <x-erp.left-accent-card accent="amber" icon="file-text" title="Invoice details" title-bn="চালানের বিস্তারিত" class="mb-3">
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white">
+                    <h2 class="h6 mb-0">
+                        <i class="fas fa-circle-info me-1" style="color:#7c3aed;"></i> Invoice details
+                    </h2>
+                </div>
+                <div class="card-body">
                     <dl class="row mb-0">
                         <dt class="col-sm-3 text-muted">Invoice code</dt>
                         <dd class="col-sm-9">
@@ -183,7 +185,7 @@
 
                         <dt class="col-sm-3 text-muted">Total amount</dt>
                         <dd class="col-sm-9">
-                            <strong class="fs-5 text-amber-700">Tk {{ number_format((float) $invoice->total_amount, 2) }}</strong>
+                            <strong class="fs-5" style="color:#7c3aed;">Tk {{ number_format((float) $invoice->total_amount, 2) }}</strong>
                         </dd>
 
                         <dt class="col-sm-3 text-muted">Paid</dt>
@@ -219,10 +221,18 @@
                             @if ($invoice->created_at) · {{ $invoice->created_at->format('d M Y, H:i') }}@endif
                         </dd>
                     </dl>
-            </x-erp.left-accent-card>
+                </div>
+            </div>
 
             {{-- Items table --}}
-            <x-erp.left-accent-card accent="orange" icon="package" title="Items" title-bn="পণ্য" class="mb-3" body-class="!p-0">
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white d-flex align-items-center justify-content-between">
+                    <h2 class="h6 mb-0">
+                        <i class="fas fa-table-list me-1" style="color:#7c3aed;"></i> Items
+                        <span class="badge bg-primary-subtle text-primary ms-1">{{ $invoice->items->count() }}</span>
+                    </h2>
+                </div>
+                <div class="card-body p-0">
                     <div class="table-responsive">
                         <table class="table table-sm table-striped table-hover align-middle mb-0">
                             <thead class="table-light">
@@ -267,18 +277,29 @@
                                     <td colspan="3" class="text-end">+ Transport</td>
                                     <td class="text-end">Tk {{ number_format((float) $invoice->transport_cost, 2) }}</td>
                                 </tr>
-                                <tr class="fw-bold bg-amber-50">
-                                    <td colspan="3" class="text-end text-amber-800">Total amount</td>
-                                    <td class="text-end text-amber-800">Tk {{ number_format((float) $invoice->total_amount, 2) }}</td>
+                                <tr class="fw-bold" style="background-color:#ede9fe;">
+                                    <td colspan="3" class="text-end" style="color:#4f46e5;">Total amount</td>
+                                    <td class="text-end" style="color:#4f46e5;">Tk {{ number_format((float) $invoice->total_amount, 2) }}</td>
                                 </tr>
                             </tfoot>
                         </table>
                     </div>
-            </x-erp.left-accent-card>
+                </div>
+            </div>
 
             {{-- Dispatches table --}}
             @if ($invoice->dispatches->isNotEmpty())
-                <x-erp.left-accent-card accent="cyan" icon="truck" title="Dispatches" title-bn="ডিসপ্যাচ" class="mb-3" body-class="!p-0">
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-truck me-1" style="color:#7c3aed;"></i> Dispatches
+                            <span class="badge bg-primary-subtle text-primary ms-1">{{ $invoice->dispatches->count() }}</span>
+                            <span class="small text-muted ms-2">
+                                {{ number_format($totalDispatched, 4) }} / {{ number_format($totalOrdered, 4) }} dispatched
+                            </span>
+                        </h2>
+                    </div>
+                    <div class="card-body p-0">
                         <div class="table-responsive">
                             <table class="table table-sm table-striped table-hover align-middle mb-0">
                                 <thead class="table-light">
@@ -342,23 +363,25 @@
                                 </tbody>
                             </table>
                         </div>
-                        <div class="px-4 py-2 small text-muted border-top">
-                            {{ number_format($totalDispatched, 4) }} / {{ number_format($totalOrdered, 4) }} dispatched
-                        </div>
-                </x-erp.left-accent-card>
+                    </div>
+                </div>
             @endif
 
             {{-- GL Journal Entry card --}}
             @if ($invoice->journalEntry)
                 @php $je = $invoice->journalEntry; @endphp
-                <x-erp.left-accent-card accent="green" icon="banknote" title="GL Journal Entry" title-bn="জিএল জার্নাল" class="mb-3">
-                    <x-slot:actions>
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white d-flex align-items-center justify-content-between">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-book me-1" style="color:#7c3aed;"></i> GL Journal Entry
+                        </h2>
                         @if (!empty($je->is_reversed))
                             <span class="badge bg-danger-subtle text-danger">
                                 <i class="fas fa-rotate-left me-1"></i>Reversed
                             </span>
                         @endif
-                    </x-slot:actions>
+                    </div>
+                    <div class="card-body">
                         <dl class="row mb-3">
                             <dt class="col-sm-3 text-muted">JE #</dt>
                             <dd class="col-sm-9">
@@ -439,12 +462,20 @@
                         @else
                             <p class="text-muted small mb-0">No journal lines.</p>
                         @endif
-                </x-erp.left-accent-card>
+                    </div>
+                </div>
             @endif
 
             {{-- Customer Ledger Entries card --}}
             @if ($customerLedgerEntries->isNotEmpty())
-                <x-erp.left-accent-card accent="yellow" icon="users" title="Customer Ledger Entries" title-bn="ক্রেতা হিসাব" class="mb-3" body-class="!p-0">
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-user-tag me-1" style="color:#7c3aed;"></i> Customer Ledger Entries
+                            <span class="badge bg-primary-subtle text-primary ms-1">{{ $customerLedgerEntries->count() }}</span>
+                        </h2>
+                    </div>
+                    <div class="card-body p-0">
                         <div class="table-responsive">
                             <table class="table table-sm table-striped table-hover align-middle mb-0">
                                 <thead class="table-light">
@@ -491,41 +522,50 @@
                                 </tbody>
                             </table>
                         </div>
-                </x-erp.left-accent-card>
+                    </div>
+                </div>
             @endif
         </div>
 
         {{-- Right: aside --}}
         <div class="col-lg-4">
             {{-- Status card (large) --}}
-            <x-erp.left-accent-card accent="amber" icon="file-text" title="Status" title-bn="অবস্থা" class="mb-3">
-                    <div class="text-center">
-                        <div class="mb-2">{!! $statusBadge(true) !!}</div>
-                        <div class="small text-muted">
-                            @switch($invoice->status)
-                                @case('draft')
-                                    Draft invoice — GL posted, stock not yet moved. Can be cancelled.
-                                    @break
-                                @case('confirmed')
-                                    Confirmed invoice — ready for godown preparation (Phase 8.3).
-                                    @break
-                                @case('cancelled')
-                                    Cancelled — GL & customer ledger reversed. No further action.
-                                    @break
-                                @case('reversed')
-                                    Reversed — GL & customer ledger reversed.
-                                    @break
-                            @endswitch
-                        </div>
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white">
+                    <h2 class="h6 mb-0"><i class="fas fa-flag me-1" style="color:#7c3aed;"></i> Status</h2>
+                </div>
+                <div class="card-body text-center">
+                    <div class="mb-2">{!! $statusBadge(true) !!}</div>
+                    <div class="small text-muted">
+                        @switch($invoice->status)
+                            @case('draft')
+                                Draft invoice — GL posted, stock not yet moved. Can be cancelled.
+                                @break
+                            @case('confirmed')
+                                Confirmed invoice — ready for godown preparation (Phase 8.3).
+                                @break
+                            @case('cancelled')
+                                Cancelled — GL & customer ledger reversed. No further action.
+                                @break
+                            @case('reversed')
+                                Reversed — GL & customer ledger reversed.
+                                @break
+                        @endswitch
                     </div>
-            </x-erp.left-accent-card>
+                </div>
+            </div>
 
             {{-- Workflow progress card --}}
-            <x-erp.left-accent-card accent="orange" icon="clipboard-list" title="Workflow progress" title-bn="কর্মপ্রবাহ" class="mb-3">
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white">
+                    <h2 class="h6 mb-0"><i class="fas fa-list-check me-1" style="color:#7c3aed;"></i> Workflow progress</h2>
+                </div>
+                <div class="card-body">
                     <ul class="list-unstyled mb-0">
                         {{-- Step 1: Invoice Created --}}
                         <li class="d-flex align-items-start mb-3">
-                            <span class="rounded-circle d-flex align-items-center justify-content-center me-3 text-white flex-shrink-0 size-8 bg-green-500">
+                            <span class="rounded-circle d-flex align-items-center justify-content-center me-3 text-white flex-shrink-0"
+                                  style="width:32px;height:32px;background:#16a34a;">
                                 <i class="fas fa-check"></i>
                             </span>
                             <div>
@@ -539,11 +579,12 @@
 
                         {{-- Step 2: Godown Prepared --}}
                         <li class="d-flex align-items-start mb-3">
-                            <span class="rounded-circle d-flex align-items-center justify-content-center me-3 text-white flex-shrink-0 size-8 {{ $invoice->is_godown_prepared ? 'bg-green-500' : 'bg-gray-300' }}">
+                            <span class="rounded-circle d-flex align-items-center justify-content-center me-3 text-white flex-shrink-0"
+                                  style="width:32px;height:32px;background:{{ $invoice->is_godown_prepared ? '#16a34a' : '#cbd5e1' }};">
                                 @if ($invoice->is_godown_prepared)
                                     <i class="fas fa-check"></i>
                                 @else
-                                    <i class="fas fa-warehouse text-gray-600"></i>
+                                    <i class="fas fa-warehouse" style="color:#64748b;"></i>
                                 @endif
                             </span>
                             <div>
@@ -566,11 +607,12 @@
 
                         {{-- Step 3: Challan Issued --}}
                         <li class="d-flex align-items-start mb-3">
-                            <span class="rounded-circle d-flex align-items-center justify-content-center me-3 text-white flex-shrink-0 size-8 {{ $invoice->is_challan_issued ? 'bg-green-500' : 'bg-gray-300' }}">
+                            <span class="rounded-circle d-flex align-items-center justify-content-center me-3 text-white flex-shrink-0"
+                                  style="width:32px;height:32px;background:{{ $invoice->is_challan_issued ? '#16a34a' : '#cbd5e1' }};">
                                 @if ($invoice->is_challan_issued)
                                     <i class="fas fa-check"></i>
                                 @else
-                                    <i class="fas fa-truck text-gray-600"></i>
+                                    <i class="fas fa-truck" style="color:#64748b;"></i>
                                 @endif
                             </span>
                             <div>
@@ -593,11 +635,12 @@
 
                         {{-- Step 4: Payment Received --}}
                         <li class="d-flex align-items-start">
-                            <span class="rounded-circle d-flex align-items-center justify-content-center me-3 text-white flex-shrink-0 size-8 {{ (float) $invoice->due_amount < 0.01 ? 'bg-green-500' : 'bg-gray-300' }}">
+                            <span class="rounded-circle d-flex align-items-center justify-content-center me-3 text-white flex-shrink-0"
+                                  style="width:32px;height:32px;background:{{ (float) $invoice->due_amount < 0.01 ? '#16a34a' : '#cbd5e1' }};">
                                 @if ((float) $invoice->due_amount < 0.01)
                                     <i class="fas fa-check"></i>
                                 @else
-                                    <i class="fas fa-taka-sign text-gray-600"></i>
+                                    <i class="fas fa-taka-sign" style="color:#64748b;"></i>
                                 @endif
                             </span>
                             <div>
@@ -614,12 +657,18 @@
                             </div>
                         </li>
                     </ul>
-            </x-erp.left-accent-card>
+                </div>
+            </div>
 
             {{-- Actions card --}}
-            <x-erp.left-accent-card accent="cyan" icon="save" title="Actions" title-bn="অ্যাকশন" class="mb-3">
-                    <div class="d-grid gap-2">
-                    {{-- Draft: Edit invoice (P1-1) --}}
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white">
+                    <h2 class="h6 mb-0"><i class="fas fa-bolt me-1" style="color:#7c3aed;"></i> Actions</h2>
+                </div>
+                <div class="card-body d-grid gap-2">
+                    {{-- Draft: Edit invoice (P1-1) — only for sales-side roles.
+                        Warehouse managers can view but cannot edit (their
+                        job starts AFTER the invoice is confirmed). --}}
                     @if ($invoice->isDraft() && auth()->user()->hasRole('salesman', 'manager', 'admin', 'superadmin'))
                         <a href="{{ route('admin.sales-invoices.edit', $invoice->id) }}" class="btn btn-primary w-100">
                             <i class="fas fa-pen-to-square me-1"></i> Edit Invoice
@@ -630,12 +679,19 @@
                         </div>
                     @endif
 
-                    {{-- P1-6: Print Invoice (customer copy) --}}
+                    {{-- P1-6: Print Invoice (customer copy) — all sales-side
+                        roles can print this; the route allows salesman,
+                        accountant, manager, admin. --}}
                     <a href="{{ route('admin.sales-invoices.print-invoice', $invoice->id) }}" class="btn btn-outline-primary w-100" target="_blank">
                         <i class="fas fa-print me-1"></i> Print Invoice
                     </a>
 
-                    {{-- BUG-52: Print Godown Copy + Print Blank Godown — WM/admin only --}}
+                    {{-- BUG-52: Print Godown Copy + Print Blank Godown —
+                        gated by role. Routes allow only warehouse_manager,
+                        manager, admin. The previous version rendered these
+                        for everyone, so salesmen saw the buttons, clicked
+                        them, and got redirected to the dashboard with a
+                        "You do not have permission" flash — confusing UX. --}}
                     @if (auth()->user()->hasRole('warehouse_manager', 'manager', 'admin', 'superadmin'))
                         <a href="{{ route('admin.sales-invoices.print-godown', $invoice->id) }}" class="btn btn-outline-secondary w-100" target="_blank">
                             <i class="fas fa-warehouse me-1"></i> Print Godown Copy
@@ -645,7 +701,16 @@
                         </a>
                     @endif
 
-                    {{-- BUG-52: Sales → Warehouse handoff buttons (state-aware) --}}
+                    {{-- BUG-52: Sales → Warehouse handoff buttons.
+                        These are the entry points the warehouse manager
+                        uses to start their work on this invoice. Only
+                        rendered for warehouse_manager/manager/admin
+                        (matches the routes for admin.sales-challans.godown
+                        and admin.sales-challans.challan-form). The buttons
+                        are state-aware:
+                          - Confirmed + no godown prep  → "Prepare Godown"
+                          - Godown prepared, no challan → "Issue Challan"
+                          - Challan issued              → link to challan show --}}
                     @php
                         $canWarehouse = auth()->user()->hasRole('warehouse_manager', 'dispatcher', 'manager', 'admin', 'superadmin');
                         $isConfirmedNoGodown = $invoice->isConfirmed() && !$invoice->is_godown_prepared && !$invoice->is_reversed;
@@ -670,7 +735,7 @@
                         </div>
                     @endif
 
-                    {{-- Draft: Cancel invoice --}}
+                    {{-- Draft: Cancel invoice — only for sales-side roles. --}}
                     @if ($invoice->isDraft() && auth()->user()->hasRole('salesman', 'manager', 'admin', 'superadmin'))
                         <form method="POST" action="{{ route('admin.sales-invoices.cancel', $invoice->id) }}" id="cancelForm">
                             @csrf
@@ -685,7 +750,9 @@
                         </div>
                     @endif
 
-                    {{-- BUG-52: Confirmed-invoice info --}}
+                    {{-- BUG-52: Confirmed-invoice info — replaced the stale
+                        "Phase 8.3 will be available" alert with an actionable
+                        status reflecting the actual godown/challan state. --}}
                     @if ($invoice->isConfirmed() && !$invoice->is_reversed)
                         @if (!$invoice->is_godown_prepared)
                             <div class="alert alert-info small mb-0">
@@ -722,13 +789,11 @@
                             This invoice is {{ $invoice->status }} and cannot be modified further.
                         </div>
                     @endif
-                    </div>
-            </x-erp.left-accent-card>
+                </div>
+            </div>
         </div>
     </div>
 </div>
-
-</x-layouts.erp>
 
 @push('scripts')
 <script>
@@ -765,3 +830,4 @@ $(function () {
 });
 </script>
 @endpush
+@endsection

@@ -1870,3 +1870,29 @@ Stage Summary:
 - Sidebar fix pushed as separate commit (21bfd9f).
 - Phase 6 pushed: invoice list rebuilt with new design. DataTables AJAX, filters, chips, summary refresh — all functional. The visual layer (hero, stats, cards, table wrapper) uses the showcase amber/orange design.
 - Next: Phase 7 — rebuild invoice detail (show.blade.php) using <x-layouts.erp> + design-system components.
+
+---
+Task ID: UI-Phase-7 (Laravel)
+Agent: main
+Task: UI/UX Revamp Phase 7 (Laravel) — Invoice detail rebuild. Rebuilt sales-invoices/show.blade.php to use <x-layouts.erp> + design-system components. Old view backed up as show-legacy.blade.php.
+
+Work Log:
+- Backed up old view to show-legacy.blade.php.
+- Replaced @extends('layouts.admin') + @section('content') with <x-layouts.erp :title :tabs> (Dashboard / Invoices / Challans / UI Preview). PHP setup block (statusBadge closure, GL totals, dispatch totals, name lookups) preserved unchanged.
+- Hero: purple gradient -> amber gradient with invoice code + status badge + bilingual subtitle (customer/branch/date). Print + Back buttons use design-system styling (bg-white/20 backdrop-blur + x-erp.icon).
+- Left column (col-lg-8) — 5 cards wrapped in <x-erp.left-accent-card>:
+  1. Invoice details (accent="amber", icon="file-text") — all dl/dt/dd fields preserved verbatim. Total amount color changed from purple #7c3aed to amber-700.
+  2. Items table (accent="orange", icon="package", body-class="!p-0") — table + tfoot preserved. Total row bg changed from #ede9fe (purple tint) to bg-amber-50.
+  3. Dispatches table (accent="cyan", icon="truck", body-class="!p-0") — all columns + status badges preserved. Dispatched count moved to a footer strip.
+  4. GL Journal Entry (accent="green", icon="banknote") — JE header + lines table + balanced/unbalanced badge preserved. Reversed badge moved to $actions named slot.
+  5. Customer Ledger Entries (accent="yellow", icon="users", body-class="!p-0") — all columns preserved.
+- Right column (col-lg-4) — 3 cards wrapped:
+  1. Status (accent="amber") — large status badge + status description switch preserved.
+  2. Workflow progress (accent="orange", icon="clipboard-list") — 4-step vertical tracker. Step circles changed from inline style="width:32px;height:32px;background:#16a34a" to Tailwind classes (size-8 bg-green-500 / bg-gray-300). All dynamic state logic (is_godown_prepared, is_challan_issued, due_amount) preserved.
+  3. Actions (accent="cyan", icon="save") — ALL role-gated buttons preserved: Edit Invoice (draft+sales roles), Print Invoice (all), Print Godown/Blank Godown (WM/admin), Prepare Godown Copy (confirmed+no-godown+WM), Issue Challan (godown+no-challan+WM), Cancel Invoice (draft+sales, #cancelForm/#cancelReasonInput/#cancelBtn IDs preserved for SweetAlert). All info/warning/success alerts preserved.
+- @push('scripts') block preserved verbatim (SweetAlert2 cancel prompt). Removed @endsection. Closing </x-layouts.erp> inserted before @push.
+- Verified: bun run build:css succeeds. No @extends/@endsection remain. All 3 JS-referenced IDs (#cancelForm, #cancelReasonInput, #cancelBtn) present. Zero muted-foreground. File 833 -> 767 lines.
+
+Stage Summary:
+- Phase 7 complete. Invoice detail page now uses the showcase amber/orange design with left-accent cards, while preserving all role-gated actions, the GL/customer-ledger tables, the workflow tracker, and the SweetAlert cancel flow.
+- Next: Phase 8 — rebuild the blank godown creation page (sales-challans/godown.blade.php).
