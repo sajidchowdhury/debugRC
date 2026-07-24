@@ -13,14 +13,14 @@
 
   Usage:
     <x-layouts.erp :title="$title">
-        {{-- page content --}}
+        ... page content ...
     </x-layouts.erp>
 
     <x-layouts.erp :title="$title" :tabs="[
         ['label' => 'Dashboard', 'href' => route('dashboard'), 'active' => true],
         ['label' => 'Invoices',  'href' => route('admin.sales-invoices.index')],
     ]">
-        {{-- page content --}}
+        ... page content ...
     </x-layouts.erp>
 
   Coexists with layouts/admin.blade.php (Bootstrap) — opt-in per view.

@@ -5,7 +5,7 @@
     <x-erp.form-select name="warehouse_id" label="Warehouse" label-bn="গুদাম"
         placeholder="Select warehouse"
         :options="[['value' => 'wh1', 'label' => 'WH-HO-01 Dhaka Main'], ...]" />
-    {{-- Simple assoc array also works: :options="['wh1' => 'WH-HO-01', 'wh2' => 'WH-HO-02']" --}}
+    (Simple assoc array also works: :options="['wh1' => 'WH-HO-01', 'wh2' => 'WH-HO-02']")
 
   Features:
   - Bilingual label, required asterisk
