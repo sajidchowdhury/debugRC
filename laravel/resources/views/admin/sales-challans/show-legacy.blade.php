@@ -1,9 +1,6 @@
-<x-layouts.erp :title="'Challan ' . $challan->challan_code" :tabs="[
-    ['label' => 'Dashboard', 'href' => route('dashboard')],
-    ['label' => 'Invoices', 'href' => route('admin.sales-invoices.index')],
-    ['label' => 'Challans', 'href' => route('admin.sales-challans.index'), 'active' => true],
-    ['label' => 'UI Preview', 'href' => route('ui-preview')],
-]">
+@extends('layouts.admin')
+
+@section('content')
 @php
     $challan = $challan ?? null;
     $stockMovements = $stockMovements ?? collect();
@@ -55,32 +52,31 @@
     $cogsTotal = (float) ($challan->issue_cost ?? 0);
 @endphp
 
-<div class="space-y-6">
-    {{-- Hero header (amber/orange gradient — showcase spec) --}}
-    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
-        <div class="flex items-center justify-between flex-wrap gap-4">
-            <div>
-                <div class="flex items-center gap-3 flex-wrap">
-                    <h1 class="text-2xl font-bold text-white">Challan {{ $challan->challan_code }}</h1>
-                    {!! $statusBadge() !!}
-                </div>
-                <p class="text-amber-100 text-sm mt-1">
-                    @if ($inv)<a href="{{ route('admin.sales-invoices.show', $inv) }}" class="text-white text-decoration-underline">{{ $inv->invoice_code }}</a>@endif
-                    @if ($inv && $inv->customer) · {{ $inv->customer->customer_name }}@endif
-                    @if ($challan->branch) · {{ $challan->branch->branch_name }}@endif
-                    · {{ \Carbon\Carbon::parse($challan->challan_date)->format('d M Y') }}
-                </p>
-            </div>
-            <div class="flex items-center gap-2">
-                <a href="{{ route('admin.sales-challans.print-challan', $challan->id) }}" class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors" target="_blank">
-                    <x-erp.icon name="printer" class="size-4" /> Print Challan
-                </a>
-                <a href="{{ route('admin.sales-challans.index') }}" class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors">
-                    <x-erp.icon name="arrow-left" class="size-4" /> Back to list
-                </a>
-            </div>
+<div class="container-fluid py-2">
+    {{-- Hero header --}}
+    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
+            style="background: linear-gradient(135deg,#7c3aed,#4f46e5);">
+        <div>
+            <h1 class="h4 mb-1">
+                <i class="fas fa-truck me-2"></i>Challan {{ $challan->challan_code }}
+                {!! $statusBadge() !!}
+            </h1>
+            <p class="mb-0 small opacity-75">
+                @if ($inv)<a href="{{ route('admin.sales-invoices.show', $inv) }}" class="text-white text-decoration-underline">{{ $inv->invoice_code }}</a>@endif
+                @if ($inv && $inv->customer) · {{ $inv->customer->customer_name }}@endif
+                @if ($challan->branch) · {{ $challan->branch->branch_name }}@endif
+                · {{ \Carbon\Carbon::parse($challan->challan_date)->format('d M Y') }}
+            </p>
         </div>
-    </div>
+        <div class="d-flex gap-2">
+            <a href="{{ route('admin.sales-challans.print-challan', $challan->id) }}" class="btn btn-outline-light btn-sm" target="_blank">
+                <i class="fas fa-print me-1"></i> Print Challan
+            </a>
+            <a href="{{ route('admin.sales-challans.index') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-arrow-left me-1"></i> Back to list
+            </a>
+        </div>
+    </header>
 
     {{-- Reversal alert --}}
     @if ($challan->is_reversed)
@@ -112,7 +108,13 @@
         {{-- Left column --}}
         <div class="col-lg-8">
             {{-- Challan details card --}}
-            <x-erp.left-accent-card accent="amber" icon="truck" title="Challan details" title-bn="চালানের বিস্তারিত" class="mb-3">
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white">
+                    <h2 class="h6 mb-0">
+                        <i class="fas fa-circle-info me-1" style="color:#7c3aed;"></i> Challan details
+                    </h2>
+                </div>
+                <div class="card-body">
                     <dl class="row mb-0">
                         <dt class="col-sm-3 text-muted">Challan code</dt>
                         <dd class="col-sm-9">
@@ -176,7 +178,7 @@
 
                         <dt class="col-sm-3 text-muted">COGS total</dt>
                         <dd class="col-sm-9">
-                            <strong class="fs-5 text-amber-700">
+                            <strong class="fs-5" style="color:#7c3aed;">
                                 Tk {{ number_format($cogsTotal, 2) }}
                             </strong>
                         </dd>
@@ -186,11 +188,18 @@
                             <dd class="col-sm-9">{{ $createdByName }}</dd>
                         @endif
                     </dl>
-            </x-erp.left-accent-card>
+                </div>
+            </div>
 
             {{-- Invoice items table --}}
             @if ($inv && $inv->items && $inv->items->isNotEmpty())
-                <x-erp.left-accent-card accent="orange" icon="package" title="Invoice items" title-bn="পণ্য তালিকা" class="mb-3" body-class="!p-0">
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-list me-1" style="color:#7c3aed;"></i> Invoice items
+                        </h2>
+                    </div>
+                    <div class="card-body p-0">
                         <div class="table-responsive">
                             <table class="table table-sm table-striped table-hover align-middle mb-0">
                                 <thead class="table-light">
@@ -230,17 +239,22 @@
                                 </tbody>
                             </table>
                         </div>
-                </x-erp.left-accent-card>
+                    </div>
+                </div>
             @endif
 
             {{-- Stock movements card --}}
             @if ($stockMovements->isNotEmpty())
-                <x-erp.left-accent-card accent="cyan" icon="package" title="Stock movements" title-bn="স্টক মুভমেন্ট" class="mb-3" body-class="!p-0">
-                    <x-slot:actions>
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white d-flex align-items-center justify-content-between">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-boxes-stacked me-1" style="color:#7c3aed;"></i> Stock movements
+                        </h2>
                         <span class="badge bg-primary-subtle text-primary">
                             {{ $stockMovements->count() }} tx(s)
                         </span>
-                    </x-slot:actions>
+                    </div>
+                    <div class="card-body p-0">
                         <div class="table-responsive">
                             <table class="table table-sm table-striped table-hover align-middle mb-0">
                                 <thead class="table-light">
@@ -308,20 +322,25 @@
                                 </tbody>
                             </table>
                         </div>
-                </x-erp.left-accent-card>
+                    </div>
+                </div>
             @endif
 
             {{-- GL Journal Entry card --}}
             @if ($challan->journalEntry)
                 @php $je = $challan->journalEntry; @endphp
-                <x-erp.left-accent-card accent="green" icon="banknote" title="GL Journal Entry" title-bn="জিএল জার্নাল" class="mb-3">
-                    <x-slot:actions>
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white d-flex align-items-center justify-content-between">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-book me-1" style="color:#7c3aed;"></i> GL Journal Entry
+                        </h2>
                         @if (!empty($je->is_reversed))
                             <span class="badge bg-danger-subtle text-danger">
                                 <i class="fas fa-rotate-left me-1"></i>Reversed
                             </span>
                         @endif
-                    </x-slot:actions>
+                    </div>
+                    <div class="card-body">
                         <dl class="row mb-3">
                             <dt class="col-sm-3 text-muted">JE #</dt>
                             <dd class="col-sm-9">
@@ -402,61 +421,67 @@
                         @else
                             <p class="text-muted small mb-0">No journal lines.</p>
                         @endif
-                </x-erp.left-accent-card>
+                    </div>
+                </div>
             @endif
         </div>
 
         {{-- Right column: status + actions --}}
         <div class="col-lg-4">
-            <div class="sticky-top" style="top:80px;">
-                <x-erp.left-accent-card accent="orange" icon="clipboard-list" title="Status & Actions" title-bn="অবস্থা ও অ্যাকশন">
-                        <div class="d-flex flex-column align-items-start gap-2 mb-3">
-                            <div class="text-muted small">Current status</div>
-                            <div>{!! $statusBadge(true) !!}</div>
-                        </div>
+            <div class="card border-0 shadow-sm sticky-top" style="top:80px;">
+                <div class="card-header bg-white">
+                    <h2 class="h6 mb-0">
+                        <i class="fas fa-gauge-high me-1" style="color:#7c3aed;"></i> Status &amp; actions
+                    </h2>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex flex-column align-items-start gap-2 mb-3">
+                        <div class="text-muted small">Current status</div>
+                        <div>{!! $statusBadge(true) !!}</div>
+                    </div>
 
-                        <hr>
+                    <hr>
 
-                        <div class="d-grid gap-2">
-                            <a href="{{ route('admin.sales-challans.print-challan', $challan->id) }}" class="btn btn-outline-primary btn-sm" target="_blank">
-                                <i class="fas fa-print me-1"></i> Print challan
+                    <div class="d-grid gap-2">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="window.print()">
+                            <i class="fas fa-print me-1"></i> Print challan
+                        </button>
+                        <a href="{{ route('admin.sales-challans.index') }}" class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-list me-1"></i> All challans
+                        </a>
+                        @if ($inv)
+                            <a href="{{ route('admin.sales-invoices.show', $inv) }}" class="btn btn-outline-secondary btn-sm">
+                                <i class="fas fa-file-invoice-dollar me-1"></i> View invoice
                             </a>
-                            <a href="{{ route('admin.sales-challans.index') }}" class="btn btn-outline-secondary btn-sm">
-                                <i class="fas fa-list me-1"></i> All challans
-                            </a>
-                            @if ($inv)
-                                <a href="{{ route('admin.sales-invoices.show', $inv) }}" class="btn btn-outline-secondary btn-sm">
-                                    <i class="fas fa-file-invoice-dollar me-1"></i> View invoice
-                                </a>
-                            @endif
-                        </div>
-
-                        @if (! $challan->is_reversed)
-                            <hr>
-                            <x-erp.warning-callout title="Cancel reverses stock + GL" title-bn="বাতিজ স্টক ও জিএল ফিরিয়ে আনে">
-                                <p>Cancelling this challan will reverse the stock OUT movements and reverse the GL journal entry. A reason is required.</p>
-                            </x-erp.warning-callout>
-                            <form method="POST" action="{{ route('admin.sales-challans.cancel', $challan) }}" id="cancelForm" class="mt-2">
-                                @csrf
-                                <input type="hidden" name="cancel_reason" id="cancelReasonInput" value="">
-                                <button type="button" class="btn btn-danger w-100" id="cancelBtn">
-                                    <i class="fas fa-ban me-1"></i> Cancel Challan
-                                </button>
-                            </form>
-                        @else
-                            <hr>
-                            <div class="alert alert-secondary small mb-0">
-                                <i class="fas fa-lock me-1"></i>
-                                This challan is reversed — no further actions available.
-                            </div>
                         @endif
-                </x-erp.left-accent-card>
+                    </div>
+
+                    @if (! $challan->is_reversed)
+                        <hr>
+                        <div class="alert alert-warning small mb-2">
+                            <i class="fas fa-triangle-exclamation me-1"></i>
+                            Cancelling this challan will reverse the stock OUT movements and reverse the GL journal
+                            entry. A reason is required.
+                        </div>
+                        <form method="POST" action="{{ route('admin.sales-challans.cancel', $challan) }}" id="cancelForm">
+                            @csrf
+                            <input type="hidden" name="cancel_reason" id="cancelReasonInput" value="">
+                            <button type="button" class="btn btn-danger w-100" id="cancelBtn">
+                                <i class="fas fa-ban me-1"></i> Cancel Challan
+                            </button>
+                        </form>
+                    @else
+                        <hr>
+                        <div class="alert alert-secondary small mb-0">
+                            <i class="fas fa-lock me-1"></i>
+                            This challan is reversed — no further actions available.
+                        </div>
+                    @endif
+                </div>
             </div>
         </div>
     </div>
 </div>
-
-</x-layouts.erp>
 
 @push('scripts')
 <script>
@@ -491,3 +516,4 @@ $(function () {
 });
 </script>
 @endpush
+@endsection

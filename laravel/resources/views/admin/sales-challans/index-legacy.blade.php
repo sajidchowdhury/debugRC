@@ -1,9 +1,6 @@
-<x-layouts.erp :title="$title ?? 'Challans'" :tabs="[
-    ['label' => 'Dashboard', 'href' => route('dashboard')],
-    ['label' => 'Invoices', 'href' => route('admin.sales-invoices.index')],
-    ['label' => 'Challans', 'href' => route('admin.sales-challans.index'), 'active' => true],
-    ['label' => 'UI Preview', 'href' => route('ui-preview')],
-]">
+@extends('layouts.admin')
+
+@section('content')
 @php
     // Defaults for filter controls
     $filters = array_merge([
@@ -23,11 +20,13 @@
     ], $stats ?? []);
 
     // Determine active tab. Default = 'pending_godown' (the WM's primary queue).
+    // Tab persistence via ?tab= query param.
     $activeTab = request()->input('tab', 'pending_godown');
     if (!in_array($activeTab, ['pending_godown', 'pending_challan', 'issued'], true)) {
         $activeTab = 'pending_godown';
     }
 
+    // Helper: count line items + total qty for display
     $invoiceLineCount = function ($invoice) {
         return $invoice->relationLoaded('items') ? $invoice->items->count() : 0;
     };
@@ -37,34 +36,86 @@
     };
 @endphp
 
-<div class="space-y-6">
-    {{-- Hero header (amber/orange gradient — showcase spec) --}}
-    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
-        <div class="flex items-center justify-between flex-wrap gap-4">
-            <div>
-                <h1 class="text-2xl font-bold text-white">গোডাউন ও চালান</h1>
-                <p class="text-amber-100 text-sm mt-1">{{ $title }} — Warehouse workflow queue</p>
-            </div>
-            <a href="{{ route('admin.sales-invoices.index') }}" class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors">
-                <x-erp.icon name="file-text" class="size-4" /> Invoices
+<div class="container-fluid py-2">
+    {{-- Hero header (purple/indigo = revenue movement) --}}
+    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
+            style="background: linear-gradient(135deg,#7c3aed,#4f46e5);">
+        <div>
+            <h1 class="h4 mb-1"><i class="fas fa-truck me-2"></i>{{ $title }}</h1>
+            <p class="mb-0 small opacity-75">
+                Warehouse workflow queue: invoices awaiting godown prep, invoices awaiting challan issue, and issued challans history.
+            </p>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{{ route('admin.sales-invoices.index') }}" class="btn btn-light btn-sm">
+                <i class="fas fa-file-invoice-dollar me-1"></i> Invoices
             </a>
         </div>
-        {{-- Journey stepper --}}
-        <div class="mt-6">
-            <x-erp.journey-stepper />
+    </header>
+
+    {{-- Workflow queue stats: 4 cards --}}
+    <div class="row g-3 mb-3">
+        <div class="col-sm-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#0891b2;">
+                        <i class="fas fa-warehouse"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">{{ number_format((int) ($stats['pending_godown'] ?? 0)) }}</div>
+                        <div class="text-muted small">Pending godown prep</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#7c3aed;">
+                        <i class="fas fa-truck-front"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">{{ number_format((int) ($stats['pending_challan'] ?? 0)) }}</div>
+                        <div class="text-muted small">Pending challan issue</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#16a34a;">
+                        <i class="fas fa-circle-check"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">{{ number_format((int) ($stats['active'] ?? 0)) }}</div>
+                        <div class="text-muted small">Issued (active)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-lg-3">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#4f46e5;">
+                        <i class="fas fa-taka-sign"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">Tk {{ number_format((float) ($stats['total_cogs'] ?? 0), 2) }}</div>
+                        <div class="text-muted small">Total COGS (active)</div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
-    {{-- Stat cards --}}
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <x-erp.stat-card label="Pending Godown" label-bn="গোডাউন বাকি" :value="number_format((int) ($stats['pending_godown'] ?? 0))" accent="cyan" icon="warehouse" />
-        <x-erp.stat-card label="Pending Challan" label-bn="চালান বাকি" :value="number_format((int) ($stats['pending_challan'] ?? 0))" accent="amber" icon="truck" />
-        <x-erp.stat-card label="Issued (Active)" label-bn="ইস্যুকৃত" :value="number_format((int) ($stats['active'] ?? 0))" accent="green" icon="check-circle" />
-        <x-erp.stat-card label="Total COGS" label-bn="মোট ক্রয়মূল্য" :value="'৳' . number_format((float) ($stats['total_cogs'] ?? 0), 0)" accent="orange" icon="banknote" />
-    </div>
-
-    {{-- Filter form --}}
-    <x-erp.left-accent-card accent="amber" icon="search" title="Filters" title-bn="ফিল্টার">
+    {{-- Filter form (applies to all tabs via ?search=) --}}
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body">
             <form method="GET" action="{{ route('admin.sales-challans.index') }}" class="row g-2 align-items-end">
                 <input type="hidden" name="tab" value="{{ $activeTab }}">
                 <div class="col-md-2">
@@ -94,7 +145,8 @@
                     </a>
                 </div>
             </form>
-    </x-erp.left-accent-card>
+        </div>
+    </div>
 
     {{-- Tabs: 3 sections --}}
     <ul class="nav nav-tabs mb-0" id="challanTabs" role="tablist">
@@ -456,8 +508,6 @@
     </div>
 </div>
 
-</x-layouts.erp>
-
 @push('scripts')
 <script>
 $(function () {
@@ -495,3 +545,4 @@ $(function () {
 });
 </script>
 @endpush
+@endsection

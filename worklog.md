@@ -1955,3 +1955,23 @@ Work Log:
 Stage Summary:
 - Phase 10 complete. All 3 print layouts now use the showcase design: branch-colored headers (HO=Red, PAT=Blue, NOW=Green, TAR=Orange), .write-in dashed cells for manual handwriting, .watermark for blank-godown + cancelled-challan, <x-erp.signature-row> for bilingual signature lines. The print layout loads rc-erp.css so Tailwind utilities are available. The .rc-erp-print-page body class triggers the @media print block (A4 margins, 11px font) from Phase 0.
 - Next: Phase 11 — polish (SM forms, loading/empty/error states, mobile, toasts) OR Phase 12 if the team is satisfied with the current state.
+
+---
+Task ID: UI-Phase-11 (Laravel)
+Agent: main
+Task: UI/UX Revamp Phase 11 (Laravel) — Polish. Rebuilt the challan detail (show.blade.php) and challan list (index.blade.php) — the last 2 sales-module views still using the old admin layout. Both backed up as *-legacy.blade.php.
+
+Work Log:
+- sales-challans/show.blade.php (rebuilt, 519→493 lines): @extends('layouts.admin') → <x-layouts.erp> with tab strip (Challans=active). Hero: purple → amber gradient + challan code + status badge. 4 left-column Bootstrap cards → <x-erp.left-accent-card>: Challan details (amber/truck), Invoice items (orange/package), Stock movements (cyan/package with tx-count badge in $actions slot), GL Journal Entry (green/banknote with Reversed badge in $actions slot). Right sidebar: Bootstrap card → <x-erp.left-accent-card accent="orange"> with status badge + print/all-challans/view-invoice buttons + <x-erp.warning-callout> for cancel warning + #cancelForm/#cancelBtn preserved. COGS total color #7c3aed → amber-700. @push('scripts') SweetAlert2 cancel flow preserved (confirmButtonColor already #dc3545 red — kept). All JS-referenced IDs (#cancelForm, #cancelReasonInput, #cancelBtn) verified present.
+- sales-challans/index.blade.php (rebuilt, 548→497 lines): @extends('layouts.admin') → <x-layouts.erp> with tab strip (Challans=active). Hero: purple → amber gradient + bilingual title + <x-erp.journey-stepper>. 4 Bootstrap stat cards → 4 <x-erp.stat-card> (Pending Godown/cyan, Pending Challan/amber, Issued/green, Total COGS/orange). Filter form: Bootstrap card → <x-erp.left-accent-card accent="amber">. All 3 tabbed sections (pending_godown, pending_challan, issued) preserved with their tables, action buttons, pagination. DataTables init (#dataTable), CSV export (#csvExportBtn), tab switching JS all preserved. @push('scripts') block verbatim.
+- Verified: bun run build:css succeeds. Both files: 0 @extends/@endsection, 1 </x-layouts.erp>. All JS-referenced IDs present. Zero muted-foreground.
+
+Stage Summary:
+- Phase 11 complete. ALL sales-module views now use the showcase design system:
+  - Invoice list (index) — Phase 6
+  - Invoice detail (show) — Phase 7
+  - Godown prep — Phase 8
+  - Challan issue — Phase 9
+  - 3 print layouts — Phase 10
+  - Challan list (index) + Challan detail (show) — Phase 11
+- The full Invoice → Godown → Challan workflow is now visually consistent with the amber/orange showcase design, bilingual labels, left-accent cards, stat cards, journey stepper, step indicators, and design-system buttons. All backend logic, DataTables AJAX, SweetAlert2 flows, role-gating, and idempotency tokens are preserved.
