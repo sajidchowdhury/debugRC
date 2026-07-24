@@ -18,6 +18,11 @@
     };
 
     $invoiceTotal = (float) ($invoice->total_amount ?? 0);
+
+    // Pre-compute disabled state for the submit button (must NOT use @if inside
+    // an <x-*> component tag — the '>' in $warehouses->isEmpty() breaks Blade's
+    // ComponentTagCompiler regex, orphaning the closing tag's endif).
+    $warehousesEmpty = $warehouses->isEmpty();
 @endphp
 
 <div class="space-y-6">
@@ -210,7 +215,7 @@
         {{-- Sticky action bar --}}
         <x-erp.sticky-action-bar>
             <x-erp.outline-button href="{{ route('admin.sales-invoices.show', $invoice) }}">Cancel / বাতিল</x-erp.outline-button>
-            <x-erp.primary-button accent="amber" icon="save" type="submit" @if ($warehouses->isEmpty()) disabled @endif>
+            <x-erp.primary-button accent="amber" icon="save" type="submit" :disabled="$warehousesEmpty">
                 Confirm Godown Assignment
             </x-erp.primary-button>
         </x-erp.sticky-action-bar>
