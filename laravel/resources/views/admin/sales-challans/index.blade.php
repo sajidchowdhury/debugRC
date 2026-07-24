@@ -1,9 +1,4 @@
-<x-layouts.erp :title="$title ?? 'Challans'" :tabs="[
-    ['label' => 'Dashboard', 'href' => route('dashboard')],
-    ['label' => 'Invoices', 'href' => route('admin.sales-invoices.index')],
-    ['label' => 'Challans', 'href' => route('admin.sales-challans.index'), 'active' => true],
-    ['label' => 'UI Preview', 'href' => route('ui-preview')],
-]">
+<x-layouts.erp :title="$title ?? 'Challans'">
 @php
     // Defaults for filter controls
     $filters = array_merge([
@@ -39,97 +34,25 @@
 
 <div class="space-y-6">
 
-    {{-- ============================================================ --}}
-    {{-- 1. HERO HEADER (amber/orange gradient + journey stepper)     --}}
-    {{-- ============================================================ --}}
-    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg relative overflow-hidden">
-        {{-- decorative blurred circle --}}
-        <div class="absolute -right-10 -top-10 size-40 bg-white/10 rounded-full blur-2xl"></div>
-        <div class="absolute -left-6 -bottom-12 size-32 bg-orange-300/20 rounded-full blur-2xl"></div>
-
-        <div class="relative flex items-center justify-between flex-wrap gap-4">
-            <div>
-                <h1 class="text-2xl font-bold text-white flex items-center gap-2">
-                    <i class="fas fa-truck-ramp-box"></i>
-                    গোডাউন ও চালান
-                </h1>
-                <p class="text-amber-100 text-sm mt-1">
-                    {{ $title }} — Warehouse workflow queue · ওয়্যারহাউজ ওয়ার্কফ্লো
-                </p>
-            </div>
-            <div class="flex items-center gap-2 flex-wrap">
-                <a href="{{ route('admin.sales-invoices.index') }}" class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors">
-                    <x-erp.icon name="file-text" class="size-4" />
-                    Invoices
-                </a>
-                <a href="{{ route('admin.sales-challans.export-csv') }}" id="csvExportBtn" target="_blank" class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors">
-                    <x-erp.icon name="download" class="size-4" />
-                    Export CSV
-                </a>
-            </div>
+    {{-- Page title bar (compact, matches other pages) --}}
+    <div class="flex items-center justify-between flex-wrap gap-2">
+        <div>
+            <h1 class="text-xl font-bold text-amber-900 flex items-center gap-2">
+                <i class="fas fa-truck-ramp-box text-amber-500"></i>
+                {{ $title }}
+            </h1>
+            <p class="text-sm text-gray-500 mt-0.5">গোডাউন ও চালান · Warehouse workflow queue</p>
         </div>
-
-        {{-- Journey stepper --}}
-        <div class="relative mt-6">
-            <x-erp.journey-stepper />
+        <div class="flex items-center gap-2 flex-wrap">
+            <a href="{{ route('admin.sales-invoices.index') }}" class="inline-flex items-center gap-1.5 bg-white border border-amber-200 hover:bg-amber-50 text-amber-700 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors">
+                <x-erp.icon name="file-text" class="size-4" />
+                Invoices
+            </a>
+            <a href="{{ route('admin.sales-challans.export-csv') }}" id="csvExportBtn" target="_blank" class="inline-flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium transition-colors shadow-sm">
+                <x-erp.icon name="download" class="size-4" />
+                Export CSV
+            </a>
         </div>
-    </div>
-
-    {{-- ============================================================ --}}
-    {{-- 2. STAT CARDS (border-l-4 accent, showcase spec)             --}}
-    {{-- ============================================================ --}}
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <x-erp.stat-card label="Pending Godown" label-bn="গোডাউন বাকি" :value="number_format((int) ($stats['pending_godown'] ?? 0))" accent="amber" icon="warehouse" />
-        <x-erp.stat-card label="Pending Challan" label-bn="চালান বাকি" :value="number_format((int) ($stats['pending_challan'] ?? 0))" accent="orange" icon="truck" />
-        <x-erp.stat-card label="Issued (Active)" label-bn="ইস্যুকৃত" :value="number_format((int) ($stats['active'] ?? 0))" accent="green" icon="check-circle" />
-        <x-erp.stat-card label="Total COGS" label-bn="মোট ক্রয়মূল্য" :value="'৳' . number_format((float) ($stats['total_cogs'] ?? 0), 0)" accent="cyan" icon="banknote" />
-    </div>
-
-    {{-- ============================================================ --}}
-    {{-- 3. FILTER FORM (white rounded card, showcase spec)           --}}
-    {{-- ============================================================ --}}
-    <div class="bg-white rounded-xl shadow-sm border border-amber-100 p-4">
-        <div class="flex items-center gap-2 mb-3">
-            <div class="size-8 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center">
-                <x-erp.icon name="search" class="size-4" />
-            </div>
-            <div>
-                <h3 class="font-semibold text-amber-900 text-sm">Filters / ফিল্টার</h3>
-                <p class="text-xs text-gray-500">Search invoices, challans, customers — narrow the workflow queue</p>
-            </div>
-        </div>
-        <form method="GET" action="{{ route('admin.sales-challans.index') }}" class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-            <input type="hidden" name="tab" value="{{ $activeTab }}">
-            <div class="md:col-span-2">
-                <label class="block text-xs font-medium text-gray-600 mb-1" for="from_date">From date <span class="text-gray-400">(issued)</span></label>
-                <input type="date" id="from_date" name="from_date"
-                       class="w-full rounded-md border border-amber-200 bg-amber-50/40 px-2.5 py-1.5 text-sm text-gray-800 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
-                       value="{{ $filters['from_date'] }}">
-            </div>
-            <div class="md:col-span-2">
-                <label class="block text-xs font-medium text-gray-600 mb-1" for="to_date">To date <span class="text-gray-400">(issued)</span></label>
-                <input type="date" id="to_date" name="to_date"
-                       class="w-full rounded-md border border-amber-200 bg-amber-50/40 px-2.5 py-1.5 text-sm text-gray-800 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
-                       value="{{ $filters['to_date'] }}">
-            </div>
-            <div class="md:col-span-5">
-                <label class="block text-xs font-medium text-gray-600 mb-1" for="search">Search <span class="text-gray-400">(invoice / challan / customer)</span></label>
-                <div class="relative">
-                    <x-erp.icon name="search" class="size-4 text-amber-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                    <input type="text" id="search" name="search"
-                           class="w-full rounded-md border border-amber-200 bg-amber-50/40 pl-8 pr-2.5 py-1.5 text-sm text-gray-800 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-200"
-                           placeholder="INV-2025-... / CH-... / customer name" value="{{ $filters['search'] }}">
-                </div>
-            </div>
-            <div class="md:col-span-3 flex gap-2 justify-end">
-                <button type="submit" class="inline-flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-md px-3 py-1.5 text-xs font-medium transition-colors shadow-sm">
-                    <x-erp.icon name="filter" class="size-4" /> Filter
-                </button>
-                <a href="{{ route('admin.sales-challans.index') }}" class="inline-flex items-center gap-1.5 bg-white border border-amber-200 hover:bg-amber-50 text-amber-700 rounded-md px-3 py-1.5 text-xs font-medium transition-colors">
-                    <x-erp.icon name="x" class="size-4" /> Clear
-                </a>
-            </div>
-        </form>
     </div>
 
     {{-- ============================================================ --}}
