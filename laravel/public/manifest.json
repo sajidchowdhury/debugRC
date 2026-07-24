@@ -3,7 +3,7 @@
   "short_name": "RC POS",
   "description": "RC ERP Sales Cart — POS kiosk interface for invoice creation and payment receipt.",
   "start_url": "/admin/sales/cart",
-  "scope": "/admin/sales/",
+  "scope": "/admin/",
   "display": "standalone",
   "orientation": "any",
   "theme_color": "#4f46e5",
@@ -20,7 +20,7 @@
     },
     {
       "src": "/assets/images/icon.svg",
-      "sizes": "192x192 512x512",
+      "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "maskable"
     }

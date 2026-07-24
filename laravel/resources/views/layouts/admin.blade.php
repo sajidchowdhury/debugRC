@@ -17,8 +17,11 @@
     <link rel="stylesheet" href="/assets/css/all.min.css">
     <link href="/assets/css/sweetalert2.min.css" rel="stylesheet">
 
-    {{-- Shared legacy styles (served by Nginx from /assets/) --}}
-    <link rel="stylesheet" href="/assets/css/custom.css">
+    {{-- Shared legacy styles (served by Nginx from /assets/).
+        filemtime() cache-busting ensures browsers always fetch the latest
+        custom.css after deploys (prevents stale cached CSS from hiding
+        sidebar fixes). --}}
+    <link rel="stylesheet" href="/assets/css/custom.css?v={{ filemtime(public_path('assets/css/custom.css')) }}">
     <link rel="stylesheet" href="/assets/css/footer-dropup.css">
 
     {{-- RC ERP design-system (Tailwind v4, no preflight — coexists with Bootstrap).
@@ -47,7 +50,7 @@
     <link rel="stylesheet" href="/assets/css/jquery.dataTables.min.css">
     <script src="/assets/js/bootstrep/jquery.dataTables.min.js"></script>
 
-    <script src="/assets/js/custom.js"></script>
+    <script src="/assets/js/custom.js?v={{ filemtime(public_path('assets/js/custom.js')) }}"></script>
 
     @stack('css')
 </head>
