@@ -1,4 +1,3 @@
-@php $branchCode = $invoice->branch?->branch_code; @endphp
 @extends('layouts.print')
 
 @section('print_content')
@@ -11,33 +10,32 @@
     $itemPages = $allItems->chunk($itemsPerPage);
     $totalPages = $itemPages->count();
     $globalSl = 0;
-    $branchColorHex = \App\Support\BranchColor::hex($branchCode);
 @endphp
 
 @foreach ($itemPages as $pageIndex => $pageItems)
 <div class="print-page position-relative">
     {{-- BLANK GODOWN watermark --}}
-    <div class="watermark">BLANK GODOWN</div>
+    <div class="watermark" style="font-size:3.5rem; color:rgba(245,158,11,0.12);">BLANK GODOWN</div>
 
     {{-- Company header --}}
     <div class="company-header d-flex justify-content-between align-items-start">
         <div>
             <div class="company-name">{{ config('app.name', 'Remote Center ERP') }}</div>
             @if ($invoice->branch)
-                <div class="small text-muted">{{ $invoice->branch->branch_name }} শাখা / {{ \App\Support\BranchColor::get($branchCode)['color_name'] ?? '' }} Branch</div>
+                <div class="small text-muted">{{ $invoice->branch->branch_name }}</div>
             @endif
         </div>
         <div class="text-end">
-            <div class="doc-title">খালি গোডাউন কপি / BLANK GODOWN</div>
-            <div class="small text-muted">Manual Picking Sheet / ম্যানুয়াল পিকিং শিট</div>
+            <div class="doc-title" style="color:#d97706;">খালি গোডাউন / BLANK GODOWN</div>
+            <div class="small text-muted">Manual Picking Sheet</div>
         </div>
     </div>
 
     {{-- Banner --}}
-    <div class="mb-2 p-2 rounded" style="background:{{ $branchColorHex }}15; border:1px dashed {{ $branchColorHex }};">
+    <div class="mb-2 p-2 rounded" style="background:rgba(245,158,11,0.1); border:1px dashed #f59e0b;">
         <div class="d-flex justify-content-between align-items-center">
             <span class="fw-semibold small"><i class="fas fa-pen me-1"></i> ম্যানুয়াল পিকিং শিট — Handwrite warehouse, carton & pick confirmation</span>
-            <span class="badge text-dark" style="background:{{ $branchColorHex }}33;">পৃষ্ঠা {{ $pageIndex + 1 }} / {{ $totalPages }}</span>
+            <span class="badge bg-warning text-dark">পৃষ্ঠা {{ $pageIndex + 1 }} / {{ $totalPages }}</span>
         </div>
         <div class="d-flex gap-3 small mt-1">
             <span>ইনভয়েস: <strong>{{ $invoice->invoice_code }}</strong></span>
@@ -89,9 +87,9 @@
     </div>
     @endif
 
-    {{-- Picking list table — BLANK write-in cells using .write-in class --}}
+    {{-- Picking list table — BLANK writing cells --}}
     <table class="table table-sm table-bordered items-table">
-        <thead>
+        <thead style="background:#fef3c7;">
             <tr>
                 <th style="width:5%;">ক্রম / #</th>
                 <th style="width:30%;">পণ্যের নাম / Product</th>
@@ -114,25 +112,25 @@
                         @endif
                     </td>
                     <td class="text-end fw-semibold">{{ number_format((float) $item->qty, 2) }}</td>
-                    {{-- Warehouse — write-in cell --}}
+                    {{-- Warehouse — blank write-in cell with hint --}}
                     <td class="text-center">
                         @if ($item->warehouse)
                             <span style="font-size:0.75rem; color:#999;">{{ $item->warehouse->warehouse_name }}</span>
                         @else
-                            <span class="write-in d-inline-block" style="width:90%; min-height:20px;">&nbsp;</span>
+                            <span style="border-bottom:1px solid #ccc; display:inline-block; width:90%;">&nbsp;</span>
                         @endif
                     </td>
-                    {{-- Carton — write-in --}}
+                    {{-- Carton — blank --}}
                     <td class="text-center">
-                        <span class="write-in d-inline-block" style="width:70%; min-height:20px;">&nbsp;</span>
+                        <span style="border-bottom:1px solid #ccc; display:inline-block; width:70%;">&nbsp;</span>
                     </td>
-                    {{-- Pieces picked — write-in --}}
+                    {{-- Pieces picked — blank --}}
                     <td class="text-center">
-                        <span class="write-in d-inline-block" style="width:70%; min-height:20px;">&nbsp;</span>
+                        <span style="border-bottom:1px solid #ccc; display:inline-block; width:70%;">&nbsp;</span>
                     </td>
-                    {{-- Signature — write-in --}}
+                    {{-- Signature — blank --}}
                     <td class="text-center">
-                        <span class="write-in d-inline-block" style="width:90%; min-height:20px;">&nbsp;</span>
+                        <span style="border-bottom:1px solid #ccc; display:inline-block; width:90%;">&nbsp;</span>
                     </td>
                 </tr>
             @endforeach
@@ -165,7 +163,7 @@
         </div>
 
         {{-- Dispatcher write-in block --}}
-        <div class="mt-3 p-2 border rounded" style="background:{{ $branchColorHex }}11;">
+        <div class="mt-3 p-2 border rounded" style="background:rgba(245,158,11,0.05);">
             <div class="small fw-semibold mb-1">ডিসপ্যাচার / Dispatcher</div>
             @if ($invoice->dispatchers && $invoice->dispatchers->count() > 0)
                 <div class="small mb-1">সিস্টেম: {{ $invoice->dispatchers->pluck('name')->join(', ') }}</div>
@@ -173,11 +171,11 @@
             <div class="row g-1">
                 <div class="col-6">
                     <div class="small text-muted">ডিসপ্যাচার নাম / Name</div>
-                    <div class="write-in" style="min-height:25px;">&nbsp;</div>
+                    <div style="border-bottom:1px solid #999; height:25px;">&nbsp;</div>
                 </div>
                 <div class="col-6">
                     <div class="small text-muted">তারিখ / সময় / Date & Time</div>
-                    <div class="write-in" style="min-height:25px;">&nbsp;</div>
+                    <div style="border-bottom:1px solid #999; height:25px;">&nbsp;</div>
                 </div>
             </div>
         </div>
@@ -191,11 +189,17 @@
         </div>
 
         {{-- Signatures --}}
-        <x-erp.signature-row :signers="[
-            ['label' => 'Dispatcher', 'label_bn' => 'ডিসপ্যাচার'],
-            ['label' => 'Godown Manager', 'label_bn' => 'গোডাউন ম্যানেজার'],
-            ['label' => 'Verified By', 'label_bn' => 'যাচাইকারী'],
-        ]" />
+        <div class="signature-section mt-3">
+            <div class="signature-box">
+                <div class="small text-muted">ডিসপ্যাচার / Dispatcher</div>
+            </div>
+            <div class="signature-box">
+                <div class="small text-muted">গোডাউন ম্যানেজার / Godown Manager</div>
+            </div>
+            <div class="signature-box">
+                <div class="small text-muted">যাচাইকারী / Verified By</div>
+            </div>
+        </div>
 
         {{-- Footer --}}
         <div class="text-muted text-center mt-2" style="font-size:0.7rem;">

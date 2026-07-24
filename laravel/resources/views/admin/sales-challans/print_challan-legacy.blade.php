@@ -1,4 +1,3 @@
-@php $branchCode = $challan->branch?->branch_code; @endphp
 @extends('layouts.print')
 
 @section('print_content')
@@ -7,7 +6,6 @@
     $allItems = $challan->items ?? collect();
     $totalPages = max(1, ceil($allItems->count() / $itemsPerPage));
     $globalSl = 0;
-    $branchColorHex = \App\Support\BranchColor::hex($branchCode);
 @endphp
 
 @for ($page = 1; $page <= $totalPages; $page++)
@@ -18,7 +16,7 @@
 
     <div class="print-page position-relative">
         @if ($challan->is_reversed)
-            <div class="watermark" style="color:rgba(239,68,68,0.15);">CANCELLED</div>
+            <div class="watermark">CANCELLED</div>
         @endif
 
         {{-- Company header --}}
@@ -26,11 +24,11 @@
             <div>
                 <div class="company-name">{{ config('app.name', 'Remote Center ERP') }}</div>
                 @if ($challan->branch)
-                    <div class="small text-muted">{{ $challan->branch->branch_name }} শাখা</div>
+                    <div class="small text-muted">{{ $challan->branch->branch_name }}</div>
                 @endif
             </div>
             <div class="text-end">
-                <div class="doc-title">চালানপত্র (ডেলিভারি) / Delivery Challan</div>
+                <div class="doc-title">Delivery Challan</div>
                 <div class="small text-muted">Page {{ $page }} of {{ $totalPages }}</div>
             </div>
         </div>
@@ -38,19 +36,19 @@
         {{-- Challan meta --}}
         <div class="meta-grid">
             <div>
-                <div class="meta-label">Challan No. / চালান নং</div>
+                <div class="meta-label">Challan No.</div>
                 <div class="meta-value">{{ $challan->challan_code }}</div>
             </div>
             <div class="text-end">
-                <div class="meta-label">Date / তারিখ</div>
+                <div class="meta-label">Date</div>
                 <div class="meta-value">{{ \Carbon\Carbon::parse($challan->challan_date)->format('d M Y') }}</div>
             </div>
             <div>
-                <div class="meta-label">Invoice No. / ইনভয়েস নং</div>
+                <div class="meta-label">Invoice No.</div>
                 <div class="meta-value">{{ $challan->salesInvoice?->invoice_code ?? '—' }}</div>
             </div>
             <div>
-                <div class="meta-label">Customer / ক্রেতা</div>
+                <div class="meta-label">Customer</div>
                 <div class="meta-value">{{ $challan->salesInvoice?->customer?->customer_name ?? '—' }}</div>
             </div>
         </div>
@@ -58,19 +56,19 @@
         {{-- Transport details --}}
         <div class="meta-grid">
             <div>
-                <div class="meta-label">Transport / পরিবহন</div>
+                <div class="meta-label">Transport</div>
                 <div class="meta-value">{{ $challan->transport_name ?? '—' }}</div>
             </div>
             <div>
-                <div class="meta-label">Vehicle No. / গাড়ি নং</div>
+                <div class="meta-label">Vehicle No.</div>
                 <div class="meta-value">{{ $challan->vehicle_number ?? '—' }}</div>
             </div>
             <div>
-                <div class="meta-label">Driver / চালক</div>
+                <div class="meta-label">Driver</div>
                 <div class="meta-value">{{ $challan->driver_name ?? '—' }}</div>
             </div>
             <div>
-                <div class="meta-label">Transport Phone / ফোন</div>
+                <div class="meta-label">Transport Phone</div>
                 <div class="meta-value">{{ $challan->transport_phone ?? '—' }}</div>
             </div>
         </div>
@@ -80,9 +78,9 @@
             <thead>
                 <tr>
                     <th style="width:5%;">#</th>
-                    <th style="width:40%;">Product / পণ্য</th>
-                    <th style="width:20%;">Warehouse / গুদাম</th>
-                    <th class="text-end" style="width:12%;">Qty / পরিমাণ</th>
+                    <th style="width:40%;">Product</th>
+                    <th style="width:20%;">Warehouse</th>
+                    <th class="text-end" style="width:12%;">Qty</th>
                     <th class="text-end" style="width:18%;">COGS (Tk)</th>
                 </tr>
             </thead>
@@ -106,7 +104,7 @@
         @if ($isLastPage)
             <div class="totals-section">
                 <dl class="row mb-0">
-                    <dt class="col-7">Transport Cost / পরিবহন খরচ</dt>
+                    <dt class="col-7">Transport Cost</dt>
                     <dd class="col-5">Tk {{ number_format((float) $challan->transport_cost, 2) }}</dd>
 
                     <dt class="col-7">Total Issue Cost (COGS)</dt>
@@ -114,20 +112,18 @@
                 </dl>
             </div>
 
-            {{-- Delivery note --}}
-            <div class="mt-3 p-2 rounded small" style="background:{{ $branchColorHex }}15; border:1px dashed {{ $branchColorHex }};">
-                <i class="fas fa-circle-info me-1"></i>
-                <strong>গ্রহণ নিশ্চিতকরণ / Receipt Confirmation:</strong>
-                পণ্য গ্রহণ করে স্বাক্ষর করুন। কোনো ত্রুটি থাকলে ২৪ ঘণ্টার মধ্যে জানান।<br>
-                Confirm receipt of goods by signing. Report any defects within 24 hours.
-            </div>
-
             {{-- Signatures --}}
-            <x-erp.signature-row :signers="[
-                ['label' => 'Driver Signature', 'label_bn' => 'চালকের স্বাক্ষর'],
-                ['label' => 'Warehouse Manager', 'label_bn' => 'গোডাউন ম্যানেজার'],
-                ['label' => 'Receiver Signature', 'label_bn' => 'প্রাপকের স্বাক্ষর'],
-            ]" />
+            <div class="signature-section">
+                <div class="signature-box">
+                    <div class="small text-muted">Driver Signature</div>
+                </div>
+                <div class="signature-box">
+                    <div class="small text-muted">Warehouse Manager</div>
+                </div>
+                <div class="signature-box">
+                    <div class="small text-muted">Receiver Signature</div>
+                </div>
+            </div>
         @endif
     </div>
 @endfor
