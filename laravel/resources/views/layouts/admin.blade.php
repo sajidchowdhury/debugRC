@@ -275,7 +275,15 @@
         // custom.css) — nothing in Bootstrap or Tailwind can override them.
         // jQuery just toggles `.is-open` and aria-expanded; chevron rotates via CSS.
         (function() {
-            var STORAGE_KEY = 'rcerp_sidebar_expanded';
+            // Versioned key. Earlier ('rcerp_sidebar_expanded', no suffix) stored
+            // .show-based boolean state that, after the .is-open migration,
+            // caused EVERY submenu to auto-restore as open on page load
+            // ("all menus open by default"). Bumping the suffix discards that
+            // stale data so the sidebar starts collapsed (only the server-side
+            // active section opens via the $isActive 'is-open' class).
+            var STORAGE_KEY = 'rcerp_sidebar_expanded_v2';
+            // One-time cleanup of the obsolete key (best effort).
+            try { localStorage.removeItem('rcerp_sidebar_expanded'); } catch(e) {}
 
             // Restore saved state on DOM ready
             $(document).ready(function() {
