@@ -83,6 +83,12 @@ Route::middleware('auth')->group(function () {
     Route::get('ui-preview', [App\Http\Controllers\UiPreviewController::class, 'index'])
         ->name('ui-preview');
 
+    // Branch switch — Phase 5 (sales layout shell). POST form from the erp
+    // layout's branch <select>. Sets session('branch_id'/'branch_name'/'branch_code')
+    // which SetAppBranchId middleware reads on the next request for RLS.
+    Route::post('branch/switch', [App\Http\Controllers\BranchSwitchController::class, 'switch'])
+        ->name('branch.switch');
+
     // ============================================================
     // Phase 4: Master Data Modules
     // ============================================================

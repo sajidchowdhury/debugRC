@@ -1820,3 +1820,30 @@ Work Log:
 Stage Summary:
 - All 3 blocking issues fixed. Team needs to: git pull, rebuild the Docker image (docker compose build rcerp_app), delete the stale node_modules volume (docker volume rm rcerp_app_node_modules), and docker compose up -d. Then verify: npm list @tailwindcss/cli, npm run build:css, php -i (no ini warning), and /ui-preview renders all 21 components.
 - The entrypoint now self-heals: future package.json changes will trigger automatic npm install via the checksum check.
+
+---
+Task ID: UI-Phase-5 (Laravel)
+Agent: main
+Task: UI/UX Revamp Phase 5 (Laravel) — Sales layout shell. Build <x-layouts.erp> that the rebuilt sales views (Phase 6+) will extend instead of layouts.admin. Provides the showcase nav design (sticky 2-row: brand + role badge + branch switcher + notification bell + optional tab strip), flash messages, content slot, and sticky amber-900 footer. Includes a working branch-switch route/controller.
+
+Work Log:
+- app/Http/Controllers/BranchSwitchController.php (new) — POST switch() method. Authorization: admin/superadmin/manager only (regular users locked to home branch). Validates branch_id exists + is active. Sets session('branch_id'/'branch_name'/'branch_code') which SetAppBranchId middleware reads on the NEXT request to set the PostgreSQL app.branch_id GUC for RLS. Redirects back with success/error flash.
+- routes/web.php — added POST /branch/switch (named 'branch.switch') inside the auth group, right after /ui-preview. Uses fully-qualified controller path.
+- resources/views/components/layouts/erp.blade.php (new) — the sales layout shell. CRITICAL: lives at components/layouts/ (NOT layouts/) for <x-layouts.erp> auto-discovery (the lesson from the Phase 4 erp-preview bug). Full HTML page structure:
+  - <head>: same stylesheets as admin.blade.php (Bootstrap + custom.css + rc-erp.css) + jQuery + SweetAlert2 + Select2 + DataTables + custom.js, so sales views have full compatibility. @stack('css') and @stack('head_meta') for per-page additions.
+  - Sticky nav (no-print, bg-white/90 backdrop-blur-md border-amber-200): Row 1 = RC ERP gradient chip + bilingual tagline (left); role badge + branch switcher + notification bell + user dropdown (right). Row 2 = optional tab strip via $tabs prop (array of ['label','href','active?']).
+  - Role badge: reads auth()->user()->getRole(); maps 7 roles (admin, superadmin, manager, sales_manager, warehouse_manager, dispatcher, accountant) to colored pills (amber for SM, orange for WM, cyan for manager, gray for admin/others). Bilingual labels. Read-only (real role switching = re-login as different employee, out of scope).
+  - Branch switcher: admin/manager only. Renders an inline <form method=POST action=route('branch.switch')> with a <select name=branch_id onchange="this.form.submit()"> of active branches. Non-admin users see a read-only branch pill instead. @csrf included.
+  - Notification bell: @can('view-notification-rules') gated, links to admin.notifications.rules route. Phase 10 (notifications panel) will add the unread count badge + slide-out panel.
+  - User dropdown: Bootstrap dropdown (data-bs-toggle) with username, employee name, role, Dashboard link, Logout form (POST to route('logout')).
+  - Flash messages: success (green), error (red), warning (amber) — each with matching x-erp.icon + Showcase styling (rounded-lg border). Rendered above main content, max-w-7xl.
+  - Main content: <main class="flex-1 ..."> with optional <h1> page title + {{ $slot }}.
+  - Sticky footer (no-print, bg-amber-900 text-amber-100): "RC ERP / আর সি বণিক — Warehouse Distribution System © {year}". Uses flex-col min-h-screen on body + shrink-0 on footer so it sticks to bottom on short pages and pushes down on long pages.
+  - <body class="bg-gradient-to-b from-amber-50/30 to-white min-h-screen flex flex-col font-sans text-gray-900"> — the showcase gradient + sticky-footer flexbox pattern.
+- Verified: bun run build:css succeeds; CSS grew 61KB → 62KB. New utilities (max-w-7xl, shrink-0, whitespace-nowrap, truncate, max-w-[100px], bg-amber-50/60, backdrop-blur-md, flex-col) all present. Zero muted-foreground (one intentional Bootstrap text-muted in the dropdown — that's a Bootstrap class, not the shadcn muted-foreground).
+- No existing Blade view modified — the layout is opt-in. Phase 6+ sales views will switch from @extends('layouts.admin') to <x-layouts.erp>. The old admin layout remains for non-sales views.
+
+Stage Summary:
+- Phase 5 (Laravel) complete. The sales layout shell is ready for Phase 6+ to consume.
+- Branch switching is real (sets session → RLS middleware picks up next request), not mock. Role badge is read-only (intentional — real role switching requires re-login). Notification bell is wired to the existing rules page; Phase 10 will enhance with unread count + slide-out panel.
+- Next: Phase 6 — rebuild the dashboard / invoice list (sales-invoices/index.blade.php) to use <x-layouts.erp> + the 21 design-system components.
