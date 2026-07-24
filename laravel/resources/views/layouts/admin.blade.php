@@ -113,10 +113,16 @@
                     @foreach ($menuTree as $mainMenu)
                         @php
                             $hasChildren = !empty($mainMenu['children']);
-                            $isActive = $hasChildren && collect($mainMenu['children'])->contains(function ($child) use ($currentUri) {
-                                return !empty($child['url']) && $child['url'] !== '#' &&
-                                    (str_contains($currentUri, parse_url($child['url'], PHP_URL_PATH) ?? '') ||
-                                     str_contains($mainMenu['url'] ?? '', $currentUri));
+                            $mainMenuPath = parse_url($mainMenu['url'] ?? '#', PHP_URL_PATH) ?: '';
+                            $isActive = $hasChildren && collect($mainMenu['children'])->contains(function ($child) use ($currentUri, $mainMenuPath) {
+                                $childPath = parse_url($child['url'] ?? '#', PHP_URL_PATH) ?: '';
+                                if (empty($childPath) || $childPath === '/' || $childPath === '#') {
+                                    return false;
+                                }
+                                // Match if current URI starts with the child's path
+                                // (e.g., /admin/sales-invoices/5/edit starts with /admin/sales-invoices)
+                                return str_starts_with($currentUri, $childPath)
+                                    || ($mainMenuPath && $mainMenuPath !== '#' && str_starts_with($currentUri, $mainMenuPath));
                             });
                         @endphp
 
@@ -133,8 +139,9 @@
                                     @foreach ($mainMenu['children'] as $child)
                                         @php
                                             $hasGrandchildren = !empty($child['children']);
-                                            $childActive = !empty($child['url']) && $child['url'] !== '#' &&
-                                                str_contains($currentUri, parse_url($child['url'], PHP_URL_PATH) ?? '');
+                                            $childPath = parse_url($child['url'] ?? '#', PHP_URL_PATH) ?: '';
+                                            $childActive = !empty($childPath) && $childPath !== '/' && $childPath !== '#' &&
+                                                str_starts_with($currentUri, $childPath);
                                         @endphp
 
                                         @if ($hasGrandchildren)
@@ -159,7 +166,12 @@
                                         @else
                                             {{-- Leaf item --}}
                                             <li class="nav-item">
-                                                <a href="{{ $child['url'] }}" class="nav-link small {{ $childActive ? 'active' : '' }}">
+                                                @php
+                                                    $leafPath = parse_url($child['url'] ?? '#', PHP_URL_PATH) ?: '';
+                                                    $leafActive = !empty($leafPath) && $leafPath !== '/' && $leafPath !== '#' &&
+                                                        str_starts_with($currentUri, $leafPath);
+                                                @endphp
+                                                <a href="{{ $child['url'] }}" class="nav-link small {{ $leafActive ? 'active' : '' }}">
                                                     <i class="{{ $child['icon'] }}"></i>
                                                     <span class="ms-2">{{ $child['menu_name'] }}</span>
                                                 </a>
@@ -170,8 +182,13 @@
                             </li>
                         @else
                             {{-- Top-level leaf --}}
+                            @php
+                                $topLeafPath = parse_url($mainMenu['url'] ?? '#', PHP_URL_PATH) ?: '';
+                                $topLeafActive = !empty($topLeafPath) && $topLeafPath !== '/' && $topLeafPath !== '#' &&
+                                    str_starts_with($currentUri, $topLeafPath);
+                            @endphp
                             <li class="nav-item">
-                                <a href="{{ $mainMenu['url'] }}" class="nav-link {{ str_contains($currentUri, parse_url($mainMenu['url'] ?? '', PHP_URL_PATH) ?? '') ? 'active' : '' }}">
+                                <a href="{{ $mainMenu['url'] }}" class="nav-link {{ $topLeafActive ? 'active' : '' }}">
                                     <i class="{{ $mainMenu['icon'] }}"></i>
                                     <span class="ms-2">{{ $mainMenu['menu_name'] }}</span>
                                 </a>
@@ -230,6 +247,52 @@
             const sidebar = document.getElementById('sidebar');
             if (sidebar) sidebar.classList.toggle('d-none');
         }
+
+        // ─── Sidebar collapse state persistence ───────────────────────────
+        // Saves which parent menus are expanded/collapsed to localStorage,
+        // so the sidebar remembers the user's manual toggles across page
+        // navigations (not just the server-side $isActive detection).
+        (function() {
+            var STORAGE_KEY = 'rcerp_sidebar_expanded';
+
+            // Restore: on page load, apply saved expand/collapse state.
+            // Server-side $isActive already added 'show' to active parents;
+            // we only ADD more 'show' for parents the user manually expanded
+            // on a previous page (we never remove 'show' that $isActive set).
+            document.addEventListener('DOMContentLoaded', function() {
+                var saved = {};
+                try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch(e) {}
+                document.querySelectorAll('#sidebarMenu .collapse').forEach(function(el) {
+                    var id = el.id;
+                    if (id && saved[id] === true && !el.classList.contains('show')) {
+                        el.classList.add('show');
+                    }
+                    // Also mark the trigger link as active-style when expanded
+                    if (id && el.classList.contains('show')) {
+                        var trigger = document.querySelector('[data-bs-target="#' + id + '"]');
+                        if (trigger) trigger.setAttribute('aria-expanded', 'true');
+                    }
+                });
+            });
+
+            // Save: when a collapse is toggled, record its new state.
+            document.addEventListener('shown.bs.collapse', function(e) {
+                if (!e.target.id || !e.target.closest('#sidebarMenu')) return;
+                try {
+                    var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+                    saved[e.target.id] = true;
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+                } catch(err) {}
+            });
+            document.addEventListener('hidden.bs.collapse', function(e) {
+                if (!e.target.id || !e.target.closest('#sidebarMenu')) return;
+                try {
+                    var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+                    saved[e.target.id] = false;
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+                } catch(err) {}
+            });
+        })();
     </script>
     @stack('scripts')
 </body>
