@@ -1,83 +1,86 @@
-<x-layouts.erp :title="$title" :tabs="[
-    ['label' => 'Dashboard', 'href' => route('dashboard')],
-    ['label' => 'Invoices', 'href' => route('admin.sales-invoices.index')],
-    ['label' => 'Challans', 'href' => route('admin.sales-challans.index')],
-    ['label' => 'UI Preview', 'href' => route('ui-preview')],
-]">
+@extends('layouts.admin')
+
+@section('content')
 @php
     $totalCogs = (float) ($totalCogs ?? 0);
 @endphp
 
-<div class="space-y-6">
-    {{-- Hero header (amber/orange gradient — showcase spec) --}}
-    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
-        <div class="flex items-center justify-between flex-wrap gap-4">
-            <div>
-                <h1 class="text-2xl font-bold text-white">চালানপত্র ইস্যু</h1>
-                <p class="text-amber-100 text-sm mt-1">{{ $title }}</p>
-                <p class="text-amber-200 text-xs mt-0.5">Step 2 of 2 — Issue the delivery challan. Stock moves OUT and GL posts Dr COGS / Cr Inventory.</p>
-            </div>
-            <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors">
-                <x-erp.icon name="arrow-left" class="size-4" /> Back to invoice
+<div class="container-fluid py-2">
+    {{-- Hero header --}}
+    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
+            style="background: linear-gradient(135deg,#7c3aed,#4f46e5);">
+        <div>
+            <h1 class="h4 mb-1">
+                <i class="fas fa-truck-fast me-2"></i>{{ $title }}
+            </h1>
+            <p class="mb-0 small opacity-75">
+                Step 2 of 2 — Issue the delivery challan. Stock moves OUT and GL posts Dr COGS / Cr Inventory.
+            </p>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-arrow-left me-1"></i> Back to invoice
             </a>
         </div>
-        {{-- 4-step workflow indicator --}}
-        <div class="mt-6">
-            <x-erp.step-indicator :steps="[
-                ['label' => 'Invoice', 'label_bn' => 'চালান', 'icon' => 'file-text', 'state' => 'done'],
-                ['label' => 'Godown Prep', 'label_bn' => 'গোডাউন প্রস্তুতি', 'icon' => 'warehouse', 'state' => 'done'],
-                ['label' => 'Challan Issue', 'label_bn' => 'চালান ইস্যু', 'icon' => 'truck', 'state' => 'active'],
-                ['label' => 'Completed', 'label_bn' => 'সম্পন্ন', 'icon' => 'check-circle', 'state' => 'pending'],
-            ]" />
+    </header>
+
+    {{-- Info banner --}}
+    <div class="alert alert-warning d-flex align-items-start mb-3" role="alert">
+        <i class="fas fa-triangle-exclamation me-2 mt-1"></i>
+        <div>
+            <strong>Issuing the challan will move stock OUT</strong> at the current avg_cost for each line item's
+            assigned warehouse and post a GL entry (Dr COGS / Cr Inventory). This action cannot be undone from this
+            screen — to reverse, use the <em>Cancel Challan</em> action on the challan detail page (which reverses
+            stock + GL).
         </div>
     </div>
 
-    {{-- Irreversible-action warning --}}
-    <x-erp.warning-callout title="Issuing the challan will move stock OUT" title-bn="এই কাজটি ফিরিয়ে আনা যাবে না">
-        <p>Stock moves <strong>OUT</strong> at the current avg_cost for each line item's assigned warehouse and posts a GL entry (Dr COGS / Cr Inventory).</p>
-        <p class="mb-0">This action cannot be undone from this screen — to reverse, use the <em>Cancel Challan</em> action on the challan detail page (which reverses stock + GL).</p>
-    </x-erp.warning-callout>
-
     {{-- Invoice summary mini-card --}}
-    <x-erp.left-accent-card accent="amber" icon="file-text" title="Invoice Summary" title-bn="চালান সারসংক্ষেপ" body-class="!py-2">
-        <div class="row g-2 align-items-center">
-            <div class="col-md-3">
-                <span class="text-muted small">Invoice:</span>
-                <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="fw-semibold text-decoration-none">
-                    {{ $invoice->invoice_code }}
-                </a>
-            </div>
-            <div class="col-md-3">
-                <span class="text-muted small">Date:</span>
-                <span class="fw-semibold">
-                    {{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}
-                </span>
-            </div>
-            <div class="col-md-3">
-                <span class="text-muted small">Customer:</span>
-                <span class="fw-semibold">
-                    @if ($invoice->customer){{ $invoice->customer->customer_name }}@else—@endif
-                </span>
-            </div>
-            <div class="col-md-3">
-                <span class="text-muted small">Branch:</span>
-                <span class="fw-semibold">
-                    @if ($invoice->branch){{ $invoice->branch->branch_name }}@else—@endif
-                </span>
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body py-2">
+            <div class="row g-2 align-items-center">
+                <div class="col-md-3">
+                    <span class="text-muted small">Invoice:</span>
+                    <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="fw-semibold text-decoration-none">
+                        {{ $invoice->invoice_code }}
+                    </a>
+                </div>
+                <div class="col-md-3">
+                    <span class="text-muted small">Date:</span>
+                    <span class="fw-semibold">
+                        {{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}
+                    </span>
+                </div>
+                <div class="col-md-3">
+                    <span class="text-muted small">Customer:</span>
+                    <span class="fw-semibold">
+                        @if ($invoice->customer){{ $invoice->customer->customer_name }}@else—@endif
+                    </span>
+                </div>
+                <div class="col-md-3">
+                    <span class="text-muted small">Branch:</span>
+                    <span class="fw-semibold">
+                        @if ($invoice->branch){{ $invoice->branch->branch_name }}@else—@endif
+                    </span>
+                </div>
             </div>
         </div>
-    </x-erp.left-accent-card>
+    </div>
 
     <div class="row g-3">
         {{-- Left: COGS preview + transport form --}}
-        <div class="col-lg-8 space-y-3">
+        <div class="col-lg-8">
             {{-- COGS preview card --}}
-            <x-erp.left-accent-card accent="green" icon="banknote" title="COGS Preview" title-bn="ক্রয়মূল্য প্রাক্কলন" body-class="!p-0">
-                <x-slot:actions>
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white d-flex align-items-center justify-content-between">
+                    <h2 class="h6 mb-0">
+                        <i class="fas fa-calculator me-1" style="color:#7c3aed;"></i> COGS preview
+                    </h2>
                     <span class="badge bg-primary-subtle text-primary">
                         {{ $invoice->items->count() }} line(s)
                     </span>
-                </x-slot:actions>
+                </div>
+                <div class="card-body p-0">
                     <div class="table-responsive">
                         <table class="table table-sm table-striped table-hover align-middle mb-0">
                             <thead class="table-light">
@@ -120,14 +123,15 @@
                             <tfoot>
                                 <tr class="table-light fw-bold">
                                     <td colspan="4" class="text-end">Total COGS</td>
-                                    <td class="text-end fs-5 text-green-700">
+                                    <td class="text-end fs-5" style="color:#7c3aed;">
                                         Tk {{ number_format($totalCogs, 2) }}
                                     </td>
                                 </tr>
                             </tfoot>
                         </table>
                     </div>
-            </x-erp.left-accent-card>
+                </div>
+            </div>
 
             {{-- Transport + notes form --}}
             <form method="POST" action="{{ route('admin.sales-challans.issueChallan', $invoice) }}" id="issueForm">
@@ -145,8 +149,13 @@
                      "Challan already issued for this invoice." --}}
                 <input type="hidden" name="idempotency_token" id="idempotencyToken"
                        value="{{ old('idempotency_token', (string) \Illuminate\Support\Str::uuid()) }}">
-
-                <x-erp.left-accent-card accent="cyan" icon="truck" title="Transport Details" title-bn="পরিবহন তথ্য">
+                <div class="card border-0 shadow-sm">
+                    <div class="card-header bg-white">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-truck me-1" style="color:#7c3aed;"></i> Transport details
+                        </h2>
+                    </div>
+                    <div class="card-body">
                         <div class="row g-3">
                             <div class="col-md-6">
                                 <label class="form-label" for="transport_name">Transport name</label>
@@ -190,61 +199,65 @@
                                 <div class="form-text">Optional internal note (max 500 chars).</div>
                             </div>
                         </div>
-                </x-erp.left-accent-card>
-
-                {{-- Sticky action bar --}}
-                <x-erp.sticky-action-bar>
-                    <x-erp.outline-button href="{{ route('admin.sales-invoices.show', $invoice) }}">Cancel / বাতিল</x-erp.outline-button>
-                    <x-erp.gradient-button icon="truck" type="submit" id="issueBtn">
-                        Issue Challan / চালান ইস্যু
-                    </x-erp.gradient-button>
-                </x-erp.sticky-action-bar>
+                    </div>
+                    <div class="card-footer bg-white d-flex justify-content-between align-items-center">
+                        <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-times me-1"></i> Cancel
+                        </a>
+                        <button type="submit" class="btn btn-primary btn-sm" id="issueBtn">
+                            <i class="fas fa-paper-plane me-1"></i> Issue Challan
+                        </button>
+                    </div>
+                </div>
             </form>
         </div>
 
         {{-- Right: summary sidebar --}}
         <div class="col-lg-4">
-            <div class="sticky-top" style="top:80px;">
-                <x-erp.left-accent-card accent="orange" icon="clipboard-list" title="Issue Summary" title-bn="ইস্যু সারসংক্ষেপ">
-                        <dl class="row mb-0 small">
-                            <dt class="col-7 text-muted">Invoice</dt>
-                            <dd class="col-5 text-end fw-semibold">{{ $invoice->invoice_code }}</dd>
+            <div class="card border-0 shadow-sm sticky-top" style="top:80px;">
+                <div class="card-header bg-white">
+                    <h2 class="h6 mb-0">
+                        <i class="fas fa-clipboard-check me-1" style="color:#7c3aed;"></i> Issue summary
+                    </h2>
+                </div>
+                <div class="card-body">
+                    <dl class="row mb-0 small">
+                        <dt class="col-7 text-muted">Invoice</dt>
+                        <dd class="col-5 text-end fw-semibold">{{ $invoice->invoice_code }}</dd>
 
-                            <dt class="col-7 text-muted">Line items</dt>
-                            <dd class="col-5 text-end">{{ $invoice->items->count() }}</dd>
+                        <dt class="col-7 text-muted">Line items</dt>
+                        <dd class="col-5 text-end">{{ $invoice->items->count() }}</dd>
 
-                            <dt class="col-7 text-muted">Total COGS</dt>
-                            <dd class="col-5 text-end fw-bold fs-6 text-amber-700">
-                                Tk {{ number_format($totalCogs, 2) }}
-                            </dd>
+                        <dt class="col-7 text-muted">Total COGS</dt>
+                        <dd class="col-5 text-end fw-bold fs-6" style="color:#7c3aed;">
+                            Tk {{ number_format($totalCogs, 2) }}
+                        </dd>
 
-                            <dt class="col-7 text-muted">Stock effect</dt>
-                            <dd class="col-5 text-end">
-                                <span class="badge bg-danger-subtle text-danger">
-                                    <i class="fas fa-minus me-1"></i>OUT
-                                </span>
-                            </dd>
+                        <dt class="col-7 text-muted">Stock effect</dt>
+                        <dd class="col-5 text-end">
+                            <span class="badge bg-danger-subtle text-danger">
+                                <i class="fas fa-minus me-1"></i>OUT
+                            </span>
+                        </dd>
 
-                            <dt class="col-7 text-muted">GL effect</dt>
-                            <dd class="col-5 text-end">
-                                <span class="badge bg-info-subtle text-info">
-                                    Dr COGS / Cr Inventory
-                                </span>
-                            </dd>
-                        </dl>
-                        <hr>
-                        <div class="alert alert-secondary small mb-0">
-                            <i class="fas fa-info-circle me-1"></i>
-                            After issue, you will be redirected to the challan detail page where you can verify stock
-                            movements and the GL journal entry.
-                        </div>
-                </x-erp.left-accent-card>
+                        <dt class="col-7 text-muted">GL effect</dt>
+                        <dd class="col-5 text-end">
+                            <span class="badge bg-info-subtle text-info">
+                                Dr COGS / Cr Inventory
+                            </span>
+                        </dd>
+                    </dl>
+                    <hr>
+                    <div class="alert alert-secondary small mb-0">
+                        <i class="fas fa-info-circle me-1"></i>
+                        After issue, you will be redirected to the challan detail page where you can verify stock
+                        movements and the GL journal entry.
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 </div>
-
-</x-layouts.erp>
 
 @push('scripts')
 <script>
@@ -257,7 +270,7 @@ $(function () {
             html: '<p class="mb-1">This will <strong>move stock OUT</strong> and post a <strong>GL entry (Dr COGS / Cr Inventory)</strong>.</p>' +
                   '<p class="mb-0 text-muted small">Total COGS: Tk {{ number_format($totalCogs, 2) }}</p>',
             showCancelButton: true,
-            confirmButtonColor: '#d97706',
+            confirmButtonColor: '#7c3aed',
             cancelButtonColor: '#6c757d',
             confirmButtonText: '<i class="fas fa-paper-plane"></i> Yes, issue challan',
             cancelButtonText: 'Cancel'
@@ -270,3 +283,4 @@ $(function () {
 });
 </script>
 @endpush
+@endsection

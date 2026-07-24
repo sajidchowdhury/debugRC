@@ -1916,3 +1916,26 @@ Work Log:
 Stage Summary:
 - Phase 8 complete. Godown prep page now uses the showcase amber/orange design with step indicator, left-accent cards, warning callout, and sticky action bar. All form fields, Select2 wiring, avg-cost display, and submit validation preserved.
 - Next: Phase 9 — rebuild the challan issue form (sales-challans/issue.blade.php).
+
+---
+Task ID: UI-Phase-9 (Laravel)
+Agent: main
+Task: UI/UX Revamp Phase 9 (Laravel) — Challan issue rebuild. Rebuilt sales-challans/issue.blade.php to use <x-layouts.erp> + design-system components. Old view backed up as issue-legacy.blade.php.
+
+Work Log:
+- Backed up old view to issue-legacy.blade.php.
+- Replaced @extends('layouts.admin') + @section('content') with <x-layouts.erp :title :tabs>. PHP setup ($totalCogs cast) preserved.
+- Hero: purple gradient -> amber gradient with bilingual title "চালানপত্র ইস্যু" + "Step 2 of 2" subtitle + Back to invoice button. Added <x-erp.step-indicator> showing 4-step workflow (Invoice=done, Godown Prep=done, Challan Issue=active, Completed=pending).
+- Info banner: Bootstrap alert-warning -> <x-erp.warning-callout title="Issuing the challan will move stock OUT">. Body text preserved (stock OUT + GL Dr COGS/Cr Inventory + cancel-via-detail-page note).
+- Invoice summary mini-card: Bootstrap card -> <x-erp.left-accent-card accent="amber" body-class="!py-2">. All 4 fields preserved (invoice code, date, customer, branch).
+- Left column (col-lg-8):
+  1. COGS preview: Bootstrap card -> <x-erp.left-accent-card accent="green" icon="banknote" body-class="!p-0"> with line-count badge in $actions slot. Entire table preserved (Product, Warehouse badge, Qty, Avg cost, COGS amount). Total COGS color changed from purple #7c3aed to green-700.
+  2. Transport + notes form: Bootstrap card -> <x-erp.left-accent-card accent="cyan" icon="truck">. ALL form fields preserved with same IDs: #transport_name, #transport_phone, #vehicle_number, #driver_name, #transport_cost, #notes. All old() repopulation preserved. The hidden #idempotencyToken input (R3 UUID) preserved with its old('idempotency_token', Str::uuid()) logic.
+  3. Card footer -> <x-erp.sticky-action-bar> with <x-erp.outline-button> (Cancel) + <x-erp.gradient-button icon="truck" type="submit" id="issueBtn"> (Issue Challan).
+- Right column (col-lg-4): Issue summary sidebar — Bootstrap card -> <x-erp.left-accent-card accent="orange" icon="clipboard-list">. All dl/dt/dd preserved (Invoice, Line items, Total COGS, Stock effect=OUT badge, GL effect=Dr COGS/Cr Inventory badge). Total COGS color changed from purple to amber-700. Info alert at bottom preserved.
+- @push('scripts') block preserved verbatim (SweetAlert2 confirm prompt on #issueForm submit). Swal.fire confirmButtonColor changed from purple #7c3aed to amber #d97706 to match new theme. Removed @endsection.
+- Verified: bun run build:css succeeds. No @extends/@endsection remain. All 9 JS-referenced IDs present (#issueForm, #issueBtn, #idempotencyToken, #transport_name, #transport_phone, #vehicle_number, #driver_name, #transport_cost, #notes). Form action + CSRF + idempotency_token present. Zero muted-foreground. File 286 -> 272 lines.
+
+Stage Summary:
+- Phase 9 complete. Challan issue page now uses the showcase amber/orange design with step indicator, COGS preview in green-accented card, transport form in cyan-accented card, summary sidebar in orange-accented card, and sticky action bar with gradient Issue Challan button. All form fields, idempotency token, and SweetAlert2 confirm flow preserved.
+- Next: Phase 10 — rebuild the 3 print layouts (print_blank_godown, print_godown, print_challan).
