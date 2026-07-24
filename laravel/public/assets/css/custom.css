@@ -238,14 +238,21 @@
             flex: 1;
         }
 
-        /* Submenu Styling */
+        /* Submenu Styling + visibility (self-contained — NO Bootstrap .collapse/.show).
+           display:none by default; .is-open reveals it. These rules are scoped to
+           .sidebar .submenu (specificity 0,2,0 / 0,3,0) so nothing in Bootstrap's
+           .collapse/.show or Tailwind's utilities can override the show/hide. */
         .sidebar .submenu {
+            display: none;                 /* hidden by default */
             background: rgba(0,0,0,0.15);
             margin: 0 8px 4px 8px;
             border-radius: 8px;
             padding: 4px 0;
             overflow: hidden;
-            transition: all 0.3s ease;
+            list-style: none;              /* no bullets (belt-and-suspenders vs .nav) */
+        }
+        .sidebar .submenu.is-open {        /* shown when jQuery toggles .is-open */
+            display: block;
         }
 
         /* Smooth collapse animations */

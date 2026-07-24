@@ -146,7 +146,7 @@
                                     <span class="ms-2">{{ $mainMenu['menu_name'] }}</span>
                                     <i class="fas fa-chevron-down ms-auto small"></i>
                                 </a>
-                                <ul class="nav flex-column ms-3 collapse {{ $isActive ? 'show' : '' }}" id="menu-{{ $mainMenu['id'] }}">
+                                <ul class="nav flex-column ms-3 submenu {{ $isActive ? 'is-open' : '' }}" id="menu-{{ $mainMenu['id'] }}">
                                     @foreach ($mainMenu['children'] as $child)
                                         @php
                                             $hasGrandchildren = !empty($child['children']);
@@ -163,7 +163,7 @@
                                                     <i class="{{ $child['icon'] }}"></i>
                                                     <span class="ms-2">{{ $child['menu_name'] }}</span>
                                                 </a>
-                                                <ul class="nav flex-column ms-3 collapse {{ $childActive ? 'show' : '' }}" id="submenu-{{ $child['id'] }}">
+                                                <ul class="nav flex-column ms-3 submenu {{ $childActive ? 'is-open' : '' }}" id="submenu-{{ $child['id'] }}">
                                                     @foreach ($child['children'] as $grandchild)
                                                         <li class="nav-item">
                                                             <a href="{{ $grandchild['url'] }}" class="nav-link small">
@@ -266,10 +266,14 @@
             sidebar.classList.toggle('active');
         }
 
-        // ─── Sidebar submenu toggle (bulletproof — no Bootstrap dependency) ──
-        // Uses explicit jQuery click handlers instead of relying on Bootstrap's
-        // data-bs-toggle="collapse" auto-initialization, which was fragile due
-        // to script load order conflicts. This handler ALWAYS works.
+        // ─── Sidebar submenu toggle (truly bulletproof — no Bootstrap .collapse/.show) ──
+        // Earlier attempts toggled Bootstrap's `.show` class on `.collapse` <ul>s,
+        // but in this Bootstrap 5 + Tailwind v4 environment that mechanism was
+        // unreliable (submenu flashed open then vanished, or stayed invisible).
+        // We now use a SELF-CONTAINED `.is-open` class on `.submenu` elements,
+        // with display:none/block rules scoped to `.sidebar .submenu` (see
+        // custom.css) — nothing in Bootstrap or Tailwind can override them.
+        // jQuery just toggles `.is-open` and aria-expanded; chevron rotates via CSS.
         (function() {
             var STORAGE_KEY = 'rcerp_sidebar_expanded';
 
@@ -285,15 +289,15 @@
                     var $target = $(targetSel);
                     var targetId = targetSel.replace('#', '');
 
-                    // If server-side $isActive already added 'show', respect it
-                    if ($target.hasClass('show')) {
+                    // If server-side $isActive already added 'is-open', respect it
+                    if ($target.hasClass('is-open')) {
                         $(this).attr('aria-expanded', 'true');
                         return;
                     }
 
                     // If localStorage says it was expanded, expand it
                     if (saved[targetId] === true) {
-                        $target.addClass('show');
+                        $target.addClass('is-open');
                         $(this).attr('aria-expanded', 'true');
                     }
                 });
@@ -305,13 +309,13 @@
                     if (!targetSel) return;
                     var $target = $(targetSel);
                     var targetId = targetSel.replace('#', '');
-                    var isExpanded = $target.hasClass('show');
+                    var isExpanded = $target.hasClass('is-open');
 
                     if (isExpanded) {
-                        $target.removeClass('show');
+                        $target.removeClass('is-open');
                         $(this).attr('aria-expanded', 'false');
                     } else {
-                        $target.addClass('show');
+                        $target.addClass('is-open');
                         $(this).attr('aria-expanded', 'true');
                     }
 
