@@ -214,11 +214,15 @@
                        value="{{ $filters['search'] ?? '' }}" autocomplete="off">
             </div>
 
-            {{-- Export CSV — mirrors the current filter params via JS. --}}
+            {{-- Export CSV — mirrors the current filter params via JS.
+                Phase 6: @can guard (SalesInvoicePolicy::exportCsv —
+                accountant/manager/admin only; salesman excluded per F-30). --}}
+            @can('exportCsv', \App\Models\SalesInvoice::class)
             <a href="{{ route('admin.sales-invoices.export-csv') }}"
                class="btn btn-outline-success btn-sm" target="_blank" id="csvExportBtnVisible">
                 <i class="fas fa-file-csv me-1"></i> Export
             </a>
+            @endcan
         </div>
     </x-erp.left-accent-card>
 

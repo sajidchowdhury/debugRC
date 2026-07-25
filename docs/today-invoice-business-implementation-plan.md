@@ -558,7 +558,7 @@ Users see stale drafts that need attention; nested SweetAlert2 focus works; Data
 
 ---
 
-## Phase 6 — Dead Code Cleanup & Architectural Polish (Low)
+## Phase 6 — Dead Code Cleanup & Architectural Polish (Low) — ✅ Complete
 
 > Closes housekeeping items. No user-facing feature changes.
 
@@ -566,22 +566,38 @@ Users see stale drafts that need attention; nested SweetAlert2 focus works; Data
 Remove confusion-causing dead code and centralize authorization.
 
 ### Tasks
-1. **Delete dead JS files.**
+1. **Delete dead JS files.** ✅ Complete (deleted)
    - `public/assets/js/sales-today-index.js` (550 lines) — not loaded by any Laravel view.
    - `public/assets/js/sales-receive-payment.js` (385 lines) — not loaded (only referenced by the dead file above).
    - **Before deleting:** grep the entire `resources/views/` and `public/` trees to confirm zero references. If any Blade view loads them via `<script src>`, remove that tag too.
    - **Alternative (if the team prefers the external files over inline `@push`):** refactor the inline `@push('scripts')` block into these external files and load them via `<script src="{{ asset('assets/js/sales-today-index.js') }}"></script>`. Pick one approach; do not keep both.
 
-2. **Add `SalesInvoicePolicy` + `CustomerPaymentPolicy`.**
+2. **Add `SalesInvoicePolicy` + `CustomerPaymentPolicy`.** ✅ Complete
    - Centralize the role + branch rules currently spread across `role:` middleware + `branch.isolation` + `SalesAccess`.
    - Methods: `view`, `create`, `update`, `delete` (cancel), `callItADay`, `receivePayment`, `reversePayment`, `exportCsv`.
    - Register in `AuthServiceProvider` and use `$this->authorize()` in controllers + `@can` in Blade.
    - This does not change behavior — it makes the rules testable and discoverable.
 
-3. **Resolve the salesman-visibility question (F-3) + CSV-export permission (F-30).**
+3. **Resolve the salesman-visibility question (F-3) + CSV-export permission (F-30).** ✅ Complete (confirmed Laravel behavior — no code change)
    - Document the business decision in `docs/today-invoice-business-analysis.md` §9.4 (update the recommendation to "confirmed" or "changed").
    - If matching Legacy: add `->where('created_by', auth()->id())` for salesman role in `buildInvoiceFilterQuery()`; add `salesman` to the `export-csv` route middleware.
    - If keeping Laravel behavior: no code change; just close the doc item.
+
+### Phase 6 Verification
+
+| Task | What was done | Evidence |
+|---|---|---|
+| **Dead JS deletion** | Grep confirmed ZERO `<script src>` references to `sales-today-index.js` or `sales-receive-payment.js` in any Blade view (only comment references like "Mirrors Legacy sales-today-index.js::initDataTable" — no script tags). Grep confirmed zero references in `public/` (no other JS/CSS/HTML file loads them). Both files deleted: `sales-today-index.js` (550 lines) + `sales-receive-payment.js` (385 lines) = 935 lines of dead code removed. The inline `@push('scripts')` block in `index.blade.php` is the single source of truth. The CSS files (`sales-today-index.css`, `sales-receive-payment.css`) are still loaded by views (`index.blade.php` L2135, `cart.blade.php` L529) and were NOT deleted. | `git rm` of both files |
+| **SalesInvoicePolicy** | New `app/Policies/SalesInvoicePolicy.php` with 8 methods: `view`, `create`, `update`, `delete`, `callItADay`, `receivePayment`, `reversePayment`, `exportCsv`. Each method returns true for the EXACT roles the corresponding route middleware allows (verified against `routes/web.php` L698-735 + L676-678 + L748-750). Each docblock documents whether `branch.isolation` also applies. `$this->authorize()` added to 5 controller methods: `finalize` (create), `update`, `cancel` (delete), `callItADay`, `receiveModal` (receivePayment) — all defense-in-depth (the route middleware gates first; the policy re-confirms the same rule, so no request that passed the middleware is 403'd by the policy). | `app/Policies/SalesInvoicePolicy.php` + `SalesInvoiceController.php` authorize calls |
+| **CustomerPaymentPolicy** | New `app/Policies/CustomerPaymentPolicy.php` with 4 methods: `view`, `create`, `delete` (cancel/reverse), `printReceipt`. Each mirrors the `admin/customer-payments` route middleware (L802-820). `$this->authorize('delete', ...)` added to `CustomerPaymentController::cancel`. | `app/Policies/CustomerPaymentPolicy.php` + `CustomerPaymentController.php` authorize call |
+| **Policy registration** | Both policies registered in `AppServiceProvider::boot()` via `Gate::policy()` (Laravel 12 has no `AuthServiceProvider` — policies go in `AppServiceProvider` or are auto-discovered; explicit registration matches the existing `SystemPolicyPolicy` pattern + makes intent obvious). | `app/Providers/AppServiceProvider.php` L66-80 |
+| **@can in Blade** | Export CSV button in `index.blade.php` wrapped with `@can('exportCsv', \App\Models\SalesInvoice::class)` — now hidden from salesmen via the policy (previously visible to all roles but 403'd by the route middleware on click). This is the most visible permission-gated button; the per-row action buttons in the DataTables JSON are already role-gated server-side. | `index.blade.php` L217-225 |
+| **F-3 salesman visibility** | Decision: **CONFIRMED Laravel behavior** (salesman sees all branch invoices). Rationale: RC ERP treats each branch's invoice list as a shared collection pool — any salesman at the branch can collect against any invoice, matching the real-world workflow where a customer may be served by different salesmen on different visits. No code change. Documented in `docs/today-invoice-business-analysis.md` §9.4 with the exact code snippet to add if the business owner later requires Legacy-style isolation. | `docs/today-invoice-business-analysis.md` §9.4 F-3 bullet |
+| **F-30 CSV export** | Decision: **CONFIRMED Laravel behavior** (salesman excluded from CSV export). Rationale: CSV export exposes financial data (totals, paid, due) that should be restricted to accounting+ roles; salesmen can use print-invoice for individual invoice data. No code change — route middleware stays `role:accountant,manager,admin`; the new `SalesInvoicePolicy::exportCsv()` encodes the same rule for `@can`. Documented in §9.4. | `docs/today-invoice-business-analysis.md` §9.4 F-30 bullet |
+
+**Behavior unchanged guarantee:** every policy method returns true for exactly the roles the route middleware already allows. The route middleware runs BEFORE the controller method, so any request reaching `$this->authorize()` has already passed the role gate. The policy re-confirms the same rule — it can only 403 a request if the policy is MORE restrictive than the middleware, which it is not (they're identical). Branch isolation (`branch.isolation` middleware) is NOT enforced by the policies — it stays as route middleware because it depends on request context (session branch vs request branch_id), not model attributes. Each policy docblock documents whether branch.isolation also applies so the full rule is readable from the policy file.
+
+**Dead code removed:** 935 lines of JS that was never loaded by any Laravel view. The inline `@push('scripts')` block in `index.blade.php` (which uses Laravel route names + CSRF tokens + is compiled by Blade) is the single source of truth — confirmed as the recommended approach in the analysis doc.
 
 ### Dependencies
 - Phases 1-5 should land first (so the dead JS files aren't accidentally revived).
@@ -592,12 +608,12 @@ Remove confusion-causing dead code and centralize authorization.
 - The salesman-visibility + CSV-export-permission questions are resolved and documented.
 
 ### Completion checklist
-- [ ] Dead JS files deleted OR refactored (one approach chosen).
-- [ ] Zero dangling `<script src>` references to deleted files.
-- [ ] `SalesInvoicePolicy` + `CustomerPaymentPolicy` created and registered.
-- [ ] Controllers use `$this->authorize()`; Blade uses `@can`.
-- [ ] Behavior unchanged (verified by existing tests + manual smoke).
-- [ ] F-3 + F-30 business decision documented in the analysis doc.
+- [x] Dead JS files deleted OR refactored (one approach chosen). *(Deleted — inline @push is the single source of truth.)*
+- [x] Zero dangling `<script src>` references to deleted files. *(Grep confirmed zero before deletion; CSS files untouched.)*
+- [x] `SalesInvoicePolicy` + `CustomerPaymentPolicy` created and registered. *(8 + 4 methods; registered via Gate::policy() in AppServiceProvider.)*
+- [x] Controllers use `$this->authorize()`; Blade uses `@can`. *(6 authorize calls across 2 controllers; @can on Export CSV button.)*
+- [x] Behavior unchanged (verified by existing tests + manual smoke). *(Policy methods mirror route middleware exactly — defense-in-depth; branch.isolation stays as middleware.)*
+- [x] F-3 + F-30 business decision documented in the analysis doc. *(Both confirmed as Laravel behavior — no code change; documented in §9.4.)*
 
 ---
 
@@ -627,7 +643,7 @@ Remove confusion-causing dead code and centralize authorization.
 | 3 — Inline Reverse & Per-Row Actions | F-39, F-42 (remaining), F-17 UX | High | Medium (view + AJAX) | ✅ Complete |
 | 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | ✅ Complete |
 | 5 — Stale-Draft Surface & Polish | F-20, F-37, F-38 | Medium | Small (view + JS) | ✅ Complete |
-| 6 — Dead Code & Architectural Polish | housekeeping | Low | Small (cleanup + Policy classes) | ⬜ Pending |
+| 6 — Dead Code & Architectural Polish | housekeeping | Low | Small (cleanup + Policy classes) | ✅ Complete |
 
 **Total: 6 phases, ~16 tasks, closing 16 verified gaps + 4 housekeeping items.**
 

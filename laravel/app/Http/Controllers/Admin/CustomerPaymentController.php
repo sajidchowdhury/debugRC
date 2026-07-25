@@ -294,6 +294,9 @@ class CustomerPaymentController extends Controller
 
     public function cancel(Request $request, int $id)
     {
+        // Phase 6: defense-in-depth policy check (mirrors route role middleware).
+        $this->authorize('delete', CustomerPayment::findOrFail($id));
+
         $request->validate([
             // R27 (2026-07-22): min:5 parity with Legacy
             // SalesPaymentOperationsTrait::reverseCustomerPayment() —

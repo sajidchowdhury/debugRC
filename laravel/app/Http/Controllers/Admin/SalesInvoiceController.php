@@ -154,6 +154,9 @@ class SalesInvoiceController extends Controller
      */
     public function finalize(Request $request)
     {
+        // Phase 6: defense-in-depth policy check (mirrors route role middleware).
+        $this->authorize('create', SalesInvoice::class);
+
         $validated = $request->validate([
             'customer_id' => 'required|integer|exists:customers,id',
             'branch_id' => 'required|integer|exists:branches,id',
@@ -273,6 +276,10 @@ class SalesInvoiceController extends Controller
      */
     public function update(Request $request, int $id)
     {
+        $invoice = SalesInvoice::findOrFail($id);
+        // Phase 6: defense-in-depth policy check (mirrors route role middleware).
+        $this->authorize('update', $invoice);
+
         $validated = $request->validate([
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
@@ -587,6 +594,9 @@ class SalesInvoiceController extends Controller
      */
     public function cancel(Request $request, int $id)
     {
+        // Phase 6: defense-in-depth policy check (mirrors route role middleware).
+        $this->authorize('delete', SalesInvoice::findOrFail($id));
+
         $request->validate([
             // Phase 3 (business): min:5 parity with Legacy
             // SalesPaymentOperationsTrait::reverseCustomerPayment() runtime
@@ -647,6 +657,11 @@ class SalesInvoiceController extends Controller
      */
     public function callItADay(Request $request)
     {
+        // Phase 6: defense-in-depth policy check (mirrors route role middleware).
+        // callItADay operates on a batch of invoice IDs — authorize against a
+        // stub model (the policy checks role only, not model attributes).
+        $this->authorize('callItADay', new SalesInvoice());
+
         $validated = $request->validate([
             'invoice_ids' => 'required|array|min:1',
             'invoice_ids.*' => 'integer',
@@ -725,6 +740,9 @@ class SalesInvoiceController extends Controller
                     ->orderByDesc('id');
             },
         ])->findOrFail($id);
+
+        // Phase 6: defense-in-depth policy check (mirrors route role middleware).
+        $this->authorize('receivePayment', $invoice);
 
         // Outstanding payments already allocated to this invoice
         // (uses the invoice_payment_allocations table joined via

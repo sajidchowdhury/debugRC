@@ -62,5 +62,21 @@ class AppServiceProvider extends ServiceProvider
         \Illuminate\Support\Facades\Gate::define('view-notification-rules', function (\App\Models\User $user) {
             return $user->isAdmin(); // true for admin + superadmin (User::isAdmin() L168-171)
         });
+
+        // Phase 6: Register model Policies. Laravel auto-discovers these
+        // (App\Models\SalesInvoice → App\Policies\SalesInvoicePolicy), but
+        // explicit registration makes the intent obvious + survives any
+        // namespace-discovery edge cases. Each policy mirrors the existing
+        // role: middleware rules exactly — $this->authorize() in controllers
+        // is defense-in-depth, NOT the primary gate. See the policy class
+        // docblocks for the full rule table.
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\SalesInvoice::class,
+            \App\Policies\SalesInvoicePolicy::class
+        );
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\CustomerPayment::class,
+            \App\Policies\CustomerPaymentPolicy::class
+        );
     }
 }
