@@ -75,14 +75,16 @@
         </div>
     </div>
 
-    {{-- Hidden filter form — keeps JS selectors (#from_date, #to_date, etc.)
-        alive so currentFilterParams() / localStorage / clear-all work without
-        the visible filter card. The visible filter UI is the status-chip
-        card below (scope + status chips + search). --}}
+    {{-- Hidden filter form — keeps JS selectors (#customer_id, #branch_id,
+        #filterSmartSort, etc.) alive so currentFilterParams() / localStorage
+        / clear-all work without a visible form submit. The visible filter
+        UI is the status-chip card below (date presets + scope + status
+        chips + search).
+
+        F-32: #from_date / #to_date / #datePresets live in the VISIBLE filter
+        card below (not here) so users can see + edit the date range. The IDs
+        are unchanged so all existing JS selectors keep working. --}}
     <form id="invoiceFilterForm" autocomplete="off" class="hidden">
-        <div id="datePresets"></div>
-        <input type="hidden" id="from_date" name="from_date" value="{{ $filters['from_date'] }}">
-        <input type="hidden" id="to_date" name="to_date" value="{{ $filters['to_date'] }}">
         <input type="hidden" id="customer_id" name="customer_id" value="{{ $filters['customer_id'] }}">
         <input type="hidden" id="branch_id" name="branch_id" value="{{ $filters['branch_id'] }}">
         <input type="checkbox" id="filterSmartSort" name="smart_sort" value="1"
@@ -95,6 +97,30 @@
     {{-- R22 + BUG-52: Single filter card — scope + status chips with live
         counts, plus an inline smart-search box and Export CSV button. --}}
     <x-erp.left-accent-card accent="orange" icon="clipboard-list" title="Filter" title-bn="ফিল্টার" body-class="!py-2">
+        {{-- F-32: Date presets + visible date inputs. The 5 preset pills
+            resolve to concrete from_date/to_date values client-side (no
+            server round-trip). "Custom" clears the preset highlight and
+            focuses the date inputs so the user can pick an arbitrary range.
+            The #datePresets wrapper + .date-preset-btn elements are the DOM
+            the existing JS ($presets, applyDatePreset, setActivePreset)
+            binds to. #from_date / #to_date are type="date" so the native
+            browser picker is used + the existing change handler fires. --}}
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2 pb-2 border-bottom">
+            <span class="text-muted small me-2">
+                <i class="fas fa-calendar-days me-1"></i>Period
+                <small class="text-muted fw-normal">(date range)</small>:
+            </span>
+            <x-erp.date-presets id="datePresets" />
+            <div class="d-flex align-items-center gap-1 ms-sm-auto">
+                <input type="date" id="from_date" name="from_date" value="{{ $filters['from_date'] }}"
+                       class="form-control form-control-sm" style="max-width:150px;"
+                       aria-label="From date" autocomplete="off">
+                <span class="text-muted px-1" aria-hidden="true">→</span>
+                <input type="date" id="to_date" name="to_date" value="{{ $filters['to_date'] }}"
+                       class="form-control form-control-sm" style="max-width:150px;"
+                       aria-label="To date" autocomplete="off">
+            </div>
+        </div>
         <div class="d-flex flex-wrap gap-2 align-items-center" id="statusChipRow">
             <span class="text-muted small me-2">
                 <i class="fas fa-filter me-1"></i>Status

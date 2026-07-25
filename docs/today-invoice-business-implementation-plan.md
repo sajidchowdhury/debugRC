@@ -123,7 +123,7 @@ Both write to `user_audit_log` (PG) + `logs/user_audit.log` (file) via `UserAudi
 
 ---
 
-## Phase 2 — Filter UX Parity (High)
+## Phase 2 — Filter UX Parity (High) ✅ Complete
 
 > Closes gaps **F-31, F-32, F-41, F-40**. These are efficiency features that salesmen rely on for high-volume daily collection.
 
@@ -163,13 +163,67 @@ Restore the filter-navigation speed of the Legacy page: persistent filters, one-
 - Print-receipt is one click away after payment, no navigation.
 
 ### Completion checklist
-- [ ] `localStorage` key `rcerp_sales_invoices_filters_v1` hydrates on load (URL params override).
-- [ ] 5 date preset buttons functional; active state styled per design system.
-- [ ] Active filter bar renders all active filters as removable tags.
-- [ ] "Clear all" resets to defaults.
-- [ ] Receive-modal submit is AJAX; success JSON includes `payment_id` + `is_fully_paid`.
-- [ ] SweetAlert2 success toast with "Print receipt" button opens the receipt in a new tab.
-- [ ] No full-page redirect on payment submit.
+- [x] `localStorage` key `rcerp_sales_invoices_filters_v1` hydrates on load (URL params override).
+- [x] 5 date preset buttons functional; active state styled per design system.
+- [x] Active filter bar renders all active filters as removable tags.
+- [x] "Clear all" resets to defaults.
+- [x] Receive-modal submit is AJAX; success JSON includes `payment_id` + `is_fully_paid`.
+- [x] SweetAlert2 success toast with "Print receipt" button opens the receipt in a new tab.
+- [x] No full-page redirect on payment submit.
+
+### Phase 2 Verification
+
+**F-31 — Filter persistence via `localStorage`** (already implemented in the UI/UX phase):
+
+| Criterion | Evidence |
+|---|---|
+| `STORAGE_KEY = 'rcerp_sales_invoices_filters_v1'` | `index.blade.php` L414 — `var FILTERS_KEY = 'rcerp_sales_invoices_filters_v1';` (new version namespace, avoids clashing with Legacy's `sales_today_filters_v1`). |
+| Debounce-save on every filter change | `saveFilters()` (L565-570) — 400ms `setTimeout` debounce, `localStorage.setItem(FILTERS_KEY, JSON.stringify(currentFilterParams()))` wrapped in try/catch. Called from: status-chip click, apply button, search input (debounced 320ms), date/customer/branch/smart-sort change, date-preset apply, clearSingleFilter. |
+| URL params win on page load | `loadFilters()` (L575-607) — checks `url.searchParams.has('from_date'/'to_date'/'customer_id'/'branch_id'/'status'/'scope')`; if any present, returns early (server-rendered values win). Otherwise hydrates from `localStorage.getItem(FILTERS_KEY)`. |
+| Hydrates BEFORE first DataTable AJAX | `loadFilters()` called at L663 (before `var dt = $table.DataTable({...})` at L665) so the initial draw already reflects the saved filter state. |
+| "Clear" wipes localStorage + DOM + redraws | `clearAllFilters()` (L610-626) — wipes all filter inputs, `localStorage.removeItem(FILTERS_KEY)`, `dt.ajax.reload()`, `scheduleSummary()`, `renderActiveFilterBar()`, resets to defaults (`scope=''`, `status_chip='all'`, `smart_sort=on`). |
+
+**F-32 — Date preset buttons** (component + JS already existed; **DOM mount landed in this phase**):
+
+| Criterion | Evidence |
+|---|---|
+| 5 preset pills: Today / Yesterday / Last 7 days / This month / Custom | `<x-erp.date-presets id="datePresets" />` mounted at `index.blade.php` L113 inside the visible filter card. Component (`resources/views/components/erp/date-presets.blade.php`) renders 5 `<button type="button" data-preset="{key}" class="date-preset-btn ...">` pills with English + Bengali labels. |
+| Presets resolve to concrete from/to dates client-side (no round-trip) | `applyDatePreset(key)` (L474-507) — `today` → from=to=today; `yesterday` → from=to=yesterday; `last_7_days` → from=today−6, to=today; `this_month` → from=first-of-month, to=today; `custom` → leaves date inputs untouched + focuses `#from_date`. |
+| Active preset = amber gradient pill (design system, not Legacy's indigo) | `PRESET_ACTIVE = 'bg-gradient-to-r from-amber-500 to-orange-500 border-transparent text-white shadow-sm'` (L421). `setActivePreset(key)` (L450-462) toggles `aria-pressed` + swaps `PRESET_INACTIVE` ↔ `PRESET_ACTIVE` classes. |
+| Clicking a preset sets date inputs + clears scope + redraws | `applyDatePreset()` L487-494 — for non-custom presets: `$scopeInput.val('')`, `$chipInput.val('all')`, resets chip active state, `setActivePreset(key)`, then `dt.ajax.reload()` + `scheduleSummary()` + `saveFilters()` + `renderActiveFilterBar()`. |
+| Visible date inputs for custom range | `#from_date` + `#to_date` are now `<input type="date">` (L115, L119) in the visible filter card — moved out of the hidden form. Native browser date picker fires the existing `change` handler (L1057→shifted) which reloads the table + saves + renders the active bar + refreshes preset highlight. |
+| Preset highlight re-evaluates on date/scope change | `refreshPresetHighlight()` (L467-470) — if `scope` is active, no preset highlighted (scope owns the date context); otherwise `detectPresetFromDates()` matches current from/to against preset definitions. Called on: status-chip click, date change, clearSingleFilter, initial load. |
+| `detectPresetFromDates()` correctly identifies matching preset | L431-445 — compares `#from_date`/`#to_date` against today/yesterday/last-7-days/this-month date windows using local `ymd()` formatter (avoids `toISOString()` UTC off-by-one). Returns `''` (custom/no-match) when dates don't align to a preset. |
+
+**F-32 DOM-mount gap fixed in this phase:**
+
+The `<x-erp.date-presets>` Blade component + all JS handlers (`applyDatePreset`, `setActivePreset`, `refreshPresetHighlight`, `detectPresetFromDates`, `$presets.on('click', '.date-preset-btn', ...)`) existed from the UI/UX phase but the `#datePresets` div was an empty placeholder — the component was never mounted, and `#from_date`/`#to_date` were `type="hidden"` with no visible date picker UI. Users had no way to apply presets or set custom dates.
+
+This phase:
+1. Removed the empty `<div id="datePresets"></div>` + hidden `#from_date`/`#to_date` from the hidden form.
+2. Mounted `<x-erp.date-presets id="datePresets" />` in the visible filter card (new Period row above the Status row, separated by `border-bottom`).
+3. Added visible `<input type="date" id="from_date">` + `<input type="date" id="to_date">` with native browser date pickers.
+4. IDs unchanged → all existing JS selectors (`$('#datePresets')`, `$('#from_date')`, `$('#to_date')`) bind correctly to the new visible elements.
+
+**F-41 — Active filter bar** (already implemented in the UI/UX phase):
+
+| Criterion | Evidence |
+|---|---|
+| `#activeFilterBar` row below the filter form | `<x-erp.active-filter-bar id="activeFilterBar" />` mounted at `index.blade.php` L147 (below the filter card, above the invoices table card). Component renders a hidden amber-tinted bar that shows when ≥1 filter is active. |
+| Pill-shaped tags for each active filter | `renderActiveFilterBar()` (L522-561) — builds tags for: scope (today/pending_godown/pending_challan), status_chip (draft/confirmed/cancelled/reversed/awaiting_payment), from_date, to_date, customer_id (resolves name from `<option>`), branch_id, search, smart_sort. `filterTagHTML(key, label)` (L510-518) renders each tag as an amber-bordered pill. |
+| Inline `×` button clears just that filter | `clearSingleFilter(key)` (L629-659) — per-key wipe logic (scope/status_chip/from_date/to_date/customer_id/branch_id/search/smart_sort), then `refreshPresetHighlight()` + `dt.ajax.reload()` + `scheduleSummary()` + `saveFilters()` + `renderActiveFilterBar()`. Delegated `[data-clear-filter]` click handler. |
+| "Clear all" button on the right | `#clearAllFilters` button inside `<x-erp.active-filter-bar>` component + `$('#clearAllFilters').on('click', ...)` handler → `clearAllFilters()`. |
+| Bar hides when nothing is active | `renderActiveFilterBar()` L551-554 — `$activeBar.addClass('hidden')` when `tags.length === 0`. |
+
+**F-40 — Receive-modal print-receipt success prompt** (already implemented in Phase 1 / UI/UX phase):
+
+| Criterion | Evidence |
+|---|---|
+| AJAX submit returns JSON with `payment_id` + `is_fully_paid` | `CustomerPaymentController::store()` — when `$request->expectsJson() || $request->ajax()`, returns JSON with `payment_id`, `payment_code`, `invoice_id`, `is_fully_paid`, `balance_after`, `message`, `print_receipt_url`. |
+| SweetAlert2 success with "Print receipt" button | `doSubmit().done()` (L1615-1639) — `Swal.fire({ icon: 'success', title: 'Payment recorded ✓', confirmButtonText: printUrl ? '<i class="fas fa-print me-1"></i>Print receipt' : 'OK', showCancelButton: !!printUrl, cancelButtonText: 'Close', confirmButtonColor: '#059669' })`. |
+| Opens receipt in a new tab | `.then(function (r) { if (r.isConfirmed && printUrl) { window.open(printUrl, '_blank', 'noopener'); } })` (L1629-1632). |
+| Auto call-it-a-day prompt fires AFTER the print-receipt Swal if `is_fully_paid` | L1633-1638 — `if (isFullyPaid && invoiceId > 0) { confirmCallItADay([invoiceId], 'Call it a day?', '...'); }` inside the `.then()` callback (fires after the Swal closes). |
+| No full-page redirect on payment submit | `doSubmit()` uses `$.ajax({...})` with `headers: { 'X-Requested-With': 'XMLHttpRequest' }` — the controller detects AJAX and returns JSON instead of redirecting. The receive modal is hidden via `getReceiveModalBs().hide()` (L1602). |
 
 ---
 
@@ -365,7 +419,7 @@ Remove confusion-causing dead code and centralize authorization.
 | Phase | Closes gaps | Impact | Estimated effort | Status |
 |---|---|---|---|---|
 | 1 — Call-It-A-Day Parity | F-2, F-33, F-42, F-43 | Critical | Medium (controller + view + JS) | ✅ Complete |
-| 2 — Filter UX Parity | F-31, F-32, F-41, F-40 | High | Medium (mostly JS + view) | ⬜ Pending |
+| 2 — Filter UX Parity | F-31, F-32, F-41, F-40 | High | Medium (mostly JS + view) | ✅ Complete |
 | 3 — Inline Reverse & Per-Row Actions | F-39, F-42 (remaining), F-17 UX | High | Medium (view + AJAX) | ⬜ Pending |
 | 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | ⬜ Pending |
 | 5 — Stale-Draft Surface & Polish | F-20, F-37, F-38 | Medium | Small (view + JS) | ⬜ Pending |
