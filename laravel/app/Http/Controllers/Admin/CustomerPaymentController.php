@@ -303,9 +303,30 @@ class CustomerPaymentController extends Controller
 
         try {
             $payment = $this->paymentService->cancelPayment($id, auth()->id(), $request->input('cancel_reason'));
+
+            // Phase 3 (UI/UX): inline reverse from the receive modal —
+            // return JSON so the AJAX flow can re-fetch the modal body +
+            // announce the reversal without a page redirect. Mirrors the
+            // AJAX branch in CustomerPaymentController::store.
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'status'       => 'success',
+                    'message'      => "Payment {$payment->payment_code} cancelled. GL + ledger reversed.",
+                    'payment_id'   => $payment->id,
+                    'payment_code' => $payment->payment_code,
+                    'is_reversed'  => true,
+                ]);
+            }
+
             return redirect()->route('admin.customer-payments.show', $payment)
                 ->with('success', "Payment {$payment->payment_code} cancelled. GL + ledger reversed.");
         } catch (\Throwable $e) {
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => $e->getMessage(),
+                ], 400);
+            }
             return back()->with('error', $e->getMessage());
         }
     }

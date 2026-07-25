@@ -14,7 +14,7 @@
 |---|---|---|
 | 1 — In-Context Payment & Call-It-A-Day | ✅ **DONE** | AJAX payment, print-receipt prompt, auto call-it-a-day, per-row + bulk actions, 4 new `<x-erp.*>` components |
 | 2 — Filter UX | ✅ **DONE** | Date presets (Today/Yesterday/Last 7 days/This month/Custom), localStorage persistence, active-filter-bar with removable tags + Clear all, 3 new `<x-erp.*>` components |
-| 3 — Per-Row Actions & Inline Reverse | ⬜ Pending | |
+| 3 — Per-Row Actions & Inline Reverse | ✅ **DONE** | Action-group pattern (≤3 inline + overflow ⋯) on desktop + mobile, inline payment reversal in receive modal (SweetAlert2 reason prompt → AJAX POST → re-fetch), 2 new `<x-erp.*>` components + controller AJAX branch |
 | 4 — Premium Polish | ⬜ Pending | |
 | 5 — Accessibility & Keyboard | ⬜ Pending | |
 | 6 — Responsive & Mobile | ⬜ Pending | |
@@ -113,9 +113,11 @@
 
 ---
 
-## Phase 3 — Per-Row Actions Parity & Inline Reverse (High)
+## Phase 3 — Per-Row Actions Parity & Inline Reverse (High) — ✅ DONE
 
 > Brings the index page's per-row action set to Legacy parity (View / Edit / Cancel / Receive / Call-it-a-day) and adds inline payment reversal inside the receive modal.
+
+> **Implemented:** 2 new Blade components (`<x-erp.action-group>`, `<x-erp.reverse-payment-button>`). DataTable actions column refactored to the action-group pattern — ≤3 inline icon buttons (View + Edit + Receive) + an overflow ⋯ dropdown (Call-it-a-day / Print / Cancel) so rows stay narrow; mobile cards now also use an overflow (Edit / Call-it-a-day / Print / Cancel) bringing Cancel to mobile for the first time. Inline payment reversal in the receive modal: each existing payment row gets a role-gated (accountant/manager/admin/superadmin) "Reverse" button → SweetAlert2 textarea reason prompt (min 5 chars, red confirm) → AJAX POST to `admin.customer-payments.cancel` → on success the modal body is re-fetched (reversed payment vanishes, balance goes back up) + DataTable reloads + `salesToday:paymentRecorded` event fired with `{reversedPaymentId}`. `CustomerPaymentController::cancel` now returns JSON for AJAX requests (mirrors the `store` pattern) so the inline flow has no page redirect. Tailwind CSS rebuilt — all new red-variant + `w-full`/`sm:w-auto` classes confirmed generated.
 
 ### Screens to improve
 - `resources/views/admin/sales-invoices/index.blade.php` — DataTable actions column render function.

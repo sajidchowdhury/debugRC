@@ -791,18 +791,23 @@ $(function () {
                 },
             },
             {
-                // Phase 1 (UI/UX): per-row actions — full Legacy parity.
-                // View / Edit / Receive / Call-it-a-day / Print inline +
-                // Cancel in an overflow dropdown. Uses .rc-action-btn
-                // (defined in the <style> block below) for compact icon
-                // buttons matching the <x-erp.action-button> spec.
+                // Phase 3 (UI/UX): per-row actions — action-group pattern.
+                // ≤3 inline icon buttons (View + Edit + Receive) + an
+                // overflow ⋯ dropdown for the rest (Call-it-a-day / Print
+                // / Cancel). Mirrors the <x-erp.action-group> Blade
+                // component markup. Uses .rc-action-btn (defined in the
+                // <style> block below) for compact icon buttons matching
+                // the <x-erp.action-button> spec. aria-label on every
+                // button includes the invoice code for screen readers.
                 data: null,
                 orderable: false,
                 className: 'text-center text-nowrap',
                 render: function (data, type, row) {
                     if (type !== 'display') return '';
                     var code = escapeHtml(row.invoice_code || '');
-                    var html = '<div class="d-flex gap-1 justify-content-center align-items-center">';
+                    var html = '<div class="d-inline-flex gap-1 justify-content-center align-items-center">';
+
+                    // --- Inline (max 3): View + Edit + Receive ---
 
                     // View (always)
                     html += '<a href="' + row.show_url + '" class="rc-action-btn rc-action-view" '
@@ -826,36 +831,43 @@ $(function () {
                              +  '<i class="fas fa-hand-holding-dollar"></i></button>';
                     }
 
+                    // --- Overflow ⋯: Call-it-a-day / Print / Cancel ---
+                    // Only render the dropdown if at least one overflow
+                    // action is available.
+                    var overflowItems = '';
+
                     // Call it a day (paid, not yet called)
                     if (row.show_call_a_day) {
-                        html += '<button type="button" class="rc-action-btn rc-action-callitaday btn-call-it-a-day" '
-                             +  'title="Call it a day" '
-                             +  'aria-label="Call it a day for invoice ' + code + '" '
-                             +  'data-invoice-id="' + row.id + '" '
-                             +  'data-invoice-code="' + code + '">'
-                             +  '<i class="fas fa-check-circle"></i></button>';
+                        overflowItems += '<li><button type="button" class="dropdown-item btn-call-it-a-day" '
+                                      +  'data-invoice-id="' + row.id + '" data-invoice-code="' + code + '" '
+                                      +  'aria-label="Call it a day for invoice ' + code + '">'
+                                      +  '<i class="fas fa-check-circle text-orange-500 me-2"></i>Call it a day</button></li>';
                     }
 
                     // Print invoice (confirmed + not reversed)
                     if (row.show_print && row.print_invoice_url) {
-                        html += '<a href="' + row.print_invoice_url + '" target="_blank" rel="noopener" '
-                             +  'class="rc-action-btn rc-action-print" '
-                             +  'title="Print invoice" aria-label="Print invoice ' + code + '">'
-                             +  '<i class="fas fa-print"></i></a>';
+                        overflowItems += '<li><a href="' + row.print_invoice_url + '" target="_blank" rel="noopener" '
+                                      +  'class="dropdown-item" aria-label="Print invoice ' + code + '">'
+                                      +  '<i class="fas fa-print text-gray-500 me-2"></i>Print invoice</a></li>';
                     }
 
-                    // Overflow: Cancel (draft only) — kept in a dropdown
-                    // so the row stays narrow.
+                    // Cancel (draft only) — destructive, shown last + red.
                     if (row.show_cancel) {
+                        overflowItems += '<li><hr class="dropdown-divider my-1"></li>'
+                                      +  '<li><button type="button" class="dropdown-item text-danger btn-cancel-invoice" '
+                                      +  'data-invoice-id="' + row.id + '" data-invoice-code="' + code + '" '
+                                      +  'aria-label="Cancel invoice ' + code + '">'
+                                      +  '<i class="fas fa-ban me-2"></i>Cancel invoice</button></li>';
+                    }
+
+                    if (overflowItems) {
                         html += '<div class="dropdown d-inline-block">'
                              +  '<button type="button" class="rc-action-btn" data-bs-toggle="dropdown" '
                              +  'aria-expanded="false" title="More" '
                              +  'aria-label="More actions for invoice ' + code + '">'
                              +  '<i class="fas fa-ellipsis-h"></i></button>'
                              +  '<ul class="dropdown-menu dropdown-menu-end shadow-lg rounded-md border border-gray-200 bg-white py-1" style="min-width:12rem;">'
-                             +  '<li><button type="button" class="dropdown-item text-danger btn-cancel-invoice" '
-                             +  'data-invoice-id="' + row.id + '" data-invoice-code="' + code + '">'
-                             +  '<i class="fas fa-ban me-2"></i>Cancel invoice</button></li>'
+                             +  overflowItems
                              +  '</ul></div>';
                     }
 
@@ -1264,6 +1276,8 @@ $(function () {
                         '<i class="fas fa-hand me-1"></i>Soft hold</span></div>';
             }
             html +=   '<div class="mt-2 d-flex gap-1 flex-wrap align-items-center">';
+            // Phase 3 (UI/UX): mobile action-group — View + Receive inline
+            // + overflow ⋯ (Edit / Call-it-a-day / Print / Cancel).
             html +=     '<a href="' + row.show_url + '" class="btn btn-sm btn-outline-secondary">' +
                             '<i class="fas fa-eye"></i> View</a>';
             if (row.show_receive) {
@@ -1272,18 +1286,41 @@ $(function () {
                           'data-invoice-code="' + escapeHtml(row.invoice_code) + '">' +
                           '<i class="fas fa-hand-holding-dollar me-1"></i>Receive</button>';
             }
-            // Phase 1 (UI/UX): Call-it-a-day on mobile cards.
-            if (row.show_call_a_day) {
-                html +=   '<button type="button" class="btn btn-sm btn-outline-warning btn-call-it-a-day" ' +
-                          'data-invoice-id="' + row.id + '" ' +
-                          'data-invoice-code="' + escapeHtml(row.invoice_code) + '" title="Call it a day">' +
-                          '<i class="fas fa-check-circle me-1"></i>Done</button>';
+
+            // Overflow ⋯ — only render if ≥1 secondary action exists.
+            var mOver = '';
+            if (row.show_edit && row.edit_url) {
+                mOver += '<li><a href="' + row.edit_url + '" class="dropdown-item" ' +
+                         'aria-label="Edit invoice ' + escapeHtml(row.invoice_code) + '">' +
+                         '<i class="fas fa-pen text-amber-600 me-2"></i>Edit draft</a></li>';
             }
-            // Phase 1 (UI/UX): Print on mobile cards.
+            if (row.show_call_a_day) {
+                mOver += '<li><button type="button" class="dropdown-item btn-call-it-a-day" ' +
+                         'data-invoice-id="' + row.id + '" ' +
+                         'data-invoice-code="' + escapeHtml(row.invoice_code) + '" ' +
+                         'aria-label="Call it a day for invoice ' + escapeHtml(row.invoice_code) + '">' +
+                         '<i class="fas fa-check-circle text-orange-500 me-2"></i>Call it a day</button></li>';
+            }
             if (row.show_print && row.print_invoice_url) {
-                html +=   '<a href="' + row.print_invoice_url + '" target="_blank" rel="noopener" ' +
-                          'class="btn btn-sm btn-outline-secondary" title="Print invoice">' +
-                          '<i class="fas fa-print"></i></a>';
+                mOver += '<li><a href="' + row.print_invoice_url + '" target="_blank" rel="noopener" ' +
+                         'class="dropdown-item" aria-label="Print invoice ' + escapeHtml(row.invoice_code) + '">' +
+                         '<i class="fas fa-print text-gray-500 me-2"></i>Print invoice</a></li>';
+            }
+            if (row.show_cancel) {
+                mOver += '<li><hr class="dropdown-divider my-1"></li>' +
+                         '<li><button type="button" class="dropdown-item text-danger btn-cancel-invoice" ' +
+                         'data-invoice-id="' + row.id + '" ' +
+                         'data-invoice-code="' + escapeHtml(row.invoice_code) + '" ' +
+                         'aria-label="Cancel invoice ' + escapeHtml(row.invoice_code) + '">' +
+                         '<i class="fas fa-ban me-2"></i>Cancel invoice</button></li>';
+            }
+            if (mOver) {
+                html += '<div class="dropdown d-inline-block">' +
+                        '<button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="dropdown" ' +
+                        'aria-expanded="false" aria-label="More actions for invoice ' + escapeHtml(row.invoice_code) + '">' +
+                        '<i class="fas fa-ellipsis-h"></i></button>' +
+                        '<ul class="dropdown-menu dropdown-menu-end shadow-lg rounded-md border border-gray-200 bg-white py-1" style="min-width:12rem;">' +
+                        mOver + '</ul></div>';
             }
             html +=   '</div>';
             html += '</div>';
@@ -1509,6 +1546,110 @@ $(function () {
             });
         }
     }
+
+    // ============================================================
+    // ====== Phase 3 (UI/UX): Inline payment reversal =============
+    // ============================================================
+    // Delegated handler — survives DataTables redraws + modal re-fetches.
+    // The .btn-reverse-payment buttons live inside the receive modal's
+    // "Payments on this invoice" list (rendered server-side by
+    // _receive_modal_body.blade.php, role-gated to accountant/manager/
+    // admin/superadmin). Clicking one opens a SweetAlert2 reason prompt
+    // (textarea, min 5 chars) → AJAX POST to admin.customer-payments.cancel
+    // → on success the modal body is re-fetched (the reversed payment's
+    // allocation is deleted server-side, so it vanishes from the list +
+    // the balance due goes back up) + the DataTable reloads to reflect
+    // the new due/paid columns. Mirrors the Legacy reverse_payment flow
+    // without any page navigation.
+    $(document).on('click', '.btn-reverse-payment', function () {
+        var pid  = parseInt($(this).data('payment-id'), 10) || 0;
+        var code = String($(this).data('payment-code') || '');
+        if (!pid) return;
+
+        Swal.fire({
+            title: 'Reverse payment ' + escapeHtml(code) + '?',
+            html: 'This reverses the GL entry, customer ledger, and invoice allocation. '
+                + 'The invoice\'s due amount will go back up. <b>This cannot be undone.</b>',
+            icon: 'warning',
+            input: 'textarea',
+            inputPlaceholder: 'Reason for reversal (required, min 5 chars)…',
+            inputAttributes: { 'aria-label': 'Reason for reversal (minimum 5 characters)' },
+            inputValidator: function (v) {
+                if (!v || String(v).trim().length < 5) {
+                    return 'Reason must be at least 5 characters.';
+                }
+                return null;
+            },
+            showCancelButton: true,
+            confirmButtonText: '<i class="fas fa-rotate-left me-1"></i>Yes, reverse it',
+            cancelButtonText: 'Keep it',
+            confirmButtonColor: '#dc2626', // red-600
+        }).then(function (r) {
+            if (!r.isConfirmed) return;
+            // Cancel URL built inline (matches the cancel-invoice pattern)
+            // — avoids route() URL-encoding a placeholder.
+            var url = '/admin/customer-payments/' + pid + '/cancel';
+            $.ajax({
+                url: url,
+                method: 'POST',
+                data: { _token: ROUTES.csrf, cancel_reason: r.value },
+                dataType: 'json',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            }).done(function (data) {
+                var payCode = (data && data.payment_code) || code;
+                Swal.fire({
+                    toast: true, position: 'top-end', icon: 'success',
+                    title: 'Payment ' + escapeHtml(payCode) + ' reversed.',
+                    showConfirmButton: false, timer: 2400,
+                });
+                announceSR('Payment ' + payCode + ' reversed.');
+
+                // Re-fetch the modal body so the reversed payment
+                // disappears + the balance/summary stats update. The
+                // invoiceId is read from the modal body's data attr.
+                var $body = $modalContent.find('.receive-modal-body');
+                var invoiceId = $body.length ? ($body.data('invoice-id') || 0) : 0;
+                if (invoiceId) {
+                    $.ajax({
+                        url: '/admin/sales-invoices/' + invoiceId + '/receive-modal',
+                        method: 'GET',
+                        dataType: 'html',
+                        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                    }).done(function (html) {
+                        $modalContent.html(html);
+                        initReceiveModalBody();
+                    });
+                }
+
+                // Refresh the table so due/paid/status columns update.
+                dt.ajax.reload();
+                scheduleSummary();
+
+                // Fire a custom event so any future listener can react
+                // (e.g. auto-collapsing the row). Mirrors the spec's
+                // salesToday:paymentRecorded with { reversedPaymentId }.
+                $(document).trigger('salesToday:paymentRecorded', [{
+                    reversedPaymentId: pid,
+                    paymentCode: payCode,
+                }]);
+            }).fail(function (xhr) {
+                var msg;
+                if (xhr.status === 422 && xhr.responseJSON && xhr.responseJSON.errors) {
+                    var errs = xhr.responseJSON.errors;
+                    msg = Object.keys(errs).map(function (k) { return errs[k].join(' '); }).join(' ');
+                } else {
+                    msg = (xhr.responseJSON && xhr.responseJSON.message)
+                        || xhr.statusText
+                        || 'Server error';
+                }
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Could not reverse payment',
+                    html: escapeHtml(msg),
+                });
+            });
+        });
+    });
 
     // ============================================================
     // ====== Shared helpers =======================================

@@ -182,6 +182,15 @@
 
             {{-- Payments already on this invoice --}}
             @if ($payments->isNotEmpty())
+                @php
+                    // Phase 3 (UI/UX): only accountant/manager/admin/superadmin
+                    // can reverse a payment (mirrors the route middleware on
+                    // admin.customer-payments.cancel). The button is hidden
+                    // for salesman — they can see the payment history but
+                    // cannot undo it.
+                    $canReversePayments = auth()->check()
+                        && auth()->user()->hasRole('accountant', 'manager', 'admin', 'superadmin');
+                @endphp
                 <div class="border-top pt-2 mb-3">
                     <div class="d-flex justify-content-between align-items-baseline mb-1">
                         <span class="small fw-semibold">Payments on this invoice</span>
@@ -189,8 +198,8 @@
                     </div>
                     <ul class="list-unstyled mb-0 small">
                         @foreach ($payments as $p)
-                            <li class="d-flex justify-content-between align-items-center border-bottom py-1">
-                                <div>
+                            <li class="d-flex justify-content-between align-items-start border-bottom py-1 gap-2 flex-wrap">
+                                <div class="flex-grow-1">
                                     <strong>{{ $p['payment_code'] }}</strong>
                                     <div class="text-muted" style="font-size:0.75rem;">
                                         {{ $p['payment_date'] ? \Carbon\Carbon::parse($p['payment_date'])->format('d-m-Y') : '—' }}
@@ -198,12 +207,18 @@
                                         · by {{ $p['received_by_name'] }}
                                     </div>
                                 </div>
-                                <div class="d-flex align-items-center gap-2">
-                                    <span class="fw-semibold">Tk {{ number_format($p['allocated_amount'], 2) }}</span>
-                                    <a href="{{ route('admin.customer-payments.print-receipt', $p['payment_id']) }}"
-                                       class="btn btn-sm btn-outline-secondary py-0 px-1" target="_blank" rel="noopener" title="Print receipt">
-                                        <i class="fas fa-print"></i>
-                                    </a>
+                                <div class="d-flex flex-column align-items-end gap-1">
+                                    <div class="d-flex align-items-center gap-2">
+                                        <span class="fw-semibold">Tk {{ number_format($p['allocated_amount'], 2) }}</span>
+                                        <a href="{{ route('admin.customer-payments.print-receipt', $p['payment_id']) }}"
+                                           class="btn btn-sm btn-outline-secondary py-0 px-1" target="_blank" rel="noopener" title="Print receipt"
+                                           aria-label="Print receipt for {{ $p['payment_code'] }}">
+                                            <i class="fas fa-print"></i>
+                                        </a>
+                                    </div>
+                                    @if ($canReversePayments && !empty($p['payment_id']))
+                                        <x-erp.reverse-payment-button :payment-id="$p['payment_id']" :payment-code="$p['payment_code']" />
+                                    @endif
                                 </div>
                             </li>
                         @endforeach
