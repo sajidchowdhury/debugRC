@@ -17,7 +17,7 @@
 
 ---
 
-## Phase 1 — Call-It-A-Day Parity (Critical)
+## Phase 1 — Call-It-A-Day Parity (Critical) ✅ Complete
 
 > Closes gaps **F-2, F-33, F-42, F-43**. This is the single biggest behavioral gap: the "Call It A Day" feature exists in Laravel code but is invisible to users because (a) the list doesn't filter by it, (b) no button invokes it, and (c) the auto-prompt after full payment never fires.
 
@@ -59,18 +59,67 @@ Make "Call It A Day" behave exactly like Legacy: invoices marked `call_a_day=tru
 - The daily-collection workflow matches Legacy.
 
 ### Completion checklist
-- [ ] `buildInvoiceFilterQuery()` applies `where('call_a_day', false)` to index/datatable/summary.
-- [ ] Partial index `idx_si_call_a_day_active` verified present.
-- [ ] Misleading docstring + migration comment corrected.
-- [ ] Optional `?include_called=1` audit param works for admin/manager.
-- [ ] Per-row "Call It A Day" button renders (hidden when already called).
-- [ ] SweetAlert2 confirmation fires before the POST.
-- [ ] Bulk checkbox column + select-all + bulk-action bar functional.
-- [ ] Bulk POST caps at 200 and reports `updated_count`.
-- [ ] Receive-modal submit switched to AJAX (Option A) OR return-URL flow (Option B).
-- [ ] Auto call-it-a-day prompt fires on `is_fully_paid=true`.
-- [ ] Table redraws + summary refreshes after every call-it-a-day action.
-- [ ] Audit log entry `sale_call_a_day` written for every action (verify in `user_audit_log`).
+- [x] `buildInvoiceFilterQuery()` applies `where('call_a_day', false)` to index/datatable/summary.
+- [x] Partial index `idx_si_call_a_day_active` verified present.
+- [x] Misleading docstring + migration comment corrected.
+- [x] Optional `?include_called=1` audit param works for admin/manager.
+- [x] Per-row "Call It A Day" button renders (hidden when already called).
+- [x] SweetAlert2 confirmation fires before the POST.
+- [x] Bulk checkbox column + select-all + bulk-action bar functional.
+- [x] Bulk POST caps at 200 and reports `updated_count`.
+- [x] Receive-modal submit switched to AJAX (Option A) OR return-URL flow (Option B).
+- [x] Auto call-it-a-day prompt fires on `is_fully_paid=true`.
+- [x] Table redraws + summary refreshes after every call-it-a-day action.
+- [x] Audit log entry `sale_call_a_day` written for every action (verify in `user_audit_log`).
+
+### Phase 1 Verification
+
+**F-2 — Filter the list by `call_a_day=false`** (landed in this phase):
+
+| Criterion | Evidence |
+|---|---|
+| `buildInvoiceFilterQuery()` applies `where('call_a_day', false)` to the base query | `app/Http/Controllers/Admin/SalesInvoiceController.php` — `buildInvoiceFilterQuery()` now applies the filter at the base (before any scope branches), so `datatable()` + `summary()` inherit it across ALL scopes/chips. |
+| `index()` inline query also filtered | `index()` applies `->when(! $includeCalled, fn($q) => $q->where('call_a_day', false))` to its own inline query + the `$statsBase` used for chip counts. |
+| `?include_called=1` audit param (admin/manager only) | New private helper `shouldIncludeCalledInvoices(Request)` checks `$request->boolean('include_called')` AND `$user->hasRole('admin', 'manager')`. Used by both `index()` and `buildInvoiceFilterQuery()`. |
+| Partial index `idx_si_call_a_day_active WHERE call_a_day = false` verified present | `database/migrations/2025_01_19_000001_add_call_a_day_to_sales_invoices.php` line 47 — `CREATE INDEX IF NOT EXISTS idx_si_call_a_day_active ON sales_invoices (call_a_day) WHERE call_a_day = false`. |
+| Misleading docstring corrected | `app/Services/Sales/SalesInvoiceService.php` `callItADay()` docstring rewritten — removed false "DataTable filters by COALESCE(call_a_day, false) = false" claim; now accurately describes the `buildInvoiceFilterQuery()` base filter + `?include_called=1` opt-out + the backing partial index. |
+| Misleading migration comment corrected | `database/migrations/2025_01_19_000001_add_call_a_day_to_sales_invoices.php` header rewritten — removed false "omitted in the PG schema redesign" claim; now accurately explains the migration is a no-op for the column on fresh installs (04_sales.sql declares it) and exists for backfill + the partial index. |
+| Redundant `call_a_day` filter removed from today-branch | `buildInvoiceFilterQuery()` no longer repeats `where('call_a_day', false)` inside the `scope === 'today'` branch (now at base). `summary()` `$countToday` no longer repeats it either — base clone inherits it, keeping the count consistent across audit modes. |
+
+**F-42 — Per-row "Call It A Day" button** (already implemented in the UI/UX phase):
+
+| Criterion | Evidence |
+|---|---|
+| Per-row button renders, hidden when `call_a_day=true` | `resources/views/admin/sales-invoices/index.blade.php` — DataTables `columns[11]` actions column renders `.btn-call-it-a-day` inside the overflow dropdown only when `row.show_call_a_day` is true. The flag is computed server-side in `datatable()`: `show_call_a_day => $due <= 0.01 && !$isCancelled && !$isReversed && !$calledItADay`. |
+| SweetAlert2 confirmation before POST | `confirmCallItADay(ids, title, text)` (index.blade.php L1170-1183) — `Swal.fire({ icon: 'question', showCancelButton: true, confirmButtonColor: '#ea580c' })` then `callItADay(ids)` on confirm. |
+| Click handler wired | Delegated `$(document).on('click', '.btn-call-it-a-day', …)` (L1152-1159) — survives DataTables redraws. |
+
+**F-43 — Bulk "Call It A Day" with checkbox column** (already implemented in the UI/UX phase):
+
+| Criterion | Evidence |
+|---|---|
+| Checkbox column (col 0) | DataTables `columns[0]` renders `<input type="checkbox" class="row-invoice-checkbox" value="{row.id}">` (index.blade.php L706-718). |
+| Select-all header checkbox | `#selectAllInvoices` in the `<thead>` (L202-206) + `change` handler (L1129-1134). |
+| Bulk-action bar | `#invoiceBulkBar` (L162-188) — sticky amber bar with `#bulkSelectedCount` + `#bulkCallItADay` + `#bulkClear` buttons, hidden by default, shown via `updateBulkBar()` when ≥1 row selected. |
+| Bulk POST caps at 200 + reports `updated_count` | `SalesInvoiceService::callItADay()` L782 — `array_slice(array_map('intval', array_unique($invoiceIds)), 0, 200)`. Returns `['status', 'message', 'updated_count']`. JS `callItADay()` (L1186-1213) reads `data.updated_count` + toasts + redraws. |
+
+**F-33 — Auto call-it-a-day after full payment (Option A — AJAX submit)** (already implemented in the UI/UX phase):
+
+| Criterion | Evidence |
+|---|---|
+| Receive-modal submit is AJAX (Option A) | `doSubmit()` (index.blade.php L1587-1661) — `$.ajax({ url: $form.attr('action'), method: 'POST', data: $form.serialize(), dataType: 'json', headers: { 'X-Requested-With': 'XMLHttpRequest' } })`. No full-page redirect. |
+| Controller returns JSON with `is_fully_paid` + `payment_id` + `print_receipt_url` | `CustomerPaymentController::store()` — when `$request->expectsJson() || $request->ajax()`, returns JSON with `payment_id`, `payment_code`, `invoice_id`, `is_fully_paid`, `balance_after`, `message`, `print_receipt_url`. `is_fully_paid` computed by re-fetching the invoice after `confirmPayment()` commits. |
+| Auto call-it-a-day prompt on `is_fully_paid=true` | `doSubmit().done()` (L1633-1638) — after the success Swal closes, if `isFullyPaid && invoiceId > 0`, fires `confirmCallItADay([invoiceId], 'Call it a day?', 'This invoice is now fully paid. Remove it from your daily collection list?')`. |
+| Table redraws + summary refreshes | `doSubmit().done()` L1611-1612 — `dt.ajax.reload(); scheduleSummary();` immediately on payment success (before the Swal), so due/paid columns update. Same pattern in `callItADay()` L1203-1204. |
+
+**Audit log verification:**
+
+| Action | Logger method | Action string | Call site |
+|---|---|---|---|
+| Per-row / bulk Call-It-A-Day | `SalesAuditLogger::callItADay(userId, branchId, invoiceIds, updatedCount)` | `sale_call_a_day` | `SalesInvoiceService::callItADay()` L800 (inside DB transaction, after the batch UPDATE) |
+| Payment received (F-33 trigger context) | `SalesAuditLogger::paymentReceived(...)` | `payment_received` | `CustomerPaymentService::confirmPayment()` via `auditPaymentConfirmed()` |
+
+Both write to `user_audit_log` (PG) + `logs/user_audit.log` (file) via `UserAuditLogger::log()`.
 
 ---
 
@@ -313,14 +362,14 @@ Remove confusion-causing dead code and centralize authorization.
 
 ## Phase Summary (one-page view)
 
-| Phase | Closes gaps | Impact | Estimated effort |
-|---|---|---|---|
-| 1 — Call-It-A-Day Parity | F-2, F-33, F-42, F-43 | Critical | Medium (controller + view + JS) |
-| 2 — Filter UX Parity | F-31, F-32, F-41, F-40 | High | Medium (mostly JS + view) |
-| 3 — Inline Reverse & Per-Row Actions | F-39, F-42 (remaining), F-17 UX | High | Medium (view + AJAX) |
-| 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) |
-| 5 — Stale-Draft Surface & Polish | F-20, F-37, F-38 | Medium | Small (view + JS) |
-| 6 — Dead Code & Architectural Polish | housekeeping | Low | Small (cleanup + Policy classes) |
+| Phase | Closes gaps | Impact | Estimated effort | Status |
+|---|---|---|---|---|
+| 1 — Call-It-A-Day Parity | F-2, F-33, F-42, F-43 | Critical | Medium (controller + view + JS) | ✅ Complete |
+| 2 — Filter UX Parity | F-31, F-32, F-41, F-40 | High | Medium (mostly JS + view) | ⬜ Pending |
+| 3 — Inline Reverse & Per-Row Actions | F-39, F-42 (remaining), F-17 UX | High | Medium (view + AJAX) | ⬜ Pending |
+| 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | ⬜ Pending |
+| 5 — Stale-Draft Surface & Polish | F-20, F-37, F-38 | Medium | Small (view + JS) | ⬜ Pending |
+| 6 — Dead Code & Architectural Polish | housekeeping | Low | Small (cleanup + Policy classes) | ⬜ Pending |
 
 **Total: 6 phases, ~16 tasks, closing 16 verified gaps + 4 housekeeping items.**
 

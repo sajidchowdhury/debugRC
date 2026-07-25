@@ -755,12 +755,19 @@ class SalesInvoiceService
     }
 
     /**
-     * Call It A Day — batch flag invoices as removed from daily collection list (Gap G-10).
+     * Call It A Day — batch flag invoices as removed from daily collection list (Gap G-10 / F-2).
      *
      * Sets call_a_day = true on selected invoices for the given branch.
      * This is a UI/operational convenience only — no GL, ledger, or stock impact.
-     * Invoices with call_a_day = true disappear from the "Sales Today" view
-     * (the DataTable filters by COALESCE(call_a_day, false) = false).
+     *
+     * Visibility: invoices with call_a_day = true are hidden from the default
+     * Today Invoice list, DataTables AJAX, summary chip counts, and index-page
+     * stats by SalesInvoiceController::buildInvoiceFilterQuery() which applies
+     * ->where('call_a_day', false) to the base query. Admin/manager can bypass
+     * the filter with ?include_called=1 to audit called-it-a-day invoices.
+     *
+     * The filter is backed by partial index idx_si_call_a_day_active
+     * (migration 2025_01_19_000001) WHERE call_a_day = false.
      *
      * Legacy equivalent: SalesInvoiceOperationsTrait::callItADay()
      *

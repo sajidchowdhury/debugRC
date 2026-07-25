@@ -43,13 +43,9 @@ class SalesInvoiceController extends Controller
         $forcePendingGodown  = false;
         $forcePendingChallan = false;
 
-        $forceToday = false;
         if ($scope === 'today') {
             $effectiveFrom = $effectiveFrom ?? $today;
             $effectiveTo   = $effectiveTo   ?? $today;
-            // Consistent with buildInvoiceFilterQuery(): hide invoices
-            // flagged call_a_day from the Today view.
-            $forceToday = true;
         } elseif ($scope === 'pending_godown') {
             // Invoices awaiting godown prep: status confirmed (i.e. not draft),
             // is_godown_prepared=false, not reversed. Across all dates so the
@@ -60,10 +56,15 @@ class SalesInvoiceController extends Controller
             $forcePendingChallan = true;
         }
 
+        // F-2: Hide invoices flagged call_a_day from the default view across
+        // ALL scopes/chips (not just scope=today). Admin/manager can bypass
+        // with ?include_called=1 for auditing called-it-a-day invoices.
+        $includeCalled = $this->shouldIncludeCalledInvoices($request);
+
         $query = SalesInvoice::with(['customer', 'branch', 'items'])
+            ->when(! $includeCalled, fn($q) => $q->where('call_a_day', false))
             ->when($effectiveFrom, fn($q, $d) => $q->where('invoice_date', '>=', $d))
             ->when($effectiveTo,   fn($q, $d) => $q->where('invoice_date', '<=', $d))
-            ->when($forceToday, fn($q) => $q->where('call_a_day', false))
             ->when($request->input('customer_id'), fn($q, $cid) => $q->where('customer_id', $cid))
             ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
             ->when($forcePendingGodown, function ($q) {
@@ -91,21 +92,27 @@ class SalesInvoiceController extends Controller
         // BUG-52: extended stats with workflow-relevant counts so the
         // index page can render Today / Pending Godown / Pending Challan
         // chips with live counts.
+        // F-2: chip counts honor the same call_a_day filter as the list
+        // (and the summary() AJAX endpoint) so the initial render matches
+        // the AJAX-refreshed counts. Admin/manager with ?include_called=1
+        // see the unfiltered counts.
+        $statsBase = SalesInvoice::query()
+            ->when(! $includeCalled, fn($q) => $q->where('call_a_day', false));
         $stats = [
-            'total'           => SalesInvoice::count(),
-            'today'           => SalesInvoice::where('invoice_date', $today)->where('call_a_day', false)->count(),
-            'draft'           => SalesInvoice::where('status', 'draft')->count(),
-            'confirmed'       => SalesInvoice::where('status', 'confirmed')->count(),
-            'cancelled'       => SalesInvoice::where('status', 'cancelled')->count(),
-            'pending_godown'  => SalesInvoice::where('status', 'confirmed')
+            'total'           => (clone $statsBase)->count(),
+            'today'           => (clone $statsBase)->where('invoice_date', $today)->count(),
+            'draft'           => (clone $statsBase)->where('status', 'draft')->count(),
+            'confirmed'       => (clone $statsBase)->where('status', 'confirmed')->count(),
+            'cancelled'       => (clone $statsBase)->where('status', 'cancelled')->count(),
+            'pending_godown'  => (clone $statsBase)->where('status', 'confirmed')
                                     ->where('is_godown_prepared', false)
                                     ->where('is_reversed', false)
                                     ->count(),
-            'pending_challan' => SalesInvoice::where('is_godown_prepared', true)
+            'pending_challan' => (clone $statsBase)->where('is_godown_prepared', true)
                                     ->where('is_challan_issued', false)
                                     ->where('is_reversed', false)
                                     ->count(),
-            'total_value'     => SalesInvoice::whereNotIn('status', ['cancelled'])->sum('total_amount'),
+            'total_value'     => (float) (clone $statsBase)->whereNotIn('status', ['cancelled'])->sum('total_amount'),
         ];
 
         return view('admin.sales-invoices.index', [
@@ -919,9 +926,11 @@ class SalesInvoiceController extends Controller
 
         // BUG-52: workflow buckets for the new chips.
         $today = now()->format('Y-m-d');
-        // Phase 1 (UI/UX): Today chip count excludes call_a_day invoices
-        // so the count matches the filtered DataTable (see buildInvoiceFilterQuery).
-        $countToday = (clone $base)->where('invoice_date', $today)->where('call_a_day', false)->count();
+        // F-2: $base already filters call_a_day=false (unless ?include_called=1
+        // for admin/manager), so $countToday inherits that filter — no need
+        // to repeat it here. This keeps the Today chip count consistent with
+        // the filtered DataTable rows across all audit modes.
+        $countToday = (clone $base)->where('invoice_date', $today)->count();
         $countPendingGodown = (clone $base)
             ->where('status', 'confirmed')
             ->where('is_godown_prepared', false)
@@ -962,6 +971,14 @@ class SalesInvoiceController extends Controller
     private function buildInvoiceFilterQuery(Request $request, bool $excludeStatusChip = false)
     {
         $q = SalesInvoice::query();
+
+        // F-2: Hide invoices flagged call_a_day from the default view across
+        // ALL scopes/chips (not just scope=today). Admin/manager can bypass
+        // with ?include_called=1 for auditing called-it-a-day invoices.
+        // Backed by partial index idx_si_call_a_day_active WHERE call_a_day = false.
+        if (! $this->shouldIncludeCalledInvoices($request)) {
+            $q->where('call_a_day', false);
+        }
 
         if ($d = $request->input('from_date')) {
             $q->where('invoice_date', '>=', $d);
@@ -1010,10 +1027,8 @@ class SalesInvoiceController extends Controller
                 $today = now()->format('Y-m-d');
                 if (! $request->input('from_date')) { $q->where('invoice_date', '>=', $today); }
                 if (! $request->input('to_date'))   { $q->where('invoice_date', '<=', $today); }
-                // Phase 1 (UI/UX) / G-10: hide invoices flagged call_a_day
-                // from the daily collection list so "Call It A Day" makes
-                // them vanish from the Today view on redraw.
-                $q->where('call_a_day', false);
+                // F-2: call_a_day filter is applied at the base of
+                // buildInvoiceFilterQuery() — no need to repeat it here.
             } elseif ($scope === 'pending_godown') {
                 $q->where('status', 'confirmed')
                   ->where('is_godown_prepared', false)
@@ -1049,5 +1064,28 @@ class SalesInvoiceController extends Controller
         }
 
         return $q;
+    }
+
+    /**
+     * F-2: Determine whether the current request should include
+     * call_a_day=true invoices in the result set.
+     *
+     * Default behavior (no flag / non-admin / non-manager): invoices flagged
+     * call_a_day are hidden from the list, datatable, summary, and chip counts.
+     *
+     * Audit escape hatch: admin + manager can pass ?include_called=1 to see
+     * called-it-a-day invoices for auditing. This is a Laravel improvement
+     * over Legacy (Legacy has no way to recover called invoices once removed).
+     *
+     * @param Request $request
+     * @return bool True if called invoices should be included in the result set.
+     */
+    private function shouldIncludeCalledInvoices(Request $request): bool
+    {
+        if (! $request->boolean('include_called')) {
+            return false;
+        }
+        $user = $request->user();
+        return $user !== null && $user->hasRole('admin', 'manager');
     }
 }
