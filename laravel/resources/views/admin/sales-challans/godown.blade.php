@@ -298,6 +298,8 @@
                                                 data-product-id="{{ $item->product_id }}"
                                                 data-qty="{{ $item->qty }}"
                                                 data-pcs-per-carton="{{ $pcsPerCartonForItem($item) }}"
+                                                data-is-godown-prepared="{{ $isEditGodown ? 1 : 0 }}"
+                                                data-persisted-warehouse-id="{{ $item->warehouse_id ?? '' }}"
                                                 required>
                                             <option value="">— select warehouse —</option>
                                             @foreach ($warehouses as $w)
@@ -314,6 +316,8 @@
                                                 @endphp
                                                 <option value="{{ $w->id }}"
                                                         data-qty="{{ $wAvail }}"
+                                                        data-available="{{ $wAvail }}"
+                                                        data-physical="{{ $wPhys }}"
                                                         data-avg-cost="{{ $wCost }}"
                                                         @if ($isSelected) selected @endif
                                                         @if ($insufficient) disabled @endif
@@ -324,6 +328,18 @@
                                                 </option>
                                             @endforeach
                                         </select>
+                                        {{-- Phase 7: per-row live stock badge. Reflects the SELECTED
+                                             warehouse's availability vs this line's demand. Colors:
+                                             green (≥ demand), amber (0 < avail < demand), red (avail = 0),
+                                             blue (reserved — godown-prepared + persisted warehouse).
+                                             Icon + text in every state so color is never the only signal. --}}
+                                        <span id="stock-badge-{{ $item->id }}"
+                                              class="stock-badge mt-1.5 inline-flex items-center gap-1 text-xs font-semibold rounded-full px-2 py-0.5 border bg-gray-50 text-gray-500 border-gray-200"
+                                              role="status" aria-live="polite"
+                                              data-aria-label="Stock status for this line">
+                                            <i class="fas fa-circle-question"></i>
+                                            <span class="stock-badge-text">Select warehouse</span>
+                                        </span>
                                     @endif
                                 </td>
                                 <td class="px-4 py-3">
@@ -480,10 +496,20 @@
 
         <!-- Sticky save bar (matches template PAGE 3) -->
         <div class="flex gap-3 sticky bottom-4 bg-white/80 backdrop-blur-sm py-4 px-4 border-t rounded-t-lg shadow-lg mt-4 items-center justify-end flex-wrap">
+            {{-- Phase 7: Ctrl+S hint — desktop only (hidden md:inline).
+                 Also doubles as the JS visibility gate for the shortcut:
+                 on mobile the hint is display:none, so Ctrl+S is a no-op. --}}
+            <span id="ctrl-s-hint" class="hidden md:inline-flex items-center gap-1 text-xs text-gray-400 mr-auto">
+                <kbd class="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-[10px] font-mono shadow-sm">Ctrl</kbd>
+                <span>+</span>
+                <kbd class="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-[10px] font-mono shadow-sm">S</kbd>
+                <span>to save</span>
+            </span>
             <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="border border-gray-200 hover:bg-gray-50 rounded-lg px-4 py-2 text-sm">
                 Cancel / বাতিল
             </a>
             <button type="submit"
+                    id="btn-save-godown"
                     @if ($warehousesEmpty) disabled @endif
                     class="bg-amber-500 hover:bg-amber-600 text-white gap-2 rounded-lg px-4 py-2 font-medium inline-flex items-center text-sm shadow-md disabled:bg-gray-300 disabled:cursor-not-allowed">
                 <i class="fas fa-save"></i>
@@ -500,7 +526,67 @@
 $(function () {
     $('.warehouse-select').select2({ theme: 'bootstrap-5', width: '100%' });
 
-    // On warehouse change, show that warehouse's avg_cost next to the row.
+    // Phase 7 — Live stock badge for the SELECTED warehouse.
+    // Colors: green (avail ≥ demand), amber (0 < avail < demand),
+    // red (avail = 0), blue (reserved — godown-prepared + persisted wh).
+    // Icon + text in every state so color is never the only signal.
+    function updateStockBadge($sel) {
+        var itemId = $sel.data('item-id');
+        var $badge = $('#stock-badge-' + itemId);
+        if (!$badge.length) return;
+
+        var demand = parseFloat($sel.data('qty')) || 0;
+        var isGodownPrepared = parseInt($sel.data('is-godown-prepared'), 10) === 1;
+        var persistedWid = String($sel.data('persisted-warehouse-id') || '');
+        var opt = $sel.find('option:selected');
+        var wid = opt.val();
+        var $icon = $badge.find('i');
+        var $text = $badge.find('.stock-badge-text');
+
+        // Shared shell; state classes appended per branch.
+        var base = 'stock-badge mt-1.5 inline-flex items-center gap-1 text-xs font-semibold rounded-full px-2 py-0.5 border';
+
+        if (!wid) {
+            $badge.attr('class', base + ' bg-gray-50 text-gray-500 border-gray-200')
+                  .attr('aria-label', 'No warehouse selected');
+            $icon.attr('class', 'fas fa-circle-question');
+            $text.text('Select warehouse');
+            return;
+        }
+
+        var available = parseFloat(opt.data('available')) || 0;
+        var physical = parseFloat(opt.data('physical')) || 0;
+
+        // Reserved (blue) — edit-godown mode + this is the persisted
+        // warehouse (stock already held for this invoice).
+        if (isGodownPrepared && persistedWid === String(wid)) {
+            $badge.attr('class', base + ' bg-blue-100 text-blue-700 border-blue-300')
+                  .attr('aria-label', 'Reserved — stock already held for this invoice. Available ' + available.toFixed(2) + ', physical ' + physical.toFixed(2));
+            $icon.attr('class', 'fas fa-lock');
+            $text.text('Reserved · ' + available.toFixed(2) + ' avail');
+            return;
+        }
+
+        if (available >= demand && available > 0) {
+            $badge.attr('class', base + ' bg-green-100 text-green-700 border-green-300')
+                  .attr('aria-label', 'In stock — available ' + available.toFixed(2) + ' meets demand ' + demand.toFixed(2));
+            $icon.attr('class', 'fas fa-check');
+            $text.text('In stock · ' + available.toFixed(2));
+        } else if (available > 0) {
+            $badge.attr('class', base + ' bg-yellow-100 text-yellow-700 border-yellow-300')
+                  .attr('aria-label', 'Short — available ' + available.toFixed(2) + ' below demand ' + demand.toFixed(2));
+            $icon.attr('class', 'fas fa-triangle-exclamation');
+            $text.text('Short · ' + available.toFixed(2) + ' / ' + demand.toFixed(2));
+        } else {
+            $badge.attr('class', base + ' bg-red-100 text-red-700 border-red-300')
+                  .attr('aria-label', 'No stock available in this warehouse');
+            $icon.attr('class', 'fas fa-ban');
+            $text.text('No stock');
+        }
+    }
+
+    // On warehouse change, show that warehouse's avg_cost next to the row
+    // AND update the live stock badge (Phase 7).
     $('.warehouse-select').on('select2:select', function (e) {
         var $sel = $(this);
         var itemId = $sel.data('item-id');
@@ -512,9 +598,18 @@ $(function () {
                 .addClass('fw-semibold')
                 .text(parseFloat(avgCost).toFixed(2));
         }
+        updateStockBadge($sel);
     });
 
-    // Pre-fill displays if any option is already selected (e.g. on back-with-input).
+    // Phase 7 — also refresh badge on programmatic clear / unselect
+    // (covers bulk-unset and any non-select path).
+    $('.warehouse-select').on('select2:unselect change', function () {
+        updateStockBadge($(this));
+    });
+
+    // Pre-fill displays if any option is already selected (e.g. on
+    // back-with-input or edit-godown re-entry). Also renders the initial
+    // badge state (Phase 7), including the empty "Select warehouse" shell.
     $('.warehouse-select').each(function () {
         var $sel = $(this);
         var itemId = $sel.data('item-id');
@@ -528,6 +623,7 @@ $(function () {
                     .text(parseFloat(avgCost).toFixed(2));
             }
         }
+        updateStockBadge($sel); // Phase 7: initial badge render
     });
 
     // Phase 4 — Warehouse-assignment progress bar.
@@ -684,6 +780,21 @@ $(function () {
                 confirmButtonColor: '#d97706'
             });
             return;
+        }
+    });
+
+    // Phase 7 — Ctrl/Cmd+S → Save godown (desktop only).
+    // The #ctrl-s-hint span is `hidden md:inline-flex`, so on mobile it is
+    // display:none and jQuery :visible returns false → shortcut is a no-op.
+    // Also guards against a disabled save button (no active warehouses).
+    $(document).on('keydown', function (e) {
+        if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+            e.preventDefault();
+            if (!$('#ctrl-s-hint').is(':visible')) return; // mobile no-op
+            var $btn = $('#btn-save-godown');
+            if ($btn.length && !$btn.prop('disabled')) {
+                $btn.trigger('click');
+            }
         }
     });
 });
