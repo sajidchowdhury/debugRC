@@ -30,7 +30,7 @@ class Accents
     /**
      * @return array{
      *   border_l_500:string, border_l_400:string,
-     *   text_500:string, text_600:string, text_700:string,
+     *   text_400:string, text_500:string, text_600:string, text_700:string,
      *   bg_50:string, bg_100:string, bg_500:string, bg_600:string,
      *   hover_bg_600:string,
      *   border_300:string, border_400:string,
@@ -58,6 +58,7 @@ class Accents
             self::AMBER => [
                 'border_l_500' => 'border-l-amber-500',
                 'border_l_400' => 'border-l-amber-400',
+                'text_400' => 'text-amber-400',
                 'text_500' => 'text-amber-500',
                 'text_600' => 'text-amber-600',
                 'text_700' => 'text-amber-700',
@@ -74,6 +75,7 @@ class Accents
             self::ORANGE => [
                 'border_l_500' => 'border-l-orange-500',
                 'border_l_400' => 'border-l-orange-400',
+                'text_400' => 'text-orange-400',
                 'text_500' => 'text-orange-500',
                 'text_600' => 'text-orange-600',
                 'text_700' => 'text-orange-700',
@@ -90,6 +92,7 @@ class Accents
             self::CYAN => [
                 'border_l_500' => 'border-l-cyan-500',
                 'border_l_400' => 'border-l-cyan-400',
+                'text_400' => 'text-cyan-400',
                 'text_500' => 'text-cyan-500',
                 'text_600' => 'text-cyan-600',
                 'text_700' => 'text-cyan-700',
@@ -106,6 +109,7 @@ class Accents
             self::GREEN => [
                 'border_l_500' => 'border-l-green-500',
                 'border_l_400' => 'border-l-green-400',
+                'text_400' => 'text-green-400',
                 'text_500' => 'text-green-500',
                 'text_600' => 'text-green-600',
                 'text_700' => 'text-green-700',
@@ -122,6 +126,7 @@ class Accents
             self::RED => [
                 'border_l_500' => 'border-l-red-500',
                 'border_l_400' => 'border-l-red-400',
+                'text_400' => 'text-red-400',
                 'text_500' => 'text-red-500',
                 'text_600' => 'text-red-600',
                 'text_700' => 'text-red-700',
@@ -138,6 +143,7 @@ class Accents
             self::YELLOW => [
                 'border_l_500' => 'border-l-yellow-500',
                 'border_l_400' => 'border-l-yellow-400',
+                'text_400' => 'text-yellow-400',
                 'text_500' => 'text-yellow-500',
                 'text_600' => 'text-yellow-600',
                 'text_700' => 'text-yellow-700',
@@ -154,6 +160,7 @@ class Accents
             self::BLUE => [
                 'border_l_500' => 'border-l-blue-500',
                 'border_l_400' => 'border-l-blue-400',
+                'text_400' => 'text-blue-400',
                 'text_500' => 'text-blue-500',
                 'text_600' => 'text-blue-600',
                 'text_700' => 'text-blue-700',
@@ -170,6 +177,7 @@ class Accents
             self::GRAY => [
                 'border_l_500' => 'border-l-gray-500',
                 'border_l_400' => 'border-l-gray-400',
+                'text_400' => 'text-gray-400',
                 'text_500' => 'text-gray-500',
                 'text_600' => 'text-gray-600',
                 'text_700' => 'text-gray-700',
