@@ -75,6 +75,51 @@
                 <a href="{{ url('/') }}" class="btn btn-light btn-outline-dark btn-sm" title="Legacy App">
                     <i class="fas fa-home"></i>
                 </a>
+
+                {{-- Phase 4 F-18a: Notification bell — visible to ALL authenticated
+                     users (everyone receives notifications). The "Settings" link
+                     inside the dropdown is gated to admin/superadmin via the
+                     view-notification-rules Gate. Real-time push is via SSE
+                     (PostgreSQL LISTEN/NOTIFY → Redis → EventSource) handled by
+                     /assets/js/notification.js — NO database polling. --}}
+                <div class="dropdown">
+                    <button class="btn btn-outline-dark btn-sm dropdown-toggle position-relative"
+                            type="button" id="notifDropdownBtn" data-bs-toggle="dropdown"
+                            aria-expanded="false" title="Notifications">
+                        <i class="fas fa-bell"></i>
+                        <span id="notifBadge"
+                              class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
+                              style="display:none; font-size:0.65em; min-width:1.2em;">0</span>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow"
+                        aria-labelledby="notifDropdownBtn"
+                        style="min-width: 340px; max-height: 420px; overflow-y: auto;">
+                        <li class="dropdown-header d-flex justify-content-between align-items-center">
+                            <strong><i class="fas fa-bell me-1"></i>Notifications</strong>
+                            <button type="button" class="btn btn-sm btn-link p-0 text-decoration-none"
+                                    id="notifMarkAllRead" title="Mark all as read">
+                                <i class="fas fa-check-double me-1"></i><small>Mark all read</small>
+                            </button>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li id="notifList">
+                            <span class="dropdown-item-text text-muted small">Loading…</span>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <a class="dropdown-item" href="{{ route('admin.notifications.inbox') }}">
+                                <i class="fas fa-inbox me-2"></i>View all notifications
+                            </a>
+                        </li>
+                        @can('view-notification-rules')
+                        <li>
+                            <a class="dropdown-item" href="{{ route('admin.notifications.rules') }}">
+                                <i class="fas fa-cog me-2"></i>Notification settings
+                            </a>
+                        </li>
+                        @endcan
+                    </ul>
+                </div>
                 <div class="dropdown">
                     <a href="#" class="btn btn-outline-dark btn-sm dropdown-toggle d-flex align-items-center"
                        data-bs-toggle="dropdown">
@@ -255,6 +300,23 @@
 
     {{-- ==================== SCRIPTS ==================== --}}
     <script src="/assets/js/bootstrep/bootstrap.bundle.min.js"></script>
+
+    {{-- Toast container + (silent) notification sound element — referenced
+         by notification.js showBeautifulNotification() + playNotificationSound().
+         Placed BEFORE notification.js so the elements exist when the script's
+         top-level const notificationSound = document.getElementById(...) runs.
+         The audio element has no src so play() rejects silently via .catch(). --}}
+    <div id="notificationContainer" aria-live="polite" aria-atomic="true"
+         style="position:fixed; top:70px; right:20px; z-index:1080; max-width:360px;"></div>
+    <audio id="notificationSound" preload="none" style="display:none;"></audio>
+
+    {{-- Phase 4 F-18a: Notification engine — SSE real-time push
+         (PostgreSQL LISTEN/NOTIFY → Redis → EventSource). Loaded on every
+         authenticated page so the bell badge + toast popups work app-wide.
+         NO database polling — the only DB hits are (a) one unread-count
+         fetch on page load + dropdown open, and (b) one recent-list fetch
+         on dropdown open. All subsequent updates arrive via SSE push. --}}
+    <script src="/assets/js/notification.js?v={{ filemtime(public_path('assets/js/notification.js')) }}"></script>
     <script>
         window.CSRF_TOKEN = '{{ csrf_token() }}';
         function toggleSidebar() {
@@ -346,6 +408,90 @@
                             sidebar.classList.remove('active');
                             sidebar.classList.add('d-none'); // fully hide (matches toggleSidebar)
                         }
+                    }
+                });
+            });
+        })();
+
+        // ─── Phase 4 F-18a: Notification bell dropdown ───
+        // Populates the recent-notifications list when the dropdown opens,
+        // and wires the "Mark all read" button. The unread-count badge +
+        // real-time toast popups are handled by notification.js (SSE-driven).
+        (function() {
+            var NOTIF_RECENT_URL = '{{ route("admin.notifications.recent") }}';
+            var NOTIF_MARK_ALL_URL = '{{ route("admin.notifications.markAllRead") }}';
+            var CSRF = '{{ csrf_token() }}';
+            var listLoaded = false;
+
+            function renderRecent(data) {
+                var $list = $('#notifList');
+                if (!data || !data.notifications || data.notifications.length === 0) {
+                    $list.html('<span class="dropdown-item-text text-muted small">No notifications.</span>');
+                    return;
+                }
+                var html = '';
+                data.notifications.forEach(function(n) {
+                    var unread = !n.read_at;
+                    var bg = unread ? 'bg-amber-50' : '';
+                    var iconClass = n.icon || 'fa-bell';
+                    var colorClass = n.color === 'danger' ? 'text-danger'
+                        : n.color === 'success' ? 'text-success'
+                        : n.color === 'warning' ? 'text-warning'
+                        : n.color === 'info' ? 'text-info'
+                        : 'text-primary';
+                    var body = $('<div>').text(n.body || '').html();
+                    var title = $('<div>').text(n.title || '').html();
+                    var time = n.created_at || '';
+                    html += '<li class="dropdown-item-text py-2 border-bottom ' + bg + '">'
+                        + '<div class="d-flex align-items-start gap-2">'
+                        + '<i class="fas ' + iconClass + ' ' + colorClass + ' mt-1"></i>'
+                        + '<div class="flex-grow-1">'
+                        + '<div class="fw-semibold small">' + title + '</div>'
+                        + '<div class="text-muted" style="font-size:0.78rem;">' + body + '</div>'
+                        + '<div class="text-muted" style="font-size:0.7rem;">' + time + '</div>'
+                        + '</div>'
+                        + '</div>'
+                        + '</li>';
+                });
+                $list.html(html);
+            }
+
+            function refreshBadge() {
+                if (typeof window.lightCheckNotifications === 'function') {
+                    window.lightCheckNotifications();
+                }
+            }
+
+            // Load recent list on first dropdown open.
+            $('#notifDropdownBtn').on('shown.bs.dropdown', function() {
+                $.ajax({
+                    url: NOTIF_RECENT_URL,
+                    method: 'GET',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                }).done(function(data) {
+                    renderRecent(data);
+                    // Sync badge with the server's unread_count (source of truth).
+                    if (typeof window.updateNotificationBadge === 'function' && typeof data.unread_count !== 'undefined') {
+                        window.updateNotificationBadge(data.unread_count);
+                    }
+                }).fail(function() {
+                    $('#notifList').html('<span class="dropdown-item-text text-muted small">Failed to load.</span>');
+                });
+            });
+
+            // Mark all as read.
+            $('#notifMarkAllRead').on('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                $.ajax({
+                    url: NOTIF_MARK_ALL_URL,
+                    method: 'POST',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-TOKEN': CSRF },
+                }).done(function() {
+                    // Visually mark all items as read + clear badge.
+                    $('#notifList .bg-amber-50').removeClass('bg-amber-50');
+                    if (typeof window.updateNotificationBadge === 'function') {
+                        window.updateNotificationBadge(0);
                     }
                 });
             });

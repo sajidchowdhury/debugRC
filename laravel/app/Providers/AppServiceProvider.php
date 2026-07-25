@@ -50,5 +50,17 @@ class AppServiceProvider extends ServiceProvider
         \Illuminate\Support\Facades\Gate::define('manage-system-policy', function (\App\Models\User $user) {
             return $user->isSuperadmin();
         });
+
+        // Phase 4 F-18a: Notification bell + rule-management visibility.
+        // Admins + superadmins see the "Settings" link in the notification
+        // dropdown and can access admin/notifications/rules. Previously the
+        // Gate was CONSUMED by <components/layouts/erp.blade.php> (@can) but
+        // NEVER DEFINED — so the bell was hidden from everyone. The bell
+        // itself (unread badge + recent dropdown) is visible to ALL
+        // authenticated users since every user receives notifications; only
+        // the rule-management entry point is gated here.
+        \Illuminate\Support\Facades\Gate::define('view-notification-rules', function (\App\Models\User $user) {
+            return $user->isAdmin(); // true for admin + superadmin (User::isAdmin() L168-171)
+        });
     }
 }

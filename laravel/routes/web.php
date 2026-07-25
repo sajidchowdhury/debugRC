@@ -866,12 +866,25 @@ Route::middleware('auth')->group(function () {
 
     // ============================================================
     // Phase 10: Notifications (rules + inbox + AJAX)
+    // Phase 4 F-18a: split into admin-only rule CRUD (role:admin
+    //   middleware — previously ANY authenticated user could create /
+    //   toggle / delete notification rules, a privilege-escalation gap)
+    //   vs. all-user inbox + AJAX endpoints (each user reads/marks
+    //   their own notifications).
     // ============================================================
     Route::prefix('admin/notifications')->name('admin.notifications.')->group(function () {
-        Route::get('rules', [NotificationController::class, 'rules'])->name('rules');
-        Route::post('rules', [NotificationController::class, 'storeRule'])->name('storeRule');
-        Route::post('rules/{id}/toggle', [NotificationController::class, 'toggleRule'])->name('toggleRule');
-        Route::delete('rules/{id}', [NotificationController::class, 'destroyRule'])->name('destroyRule');
+        // Rule CRUD — admin / superadmin only.
+        Route::middleware('role:admin')->group(function () {
+            Route::get('rules', [NotificationController::class, 'rules'])->name('rules');
+            Route::post('rules', [NotificationController::class, 'storeRule'])->name('storeRule');
+            Route::post('rules/{id}/toggle', [NotificationController::class, 'toggleRule'])->name('toggleRule');
+            Route::delete('rules/{id}', [NotificationController::class, 'destroyRule'])->name('destroyRule');
+        });
+
+        // Inbox + AJAX — all authenticated users (operates on the
+        // authenticated user's own notifications only; see
+        // NotificationController::markRead / inbox which scope by
+        // auth()->user()->notifications()).
         Route::get('inbox', [NotificationController::class, 'inbox'])->name('inbox');
         Route::post('inbox/{id}/read', [NotificationController::class, 'markRead'])->name('markRead');
         Route::post('inbox/read-all', [NotificationController::class, 'markAllRead'])->name('markAllRead');

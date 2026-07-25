@@ -1,11 +1,19 @@
   // === NOTIFICATION FUNCTIONS ===
-  // Laravel native notification system — database + broadcast channels.
+  // Laravel native notification system — database channel.
   // Phase 1E (Task 31): Upgraded from AJAX polling to SSE (Server-Sent Events)
   // with automatic fallback to polling if SSE is unavailable.
+  // Phase 4 F-18a: Fixed BASE_URL (was '/remote-center-erp/' — routes are
+  // root-relative) + fixed the unread-count endpoint (was the non-existent
+  // 'notifications/unread'; now 'admin/notifications/unread-count' which
+  // returns {count: N}) + null guards on notificationSound. This file is
+  // now loaded by layouts/admin.blade.php on every authenticated page.
   // NOTE (2026-07-22): Telegram + FCM push notifications are intentionally
   // NOT implemented — see docs/sales_entry_Lg_vs_La.md R24/R25 (removed).
+  // NOTE (Phase 4 F-18a): Real-time delivery is via SSE
+  // (PostgreSQL LISTEN/NOTIFY → Redis → EventSource), NOT Laravel
+  // broadcasting — no continuous database polling.
 
-  const BASE_URL = '/remote-center-erp/';
+  const BASE_URL = '/';
 
   let unreadCount = 0;
   let eventSource = null;
@@ -205,8 +213,11 @@
   // ============================================================
 
   function playNotificationSound() {
-      notificationSound.currentTime = 0;
-      notificationSound.play().catch(() => {});
+      if (!notificationSound) return; // Phase 4 F-18a: null guard (audio element may be absent)
+      try {
+          notificationSound.currentTime = 0;
+          notificationSound.play().catch(() => {});
+      } catch (e) { /* no audio element — silent */ }
   }
 
   function showBeautifulNotification(title, message, invoiceId = null) {
@@ -245,10 +256,13 @@
   }
 
   function lightCheckNotifications() {
-      fetch(BASE_URL + 'notifications/unread')
+      // Phase 4 F-18a: fixed URL (was 'notifications/unread' — 404) + response
+      // shape (was data.notifications.length; admin/notifications/unread-count
+      // returns {count: N}).
+      fetch(BASE_URL + 'admin/notifications/unread-count')
           .then(r => r.ok ? r.json() : {})
           .then(data => {
-              if (data.status === 'success') updateNotificationBadge(data.notifications.length);
+              if (typeof data.count !== 'undefined') updateNotificationBadge(data.count);
           })
           .catch(() => {});
   }
@@ -286,7 +300,10 @@
       startPolling();
   }
 
-  // Expose globally
+  // Expose globally (Phase 4 F-18a: the layout's inline dropdown JS calls
+  // updateNotificationBadge + lightCheckNotifications via window.*).
   window.showBeautifulNotification = showBeautifulNotification;
+  window.updateNotificationBadge = updateNotificationBadge;
+  window.lightCheckNotifications = lightCheckNotifications;
   window.initSSE = initSSE;
   window.startPolling = startPolling;

@@ -313,26 +313,61 @@ This phase adds the missing `min:5` to the invoice-cancel rule (1-word change) s
 
 ---
 
-## Phase 4 — Notifications, Rate Limits & Search Coverage (Medium)
+## Phase 4 — Notifications, Rate Limits & Search Coverage (Medium) — F-18a ✅ / F-12, F-6, F-18b/c/d pending
 
 > Closes gaps **F-18, F-12, F-6**. Improves observability and robustness.
 
 ### Goal
-Real-time Telegram alerts on today-invoice payments, rate-limited AJAX endpoints, and a smart search that covers every field Legacy covered.
+A configurable notification-rule engine (admin picks, per predefined event, who gets notified — multi-select of recipient types), real-time in-app delivery WITHOUT continuous database pressure (SSE via PostgreSQL LISTEN/NOTIFY → Redis → EventSource), rate-limited AJAX endpoints, and a smart search that covers every field Legacy covered.
 
-### Tasks
-1. **F-18 — Telegram notification on today payment.**
-   - Port `SalesTelegramNotifier::notifyTodayInvoicePayment` to a Laravel `Notification` class (`app/Notifications/TodayInvoicePaymentReceived.php`).
-   - Trigger: inside `CustomerPaymentService::confirmPayment()`, after the DB transaction commits, dispatch the notification to users where `role IN (admin, accountant)` AND `telegram_user_id IS NOT NULL` AND `invoice.invoice_date === today`.
-   - Use Laravel's `ShouldQueue` + a queue worker so notification failures don't block the payment response (mirrors Legacy's `SalesTelegramNotifier::safe()` wrapper).
-   - Gate via `config('services.telegram.enabled', true)`.
+### F-18 — REDEFINED (was "Telegram port"; now "configurable notification-rule engine")
 
-2. **F-12 — Rate-limit datatable + summary routes.**
+**Original spec (superseded):** Port `SalesTelegramNotifier::notifyTodayInvoicePayment` to a Telegram Laravel Notification. **The user redefined this** — no Telegram; instead build a configurable admin panel where the admin chooses, per predefined business event, who gets notified (multi-select of recipient types). All events are predefined (users cannot create events). Real-time delivery must NOT put continuous pressure on the database.
+
+**Predefined events** (the user's list): After Sales Confirm · After Create Challan copy · After Login · After Logout · After Create Damage invoice · After Receive money · After Sales return · After Branch demand · After increasing customer limit.
+
+**Example recipient types** (the user's list, multi-select per event): All users · Only admin · Warehouse Manager of all branches · Warehouse Manager of branch selected by sales manager · Sales manager · Accountant · etc.
+
+#### F-18 sub-phase roadmap (split because the audit found the engine is ~50% built by a prior "Phase 10" but has critical gaps)
+
+| Sub-phase | Scope | Status |
+|---|---|---|
+| **F-18a** | Security + bell + JS + Gate — make the existing engine work end-to-end | ✅ Complete |
+| **F-18b** | Schema: multi-select recipient types per event (pivot table) + context-aware recipient resolution (`warehouse_manager_of_branch`, `salesman_of_invoice`, etc.) + expand EVENTS to the user's 9 predefined events + expand RECIPIENTS + clean up vestigial `broadcast` channel | ⬜ Pending |
+| **F-18c** | Wire explicit `dispatch()` calls into all 9 event trigger points (only 3/10 are dispatched in PHP today; the rest rely on PG triggers + a worker process that may not be running) | ⬜ Pending |
+| **F-18d** | Admin UX polish: redesign `rules.blade.php` for multi-select per event, default-rules seeder, "Reset to defaults" button | ⬜ Pending |
+
+**Architecture decision (F-18a):** Real-time delivery uses the existing **SSE pipeline** (PostgreSQL `LISTEN/NOTIFY` → Redis Pub/Sub → browser `EventSource`), NOT Laravel broadcasting. The database is only hit when a notification is created (event-driven, not polled) — satisfying the "no continuous DB pressure" requirement. The vestigial `broadcast` channel in `ERPNotification` (which silently no-ops due to missing `config/broadcasting.php`) will be cleaned up in F-18b.
+
+### F-18a Verification
+
+The audit (`audit-4`) found that a prior "Phase 10 / Task 31" already built substantial infrastructure: `notifications` + `notification_rules` tables, `ERPNotification` class (`ShouldQueue`, database + broadcast channels), `NotificationService::dispatch()` + `resolveRecipients()` (7 recipient types, all global), `NotificationController` with 8 routes (rules CRUD + inbox + AJAX), `ListenNotifyWorker` + `SseController` (SSE real-time pipeline), and `public/assets/js/notification.js` (SSE client with toast popups + badge). But it was **broken in 5 ways** — F-18a fixes all 5:
+
+| Gap | Fix | Evidence |
+|---|---|---|
+| **Security: no `role:admin` on rule-CRUD routes** — any authenticated user (including a salesman) could create / toggle / delete notification rules | Split the `admin/notifications` route group: rule-CRUD (`rules`, `storeRule`, `toggleRule`, `destroyRule`) now wrapped in `Route::middleware('role:admin')`; inbox + AJAX endpoints (`inbox`, `markRead`, `markAllRead`, `unreadCount`, `recent`) remain open to all authenticated users (they operate on `auth()->user()->notifications()` only) | `routes/web.php` L867-893 |
+| **`view-notification-rules` Gate consumed but never defined** — `<components/layouts/erp.blade.php>` L150 `@can('view-notification-rules')` returned false for ALL users → the bell was hidden from everyone | Defined the Gate in `AppServiceProvider::boot()` → returns `$user->isAdmin()` (true for admin + superadmin) | `app/Providers/AppServiceProvider.php` L54-64 |
+| **No notification bell in main `layouts/admin.blade.php`** — the main layout navbar had only a home button + user dropdown; no way to see notifications | Added a Bootstrap bell button with unread-count badge (`#notifBadge`) + dropdown (recent list `#notifList` + "Mark all read" + "View all" → inbox + "Settings" → rules gated by `@can('view-notification-rules')`). Bell visible to ALL auth users (everyone receives notifications); only the Settings link is admin-gated | `resources/views/layouts/admin.blade.php` L79-122 |
+| **`notification.js` was dead code** — not loaded by any Blade view + wrong `BASE_URL = '/remote-center-erp/'` (routes are root-relative) + wrong unread endpoint (`notifications/unread` — 404; real route is `admin/notifications/unread-count`) + wrong response parsing (`data.notifications.length` vs `data.count`) | Fixed `BASE_URL = '/'`; fixed `lightCheckNotifications()` to fetch `admin/notifications/unread-count` + parse `data.count`; added null guard on `notificationSound`; exposed `updateNotificationBadge` + `lightCheckNotifications` globally (`window.*`) for the layout's dropdown JS; loaded the script via `<script src="/assets/js/notification.js?v={{ filemtime(...) }}">` on every authenticated page (after the bell DOM, before the inline dropdown JS) | `public/assets/js/notification.js` L1-16, 215-221, 258-268, 303-309; `resources/views/layouts/admin.blade.php` L313-319 |
+| **No toast container / audio element** — `showBeautifulNotification()` + `playNotificationSound()` referenced `#notificationContainer` + `#notificationSound` which didn't exist in the main layout | Added `<div id="notificationContainer">` (fixed-position toast host, `aria-live="polite"`) + `<audio id="notificationSound">` (hidden, no src — play() rejects silently) BEFORE the `notification.js` script tag so the elements exist when the script's top-level `const notificationSound = document.getElementById(...)` runs | `resources/views/layouts/admin.blade.php` L304-311 |
+
+**Real-time delivery flow (now working end-to-end after F-18a):**
+1. A business event fires → `NotificationService::dispatch('event', body, refType, refId, extra)` (existing, `app/Services/Notification/NotificationService.php` L61).
+2. Service finds active `notification_rules` for the event → resolves recipients → `$user->notify(new ERPNotification(...))` → writes ONE row per recipient to the `notifications` table (Laravel standard, `ShouldQueue` → async, doesn't block the request).
+3. Service also calls `$this->listenNotify->emitNotify('rcerp_notification_dispatched', [...])` → `pg_notify()` → `ListenNotifyWorker` (long-running artisan process) → Redis Pub/Sub → `SseController` → browser `EventSource`.
+4. `notification.js` receives the `rcerp_notification_dispatched` SSE event → shows a toast popup (`showBeautifulNotification`) + refreshes the badge (`lightCheckNotifications` → one COUNT query to `admin/notifications/unread-count`).
+5. **No polling when SSE is connected.** Fallback to 30s polling ONLY if SSE is unavailable (worker down / browser doesn't support EventSource) — the polling does a single COUNT query, not a list fetch.
+
+**Deployment note:** The `ListenNotifyWorker` must run as a separate long-lived process (`php artisan listen-notify:worker` under supervisor/systemd) for SSE-based real-time push to work. If the worker is down, the system degrades gracefully to 30s polling (a single COUNT query per poll — light load). The `/sse/status` endpoint reports worker health.
+
+### Tasks (remaining Phase 4 tasks — unchanged from original spec)
+
+2. **F-12 — Rate-limit datatable + summary routes.** ⬜ Pending
    - Add `->middleware('throttle:180,1')` to `admin.sales-invoices.datatable`.
    - Add `->middleware('throttle:120,1')` to `admin.sales-invoices.summary`.
    - These match Legacy's per-user limits. Laravel's `throttle` middleware uses the user ID (or IP for guests) as the key — appropriate for authenticated routes.
 
-3. **F-6 — Expand smart search.**
+3. **F-6 — Expand smart search.** ⬜ Pending
    - In `buildInvoiceFilterQuery()`, extend the search `orWhere` closure to also match:
      - `employees.name` (salesman) via a JOIN or `whereHas('salesman', ...)`.
      - `users.username` (creator) via `whereHas('creator', ...)`.
@@ -341,21 +376,26 @@ Real-time Telegram alerts on today-invoice payments, rate-limited AJAX endpoints
 
 ### Dependencies
 - Phase 1 task 4 (AJAX submit) for the notification trigger point (after commit).
-- A configured Telegram bot token in `config/services.php` + `users.telegram_user_id` column (migration `2025_01_24_000003` may already exist — verify).
+- The existing "Phase 10" notification infrastructure (`notifications` + `notification_rules` tables, `ERPNotification`, `NotificationService`, `NotificationController`, `ListenNotifyWorker`, `SseController`) — F-18a fixes the 5 gaps that made it non-functional; F-18b/c/d extend it.
 
 ### Expected result
-- Admin/accountant receive a Telegram message within seconds of a today-invoice payment.
+- Admins configure, per predefined event, who gets notified (multi-select of recipient types including branch-context-aware types like "Warehouse Manager of branch").
+- Every authenticated user sees a notification bell with unread badge + recent dropdown; real-time toast popups arrive via SSE without database polling.
 - AJAX endpoints reject abusive clients with HTTP 429.
 - Smart search finds invoices by salesman, creator, or product — matching Legacy.
 
 ### Completion checklist
-- [ ] `TodayInvoicePaymentReceived` notification class created; queued.
-- [ ] Notification fires only when `invoice.invoice_date === today`.
-- [ ] Notification recipients: admin + accountant with `telegram_user_id`.
-- [ ] `throttle:180,1` on datatable route; `throttle:120,1` on summary route.
-- [ ] 429 response test confirms rate limiting works.
-- [ ] Smart search returns matches for salesman name, creator username, product name/code.
-- [ ] Query performance acceptable (EXPLAIN ANALYZE; add index if needed).
+- [x] **F-18a:** `role:admin` middleware on notification rule-CRUD routes.
+- [x] **F-18a:** `view-notification-rules` Gate defined; bell visible to all auth users; Settings link admin-gated.
+- [x] **F-18a:** `notification.js` loaded on every authenticated page; BASE_URL + unread-count URL + response parsing fixed; toast container + audio element present.
+- [x] **F-18a:** Real-time delivery via SSE (PostgreSQL LISTEN/NOTIFY → Redis → EventSource) — no continuous DB polling.
+- [ ] **F-18b:** Multi-select recipient types per event (pivot table) + context-aware recipient resolution + EVENTS/RECIPIENTS expanded to the user's 9 events / extended recipient types + vestigial broadcast channel cleaned up.
+- [ ] **F-18c:** Explicit `dispatch()` calls wired into all 9 event trigger points.
+- [ ] **F-18d:** Admin UX polish (multi-select rules UI + default-rules seeder + "Reset to defaults").
+- [ ] **F-12:** `throttle:180,1` on datatable route; `throttle:120,1` on summary route.
+- [ ] **F-12:** 429 response test confirms rate limiting works.
+- [ ] **F-6:** Smart search returns matches for salesman name, creator username, product name/code.
+- [ ] **F-6:** Query performance acceptable (EXPLAIN ANALYZE; add index if needed).
 
 ---
 
@@ -466,7 +506,7 @@ Remove confusion-causing dead code and centralize authorization.
 | 1 — Call-It-A-Day Parity | F-2, F-33, F-42, F-43 | Critical | Medium (controller + view + JS) | ✅ Complete |
 | 2 — Filter UX Parity | F-31, F-32, F-41, F-40 | High | Medium (mostly JS + view) | ✅ Complete |
 | 3 — Inline Reverse & Per-Row Actions | F-39, F-42 (remaining), F-17 UX | High | Medium (view + AJAX) | ✅ Complete |
-| 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | ⬜ Pending |
+| 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | 🔄 In progress (F-18a ✅; F-12, F-6, F-18b/c/d pending) |
 | 5 — Stale-Draft Surface & Polish | F-20, F-37, F-38 | Medium | Small (view + JS) | ⬜ Pending |
 | 6 — Dead Code & Architectural Polish | housekeeping | Low | Small (cleanup + Policy classes) | ⬜ Pending |
 
