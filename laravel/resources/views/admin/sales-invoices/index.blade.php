@@ -184,10 +184,17 @@
                     $isActive = $isScope
                         ? ($scope === $key)
                         : ($scope === null && $filters['status_chip'] === $key);
+                    // Build the data-* attribute as a pre-escaped string so we
+                    // avoid an inline conditional directive inside the button
+                    // tag (Blade can mis-compile inline if/else/endif that
+                    // share a line with double-brace echoes).
+                    $chipDataAttr = $isScope
+                        ? 'data-scope="' . e($key) . '"'
+                        : 'data-status="' . e($key) . '"';
                 @endphp
                 <button type="button"
                         class="btn btn-sm status-chip {{ $isActive ? 'active' : '' }}"
-                        @if ($isScope) data-scope="{{ $key }}" @else data-status="{{ $key }}" @endif>
+                        {!! $chipDataAttr !!}>
                     <i class="fas {{ $chip['icon'] }} me-1"></i>
                     <span class="chip-label">{{ $chip['label'] }}</span>
                     <span class="chip-count badge bg-secondary ms-1">0</span>
