@@ -18,6 +18,23 @@
     };
 
     $invoiceTotal = (float) ($invoice->total_amount ?? 0);
+    $itemCount = (int) $invoice->items->count();
+    $invoiceDate = $invoice->invoice_date
+        ? \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y')
+        : '—';
+    $customerName = $invoice->customer?->customer_name ?? '—';
+    $customerMobile = $invoice->customer?->mobile ?? '';
+    $salesmanName = $invoice->sales_person ?? ($invoice->salesman?->name ?? '');
+    $branchName = $invoice->branch?->branch_name ?? 'Branch';
+
+    // Display status derived from the boolean workflow flags so the pill
+    // reflects the actual pipeline stage regardless of the literal status
+    // column (which may be 'draft' or 'confirmed' on this screen).
+    $displayStatus = $invoice->is_challan_issued
+        ? App\Support\StatusPalette::CHALLAN_ISSUED
+        : ($invoice->is_godown_prepared
+            ? App\Support\StatusPalette::GODOWN_PREPARED
+            : App\Support\StatusPalette::DRAFT);
 
     // Pre-compute disabled state for the submit button (must NOT use @if inside
     // an <x-*> component tag — raw <button> used below).
@@ -34,69 +51,78 @@
         <span class="text-amber-800 font-medium">Godown Preparation</span>
     </nav>
 
-    <!-- Hero header (amber/orange gradient — showcase PAGE 3) -->
+    {{-- Hero header (amber/orange gradient — Phase 2 parity with Project A) --}}
     <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
-        <div class="flex items-center justify-between flex-wrap gap-4">
-            <div>
-                <h1 class="text-2xl font-bold text-white">গোডাউন কপি প্রস্তুতি / Godown Preparation</h1>
-                <p class="text-amber-100 text-sm mt-1">{{ $title }}</p>
-                <p class="text-amber-200 text-xs mt-0.5">Step 2 of 4 — Assign a source warehouse to each invoice line</p>
+        <div class="flex items-start justify-between flex-wrap gap-4">
+            <div class="flex items-start gap-4">
+                <div class="bg-white/20 backdrop-blur-sm rounded-xl size-14 flex items-center justify-center text-white shrink-0">
+                    <x-erp.icon name="warehouse" class="size-7" />
+                </div>
+                <div>
+                    <p class="text-amber-100 text-xs font-medium uppercase tracking-wider">গোডাউন কপি / Godown Preparation</p>
+                    <div class="flex items-center gap-3 flex-wrap mt-1">
+                        <h1 class="text-2xl font-bold text-white">Godown &amp; Challan</h1>
+                        <span class="bg-white/20 rounded-full px-3 py-1 text-sm font-mono text-white">{{ $invoice->invoice_code }}</span>
+                    </div>
+                    <p class="text-amber-100 text-sm mt-1.5 flex items-center gap-2 flex-wrap">
+                        <span class="inline-flex items-center gap-1">
+                            <x-erp.icon name="map-pin" class="size-3.5" />
+                            {{ $branchName }}
+                        </span>
+                        <span class="text-amber-200">·</span>
+                        <span>Step 2 of 4 — Assign a source warehouse to each invoice line</span>
+                    </p>
+                </div>
             </div>
-            <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors">
-                <i class="fas fa-arrow-left"></i> Back to invoice
-            </a>
+            <div class="flex items-center gap-2 flex-wrap">
+                <a href="{{ route('admin.sales-challans.index') }}"
+                   class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors">
+                    <x-erp.icon name="arrow-left" class="size-3.5" /> Back to list
+                </a>
+                <a href="{{ route('admin.sales-invoices.show', $invoice) }}"
+                   class="inline-flex items-center gap-1.5 bg-white text-amber-700 hover:bg-amber-50 rounded-lg px-3 py-2 text-xs font-semibold transition-colors shadow-sm">
+                    <x-erp.icon name="file-text" class="size-3.5" /> View invoice
+                </a>
+            </div>
         </div>
 
-        <!-- 4-step workflow indicator (Phase 1: uses <x-erp.journey-stepper>) -->
+        {{-- 4-step workflow indicator (Phase 1: uses <x-erp.journey-stepper>) --}}
         <x-erp.journey-stepper :current="2" />
     </div>
 
-    <!-- Invoice summary card (orange left accent — matches template PAGE 3) -->
-    <div class="bg-white rounded-xl shadow-sm border-l-4 border-l-orange-500 p-4">
-        <div class="pb-2 mb-3 border-b border-gray-100">
-            <h3 class="text-lg font-medium">
-                <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="hover:text-amber-700 transition-colors">
-                    {{ $invoice->invoice_code }}
-                </a>
-            </h3>
-            <p class="text-sm text-gray-500">
-                {{ \Carbon\Carbon::parse($invoice->invoice_date)->format('d M Y') }}
-                —
-                @if ($invoice->customer){{ $invoice->customer->customer_name }}@else—@endif
-            </p>
-        </div>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div>
-                <span class="text-gray-500 block text-xs">Customer</span>
-                <span class="font-medium">
-                    @if ($invoice->customer)
-                        {{ $invoice->customer->customer_name }}
-                        <span class="text-xs text-gray-500">{{ $invoice->customer->customer_code }}</span>
-                    @else
-                        —
-                    @endif
-                </span>
-            </div>
-            <div>
-                <span class="text-gray-500 block text-xs">Branch</span>
-                <span class="font-medium">
-                    @if ($invoice->branch)
-                        {{ $invoice->branch->branch_name }}
-                        <span class="text-xs text-gray-500">({{ $invoice->branch->branch_code }})</span>
-                    @else
-                        —
-                    @endif
-                </span>
-            </div>
-            <div>
-                <span class="text-gray-500 block text-xs">Line items</span>
-                <span class="font-medium">{{ number_format($invoice->items->count()) }}</span>
-            </div>
-            <div>
-                <span class="text-gray-500 block text-xs">Total amount</span>
-                <span class="font-bold text-amber-900">Tk {{ number_format($invoiceTotal, 2) }}</span>
-            </div>
-        </div>
+    {{-- 4-card summary grid (Phase 2 — parity with Project A's summary row) --}}
+    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+        <x-erp.stat-card label="Customer" label-bn="ক্রেতা"
+                         :value="$customerName"
+                         accent="amber" icon="users">
+            @if ($customerMobile)
+                <span class="font-mono">{{ $customerMobile }}</span>
+            @else
+                <span class="text-gray-400">— no mobile —</span>
+            @endif
+        </x-erp.stat-card>
+
+        <x-erp.stat-card label="Invoice date" label-bn="চালান তারিখ"
+                         :value="$invoiceDate"
+                         accent="amber" icon="clock">
+            @if ($salesmanName)
+                <span class="text-gray-600">Salesman:</span> {{ $salesmanName }}
+            @else
+                <span class="text-gray-400">— no salesman —</span>
+            @endif
+        </x-erp.stat-card>
+
+        <x-erp.stat-card label="Items" label-bn="আইটেম"
+                         :value="(string) $itemCount"
+                         accent="amber" icon="box">
+            line{{ $itemCount === 1 ? '' : 's' }} on this invoice
+        </x-erp.stat-card>
+
+        <x-erp.stat-card label="Invoice total" label-bn="মোট"
+                         :value="'Tk ' . number_format($invoiceTotal, 2)"
+                         accent="green" icon="banknote">
+            <x-erp.status-pill :status="$displayStatus" />
+        </x-erp.stat-card>
     </div>
 
     <!-- Info / warning banner -->
