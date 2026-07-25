@@ -56,9 +56,10 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
     </div>
 
-    {{-- Summary stats --}}
+    {{-- Summary stats — Phase 6 (UI/UX): .rc-modal-stats hook lets the
+        mobile CSS stack these tiles vertically on <768px. --}}
     <div class="modal-body pt-2">
-        <div class="row g-2 mb-3">
+        <div class="row g-2 mb-3 rc-modal-stats">
             <div class="col-4">
                 <div class="border rounded p-2 text-center">
                     <div class="small text-muted">Invoice total</div>
@@ -132,10 +133,11 @@
                 <div id="srpAmountHint" class="form-text small">&nbsp;</div>
             </div>
 
-            {{-- Payment mode --}}
+            {{-- Payment mode — Phase 6 (UI/UX): .rc-modal-modes hook lets the
+                mobile CSS switch this to a 2-col grid on <768px. --}}
             <div class="mb-2">
                 <label class="form-label small mb-1">Payment mode</label>
-                <div class="d-flex gap-3 flex-wrap">
+                <div class="d-flex gap-3 flex-wrap rc-modal-modes">
                     <div class="form-check">
                         <input type="radio" name="payment_mode" id="srpModeCash" value="cash" class="form-check-input" checked>
                         <label for="srpModeCash" class="form-check-label small"><i class="fas fa-money-bill-wave me-1 text-success"></i>Cash</label>

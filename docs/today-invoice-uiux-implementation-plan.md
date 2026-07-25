@@ -17,7 +17,7 @@
 | 3 — Per-Row Actions & Inline Reverse | ✅ **DONE** | Action-group pattern (≤3 inline + overflow ⋯) on desktop + mobile, inline payment reversal in receive modal (SweetAlert2 reason prompt → AJAX POST → re-fetch), 2 new `<x-erp.*>` components + controller AJAX branch |
 | 4 — Premium Polish | ✅ **DONE** | Sticky DataTable header (amber-50/blur, max-h-28rem scroll), due-column colored pills (red due / green ✓ Paid), dual empty-state (filtered vs genuinely-empty) reusing `<x-erp.empty-state>`, branch-color pills in table cell (config-driven inline styles), live hero counter (`#heroInvoiceCount` via `recordsDisplay`); removed redundant mobile inline empty-state + skipped the unnecessary `<x-erp.live-counter>` component (inline span suffices) |
 | 5 — Accessibility & Keyboard | ✅ **DONE** | `<x-erp.sr-status>` component (replaces inline div), keyboard shortcut layer (j/k/r/c/e///Esc — desktop-only, skipped on `pointer:coarse`), modal focus management (auto-focus `#srpAmount` on open, restore to trigger button on close), global reduced-motion guard, WCAG AA contrast fix (amber `#d97706`→`#b45309`, green `#16a34a`→`#15803d`, cyan `#0891b2`→`#0e7490`), keyboard-hint badge with SweetAlert2 cheatsheet; 1 new `<x-erp.*>` component |
-| 6 — Responsive & Mobile | ⬜ Pending | |
+| 6 — Responsive & Mobile | ✅ **DONE** | Collapsible filter card (`<x-erp.collapsible-card>` with native `<details>`/`<summary>` — collapsed on mobile, always-open on desktop), mobile receive-modal layout (full-width modal, stacked stat tiles, 2-col payment-mode grid, sticky submit footer), overflow-x guard; skipped the global sidebar breakpoint change (affects all sales pages, not Today-Invoice-scoped) + skipped the mobile-action-sheet (redundant with Phase 3's working overflow dropdown); 1 new `<x-erp.*>` component |
 
 ---
 
@@ -251,9 +251,18 @@
 
 ---
 
-## Phase 6 — Responsive & Mobile Polish (Low-Medium)
+## Phase 6 — Responsive & Mobile Polish (Low-Medium) — ✅ DONE
 
 > Optimizes the mobile experience: sidebar breakpoint, single-column modal, collapsible filters, mobile action sheet.
+
+> **Implemented:**
+> - **`<x-erp.collapsible-card>` component** — a `<x-erp.left-accent-card>` variant built on native `<details>`/`<summary>` for toggle semantics + keyboard support + screen-reader "expanded/collapsed" state. The filter form on the index page now uses it. On mobile (<768px) JS sets `details.open = false` on load so it collapses by default (saves vertical space); on desktop (≥768px) CSS forces the body visible + hides the chevron toggle. The chevron rotates 180° when `[open]`. `aria-controls` on the summary points at the body id.
+> - **Mobile receive-modal layout** — added `.rc-modal-stats` and `.rc-modal-modes` hooks to `_receive_modal_body.blade.php`; CSS at `<768px` makes the modal full-width (`max-width:100%; margin:0; border-radius:0; min-height:100vh`), stacks the 3 stat tiles vertically (`width:100%`), switches the payment-mode radios to a 2-col grid, and makes the footer sticky (`position:sticky; bottom:0; border-top`) so the "Receive payment" button stays thumb-reachable. The submit + close buttons go `flex:1` (equal width).
+> - **Overflow-x guard** — added `sales-invoices-app` class to the page wrapper + `overflow-x: hidden` to prevent horizontal scroll at any breakpoint; `#invoiceTable` gets `overflow-x: auto` so the table itself scrolls internally if needed.
+>
+> **Intentionally skipped (lean — per "remove unnecessary elements"):**
+> - **Sidebar breakpoint change** (`d-lg-block` → `d-md-block` in `erp.blade.php`) — this is a global layout change that affects ALL sales pages (challans, cart, etc.), not just the Today Invoice screen. The plan's scope rule says "Only the Today Invoice screen. No other module." Changing the shared layout risks breaking other pages and violates the scope constraint. The existing off-canvas mobile sidebar (toggle button in the topbar) already handles <1024px.
+> - **`<x-erp.mobile-action-sheet>` component** — Phase 3 already delivered a working mobile action-group with an overflow `⋯` dropdown on the mobile cards. A separate bottom-sheet modal would be redundant (two ways to do the same thing) and adds complexity for no user benefit. The existing dropdown is thumb-reachable and works correctly.
 
 ### Screens to improve
 - `resources/views/components/layouts/erp.blade.php` — sidebar breakpoint.

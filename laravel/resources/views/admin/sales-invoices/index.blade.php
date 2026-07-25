@@ -61,7 +61,7 @@
     ];
 @endphp
 
-<div class="space-y-6">
+<div class="space-y-6 sales-invoices-app">
     {{-- Hero header (amber/orange gradient — showcase spec) --}}
     <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
         <div class="flex items-center justify-between flex-wrap gap-4">
@@ -91,8 +91,10 @@
         <x-erp.stat-card label="Total Value" label-bn="মোট মূল্য" :value="'৳' . number_format((float) $stats['total_value'], 0)" accent="green" icon="banknote" />
     </div>
 
-    {{-- Filter form (R21 — drives DataTables AJAX params) --}}
-    <x-erp.left-accent-card accent="amber" icon="search" title="Filters" title-bn="ফিল্টার">
+    {{-- Filter form (R21 — drives DataTables AJAX params).
+        Phase 6 (UI/UX): collapsible on mobile (saves vertical space),
+        always-expanded on desktop via CSS media query. --}}
+    <x-erp.collapsible-card id="filterCard" accent="amber" icon="search" title="Filters" title-bn="ফিল্টার">
         {{-- Phase 2 (UI/UX): one-click date presets — Today / Yesterday / Last 7 days / This month / Custom.
             The preset resolves to concrete from_date/to_date values on the client (see applyDatePreset). --}}
         <div class="mb-3 flex items-center gap-3 flex-wrap">
@@ -167,7 +169,7 @@
                 </a>
             </div>
         </form>
-    </x-erp.left-accent-card>
+    </x-erp.collapsible-card>
 
     {{-- R22 + BUG-52: Workflow chips (scope) + Status chips with live counts. --}}
     <x-erp.left-accent-card accent="orange" icon="clipboard-list" title="Filter" title-bn="ফিল্টার" body-class="!py-2">
@@ -2025,6 +2027,18 @@ $(function () {
     }
 
     // ============================================================
+    // ====== Phase 6 (UI/UX): Mobile responsive tweaks ============
+    // ============================================================
+    // Collapse the filter card by default on mobile (<768px) to save
+    // vertical space. Desktop keeps it open (the <details open> attr
+    // + CSS forces the body visible on ≥768px). User can still toggle
+    // it manually — this only sets the INITIAL state.
+    if (window.matchMedia && window.matchMedia('(max-width: 767.98px)').matches) {
+        var filterCardEl = document.getElementById('filterCard');
+        if (filterCardEl) filterCardEl.open = false;
+    }
+
+    // ============================================================
     // ====== Initial load =========================================
     // ============================================================
     refreshSummary();
@@ -2331,5 +2345,77 @@ $(function () {
         .rc-table-scroll { scroll-behavior: auto !important; }
         html { scroll-behavior: auto !important; }
     }
+
+    /* ============================================================
+       Phase 6 (UI/UX): Collapsible filter card
+       Uses native <details>/<summary> for toggle semantics. On mobile
+       (<768px) the body collapses by default (JS removes [open] on
+       load); on desktop (≥768px) the body is always visible (CSS
+       forces it). The chevron rotates 180° when [open].
+       ============================================================ */
+    .rc-collapsible-card > summary {
+        list-style: none;           /* hide default disclosure triangle */
+    }
+    .rc-collapsible-card > summary::-webkit-details-marker {
+        display: none;              /* Safari/Chrome marker */
+    }
+    .rc-collapsible-card > summary:focus-visible {
+        outline: 2px solid #f59e0b;
+        outline-offset: -2px;
+        border-radius: 0.25rem;
+    }
+    .rc-collapsible-chevron {
+        transition: transform 0.18s ease;
+        font-size: 0.8rem;
+    }
+    .rc-collapsible-card[open] > summary .rc-collapsible-chevron {
+        transform: rotate(180deg);
+    }
+    /* Desktop: always show the body (even if the user collapsed it,
+       we respect user intent — but we DO hide the chevron toggle on
+       desktop since there's nothing to toggle). */
+    @media (min-width: 768px) {
+        .rc-collapsible-card .rc-collapsible-body { display: block !important; }
+        .rc-collapsible-card > summary .rc-collapsible-chevron { display: none; }
+        .rc-collapsible-card > summary { cursor: default; }
+    }
+    @media (max-width: 767.98px) {
+        .rc-collapsible-card .rc-collapsible-body { padding: 0.75rem; }
+    }
+
+    /* ============================================================
+       Phase 6 (UI/UX): Mobile receive-modal layout
+       On <768px the stat tiles stack vertically, the payment-mode
+       radios become a 2-col grid, and the submit button sticks to
+       the bottom of the modal viewport.
+       ============================================================ */
+    @media (max-width: 767.98px) {
+        #receivePaymentModal .modal-dialog { max-width: 100%; margin: 0; }
+        #receivePaymentModal .modal-content { border-radius: 0; min-height: 100vh; }
+        #receivePaymentModal .modal-body { max-height: calc(100vh - 8rem); }
+        /* Stat tiles: stack vertically on mobile. */
+        #receivePaymentModal .rc-modal-stats { row-gap: 0.4rem; }
+        #receivePaymentModal .rc-modal-stats > div { width: 100%; }
+        /* Payment-mode radios: 2-col grid on mobile. */
+        #receivePaymentModal .rc-modal-modes {
+            display: grid !important;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.4rem;
+        }
+        /* Sticky submit footer on mobile. */
+        #receivePaymentModal .modal-footer {
+            position: sticky;
+            bottom: 0;
+            background: #fff;
+            border-top: 1px solid #e5e7eb;
+            padding: 0.6rem 1rem;
+            z-index: 5;
+        }
+        #receivePaymentModal .modal-footer .btn { flex: 1; }
+    }
+
+    /* Phase 6: prevent horizontal scroll on the page at any breakpoint. */
+    .sales-invoices-app { overflow-x: hidden; }
+    #invoiceTable { overflow-x: auto; }
 </style>
 @endpush
