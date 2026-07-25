@@ -1,5 +1,18 @@
 @extends('layouts.admin')
 
+@push('head_meta')
+<style>
+    /* F-18d fix: self-contained show/hide for the Create-Rule card.
+       Bootstrap's native .collapse/.show is unreliable in this
+       Bootstrap 5 + Tailwind v4 environment (the card flashed open
+       then vanished on click). Scoped rules guarantee nothing in
+       Bootstrap or Tailwind can override the visibility. Mirrors the
+       .is-open pattern already used for the sidebar submenu. */
+    #createRuleCard { display: none; }
+    #createRuleCard.is-open { display: block; }
+</style>
+@endpush
+
 @section('content')
 @php
     // Event → Bootstrap color mapping (per task spec)
@@ -55,7 +68,7 @@
             <a href="{{ route('admin.notifications.inbox') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-inbox me-1"></i> Inbox
             </a>
-            <button type="button" class="btn btn-light btn-sm" data-bs-toggle="collapse" data-bs-target="#createRuleCard" aria-expanded="true">
+            <button type="button" class="btn btn-light btn-sm" id="btnToggleCreateRule" aria-expanded="false" aria-controls="createRuleCard">
                 <i class="fas fa-plus me-1"></i> Create Rule
             </button>
             {{-- F-18d: Reset to defaults — destructive; SweetAlert2 confirms --}}
@@ -144,12 +157,12 @@
     </div>
 
     {{-- =================== CREATE RULE FORM =================== --}}
-    <div class="collapse show mb-3" id="createRuleCard">
+    <div class="mb-3" id="createRuleCard">
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-white d-flex align-items-center py-3">
                 <i class="fas fa-circle-plus me-2 text-indigo"></i>
                 <strong>Create Notification Rule</strong>
-                <button type="button" class="btn btn-sm btn-link ms-auto" data-bs-toggle="collapse" data-bs-target="#createRuleCard">
+                <button type="button" class="btn btn-sm btn-link ms-auto" id="btnCloseCreateRule" aria-label="Close create-rule form">
                     <i class="fas fa-times"></i>
                 </button>
             </div>
@@ -419,6 +432,23 @@
         }
         $types.on('change', syncSpecificUser);
         syncSpecificUser();
+    });
+
+    // F-18d fix: self-contained toggle for the Create-Rule card.
+    // Replaces Bootstrap .collapse (which flashed open-then-vanished
+    // under Tailwind v4). The card starts hidden (#createRuleCard has
+    // no .is-open by default); clicking "Create Rule" reveals it and
+    // the x button hides it. Scoped CSS in @push('head_meta') controls
+    // visibility so nothing in Bootstrap/Tailwind can interfere.
+    $(function () {
+        var $card = $('#createRuleCard');
+        var $btn  = $('#btnToggleCreateRule');
+        function openCard()  { $card.addClass('is-open'); $btn.attr('aria-expanded', 'true'); }
+        function closeCard() { $card.removeClass('is-open'); $btn.attr('aria-expanded', 'false'); }
+        $btn.on('click', function () {
+            if ($card.hasClass('is-open')) { closeCard(); } else { openCard(); }
+        });
+        $('#btnCloseCreateRule').on('click', closeCard);
     });
 
     // Select2 for the specific-user dropdown (nicer search)
