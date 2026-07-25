@@ -65,6 +65,11 @@
             ? App\Support\StatusPalette::GODOWN_PREPARED
             : App\Support\StatusPalette::DRAFT);
 
+    // Phase 5: edit-godown mode — invoice is godown-prepared but not yet
+    // challan-issued, so the user may re-enter this screen and change
+    // warehouse assignments / dispatchers / CTN before issuing.
+    $isEditGodown = (bool) $invoice->is_godown_prepared && !(bool) $invoice->is_challan_issued;
+
     // Pre-compute disabled state for the submit button (must NOT use @if inside
     // an <x-*> component tag — raw <button> used below).
     $warehousesEmpty = $warehouses->isEmpty();
@@ -173,6 +178,19 @@
         </div>
     @endif
 
+    {{-- Phase 5: edit-godown policy callout (cyan ties to the godown_prepared stage) --}}
+    @if ($isEditGodown)
+        <div class="bg-cyan-50 border border-cyan-200 rounded-lg p-4 flex items-start gap-3">
+            <i class="fas fa-pen-to-square text-cyan-600 mt-0.5"></i>
+            <div>
+                <p class="font-medium text-cyan-800">Edit-godown mode / গোডাউন সম্পাদনা</p>
+                <p class="text-sm text-cyan-700 mt-1">
+                    This godown was already prepared. You may change warehouse assignments, dispatchers, or carton counts — changes re-assign the dispatch rows in place (no duplicates). Stock does <strong>not</strong> move until the challan is issued. Availability shown is pipeline-aware (physical &minus; other open invoices), excluding this invoice's own reservation.
+                </p>
+            </div>
+        </div>
+    @endif
+
     <!-- Godown assignment form -->
     <form method="POST" action="{{ route('admin.sales-challans.storeGodown', $invoice) }}">
         @csrf
@@ -245,6 +263,9 @@
                                 $rows = $availForProduct($item->product_id);
                                 $totalAvail = $totalAvailForProduct($item->product_id);
                                 $short = $totalAvail < (float) $item->qty;
+                                // Phase 5: persisted warehouse (edit-godown re-entry)
+                                // or old() on back-with-input.
+                                $selectedWid = old('warehouse_assignments.' . $item->id, (string) ($item->warehouse_id ?? ''));
                             @endphp
                             <tr class="hover:bg-amber-50/30 border-b border-gray-100">
                                 <td class="px-4 py-3">
@@ -274,16 +295,24 @@
                                             @foreach ($warehouses as $w)
                                                 @php
                                                     $row = $rows->firstWhere('warehouse_id', $w->id);
-                                                    $wQty = $row ? (float) $row->qty : 0.0;
-                                                    $wCost = $row ? (float) $row->avg_cost : 0.0;
+                                                    $wAvail = $row ? (float) $row->qty : 0.0;          // pipeline-aware available
+                                                    $wPhys  = $row ? (float) $row->physical_qty : 0.0;
+                                                    $wPipe  = $row ? (float) $row->pipeline_qty : 0.0;
+                                                    $wCost  = $row ? (float) $row->avg_cost : 0.0;
+                                                    $isSelected = (string) $w->id === (string) $selectedWid;
+                                                    // Phase 5: never disable the currently-persisted warehouse
+                                                    // (so re-save keeps it selectable even if pipeline-tight).
+                                                    $insufficient = !$isSelected && ($wAvail < (float) $item->qty);
                                                 @endphp
                                                 <option value="{{ $w->id }}"
-                                                        data-qty="{{ $wQty }}"
+                                                        data-qty="{{ $wAvail }}"
                                                         data-avg-cost="{{ $wCost }}"
-                                                        @if ($wQty < (float) $item->qty) disabled @endif>
+                                                        @if ($isSelected) selected @endif
+                                                        @if ($insufficient) disabled @endif
+                                                        title="available {{ number_format($wAvail, 2) }} · physical {{ number_format($wPhys, 2) }} · pipeline {{ number_format($wPipe, 2) }}">
                                                     {{ $w->warehouse_name }}
-                                                    · {{ number_format($wQty, 2) }} on hand
-                                                    @if ($wQty < (float) $item->qty) · insufficient @endif
+                                                    · {{ number_format($wAvail, 2) }} avail
+                                                    @if ($insufficient) · insufficient @endif
                                                 </option>
                                             @endforeach
                                         </select>
@@ -320,6 +349,7 @@
                                                 @endif
                                                 <span class="text-xs text-gray-500 self-center">
                                                     @ {{ number_format((float) $row->avg_cost, 2) }}
+                                                    · phys {{ number_format((float) $row->physical_qty, 2) }}
                                                 </span>
                                             @endforeach
                                         </div>

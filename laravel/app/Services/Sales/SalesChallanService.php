@@ -71,6 +71,19 @@ class SalesChallanService
      * and was already broken independently — NOT fixed here (out of
      * scope for Phase 4; carry-forward to a separate API remediation).
      *
+     * Phase 5: edit-godown mode. The draft-only guard is relaxed to also
+     * allow re-save when is_godown_prepared=true && !is_challan_issued
+     * (so a warehouse manager can change warehouse assignments / CTN /
+     * dispatchers before the challan is issued). The availability check
+     * now uses the pipeline-aware StockAvailabilityService::getWarehouseAvailableQty
+     * (physical − open dispatch pipeline from OTHER invoices) instead of
+     * the physical-only StockService::getWarehouseQty, passing $invoiceId
+     * as excludeInvoiceId so this invoice's own open dispatch rows do
+     * not reserve against themselves. The dispatch UPDATE is inherently
+     * idempotent (keyed by sales_invoice_id + product_id; never INSERTs),
+     * so a re-save produces no duplicate sales_invoice_dispatches rows.
+     * The original godown_prepared_at timestamp is preserved on re-save.
+     *
      * @param int $invoiceId
      * @param array $warehouseAssignments [item_id => warehouse_id] (web)
      *                                      or [product_id => warehouse_id] (API — broken, see above)
@@ -79,7 +92,8 @@ class SalesChallanService
      *                              (role=dispatcher, branch-scoped).
      * @param array $dispatchedCtn [item_id => ctn_count] carton packing
      * @return SalesInvoice
-     * @throws \RuntimeException If invoice not draft or already godown-prepared.
+     * @throws \RuntimeException If invoice not draft (and not godown-prepared
+     *         re-edit), already challan-issued, reversed, or cancelled.
      */
     public function prepareGodown(
         int $invoiceId,
@@ -94,8 +108,17 @@ class SalesChallanService
             if (!$invoice) {
                 throw new \RuntimeException("Invoice {$invoiceId} not found.");
             }
-            if (!$invoice->isDraft()) {
-                throw new \RuntimeException("Only draft invoices can be godown-prepared (current: {$invoice->status}).");
+
+            // Phase 5: edit-godown guard. Allow first-time prep (draft) AND
+            // re-save (godown-prepared but not yet issued). Reject issued /
+            // reversed / cancelled. loadForUpdate already holds the row lock.
+            $canPrepare = $invoice->isDraft()
+                || ($invoice->is_godown_prepared && !$invoice->is_challan_issued);
+            if (!$canPrepare) {
+                throw new \RuntimeException(
+                    "Invoice cannot be godown-prepared at this stage (status: {$invoice->status}, "
+                    . 'issued: ' . ($invoice->is_challan_issued ? 'yes' : 'no') . ').'
+                );
             }
 
             // Assign warehouse_id to each invoice item.
@@ -110,11 +133,19 @@ class SalesChallanService
                     throw new \RuntimeException("Warehouse not assigned for product {$item->product_id}.");
                 }
 
-                // Check availability in the assigned warehouse.
-                $available = $this->stockService->getWarehouseQty((int) $wid, $item->product_id);
+                // Phase 5: pipeline-aware availability check. Use the
+                // availability service (physical − open dispatch pipeline
+                // from OTHER invoices) instead of physical-only getWarehouseQty.
+                // excludeInvoiceId = current invoice so this invoice's own
+                // open dispatch row does not reserve against itself.
+                $available = $this->availabilityService->getWarehouseAvailableQty(
+                    (int) $item->product_id,
+                    (int) $wid,
+                    (int) $invoiceId
+                );
                 if ((float) $item->qty > $available + 0.0001) {
                     throw new \RuntimeException(
-                        "Insufficient stock in warehouse {$wid} for product {$item->product_id}: "
+                        "Insufficient available stock in warehouse {$wid} for product {$item->product_id}: "
                         . "available {$available}, required {$item->qty}"
                     );
                 }
@@ -143,6 +174,8 @@ class SalesChallanService
             // Validation already guaranteed each id is an active
             // dispatcher in the invoice's branch (PrepareGodownWebRequest
             // for web; API path doesn't send dispatchers yet).
+            // Phase 5: sync() is idempotent — a re-save DELETEs+INSERTs the
+            // pivot rows in place, producing no duplicate sales_invoice_dispatchers.
             $dispatcherIds = array_values(array_unique(array_filter(
                 array_map('intval', $dispatcherIds),
                 static fn($v) => $v > 0
@@ -154,14 +187,22 @@ class SalesChallanService
             $invoice->dispatchers()->sync($syncPayload);
 
             // Update invoice status.
+            // Phase 5: on re-save (already godown-prepared) preserve the
+            // original godown_prepared_at timestamp; only stamp it on the
+            // first preparation. status is set to 'confirmed' in both
+            // paths (draft→confirmed on first prep; stays confirmed on
+            // re-save — a no-op but harmless and keeps the row dirty flag).
+            $statusUpdate = [
+                'status' => 'confirmed',
+                'is_godown_prepared' => true,
+                'updated_at' => now(),
+            ];
+            if (!$invoice->godown_prepared_at) {
+                $statusUpdate['godown_prepared_at'] = now();
+            }
             DB::table('sales_invoices')
                 ->where('id', $invoiceId)
-                ->update([
-                    'status' => 'confirmed',
-                    'is_godown_prepared' => true,
-                    'godown_prepared_at' => now(),
-                    'updated_at' => now(),
-                ]);
+                ->update($statusUpdate);
 
             // P1-3: Audit log — godown_prepared.
             $this->auditLogger->godownPrepared(

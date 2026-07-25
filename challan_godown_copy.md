@@ -757,7 +757,7 @@ Per-user visibility via `user_menu_permissions.can_view`; admin/superadmin bypas
 
 ---
 
-### Phase 5 — Edit-Godown Mode & Pipeline-Aware Availability
+### Phase 5 — Edit-Godown Mode & Pipeline-Aware Availability  ✅ DONE
 **Goal:** Allow re-saving godown when `status=confirmed` (godown-prepared but not issued), and make the availability check pipeline-aware (closes A2, A3, A28, U6).
 
 **Files to touch**
@@ -768,19 +768,46 @@ Per-user visibility via `user_menu_permissions.can_view`; admin/superadmin bypas
 - `laravel/resources/views/admin/sales-challans/issue.blade.php` (read-only warehouse display)
 
 **Tasks**
-- [ ] Relax the `godown()` guard: allow GET when `status` is `draft` OR `confirmed` (godown-prepared, not issued). Reject only when `is_challan_issued` or `is_reversed`.
-- [ ] In `storeGodown`/`prepareGodown`: allow re-save when `is_godown_prepared=true && !is_challan_issued`. Make the dispatch sync idempotent (`$invoice->dispatches()->where('product_id',$pid)->update(...)` or `updateOrCreate`).
-- [ ] On the godown screen, when `is_godown_prepared && !is_challan_issued`, render warehouse dropdowns as editable (so the user can change them) — this matches A's "godown_issued allows re-save" behavior. Add a policy note callout.
-- [ ] On the issue screen, render warehouse as a read-only span + hidden input (locked) — matches A's finalize-lock behavior.
-- [ ] Replace the raw `warehouse_stock.qty` join in `godown()` with `StockAvailabilityService::getWarehouseAvailableQty` (physical − open pipeline) so the dropdown shows real availability.
+- [x] Relax the `godown()` guard: allow GET when `status` is `draft` OR `confirmed` (godown-prepared, not issued). Reject only when `is_challan_issued` or `is_reversed`.
+- [x] In `storeGodown`/`prepareGodown`: allow re-save when `is_godown_prepared=true && !is_challan_issued`. Make the dispatch sync idempotent (`$invoice->dispatches()->where('product_id',$pid)->update(...)` or `updateOrCreate`).
+- [x] On the godown screen, when `is_godown_prepared && !is_challan_issued`, render warehouse dropdowns as editable (so the user can change them) — this matches A's "godown_issued allows re-save" behavior. Add a policy note callout.
+- [x] On the issue screen, render warehouse as a read-only span + hidden input (locked) — matches A's finalize-lock behavior.
+- [x] Replace the raw `warehouse_stock.qty` join in `godown()` with `StockAvailabilityService::getWarehouseAvailableQty` (physical − open pipeline) so the dropdown shows real availability.
 
 **Acceptance criteria**
-- A godown-prepared (not issued) invoice can re-open the godown screen and change warehouse assignments.
-- Re-save is idempotent (no duplicate `sales_invoice_dispatches` rows).
-- Warehouse dropdown availability reflects pipeline reservations, not just physical stock.
-- Issue screen shows warehouse locked.
+- A godown-prepared (not issued) invoice can re-open the godown screen and change warehouse assignments. ✅
+- Re-save is idempotent (no duplicate `sales_invoice_dispatches` rows). ✅
+- Warehouse dropdown availability reflects pipeline reservations, not just physical stock. ✅
+- Issue screen shows warehouse locked. ✅
 
 **Dependencies:** Phase 3, Phase 4.
+
+**Phase 5 Execution Report:**
+
+| Item | Detail |
+|---|---|
+| Controller guard (task 1) | `SalesChallanController::godown()`: replaced the `if (!$invoice->isDraft())` redirect with an edit-mode-aware guard. Now allows GET when `isDraft()` OR (`is_godown_prepared` && `!is_challan_issued` && `!isReversed()` && `!isCancelled()`). Rejects issued / reversed / cancelled with a staged error message showing status + issued flag. |
+| Service guard (task 2) | `SalesChallanService::prepareGodown()`: replaced `if (!$invoice->isDraft())` throw with `$canPrepare = $invoice->isDraft() \|\| ($invoice->is_godown_prepared && !$invoice->is_challan_issued)`. Throws a staged RuntimeException otherwise. The 3-arg Mobile API caller is unaffected (param defaults unchanged). |
+| Dispatch idempotency (task 2) | The existing `DB::table('sales_invoice_dispatches')->where('sales_invoice_id',$invoiceId)->where('product_id',$item->product_id)->update(...)` is inherently idempotent — it UPDATEs by composite key and never INSERTs, so a re-save produces no duplicate rows. Dispatcher sync uses `BelongsToMany::sync()` (DELETE+INSERT in place) which is also idempotent. No `updateOrCreate` needed. |
+| Pipeline-aware availability — controller (task 5) | `godown()`: replaced the raw `warehouse_stock` JOIN loop with `StockAvailabilityService::getBranchWarehouseBreakdown($productId, $branchId, $invoiceId)`. Returns per-warehouse `{id, warehouse_name, physical_qty, pipeline_qty, available_qty, avg_cost}`. Mapped into the view's expected shape (`warehouse_id`, `qty=available_qty`, `avg_cost`, plus `physical_qty`/`pipeline_qty` for tooltips). `excludeInvoiceId = $invoice->id` so the edited invoice's own open dispatch rows don't reserve against itself. |
+| Pipeline-aware availability — service (task 5) | `prepareGodown()`: replaced physical-only `StockService::getWarehouseQty` with `StockAvailabilityService::getWarehouseAvailableQty($item->product_id, $wid, $invoiceId)` (physical − open pipeline from OTHER invoices). Same `excludeInvoiceId` semantics. Error message changed from "Insufficient stock" to "Insufficient available stock". |
+| Deviation from spec wording (task 5) | The spec text names `getWarehouseAvailableQty` (single-warehouse). For the GET screen we used `getBranchWarehouseBreakdown` instead — the established batch method that returns ALL branch warehouses per product in one structured call (internally calls `getWarehousePipelineQty` per warehouse). This avoids N×M single-call lookups and is the same method already used by the cart/stock-transaction flows. The single-warehouse `getWarehouseAvailableQty` IS used in the service-layer `prepareGodown` check (exactly as the spec describes). Both are pipeline-aware. |
+| `getBranchWarehouseBreakdown` extended | Added `avg_cost` to the SELECT (`COALESCE(ws.avg_cost, 0)`) and to the returned array. Backward-compatible (extra array key — existing callers `SalesCartController` / `SalesCartApiController` / `StockTransactionController` / `PurchaseReturnController` are unaffected). Updated `@return` docblock + added `excludeInvoiceId` explanation. |
+| View: edit-godown callout (task 3) | `godown.blade.php`: added `$isEditGodown = is_godown_prepared && !is_challan_issued` flag. When true, renders a cyan policy callout ("Edit-godown mode / গোডাউন সম্পাদনা") explaining that changes re-assign dispatch rows in place, stock doesn't move until issue, and availability is pipeline-aware. Cyan ties to the godown_prepared StatusPalette stage (allowed under the no-indigo/blue-as-primary rule). |
+| View: pre-select warehouse (task 3) | The warehouse `<option>` loop now computes `$selectedWid = old('warehouse_assignments.{item_id}', $item->warehouse_id)` and adds `@if ($isSelected) selected @endif`. Previously NO option was pre-selected, so re-opening a godown-prepared invoice showed a blank dropdown. Now the persisted warehouse is pre-selected (and the avg-cost display pre-fills on load via the existing init loop). |
+| View: never disable persisted warehouse (task 3) | The `disabled` logic changed from `($wQty < $item->qty)` to `(!$isSelected && ($wAvail < $item->qty))`. The currently-persisted warehouse stays selectable even if pipeline-tight (the invoice already holds that reservation), while other insufficient warehouses remain disabled. |
+| View: pipeline-aware labels (task 5) | Relabeled option text from "X on hand" → "X avail". Added a `title` tooltip showing `available X · physical Y · pipeline Z`. The "Available Stock" badges column shows `available_qty` (was physical `qty`) with a `· phys Y` hint next to avg-cost. The column header "Available Stock" now matches the pipeline-aware number. |
+| View: issue screen locked warehouse (task 4 / U6) | `issue.blade.php`: replaced the gray warehouse pill with the U6-spec amber locked span (`bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-sm font-medium`) + lock icon + warehouse icon, plus a hidden `<input type="hidden" name="warehouse_id[{item->id}]" value="{warehouse_id}">` for markup parity with Project A's finalize-lock pattern. The issue endpoint ignores this field (warehouse is already persisted at godown prep). |
+| Service: preserve timestamp | On re-save (already godown-prepared), `godown_prepared_at` is NO longer overwritten — only stamped on first preparation (`if (!$invoice->godown_prepared_at)`). The original prep timestamp survives edit-godown re-saves. |
+| Color audit | `grep (blue\|indigo)-\d` across both changed views → 0 matches. Amber forward (bg-amber-50/100/500, border-amber-100/200/300, text-amber-600/700/800) + green (COGS accent) + gray + red (existing insufficient badges). Cyan used ONLY for the edit-godown callout (bg-cyan-50, border-cyan-200, text-cyan-600/700/800) — allowed, ties to godown_prepared stage. |
+| Blade syntax | `godown.blade.php`: @php/@endphp 4/4, @foreach/@endforeach 5/5, @push/@endpush 1/1. @if/@endif 16/15 — the same constant 1-off false positive as Phase 2/3/4 (the `// comment` line containing the literal text `@if`); this phase's edits added a balanced +2 @if / +2 @endif (the callout + 1 net inline pair in the option loop). `issue.blade.php`: @php/@endphp 1/1, @if/@endif 4/4, @foreach/@endforeach 1/1, @push/@endpush 1/1 — fully balanced. |
+| Brace balance | All 3 changed PHP files: `{` == `}` (StockAvailabilityService 54/54, SalesChallanController 46/46, SalesChallanService 58/58). Paren-count differences are from docblock comments/strings, not real syntax. |
+| Import usage | `SalesChallanController`: added `StockAvailabilityService` to constructor (3rd param). `DB` facade import retained (still used by `show()`/print at line ~422). `StockService` retained (challanForm avg_cost). No unused imports. |
+| Backward compatibility | `prepareGodown()` signature unchanged (still 5 params, all optional after the 3rd). Mobile API 3-arg caller unaffected — and now benefits from the pipeline-aware check (was physical-only). `getBranchWarehouseBreakdown()` return gained an `avg_cost` key (additive, non-breaking). |
+| Diff stat | `StockAvailabilityService.php` +9/-2 (avg_cost in breakdown). `SalesChallanController.php` +44/-13 (guard + breakdown loop + import + constructor). `SalesChallanService.php` +44/-9 (guard + pipeline check + timestamp preserve + docblock). `godown.blade.php` +28/-6 (flag + callout + selected + labels). `issue.blade.php` +10/-3 (locked span + hidden input). Total: 5 files, +135/-33. |
+| Runtime verification | ⚠️ DEFERRED — PHP/Composer not available in sandbox. User must verify in dev env: (1) a godown-prepared (not issued) invoice re-opens the godown screen with warehouses pre-selected; (2) changing a warehouse + saving re-assigns the dispatch row (no duplicate); (3) availability numbers reflect pipeline (physical − other invoices), not raw physical; (4) re-saving preserves the original `godown_prepared_at`; (5) the issue screen shows the amber locked warehouse span; (6) the cyan edit-godown callout appears only in edit mode. |
+| Carry-forward to Phase 6 | Transport-cost edit at godown save (A7, U12) — `prepareGodown` does not yet accept transport fields; the issue screen owns transport. Phase 6 will add transport editing at godown with a `customer_ledger` delta. |
+| Carry-forward to Phase 11 | (1) The edit-godown callout could be extracted into `<x-erp.policy-callout variant="cyan">` if reused. (2) The hidden `warehouse_id[{item->id}]` input on the issue screen is currently informational only — if a future flow allows warehouse re-assignment at issue time, the issue endpoint would need to accept + validate it. |
 
 ---
 

@@ -7,6 +7,7 @@ use App\Http\Requests\Sales\PrepareGodownWebRequest;
 use App\Models\SalesChallan;
 use App\Models\SalesInvoice;
 use App\Services\Sales\SalesChallanService;
+use App\Services\Stock\StockAvailabilityService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -30,7 +31,8 @@ class SalesChallanController extends Controller
 {
     public function __construct(
         private SalesChallanService $challanService,
-        private StockService $stockService
+        private StockService $stockService,
+        private StockAvailabilityService $availabilityService
     ) {}
 
     public function index(Request $request)
@@ -150,16 +152,36 @@ class SalesChallanController extends Controller
     }
 
     /**
-     * Show the godown prep form for a draft invoice.
+     * Show the godown prep form.
+     *
+     * Phase 5: edit-godown mode. Previously this rejected any non-draft
+     * invoice. Now it allows GET when the invoice is:
+     *   - draft (first-time godown prep), OR
+     *   - confirmed AND godown-prepared AND NOT challan-issued (re-edit of
+     *     an already-prepared godown — the user may change warehouse
+     *     assignments / dispatchers / CTN before the challan is issued).
+     * It still rejects issued, reversed, or cancelled invoices.
+     *
+     * Phase 5: the per-warehouse availability shown in the dropdown is now
+     * pipeline-aware (physical − open dispatch pipeline from OTHER
+     * invoices) via StockAvailabilityService::getBranchWarehouseBreakdown,
+     * passing the current invoice id as excludeInvoiceId so the invoice
+     * being edited does not reserve against itself.
      */
     public function godown(Request $request, int $invoiceId)
     {
         $invoice = SalesInvoice::with(['items.product', 'dispatches', 'dispatchers', 'customer', 'branch'])
             ->findOrFail($invoiceId);
 
-        if (!$invoice->isDraft()) {
+        $canEditGodown = $invoice->isDraft()
+            || ($invoice->is_godown_prepared
+                && !$invoice->is_challan_issued
+                && !$invoice->isReversed()
+                && !$invoice->isCancelled());
+
+        if (!$canEditGodown) {
             return redirect()->route('admin.sales-invoices.show', $invoice)
-                ->with('error', "Invoice is not draft (status: {$invoice->status}).");
+                ->with('error', "Godown cannot be edited at this stage (status: {$invoice->status}, issued: " . ($invoice->is_challan_issued ? 'yes' : 'no') . ").");
         }
 
         // Get warehouses for the branch.
@@ -168,17 +190,29 @@ class SalesChallanController extends Controller
             ->orderBy('warehouse_name')
             ->get();
 
-        // Get stock availability per product per warehouse.
+        // Phase 5: pipeline-aware availability per product per warehouse.
+        // The breakdown is mapped into the shape the view expects
+        // (warehouse_id / warehouse_name / qty=available / avg_cost) plus
+        // the extra physical_qty + pipeline_qty keys for an informative
+        // tooltip. excludeInvoiceId = current invoice so its own open
+        // dispatch rows do not count against the shown availability.
         $availability = [];
         foreach ($invoice->items as $item) {
-            $rows = DB::table('warehouse_stock as ws')
-                ->join('warehouses as w', 'w.id', '=', 'ws.warehouse_id')
-                ->where('ws.product_id', $item->product_id)
-                ->where('w.branch_id', $invoice->branch_id)
-                ->where('w.is_active', true)
-                ->select('ws.warehouse_id', 'w.warehouse_name', 'ws.qty', 'ws.avg_cost')
-                ->get();
-            $availability[$item->product_id] = $rows;
+            $breakdown = $this->availabilityService->getBranchWarehouseBreakdown(
+                (int) $item->product_id,
+                (int) $invoice->branch_id,
+                (int) $invoice->id
+            );
+            $availability[$item->product_id] = collect($breakdown)->map(
+                static fn ($r) => (object) [
+                    'warehouse_id'  => $r['id'],
+                    'warehouse_name'=> $r['warehouse_name'],
+                    'qty'           => $r['available_qty'],
+                    'physical_qty'  => $r['physical_qty'],
+                    'pipeline_qty'  => $r['pipeline_qty'],
+                    'avg_cost'      => $r['avg_cost'],
+                ]
+            );
         }
 
         return view('admin.sales-challans.godown', [

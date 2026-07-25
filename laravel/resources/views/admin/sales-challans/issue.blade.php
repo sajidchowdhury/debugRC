@@ -151,10 +151,18 @@
                             </td>
                             <td class="px-4 py-3">
                                 @if ($item->warehouse)
-                                    <span class="border rounded-full px-2 py-0.5 text-xs inline-flex items-center gap-1">
-                                        <i class="fas fa-warehouse text-gray-500"></i>
+                                    {{-- Phase 5 / U6: warehouse locked as a read-only span + hidden input.
+                                         Matches Project A's finalize-lock behaviour: the warehouse was
+                                         chosen at godown prep and cannot be changed at issue time. --}}
+                                    <span class="inline-flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-sm font-medium">
+                                        <i class="fas fa-lock text-amber-600 text-xs"></i>
+                                        <i class="fas fa-warehouse text-amber-600"></i>
                                         {{ $item->warehouse->warehouse_name }}
                                     </span>
+                                    {{-- Hidden input preserves the assigned warehouse_id in the form
+                                         payload for markup parity. The issue endpoint ignores this
+                                         field (warehouse is already persisted at godown prep). --}}
+                                    <input type="hidden" name="warehouse_id[{{ $item->id }}]" value="{{ $item->warehouse_id }}">
                                 @else
                                     <span class="bg-red-100 text-red-700 border border-red-300 font-semibold text-xs rounded-full px-2 py-0.5 inline-flex items-center gap-1">
                                         — unassigned —

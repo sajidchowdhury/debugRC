@@ -381,8 +381,10 @@ class StockAvailabilityService
      *
      * @param int $productId
      * @param int $branchId
-     * @param int|null $excludeInvoiceId
-     * @return array<int, array{id: int, warehouse_name: string, physical_qty: float, pipeline_qty: float, available_qty: float}>
+     * @param int|null $excludeInvoiceId Exclude this invoice from the pipeline
+     *        (used by the godown screen so an invoice being edited does not
+     *        count its own open dispatch against the displayed availability).
+     * @return array<int, array{id: int, warehouse_name: string, physical_qty: float, pipeline_qty: float, available_qty: float, avg_cost: float}>
      */
     public function getBranchWarehouseBreakdown(int $productId, int $branchId, ?int $excludeInvoiceId = null): array
     {
@@ -393,7 +395,12 @@ class StockAvailabilityService
             })
             ->where('w.branch_id', $branchId)
             ->where('w.is_active', true)
-            ->select('w.id', 'w.warehouse_name', DB::raw('COALESCE(ws.qty, 0) as physical_qty'))
+            ->select(
+                'w.id',
+                'w.warehouse_name',
+                DB::raw('COALESCE(ws.qty, 0) as physical_qty'),
+                DB::raw('COALESCE(ws.avg_cost, 0) as avg_cost')
+            )
             ->orderBy('w.warehouse_name')
             ->get();
 
@@ -405,6 +412,7 @@ class StockAvailabilityService
                 'physical_qty' => (float) $wh->physical_qty,
                 'pipeline_qty' => $pipeline,
                 'available_qty' => max(0.0, (float) $wh->physical_qty - $pipeline),
+                'avg_cost' => (float) $wh->avg_cost,
             ];
         })->values()->all();
     }
