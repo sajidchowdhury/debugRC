@@ -43,9 +43,13 @@ class SalesInvoiceController extends Controller
         $forcePendingGodown  = false;
         $forcePendingChallan = false;
 
+        $forceToday = false;
         if ($scope === 'today') {
             $effectiveFrom = $effectiveFrom ?? $today;
             $effectiveTo   = $effectiveTo   ?? $today;
+            // Consistent with buildInvoiceFilterQuery(): hide invoices
+            // flagged call_a_day from the Today view.
+            $forceToday = true;
         } elseif ($scope === 'pending_godown') {
             // Invoices awaiting godown prep: status confirmed (i.e. not draft),
             // is_godown_prepared=false, not reversed. Across all dates so the
@@ -59,6 +63,7 @@ class SalesInvoiceController extends Controller
         $query = SalesInvoice::with(['customer', 'branch', 'items'])
             ->when($effectiveFrom, fn($q, $d) => $q->where('invoice_date', '>=', $d))
             ->when($effectiveTo,   fn($q, $d) => $q->where('invoice_date', '<=', $d))
+            ->when($forceToday, fn($q) => $q->where('call_a_day', false))
             ->when($request->input('customer_id'), fn($q, $cid) => $q->where('customer_id', $cid))
             ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
             ->when($forcePendingGodown, function ($q) {
@@ -88,7 +93,7 @@ class SalesInvoiceController extends Controller
         // chips with live counts.
         $stats = [
             'total'           => SalesInvoice::count(),
-            'today'           => SalesInvoice::where('invoice_date', $today)->count(),
+            'today'           => SalesInvoice::where('invoice_date', $today)->where('call_a_day', false)->count(),
             'draft'           => SalesInvoice::where('status', 'draft')->count(),
             'confirmed'       => SalesInvoice::where('status', 'confirmed')->count(),
             'cancelled'       => SalesInvoice::where('status', 'cancelled')->count(),

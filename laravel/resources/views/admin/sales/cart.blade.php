@@ -3001,7 +3001,13 @@
             }
 
             var subtotal = parseFloat((state.cart && state.cart.subtotal) || 0);
-            var today = new Date().toISOString().split('T')[0];
+            // Server-rendered local date (respects APP_TIMEZONE=Asia/Dhaka).
+            // Must match the server's now()->format('Y-m-d') so invoices
+            // created here appear in the "Today" scope filter on the
+            // sales-invoices index page. Using new Date().toISOString()
+            // would return UTC date, which drifts by 1 day during
+            // 18:00–24:00 local time (UTC+6).
+            var today = '{{ now()->format("Y-m-d") }}';
 
             // P2-6: Generate idempotency token (UUID v4) for this finalize attempt.
             // Prevents duplicate invoice creation on double-click or refresh-after-submit.

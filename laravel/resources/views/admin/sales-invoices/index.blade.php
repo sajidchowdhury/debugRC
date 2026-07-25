@@ -1,9 +1,5 @@
-<x-layouts.erp :title="$title ?? 'Sales Invoices'" :tabs="[
-    ['label' => 'Dashboard', 'href' => route('dashboard')],
-    ['label' => 'Invoices', 'href' => route('admin.sales-invoices.index'), 'active' => true],
-    ['label' => 'Challans', 'href' => route('admin.sales-challans.index')],
-    ['label' => 'UI Preview', 'href' => route('ui-preview')],
-]">
+@extends('layouts.admin')
+@section('content')
 @php
     // Defaults for filter controls (initial page render only —
     // subsequent filter changes are dispatched via DataTables AJAX
@@ -63,11 +59,11 @@
 
 <div class="space-y-6 sales-invoices-app">
     {{-- Hero header (amber/orange gradient — showcase spec) --}}
-    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
-        <div class="flex items-center justify-between flex-wrap gap-4">
+    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-4 shadow-lg">
+        <div class="flex items-center justify-between flex-wrap gap-3">
             <div>
-                <h1 class="text-2xl font-bold text-white">গোডাউন ও চালান</h1>
-                <p class="text-amber-100 text-sm mt-1">
+                <h1 class="text-xl font-bold text-white">গোডাউন ও চালান</h1>
+                <p class="text-amber-100 text-sm mt-0.5">
                     <span id="heroInvoiceCount"
                           aria-live="polite" aria-atomic="true">{{ number_format((int) ($stats['total'] ?? 0)) }}</span>
                     invoices on your collection list
@@ -76,10 +72,6 @@
             <a href="{{ route('admin.sales.cart') }}" class="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors">
                 <x-erp.icon name="plus" class="size-4" /> New Sale / নতুন বিক্রয়
             </a>
-        </div>
-        {{-- Journey stepper --}}
-        <div class="mt-6">
-            <x-erp.journey-stepper />
         </div>
     </div>
 
@@ -91,87 +83,25 @@
         <x-erp.stat-card label="Total Value" label-bn="মোট মূল্য" :value="'৳' . number_format((float) $stats['total_value'], 0)" accent="green" icon="banknote" />
     </div>
 
-    {{-- Filter form (R21 — drives DataTables AJAX params).
-        Phase 6 (UI/UX): collapsible on mobile (saves vertical space),
-        always-expanded on desktop via CSS media query. --}}
-    <x-erp.collapsible-card id="filterCard" accent="amber" icon="search" title="Filters" title-bn="ফিল্টার">
-        {{-- Phase 2 (UI/UX): one-click date presets — Today / Yesterday / Last 7 days / This month / Custom.
-            The preset resolves to concrete from_date/to_date values on the client (see applyDatePreset). --}}
-        <div class="mb-3 flex items-center gap-3 flex-wrap">
-            <span class="text-xs font-medium text-gray-500 inline-flex items-center gap-1">
-                <i class="fas fa-calendar-day"></i> Quick dates
-            </span>
-            <x-erp.date-presets id="datePresets" />
-        </div>
-        <form id="invoiceFilterForm" class="row g-2 align-items-end" autocomplete="off">
-            <div class="col-md-2">
-                <label class="form-label small text-muted mb-1" for="from_date">From date</label>
-                <input type="date" id="from_date" name="from_date" class="form-control form-control-sm"
-                       value="{{ $filters['from_date'] }}">
-            </div>
-            <div class="col-md-2">
-                <label class="form-label small text-muted mb-1" for="to_date">To date</label>
-                <input type="date" id="to_date" name="to_date" class="form-control form-control-sm"
-                       value="{{ $filters['to_date'] }}">
-            </div>
-            <div class="col-md-3">
-                <label class="form-label small text-muted mb-1" for="customer_id">Customer</label>
-                <select id="customer_id" name="customer_id" class="form-select form-select-sm select2-filter">
-                    <option value="">All customers</option>
-                    @foreach ($customers as $c)
-                        <option value="{{ $c->id }}"
-                            {{ (string) $filters['customer_id'] === (string) $c->id ? 'selected' : '' }}>
-                            {{ $c->customer_code }} — {{ $c->customer_name }}
-                        </option>
-                    @endforeach
-                </select>
-            </div>
-            <div class="col-md-2">
-                <label class="form-label small text-muted mb-1" for="branch_id">Branch</label>
-                <select id="branch_id" name="branch_id" class="form-select form-select-sm select2-filter">
-                    <option value="">All branches</option>
-                    @foreach ($branches as $b)
-                        <option value="{{ $b->id }}"
-                            {{ (string) $filters['branch_id'] === (string) $b->id ? 'selected' : '' }}>
-                            {{ $b->branch_code }} — {{ $b->branch_name }}
-                        </option>
-                    @endforeach
-                </select>
-            </div>
-            <div class="col-md-2">
-                <label class="form-label small text-muted mb-1" for="filterSearch">Smart search</label>
-                <div class="input-group input-group-sm">
-                    <span class="input-group-text"><i class="fas fa-search"></i></span>
-                    <input type="search" id="filterSearch" name="search" class="form-control"
-                           placeholder="Invoice, customer, mobile, branch…"
-                           value="{{ $filters['search'] }}" autocomplete="off">
-                </div>
-            </div>
-            <div class="col-md-1 d-flex align-items-end">
-                <div class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" role="switch"
-                           id="filterSmartSort" name="smart_sort" value="1"
-                           {{ $filters['smart_sort'] !== '0' ? 'checked' : '' }}>
-                    <label class="form-check-label small" for="filterSmartSort"
-                           title="Unpaid first, then oldest invoice date">Smart sort</label>
-                </div>
-            </div>
-            <div class="col-12 d-flex gap-2 justify-content-end flex-wrap">
-                <button type="button" id="applyFiltersBtn" class="btn btn-primary btn-sm">
-                    <i class="fas fa-filter me-1"></i> Apply
-                </button>
-                <button type="button" id="clearFiltersBtn" class="btn btn-outline-secondary btn-sm">
-                    <i class="fas fa-eraser me-1"></i> Clear
-                </button>
-                <a id="csvExportBtn" href="{{ route('admin.sales-invoices.export-csv') }}"
-                   class="btn btn-outline-success btn-sm" target="_blank">
-                    <i class="fas fa-file-csv me-1"></i> Export CSV
-                </a>
-            </div>
-        </form>
-    </x-erp.collapsible-card>
+    {{-- Hidden filter form — keeps JS selectors (#from_date, #to_date, etc.)
+        alive so currentFilterParams() / localStorage / clear-all work without
+        the visible filter card. The visible filter UI is the status-chip
+        card below (scope + status chips + search). --}}
+    <form id="invoiceFilterForm" autocomplete="off" class="hidden">
+        <div id="datePresets"></div>
+        <input type="hidden" id="from_date" name="from_date" value="{{ $filters['from_date'] }}">
+        <input type="hidden" id="to_date" name="to_date" value="{{ $filters['to_date'] }}">
+        <input type="hidden" id="customer_id" name="customer_id" value="{{ $filters['customer_id'] }}">
+        <input type="hidden" id="branch_id" name="branch_id" value="{{ $filters['branch_id'] }}">
+        <input type="checkbox" id="filterSmartSort" name="smart_sort" value="1"
+               {{ $filters['smart_sort'] !== '0' ? 'checked' : '' }} class="hidden">
+        <button type="button" id="applyFiltersBtn" class="hidden"></button>
+        <button type="button" id="clearFiltersBtn" class="hidden"></button>
+        <a id="csvExportBtn" href="{{ route('admin.sales-invoices.export-csv') }}" class="hidden"></a>
+    </form>
 
-    {{-- R22 + BUG-52: Workflow chips (scope) + Status chips with live counts. --}}
+    {{-- R22 + BUG-52: Single filter card — scope + status chips with live
+        counts, plus an inline smart-search box and Export CSV button. --}}
     <x-erp.left-accent-card accent="orange" icon="clipboard-list" title="Filter" title-bn="ফিল্টার" body-class="!py-2">
         <div class="d-flex flex-wrap gap-2 align-items-center" id="statusChipRow">
             <span class="text-muted small me-2">
@@ -202,6 +132,21 @@
             @endforeach
             <input type="hidden" id="status_chip" name="status_chip" value="{{ $filters['status_chip'] }}">
             <input type="hidden" id="scope" name="scope" value="{{ $scope ?? '' }}">
+
+            {{-- Inline smart search — drives the DataTables AJAX search param.
+                Debounced (320ms) in the JS below. --}}
+            <div class="ms-auto input-group input-group-sm" style="max-width: 280px;">
+                <span class="input-group-text"><i class="fas fa-search"></i></span>
+                <input type="search" id="filterSearch" name="search" class="form-control"
+                       placeholder="Invoice, customer, mobile, branch…"
+                       value="{{ $filters['search'] ?? '' }}" autocomplete="off">
+            </div>
+
+            {{-- Export CSV — mirrors the current filter params via JS. --}}
+            <a href="{{ route('admin.sales-invoices.export-csv') }}"
+               class="btn btn-outline-success btn-sm" target="_blank" id="csvExportBtnVisible">
+                <i class="fas fa-file-csv me-1"></i> Export
+            </a>
         </div>
     </x-erp.left-accent-card>
 
@@ -336,7 +281,7 @@
     </div>
 </div>
 
-</x-layouts.erp>
+@endsection
 
 @push('scripts')
 <script>
@@ -1170,7 +1115,9 @@ $(function () {
             }
         }
         var base = $('#csvExportBtn').attr('href').split('?')[0];
-        $('#csvExportBtn').attr('href', base + '?' + params.toString());
+        var exportUrl = base + '?' + params.toString();
+        $('#csvExportBtn').attr('href', exportUrl);
+        $('#csvExportBtnVisible').attr('href', exportUrl);
     }
 
     // ============================================================
