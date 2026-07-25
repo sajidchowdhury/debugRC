@@ -146,6 +146,16 @@ class SalesInvoice extends Model
     }
 
     /**
+     * F-6: The user who created this invoice (sales_invoices.created_by → users.id).
+     * Used by the smart-search whereHas('creator') to match invoices by
+     * creator username. Mirrors the legacy "creator" lookup.
+     */
+    public function creator(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /**
      * R19: payment allocations posted against this invoice
      * (via invoice_payment_allocations → customer_payments).
      * Used by the inline receive-payment modal on the sales-invoices

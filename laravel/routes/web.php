@@ -700,11 +700,17 @@ Route::middleware('auth')->group(function () {
         // BUG-52: warehouse_manager included — they need datatable JSON to
         // render the invoice list (which is now their entry point for
         // finding invoices awaiting godown prep).
+        // F-12: rate-limited to 180 req/min per user (Legacy parity). The
+        // DataTables client fires one AJAX per draw (page/sort/filter); 180/min
+        // is well above normal use but rejects script abuse → HTTP 429.
         Route::get('datatable', [SalesInvoiceController::class, 'datatable'])
-            ->name('datatable')->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
+            ->name('datatable')->middleware(['role:salesman,accountant,warehouse_manager,manager,admin', 'throttle:180,1']);
         // R22: Live status-chip counts JSON endpoint.
+        // F-12: rate-limited to 120 req/min per user (Legacy parity). The
+        // summary is lighter than datatable but polled on filter changes;
+        // 120/min rejects abuse while allowing aggressive filter UX.
         Route::get('summary', [SalesInvoiceController::class, 'summary'])
-            ->name('summary')->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
+            ->name('summary')->middleware(['role:salesman,accountant,warehouse_manager,manager,admin', 'throttle:120,1']);
         // G-10: Call It A Day batch operation (remove invoices from daily collection list)
         Route::post('call-it-a-day', [SalesInvoiceController::class, 'callItADay'])
             ->name('call-it-a-day')->middleware(['role:salesman,accountant,manager,admin', 'branch.isolation']);

@@ -1022,8 +1022,20 @@ class SalesInvoiceController extends Controller
         }
 
         // Smart search: invoice_code, customer name/code/mobile,
-        // branch name. Mirrors Legacy sales-today-index.js search
-        // hint "invoice, customer, mobile, branch, salesman, product".
+        // branch name, salesman name, creator username, product name/code.
+        // Mirrors Legacy sales-today-index.js search hint
+        // "invoice, customer, mobile, branch, salesman, product".
+        //
+        // F-6: extended to also match employees.name (salesman via
+        // whereHas('salesman')), users.username (creator via whereHas('creator')),
+        // and products.product_name/product_code (via whereHas('items.product')).
+        // Each whereHas emits a EXISTS subquery; ILIKE '%term%' is used for
+        // consistency with the existing customer/branch matching (the GIN
+        // tsvector indexes from migration 2025_01_20_000005 accelerate the
+        // standalone product/customer search endpoints, not this join-based
+        // invoice filter — adding them here would require a raw tsquery
+        // clause per relationship, which is a larger refactor and not what
+        // the plan asks for).
         if ($s = $request->input('search')) {
             if (is_array($s)) { $s = $s['value'] ?? ''; }
             $s = trim((string) $s);
@@ -1038,6 +1050,24 @@ class SalesInvoiceController extends Controller
                        ->orWhereHas('branch', function ($qb) use ($s) {
                            $qb->where('branch_name', 'ILIKE', "%{$s}%")
                               ->orWhere('branch_code', 'ILIKE', "%{$s}%");
+                       })
+                       // F-6: salesman name (employees.name via salesman_id).
+                       // Backed by idx_si_salesman on sales_invoices.salesman_id.
+                       ->orWhereHas('salesman', function ($qsm) use ($s) {
+                           $qsm->where('name', 'ILIKE', "%{$s}%");
+                       })
+                       // F-6: creator username (users.username via created_by).
+                       ->orWhereHas('creator', function ($qc) use ($s) {
+                           $qc->where('username', 'ILIKE', "%{$s}%");
+                       })
+                       // F-6: product name/code on any line item
+                       // (sales_invoice_items → products). This is the
+                       // broadest clause — it matches the invoice if ANY
+                       // item's product matches. EXISTS subquery keeps it
+                       // efficient (no row duplication).
+                       ->orWhereHas('items.product', function ($qp) use ($s) {
+                           $qp->where('product_name', 'ILIKE', "%{$s}%")
+                              ->orWhere('product_code', 'ILIKE', "%{$s}%");
                        });
                 });
             }
