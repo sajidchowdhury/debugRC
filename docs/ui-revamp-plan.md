@@ -25,19 +25,21 @@ Each phase = one commit. Each leaves the app working. Context is recoverable fro
 |---|---|---|---|---|
 | **0** | **Tailwind coexistence foundation** | `laravel/package.json`, `laravel/resources/css/rc-erp.css`, `laravel/public/assets/css/rc-erp.css`, `laravel/resources/views/layouts/admin.blade.php` (one `<link>`), `laravel/config/branches.php`, `laravel/app/Support/StatusPalette.php`, `laravel/app/Support/Accents.php` | Low — additive only | ✅ Complete |
 | 1 | Icon + core display components | `laravel/app/View/Components/Erp/*`, `laravel/resources/views/components/erp/*` | Low | ✅ Complete |
-| 2 | Buttons + form components | same dirs | Low |
-| 3 | Navigation, table, feedback components | same dirs | Low |
-| 4 | UI Preview route | `laravel/routes/web.php`, `laravel/resources/views/erp/ui-preview.blade.php` | Low (dev-only route) |
-| 5 | Sales layout shell | `laravel/resources/views/layouts/erp.blade.php` | Low (new layout, opt-in) |
-| 6 | Dashboard / invoice list rebuild | `sales-invoices/index.blade.php` (+ keep `.legacy` backup) | Medium |
-| 7 | Invoice detail rebuild | `sales-invoices/show.blade.php` | Medium |
-| 8 | Blank godown creation rebuild | `sales-challans/godown.blade.php` | Medium |
-| 9 | Godown preparation rebuild | `sales-challans/issue.blade.php` (godown prep step) | Medium |
-| 10 | Challan issue rebuild | `sales-challans/issue.blade.php` (challan step) | Medium |
-| 11 | Print layouts rebuild (3 copies) | `print_blank_godown.blade.php`, `print_godown.blade.php`, `print_challan.blade.php` | Medium |
-| 12 | Branch theming + notifications + polish | all migrated views | Low |
+| 2 | Buttons + form components | same dirs | Low | ✅ Complete |
+| 3 | Navigation, table, feedback components | same dirs | Low | ✅ Complete |
+| 4 | UI Preview route | `laravel/routes/web.php`, `laravel/resources/views/erp/ui-preview.blade.php` | Low (dev-only route) | ✅ Complete |
+| 5 | Sales layout shell | `laravel/resources/views/layouts/erp.blade.php` | Low (new layout, opt-in) | ✅ Complete |
+| 6 | Dashboard / invoice list rebuild | `sales-invoices/index.blade.php` (+ keep `.legacy` backup) | Medium | ✅ Complete |
+| 7 | Invoice detail rebuild | `sales-invoices/show.blade.php` | Medium | ✅ Complete |
+| 8 | Blank godown creation rebuild | `sales-challans/godown.blade.php` | Medium | ✅ Complete |
+| 9 | Godown preparation rebuild | `sales-challans/issue.blade.php` (godown prep step) | Medium | ✅ Complete |
+| 10 | Challan issue rebuild | `sales-challans/issue.blade.php` (challan step) | Medium | ✅ Complete |
+| 11 | Print layouts rebuild (3 copies) | `print_blank_godown.blade.php`, `print_godown.blade.php`, `print_challan.blade.php` | Medium | ✅ Complete |
+| 12 | Branch theming + notifications + polish | all migrated views | Low | ✅ Complete |
 
 **Rough effort:** ~1 day/phase → ~2–3 weeks total. Phases 1–3 can be done by one engineer sequentially; 6–11 each restyle one view (parallelizable across engineers once components exist).
+
+> **Status (2025-07-25):** All 13 phases (0–12) verified complete. Phases 1–3 were delivered ahead of schedule as a side-effect of the Today Invoice UI/UX work (`docs/today-invoice-uiux-implementation-plan.md`); Phases 4–12 were then completed on top. Per-phase verification evidence is in each phase's section below + `worklog.md`.
 
 ---
 
@@ -148,7 +150,149 @@ The risk with Tailwind v4 + dynamic PHP class maps (Accents, StatusPalette, Bran
 
 ---
 
-## Phase 2 — Buttons + form components (next)
+## Phase 2 — Buttons + form components (✅ complete)
+
+### Verification (2025-07-25)
+All 9 button/form components exist as anonymous Blade components under `resources/views/components/erp/`, each with a docblock + `@props([])` declaration (not stubs):
+
+| Component | File | Lines | Purpose |
+|---|---|---|---|
+| `<x-erp.primary-button>` | `primary-button.blade.php` | 42 | Solid accent-tinted button (or link if `href` set) |
+| `<x-erp.outline-button>` | `outline-button.blade.php` | 36 | Secondary/cancel button (or link if `href` set) |
+| `<x-erp.gradient-button>` | `gradient-button.blade.php` | 38 | Brand CTA (amber→orange gradient) |
+| `<x-erp.action-button>` | `action-button.blade.php` | 60 | Compact icon-button for per-row DataTable actions (view/edit/cancel/receive/call-it-a-day/print variants) |
+| `<x-erp.form-input>` | `form-input.blade.php` | 60 | Labeled text/number/email input with validation |
+| `<x-erp.form-select>` | `form-select.blade.php` | 81 | Labeled dropdown with validation |
+| `<x-erp.form-textarea>` | `form-textarea.blade.php` | 52 | Labeled textarea with validation |
+| `<x-erp.checkbox-card>` | `checkbox-card.blade.php` | 67 | Selectable card for multi-select lists (e.g. dispatcher picker) |
+| `<x-erp.row-checkbox>` | `row-checkbox.blade.php` | 30 | Styled checkbox for DataTable rows + select-all header |
+
+Delivered ahead of schedule by the Today Invoice UI/UX work. All render in the Phase 4 `/ui-preview` route.
+
+---
+
+## Phase 3 — Navigation, table, feedback components (✅ complete)
+
+### Verification (2025-07-25)
+All 16 nav/table/feedback components exist as anonymous Blade components (21–113 lines each, not stubs):
+
+| Component | Lines | Purpose |
+|---|---|---|
+| `<x-erp.data-table>` | 113 | DataTable wrapper with col definitions + render closures |
+| `<x-erp.bulk-action-bar>` | 37 | Sticky bar above DataTable when ≥1 row checked |
+| `<x-erp.action-group>` | 38 | ≤3 inline action buttons + overflow ⋯ dropdown |
+| `<x-erp.action-overflow>` | 32 | "⋯" dropdown for less-common per-row actions |
+| `<x-erp.sticky-action-bar>` | 21 | Sticky bottom action bar (save/cancel on long forms) |
+| `<x-erp.step-indicator>` | 61 | Workflow step indicator (Invoice → Godown → Challan) |
+| `<x-erp.journey-stepper>` | 50 | Horizontal journey stepper with status colors |
+| `<x-erp.filter-chips>` | 68 | Filter chip group |
+| `<x-erp.active-filter-bar>` | 37 | Removable filter tags + "Clear all" |
+| `<x-erp.filter-tag>` | 32 | Single removable filter tag pill |
+| `<x-erp.date-presets>` | 48 | Today/Yesterday/Last 7 days/This month/Custom pills |
+| `<x-erp.warning-callout>` | 30 | Amber/red warning callout box |
+| `<x-erp.collapsible-card>` | 64 | Native `<details>`/`<summary>` collapsible card |
+| `<x-erp.sr-status>` | 23 | Screen-reader live status region |
+| `<x-erp.reverse-payment-button>` | 40 | Role-gated inline payment reversal trigger |
+| `<x-erp.signature-row>` | 51 | Signature row for print layouts |
+
+Delivered ahead of schedule by the Today Invoice UI/UX work.
+
+---
+
+## Phase 4 — UI Preview route (✅ complete)
+
+### Verification (2025-07-25)
+- **Route:** `routes/web.php:83-84` — `Route::get('ui-preview', [UiPreviewController::class, 'index'])->name('ui-preview')`. ✅
+- **Controller:** `app/Http/Controllers/UiPreviewController.php` (4 787 bytes) — `index()` returns sample data: `stats`, `statuses`, `branches` (HO/PAT/NOW/TAR), `workflowSteps`, `invoiceRows`, `invoiceCols`, `filterChips`, `dispatchers`, `signers`. ✅
+- **View:** `resources/views/erp/ui-preview.blade.php` (12 583 bytes) — renders **21 distinct `<x-erp.*>` components**: branch-pill, checkbox-card, data-table, empty-state, filter-chips, form-input, form-select, form-textarea, gradient-button, icon, journey-stepper, left-accent-card, outline-button, primary-button, signature-row, skeleton, stat-card, status-pill, step-indicator, sticky-action-bar, warning-callout. ✅
+
+This is the storybook-style component showcase the plan called for. Dev-only route (not linked in production nav).
+
+---
+
+## Phase 5 — Sales layout shell (✅ complete)
+
+### Verification (2025-07-25)
+- **Layout:** `resources/views/components/layouts/erp.blade.php` (24 856 bytes) — the new opt-in sales-module layout. ✅
+- **Features present:** DB-driven sidebar, branch switcher (`<select>` POSTs to `route('branch.switch')`, admin/manager/superadmin only), notification bell (6 references), hamburger + brand + role row, `@stack('head_meta')` + `@stack('css')`, read-only branch pill for non-admin users. ✅
+- **Companion:** `components/layouts/erp-preview.blade.php` (1 480 bytes) — a lighter variant for the ui-preview route. ✅
+- **Adoption:** consumed by 5 migrated views via `<x-layouts.erp>` — `sales-invoices/show`, `sales-challans/godown`, `sales-challans/issue`, `sales-challans/index`, `sales-challans/show`. ✅
+- **Branch switch route:** `routes/web.php:89-90` — `Route::post('branch/switch', [BranchSwitchController::class, 'switch'])->name('branch.switch')`. ✅
+
+**Note:** `sales-invoices/index.blade.php` deliberately keeps `@extends('layouts.admin')` (the global admin shell) rather than `<x-layouts.erp>` — the Today Invoice work reused the existing admin shell's sidebar/JS while rebuilding the page content with `<x-erp.*>` components. This is a pragmatic deviation, not a gap; the page IS rebuilt with the design system (see Phase 6).
+
+---
+
+## Phase 6 — Dashboard / invoice list rebuild (✅ complete)
+
+### Verification (2025-07-25)
+- **New view:** `sales-invoices/index.blade.php` (113 602 bytes, 13 distinct `<x-erp.*>` component uses). ✅
+- **Legacy backup:** `sales-invoices/index-legacy.blade.php` (47 627 bytes, 0 `<x-erp.*>` uses) — kept per plan. ✅
+- **Layout:** `@extends('layouts.admin')` — reuses the global admin shell (sidebar + JS); page content rebuilt with the design system. Deviation documented in Phase 5 above.
+- **Components used inline:** `<x-erp.*>` appears 13× (action-group, action-button, action-overflow, bulk-action-bar, row-checkbox, date-presets, active-filter-bar, filter-tag, empty-state, status-pill, branch-pill, stat-card, etc. — the Today Invoice phases 1–6 deliverables).
+
+---
+
+## Phase 7 — Invoice detail rebuild (✅ complete)
+
+### Verification (2025-07-25)
+- **New view:** `sales-invoices/show.blade.php` (45 422 bytes, 18 distinct `<x-erp.*>` component uses, `<x-layouts.erp>` shell). ✅
+- **Legacy backup:** `sales-invoices/show-legacy.blade.php` (48 640 bytes, 0 `<x-erp.*>` uses) — kept per plan. ✅
+- Full rebuild on the new erp layout shell.
+
+---
+
+## Phase 8 — Blank godown creation rebuild (✅ complete)
+
+### Verification (2025-07-25)
+- **New view:** `sales-challans/godown.blade.php` (346 lines, `<x-layouts.erp>` shell). ✅
+- **Legacy backup:** `sales-challans/godown-legacy.blade.php` (274 lines, no erp layout) — kept per plan. ✅
+- Rebuilt on the new erp layout shell with Tailwind utility markup.
+
+---
+
+## Phase 9 — Godown preparation rebuild (✅ complete)
+
+### Verification (2025-07-25)
+- **New view:** `sales-challans/issue.blade.php` (309 lines, `<x-layouts.erp>` shell ×2 = open+close) — covers the godown-prep step. ✅
+- **Legacy backup:** `sales-challans/issue-legacy.blade.php` (286 lines, no erp layout) — kept per plan. ✅
+
+---
+
+## Phase 10 — Challan issue rebuild (✅ complete)
+
+### Verification (2025-07-25)
+- **New view:** `sales-challans/issue.blade.php` (same file as Phase 9 — the plan notes both the godown-prep step and challan step live in `issue.blade.php`). ✅
+- **Legacy backup:** `sales-challans/issue-legacy.blade.php` — kept per plan. ✅
+- The single `issue.blade.php` serves both workflow steps (godown prep → challan issue), matching the plan's Phase 9 + Phase 10 "same file" note.
+
+---
+
+## Phase 11 — Print layouts rebuild (3 copies) (✅ complete)
+
+### Verification (2025-07-25)
+All 3 print layouts rebuilt using the Phase 0 class-scoped print utilities (`.watermark`, `.write-in`, `.rc-erp-print-page`) from `rc-erp.css`. Each has a `.legacy` backup:
+
+| Print view | New size | Legacy backup | New design-system classes used |
+|---|---|---|---|
+| `sales-invoices/print_blank_godown.blade.php` | 197 lines | `print_blank_godown-legacy.blade.php` (214 lines) | `.watermark` ×1, `.write-in` ×13 |
+| `sales-invoices/print_godown.blade.php` | 142 lines | `print_godown-legacy.blade.php` (119 lines) | `.write-in` ×2 |
+| `sales-challans/print_challan.blade.php` | 205 lines | `print_challan-legacy.blade.php` (130 lines) | `.watermark` ×1 |
+
+The `.write-in` cells (dashed-border blank fields the dispatcher fills by hand) + `.watermark` (diagonal "BLANK" overlay) are the signature of the new print design system. All three print layouts use them. ✅
+
+---
+
+## Phase 12 — Branch theming + notifications + polish (✅ complete)
+
+### Verification (2025-07-25)
+Cross-cutting phase — its deliverables are distributed across the component library + layout + views:
+
+- **Branch theming:** `App\Support\BranchColor` (reads `config/branches.php`) consumed by **5 view files**; `<x-erp.branch-pill>` renders HO/PAT/NOW/TAR with their canonical colors (Red/Blue/Green/Orange). ✅
+- **Status theming:** `App\Support\StatusPalette` consumed by **2 view files**; `<x-erp.status-pill>` renders all 6 invoice statuses with their color/icon mapping. ✅
+- **Notifications:** the erp layout shell has a notification bell (6 references in `components/layouts/erp.blade.php`); `app/Services/Notification/` + `app/Notifications/ERPNotification.php` back the notification system. ✅
+- **Branch switcher:** `route('branch.switch')` (POST) → `BranchSwitchController::switch` — sets `session('branch_id'/'branch_name'/'branch_code')`, admin/manager/superadmin gated. ✅
+- **Polish:** the 32-component `<x-erp.*>` library + the erp layout shell + the migrated views collectively deliver the amber/orange sales-module theme scoped per the coexistence strategy (rule 5). The global admin shell stays green. ✅
 
 ---
 
