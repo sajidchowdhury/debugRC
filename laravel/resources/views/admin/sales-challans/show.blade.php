@@ -63,6 +63,15 @@
 
 <div class="space-y-6">
 
+    {{-- Breadcrumb --}}
+    <nav aria-label="Breadcrumb" class="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
+        <a href="{{ route('dashboard') }}" class="hover:text-amber-700 transition-colors">Sales</a>
+        <x-erp.icon name="chevron-right" class="size-3 text-gray-400" />
+        <a href="{{ route('admin.sales-challans.index') }}" class="hover:text-amber-700 transition-colors">Challan</a>
+        <x-erp.icon name="chevron-right" class="size-3 text-gray-400" />
+        <span class="text-amber-800 font-medium">{{ $challan->challan_code }}</span>
+    </nav>
+
     {{-- Hero header (amber/orange gradient — showcase spec) --}}
     <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
         <div class="flex items-start justify-between flex-wrap gap-4">
@@ -102,6 +111,9 @@
                 </a>
             </div>
         </div>
+
+        {{-- 4-step workflow indicator (Phase 1: uses <x-erp.journey-stepper>; Receipt = step 4, all done) --}}
+        <x-erp.journey-stepper :current="4" />
     </div>
 
     {{-- Reversal alert (red callout) --}}

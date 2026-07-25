@@ -12,6 +12,15 @@
 @endphp
 
 <div class="space-y-6">
+    <!-- Breadcrumb -->
+    <nav aria-label="Breadcrumb" class="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
+        <a href="{{ route('dashboard') }}" class="hover:text-amber-700 transition-colors">Sales</a>
+        <x-erp.icon name="chevron-right" class="size-3 text-gray-400" />
+        <a href="{{ route('admin.sales-challans.index') }}" class="hover:text-amber-700 transition-colors">Challan</a>
+        <x-erp.icon name="chevron-right" class="size-3 text-gray-400" />
+        <span class="text-amber-800 font-medium">Issue Challan</span>
+    </nav>
+
     <!-- Hero header (amber/orange gradient — showcase PAGE 4) -->
     <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
         <div class="flex items-center justify-between flex-wrap gap-4">
@@ -25,43 +34,8 @@
             </a>
         </div>
 
-        <!-- 4-step workflow indicator (Invoice ✓, Godown Prep ✓, Challan Issue active, Completed pending) -->
-        <div class="mt-6 flex items-center gap-2 flex-wrap">
-            <!-- 1. Invoice (done) -->
-            <div class="flex items-center gap-2">
-                <div class="size-8 rounded-full bg-green-100 border-2 border-green-400 text-green-600 flex items-center justify-center">
-                    <i class="fas fa-check text-xs"></i>
-                </div>
-                <span class="text-xs font-medium text-green-600">Invoice ✓</span>
-            </div>
-            <div class="w-4 h-0.5 bg-gray-300"></div>
-
-            <!-- 2. Godown Prep (done) -->
-            <div class="flex items-center gap-2">
-                <div class="size-8 rounded-full bg-green-100 border-2 border-green-400 text-green-600 flex items-center justify-center">
-                    <i class="fas fa-check text-xs"></i>
-                </div>
-                <span class="text-xs font-medium text-green-600">Godown Prep ✓</span>
-            </div>
-            <div class="w-4 h-0.5 bg-gray-300"></div>
-
-            <!-- 3. Challan Issue (active) -->
-            <div class="flex items-center gap-2">
-                <div class="size-8 rounded-full bg-amber-500 border-2 border-amber-600 text-white flex items-center justify-center">
-                    <i class="fas fa-truck text-xs"></i>
-                </div>
-                <span class="text-xs font-medium text-amber-700">Challan Issue</span>
-            </div>
-            <div class="w-4 h-0.5 bg-gray-300"></div>
-
-            <!-- 4. Completed (pending) -->
-            <div class="flex items-center gap-2">
-                <div class="size-8 rounded-full bg-gray-100 border-2 border-gray-300 text-gray-400 flex items-center justify-center">
-                    <i class="fas fa-check-circle text-xs"></i>
-                </div>
-                <span class="text-xs font-medium text-gray-400">Completed</span>
-            </div>
-        </div>
+        <!-- 4-step workflow indicator (Phase 1: uses <x-erp.journey-stepper>) -->
+        <x-erp.journey-stepper :current="3" />
     </div>
 
     <!-- Invoice summary card (cyan left accent — matches template PAGE 4) -->
