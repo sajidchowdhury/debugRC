@@ -12,6 +12,7 @@ use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
+use App\Services\Notification\NotificationService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -51,7 +52,8 @@ class SalesInvoiceService
         private JournalReversalService $journalReversal,
         private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
-        private SalesAuditLogger $auditLogger
+        private SalesAuditLogger $auditLogger,
+        private NotificationService $notifications
     ) {}
 
     /**
@@ -325,6 +327,31 @@ class SalesInvoiceService
 
             // P2-7: Invalidate pipeline cache (new dispatches were added).
             $this->availabilityService->invalidatePipelineForInvoice($invoiceId);
+
+            // F-18c: Notify configured recipients that a sale was confirmed.
+            // Wrapped in try/catch so a notification failure never rolls
+            // back the (already-committed) invoice transaction.
+            try {
+                $this->notifications->dispatch(
+                    'sales_finalize',
+                    "Invoice {$invoiceCode} finalized for Tk " . number_format((float) $totalAmount, 2)
+                    . " — customer #{$customerId}, branch #{$branchId}.",
+                    'sales_invoice',
+                    $invoiceId,
+                    [],
+                    [
+                        'branch_id'   => $branchId,
+                        'salesman_id' => (int) ($data['salesman_id'] ?? 0),
+                        'customer_id' => $customerId,
+                        'created_by'  => (int) ($data['created_by'] ?? auth()->id() ?? 0),
+                    ]
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Notification dispatch failed (sales_finalize)', [
+                    'invoice_id' => $invoiceId,
+                    'error'      => $e->getMessage(),
+                ]);
+            }
 
             return SalesInvoice::with(['items.product', 'customer', 'branch', 'dispatchers', 'journalEntry.lines.ledger'])
                 ->find($invoiceId);

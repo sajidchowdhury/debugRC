@@ -536,6 +536,12 @@ class CustomerController extends BaseMasterDataController
     {
         $item = Customer::findOrFail($id);
 
+        // F-18c: capture the existing credit_limit BEFORE the update so we
+        // can detect an INCREASE and fire the customer_limit_increased
+        // notification (the user's predefined event #9). The AuditableMasterData
+        // trait only writes to user_audit_log — it does NOT dispatch notifications.
+        $oldCreditLimit = (float) ($item->credit_limit ?? 0);
+
         // Phase 10: normalize customer_code BEFORE validation.
         if ($request->has('customer_code')) {
             $request->merge(['customer_code' => strtoupper(trim((string) $request->input('customer_code')))]);
@@ -568,6 +574,36 @@ class CustomerController extends BaseMasterDataController
 
         try {
             $item->update($validated);
+
+            // F-18c: fire customer_limit_increased when the credit_limit was
+            // raised (strictly greater than the old value). Decreases + no-change
+            // do NOT fire — the user's predefined event is "After INCREASING
+            // customer limit". Resolved via app() to avoid touching the
+            // parent-controller constructor signature.
+            $newCreditLimit = (float) ($item->fresh()->credit_limit ?? 0);
+            if ($newCreditLimit > $oldCreditLimit) {
+                try {
+                    app(\App\Services\Notification\NotificationService::class)->dispatch(
+                        'customer_limit_increased',
+                        "Credit limit for customer {$item->customer_name} ({$item->customer_code}) "
+                        . "raised from Tk " . number_format($oldCreditLimit, 2)
+                        . " to Tk " . number_format($newCreditLimit, 2) . '.',
+                        'customer',
+                        $item->id,
+                        [],
+                        [
+                            'customer_id' => $item->id,
+                            'branch_id'   => (int) ($item->branch_id ?? 0),
+                            'created_by'  => (int) (Auth::id() ?? 0),
+                        ]
+                    );
+                } catch (\Throwable $ne) {
+                    \Illuminate\Support\Facades\Log::warning('Notification dispatch failed (customer_limit_increased)', [
+                        'customer_id' => $item->id,
+                        'error'       => $ne->getMessage(),
+                    ]);
+                }
+            }
 
             return redirect()
                 ->route("{$this->routePrefix}.show", $item)

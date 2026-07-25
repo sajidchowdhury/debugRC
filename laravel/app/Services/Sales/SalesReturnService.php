@@ -137,13 +137,29 @@ class SalesReturnService
             );
 
             // P1-7: Notify admins that a return was created.
-            $this->notifications->dispatch(
-                'return_created',
-                "Return {$returnCode} created for Tk " . number_format($totalRevenue, 2)
-                . " against invoice #{$invoiceId}.",
-                'sales_return',
-                $returnId
-            );
+            // F-18c: pass $context so context-aware recipient types
+            // (warehouse_manager_of_branch, salesman_of_invoice) resolve.
+            try {
+                $this->notifications->dispatch(
+                    'return_created',
+                    "Return {$returnCode} created for Tk " . number_format($totalRevenue, 2)
+                    . " against invoice #{$invoiceId}.",
+                    'sales_return',
+                    $returnId,
+                    [],
+                    [
+                        'branch_id'   => $branchId,
+                        'customer_id' => $customerId,
+                        'salesman_id' => (int) ($invoice->salesman_id ?? 0),
+                        'created_by'  => (int) ($data['created_by'] ?? auth()->id() ?? 0),
+                    ]
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Notification dispatch failed (return_created)', [
+                    'return_id' => $returnId,
+                    'error'     => $e->getMessage(),
+                ]);
+            }
 
             return SalesReturn::with(['items.product', 'salesInvoice', 'customer', 'branch'])->find($returnId);
         });
@@ -232,14 +248,34 @@ class SalesReturnService
             );
 
             // P1-7: Notify warehouse managers + accountants that a return was confirmed.
-            $this->notifications->dispatch(
-                'return_confirmed',
-                "Return {$return->return_code} confirmed — stock restored, GL posted. "
-                . "Total: Tk " . number_format((float) $return->total_amount, 2)
-                . ", COGS reversed: Tk " . number_format((float) $return->cogs_amount, 2) . ".",
-                'sales_return',
-                $returnId
-            );
+            // F-18c: pass $context. sales_returns has no salesman_id column —
+            // derive from the parent invoice so salesman_of_invoice resolves.
+            try {
+                $salesmanId = (int) (DB::table('sales_invoices')
+                    ->where('id', $return->sales_invoice_id)
+                    ->value('salesman_id') ?: 0);
+
+                $this->notifications->dispatch(
+                    'return_confirmed',
+                    "Return {$return->return_code} confirmed — stock restored, GL posted. "
+                    . "Total: Tk " . number_format((float) $return->total_amount, 2)
+                    . ", COGS reversed: Tk " . number_format((float) $return->cogs_amount, 2) . ".",
+                    'sales_return',
+                    $returnId,
+                    [],
+                    [
+                        'branch_id'   => (int) $return->branch_id,
+                        'customer_id' => (int) $return->customer_id,
+                        'salesman_id' => $salesmanId,
+                        'created_by'  => $confirmedBy,
+                    ]
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Notification dispatch failed (return_confirmed)', [
+                    'return_id' => $returnId,
+                    'error'     => $e->getMessage(),
+                ]);
+            }
 
             return SalesReturn::with([
                 'items.product', 'salesInvoice', 'customer', 'branch',
@@ -321,13 +357,32 @@ class SalesReturnService
             );
 
             // P1-7: Notify accountants + admins that a return was reversed.
-            $this->notifications->dispatch(
-                'return_reversed',
-                "Return {$return->return_code} reversed — stock + GL + ledger rolled back. "
-                . "Reason: {$reason}",
-                'sales_return',
-                $returnId
-            );
+            // F-18c: pass $context.
+            try {
+                $salesmanId = (int) (DB::table('sales_invoices')
+                    ->where('id', $return->sales_invoice_id)
+                    ->value('salesman_id') ?: 0);
+
+                $this->notifications->dispatch(
+                    'return_reversed',
+                    "Return {$return->return_code} reversed — stock + GL + ledger rolled back. "
+                    . "Reason: {$reason}",
+                    'sales_return',
+                    $returnId,
+                    [],
+                    [
+                        'branch_id'   => (int) $return->branch_id,
+                        'customer_id' => (int) $return->customer_id,
+                        'salesman_id' => $salesmanId,
+                        'created_by'  => $reversedBy,
+                    ]
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Notification dispatch failed (return_reversed)', [
+                    'return_id' => $returnId,
+                    'error'     => $e->getMessage(),
+                ]);
+            }
 
             return SalesReturn::find($returnId);
         });
@@ -567,11 +622,15 @@ class SalesReturnService
             }
 
             // Create the damage invoice (draft) via DamageService.
+            // F-18c: suppress_notification=true so this linked-damage flow
+            // does NOT fire damage_invoice_created on top of return_confirmed
+            // (the return event already notifies the configured recipients).
             $damage = $this->damageService->createDamage([
                 'warehouse_id' => $warehouseId,
                 'damage_date' => $returnDate,
                 'reason' => 'Auto write-off for damaged sales return #' . $return->return_code,
                 'created_by' => $confirmedBy,
+                'suppress_notification' => true,
                 'items' => $items,
             ]);
 

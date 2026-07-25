@@ -7,6 +7,7 @@ use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
+use App\Services\Notification\NotificationService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -41,7 +42,8 @@ class CustomerPaymentService
         private JournalReversalService $journalReversal,
         private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
-        private SalesAuditLogger $auditLogger
+        private SalesAuditLogger $auditLogger,
+        private NotificationService $notifications
     ) {}
 
     /**
@@ -197,6 +199,34 @@ class CustomerPaymentService
             $this->auditPaymentConfirmed(
                 $confirmedBy, $payment, $firstInvoiceId
             );
+
+            // F-18c: Notify configured recipients that money was received.
+            // Only fires for the 'receive' transaction type (customer paying
+            // us). Other types (discount / write_off / payment-refund) are
+            // not "receive money" events per the user's predefined list.
+            if ($transactionType === 'receive') {
+                try {
+                    $this->notifications->dispatch(
+                        'payment_receive',
+                        "Payment {$payment->payment_code} received — Tk "
+                        . number_format($amount, 2)
+                        . " from customer #{$customerId} (branch #{$branchId}).",
+                        'customer_payment',
+                        $paymentId,
+                        [],
+                        [
+                            'branch_id'   => $branchId,
+                            'customer_id' => $customerId,
+                            'created_by'  => $confirmedBy,
+                        ]
+                    );
+                } catch (\Throwable $e) {
+                    Log::warning('Notification dispatch failed (payment_receive)', [
+                        'payment_id' => $paymentId,
+                        'error'      => $e->getMessage(),
+                    ]);
+                }
+            }
 
             return CustomerPayment::with([
                 'customer', 'branch', 'bank',

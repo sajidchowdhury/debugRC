@@ -10,6 +10,7 @@ use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\JournalReversalService;
 use App\Services\Accounting\SubLedgerService;
+use App\Services\Notification\NotificationService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -44,7 +45,8 @@ class SalesChallanService
         private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger,
-        private StockAvailabilityService $availabilityService
+        private StockAvailabilityService $availabilityService,
+        private NotificationService $notifications
     ) {}
 
     /**
@@ -319,6 +321,35 @@ class SalesChallanService
 
             // P2-7: Invalidate pipeline cache (dispatched_qty changed).
             $this->availabilityService->invalidatePipelineForInvoice($invoiceId);
+
+            // F-18c: Notify configured recipients that a challan was issued.
+            // sales_challans has no salesman_id column — derive from the
+            // parent invoice (salesman_id references employees.id).
+            try {
+                $salesmanId = (int) (DB::table('sales_invoices')
+                    ->where('id', $invoiceId)
+                    ->value('salesman_id') ?: 0);
+
+                $this->notifications->dispatch(
+                    'challan_create',
+                    "Challan {$challanCode} issued against invoice #{$invoiceId} — COGS Tk "
+                    . number_format((float) $cogsTotal, 2) . '.',
+                    'sales_challan',
+                    $challanId,
+                    [],
+                    [
+                        'branch_id'   => (int) $invoice->branch_id,
+                        'salesman_id' => $salesmanId,
+                        'customer_id' => (int) $invoice->customer_id,
+                        'created_by'  => (int) ($data['created_by'] ?? auth()->id() ?? 0),
+                    ]
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Notification dispatch failed (challan_create)', [
+                    'challan_id' => $challanId,
+                    'error'      => $e->getMessage(),
+                ]);
+            }
 
             return SalesChallan::with(['salesInvoice.items.product', 'items.product', 'items.warehouse', 'branch', 'journalEntry.lines.ledger'])
                 ->find($challanId);

@@ -313,7 +313,7 @@ This phase adds the missing `min:5` to the invoice-cancel rule (1-word change) s
 
 ---
 
-## Phase 4 — Notifications, Rate Limits & Search Coverage (Medium) — F-18a/b ✅ / F-12, F-6, F-18c/d pending
+## Phase 4 — Notifications, Rate Limits & Search Coverage (Medium) — F-18a/b/c ✅ / F-12, F-6, F-18d pending
 
 > Closes gaps **F-18, F-12, F-6**. Improves observability and robustness.
 
@@ -334,7 +334,7 @@ A configurable notification-rule engine (admin picks, per predefined event, who 
 |---|---|---|
 | **F-18a** | Security + bell + JS + Gate — make the existing engine work end-to-end | ✅ Complete |
 | **F-18b** | Schema: multi-select recipient types per event (pivot table) + context-aware recipient resolution (`warehouse_manager_of_branch`, `salesman_of_invoice`, etc.) + expand EVENTS to the user's 9 predefined events + expand RECIPIENTS + clean up vestigial `broadcast` channel | ✅ Complete |
-| **F-18c** | Wire explicit `dispatch()` calls into all 9 event trigger points (only 3/10 are dispatched in PHP today; the rest rely on PG triggers + a worker process that may not be running) | ⬜ Pending |
+| **F-18c** | Wire explicit `dispatch()` calls into all 9 event trigger points (only 3/10 are dispatched in PHP today; the rest rely on PG triggers + a worker process that may not be running) | ✅ Complete (8/9 — `branch_demand_created` deferred: no Laravel code path exists yet) |
 | **F-18d** | Admin UX polish: redesign `rules.blade.php` for multi-select per event, default-rules seeder, "Reset to defaults" button | ⬜ Pending |
 
 **Architecture decision (F-18a):** Real-time delivery uses the existing **SSE pipeline** (PostgreSQL `LISTEN/NOTIFY` → Redis Pub/Sub → browser `EventSource`), NOT Laravel broadcasting. The database is only hit when a notification is created (event-driven, not polled) — satisfying the "no continuous DB pressure" requirement. The vestigial `broadcast` channel in `ERPNotification` (which silently no-ops due to missing `config/broadcasting.php`) was cleaned up in F-18b.
@@ -376,6 +376,32 @@ F-18b reworks the **schema + recipient-resolution layer** so the engine supports
 
 **What F-18b does NOT do (deferred):** wiring explicit `dispatch()` calls into the remaining 6 event trigger points (sale_confirm, challan_create, login, logout, damage_invoice, branch_demand, customer_limit) — that is F-18c. The admin-UX polish (Select2 multi-select, default-rules seeder, "Reset to defaults" button) is F-18d. The current F-18b form is functional (native `<select multiple>`) but not yet polished.
 
+### F-18c Verification
+
+F-18c wires explicit `NotificationService::dispatch()` calls (with `$context`) into the business-event trigger points so notifications fire **deterministically from PHP** — no longer dependent on the `ListenNotifyWorker` artisan process being running. The audit (`audit-5`) mapped all 9 trigger points; F-18c wires 8 of 9 (the 9th, `branch_demand_created`, has no Laravel code path yet).
+
+| Event | Trigger point | `$context` passed | Evidence |
+|---|---|---|---|
+| **sales_finalize** ("After Sales Confirm") | `SalesInvoiceService::finalizeFromCart` — after `auditLogger->saleCreated()` + cache invalidation, before the `return` (inside `DB::transaction`) | `branch_id`, `salesman_id` (employee id from `$data['salesman_id']`), `customer_id`, `created_by` | `app/Services/Sales/SalesInvoiceService.php` L331-354 |
+| **challan_create** ("After Create Challan Copy") | `SalesChallanService::issueChallan` — after `auditLogger->challanIssued()` + cache invalidation, before the `return` (inside `DB::transaction`). `salesman_id` derived via a lightweight `DB::table('sales_invoices')->where('id',$invoiceId)->value('salesman_id')` query (sales_challans has no salesman_id column) | `branch_id`, `salesman_id` (derived), `customer_id`, `created_by` | `app/Services/Sales/SalesChallanService.php` L325-352 |
+| **payment_receive** ("After Receive Money") | `CustomerPaymentService::confirmPayment` — after `auditPaymentConfirmed()`, before the `return` (inside `DB::transaction`). Fires ONLY when `$transactionType === 'receive'` (discount / write_off / payment-refund are not "receive money") | `branch_id`, `customer_id`, `created_by` (the confirmer) | `app/Services/Sales/CustomerPaymentService.php` L203-229 |
+| **damage_invoice_created** ("After Create Damage Invoice") | `DamageService::createDamage` — after items insert, before the `return` (inside `DB::transaction`). Skipped when `$data['suppress_notification']` is set (the sales-return linked-damage flow sets this to avoid double-firing on top of `return_confirmed`) | `branch_id`, `created_by` | `app/Services/Stock/DamageService.php` L124-150 |
+| **user_login** ("After Login") | `AuthenticatedSessionController::store` — after `UserAuditLogger::log('login_success')`, before `regenerateToken()` | `created_by` (the user), `branch_id` (from `$user->employee?->branch_id`) | `app/Http/Controllers/Auth/AuthenticatedSessionController.php` L213-232 |
+| **user_logout** ("After Logout") | `AuthenticatedSessionController::destroy` — after `UserAuditLogger::log('logout')`. `branch_id` + `username` captured BEFORE `Auth::logout()` + `session()->invalidate()` clear them | `created_by`, `branch_id` (captured pre-logout) | `app/Http/Controllers/Auth/AuthenticatedSessionController.php` L268-287 |
+| **customer_limit_increased** ("After Increasing Customer Limit") | `CustomerController::update` — after `$item->update($validated)` succeeds. Captures `$oldCreditLimit` BEFORE the update; fires ONLY when `$newCreditLimit > $oldCreditLimit` (decreases + no-change do not fire — the user's event is "After **INCREASING** customer limit"). Resolved via `app(NotificationService::class)` to avoid touching the parent-controller constructor | `customer_id`, `branch_id`, `created_by` | `app/Http/Controllers/Admin/CustomerController.php` L539-543 (capture) + L578-606 (dispatch) |
+| **return_created / return_confirmed / return_reversed** ("After Sales Return" + sub-flows) | 3 existing `SalesReturnService::dispatch()` calls **upgraded** to pass `$context` (were 4-positional-arg, now 6-arg with context). `salesman_id` derived via `DB::table('sales_invoices')->where('id',$return->sales_invoice_id)->value('salesman_id')` for confirm/reverse (sales_returns has no salesman_id column) | `branch_id`, `customer_id`, `salesman_id` (derived for confirm/reverse), `created_by` | `app/Services/Sales/SalesReturnService.php` L139-162 / L254-282 / L362-390 |
+| **branch_demand_created** ("After Branch Demand") | **NOT WIRED** — the `branch_demands` table exists (created in `database/sql/03_stock.sql`) but there is NO Laravel `BranchDemand` model, controller, or service. The legacy PHP code path is the only creator. F-18c cannot wire a dispatch call where there is no PHP call site. | N/A | Deferred — requires a new `BranchDemandService` (out of F-18c scope) |
+
+**Safety design (applied to every dispatch site):**
+- Each new dispatch is wrapped in `try { ... } catch (\Throwable $e) { Log::warning(...); }` so a notification failure (e.g. queue down, DB write error) NEVER rolls back the business transaction or blocks the user flow. The 5 dispatches inside `DB::transaction` closures (finalizeFromCart, issueChallan, confirmPayment, createDamage, + 3 SalesReturnService calls) are especially critical — without the try/catch, a `$user->notify()` failure would roll back the entire invoice/challan/payment/return.
+- `NotificationService::dispatch()` itself is non-blocking for the request: `ERPNotification` implements `ShouldQueue`, so `$user->notify()` pushes a queued job (writes the `notifications` row async via the queue worker). The SSE `pg_notify` emission is also wrapped in its own try/catch inside `dispatch()`.
+- The `payment_receive` dispatch is gated on `$transactionType === 'receive'` — discount / write_off / payment-refund types do not fire the "receive money" event.
+- The `damage_invoice_created` dispatch honors a `suppress_notification` flag so the sales-return linked-damage flow (`SalesReturnService::createLinkedDamageWriteOffs`) does not double-fire damage_invoice_created on top of return_confirmed.
+
+**What F-18c does NOT do (deferred):**
+- `branch_demand_created` — no Laravel code path exists. Requires a new `BranchDemandService` (the table + RLS policies exist; only the Eloquent layer is missing). This is a separate feature, not a notification wiring task.
+- F-18d — admin UX polish (Select2 multi-select, default-rules seeder, "Reset to defaults" button). The current F-18b form is functional (native `<select multiple>`) but not yet polished.
+
 ### Tasks (remaining Phase 4 tasks — unchanged from original spec)
 
 2. **F-12 — Rate-limit datatable + summary routes.** ⬜ Pending
@@ -406,7 +432,7 @@ F-18b reworks the **schema + recipient-resolution layer** so the engine supports
 - [x] **F-18a:** `notification.js` loaded on every authenticated page; BASE_URL + unread-count URL + response parsing fixed; toast container + audio element present.
 - [x] **F-18a:** Real-time delivery via SSE (PostgreSQL LISTEN/NOTIFY → Redis → EventSource) — no continuous DB polling.
 - [x] **F-18b:** Multi-select recipient types per event (pivot table `notification_rule_recipients`) + context-aware recipient resolution (`warehouse_manager_of_branch`, `salesman_of_invoice`, `invoice_creator`) + EVENTS expanded to the user's 9 predefined events (+ 5 pre-existing) + RECIPIENTS expanded to 10 types (3 context-aware) + vestigial `broadcast` channel removed from `ERPNotification` (`via()` now database-only, `toBroadcast()` deleted, `BroadcastMessage` import dropped).
-- [ ] **F-18c:** Explicit `dispatch()` calls wired into all 9 event trigger points.
+- [x] **F-18c:** Explicit `dispatch()` calls wired into 8 of 9 event trigger points (`sales_finalize`, `challan_create`, `payment_receive`, `damage_invoice_created`, `user_login`, `user_logout`, `customer_limit_increased` + 3 existing `return_*` calls upgraded with `$context`). `branch_demand_created` deferred — no Laravel BranchDemand controller/service exists yet (table only; legacy-only code path).
 - [ ] **F-18d:** Admin UX polish (multi-select rules UI + default-rules seeder + "Reset to defaults").
 - [ ] **F-12:** `throttle:180,1` on datatable route; `throttle:120,1` on summary route.
 - [ ] **F-12:** 429 response test confirms rate limiting works.
@@ -522,7 +548,7 @@ Remove confusion-causing dead code and centralize authorization.
 | 1 — Call-It-A-Day Parity | F-2, F-33, F-42, F-43 | Critical | Medium (controller + view + JS) | ✅ Complete |
 | 2 — Filter UX Parity | F-31, F-32, F-41, F-40 | High | Medium (mostly JS + view) | ✅ Complete |
 | 3 — Inline Reverse & Per-Row Actions | F-39, F-42 (remaining), F-17 UX | High | Medium (view + AJAX) | ✅ Complete |
-| 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | 🔄 In progress (F-18a/b ✅; F-12, F-6, F-18c/d pending) |
+| 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | 🔄 In progress (F-18a/b/c ✅; F-12, F-6, F-18d pending) |
 | 5 — Stale-Draft Surface & Polish | F-20, F-37, F-38 | Medium | Small (view + JS) | ⬜ Pending |
 | 6 — Dead Code & Architectural Polish | housekeeping | Low | Small (cleanup + Policy classes) | ⬜ Pending |
 

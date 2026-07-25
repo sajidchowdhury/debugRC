@@ -9,6 +9,7 @@ use App\Services\Auth\CredentialVersion;
 use App\Services\Auth\LoginRateLimiter;
 use App\Services\Auth\RememberMeManager;
 use App\Services\Auth\UserAuditLogger;
+use App\Services\Notification\NotificationService;
 use App\Session\LegacySessionBridge;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -38,7 +39,8 @@ class AuthenticatedSessionController extends Controller
         private LoginRateLimiter $rateLimiter,
         private AccountLockout $lockout,
         private RememberMeManager $rememberMe,
-        private LegacySessionBridge $bridge
+        private LegacySessionBridge $bridge,
+        private NotificationService $notifications
     ) {}
 
     /**
@@ -208,6 +210,27 @@ class AuthenticatedSessionController extends Controller
             'username' => $username,
         ]);
 
+        // F-18c: Notify configured recipients that a user logged in.
+        // Best-effort — never blocks the login redirect.
+        try {
+            $this->notifications->dispatch(
+                'user_login',
+                "User {$user->username} logged in.",
+                'user',
+                $user->id,
+                [],
+                [
+                    'created_by' => (int) $user->id,
+                    'branch_id'  => (int) ($user->employee?->branch_id ?? 0),
+                ]
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Notification dispatch failed (user_login)', [
+                'user_id' => $user->id,
+                'error'   => $e->getMessage(),
+            ]);
+        }
+
         $request->session()->regenerateToken();
 
         return redirect()->intended(route('dashboard'));
@@ -219,6 +242,11 @@ class AuthenticatedSessionController extends Controller
     public function destroy(Request $request)
     {
         $userId = Auth::id();
+        // F-18c: capture branch context BEFORE Auth::logout() + session
+        // invalidate() clear it, so the user_logout notification can still
+        // resolve context-aware recipient types (e.g. warehouse_manager_of_branch).
+        $branchId = (int) (session('branch_id') ?? auth()->user()?->employee?->branch_id ?? 0);
+        $username = auth()->user()?->username ?? ('user#' . $userId);
 
         // Revoke remember-me.
         $this->rememberMe->revokeCurrent();
@@ -236,6 +264,27 @@ class AuthenticatedSessionController extends Controller
 
         if ($userId) {
             UserAuditLogger::log((int) $userId, 'logout');
+
+            // F-18c: Notify configured recipients that a user logged out.
+            // Best-effort — never blocks the logout redirect.
+            try {
+                $this->notifications->dispatch(
+                    'user_logout',
+                    "User {$username} logged out.",
+                    'user',
+                    (int) $userId,
+                    [],
+                    [
+                        'created_by' => (int) $userId,
+                        'branch_id'  => $branchId,
+                    ]
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Notification dispatch failed (user_logout)', [
+                    'user_id' => (int) $userId,
+                    'error'   => $e->getMessage(),
+                ]);
+            }
         }
 
         return redirect()->route('login')

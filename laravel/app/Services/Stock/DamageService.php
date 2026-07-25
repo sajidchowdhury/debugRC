@@ -5,6 +5,7 @@ namespace App\Services\Stock;
 use App\Models\DamageInvoice;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Notification\NotificationService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -28,7 +29,8 @@ class DamageService
 {
     public function __construct(
         private StockService $stockService,
-        private JournalPostingService $journalPosting
+        private JournalPostingService $journalPosting,
+        private NotificationService $notifications
     ) {}
 
     /**
@@ -118,6 +120,34 @@ class DamageService
                 ];
             }
             DB::table('damage_invoice_items')->insert($itemRows);
+
+            // F-18c: Notify configured recipients that a damage invoice was
+            // created. Skipped when `suppress_notification` is set — the
+            // sales-return linked-damage flow (SalesReturnService::
+            // createLinkedDamageWriteOffs) sets this flag to avoid firing
+            // damage_invoice_created on top of return_confirmed.
+            if (empty($data['suppress_notification'])) {
+                try {
+                    $this->notifications->dispatch(
+                        'damage_invoice_created',
+                        "Damage invoice {$damageCode} created — Tk "
+                        . number_format((float) $totalValue, 2)
+                        . " at warehouse #{$warehouseId} (branch #{$branchId}).",
+                        'damage_invoice',
+                        $damageId,
+                        [],
+                        [
+                            'branch_id'  => $branchId,
+                            'created_by' => (int) ($data['created_by'] ?? 0),
+                        ]
+                    );
+                } catch (\Throwable $e) {
+                    Log::warning('Notification dispatch failed (damage_invoice_created)', [
+                        'damage_id' => $damageId,
+                        'error'     => $e->getMessage(),
+                    ]);
+                }
+            }
 
             return DamageInvoice::with(['items.product', 'warehouse.branch'])->find($damageId);
         });
