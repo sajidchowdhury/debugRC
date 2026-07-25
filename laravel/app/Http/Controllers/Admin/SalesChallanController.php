@@ -283,6 +283,11 @@ class SalesChallanController extends Controller
      *
      * Phase 4: dispatched_ctn[] is passed through to the service which
      * persists it into sales_invoice_dispatches.dispatched_ctn.
+     *
+     * Phase 6: transport_cost is passed through to the service which,
+     * when it differs from the invoice's current transport_cost, updates
+     * sales_invoices.transport_cost + total_amount and posts a
+     * customer_ledger 'invoice_adjustment' delta (GL deferred to issue).
      */
     public function storeGodown(PrepareGodownWebRequest $request, int $invoiceId)
     {
@@ -294,7 +299,8 @@ class SalesChallanController extends Controller
                 $validated['warehouse_assignments'],
                 auth()->id(),
                 $validated['dispatcher_id'],
-                $validated['dispatched_ctn'] ?? []
+                $validated['dispatched_ctn'] ?? [],
+                (float) ($validated['transport_cost'] ?? 0)
             );
 
             return redirect()->route('admin.sales-challans.challan-form', $invoiceId)

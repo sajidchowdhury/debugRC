@@ -84,6 +84,22 @@ class SalesChallanService
      * so a re-save produces no duplicate sales_invoice_dispatches rows.
      * The original godown_prepared_at timestamp is preserved on re-save.
      *
+     * Phase 6: transport-cost edit at godown. An optional $transportCost
+     * (nullable so the Mobile API caller — which doesn't send transport —
+     * stays backward-compatible) is accepted. When provided AND differing
+     * from the invoice's current transport_cost by more than 0.01:
+     *   1. The ORIGINAL transport_cost + total_amount are snapshotted into
+     *      pre_challan_transport / pre_challan_total (once — preserved across
+     *      godown re-edits so issueChallan posts the GL for the FULL delta
+     *      from the pre-godown state, and cancelChallan restores originals).
+     *   2. sales_invoices.transport_cost + total_amount are updated
+     *      (total_amount = sub_total − discount_amount + new transport).
+     *   3. A customer_ledger 'invoice_adjustment' entry is posted for the
+     *      delta (debit if transport rose, credit if it fell) with
+     *      journal_entry_id = NULL (GL is deferred to issueChallan, which
+     *      links this row to the posted GL JE so cancel's cascade reverses it).
+     * No GL is posted at godown (mirrors Project A: GL at finalize/issue).
+     *
      * @param int $invoiceId
      * @param array $warehouseAssignments [item_id => warehouse_id] (web)
      *                                      or [product_id => warehouse_id] (API — broken, see above)
@@ -91,6 +107,8 @@ class SalesChallanService
      * @param array $dispatcherIds Employee IDs to sync as dispatchers
      *                              (role=dispatcher, branch-scoped).
      * @param array $dispatchedCtn [item_id => ctn_count] carton packing
+     * @param float|null $transportCost Phase 6 transport cost (null = no edit,
+     *                                  backward-compat for the Mobile API caller).
      * @return SalesInvoice
      * @throws \RuntimeException If invoice not draft (and not godown-prepared
      *         re-edit), already challan-issued, reversed, or cancelled.
@@ -100,9 +118,10 @@ class SalesChallanService
         array $warehouseAssignments,
         int $preparedBy,
         array $dispatcherIds = [],
-        array $dispatchedCtn = []
+        array $dispatchedCtn = [],
+        ?float $transportCost = null
     ): SalesInvoice {
-        return DB::transaction(function () use ($invoiceId, $warehouseAssignments, $preparedBy, $dispatcherIds, $dispatchedCtn) {
+        return DB::transaction(function () use ($invoiceId, $warehouseAssignments, $preparedBy, $dispatcherIds, $dispatchedCtn, $transportCost) {
             $invoice = SalesInvoice::with('items', 'dispatches')->lockForUpdate()->find($invoiceId);
 
             if (!$invoice) {
@@ -185,6 +204,74 @@ class SalesChallanService
                 $syncPayload[$eid] = ['dispatch_role' => 'dispatcher'];
             }
             $invoice->dispatchers()->sync($syncPayload);
+
+            // Phase 6: Transport-cost edit at godown. If the submitted
+            // transport differs from the invoice's current transport_cost,
+            // recompute total_amount, update the invoice, and post a
+            // customer_ledger 'invoice_adjustment' entry for the delta.
+            // GL is deferred to issueChallan (mirrors Project A). The
+            // original values are snapshotted (once) so issueChallan can
+            // post the GL for the full delta and cancelChallan can restore.
+            // A null $transportCost (Mobile API caller) skips this block.
+            if ($transportCost !== null) {
+                $newTransport = round((float) $transportCost, 2);
+                $oldTransport = round((float) $invoice->transport_cost, 2);
+                $transportDelta = round($newTransport - $oldTransport, 2);
+
+                if (abs($transportDelta) > 0.01) {
+                    // Snapshot the ORIGINAL values — only on the FIRST edit
+                    // (preserve the earliest pre-godown state across re-edits
+                    // so issueChallan's GL reflects the total change and
+                    // cancelChallan restores the true original).
+                    if ($invoice->pre_challan_transport === null) {
+                        DB::table('sales_invoices')
+                            ->where('id', $invoiceId)
+                            ->update([
+                                'pre_challan_transport' => $oldTransport,
+                                'pre_challan_total'     => (float) $invoice->total_amount,
+                            ]);
+                    }
+
+                    // Update invoice transport_cost + total_amount.
+                    // due_amount is GENERATED — auto-updated by PostgreSQL.
+                    $newTotal = (float) $invoice->sub_total
+                        - (float) $invoice->discount_amount
+                        + $newTransport;
+                    DB::table('sales_invoices')
+                        ->where('id', $invoiceId)
+                        ->update([
+                            'transport_cost' => $newTransport,
+                            'total_amount'   => round($newTotal, 2),
+                        ]);
+
+                    // Post customer_ledger 'invoice_adjustment' for the delta.
+                    // journal_entry_id is NULL — GL is deferred to issueChallan,
+                    // which links this row to the posted GL JE so cancel's
+                    // JournalReversalService cascade reverses it.
+                    $debit  = $transportDelta > 0 ? abs($transportDelta) : 0;
+                    $credit = $transportDelta < 0 ? abs($transportDelta) : 0;
+                    $this->subLedger->postCustomerLedgerEntry([
+                        'customer_id'      => $invoice->customer_id,
+                        'branch_id'        => $invoice->branch_id,
+                        'transaction_date' => now()->format('Y-m-d'),
+                        'transaction_type' => 'invoice_adjustment',
+                        'reference_type'   => 'sales_invoice',
+                        'reference_id'     => $invoice->id,
+                        'debit'            => $debit,
+                        'credit'           => $credit,
+                        'description'      => 'Godown prep — transport adjustment '
+                            . ($transportDelta >= 0 ? '+' : '') . number_format($transportDelta, 2)
+                            . ' (invoice ' . $invoice->invoice_code . ')',
+                        'journal_entry_id' => null,
+                        'created_by'       => $preparedBy,
+                    ]);
+
+                    // Reflect the update in the loaded model so the return
+                    // value + downstream code see the new totals.
+                    $invoice->transport_cost = $newTransport;
+                    $invoice->total_amount   = round($newTotal, 2);
+                }
+            }
 
             // Update invoice status.
             // Phase 5: on re-save (already godown-prepared) preserve the
@@ -339,57 +426,52 @@ class SalesChallanService
                     'updated_at' => now(),
                 ]);
 
-            // P2-3: Transport snapshot + adjustment.
-            // If the challan form's transport_cost differs from the invoice's
-            // original transport_cost, snapshot the original values + post an
-            // adjustment (customer_ledger + GL) for the delta.
-            $newTransport = (float) ($data['transport_cost'] ?? 0);
-            $oldTransport = (float) $invoice->transport_cost;
-            $transportAdjustment = round($newTransport - $oldTransport, 2);
+            // Phase 6 / P2-3: Transport adjustment GL (deferred from godown).
+            // Transport is now edited at GODOWN time: prepareGodown posts the
+            // customer_ledger 'invoice_adjustment' delta (journal_entry_id =
+            // NULL) + snapshots the original transport_cost/total into
+            // pre_challan_transport / pre_challan_total. At ISSUE we post the
+            // deferred GL JE for the captured delta and LINK the godown
+            // customer_ledger row(s) to it (by setting their journal_entry_id)
+            // so cancelChallan's JournalReversalService::reverseByJournalEntry
+            // cascade finds and reverses BOTH the GL and the sub-ledger entry
+            // together. (Pre-Phase-6 invoices that never edited transport at
+            // godown have pre_challan_transport = NULL → no GL, no adjustment.
+            // Backward compatible.)
             $adjustmentJournalEntryId = null;
+            $transportAdjustment = 0.0;
 
-            if (abs($transportAdjustment) > 0.01) {
-                // Snapshot original values on the invoice.
-                DB::table('sales_invoices')
-                    ->where('id', $invoiceId)
-                    ->update([
-                        'pre_challan_transport' => $oldTransport,
-                        'pre_challan_total' => (float) $invoice->total_amount,
-                    ]);
-
-                // Update invoice transport_cost + total_amount. due_amount is GENERATED — auto-updated by PostgreSQL.
-                $newTotal = (float) $invoice->sub_total - (float) $invoice->discount_amount + $newTransport;
-                DB::table('sales_invoices')
-                    ->where('id', $invoiceId)
-                    ->update([
-                        'transport_cost' => round($newTransport, 2),
-                        'total_amount' => round($newTotal, 2),
-                    ]);
-
-                // Post GL adjustment JE FIRST (Dr/Cr AR + Revenue, swapped by sign) to get journal_entry_id.
-                $adjustmentJournalEntryId = $this->postTransportAdjustmentGL(
-                    $invoiceId, $challanCode, $challanDate, (int) $invoice->branch_id,
-                    $transportAdjustment, (int) $invoice->customer_id,
-                    $data['created_by'] ?? null
+            if ($invoice->pre_challan_transport !== null) {
+                $transportAdjustment = round(
+                    (float) $invoice->transport_cost - (float) $invoice->pre_challan_transport,
+                    2
                 );
 
-                // Post customer_ledger 'invoice_adjustment' entry via SubLedgerService for the delta.
-                $debit = $transportAdjustment > 0 ? abs($transportAdjustment) : 0;
-                $credit = $transportAdjustment < 0 ? abs($transportAdjustment) : 0;
-                $this->subLedger->postCustomerLedgerEntry([
-                    'customer_id' => $invoice->customer_id,
-                    'branch_id' => $invoice->branch_id,
-                    'transaction_date' => now()->format('Y-m-d'),
-                    'transaction_type' => 'invoice_adjustment',
-                    'reference_type' => 'sales_invoice',
-                    'reference_id' => $invoice->id,
-                    'debit' => $debit,
-                    'credit' => $credit,
-                    'description' => 'Challan ' . $challanCode . ' — transport adjustment ' . ($transportAdjustment >= 0 ? '+' : '') . number_format($transportAdjustment, 2),
-                    'journal_entry_id' => $adjustmentJournalEntryId,
-                    'created_by' => $data['created_by'] ?? null,
-                ]);
+                if (abs($transportAdjustment) > 0.01) {
+                    // Post GL adjustment JE (Dr/Cr AR + Revenue, swapped by sign).
+                    $adjustmentJournalEntryId = $this->postTransportAdjustmentGL(
+                        $invoiceId, $challanCode, $challanDate, (int) $invoice->branch_id,
+                        $transportAdjustment, (int) $invoice->customer_id,
+                        $data['created_by'] ?? null
+                    );
+
+                    // Link the godown-time customer_ledger 'invoice_adjustment'
+                    // row(s) (still unlinked — journal_entry_id IS NULL) to
+                    // this GL JE so the cancel cascade reverses them. There
+                    // may be more than one row if transport was edited
+                    // multiple times during godown re-saves; their summed
+                    // delta equals the snapshot delta, matching the GL amount.
+                    DB::table('customer_ledger')
+                        ->where('reference_type', 'sales_invoice')
+                        ->where('reference_id', $invoiceId)
+                        ->where('transaction_type', 'invoice_adjustment')
+                        ->whereNull('journal_entry_id')
+                        ->update(['journal_entry_id' => $adjustmentJournalEntryId]);
+                }
             }
+            // (customer_ledger already posted at godown — NOT re-posted here.
+            //  invoice transport_cost + total_amount already updated at godown — NOT re-updated.
+            //  snapshot already taken at godown — NOT re-taken.)
 
             // Store transport_adjustment + adjustment_journal_entry_id on the challan.
             DB::table('sales_challans')

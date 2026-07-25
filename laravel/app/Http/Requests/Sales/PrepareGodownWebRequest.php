@@ -8,7 +8,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Validator;
 
 /**
- * Phase 3 + Phase 4 — Web Form Request for saving the godown copy.
+ * Phase 3 + Phase 4 + Phase 6 — Web Form Request for saving the godown copy.
  *
  * Promotes the inline $request->validate() that used to live in
  * SalesChallanController::storeGodown into a typed Form Request so the
@@ -22,6 +22,12 @@ use Illuminate\Validation\Validator;
  *   dispatcher_id.*            — integer|exists:employees,id
  *   dispatched_ctn             — nullable|array (Phase 4: carton packing count)
  *   dispatched_ctn.*           — nullable|numeric|min:0
+ *   transport_cost             — nullable|numeric|min:0 (Phase 6: transport
+ *                               cost edited at godown; defaults to the
+ *                               invoice's current transport_cost on the
+ *                               view. A change posts a customer_ledger
+ *                               'invoice_adjustment' delta; GL is deferred
+ *                               to challan issue.)
  *
  * Additional server-side authorization (withValidator):
  *   Each dispatcher_id MUST reference an Employee whose:
@@ -59,6 +65,7 @@ class PrepareGodownWebRequest extends FormRequest
             'dispatcher_id.*'          => ['integer', 'exists:employees,id'],
             'dispatched_ctn'           => ['nullable', 'array'],
             'dispatched_ctn.*'         => ['nullable', 'numeric', 'min:0'],
+            'transport_cost'           => ['nullable', 'numeric', 'min:0'],
         ];
     }
 
@@ -70,6 +77,7 @@ class PrepareGodownWebRequest extends FormRequest
             'dispatcher_id.*'        => 'dispatcher',
             'dispatched_ctn'         => 'dispatched cartons',
             'dispatched_ctn.*'       => 'dispatched cartons',
+            'transport_cost'         => 'transport cost',
         ];
     }
 

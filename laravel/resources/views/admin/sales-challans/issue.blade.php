@@ -6,8 +6,12 @@
 ]">
 @php
     $totalCogs = (float) ($totalCogs ?? 0);
-    $invoiceTotal = (float) ($invoice->total_amount ?? 0);
-    $transportCost = (float) old('transport_cost', 0);
+    // Phase 6: transport is now finalized at godown preparation, so
+    // invoice.total_amount already INCLUDES transport_cost. Render the
+    // preview as merchandise (sub_total − discount) + transport = grand
+    // total (= total_amount), with no double-counting.
+    $invoiceTotal = (float) ($invoice->sub_total ?? 0) - (float) ($invoice->discount_amount ?? 0);
+    $transportCost = (float) ($invoice->transport_cost ?? 0);
     $grandTotal = $invoiceTotal + $transportCost;
 
     // Phase 2 — pre-compute summary-card values (parity with godown screen)
@@ -238,10 +242,12 @@
                            value="{{ old('driver_name') }}" placeholder="Driver full name">
                 </div>
                 <div>
-                    <label class="text-sm font-medium text-gray-500 block mb-1" for="transport_cost">Transport Cost (Tk) / পরিবহন খরচ</label>
+                    <label class="text-sm font-medium text-gray-500 block mb-1" for="transport_cost">Transport Cost (Tk) / পরিবহন খরচ <span class="text-xs font-normal text-gray-400">(set at godown)</span></label>
                     <input type="number" step="0.01" min="0" id="transport_cost" name="transport_cost"
-                           class="border border-gray-200 rounded-lg px-3 py-2 text-sm w-full outline-none focus:ring-2 focus:ring-amber-300"
-                           value="{{ old('transport_cost', '0') }}">
+                           class="border border-gray-200 rounded-lg px-3 py-2 text-sm w-full outline-none bg-gray-50 cursor-not-allowed"
+                           value="{{ number_format((float) ($invoice->transport_cost ?? 0), 2, '.', '') }}"
+                           readonly>
+                    <p class="text-xs text-gray-500 mt-1">Transport cost is finalized at godown preparation. To change it, go back to the godown screen.</p>
                 </div>
                 <div class="md:col-span-2">
                     <label class="text-sm font-medium text-gray-500 block mb-1" for="notes">Notes / মন্তব্য</label>
@@ -255,7 +261,7 @@
             <div class="mt-4 bg-amber-50 rounded-lg p-3 border border-amber-200">
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
                     <div>
-                        <span class="text-gray-500 block text-xs">Invoice Total</span>
+                        <span class="text-gray-500 block text-xs">Invoice Total <span class="text-gray-400 font-normal">(excl. transport)</span></span>
                         <span class="font-semibold">Tk {{ number_format($invoiceTotal, 2) }}</span>
                     </div>
                     <div>

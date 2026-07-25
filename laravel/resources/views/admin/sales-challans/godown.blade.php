@@ -73,6 +73,14 @@
     // Pre-compute disabled state for the submit button (must NOT use @if inside
     // an <x-*> component tag — raw <button> used below).
     $warehousesEmpty = $warehouses->isEmpty();
+
+    // Phase 6: transport-cost preview components. The live total preview
+    // (#invoice-total-display) = sub_total + transport − discount. The
+    // transport input defaults to the invoice's current transport_cost
+    // (set at sales-invoice creation OR a prior godown save).
+    $subTotal = (float) ($invoice->sub_total ?? 0);
+    $discountAmount = (float) ($invoice->discount_amount ?? 0);
+    $transportCostDefault = (float) ($invoice->transport_cost ?? 0);
 @endphp
 
 <div class="space-y-6">
@@ -411,6 +419,65 @@
             </div>
         </div>
 
+        {{-- Phase 6: Transport cost card + live total preview (A7, U12).
+            Transport cost is edited at godown; a change posts a customer_ledger
+            'invoice_adjustment' delta immediately. The matching GL entry is
+            posted at challan issue (deferred, mirrors Project A). --}}
+        <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+            <div class="px-4 py-3 border-b border-amber-100 flex items-center justify-between flex-wrap gap-2">
+                <div>
+                    <h3 class="text-base flex items-center gap-2 font-medium">
+                        <i class="fas fa-truck text-amber-600"></i>
+                        Transport Cost
+                    </h3>
+                    <p class="text-xs text-gray-500">পরিবহন খরচ — customer ledger posts now; GL posts at challan issue</p>
+                </div>
+                <span class="bg-amber-100 border border-amber-300 text-amber-700 rounded-full px-2 py-0.5 text-xs font-medium">
+                    editable at godown
+                </span>
+            </div>
+            <div class="p-4">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+                    <div>
+                        <label class="text-sm font-medium text-gray-500 block mb-1" for="godown_transport_cost">Transport Cost (Tk) / পরিবহন খরচ</label>
+                        <input type="number" step="0.01" min="0" id="godown_transport_cost" name="transport_cost"
+                               class="border border-gray-200 rounded-lg px-3 py-2 text-sm w-full outline-none focus:ring-2 focus:ring-amber-300"
+                               value="{{ old('transport_cost', number_format($transportCostDefault, 2, '.', '')) }}"
+                               data-sub-total="{{ $subTotal }}"
+                               data-discount="{{ $discountAmount }}"
+                               inputmode="decimal">
+                        <p class="text-xs text-gray-500 mt-1.5 flex items-start gap-1.5">
+                            <i class="fas fa-circle-info text-amber-500 mt-0.5"></i>
+                            <span>Editing transport here posts a <strong>customer ledger</strong> adjustment immediately. The matching <strong>GL entry</strong> is posted when the challan is issued.</span>
+                        </p>
+                    </div>
+                    <div class="md:col-span-2">
+                        {{-- Live total preview: #invoice-total-display = sub_total + transport − discount --}}
+                        <div class="bg-amber-50 rounded-lg p-3 border border-amber-200">
+                            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                                <div>
+                                    <span class="text-gray-500 block text-xs">Sub Total</span>
+                                    <span class="font-semibold">Tk {{ number_format($subTotal, 2) }}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500 block text-xs">Discount</span>
+                                    <span class="font-semibold text-red-600">− Tk {{ number_format($discountAmount, 2) }}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500 block text-xs">Transport</span>
+                                    <span class="font-semibold" id="godown_transport_display">Tk {{ number_format($transportCostDefault, 2) }}</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-500 block text-xs">Grand Total</span>
+                                    <span class="font-bold text-amber-900" id="invoice-total-display">Tk {{ number_format($subTotal - $discountAmount + $transportCostDefault, 2) }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Sticky save bar (matches template PAGE 3) -->
         <div class="flex gap-3 sticky bottom-4 bg-white/80 backdrop-blur-sm py-4 px-4 border-t rounded-t-lg shadow-lg mt-4 items-center justify-end flex-wrap">
             <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="border border-gray-200 hover:bg-gray-50 rounded-lg px-4 py-2 text-sm">
@@ -527,6 +594,27 @@ $(function () {
             position: 'top-end'
         });
     });
+
+    // Phase 6 — Live total preview on transport cost input.
+    // #invoice-total-display = sub_total + transport − discount.
+    function formatTk(v) {
+        return 'Tk ' + Number(v).toLocaleString('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+    }
+    function updateGodownTotalPreview() {
+        var $inp = $('#godown_transport_cost');
+        if (!$inp.length) return;
+        var sub = parseFloat($inp.data('sub-total')) || 0;
+        var disc = parseFloat($inp.data('discount')) || 0;
+        var transport = parseFloat($inp.val()) || 0;
+        var total = sub + transport - disc;
+        $('#invoice-total-display').text(formatTk(total));
+        $('#godown_transport_display').text(formatTk(transport));
+    }
+    $('#godown_transport_cost').on('input', updateGodownTotalPreview);
+    updateGodownTotalPreview(); // initial render
 
     // Phase 3 — Dispatcher multi-select (Select2 AJAX).
     // Pre-filled <option> tags carry already-selected dispatchers (from
