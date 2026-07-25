@@ -13,7 +13,7 @@
 | Phase | Status | Notes |
 |---|---|---|
 | 1 — In-Context Payment & Call-It-A-Day | ✅ **DONE** | AJAX payment, print-receipt prompt, auto call-it-a-day, per-row + bulk actions, 4 new `<x-erp.*>` components |
-| 2 — Filter UX | ⬜ Pending | |
+| 2 — Filter UX | ✅ **DONE** | Date presets (Today/Yesterday/Last 7 days/This month/Custom), localStorage persistence, active-filter-bar with removable tags + Clear all, 3 new `<x-erp.*>` components |
 | 3 — Per-Row Actions & Inline Reverse | ⬜ Pending | |
 | 4 — Premium Polish | ⬜ Pending | |
 | 5 — Accessibility & Keyboard | ⬜ Pending | |
@@ -74,9 +74,11 @@
 
 ---
 
-## Phase 2 — Filter UX: Persistence, Presets, Active Filter Bar (High)
+## Phase 2 — Filter UX: Persistence, Presets, Active Filter Bar (High) — ✅ DONE
 
 > Closes the filter-navigation efficiency gaps. Restores the Legacy speed of "click Yesterday preset → done" + "reload page → filters still there".
+
+> **Implemented:** 3 new Blade components (`<x-erp.date-presets>`, `<x-erp.filter-tag>`, `<x-erp.active-filter-bar>`) wired into `sales-invoices/index.blade.php`. Date presets resolve to concrete `from_date`/`to_date` client-side; filter state persists to `localStorage` under `rcerp_sales_invoices_filters_v1` (skipped when the URL carries explicit filter params); the active-filter-bar renders one removable tag per active filter + "Clear all". Tailwind CSS rebuilt — all new utility classes (`min-h-[36px]`, `bg-amber-50/60`, `size-3.5`, `focus-visible:ring-*`, gradient active state, etc.) confirmed generated in `public/assets/css/rc-erp.css`.
 
 ### Screens to improve
 - `resources/views/admin/sales-invoices/index.blade.php` — filter form section + a new active-filter-bar row above the DataTable.

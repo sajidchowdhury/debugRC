@@ -89,6 +89,14 @@
 
     {{-- Filter form (R21 — drives DataTables AJAX params) --}}
     <x-erp.left-accent-card accent="amber" icon="search" title="Filters" title-bn="ফিল্টার">
+        {{-- Phase 2 (UI/UX): one-click date presets — Today / Yesterday / Last 7 days / This month / Custom.
+            The preset resolves to concrete from_date/to_date values on the client (see applyDatePreset). --}}
+        <div class="mb-3 flex items-center gap-3 flex-wrap">
+            <span class="text-xs font-medium text-gray-500 inline-flex items-center gap-1">
+                <i class="fas fa-calendar-day"></i> Quick dates
+            </span>
+            <x-erp.date-presets id="datePresets" />
+        </div>
         <form id="invoiceFilterForm" class="row g-2 align-items-end" autocomplete="off">
             <div class="col-md-2">
                 <label class="form-label small text-muted mb-1" for="from_date">From date</label>
@@ -183,6 +191,10 @@
             <input type="hidden" id="scope" name="scope" value="{{ $scope ?? '' }}">
         </div>
     </x-erp.left-accent-card>
+
+    {{-- Phase 2 (UI/UX): Active filter bar — shows every active filter as a
+        removable tag + "Clear all". Populated by renderActiveFilterBar(). --}}
+    <x-erp.active-filter-bar id="activeFilterBar" />
 
     {{-- R21: Invoices table (server-side DataTables) --}}
     <x-erp.left-accent-card accent="cyan" icon="file-text" title="Invoices" title-bn="চালান তালিকা" body-class="!p-0">
@@ -372,6 +384,270 @@ $(function () {
             scope:       $scopeInput.val() || '',
         };
     }
+
+    // ============================================================
+    // ====== Phase 2 (UI/UX): Date presets + active filter bar ====
+    // ============================================================
+    // Three behaviours restored from Legacy sales-today-index.js:
+    //  1. One-click date presets (Today / Yesterday / Last 7 days /
+    //     This month / Custom) — resolves to concrete from_date /
+    //     to_date values on the client, no extra round-trip.
+    //  2. localStorage persistence — filters survive page reload
+    //     (key rcerp_sales_invoices_filters_v1). Skipped when the URL
+    //     already carries explicit filter params (forceUrlParams).
+    //  3. Active filter bar — a removable tag per active filter +
+    //     "Clear all", rendered live from currentFilterParams().
+
+    var FILTERS_KEY = 'rcerp_sales_invoices_filters_v1';
+    var $presets    = $('#datePresets');
+    var $activeBar  = $('#activeFilterBar');
+    var $activeTags = $('#activeFilterTags');
+
+    // Preset pill class sets (must match <x-erp.date-presets> markup).
+    var PRESET_INACTIVE = 'bg-white border-amber-200 text-amber-700 hover:bg-amber-50';
+    var PRESET_ACTIVE   = 'bg-gradient-to-r from-amber-500 to-orange-500 border-transparent text-white shadow-sm';
+
+    // Local YYYY-MM-DD formatter (avoids toISOString() UTC off-by-one).
+    function ymd(d) {
+        var m = '' + (d.getMonth() + 1);
+        var da = '' + d.getDate();
+        return d.getFullYear() + '-' + (m.length < 2 ? '0' + m : m) + '-' + (da.length < 2 ? '0' + da : da);
+    }
+
+    // Resolve the current from/to dates to a preset key ('' = no match / custom).
+    function detectPresetFromDates() {
+        var from = $('#from_date').val();
+        var to   = $('#to_date').val();
+        if (!from || !to) return '';
+        var now   = new Date();
+        var t     = ymd(now);
+        var y     = new Date(now); y.setDate(y.getDate() - 1);
+        var s7    = new Date(now); s7.setDate(s7.getDate() - 6);
+        var first = new Date(now.getFullYear(), now.getMonth(), 1);
+        if (from === t && to === t) return 'today';
+        if (from === ymd(y) && to === ymd(y)) return 'yesterday';
+        if (from === ymd(s7) && to === t) return 'last_7_days';
+        if (from === ymd(first) && to === t) return 'this_month';
+        return '';
+    }
+
+    // Toggle the visual active state of the preset pills. "custom" is
+    // never active — clicking it only clears the highlight + focuses the
+    // date inputs.
+    function setActivePreset(key) {
+        if (!$presets.length) return;
+        $presets.find('.date-preset-btn').each(function () {
+            var k = $(this).data('preset');
+            var isActive = (k === key && k !== 'custom');
+            $(this).attr('aria-pressed', isActive ? 'true' : 'false');
+            if (isActive) {
+                $(this).removeClass(PRESET_INACTIVE).addClass(PRESET_ACTIVE);
+            } else {
+                $(this).removeClass(PRESET_ACTIVE).addClass(PRESET_INACTIVE);
+            }
+        });
+    }
+
+    // Re-evaluate which preset (if any) matches the current dates.
+    // When a workflow scope chip is active, no preset is highlighted
+    // (the scope owns the date context).
+    function refreshPresetHighlight() {
+        if (currentFilterParams().scope) { setActivePreset(''); return; }
+        setActivePreset(detectPresetFromDates());
+    }
+
+    // Apply a date preset → set from/to, clear scope so dates take
+    // precedence, reload the table.
+    function applyDatePreset(key) {
+        var now   = new Date();
+        var t     = ymd(now);
+        var y     = new Date(now); y.setDate(y.getDate() - 1);
+        var s7    = new Date(now); s7.setDate(s7.getDate() - 6);
+        var first = new Date(now.getFullYear(), now.getMonth(), 1);
+
+        if (key === 'today')            { $('#from_date').val(t);        $('#to_date').val(t); }
+        else if (key === 'yesterday')   { $('#from_date').val(ymd(y));   $('#to_date').val(ymd(y)); }
+        else if (key === 'last_7_days') { $('#from_date').val(ymd(s7));  $('#to_date').val(t); }
+        else if (key === 'this_month')  { $('#from_date').val(ymd(first)); $('#to_date').val(t); }
+        // 'custom' → leave the date inputs untouched so the user can pick.
+
+        if (key !== 'custom') {
+            // A concrete preset overrides any workflow scope chip so the
+            // explicit date range is the active filter context.
+            $scopeInput.val('');
+            $chipInput.val('all');
+            $('.status-chip').removeClass('active');
+            $('.status-chip[data-status="all"]').addClass('active');
+            setActivePreset(key);
+        } else {
+            setActivePreset('');
+        }
+
+        dt.ajax.reload();
+        scheduleSummary();
+        updateExportLink();
+        saveFilters();
+        renderActiveFilterBar();
+        announceSR(key === 'custom' ? 'Custom date range' : ('Date filter: ' + key.replace(/_/g, ' ')));
+
+        if (key === 'custom') { $('#from_date').focus(); }
+    }
+
+    // Build a single filter-tag HTML string (mirrors <x-erp.filter-tag>).
+    function filterTagHTML(key, label) {
+        return '<span class="inline-flex items-center gap-1.5 rounded-full bg-white border border-amber-300 px-2.5 py-0.5 text-xs text-amber-900">'
+             + '<span>' + escapeHtml(label) + '</span>'
+             + '<button type="button" data-clear-filter="' + escapeHtml(key) + '"'
+             + ' aria-label="Remove ' + escapeHtml(label) + ' filter"'
+             + ' class="size-4 rounded-full hover:bg-amber-100 inline-flex items-center justify-center text-amber-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400">'
+             + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-3" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>'
+             + '</button></span>';
+    }
+
+    // Read currentFilterParams() and render one tag per active filter.
+    // The bar hides itself when nothing is active.
+    function renderActiveFilterBar() {
+        if (!$activeBar.length) return;
+        var p = currentFilterParams();
+        var tags = [];
+
+        // Scope chip (today / pending_godown / pending_challan) takes
+        // precedence over status_chip for the "what am I filtering" label.
+        var scopeLabels = { today: 'Today', pending_godown: 'Pending Godown', pending_challan: 'Pending Challan' };
+        var statusLabels = { draft: 'Draft', confirmed: 'Confirmed', cancelled: 'Cancelled', reversed: 'Reversed', awaiting_payment: 'Awaiting Payment' };
+
+        if (p.scope && scopeLabels[p.scope]) {
+            tags.push({ key: 'scope', label: 'Scope: ' + scopeLabels[p.scope] });
+        } else if (p.status_chip && p.status_chip !== 'all' && statusLabels[p.status_chip]) {
+            tags.push({ key: 'status_chip', label: 'Status: ' + statusLabels[p.status_chip] });
+        }
+        if (p.from_date) tags.push({ key: 'from_date', label: 'From: ' + p.from_date });
+        if (p.to_date)   tags.push({ key: 'to_date',   label: 'To: ' + p.to_date });
+        if (p.customer_id) {
+            var $c = $('#customer_id option[value="' + p.customer_id + '"]');
+            tags.push({ key: 'customer_id', label: 'Customer: ' + ($c.length ? $.trim($c.text()) : p.customer_id) });
+        }
+        if (p.branch_id) {
+            var $b = $('#branch_id option[value="' + p.branch_id + '"]');
+            tags.push({ key: 'branch_id', label: 'Branch: ' + ($b.length ? $.trim($b.text()) : p.branch_id) });
+        }
+        if (p.search)     tags.push({ key: 'search',     label: 'Search: ' + p.search });
+        if (p.smart_sort === '1') tags.push({ key: 'smart_sort', label: 'Smart sort' });
+
+        $activeTags.empty();
+        if (tags.length === 0) {
+            $activeBar.addClass('hidden');
+            return;
+        }
+        $activeBar.removeClass('hidden');
+        var html = '';
+        for (var i = 0; i < tags.length; i++) {
+            html += filterTagHTML(tags[i].key, tags[i].label);
+        }
+        $activeTags.html(html);
+    }
+
+    // Debounced save of the current filter state to localStorage.
+    var saveDebounce = null;
+    function saveFilters() {
+        clearTimeout(saveDebounce);
+        saveDebounce = setTimeout(function () {
+            try { localStorage.setItem(FILTERS_KEY, JSON.stringify(currentFilterParams())); } catch (e) {}
+        }, 400);
+    }
+
+    // Hydrate the filter form from localStorage on first load. Skipped
+    // when the URL already carries explicit filter params (forceUrlParams)
+    // — in that case the server-rendered values win.
+    function loadFilters() {
+        try {
+            var url = new URL(window.location.href);
+            var hasUrlParams = url.searchParams.has('from_date') || url.searchParams.has('to_date')
+                || url.searchParams.has('customer_id') || url.searchParams.has('branch_id')
+                || url.searchParams.has('status') || url.searchParams.has('scope');
+            if (hasUrlParams) return;
+
+            var raw = localStorage.getItem(FILTERS_KEY);
+            if (!raw) return;
+            var p = JSON.parse(raw);
+            if (!p || typeof p !== 'object') return;
+
+            if (p.from_date)   $('#from_date').val(p.from_date);
+            if (p.to_date)     $('#to_date').val(p.to_date);
+            if (p.customer_id) { $('#customer_id').val(p.customer_id).trigger('change'); }
+            if (p.branch_id)   { $('#branch_id').val(p.branch_id).trigger('change'); }
+            if (p.search)      $search.val(p.search);
+            $('#filterSmartSort').prop('checked', p.smart_sort !== '0');
+            if (p.status_chip) $chipInput.val(p.status_chip);
+            if (p.scope)       $scopeInput.val(p.scope);
+
+            // Re-sync the status/scope chip active styling to match.
+            $('.status-chip').removeClass('active');
+            if (p.scope) {
+                $('.status-chip[data-scope="' + p.scope + '"]').addClass('active');
+            } else if (p.status_chip) {
+                $('.status-chip[data-status="' + p.status_chip + '"]').addClass('active');
+            } else {
+                $('.status-chip[data-status="all"]').addClass('active');
+            }
+        } catch (e) {}
+    }
+
+    // Wipe every filter back to defaults + clear localStorage + redraw.
+    function clearAllFilters() {
+        $('#from_date, #to_date').val('');
+        $('#customer_id, #branch_id').val('').trigger('change');
+        $search.val('');
+        $('#filterSmartSort').prop('checked', true);   // smart sort on by default
+        $scopeInput.val('');
+        $chipInput.val('all');
+        $('.status-chip').removeClass('active');
+        $('.status-chip[data-status="all"]').addClass('active');
+        setActivePreset('');
+        try { localStorage.removeItem(FILTERS_KEY); } catch (e) {}
+        dt.ajax.reload();
+        scheduleSummary();
+        updateExportLink();
+        renderActiveFilterBar();
+        announceSR('All filters cleared');
+    }
+
+    // Remove a single filter (× on a tag) and redraw.
+    function clearSingleFilter(key) {
+        if (key === 'scope') {
+            $scopeInput.val('');
+            $chipInput.val('all');
+            $('.status-chip').removeClass('active');
+            $('.status-chip[data-status="all"]').addClass('active');
+        } else if (key === 'status_chip') {
+            $chipInput.val('all');
+            $('.status-chip').removeClass('active');
+            $('.status-chip[data-status="all"]').addClass('active');
+        } else if (key === 'from_date') {
+            $('#from_date').val('');
+        } else if (key === 'to_date') {
+            $('#to_date').val('');
+        } else if (key === 'customer_id') {
+            $('#customer_id').val('').trigger('change');
+        } else if (key === 'branch_id') {
+            $('#branch_id').val('').trigger('change');
+        } else if (key === 'search') {
+            $search.val('');
+        } else if (key === 'smart_sort') {
+            $('#filterSmartSort').prop('checked', false);
+        }
+        refreshPresetHighlight();
+        dt.ajax.reload();
+        scheduleSummary();
+        updateExportLink();
+        saveFilters();
+        renderActiveFilterBar();
+        announceSR('Filter removed');
+    }
+
+    // Hydrate from localStorage BEFORE the first DataTable AJAX so the
+    // initial draw already reflects the saved filter state.
+    loadFilters();
 
     var dt = $table.DataTable({
         processing: true,
@@ -680,6 +956,10 @@ $(function () {
         dt.ajax.reload();
         scheduleSummary();
         updateExportLink();
+        // Phase 2 (UI/UX): persist + refresh active bar + preset highlight.
+        saveFilters();
+        renderActiveFilterBar();
+        refreshPresetHighlight();
     });
 
     // ============================================================
@@ -693,21 +973,17 @@ $(function () {
         dt.ajax.reload();
         scheduleSummary();
         updateExportLink();
+        // Phase 2 (UI/UX): persist + refresh active bar + preset highlight.
+        saveFilters();
+        renderActiveFilterBar();
+        refreshPresetHighlight();
     });
 
+    // Phase 2 (UI/UX): the form Clear button now delegates to the
+    // unified clearAllFilters() (also used by the active-filter-bar's
+    // "Clear all") so localStorage is wiped + the active bar re-renders.
     $('#clearFiltersBtn').on('click', function () {
-        $('#from_date, #to_date').val('');
-        $('#customer_id, #branch_id').val('').trigger('change');
-        $search.val('');
-        $('#filterSmartSort').prop('checked', true);
-        // BUG-52: clear both scope and status_chip on reset.
-        $scopeInput.val('');
-        $chipInput.val('all');
-        $('.status-chip').removeClass('active');
-        $('.status-chip[data-status="all"]').addClass('active');
-        dt.ajax.reload();
-        scheduleSummary();
-        updateExportLink();
+        clearAllFilters();
     });
 
     // Debounced smart search — 320ms feels instant without spamming
@@ -719,6 +995,9 @@ $(function () {
             dt.ajax.reload();
             scheduleSummary();
             updateExportLink();
+            // Phase 2 (UI/UX): persist + refresh active bar.
+            saveFilters();
+            renderActiveFilterBar();
         }, 320);
     });
 
@@ -728,7 +1007,39 @@ $(function () {
         dt.ajax.reload();
         scheduleSummary();
         updateExportLink();
+        // Phase 2 (UI/UX): persist + refresh active bar + preset highlight
+        // (manual date edits may match/undo a preset → re-evaluate).
+        saveFilters();
+        renderActiveFilterBar();
+        refreshPresetHighlight();
     });
+
+    // ============================================================
+    // ====== Phase 2 (UI/UX): preset + tag + clear-all handlers ===
+    // ============================================================
+    // Delegated so they survive any future DOM redraws of the filter
+    // region (the preset bar + active bar are static, but delegation is
+    // the safe pattern used elsewhere on this page).
+
+    // Date preset pill click → resolve to from/to + reload.
+    $presets.on('click', '.date-preset-btn', function () {
+        applyDatePreset($(this).data('preset'));
+    });
+
+    // Active-filter-tag × button → remove that single filter.
+    $(document).on('click', '[data-clear-filter]', function () {
+        clearSingleFilter($(this).data('clear-filter'));
+    });
+
+    // Active-filter-bar "Clear all" → wipe everything.
+    $('#clearAllFilters').on('click', function () {
+        clearAllFilters();
+    });
+
+    // Initial render: paint the active bar + preset highlight to match
+    // the (possibly localStorage-hydrated) starting state.
+    renderActiveFilterBar();
+    refreshPresetHighlight();
 
     // CSV export: pass current filter params (incl. status_chip) to export URL
     function updateExportLink() {
