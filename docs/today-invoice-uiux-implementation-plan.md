@@ -15,7 +15,7 @@
 | 1 — In-Context Payment & Call-It-A-Day | ✅ **DONE** | AJAX payment, print-receipt prompt, auto call-it-a-day, per-row + bulk actions, 4 new `<x-erp.*>` components |
 | 2 — Filter UX | ✅ **DONE** | Date presets (Today/Yesterday/Last 7 days/This month/Custom), localStorage persistence, active-filter-bar with removable tags + Clear all, 3 new `<x-erp.*>` components |
 | 3 — Per-Row Actions & Inline Reverse | ✅ **DONE** | Action-group pattern (≤3 inline + overflow ⋯) on desktop + mobile, inline payment reversal in receive modal (SweetAlert2 reason prompt → AJAX POST → re-fetch), 2 new `<x-erp.*>` components + controller AJAX branch |
-| 4 — Premium Polish | ⬜ Pending | |
+| 4 — Premium Polish | ✅ **DONE** | Sticky DataTable header (amber-50/blur, max-h-28rem scroll), due-column colored pills (red due / green ✓ Paid), dual empty-state (filtered vs genuinely-empty) reusing `<x-erp.empty-state>`, branch-color pills in table cell (config-driven inline styles), live hero counter (`#heroInvoiceCount` via `recordsDisplay`); removed redundant mobile inline empty-state + skipped the unnecessary `<x-erp.live-counter>` component (inline span suffices) |
 | 5 — Accessibility & Keyboard | ⬜ Pending | |
 | 6 — Responsive & Mobile | ⬜ Pending | |
 
@@ -149,9 +149,16 @@
 
 ---
 
-## Phase 4 — Premium Polish: Sticky Header, Due Highlight, Empty State, Branch Color (Medium)
+## Phase 4 — Premium Polish: Sticky Header, Due Highlight, Empty State, Branch Color (Medium) — ✅ DONE
 
 > Pure UI delight that makes the screen feel premium and modern without changing workflow.
+
+> **Implemented:**
+> - **Sticky header** — DataTables `dom` wraps only the table (`t`) in a new `.rc-table-scroll` container with `max-height:28rem; overflow-y:auto;`; `thead th` gets `position:sticky; top:0; z-10;` with an opaque `amber-50/96` background + `backdrop-blur(4px)` + amber-300 bottom rule. Length-menu / pagination / info stay OUTSIDE the scroll container so they remain visible.
+> - **Due highlight** — `due_amount` column render now emits `.rc-due-pill` pills: red (outstanding `৳amount`) / green (`✓ Paid`). Meaning is in the text + `aria-label`, not color alone.
+> - **Empty state** — two `<x-erp.empty-state>` instances (reused, not rebuilt) toggled by `updateEmptyState()` in `drawCallback`: `recordsTotal===0` → "You're all caught up!" with **Create your first invoice** CTA; `recordsTotal>0 && recordsDisplay===0` → "No invoices match your filters" with **Clear all filters** CTA (wired to the Phase 2 `clearAllFilters()`). `role="status"` on both. The previous duplicate inline mobile empty-state was **removed** (lean — one shared empty-state for desktop + mobile).
+> - **Branch color** — `branch_code` added to the DataTable row payload; a `BRANCH_COLORS` JS map is emitted from `config/branches.php` and a `branchPillHtml()` helper renders an inline-styled `.rc-branch-pill` tinted with each branch's hex (bg `hex+15`, text `hex`, border `hex+33`). On mobile only the code shows (name hidden via media query) to save space. The hero branch pill was **intentionally skipped** as redundant with the topbar branch indicator (per the "remove unnecessary elements" directive).
+> - **Live counter** — the hero subtitle's static `Sales Invoices — {title}` text was **replaced** by `<span id="heroInvoiceCount">N</span> invoices on your collection list`, updated live in `drawCallback` via `api.page.info().recordsDisplay`. `aria-live="polite"`. The planned `<x-erp.live-counter>` component was **not** built — an inline span is sufficient (no unnecessary component).
 
 ### Screens to improve
 - `resources/views/admin/sales-invoices/index.blade.php` — DataTable header, due column, empty state, branch cell.

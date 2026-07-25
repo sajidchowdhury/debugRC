@@ -836,6 +836,7 @@ class SalesInvoiceController extends Controller
                 'customer_name'  => $inv->customer?->customer_name ?? '',
                 'customer_code'  => $inv->customer?->customer_code ?? '',
                 'branch_name'    => $inv->branch?->branch_name ?? '',
+                'branch_code'    => $inv->branch?->branch_code ?? '',
                 'items_count'    => $inv->items->count(),
                 'total_amount'   => (float) $inv->total_amount,
                 'paid_amount'    => (float) $inv->paid_amount,

@@ -67,7 +67,11 @@
         <div class="flex items-center justify-between flex-wrap gap-4">
             <div>
                 <h1 class="text-2xl font-bold text-white">গোডাউন ও চালান</h1>
-                <p class="text-amber-100 text-sm mt-1">Sales Invoices — {{ $title }}</p>
+                <p class="text-amber-100 text-sm mt-1">
+                    <span id="heroInvoiceCount"
+                          aria-live="polite" aria-atomic="true">{{ number_format((int) ($stats['total'] ?? 0)) }}</span>
+                    invoices on your collection list
+                </p>
             </div>
             <a href="{{ route('admin.sales.cart') }}" class="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors">
                 <x-erp.icon name="plus" class="size-4" /> New Sale / নতুন বিক্রয়
@@ -259,6 +263,40 @@
                     <tbody></tbody>
                 </table>
             </div>
+
+            {{-- Phase 4 (UI/UX): Empty states. Shown by updateEmptyState()
+                in the DataTables drawCallback when recordsDisplay === 0.
+                Two variants: "filters returned nothing" (with Clear-all
+                button) and "genuinely no invoices" (with Create-invoice
+                CTA). role="status" so screen readers announce the change. --}}
+            <div id="invoiceEmptyStateFiltered" class="hidden" role="status">
+                <x-erp.empty-state icon="inbox"
+                    title="No invoices match your filters"
+                    title-bn="কোনো চালান পাওয়া যায়নি"
+                    message="Try widening the date range, switching the status chip, or clearing the search."
+                    message-bn="তারিখের সীমা বাড়ান, স্ট্যাটাস পরিবর্তন করুন বা অনুসন্ধান মুছুন।">
+                    <x-slot:action>
+                        <button type="button" id="emptyStateClearBtn"
+                                class="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 transition-colors">
+                            <x-erp.icon name="rotate-ccw" class="size-4" /> Clear all filters
+                        </button>
+                    </x-slot:action>
+                </x-erp.empty-state>
+            </div>
+            <div id="invoiceEmptyStateFresh" class="hidden" role="status">
+                <x-erp.empty-state icon="check-circle"
+                    title="You're all caught up!"
+                    title-bn="সব সম্পন্ন!"
+                    message="No invoices here yet — create your first invoice to get started."
+                    message-bn="এখনো কোনো চালান নেই — শুরু করতে প্রথম চালান তৈরি করুন।">
+                    <x-slot:action>
+                        <a href="{{ route('admin.sales.cart') }}"
+                           class="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-600 transition-colors">
+                            <x-erp.icon name="plus" class="size-4" /> Create your first invoice
+                        </a>
+                    </x-slot:action>
+                </x-erp.empty-state>
+            </div>
     </x-erp.left-accent-card>
 </div>
 
@@ -324,9 +362,27 @@ $(function () {
         callItADay: '{{ route("admin.sales-invoices.call-it-a-day") }}',
         csrf:       '{{ csrf_token() }}',
     };
+
+    // Phase 4 (UI/UX): Branch color map emitted from config/branches.php
+    // so the DataTable branch cell can render a colored pill client-side
+    // (Tailwind can't generate arbitrary branch colors at build time, so
+    // we use inline styles — same approach the plan specifies).
+    var BRANCH_COLORS = {
+        @foreach (config('branches.colors', []) as $code => $cfg)
+        '{{ $code }}': { hex: '{{ $cfg['color_hex'] }}', name: {{ \Illuminate\Support\Js::from($cfg['name']) }} },
+        @endforeach
+    };
     var $bulkBar = $('#invoiceBulkBar');
     var $bulkCount = $('#bulkSelectedCount');
     var $selectAll = $('#selectAllInvoices');
+    // Phase 4 (UI/UX): cached selectors for empty-state + live counter
+    // (declared here, before the DataTable init, so they're defined by
+    // the time drawCallback first fires).
+    var $emptyFiltered = $('#invoiceEmptyStateFiltered');
+    var $emptyFresh    = $('#invoiceEmptyStateFresh');
+    var $tableWrap     = $('.sales-invoices-desktop-table');
+    var $cardsWrap     = $('#invoiceCards');
+    var $heroCount     = $('#heroInvoiceCount');
 
     // Screen-reader live-region announcer (Phase 1 a11y).
     function announceSR(msg) {
@@ -665,7 +721,10 @@ $(function () {
         // instead — it's part of the filter form so it persists
         // across page reloads via the URL query string on the index
         // action, and so it lives next to the other filter inputs).
-        dom: '<"row mb-2"<"col-md-6"l><"col-md-6 text-end"p>>rt<"row mt-2"<"col-md-6"i><"col-md-6 text-end"p>>',
+        // Phase 4 (UI/UX): wrap only the table (`t`) in .rc-table-scroll
+        // so the length-menu / pagination / info stay OUTSIDE the sticky
+        // scroll container (otherwise they'd scroll away with the rows).
+        dom: '<"row mb-2"<"col-md-6"l><"col-md-6 text-end"p>>r<"rc-table-scroll"t><"row mt-2"<"col-md-6"i><"col-md-6 text-end"p>>',
         ajax: {
             url: '{{ route('admin.sales-invoices.datatable') }}',
             type: 'GET',
@@ -729,10 +788,13 @@ $(function () {
                 },
             },
             {
+                // Phase 4 (UI/UX): Branch cell — colored pill tinted by
+                // branch code (config/branches.php). On mobile the name
+                // is hidden via CSS so only the code shows, saving space.
                 data: 'branch_name',
                 render: function (data, type, row) {
                     if (type !== 'display') return data || '';
-                    return data ? escapeHtml(data) : '<span class="text-muted">—</span>';
+                    return branchPillHtml(row.branch_code, data);
                 },
             },
             {
@@ -760,15 +822,26 @@ $(function () {
                 },
             },
             {
+                // Phase 4 (UI/UX): Due column highlight — red pill for
+                // outstanding dues, green ✓ Paid pill for settled invoices.
+                // Meaning is conveyed by text (৳amount / ✓ Paid), not color
+                // alone; aria-labels describe the state for screen readers.
                 data: 'due_amount',
                 className: 'text-end',
                 render: function (data, type, row) {
                     if (type !== 'display') return data || 0;
                     var due = parseFloat(data || 0);
                     if (due > 0.01) {
-                        return '<span class="text-danger fw-semibold">' + numberFormat(due, 2) + '</span>';
+                        return '<span class="rc-due-pill rc-due-outstanding" '
+                             +      'aria-label="Due ৳' + numberFormat(due, 2) + '">'
+                             +   '<i class="fas fa-circle-exclamation"></i> ৳'
+                             +   numberFormat(due, 2)
+                             + '</span>';
                     }
-                    return '<span class="text-success">0.00</span>';
+                    return '<span class="rc-due-pill rc-due-paid" '
+                         +      'aria-label="Fully paid">'
+                         +   '<i class="fas fa-check"></i> Paid'
+                         + '</span>';
                 },
             },
             {
@@ -877,8 +950,17 @@ $(function () {
             },
         ],
         drawCallback: function () {
+            var api = this.api();
+
             // R23: Render mobile cards from the current page's data.
-            renderMobileCards(this.api());
+            renderMobileCards(api);
+
+            // Phase 4 (UI/UX): Empty state + live hero counter. The empty
+            // state replaces the table when recordsDisplay === 0; the hero
+            // counter reflects the filtered count so it updates live as
+            // the user changes filters / calls-it-a-day.
+            updateEmptyState(api);
+            updateHeroCount(api);
 
             // Phase 1 (UI/UX): DataTables redraws the tbody on every
             // page change / ajax.reload, so per-row checkboxes are new
@@ -1216,6 +1298,52 @@ $(function () {
     }
 
     // ============================================================
+    // ====== Phase 4 (UI/UX): Empty state + live hero counter =====
+    // ============================================================
+    // updateEmptyState(): when the DataTable has 0 visible rows, hide
+    // the table + mobile cards and show one of two friendly empty-state
+    // variants. recordsTotal === 0 → "genuinely empty" (CTA: Create
+    // invoice); recordsTotal > 0 → "filters hid everything" (CTA:
+    // Clear all filters). role="status" on the wrapper lets screen
+    // readers announce the change. (Selectors $emptyFiltered /
+    // $emptyFresh / $tableWrap / $cardsWrap / $heroCount are declared
+    // earlier, before the DataTable init.)
+    function updateEmptyState(api) {
+        var info = api.page.info();
+        var shown = info.recordsDisplay;
+        if (shown > 0) {
+            $emptyFiltered.addClass('hidden');
+            $emptyFresh.addClass('hidden');
+            $tableWrap.removeClass('hidden');
+            return;
+        }
+        // No rows to show — hide the table, show the right empty state.
+        $tableWrap.addClass('hidden');
+        $cardsWrap.empty();
+        if (info.recordsTotal === 0) {
+            $emptyFresh.removeClass('hidden');
+            $emptyFiltered.addClass('hidden');
+        } else {
+            $emptyFiltered.removeClass('hidden');
+            $emptyFresh.addClass('hidden');
+        }
+    }
+
+    // updateHeroCount(): reflect the filtered record count in the hero
+    // subtitle so it updates live as filters / call-it-a-day change.
+    function updateHeroCount(api) {
+        if (!$heroCount.length) return;
+        var n = api.page.info().recordsDisplay;
+        $heroCount.text(numberFormat(n));
+    }
+
+    // Empty-state "Clear all filters" button → reuse the Phase 2
+    // clearAllFilters() (same handler as the active-filter-bar button).
+    $(document).on('click', '#emptyStateClearBtn', function () {
+        clearAllFilters();
+    });
+
+    // ============================================================
     // ====== R23: Mobile cards variant ============================
     // ============================================================
     // On narrow screens (max-width: 767.98px), the desktop table is
@@ -1235,12 +1363,10 @@ $(function () {
         }
         var data = api.rows({ page: 'current' }).data();
         if (!data || data.length === 0) {
-            $cards.html(
-                '<div class="text-center text-muted py-4">' +
-                    '<i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>' +
-                    '<p class="mb-0">No sales invoices match your filters.</p>' +
-                '</div>'
-            );
+            // Phase 4 (UI/UX): empty state is now handled centrally by
+            // updateEmptyState() (shared desktop + mobile), so just clear
+            // the cards container here.
+            $cards.empty();
             return;
         }
         var html = '';
@@ -1677,6 +1803,24 @@ $(function () {
         };
         return map[status] || '<span class="badge bg-light text-dark">' + escapeHtml(status || '') + '</span>';
     }
+    // Phase 4 (UI/UX): colored branch pill for the DataTable branch cell.
+    // Tinted with the branch's config color (config/branches.php) via
+    // inline style — bg = hex+15 (8% alpha), text = hex, border = hex+33.
+    // Mirrors the <x-erp.branch-pill> Blade component visually.
+    function branchPillHtml(code, name) {
+        code = String(code || '').toUpperCase();
+        name = name || '';
+        if (!code) return '<span class="text-muted">—</span>';
+        var c = BRANCH_COLORS[code] || { hex: '#64748b', name: name };
+        var label = name || c.name || code;
+        return '<span class="rc-branch-pill" '
+             +      'style="background:' + c.hex + '15;color:' + c.hex + ';border-color:' + c.hex + '33;" '
+             +      'aria-label="Branch: ' + escapeHtml(label) + ' (' + code + ')">'
+             +   '<i class="fas fa-code-branch"></i>'
+             +   '<span class="rc-branch-name">' + escapeHtml(label) + '</span>'
+             +   '<span class="rc-branch-code">' + escapeHtml(code) + '</span>'
+             + '</span>';
+    }
 
     // ============================================================
     // ====== Initial load =========================================
@@ -1834,6 +1978,86 @@ $(function () {
     @keyframes rcBulkBarSlide {
         from { opacity: 0; transform: translateY(-6px); }
         to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ============================================================
+       Phase 4 (UI/UX): Sticky DataTable header
+       .rc-table-scroll is the DataTables-generated wrapper around the
+       table (see the `dom` option). It gets a max-height so the body
+       scrolls independently while the thead stays pinned. Sticky is
+       relative to this scroll container (not the viewport) — exactly
+       what we want. Opaque amber background + blur so rows don't show
+       through on scroll. The length-menu / pagination / info stay
+       OUTSIDE this container so they remain visible.
+       ============================================================ */
+    .rc-table-scroll {
+        max-height: 28rem;        /* ~ max-h-[28rem] */
+        overflow-y: auto;
+    }
+    #invoiceTable thead th {
+        position: -webkit-sticky;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: rgb(254 243 199 / 0.96);   /* amber-50/96 */
+        backdrop-filter: blur(4px);
+        box-shadow: inset 0 -1px 0 0 rgb(252 211 77); /* amber-300 bottom rule */
+    }
+
+    /* ============================================================
+       Phase 4 (UI/UX): Due column highlight pills (.rc-due-pill)
+       Rendered client-side by the DataTable due_amount column. Red
+       pill = outstanding, green pill = fully paid. Meaning is also
+       in the text (৳amount / ✓ Paid) + aria-label, not color alone.
+       ============================================================ */
+    .rc-due-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.125rem 0.5rem;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        line-height: 1.25;
+        white-space: nowrap;
+    }
+    .rc-due-pill.rc-due-outstanding {
+        background: #fef2f2;   /* red-50 */
+        color: #b91c1c;        /* red-700 */
+    }
+    .rc-due-pill.rc-due-paid {
+        background: #f0fdf4;   /* green-50 */
+        color: #15803d;        /* green-700 */
+    }
+
+    /* ============================================================
+       Phase 4 (UI/UX): Branch pill (.rc-branch-pill)
+       Inline-styled with the branch color (config/branches.php) by
+       the branchPillHtml() JS helper. On mobile only the code shows
+       to save space; the full name is hidden.
+       ============================================================ */
+    .rc-branch-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 0.1rem 0.55rem;
+        border: 1px solid;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        line-height: 1.3;
+        max-width: 100%;
+    }
+    .rc-branch-pill .rc-branch-name {
+        max-width: 9rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .rc-branch-pill .rc-branch-code { opacity: 0.75; font-weight: 700; }
+    @media (max-width: 767.98px) {
+        .rc-branch-pill .rc-branch-name { display: none; }
+        .rc-branch-pill .rc-branch-code { display: inline; }
     }
 </style>
 @endpush
