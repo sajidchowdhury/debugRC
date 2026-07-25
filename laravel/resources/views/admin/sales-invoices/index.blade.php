@@ -479,7 +479,7 @@ $(function () {
     var $activeBar  = $('#activeFilterBar');
     var $activeTags = $('#activeFilterTags');
 
-    // Preset pill class sets (must match <x-erp.date-presets> markup).
+    // Preset pill class sets (must match the erp.date-presets component markup).
     var PRESET_INACTIVE = 'bg-white border-amber-200 text-amber-700 hover:bg-amber-50';
     var PRESET_ACTIVE   = 'bg-gradient-to-r from-amber-500 to-orange-500 border-transparent text-white shadow-sm';
 
@@ -569,7 +569,7 @@ $(function () {
         if (key === 'custom') { $('#from_date').focus(); }
     }
 
-    // Build a single filter-tag HTML string (mirrors <x-erp.filter-tag>).
+    // Build a single filter-tag HTML string (mirrors the erp.filter-tag component).
     function filterTagHTML(key, label) {
         return '<span class="inline-flex items-center gap-1.5 rounded-full bg-white border border-amber-300 px-2.5 py-0.5 text-xs text-amber-900">'
              + '<span>' + escapeHtml(label) + '</span>'
@@ -887,10 +887,10 @@ $(function () {
                 // Phase 3 (UI/UX): per-row actions — action-group pattern.
                 // ≤3 inline icon buttons (View + Edit + Receive) + an
                 // overflow ⋯ dropdown for the rest (Call-it-a-day / Print
-                // / Cancel). Mirrors the <x-erp.action-group> Blade
+                // / Cancel). Mirrors the erp.action-group Blade
                 // component markup. Uses .rc-action-btn (defined in the
                 // <style> block below) for compact icon buttons matching
-                // the <x-erp.action-button> spec. aria-label on every
+                // the erp.action-button component spec. aria-label on every
                 // button includes the invoice code for screen readers.
                 data: null,
                 orderable: false,
@@ -1855,7 +1855,7 @@ $(function () {
     // Phase 4 (UI/UX): colored branch pill for the DataTable branch cell.
     // Tinted with the branch's config color (config/branches.php) via
     // inline style — bg = hex+15 (8% alpha), text = hex, border = hex+33.
-    // Mirrors the <x-erp.branch-pill> Blade component visually.
+    // Mirrors the erp.branch-pill Blade component visually.
     function branchPillHtml(code, name) {
         code = String(code || '').toUpperCase();
         name = name || '';
@@ -2146,7 +2146,7 @@ $(function () {
 
     /* ============================================================
        Phase 1 (UI/UX): compact per-row action buttons (.rc-action-btn)
-       Matches the <x-erp.action-button> spec — Tailwind-equivalent
+       Matches the erp.action-button component spec — Tailwind-equivalent
        sizing/colors. Used by the DataTable actions column + mobile
        cards. Defined here (not in rc-erp.css) because the buttons
        are rendered client-side by DataTables JS.
