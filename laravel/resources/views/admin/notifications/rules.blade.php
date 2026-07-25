@@ -438,8 +438,11 @@
     // Replaces Bootstrap .collapse (which flashed open-then-vanished
     // under Tailwind v4). The card starts hidden (#createRuleCard has
     // no .is-open by default); clicking "Create Rule" reveals it and
-    // the x button hides it. Scoped CSS in @push('head_meta') controls
-    // visibility so nothing in Bootstrap/Tailwind can interfere.
+    // the x button hides it. Scoped CSS in the head <style> block above
+    // controls visibility so nothing in Bootstrap/Tailwind can interfere.
+    // NOTE: do NOT write the literal Blade push directive inside this JS
+    // comment — Blade parses @-directives everywhere, even in <script>
+    // blocks and JS comments, which corrupts the push stack.
     $(function () {
         var $card = $('#createRuleCard');
         var $btn  = $('#btnToggleCreateRule');
