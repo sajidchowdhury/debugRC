@@ -202,6 +202,16 @@
 
     {{-- R21: Invoices table (server-side DataTables) --}}
     <x-erp.left-accent-card accent="cyan" icon="file-text" title="Invoices" title-bn="চালান তালিকা" body-class="!p-0">
+        <x-slot:actions>
+            {{-- Phase 5 (UI/UX): keyboard-shortcut hint. Shown only when
+                the shortcut layer is enabled (desktop, fine pointer).
+                Clicking it reveals a SweetAlert2 cheatsheet. --}}
+            <span id="kbdHint" class="rc-kbd-hint" role="button" tabindex="0"
+                  title="Keyboard shortcuts: j/k move, r receive, c call-it-a-day, e edit, / search, Esc clear"
+                  aria-label="Show keyboard shortcuts">
+                <kbd>j</kbd><kbd>k</kbd> navigate · <kbd>/</kbd> search
+            </span>
+        </x-slot:actions>
             {{-- Phase 1 (UI/UX): Bulk action bar — appears when ≥1 row is checked. --}}
             <div class="px-3 pt-3">
                 <div id="invoiceBulkBar"
@@ -230,8 +240,9 @@
                         </button>
                     </div>
                 </div>
-                {{-- Screen-reader status region — announced on filter / selection / payment changes --}}
-                <div id="srStatus" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+                {{-- Phase 5 (UI/UX): Screen-reader status region — announced on
+                    filter / selection / payment changes via announceSR(). --}}
+                <x-erp.sr-status id="srStatus" />
             </div>
 
             {{-- R23: Mobile cards container --}}
@@ -1481,9 +1492,16 @@ $(function () {
         return receiveModalBs;
     }
 
+    // Phase 5 (UI/UX): Modal focus management — remember the button that
+    // opened the modal so focus can be restored to it on close. Bootstrap
+    // traps focus inside the modal while open by default; we additionally
+    // move focus to the amount input once the body loads.
+    var $receiveTriggerBtn = null;
+
     $(document).on('click', '.btn-receive-payment', function () {
         var invoiceId = $(this).data('invoice-id');
         if (!invoiceId) return;
+        $receiveTriggerBtn = $(this);   // remember for restore-on-close
         $modalContent.html(
             '<div class="modal-body text-center py-5">' +
                 '<i class="fas fa-spinner fa-spin fa-2x text-primary mb-3"></i>' +
@@ -1500,6 +1518,17 @@ $(function () {
         }).done(function (html) {
             $modalContent.html(html);
             initReceiveModalBody();
+            // Phase 5 (UI/UX): move focus to the amount input once the
+            // form is injected — keyboard users can start typing immediately.
+            var $amt = $('#srpAmount');
+            if ($amt.length) {
+                $amt.focus();
+            } else {
+                // No amount field (e.g. error state) — focus the first
+                // focusable control in the modal.
+                $modalContent.find('button, a, input, select, textarea')
+                    .filter(':visible').first().focus();
+            }
         }).fail(function (xhr) {
             $modalContent.html(
                 '<div class="modal-body text-center py-5">' +
@@ -1510,6 +1539,17 @@ $(function () {
                 '</div>'
             );
         });
+    });
+
+    // Phase 5 (UI/UX): restore focus to the triggering "Receive" button
+    // when the modal closes (WCAG 2.4.3 — focus order). Clears the
+    // remembered trigger afterwards so a later programmatic open doesn't
+    // steal focus from the wrong element.
+    $receiveModal.on('hidden.bs.modal', function () {
+        if ($receiveTriggerBtn && $receiveTriggerBtn.length) {
+            $receiveTriggerBtn.focus();
+            $receiveTriggerBtn = null;
+        }
     });
 
     function initReceiveModalBody() {
@@ -1823,6 +1863,168 @@ $(function () {
     }
 
     // ============================================================
+    // ====== Phase 5 (UI/UX): Keyboard shortcuts ==================
+    // ============================================================
+    // Power-user navigation. Desktop only — the whole layer is skipped
+    // when the primary pointer is coarse (touch) so mobile users never
+    // get accidental triggers. Keys:
+    //   j / k   — move row focus down / up
+    //   r       — receive payment on the focused row
+    //   c       — call it a day on the focused row
+    //   e       — edit the focused row (draft only)
+    //   /       — focus the smart-search input
+    //   Esc     — clear row focus / close any open dropdown
+    // Any handler bails out when focus is in a form field, a contenteditable,
+    // or inside the receive-payment modal (so users can type freely).
+    var SHORTCUTS_ENABLED = (function () {
+        if (!window.matchMedia) return false;
+        // Skip on touch-primary devices.
+        if (window.matchMedia('(pointer: coarse)').matches) return false;
+        // Skip if the user has no physical keyboard hint (very small screens).
+        if (window.matchMedia('(max-width: 767.98px)').matches) return false;
+        return true;
+    })();
+
+    var $focusedRow = null;
+
+    function isTypingTarget(el) {
+        if (!el) return false;
+        var tag = (el.tagName || '').toUpperCase();
+        return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+            || el.isContentEditable === true;
+    }
+
+    function inReceiveModal() {
+        return $receiveModal.hasClass('show');
+    }
+
+    function visibleRows() {
+        return $('#invoiceTable tbody tr').filter(function () {
+            return $(this).is(':visible');
+        });
+    }
+
+    function clearRowFocus() {
+        if ($focusedRow) {
+            $focusedRow.removeClass('rc-row-focused').attr('tabindex', '-1');
+            $focusedRow = null;
+        }
+    }
+
+    function focusRow($tr) {
+        clearRowFocus();
+        if (!$tr || !$tr.length) return;
+        $focusedRow = $tr;
+        $tr.addClass('rc-row-focused').attr('tabindex', '0');
+        // Scroll the row into view within the sticky scroll container.
+        $tr[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        $tr[0].focus({ preventScroll: true });
+        var code = $tr.find('a.fw-semibold').first().text() || 'row';
+        announceSR('Row ' + code + ' focused. Press R to receive, C to call it a day, E to edit.');
+    }
+
+    function moveRowFocus(delta) {
+        var $rows = visibleRows();
+        if (!$rows.length) { announceSR('No rows to navigate'); return; }
+        var idx = $focusedRow ? $rows.index($focusedRow) : -1;
+        var next = Math.max(0, Math.min($rows.length - 1, idx + delta));
+        focusRow($rows.eq(next));
+    }
+
+    function triggerRowAction(selector, actionLabel) {
+        if (!$focusedRow || !$focusedRow.length) {
+            announceSR('No row focused. Use J or K to select a row first.');
+            return;
+        }
+        var $btn = $focusedRow.find(selector).first();
+        if (!$btn.length) {
+            announceSR(actionLabel + ' is not available for this row.');
+            return;
+        }
+        announceSR(actionLabel);
+        $btn.trigger('click');
+    }
+
+    if (SHORTCUTS_ENABLED) {
+        $(document).on('keydown', function (e) {
+            // Never intercept modifier combos (Ctrl/Cmd/Alt) — those belong
+            // to the browser/OS.
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
+            // Don't interfere while typing in any field.
+            if (isTypingTarget(e.target)) {
+                // Esc still works to blur the field.
+                if (e.key === 'Escape') { e.target.blur(); }
+                return;
+            }
+            // Don't interfere while the receive modal is open (typing $ amounts).
+            if (inReceiveModal()) return;
+
+            switch (e.key) {
+                case 'j':
+                    e.preventDefault();
+                    moveRowFocus(1);
+                    break;
+                case 'k':
+                    e.preventDefault();
+                    moveRowFocus(-1);
+                    break;
+                case 'r':
+                    e.preventDefault();
+                    triggerRowAction('.btn-receive-payment', 'Receive payment');
+                    break;
+                case 'c':
+                    e.preventDefault();
+                    triggerRowAction('.btn-call-it-a-day', 'Call it a day');
+                    break;
+                case 'e':
+                    e.preventDefault();
+                    triggerRowAction('.rc-action-edit', 'Edit invoice');
+                    break;
+                case '/':
+                    e.preventDefault();
+                    var $s = $('#filterSearch');
+                    if ($s.length) { $s.focus(); announceSR('Search focused'); }
+                    break;
+                case 'Escape':
+                    clearRowFocus();
+                    // Close any stray open dropdown.
+                    $('.dropdown-menu.show').removeClass('show');
+                    break;
+            }
+        });
+
+        // Re-focus the first row when the table redraws if focus was active.
+        // (DataTables rebuilds <tbody> on every draw, so the old $focusedRow
+        // node is gone — we just reset and let the user press j again.)
+        $table.on('draw.dt', function () { clearRowFocus(); });
+
+        // Show the keyboard-hint badge now that we know the layer is active.
+        $('#kbdHint').css('display', 'inline-flex');
+
+        // Click / Enter / Space on the hint → SweetAlert2 cheatsheet.
+        $('#kbdHint').on('click keydown', function (e) {
+            if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            if (typeof Swal === 'undefined') return;
+            Swal.fire({
+                title: 'Keyboard shortcuts',
+                html:
+                    '<div class="text-start" style="font-size:0.9rem;line-height:1.9;">' +
+                      '<div><kbd style="font-family:monospace;border:1px solid #ccc;border-radius:4px;padding:1px 6px;">j</kbd> / ' +
+                      '<kbd style="font-family:monospace;border:1px solid #ccc;border-radius:4px;padding:1px 6px;">k</kbd> — move focus down / up a row</div>' +
+                      '<div><kbd style="font-family:monospace;border:1px solid #ccc;border-radius:4px;padding:1px 6px;">r</kbd> — receive payment on the focused row</div>' +
+                      '<div><kbd style="font-family:monospace;border:1px solid #ccc;border-radius:4px;padding:1px 6px;">c</kbd> — call it a day on the focused row</div>' +
+                      '<div><kbd style="font-family:monospace;border:1px solid #ccc;border-radius:4px;padding:1px 6px;">e</kbd> — edit the focused row (draft only)</div>' +
+                      '<div><kbd style="font-family:monospace;border:1px solid #ccc;border-radius:4px;padding:1px 6px;">/</kbd> — focus the smart-search box</div>' +
+                      '<div><kbd style="font-family:monospace;border:1px solid #ccc;border-radius:4px;padding:1px 6px;">Esc</kbd> — clear row focus / close dropdown</div>' +
+                    '</div>',
+                confirmButtonText: 'Got it',
+                confirmButtonColor: '#d97706',
+            });
+        });
+    }
+
+    // ============================================================
     // ====== Initial load =========================================
     // ============================================================
     refreshSummary();
@@ -1873,14 +2075,14 @@ $(function () {
     }
     .status-chip:not(.active) .chip-count { background: #fff; color: #475569; }
     .status-chip[data-status="awaiting_payment"].active { background: #dc2626; }
-    .status-chip[data-status="draft"].active            { background: #d97706; }
-    .status-chip[data-status="confirmed"].active        { background: #16a34a; }
+    .status-chip[data-status="draft"].active            { background: #b45309; }   /* Phase 5: amber-700 — was #d97706 (3.2:1, failed AA) → 5.0:1 ✓ */
+    .status-chip[data-status="confirmed"].active        { background: #15803d; }   /* Phase 5: green-700 — was #16a34a (3.3:1, failed AA) → 5.1:1 ✓ */
     .status-chip[data-status="cancelled"].active        { background: #64748b; }
     .status-chip[data-status="reversed"].active         { background: #b91c1c; }
     /* BUG-52: scope chips — distinct colors so the workflow queue
        chips are visually distinguishable from the status chips. */
     .status-chip[data-scope="today"].active           { background: #4f46e5; }
-    .status-chip[data-scope="pending_godown"].active  { background: #0891b2; }
+    .status-chip[data-scope="pending_godown"].active  { background: #0e7490; }     /* Phase 5: cyan-700 — was #0891b2 (3.7:1, failed AA) → 5.4:1 ✓ */
     .status-chip[data-scope="pending_challan"].active { background: #7c3aed; }
 
     /* R23: Mobile cards variant. Hidden on desktop, shown on mobile.
@@ -2058,6 +2260,76 @@ $(function () {
     @media (max-width: 767.98px) {
         .rc-branch-pill .rc-branch-name { display: none; }
         .rc-branch-pill .rc-branch-code { display: inline; }
+    }
+
+    /* ============================================================
+       Phase 5 (UI/UX): Keyboard-focus row highlight
+       Applied to the <tr> focused via j/k shortcuts. The amber tint
+       matches the page accent; the inset box-shadow acts as a visible
+       focus ring that doesn't get clipped by the overflow container.
+       ============================================================ */
+    #invoiceTable tbody tr.rc-row-focused {
+        background: #fef3c7 !important;          /* amber-100 */
+        box-shadow: inset 0 0 0 2px #f59e0b;     /* amber-500 ring */
+        outline: none;
+    }
+    #invoiceTable tbody tr.rc-row-focused > td { background: transparent; }
+    /* Respect reduced-motion: no smooth scroll into view. */
+    @media (prefers-reduced-motion: reduce) {
+        #invoiceTable tbody tr.rc-row-focused { transition: none; }
+    }
+
+    /* ============================================================
+       Phase 5 (UI/UX): Keyboard-shortcut hint badge
+       A small, unobtrusive indicator shown next to the Invoices card
+       title so power users discover the j/k/r/c//Esc shortcuts. Hidden
+       on touch-primary devices (the shortcut layer is disabled there).
+       ============================================================ */
+    .rc-kbd-hint {
+        display: none;   /* shown via JS only when SHORTCUTS_ENABLED */
+        align-items: center;
+        gap: 0.25rem;
+        margin-left: 0.5rem;
+        font-size: 0.7rem;
+        color: #6b7280;
+    }
+    .rc-kbd-hint kbd {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 1.1rem;
+        height: 1.1rem;
+        padding: 0 0.25rem;
+        border: 1px solid #d1d5db;
+        border-bottom-width: 2px;
+        border-radius: 0.25rem;
+        background: #f9fafb;
+        color: #374151;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.65rem;
+        line-height: 1;
+    }
+    @media (pointer: coarse) { .rc-kbd-hint { display: none !important; } }
+
+    /* ============================================================
+       Phase 5 (UI/UX): Reduced-motion — global guard
+       Disables all CSS transitions/animations on this page when the
+       user prefers reduced motion. (The bulk-bar slide already had its
+       own guard; this covers chips, action buttons, pills, and the
+       sticky-header blur.)
+       ============================================================ */
+    @media (prefers-reduced-motion: reduce) {
+        .status-chip,
+        .rc-action-btn,
+        .rc-due-pill,
+        .rc-branch-pill,
+        #invoiceTable thead th,
+        .sales-invoice-card {
+            transition: none !important;
+            animation: none !important;
+        }
+        .rc-table-scroll { scroll-behavior: auto !important; }
+        html { scroll-behavior: auto !important; }
     }
 </style>
 @endpush

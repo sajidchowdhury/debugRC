@@ -16,7 +16,7 @@
 | 2 — Filter UX | ✅ **DONE** | Date presets (Today/Yesterday/Last 7 days/This month/Custom), localStorage persistence, active-filter-bar with removable tags + Clear all, 3 new `<x-erp.*>` components |
 | 3 — Per-Row Actions & Inline Reverse | ✅ **DONE** | Action-group pattern (≤3 inline + overflow ⋯) on desktop + mobile, inline payment reversal in receive modal (SweetAlert2 reason prompt → AJAX POST → re-fetch), 2 new `<x-erp.*>` components + controller AJAX branch |
 | 4 — Premium Polish | ✅ **DONE** | Sticky DataTable header (amber-50/blur, max-h-28rem scroll), due-column colored pills (red due / green ✓ Paid), dual empty-state (filtered vs genuinely-empty) reusing `<x-erp.empty-state>`, branch-color pills in table cell (config-driven inline styles), live hero counter (`#heroInvoiceCount` via `recordsDisplay`); removed redundant mobile inline empty-state + skipped the unnecessary `<x-erp.live-counter>` component (inline span suffices) |
-| 5 — Accessibility & Keyboard | ⬜ Pending | |
+| 5 — Accessibility & Keyboard | ✅ **DONE** | `<x-erp.sr-status>` component (replaces inline div), keyboard shortcut layer (j/k/r/c/e///Esc — desktop-only, skipped on `pointer:coarse`), modal focus management (auto-focus `#srpAmount` on open, restore to trigger button on close), global reduced-motion guard, WCAG AA contrast fix (amber `#d97706`→`#b45309`, green `#16a34a`→`#15803d`, cyan `#0891b2`→`#0e7490`), keyboard-hint badge with SweetAlert2 cheatsheet; 1 new `<x-erp.*>` component |
 | 6 — Responsive & Mobile | ⬜ Pending | |
 
 ---
@@ -196,9 +196,21 @@
 
 ---
 
-## Phase 5 — Accessibility & Keyboard Navigation (Medium)
+## Phase 5 — Accessibility & Keyboard Navigation (Medium) — ✅ DONE
 
 > Makes the screen fully keyboard-navigable + screen-reader-friendly + WCAG AA compliant.
+
+> **Implemented:**
+> - **`<x-erp.sr-status>` component** — created a reusable visually-hidden `role="status" aria-live="polite" aria-atomic="true"` region. Replaced the inline `#srStatus` div on the index page with `<x-erp.sr-status id="srStatus" />`. The existing `announceSR(msg)` helper writes to it unchanged. (Phase 1 had already added the inline region + helper; Phase 5 just component-ised it for reuse.)
+> - **Keyboard shortcut layer** — inline JS module bound on `document` (desktop only — disabled via `window.matchMedia('(pointer: coarse)')` and `(max-width: 767.98px)`). Keys: `j`/`k` move row focus down/up (amber-100 tint + amber-500 inset ring + `tabindex=0` + `scrollIntoView`), `r` receive payment, `c` call it a day, `e` edit draft, `/` focus smart-search, `Esc` clear row focus + close stray dropdowns. All handlers bail out when focus is in an input/textarea/select/contenteditable, when a modifier (Ctrl/Cmd/Alt) is held, or when the receive modal is open. `draw.dt` clears focus (DataTables rebuilds `<tbody>`).
+> - **Modal focus management** — `.btn-receive-payment` click stores the trigger button in `$receiveTriggerBtn`; once the AJAX body loads, focus moves to `#srpAmount` (keyboard users start typing immediately); `hidden.bs.modal` restores focus to the trigger (WCAG 2.4.3). Bootstrap traps focus inside the modal while open by default.
+> - **Reduced motion** — global `@media (prefers-reduced-motion: reduce)` guard disables transitions/animations on `.status-chip`, `.rc-action-btn`, `.rc-due-pill`, `.rc-branch-pill`, `#invoiceTable thead th`, `.sales-invoice-card`, and forces `scroll-behavior: auto` on the sticky container. (The bulk-bar slide already had its own guard from Phase 1.)
+> - **Color contrast audit (WCAG AA 4.5:1, white text on chip active background)** — measured each chip's active color and darkened the three that failed:
+>   - amber `#d97706` (3.2:1 ❌) → `#b45309` amber-700 (5.0:1 ✅) — draft chip
+>   - green `#16a34a` (3.3:1 ❌) → `#15803d` green-700 (5.1:1 ✅) — confirmed chip
+>   - cyan `#0891b2` (3.7:1 ❌) → `#0e7490` cyan-700 (5.4:1 ✅) — pending-godown scope chip
+>   - The remaining colors (indigo `#4f46e5`, red `#dc2626`, slate `#64748b`, dark-red `#b91c1c`, violet `#7c3aed`) already pass at 4.7–7.4:1.
+> - **Keyboard-hint badge** — a small `j k navigate · / search` badge in the Invoices card header (`<x-slot:actions>`), shown only when the shortcut layer is enabled. Click/Enter/Space opens a SweetAlert2 cheatsheet listing all shortcuts.
 
 ### Screens to improve
 - `resources/views/admin/sales-invoices/index.blade.php` — add keyboard shortcuts, focus management, ARIA live regions.
