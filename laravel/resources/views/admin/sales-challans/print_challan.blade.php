@@ -3,8 +3,14 @@
 
 @section('print_content')
 @php
-    $branchColorHex = \App\Support\BranchColor::hex($branchCode);
-    $branchNameBn = \App\Support\BranchColor::get($branchCode)['name_bn'] ?? 'শাখা';
+    try {
+        $branchColorHex = \App\Support\BranchColor::hex($branchCode);
+        $branchNameBn = \App\Support\BranchColor::get($branchCode)['name_bn'] ?? 'শাখা';
+    } catch (\Throwable $e) {
+        $branchColorHex = '#dc2626';
+        $branchNameBn = 'শাখা';
+    }
+    $branchColorHex = $branchColorHex ?: '#dc2626';
 
     $itemsPerPage = 17;
     $allItems = $challan->items ?? collect();

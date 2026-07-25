@@ -1,15 +1,37 @@
 {{--
   layouts/print.blade.php — print layout (Phase 10 rebuild).
 
-  Used by: print_blank_godown, print_godown, print_challan.
+  Used by: print_blank_godown, print_godown, print_challan,
+  print_invoice, print_receipt.
   Loads Bootstrap + rc-erp.css (Tailwind utilities + .write-in/.watermark
   custom classes from Phase 0). Body has .rc-erp-print-page class so the
   @media print block in rc-erp.css applies (A4 margins, 11px font, etc.).
 
   Each print view sets $branchCode (via @php before @extends) so the
   company header + toolbar use the branch's configured color. Falls back
-  to amber (the brand color) if not set.
+  to the default branch color (HO red) if not set.
 --}}
+@php
+    // Compute branch color at the VERY TOP of the template — before
+    // <!DOCTYPE> — so $branchColorHex is guaranteed to be available
+    // everywhere in the layout (including the <style> block). Previously
+    // this was inside <head> after the <link> tags, which could fail if
+    // the compiled view cache was stale.
+    //
+    // Defensive: wrap in try-catch so a broken config never takes down
+    // the entire print page. Falls back to HO red (#dc2626) — the same
+    // color used when $branchCode is null or unknown.
+    $branchCode = $branchCode ?? null;
+    try {
+        $branchColorHex = \App\Support\BranchColor::hex($branchCode);
+        $branchColorName = \App\Support\BranchColor::get($branchCode)['color_name'] ?? 'Red';
+    } catch (\Throwable $e) {
+        $branchColorHex = '#dc2626';
+        $branchColorName = 'Red';
+    }
+    // Absolute safety net — if hex() returned null/empty for any reason.
+    $branchColorHex = $branchColorHex ?: '#dc2626';
+@endphp
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -22,11 +44,6 @@
     <link href="/assets/css/bootstrap.min.css?v={{ filemtime(public_path('assets/css/bootstrap.min.css')) }}" rel="stylesheet">
     <link href="/assets/css/all.min.css?v={{ filemtime(public_path('assets/css/all.min.css')) }}" rel="stylesheet">
     <link href="/assets/css/rc-erp.css?v={{ filemtime(public_path('assets/css/rc-erp.css')) }}" rel="stylesheet">
-    @php
-        $branchCode = $branchCode ?? null;
-        $branchColorHex = \App\Support\BranchColor::hex($branchCode);
-        $branchColorName = \App\Support\BranchColor::get($branchCode)['color_name'] ?? 'Amber';
-    @endphp
     <style>
         body { background: #f8f9fa; font-family: 'Inter', 'Noto Sans Bengali', system-ui, sans-serif; }
         .print-container { max-width: 800px; margin: 0 auto; padding: 20px; }
@@ -34,7 +51,7 @@
         {{-- Toolbar (no-print) — branch-colored --}}
         .print-toolbar {
             position: sticky; top: 0; z-index: 1000;
-            background: {{ $branchColorHex }}; padding: 10px 20px;
+            background: {{ $branchColorHex ?? '#dc2626' }}; padding: 10px 20px;
             display: flex; gap: 10px; align-items: center;
             margin-bottom: 20px; border-radius: 8px;
         }
@@ -48,9 +65,9 @@
         }
 
         {{-- Company header — branch-colored border --}}
-        .company-header { border-bottom: 3px solid {{ $branchColorHex }}; padding-bottom: 15px; margin-bottom: 20px; }
-        .company-name { font-size: 1.5rem; font-weight: 700; color: {{ $branchColorHex }}; }
-        .doc-title { font-size: 1.25rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: {{ $branchColorHex }}; }
+        .company-header { border-bottom: 3px solid {{ $branchColorHex ?? '#dc2626' }}; padding-bottom: 15px; margin-bottom: 20px; }
+        .company-name { font-size: 1.5rem; font-weight: 700; color: {{ $branchColorHex ?? '#dc2626' }}; }
+        .doc-title { font-size: 1.25rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: {{ $branchColorHex ?? '#dc2626' }}; }
 
         {{-- Meta grid --}}
         .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px; margin-bottom: 20px; }
@@ -58,7 +75,7 @@
         .meta-value { font-size: 0.95rem; font-weight: 600; }
 
         {{-- Items table — branch-tinted header --}}
-        .items-table th { background: {{ $branchColorHex }}22; font-size: 0.8rem; text-transform: uppercase; }
+        .items-table th { background: {{ $branchColorHex ?? '#dc2626' }}22; font-size: 0.8rem; text-transform: uppercase; }
         .items-table td { font-size: 0.9rem; }
 
         {{-- Totals + signatures --}}

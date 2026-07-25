@@ -3,9 +3,16 @@
 
 @section('print_content')
 @php
-    $branchColorHex = \App\Support\BranchColor::hex($branchCode);
-    $branchColorName = \App\Support\BranchColor::get($branchCode)['color_name'] ?? 'Branch';
-    $branchNameBn = \App\Support\BranchColor::get($branchCode)['name_bn'] ?? 'শাখা';
+    try {
+        $branchColorHex = \App\Support\BranchColor::hex($branchCode);
+        $branchColorName = \App\Support\BranchColor::get($branchCode)['color_name'] ?? 'Branch';
+        $branchNameBn = \App\Support\BranchColor::get($branchCode)['name_bn'] ?? 'শাখা';
+    } catch (\Throwable $e) {
+        $branchColorHex = '#dc2626';
+        $branchColorName = 'Red';
+        $branchNameBn = 'শাখা';
+    }
+    $branchColorHex = $branchColorHex ?: '#dc2626';
 
     $allItems = $invoice->items;
     $itemsPerPage = 17;

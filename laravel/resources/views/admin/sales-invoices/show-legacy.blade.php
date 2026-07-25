@@ -692,14 +692,10 @@
                         for everyone, so salesmen saw the buttons, clicked
                         them, and got redirected to the dashboard with a
                         "You do not have permission" flash — confusing UX. --}}
-                    @if (auth()->user()->hasRole('warehouse_manager', 'manager', 'admin', 'superadmin'))
-                        <a href="{{ route('admin.sales-invoices.print-godown', $invoice->id) }}" class="btn btn-outline-secondary w-100" target="_blank">
-                            <i class="fas fa-warehouse me-1"></i> Print Godown Copy
-                        </a>
-                        <a href="{{ route('admin.sales-invoices.print-blank-godown', $invoice->id) }}" class="btn btn-outline-warning w-100" target="_blank">
-                            <i class="fas fa-pen me-1"></i> Print Blank Godown
-                        </a>
-                    @endif
+                    {{-- Print Godown Copy / Print Blank Godown buttons removed per
+                        user request — these print views are accessible from the
+                        warehouse module (sales-challans) where they're actually
+                        needed, not from the invoice detail page. --}}
 
                     {{-- BUG-52: Sales → Warehouse handoff buttons.
                         These are the entry points the warehouse manager
