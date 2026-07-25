@@ -313,7 +313,7 @@ This phase adds the missing `min:5` to the invoice-cancel rule (1-word change) s
 
 ---
 
-## Phase 4 — Notifications, Rate Limits & Search Coverage (Medium) — F-18a ✅ / F-12, F-6, F-18b/c/d pending
+## Phase 4 — Notifications, Rate Limits & Search Coverage (Medium) — F-18a/b ✅ / F-12, F-6, F-18c/d pending
 
 > Closes gaps **F-18, F-12, F-6**. Improves observability and robustness.
 
@@ -333,11 +333,11 @@ A configurable notification-rule engine (admin picks, per predefined event, who 
 | Sub-phase | Scope | Status |
 |---|---|---|
 | **F-18a** | Security + bell + JS + Gate — make the existing engine work end-to-end | ✅ Complete |
-| **F-18b** | Schema: multi-select recipient types per event (pivot table) + context-aware recipient resolution (`warehouse_manager_of_branch`, `salesman_of_invoice`, etc.) + expand EVENTS to the user's 9 predefined events + expand RECIPIENTS + clean up vestigial `broadcast` channel | ⬜ Pending |
+| **F-18b** | Schema: multi-select recipient types per event (pivot table) + context-aware recipient resolution (`warehouse_manager_of_branch`, `salesman_of_invoice`, etc.) + expand EVENTS to the user's 9 predefined events + expand RECIPIENTS + clean up vestigial `broadcast` channel | ✅ Complete |
 | **F-18c** | Wire explicit `dispatch()` calls into all 9 event trigger points (only 3/10 are dispatched in PHP today; the rest rely on PG triggers + a worker process that may not be running) | ⬜ Pending |
 | **F-18d** | Admin UX polish: redesign `rules.blade.php` for multi-select per event, default-rules seeder, "Reset to defaults" button | ⬜ Pending |
 
-**Architecture decision (F-18a):** Real-time delivery uses the existing **SSE pipeline** (PostgreSQL `LISTEN/NOTIFY` → Redis Pub/Sub → browser `EventSource`), NOT Laravel broadcasting. The database is only hit when a notification is created (event-driven, not polled) — satisfying the "no continuous DB pressure" requirement. The vestigial `broadcast` channel in `ERPNotification` (which silently no-ops due to missing `config/broadcasting.php`) will be cleaned up in F-18b.
+**Architecture decision (F-18a):** Real-time delivery uses the existing **SSE pipeline** (PostgreSQL `LISTEN/NOTIFY` → Redis Pub/Sub → browser `EventSource`), NOT Laravel broadcasting. The database is only hit when a notification is created (event-driven, not polled) — satisfying the "no continuous DB pressure" requirement. The vestigial `broadcast` channel in `ERPNotification` (which silently no-ops due to missing `config/broadcasting.php`) was cleaned up in F-18b.
 
 ### F-18a Verification
 
@@ -359,6 +359,22 @@ The audit (`audit-4`) found that a prior "Phase 10 / Task 31" already built subs
 5. **No polling when SSE is connected.** Fallback to 30s polling ONLY if SSE is unavailable (worker down / browser doesn't support EventSource) — the polling does a single COUNT query, not a list fetch.
 
 **Deployment note:** The `ListenNotifyWorker` must run as a separate long-lived process (`php artisan listen-notify:worker` under supervisor/systemd) for SSE-based real-time push to work. If the worker is down, the system degrades gracefully to 30s polling (a single COUNT query per poll — light load). The `/sse/status` endpoint reports worker health.
+
+### F-18b Verification
+
+F-18b reworks the **schema + recipient-resolution layer** so the engine supports the user's redefined spec: admin picks, per predefined event, a **multi-select** of recipient types (including context-aware types like "Warehouse Manager of the branch selected by the sales manager"). The trigger-point wiring (F-18c) and admin-UX polish (F-18d) are separate sub-phases. Five concrete changes:
+
+| Change | What was done | Evidence |
+|---|---|---|
+| **Multi-select recipient types per event** — the Phase-10 schema stored ONE `recipient_type` string per `notification_rules` row; the user's spec requires multi-select | New migration `2025_01_26_000001` creates pivot table `notification_rule_recipients(notification_rule_id FK cascade, recipient_type, recipient_user_id nullable, timestamps)` + backfills every existing rule's single recipient_type into the pivot + drops the redundant `recipient_type`/`recipient_user_id` columns from `notification_rules`. New model `NotificationRuleRecipient` + `NotificationRule::recipientTypes()` hasMany. `NotificationController::storeRule()` validates `recipient_types[]` array (min:1, each in RECIPIENTS) + syncs to pivot in a transaction. `rules.blade.php` form now renders a `<select multiple>` and the table renders one badge per selection | `database/migrations/2025_01_26_000001_notification_rules_multi_recipients.php`; `app/Models/NotificationRuleRecipient.php`; `app/Models/NotificationRule.php` (`recipientTypes()`); `app/Http/Controllers/Admin/NotificationController.php` (`storeRule`); `resources/views/admin/notifications/rules.blade.php` |
+| **Context-aware recipient resolution** — the user wants "Warehouse Manager of branch selected by sales manager" / "Salesman of the invoice" which need event context, not global roles | `NotificationService::dispatch()` gains a 6th param `array $context = []` (recognized keys: `branch_id`, `salesman_id`, `created_by`, `customer_id`). `resolveRecipients($rule, $context)` iterates every pivot selection, resolves each to a user set, and **merges + de-duplicates by user ID** (a user matching two selections on the same rule gets ONE notification). New recipient types: `warehouse_manager_of_branch` (→ employees where role=warehouse_manager AND branch_id=context), `salesman_of_invoice` (→ the user linked to employee context.salesman_id), `invoice_creator` (→ user context.created_by). Existing dispatchers (SalesReturnService's 3 calls) keep working — the new param is optional/variadic-safe | `app/Services/Notification/NotificationService.php` (`dispatch` signature L79, `resolveRecipients` L181) |
+| **EVENTS expanded to the user's 9 predefined events** — Phase-10 had 10 events but missing 4 of the user's list (user_logout, damage_invoice_created, branch_demand_created, customer_limit_increased) | `NotificationRule::EVENTS` now carries 14 keys: the user's 9 canonical business events (sales_finalize="After Sales Confirm", challan_create, user_login, user_logout, damage_invoice_created, payment_receive="After Receive Money", return_created="After Sales Return", branch_demand_created, customer_limit_increased) + 5 pre-existing infrastructure/sub-flow events (godown_create, soft_delete, accounts_entry, return_confirmed, return_reversed — already dispatched by SalesReturnService). `NotificationService::EVENT_META` gains icon/color/title for the 4 new events | `app/Models/NotificationRule.php` (`EVENTS`); `app/Services/Notification/NotificationService.php` (`EVENT_META`) |
+| **RECIPIENTS expanded + un-fused** — Phase-10 had 7 recipient types (all global, `sales_manager` over-broadly fused with admin/superadmin) | `NotificationRule::RECIPIENTS` now carries 10 types: `all_users`, `admin` (="Only Admin"), `superadmin`, `sales_manager` (**un-fused** → manager+salesman only, was manager+salesman+admin+superadmin), `accountant`, `warehouse_manager` (="all branches"), `warehouse_manager_of_branch`★, `salesman_of_invoice`★, `invoice_creator`★, `specific_user`. ★ = context-aware (new `CONTEXT_AWARE_RECIPIENTS` constant; UI marks them with a ★ suffix) | `app/Models/NotificationRule.php` (`RECIPIENTS`, `CONTEXT_AWARE_RECIPIENTS`); `app/Services/Notification/NotificationService.php` (`resolveRecipients`) |
+| **Vestigial `broadcast` channel cleaned up** — `ERPNotification::via()` returned `database`+`broadcast` based on a `channels` array, but no `config/broadcasting.php` exists (no Reverb/Pusher/Echo installed) → `toBroadcast()` silently no-op'd | `ERPNotification` now database-only: `via()` always returns `['database']`; `toBroadcast()` method deleted; `BroadcastMessage` import dropped. `NotificationRule::CHANNELS` collapsed to `['database' => 'Database (In-App)']`. Migration normalizes any existing `broadcast`/`both` rule rows → `database`. Real-time push continues via the SSE pipeline (unchanged). The create-rule form replaces the channel dropdown with a read-only "Database (In-App) + real-time toast" badge + hidden `channel=database` input | `app/Notifications/ERPNotification.php`; `app/Models/NotificationRule.php` (`CHANNELS`); `database/migrations/2025_01_26_000001` (step 3); `resources/views/admin/notifications/rules.blade.php` |
+
+**Backward compatibility:** the 3 existing `SalesReturnService::dispatch()` call sites (return_created/confirmed/reversed at L140/235/324) are untouched — the new `$context` param is optional and defaults to `[]`, so context-aware recipient types simply resolve to an empty set when no context is passed (they only match when the dispatcher supplies `branch_id`/`salesman_id`/`created_by`). The 4 pre-seeded return rules (from migration `2025_01_09_000003`) are backfilled into the pivot automatically by the F-18b migration, so no configured rule is lost.
+
+**What F-18b does NOT do (deferred):** wiring explicit `dispatch()` calls into the remaining 6 event trigger points (sale_confirm, challan_create, login, logout, damage_invoice, branch_demand, customer_limit) — that is F-18c. The admin-UX polish (Select2 multi-select, default-rules seeder, "Reset to defaults" button) is F-18d. The current F-18b form is functional (native `<select multiple>`) but not yet polished.
 
 ### Tasks (remaining Phase 4 tasks — unchanged from original spec)
 
@@ -389,7 +405,7 @@ The audit (`audit-4`) found that a prior "Phase 10 / Task 31" already built subs
 - [x] **F-18a:** `view-notification-rules` Gate defined; bell visible to all auth users; Settings link admin-gated.
 - [x] **F-18a:** `notification.js` loaded on every authenticated page; BASE_URL + unread-count URL + response parsing fixed; toast container + audio element present.
 - [x] **F-18a:** Real-time delivery via SSE (PostgreSQL LISTEN/NOTIFY → Redis → EventSource) — no continuous DB polling.
-- [ ] **F-18b:** Multi-select recipient types per event (pivot table) + context-aware recipient resolution + EVENTS/RECIPIENTS expanded to the user's 9 events / extended recipient types + vestigial broadcast channel cleaned up.
+- [x] **F-18b:** Multi-select recipient types per event (pivot table `notification_rule_recipients`) + context-aware recipient resolution (`warehouse_manager_of_branch`, `salesman_of_invoice`, `invoice_creator`) + EVENTS expanded to the user's 9 predefined events (+ 5 pre-existing) + RECIPIENTS expanded to 10 types (3 context-aware) + vestigial `broadcast` channel removed from `ERPNotification` (`via()` now database-only, `toBroadcast()` deleted, `BroadcastMessage` import dropped).
 - [ ] **F-18c:** Explicit `dispatch()` calls wired into all 9 event trigger points.
 - [ ] **F-18d:** Admin UX polish (multi-select rules UI + default-rules seeder + "Reset to defaults").
 - [ ] **F-12:** `throttle:180,1` on datatable route; `throttle:120,1` on summary route.
@@ -506,7 +522,7 @@ Remove confusion-causing dead code and centralize authorization.
 | 1 — Call-It-A-Day Parity | F-2, F-33, F-42, F-43 | Critical | Medium (controller + view + JS) | ✅ Complete |
 | 2 — Filter UX Parity | F-31, F-32, F-41, F-40 | High | Medium (mostly JS + view) | ✅ Complete |
 | 3 — Inline Reverse & Per-Row Actions | F-39, F-42 (remaining), F-17 UX | High | Medium (view + AJAX) | ✅ Complete |
-| 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | 🔄 In progress (F-18a ✅; F-12, F-6, F-18b/c/d pending) |
+| 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | 🔄 In progress (F-18a/b ✅; F-12, F-6, F-18c/d pending) |
 | 5 — Stale-Draft Surface & Polish | F-20, F-37, F-38 | Medium | Small (view + JS) | ⬜ Pending |
 | 6 — Dead Code & Architectural Polish | housekeeping | Low | Small (cleanup + Policy classes) | ⬜ Pending |
 

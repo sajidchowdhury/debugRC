@@ -6,25 +6,20 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 /**
- * Notification Rule — Phase 10.
+ * Notification Rule — Phase 10 (F-18b: multi-select recipients).
  *
- * Admin-configurable rule that defines when a notification fires and who receives it.
+ * Admin-configurable rule that defines when a notification fires and who
+ * receives it. As of F-18b a rule may target MULTIPLE recipient types
+ * (stored in the notification_rule_recipients pivot) — e.g. "After Sales
+ * Confirm → [Admin, Warehouse Manager of branch, Salesman of invoice]".
  *
- * Events (trigger when):
- *   sales_finalize, challan_create, godown_create, payment_receive,
- *   soft_delete, accounts_entry, user_login
- *
- * Recipient types:
- *   admin, superadmin, sales_manager, accountant, all_users, specific_user
- *
- * Channels:
- *   database (stored in notifications table), broadcast (Reverb WebSocket — live)
+ * Events (trigger when) — see EVENTS constant. Recipient types — see
+ * RECIPIENTS constant (some are context-aware, resolved at dispatch time
+ * using the $context array passed to NotificationService::dispatch()).
  *
  * @property int $id
  * @property string $name
  * @property string $event
- * @property string $recipient_type
- * @property int|null $recipient_user_id
  * @property string $channel
  * @property bool $is_active
  * @property int $times_fired
@@ -38,55 +33,95 @@ class NotificationRule extends Model
     protected $table = 'notification_rules';
 
     protected $fillable = [
-        'name', 'event', 'recipient_type', 'recipient_user_id',
+        'name', 'event',
         'channel', 'is_active', 'description', 'created_by',
     ];
 
     protected $casts = [
-        'is_active' => 'boolean',
+        'is_active'   => 'boolean',
         'times_fired' => 'integer',
-        'recipient_user_id' => 'integer',
-        'created_by' => 'integer',
+        'created_by'  => 'integer',
     ];
 
     /**
      * All available events (trigger points).
+     *
+     * F-18b: expanded to cover the user's 9 predefined business events.
+     * The first 10 keys (sales_finalize … customer_limit_increased) are
+     * the canonical business events; the trailing return_confirmed /
+     * return_reversed are sub-flows of "After Sales return" that are
+     * already dispatched by SalesReturnService and worth configuring
+     * separately. soft_delete / accounts_entry / godown_create are kept
+     * as additional infrastructure events (already in the original
+     * Phase-10 set) — admins may configure them but they are not in the
+     * user's 9.
      */
     public const EVENTS = [
-        'sales_finalize' => 'Sales Invoice Finalized',
-        'challan_create' => 'Challan Created',
-        'godown_create' => 'Godown Copy Created',
-        'payment_receive' => 'Payment Received from Client',
-        'soft_delete' => 'Any Record Soft-Deleted',
-        'accounts_entry' => 'Any Accounting Entry Posted',
-        'user_login' => 'User Login',
-        // P1-7: Sales return events (legacy had return_created + return_received)
-        'return_created' => 'Sales Return Created',
-        'return_confirmed' => 'Sales Return Confirmed',
-        'return_reversed' => 'Sales Return Reversed',
+        // — User's 9 predefined business events —
+        'sales_finalize'            => 'After Sales Confirm',
+        'challan_create'            => 'After Create Challan Copy',
+        'user_login'                => 'After Login',
+        'user_logout'               => 'After Logout',
+        'damage_invoice_created'    => 'After Create Damage Invoice',
+        'payment_receive'           => 'After Receive Money',
+        'return_created'            => 'After Sales Return',
+        'branch_demand_created'     => 'After Branch Demand',
+        'customer_limit_increased'  => 'After Increasing Customer Limit',
+        // — Additional infrastructure events (pre-existing) —
+        'godown_create'             => 'Godown Copy Created',
+        'soft_delete'               => 'Record Soft-Deleted',
+        'accounts_entry'            => 'Accounting Entry Posted',
+        // — Sales-return sub-flows (already dispatched; keep configurable) —
+        'return_confirmed'          => 'Sales Return Confirmed',
+        'return_reversed'           => 'Sales Return Reversed',
     ];
 
     /**
      * All available recipient types.
+     *
+     * F-18b adds 3 context-aware types (resolved at dispatch time using
+     * the $context array): warehouse_manager_of_branch, salesman_of_invoice,
+     * invoice_creator. The legacy global types are retained; sales_manager
+     * is un-fused to mean ONLY manager+salesman roles (was previously
+     * over-broad to include admin/superadmin).
      */
     public const RECIPIENTS = [
-        'admin' => 'Admin',
-        'superadmin' => 'Super Admin',
-        'sales_manager' => 'Sales Manager',
-        'accountant' => 'Accounts',
-        'all_users' => 'All Users',
-        'specific_user' => 'Specific User',
-        // P1-7: warehouse_manager recipient (for return confirm notifications)
-        'warehouse_manager' => 'Warehouse Manager',
+        'all_users'                  => 'All Users',
+        'admin'                      => 'Only Admin',
+        'superadmin'                 => 'Super Admin',
+        'sales_manager'              => 'Sales Manager',
+        'accountant'                 => 'Accountant',
+        'warehouse_manager'          => 'Warehouse Manager (all branches)',
+        // — Context-aware (require $context at dispatch time) —
+        'warehouse_manager_of_branch' => 'Warehouse Manager of event branch',
+        'salesman_of_invoice'         => 'Salesman of the invoice',
+        'invoice_creator'             => 'Creator of the record',
+        // — Explicit —
+        'specific_user'              => 'Specific User',
     ];
 
     /**
      * Available channels.
+     *
+     * F-18b: collapsed to database-only. The `broadcast`/`both` options
+     * were vestigial — no config/broadcasting.php exists in the app and
+     * ERPNotification no longer ships a broadcast channel. Real-time push
+     * to the browser is handled by the SSE pipeline (PostgreSQL
+     * LISTEN/NOTIFY → Redis → EventSource), NOT Laravel broadcasting.
      */
     public const CHANNELS = [
         'database' => 'Database (In-App)',
-        'broadcast' => 'Broadcast (Live WebSocket)',
-        'both' => 'Both (Database + Live)',
+    ];
+
+    /**
+     * Recipient types that depend on event context (the $context array
+     * passed to NotificationService::dispatch()). Used by the UI to hint
+     * which selections need contextual data and by resolveRecipients().
+     */
+    public const CONTEXT_AWARE_RECIPIENTS = [
+        'warehouse_manager_of_branch',
+        'salesman_of_invoice',
+        'invoice_creator',
     ];
 
     public function creator(): \Illuminate\Database\Eloquent\Relations\BelongsTo
@@ -94,9 +129,13 @@ class NotificationRule extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
-    public function recipientUser(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    /**
+     * The multi-select recipient-type selections for this rule (F-18b).
+     */
+    public function recipientTypes(): \Illuminate\Database\Eloquent\Relations\HasMany
     {
-        return $this->belongsTo(User::class, 'recipient_user_id');
+        return $this->hasMany(NotificationRuleRecipient::class, 'notification_rule_id')
+                    ->orderBy('id');
     }
 
     /**
@@ -124,13 +163,15 @@ class NotificationRule extends Model
     }
 
     /**
-     * Get the recipient label.
+     * Get the recipient label(s). With multi-select (F-18b) this joins
+     * every recipient-type selection with a comma.
      */
     public function getRecipientLabelAttribute(): string
     {
-        if ($this->recipient_type === 'specific_user' && $this->recipientUser) {
-            return 'Specific: ' . $this->recipientUser->username;
+        $types = $this->recipientTypes;
+        if ($types->isEmpty()) {
+            return '—';
         }
-        return self::RECIPIENTS[$this->recipient_type] ?? $this->recipient_type;
+        return $types->map(fn ($r) => $r->label)->implode(', ');
     }
 }

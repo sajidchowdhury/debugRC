@@ -3,22 +3,32 @@
 @section('content')
 @php
     // Event → Bootstrap color mapping (per task spec)
+    // F-18b: added the 4 new events (user_logout, damage_invoice_created,
+    // branch_demand_created, customer_limit_increased) + return sub-flows.
     $eventColors = [
-        'sales_finalize'  => 'success',
-        'challan_create'  => 'info',
-        'godown_create'   => 'primary',
-        'payment_receive' => 'success',
-        'soft_delete'     => 'warning',
-        'accounts_entry'  => 'primary',
-        'user_login'      => 'secondary',
+        'sales_finalize'           => 'success',
+        'challan_create'           => 'info',
+        'godown_create'            => 'primary',
+        'payment_receive'          => 'success',
+        'soft_delete'              => 'warning',
+        'accounts_entry'           => 'primary',
+        'user_login'               => 'secondary',
+        'user_logout'              => 'secondary',
+        'damage_invoice_created'   => 'danger',
+        'branch_demand_created'    => 'info',
+        'customer_limit_increased' => 'success',
+        'return_created'           => 'info',
+        'return_confirmed'         => 'primary',
+        'return_reversed'          => 'danger',
     ];
-    // Channel → Bootstrap color mapping
+    // Channel → Bootstrap color mapping (F-18b: database-only)
     $channelColors = [
-        'database' => 'secondary',
+        'database'  => 'secondary',
         'broadcast' => 'info',
         'both'      => 'primary',
     ];
 
+    $contextAware = $contextAware ?? [];
     $filters = $filters ?? [];
     $stats   = $stats   ?? [
         'total_rules'         => 0,
@@ -38,7 +48,7 @@
         <div>
             <h1 class="h4 mb-1"><i class="fas fa-bell-concierge me-2"></i>{{ $title }}</h1>
             <p class="mb-0 small opacity-75">
-                Define <em>who</em> gets notified <em>when</em> key events happen across RC&nbsp;ERP — sales, challans, payments, deletions and more.
+                Define <em>who</em> gets notified <em>when</em> key events happen across RC&nbsp;ERP — sales, challans, payments, logins, returns and more. Multi-select recipients per event.
             </p>
         </div>
         <div class="d-flex gap-2 flex-wrap">
@@ -142,7 +152,7 @@
                         <div class="col-md-6">
                             <label class="form-label fw-semibold">Rule Name <span class="text-danger">*</span></label>
                             <input type="text" name="name" class="form-control" maxlength="100"
-                                   placeholder="e.g. Notify Admin on every sale" required>
+                                   placeholder="e.g. Notify Admin + Warehouse on every sale" required>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label fw-semibold">Event <span class="text-danger">*</span></label>
@@ -154,33 +164,39 @@
                             </select>
                         </div>
 
+                        {{-- F-18b: multi-select recipient types --}}
                         <div class="col-md-4">
-                            <label class="form-label fw-semibold">Recipient Type <span class="text-danger">*</span></label>
-                            <select name="recipient_type" id="recipientType" class="form-select" required>
-                                <option value="">— Who will receive… —</option>
+                            <label class="form-label fw-semibold">Recipient Types <span class="text-danger">*</span></label>
+                            <select name="recipient_types[]" id="recipientTypes" class="form-select" size="8" multiple required>
                                 @foreach ($recipients as $key => $label)
-                                    <option value="{{ $key }}">{{ $label }}</option>
+                                    @php
+                                        $isContextAware = in_array($key, $contextAware, true);
+                                    @endphp
+                                    <option value="{{ $key }}">{{ $label }}{{ $isContextAware ? ' ★' : '' }}</option>
                                 @endforeach
                             </select>
+                            <small class="text-muted">
+                                Hold Ctrl/Cmd to pick multiple. ★ = resolved from event context (branch / invoice).
+                            </small>
                         </div>
                         <div class="col-md-4" id="specificUserWrap" style="display:none;">
                             <label class="form-label fw-semibold">Specific User <span class="text-danger">*</span></label>
                             <select name="recipient_user_id" id="recipientUser" class="form-select">
                                 <option value="">— Select user —</option>
                                 @foreach ($users as $u)
-                                    <option value="{{ $u->id }}">{{ $u->username }} ({{ $u->email ?? '—' }})</option>
+                                    <option value="{{ $u->id }}">{{ $u->username }} ({{ $u->employee?->name ?? '—' }})</option>
                                 @endforeach
                             </select>
-                            <small class="text-muted">Only required when recipient type is "Specific User".</small>
+                            <small class="text-muted">Only required when "Specific User" is selected.</small>
                         </div>
                         <div class="col-md-4">
-                            <label class="form-label fw-semibold">Channel <span class="text-danger">*</span></label>
-                            <select name="channel" class="form-select" required>
-                                <option value="">— Delivery channel… —</option>
-                                @foreach ($channels as $key => $label)
-                                    <option value="{{ $key }}">{{ $label }}</option>
-                                @endforeach
-                            </select>
+                            <label class="form-label fw-semibold">Delivery Channel</label>
+                            <div class="form-control bg-light text-muted d-flex align-items-center" style="min-height:38px;">
+                                <i class="fas fa-database me-2 text-secondary"></i>
+                                <span>Database (In-App) + real-time toast</span>
+                            </div>
+                            <input type="hidden" name="channel" value="database">
+                            <small class="text-muted">Real-time push via SSE — no database polling.</small>
                         </div>
 
                         <div class="col-12">
@@ -256,8 +272,7 @@
                         <tr>
                             <th>Name</th>
                             <th>Event</th>
-                            <th>Recipient</th>
-                            <th>Channel</th>
+                            <th>Recipients</th>
                             <th class="text-center">Active</th>
                             <th class="text-center">Times Fired</th>
                             <th>Created By</th>
@@ -267,8 +282,7 @@
                     <tbody>
                         @forelse ($rules as $rule)
                             @php
-                                $evtColor   = $eventColors[$rule->event]            ?? 'secondary';
-                                $chanColor  = $channelColors[$rule->channel]        ?? 'secondary';
+                                $evtColor = $eventColors[$rule->event] ?? 'secondary';
                             @endphp
                             <tr>
                                 <td>
@@ -282,15 +296,21 @@
                                         <i class="fas fa-bolt me-1"></i>{{ $rule->event_label }}
                                     </span>
                                 </td>
+                                {{-- F-18b: render every recipient-type selection as its own badge --}}
                                 <td>
-                                    <span class="badge bg-light text-dark border">
-                                        {{ $rule->recipient_label }}
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="badge bg-{{ $chanColor }}-subtle text-{{ $chanColor }}">
-                                        {{ $channels[$rule->channel] ?? $rule->channel }}
-                                    </span>
+                                    <div class="d-flex flex-wrap gap-1">
+                                        @forelse ($rule->recipientTypes as $sel)
+                                            <span class="badge bg-light text-dark border">
+                                                @if ($sel->recipient_type === 'specific_user' && $sel->recipientUser)
+                                                    Specific: {{ $sel->recipientUser->username }}
+                                                @else
+                                                    {{ $recipients[$sel->recipient_type] ?? $sel->recipient_type }}
+                                                @endif
+                                            </span>
+                                        @empty
+                                            <span class="badge bg-warning-subtle text-warning">No recipients</span>
+                                        @endforelse
+                                    </div>
                                 </td>
                                 <td class="text-center">
                                     @if ($rule->is_active)
@@ -335,7 +355,7 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="8" class="text-center text-muted py-5">
+                                <td colspan="7" class="text-center text-muted py-5">
                                     <i class="fas fa-bell-slash fa-2x mb-2 d-block opacity-50"></i>
                                     No notification rules found. Create your first rule above.
                                 </td>
@@ -359,14 +379,16 @@
 
 @push('scripts')
 <script>
-    // Show/hide Specific User field based on recipient_type
+    // F-18b: Show/hide Specific User field when 'specific_user' is among
+    // the multi-select recipient_types selections.
     (function () {
-        var sel = document.getElementById('recipientType');
+        var sel = document.getElementById('recipientTypes');
         var wrap = document.getElementById('specificUserWrap');
         var userSel = document.getElementById('recipientUser');
         function sync() {
             if (!sel || !wrap) return;
-            var show = (sel.value === 'specific_user');
+            var selected = Array.prototype.map.call(sel.selectedOptions, function (o) { return o.value; });
+            var show = (selected.indexOf('specific_user') !== -1);
             wrap.style.display = show ? '' : 'none';
             if (userSel) userSel.required = show;
         }
@@ -389,7 +411,7 @@
             paging: false,
             info: false,
             searching: true,
-            order: [[5, 'desc']],
+            order: [[4, 'desc']],
             dom: '<"d-flex justify-content-end mb-2"f>t'
         });
     });

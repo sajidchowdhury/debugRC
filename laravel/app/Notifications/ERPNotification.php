@@ -4,17 +4,23 @@ namespace App\Notifications;
 
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Notifications\Messages\BroadcastMessage;
 use Illuminate\Notifications\Notification;
 
 /**
- * ERP Notification — Phase 10.
+ * ERP Notification — Phase 10 (F-18b: database-only).
  *
  * The single notification class used by all ERP events. Dispatched by
  * NotificationService based on active notification_rules.
  *
- * Supports both database (in-app) and broadcast (Reverb WebSocket — live)
- * channels. The rule's channel setting determines which channels are used.
+ * F-18b cleanup: the vestigial `broadcast` channel + `toBroadcast()`
+ * method have been removed. No `config/broadcasting.php` exists in the
+ * app (no Reverb / Pusher / Echo installed), so the broadcast channel
+ * silently no-op'd. Real-time push to the browser is handled by the SSE
+ * pipeline (PostgreSQL LISTEN/NOTIFY → Redis → EventSource) which is
+ * fired separately by NotificationService via ListenNotifyService — NOT
+ * by Laravel's broadcast system. The `channels` constructor parameter is
+ * retained for backward-compatibility of the call site but is ignored;
+ * via() always returns the database channel only.
  */
 class ERPNotification extends Notification implements ShouldQueue
 {
@@ -33,20 +39,14 @@ class ERPNotification extends Notification implements ShouldQueue
 
     /**
      * Get the notification's delivery channels.
+     *
+     * F-18b: always database-only. The `channels` constructor argument is
+     * accepted for backward compatibility but the broadcast channel is no
+     * longer wired (no broadcasting config in the app).
      */
     public function via(object $notifiable): array
     {
-        $via = [];
-        if (in_array('database', $this->channels) || in_array('both', $this->channels)) {
-            $via[] = 'database';
-        }
-        if (in_array('broadcast', $this->channels) || in_array('both', $this->channels)) {
-            $via[] = 'broadcast';
-        }
-        if (empty($via)) {
-            $via[] = 'database';
-        }
-        return $via;
+        return ['database'];
     }
 
     /**
@@ -55,30 +55,13 @@ class ERPNotification extends Notification implements ShouldQueue
     public function toDatabase(object $notifiable): array
     {
         return [
-            'title' => $this->title,
-            'body' => $this->body,
-            'event' => $this->event,
+            'title'          => $this->title,
+            'body'           => $this->body,
+            'event'          => $this->event,
             'reference_type' => $this->referenceType,
-            'reference_id' => $this->referenceId,
-            'icon' => $this->icon,
-            'color' => $this->color,
+            'reference_id'   => $this->referenceId,
+            'icon'           => $this->icon,
+            'color'          => $this->color,
         ];
-    }
-
-    /**
-     * Get the broadcast representation for Reverb WebSocket (live alerts).
-     */
-    public function toBroadcast(object $notifiable): BroadcastMessage
-    {
-        return new BroadcastMessage([
-            'title' => $this->title,
-            'body' => $this->body,
-            'event' => $this->event,
-            'reference_type' => $this->referenceType,
-            'reference_id' => $this->referenceId,
-            'icon' => $this->icon,
-            'color' => $this->color,
-            'created_at' => now()->toISOString(),
-        ]);
     }
 }
