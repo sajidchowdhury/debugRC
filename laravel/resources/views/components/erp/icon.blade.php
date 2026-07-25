@@ -111,6 +111,15 @@
         case 'save':
             $svgContent = '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>';
             break;
+        case 'check':
+            $svgContent = '<polyline points="20 6 9 17 4 12"/>';
+            break;
+        case 'more-horizontal':
+            $svgContent = '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>';
+            break;
+        case 'ban':
+            $svgContent = '<circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 14.14 14.14"/>';
+            break;
         case 'box':
         default:
             $svgContent = '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>';

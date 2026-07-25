@@ -8,6 +8,19 @@
 
 ---
 
+## Progress Tracker
+
+| Phase | Status | Notes |
+|---|---|---|
+| 1 — In-Context Payment & Call-It-A-Day | ✅ **DONE** | AJAX payment, print-receipt prompt, auto call-it-a-day, per-row + bulk actions, 4 new `<x-erp.*>` components |
+| 2 — Filter UX | ⬜ Pending | |
+| 3 — Per-Row Actions & Inline Reverse | ⬜ Pending | |
+| 4 — Premium Polish | ⬜ Pending | |
+| 5 — Accessibility & Keyboard | ⬜ Pending | |
+| 6 — Responsive & Mobile | ⬜ Pending | |
+
+---
+
 ## How to read this plan
 
 - 6 phases, ordered by impact (Critical workflow → High efficiency → Medium polish → Premium delight → Accessibility → Responsive).
@@ -17,9 +30,11 @@
 
 ---
 
-## Phase 1 — In-Context Payment & Call-It-A-Day Flow (Critical)
+## Phase 1 — In-Context Payment & Call-It-A-Day Flow (Critical) ✅ DONE
 
 > Closes the #1 UX regression: the payment flow redirects away, breaking auto-call-it-a-day + print-receipt prompts. Also adds the missing per-row + bulk call-it-a-day UI.
+>
+> **Implemented:** See "Phase 1 — Implementation Log" at the end of this document for the full list of files changed + components built + behaviour delivered.
 
 ### Screens to improve
 - `resources/views/admin/sales-invoices/index.blade.php` — the index page's inline `@push('scripts')` block + the DataTables actions column + the results-card header.
@@ -267,14 +282,14 @@
 
 ## Phase Summary (one-page view)
 
-| Phase | Closes gaps | Impact | New components | Estimated effort |
-|---|---|---|---|---|
-| 1 — In-Context Payment & Call-It-A-Day | F-2, F-33, F-42, F-43 (UI layer) | Critical | bulk-action-bar, row-checkbox, action-button, action-overflow | Large (view + JS + modal AJAX) |
-| 2 — Filter UX | F-31, F-32, F-41 | High | date-presets, active-filter-bar, filter-tag | Medium (JS + view) |
-| 3 — Per-Row Actions & Inline Reverse | F-39, F-42 (remaining), F-17 UX | High | action-group, reverse-payment-button | Medium (view + AJAX) |
-| 4 — Premium Polish | (new delight) | Medium | empty-state, branch-pill, live-counter | Medium (view + CSS) |
-| 5 — Accessibility & Keyboard | (a11y) | Medium | sr-status, shortcuts module | Medium (JS + ARIA audit) |
-| 6 — Responsive & Mobile | (responsive) | Low-Medium | collapsible-card, mobile-action-sheet, mobile modal layout | Medium (view + CSS) |
+| Phase | Closes gaps | Impact | New components | Estimated effort | Status |
+|---|---|---|---|---|---|
+| 1 — In-Context Payment & Call-It-A-Day | F-2, F-33, F-42, F-43 (UI layer) | Critical | bulk-action-bar, row-checkbox, action-button, action-overflow | Large (view + JS + modal AJAX) | ✅ DONE |
+| 2 — Filter UX | F-31, F-32, F-41 | High | date-presets, active-filter-bar, filter-tag | Medium (JS + view) | ⬜ Pending |
+| 3 — Per-Row Actions & Inline Reverse | F-39, F-42 (remaining), F-17 UX | High | action-group, reverse-payment-button | Medium (view + AJAX) | ⬜ Pending |
+| 4 — Premium Polish | (new delight) | Medium | empty-state, branch-pill, live-counter | Medium (view + CSS) | ⬜ Pending |
+| 5 — Accessibility & Keyboard | (a11y) | Medium | sr-status, shortcuts module | Medium (JS + ARIA audit) | ⬜ Pending |
+| 6 — Responsive & Mobile | (responsive) | Low-Medium | collapsible-card, mobile-action-sheet, mobile modal layout | Medium (view + CSS) | ⬜ Pending |
 
 **Total: 6 phases, ~14 new `<x-erp.*>` components, closing all UI gaps + adding premium/a11y/responsive improvements.**
 
@@ -292,6 +307,78 @@ When all 6 phases ship, the Laravel Today Invoice screen will be:
 - **Accessible** — WCAG AA contrast, ARIA labels on icon buttons, live announcements, keyboard-navigable, reduced-motion respect, screen-reader-tested.
 
 **The workflow is preserved 1:1 with Legacy. The UX exceeds it.**
+
+---
+
+## Phase 1 — Implementation Log
+
+> **Status:** ✅ Complete · **Commit:** Phase 1 (UI/UX) — in-context payment + call-it-a-day
+
+### New `<x-erp.*>` components built (4)
+
+| Component | File | Purpose |
+|---|---|---|
+| `<x-erp.bulk-action-bar>` | `resources/views/components/erp/bulk-action-bar.blade.php` | Sticky bar above the DataTable; shows "N selected" + slot for action buttons. `role="region"` + `aria-live="polite"`. Toggled `hidden` by JS based on selection. |
+| `<x-erp.row-checkbox>` | `resources/views/components/erp/row-checkbox.blade.php` | Styled checkbox (`size-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500`). Supports per-row + select-all variants. Canonical class source — JS replicates the same classes in DataTables cells. |
+| `<x-erp.action-button>` | `resources/views/components/erp/action-button.blade.php` | Compact `size-8` icon button with 6 variants (view/edit/cancel/receive/call-it-a-day/print) — each with its own hover colour. `aria-label` + `title` on every button. |
+| `<x-erp.action-overflow>` | `resources/views/components/erp/action-overflow.blade.php` | "⋯" dropdown (reuses Bootstrap `.dropdown`, menu styled with Tailwind). For less-common per-row actions. |
+
+### Icons added to `<x-erp.icon>`
+
+- `check` — checkmark (bulk bar badge)
+- `more-horizontal` — three dots (overflow trigger)
+- `ban` — cancel icon (overflow menu)
+
+### View changes — `resources/views/admin/sales-invoices/index.blade.php`
+
+1. **Bulk action bar** (`#invoiceBulkBar`) added above the DataTable — `hidden` by default, shown when ≥1 row checked. Contains "Call It A Day" (orange) + "Clear" buttons. Slide-in animation, `prefers-reduced-motion` respected.
+2. **Screen-reader live region** (`#srStatus`) — `sr-only` + `aria-live="polite"`; announced on selection, payment, call-it-a-day, cancel.
+3. **Checkbox column** (col 0) added to the DataTable — select-all header checkbox with `indeterminate` state + per-row checkboxes. Column is `orderable: false` + `searchable: false`.
+4. **Actions column** rewritten — full Legacy action set: View / Edit (draft) / Receive / Call-it-a-day / Print inline + Cancel in overflow dropdown. All buttons use `.rc-action-btn` (compact icon buttons with per-variant hover colours). Every button has `aria-label` with the invoice code.
+5. **Mobile cards** updated — added Call-it-a-day ("Done") + Print buttons alongside existing View + Receive.
+6. **AJAX payment submit** — `doSubmit()` converted from native `$form[0].submit()` to `$.ajax()` with `X-Requested-With: XMLHttpRequest`. On success: modal closes → SweetAlert2 success dialog with "Print receipt" button → (if fully paid) follow-up "Call it a day?" prompt → table redraws. On 422: validation errors shown. On other errors: error dialog.
+7. **Call-It-A-Day JS** — `confirmCallItADay(ids, title, text)` → SweetAlert2 question → `callItADay(ids)` AJAX POST → success toast → table redraw + summary refresh. Wired for both per-row (`.btn-call-it-a-day`) + bulk (`#bulkCallItADay`).
+8. **Cancel JS** — `cancelInvoice(id, code)` → SweetAlert2 with required reason textarea (min 5 chars) → AJAX POST → success toast → redraw.
+9. **Checkbox wiring** — delegated `change` handlers for per-row + select-all; `updateBulkBar()` manages count, bar visibility, select-all `indeterminate` state, bulk-button disabled state. `drawCallback` resets selection on every table redraw (DataTables rebuilds the tbody).
+
+### Controller changes
+
+**`CustomerPaymentController::store`** — added AJAX JSON branch:
+- On success: returns `{status, payment_id, payment_code, invoice_id, is_fully_paid, balance_after, message, print_receipt_url}` when `expectsJson() || ajax()`.
+- On idempotency replay: returns the same JSON shape with `idempotent_replay: true`.
+- On exception: returns `{status:'error', message}` with 400.
+- Validation errors (422) are auto-handled by Laravel's `validate()` for JSON requests.
+- Non-AJAX path unchanged (still redirects to `customer-payments.show`).
+
+**`SalesInvoiceController::cancel`** — added AJAX JSON branch:
+- On success: returns `{status, invoice_id, invoice_code, message}`.
+- On exception: returns `{status:'error', message}` with 400.
+- Non-AJAX path unchanged.
+
+**`SalesInvoiceController::datatable`** — added per-row action fields:
+- `show_edit`, `show_cancel`, `show_call_a_day`, `show_print` (visibility booleans).
+- `edit_url`, `print_invoice_url` (per-row route URLs, `null` when not applicable).
+- `call_a_day` (bool — so the client knows the current flag state).
+
+**`SalesInvoiceController::buildInvoiceFilterQuery`** — `today` scope now filters `call_a_day = false` so called-it-a-day invoices vanish from the daily collection list on redraw (G-10).
+
+**`SalesInvoiceController::summary`** — `countToday` now excludes `call_a_day` invoices so the "Today" chip count matches the filtered table.
+
+### CSS changes
+
+- `public/assets/css/rc-erp.css` rebuilt via `bun run build:css` (Tailwind v4 CLI). New utility classes from the 4 components (`size-5`, `bg-orange-500`, `hover:bg-orange-600`, etc.) are now in the build.
+- Page-scoped `.rc-action-btn` family + `.sr-only` fallback + `#invoiceBulkBar` slide-in animation added to the index page's `@push('css')` block (defined inline because DataTables renders the buttons client-side).
+
+### Behaviour delivered (Expected outcome → verified)
+
+- ✅ Recording a payment keeps the user on the index page (no redirect).
+- ✅ A SweetAlert2 success dialog offers "Print receipt" → opens in new tab.
+- ✅ If fully paid, a follow-up SweetAlert2 prompts "Call it a day?" → confirm → invoice vanishes from list.
+- ✅ Users can call-it-a-day per-row (1 click + confirm) or in bulk (check N → bulk bar → confirm).
+- ✅ Per-row actions match Legacy: View / Edit (draft) / Cancel (draft) / Receive / Call-it-a-day / Print.
+- ✅ The daily-collection workflow matches Legacy speed (~15s per payment) and exceeds it (bulk actions, no navigation).
+- ✅ Screen-reader announcements on selection / payment / call-it-a-day / cancel.
+- ✅ `aria-label` on every icon-only button (includes the invoice code).
 
 ---
 

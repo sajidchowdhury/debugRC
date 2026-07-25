@@ -134,8 +134,22 @@ class CustomerPaymentController extends Controller
         $cached = \Illuminate\Support\Facades\Cache::get($cacheKey);
 
         if ($cached !== null) {
-            // Replay: redirect to the same payment show page with the
+            // R2 Replay: redirect to the same payment show page with the
             // original success message + an additional warning flash.
+            // Phase 1 (UI/UX): AJAX branch — the inline receive modal
+            // posts via fetch() and expects JSON, not a redirect.
+            if ($request->expectsJson() || $request->ajax()) {
+                $replayInvoiceId = (int) ($validated['alloc_invoice_id'][0] ?? 0);
+                return response()->json([
+                    'status'             => 'success',
+                    'idempotent_replay'  => true,
+                    'payment_id'         => $cached['payment_id'],
+                    'payment_code'       => $cached['payment_code'] ?? '',
+                    'invoice_id'         => $replayInvoiceId,
+                    'message'            => $cached['success_message'] ?? 'Payment already recorded (duplicate submission).',
+                    'print_receipt_url'  => route('admin.customer-payments.print-receipt', $cached['payment_id']),
+                ]);
+            }
             return redirect()
                 ->route('admin.customer-payments.show', ['customer_payment' => $cached['payment_id']])
                 ->with('success', $cached['success_message'])
@@ -198,9 +212,45 @@ class CustomerPaymentController extends Controller
                 'success_message' => $successMessage,
             ], 600);
 
+            // Phase 1 (UI/UX): AJAX branch — the inline receive modal
+            // posts via fetch() and expects JSON so the user stays on
+            // the Today Invoice list (no redirect). We return enough
+            // context for the client to offer "Print receipt" + the
+            // "Call it a day?" follow-up when the invoice is fully paid.
+            if ($request->expectsJson() || $request->ajax()) {
+                $invoiceId = (int) ($validated['alloc_invoice_id'][0] ?? 0);
+                $isFullyPaid = false;
+                $balanceAfter = null;
+                if ($invoiceId > 0) {
+                    $invoiceFresh = \App\Models\SalesInvoice::find($invoiceId);
+                    if ($invoiceFresh) {
+                        $balanceAfter = (float) $invoiceFresh->due_amount;
+                        $isFullyPaid = $balanceAfter <= 0.01
+                            && $invoiceFresh->status !== 'cancelled'
+                            && !$invoiceFresh->is_reversed;
+                    }
+                }
+                return response()->json([
+                    'status'           => 'success',
+                    'payment_id'       => $payment->id,
+                    'payment_code'     => $payment->payment_code,
+                    'invoice_id'       => $invoiceId,
+                    'is_fully_paid'    => $isFullyPaid,
+                    'balance_after'    => $balanceAfter,
+                    'message'          => $successMessage,
+                    'print_receipt_url' => route('admin.customer-payments.print-receipt', $payment),
+                ]);
+            }
+
             return redirect()->route('admin.customer-payments.show', $payment)
                 ->with('success', $successMessage);
         } catch (\Throwable $e) {
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => $e->getMessage(),
+                ], 400);
+            }
             return back()->withInput()->with('error', $e->getMessage());
         }
     }

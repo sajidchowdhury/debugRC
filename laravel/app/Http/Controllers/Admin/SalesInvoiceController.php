@@ -560,9 +560,25 @@ class SalesInvoiceController extends Controller
 
         try {
             $invoice = $this->invoiceService->cancelInvoice($id, auth()->id(), $request->input('cancel_reason'));
+            // Phase 1 (UI/UX): AJAX branch — the inline cancel action
+            // (overflow dropdown) posts via AJAX and expects JSON.
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'status'       => 'success',
+                    'invoice_id'   => $invoice->id,
+                    'invoice_code' => $invoice->invoice_code,
+                    'message'      => "Invoice {$invoice->invoice_code} cancelled.",
+                ]);
+            }
             return redirect()->route('admin.sales-invoices.show', $invoice)
                 ->with('success', "Invoice {$invoice->invoice_code} cancelled.");
         } catch (\Throwable $e) {
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => $e->getMessage(),
+                ], 400);
+            }
             return back()->with('error', $e->getMessage());
         }
     }
@@ -808,6 +824,11 @@ class SalesInvoiceController extends Controller
             ->skip($start)->take($length)->get();
 
         $data = $rows->map(function ($inv) {
+            $due = (float) $inv->due_amount;
+            $isCancelled = $inv->status === 'cancelled';
+            $isReversed = (bool) $inv->is_reversed;
+            $isDraft = $inv->status === 'draft';
+            $calledItADay = (bool) $inv->call_a_day;
             return [
                 'id'             => $inv->id,
                 'invoice_code'   => $inv->invoice_code,
@@ -818,14 +839,23 @@ class SalesInvoiceController extends Controller
                 'items_count'    => $inv->items->count(),
                 'total_amount'   => (float) $inv->total_amount,
                 'paid_amount'    => (float) $inv->paid_amount,
-                'due_amount'     => (float) $inv->due_amount,
+                'due_amount'     => $due,
                 'status'         => $inv->status,
                 'is_soft_hold'   => (bool) $inv->is_soft_hold,
-                'is_reversed'    => (bool) $inv->is_reversed,
-                'show_receive'   => (float) $inv->due_amount > 0.01
-                                     && $inv->status !== 'cancelled'
-                                     && !$inv->is_reversed,
+                'is_reversed'    => $isReversed,
+                'call_a_day'     => $calledItADay,
+                // Phase 1 (UI/UX): action-visibility flags + per-row URLs
+                // so the DataTables actions column can render the full
+                // Legacy action set (View / Edit / Cancel / Receive /
+                // Call-it-a-day / Print) without hardcoding routes in JS.
+                'show_receive'   => $due > 0.01 && !$isCancelled && !$isReversed,
+                'show_edit'      => $isDraft && !$isReversed,
+                'show_cancel'    => $isDraft && !$isReversed,
+                'show_call_a_day'=> $due <= 0.01 && !$isCancelled && !$isReversed && !$calledItADay,
+                'show_print'     => !$isDraft && !$isReversed,
                 'show_url'       => route('admin.sales-invoices.show', $inv),
+                'edit_url'       => $isDraft && !$isReversed ? route('admin.sales-invoices.edit', $inv) : null,
+                'print_invoice_url' => !$isDraft && !$isReversed ? route('admin.sales-invoices.print-invoice', $inv) : null,
             ];
         });
 
@@ -877,7 +907,9 @@ class SalesInvoiceController extends Controller
 
         // BUG-52: workflow buckets for the new chips.
         $today = now()->format('Y-m-d');
-        $countToday = (clone $base)->where('invoice_date', $today)->count();
+        // Phase 1 (UI/UX): Today chip count excludes call_a_day invoices
+        // so the count matches the filtered DataTable (see buildInvoiceFilterQuery).
+        $countToday = (clone $base)->where('invoice_date', $today)->where('call_a_day', false)->count();
         $countPendingGodown = (clone $base)
             ->where('status', 'confirmed')
             ->where('is_godown_prepared', false)
@@ -966,6 +998,10 @@ class SalesInvoiceController extends Controller
                 $today = now()->format('Y-m-d');
                 if (! $request->input('from_date')) { $q->where('invoice_date', '>=', $today); }
                 if (! $request->input('to_date'))   { $q->where('invoice_date', '<=', $today); }
+                // Phase 1 (UI/UX) / G-10: hide invoices flagged call_a_day
+                // from the daily collection list so "Call It A Day" makes
+                // them vanish from the Today view on redraw.
+                $q->where('call_a_day', false);
             } elseif ($scope === 'pending_godown') {
                 $q->where('status', 'confirmed')
                   ->where('is_godown_prepared', false)

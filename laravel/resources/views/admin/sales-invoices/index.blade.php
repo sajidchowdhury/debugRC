@@ -186,6 +186,38 @@
 
     {{-- R21: Invoices table (server-side DataTables) --}}
     <x-erp.left-accent-card accent="cyan" icon="file-text" title="Invoices" title-bn="চালান তালিকা" body-class="!p-0">
+            {{-- Phase 1 (UI/UX): Bulk action bar — appears when ≥1 row is checked. --}}
+            <div class="px-3 pt-3">
+                <div id="invoiceBulkBar"
+                     role="region"
+                     aria-label="Bulk actions"
+                     class="hidden sticky top-0 z-20 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5 shadow-sm flex flex-wrap items-center justify-between gap-3">
+                    <div class="flex items-center gap-2 text-sm">
+                        <span class="inline-flex items-center justify-center size-5 rounded-full bg-amber-500 text-white text-xs font-bold">
+                            <i class="fas fa-check" style="font-size:0.6rem;"></i>
+                        </span>
+                        <span class="font-medium text-amber-900">
+                            <span id="bulkSelectedCount" aria-live="polite" aria-atomic="true">0</span>
+                            selected / নির্বাচিত
+                        </span>
+                    </div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <button type="button" id="bulkCallItADay"
+                                class="inline-flex items-center gap-2 rounded-lg bg-orange-500 hover:bg-orange-600 text-white px-3 py-1.5 text-sm font-medium shadow-sm transition-colors disabled:opacity-50 disabled:pointer-events-none">
+                            <i class="fas fa-check-circle"></i>
+                            Call It A Day
+                        </button>
+                        <button type="button" id="bulkClear"
+                                class="inline-flex items-center gap-2 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-3 py-1.5 text-sm font-medium transition-colors">
+                            <i class="fas fa-times"></i>
+                            Clear
+                        </button>
+                    </div>
+                </div>
+                {{-- Screen-reader status region — announced on filter / selection / payment changes --}}
+                <div id="srStatus" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+            </div>
+
             {{-- R23: Mobile cards container --}}
             <div id="invoiceCards" class="sales-invoices-mobile-cards"></div>
 
@@ -194,6 +226,11 @@
                        style="width:100%">
                     <thead class="table-light">
                         <tr>
+                            <th class="text-center align-middle" style="width:36px;" data-orderable="false">
+                                <input type="checkbox" id="selectAllInvoices"
+                                       aria-label="Select all invoices on this page"
+                                       class="size-4 rounded border-gray-300 text-amber-600 focus:ring-2 focus:ring-amber-500 focus:ring-offset-0 cursor-pointer" />
+                            </th>
                             <th data-data="invoice_code">Code</th>
                             <th data-data="invoice_date">Date</th>
                             <th data-data="customer_name">Customer</th>
@@ -264,6 +301,62 @@ $(function () {
     var $scopeInput = $('#scope');
     var searchDebounce = null;
 
+    // ============================================================
+    // ====== Phase 1 (UI/UX): route URLs + bulk-bar state =========
+    // ============================================================
+    // Route URLs emitted from Blade so the JS never hardcodes paths.
+    // The cancel URL uses a path built inline (matching the existing
+    // receive-modal pattern) because route() would URL-encode a colon
+    // placeholder.
+    var ROUTES = {
+        callItADay: '{{ route("admin.sales-invoices.call-it-a-day") }}',
+        csrf:       '{{ csrf_token() }}',
+    };
+    var $bulkBar = $('#invoiceBulkBar');
+    var $bulkCount = $('#bulkSelectedCount');
+    var $selectAll = $('#selectAllInvoices');
+
+    // Screen-reader live-region announcer (Phase 1 a11y).
+    function announceSR(msg) {
+        var $sr = $('#srStatus');
+        if ($sr.length) { $sr.text(msg); }
+    }
+
+    // Return the currently-checked invoice IDs on the visible page.
+    function selectedInvoiceIds() {
+        var ids = [];
+        $('.row-invoice-checkbox:checked').each(function () {
+            ids.push(parseInt($(this).val(), 10) || 0);
+        });
+        return ids.filter(function (id) { return id > 0; });
+    }
+
+    // Show/hide the bulk bar + update the "N selected" count.
+    function updateBulkBar() {
+        var ids = selectedInvoiceIds();
+        $bulkCount.text(ids.length);
+        if (ids.length > 0) {
+            $bulkBar.removeClass('hidden');
+        } else {
+            $bulkBar.addClass('hidden');
+        }
+        // Select-all indeterminate state: if some (but not all) rows
+        // on the page are checked, show the indeterminate dash.
+        var $boxes = $('.row-invoice-checkbox');
+        var total = $boxes.length;
+        var checked = $boxes.filter(':checked').length;
+        if (total === 0) {
+            $selectAll.prop('indeterminate', false).prop('checked', false);
+        } else if (checked === total) {
+            $selectAll.prop('indeterminate', false).prop('checked', true);
+        } else if (checked > 0) {
+            $selectAll.prop('indeterminate', true).prop('checked', false);
+        } else {
+            $selectAll.prop('indeterminate', false).prop('checked', false);
+        }
+        $('#bulkCallItADay').prop('disabled', ids.length === 0);
+    }
+
     function currentFilterParams() {
         return {
             from_date:   $('#from_date').val(),
@@ -318,6 +411,19 @@ $(function () {
             },
         },
         columns: [
+            {
+                // Phase 1 (UI/UX): row checkbox (col 0).
+                data: null,
+                orderable: false,
+                searchable: false,
+                className: 'text-center align-middle',
+                render: function (data, type, row) {
+                    if (type !== 'display') return '';
+                    return '<input type="checkbox" class="row-invoice-checkbox size-4 rounded border-gray-300 text-amber-600 focus:ring-2 focus:ring-amber-500 focus:ring-offset-0 cursor-pointer align-middle" '
+                         + 'value="' + row.id + '" '
+                         + 'aria-label="Select invoice ' + escapeHtml(row.invoice_code || '') + '" />';
+                },
+            },
             {
                 data: 'invoice_code',
                 render: function (data, type, row) {
@@ -409,20 +515,75 @@ $(function () {
                 },
             },
             {
+                // Phase 1 (UI/UX): per-row actions — full Legacy parity.
+                // View / Edit / Receive / Call-it-a-day / Print inline +
+                // Cancel in an overflow dropdown. Uses .rc-action-btn
+                // (defined in the <style> block below) for compact icon
+                // buttons matching the <x-erp.action-button> spec.
                 data: null,
                 orderable: false,
                 className: 'text-center text-nowrap',
                 render: function (data, type, row) {
                     if (type !== 'display') return '';
-                    var html = '<a href="' + row.show_url + '" class="btn btn-sm btn-outline-secondary" title="View">' +
-                               '<i class="fas fa-eye"></i></a>';
-                    if (row.show_receive) {
-                        html += ' <button type="button" class="btn btn-sm btn-success btn-receive-payment" ' +
-                                'title="Receive payment" ' +
-                                'data-invoice-id="' + row.id + '" ' +
-                                'data-invoice-code="' + escapeHtml(row.invoice_code) + '">' +
-                                '<i class="fas fa-hand-holding-dollar"></i></button>';
+                    var code = escapeHtml(row.invoice_code || '');
+                    var html = '<div class="d-flex gap-1 justify-content-center align-items-center">';
+
+                    // View (always)
+                    html += '<a href="' + row.show_url + '" class="rc-action-btn rc-action-view" '
+                         +  'title="View" aria-label="View invoice ' + code + '">'
+                         +  '<i class="fas fa-eye"></i></a>';
+
+                    // Edit (draft only)
+                    if (row.show_edit && row.edit_url) {
+                        html += '<a href="' + row.edit_url + '" class="rc-action-btn rc-action-edit" '
+                             +  'title="Edit draft" aria-label="Edit invoice ' + code + '">'
+                             +  '<i class="fas fa-pen"></i></a>';
                     }
+
+                    // Receive payment (due > 0)
+                    if (row.show_receive) {
+                        html += '<button type="button" class="rc-action-btn rc-action-receive btn-receive-payment" '
+                             +  'title="Receive payment" '
+                             +  'aria-label="Receive payment for invoice ' + code + '" '
+                             +  'data-invoice-id="' + row.id + '" '
+                             +  'data-invoice-code="' + code + '">'
+                             +  '<i class="fas fa-hand-holding-dollar"></i></button>';
+                    }
+
+                    // Call it a day (paid, not yet called)
+                    if (row.show_call_a_day) {
+                        html += '<button type="button" class="rc-action-btn rc-action-callitaday btn-call-it-a-day" '
+                             +  'title="Call it a day" '
+                             +  'aria-label="Call it a day for invoice ' + code + '" '
+                             +  'data-invoice-id="' + row.id + '" '
+                             +  'data-invoice-code="' + code + '">'
+                             +  '<i class="fas fa-check-circle"></i></button>';
+                    }
+
+                    // Print invoice (confirmed + not reversed)
+                    if (row.show_print && row.print_invoice_url) {
+                        html += '<a href="' + row.print_invoice_url + '" target="_blank" rel="noopener" '
+                             +  'class="rc-action-btn rc-action-print" '
+                             +  'title="Print invoice" aria-label="Print invoice ' + code + '">'
+                             +  '<i class="fas fa-print"></i></a>';
+                    }
+
+                    // Overflow: Cancel (draft only) — kept in a dropdown
+                    // so the row stays narrow.
+                    if (row.show_cancel) {
+                        html += '<div class="dropdown d-inline-block">'
+                             +  '<button type="button" class="rc-action-btn" data-bs-toggle="dropdown" '
+                             +  'aria-expanded="false" title="More" '
+                             +  'aria-label="More actions for invoice ' + code + '">'
+                             +  '<i class="fas fa-ellipsis-h"></i></button>'
+                             +  '<ul class="dropdown-menu dropdown-menu-end shadow-lg rounded-md border border-gray-200 bg-white py-1" style="min-width:12rem;">'
+                             +  '<li><button type="button" class="dropdown-item text-danger btn-cancel-invoice" '
+                             +  'data-invoice-id="' + row.id + '" data-invoice-code="' + code + '">'
+                             +  '<i class="fas fa-ban me-2"></i>Cancel invoice</button></li>'
+                             +  '</ul></div>';
+                    }
+
+                    html += '</div>';
                     return html;
                 },
             },
@@ -431,10 +592,13 @@ $(function () {
             // R23: Render mobile cards from the current page's data.
             renderMobileCards(this.api());
 
-            // Re-bind the receive-payment buttons (DataTables redraws
-            // the tbody on every page change, so the existing
-            // .btn-receive-payment handler needs to be a delegated
-            // one — it is, see below).
+            // Phase 1 (UI/UX): DataTables redraws the tbody on every
+            // page change / ajax.reload, so per-row checkboxes are new
+            // DOM nodes. Reset the select-all + bulk bar to reflect the
+            // fresh (unchecked) checkboxes. If the user had a selection
+            // that was just "called it a day", the bar hides itself.
+            $selectAll.prop('indeterminate', false).prop('checked', false);
+            updateBulkBar();
         },
     });
 
@@ -585,6 +749,150 @@ $(function () {
     }
 
     // ============================================================
+    // ====== Phase 1 (UI/UX): checkboxes + Call-It-A-Day ==========
+    // ============================================================
+    // Delegated handlers (survive DataTables redraws). The bulk bar
+    // appears when ≥1 row is checked; "Call It A Day" flags invoices
+    // as collected so they vanish from the Today list on redraw.
+
+    // Per-row checkbox → update the bulk bar + select-all state.
+    $table.on('change', '.row-invoice-checkbox', function () {
+        updateBulkBar();
+        announceSR($(this).is(':checked') ? 'Row selected' : 'Row unselected');
+    });
+
+    // Select-all header checkbox → toggle every checkbox on the page.
+    $selectAll.on('change', function () {
+        var checked = $(this).is(':checked');
+        $('.row-invoice-checkbox').prop('checked', checked);
+        updateBulkBar();
+        announceSR(checked ? 'All rows on this page selected' : 'Selection cleared');
+    });
+
+    // Bulk "Clear" → uncheck everything + hide the bar.
+    $('#bulkClear').on('click', function () {
+        $('.row-invoice-checkbox').prop('checked', false);
+        $selectAll.prop('indeterminate', false).prop('checked', false);
+        updateBulkBar();
+    });
+
+    // Bulk "Call It A Day" → confirm → AJAX POST → redraw.
+    $('#bulkCallItADay').on('click', function () {
+        var ids = selectedInvoiceIds();
+        if (ids.length === 0) return;
+        confirmCallItADay(ids, 'Call it a day on ' + ids.length + ' invoice(s)?',
+            'They will be removed from your daily collection list. This does NOT cancel the invoice or affect the ledger.');
+    });
+
+    // Per-row "Call It A Day" (delegated — survives redraws).
+    $(document).on('click', '.btn-call-it-a-day', function () {
+        var id = parseInt($(this).data('invoice-id'), 10) || 0;
+        var code = String($(this).data('invoice-code') || '');
+        if (!id) return;
+        confirmCallItADay([id],
+            'Call it a day for ' + escapeHtml(code) + '?',
+            'It will be removed from your daily collection list. This does NOT cancel the invoice or affect the ledger.');
+    });
+
+    // Per-row "Cancel invoice" (delegated — lives in the overflow dropdown).
+    $(document).on('click', '.btn-cancel-invoice', function () {
+        var id = parseInt($(this).data('invoice-id'), 10) || 0;
+        var code = String($(this).data('invoice-code') || '');
+        if (!id) return;
+        cancelInvoice(id, code);
+    });
+
+    // Shared "Call It A Day" confirm → POST → redraw flow.
+    function confirmCallItADay(ids, title, text) {
+        Swal.fire({
+            title: title,
+            html: text,
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonText: '<i class="fas fa-check-circle me-1"></i>Yes, call it a day',
+            cancelButtonText: 'Cancel',
+            confirmButtonColor: '#ea580c', // orange-600
+        }).then(function (r) {
+            if (!r.isConfirmed) return;
+            callItADay(ids);
+        });
+    }
+
+    // AJAX POST to admin.sales-invoices.call-it-a-day → redraw.
+    function callItADay(ids) {
+        $.ajax({
+            url: ROUTES.callItADay,
+            method: 'POST',
+            data: { _token: ROUTES.csrf, invoice_ids: ids },
+            dataType: 'json',
+        }).done(function (data) {
+            var count = (data && data.updated_count) || 0;
+            Swal.fire({
+                toast: true,
+                position: 'top-end',
+                icon: 'success',
+                title: count + ' invoice(s) called it a day ✓',
+                showConfirmButton: false,
+                timer: 2200,
+            });
+            announceSR(count + ' invoices called it a day.');
+            dt.ajax.reload();
+            scheduleSummary();
+        }).fail(function (xhr) {
+            var msg = (xhr.responseJSON && xhr.responseJSON.message) || xhr.statusText || 'Server error';
+            Swal.fire({
+                icon: 'error',
+                title: 'Could not call it a day',
+                html: escapeHtml(msg),
+            });
+        });
+    }
+
+    // AJAX POST to admin.sales-invoices.cancel → redraw.
+    function cancelInvoice(id, code) {
+        Swal.fire({
+            title: 'Cancel invoice ' + escapeHtml(code) + '?',
+            html: 'This reverses the sale: stock returns to inventory, the GL is reversed, and the customer ledger is credited. <b>This cannot be undone.</b>',
+            icon: 'warning',
+            input: 'textarea',
+            inputPlaceholder: 'Reason for cancellation (required, min 5 chars)…',
+            inputValidator: function (v) {
+                if (!v || String(v).trim().length < 5) {
+                    return 'Reason must be at least 5 characters.';
+                }
+                return null;
+            },
+            showCancelButton: true,
+            confirmButtonText: '<i class="fas fa-ban me-1"></i>Yes, cancel it',
+            cancelButtonText: 'Keep it',
+            confirmButtonColor: '#dc2626', // red-600
+        }).then(function (r) {
+            if (!r.isConfirmed) return;
+            // Cancel URL built inline (matches the receive-modal AJAX
+            // pattern) — avoids route() URL-encoding a placeholder.
+            var url = '/admin/sales-invoices/' + id + '/cancel';
+            $.ajax({
+                url: url,
+                method: 'POST',
+                data: { _token: ROUTES.csrf, cancel_reason: r.value },
+                dataType: 'json',
+            }).done(function () {
+                Swal.fire({
+                    toast: true, position: 'top-end', icon: 'success',
+                    title: 'Invoice ' + escapeHtml(code) + ' cancelled.',
+                    showConfirmButton: false, timer: 2200,
+                });
+                announceSR('Invoice ' + code + ' cancelled.');
+                dt.ajax.reload();
+                scheduleSummary();
+            }).fail(function (xhr) {
+                var msg = (xhr.responseJSON && xhr.responseJSON.message) || xhr.statusText || 'Server error';
+                Swal.fire({ icon: 'error', title: 'Could not cancel', html: escapeHtml(msg) });
+            });
+        });
+    }
+
+    // ============================================================
     // ====== R23: Mobile cards variant ============================
     // ============================================================
     // On narrow screens (max-width: 767.98px), the desktop table is
@@ -644,7 +952,7 @@ $(function () {
                 html += '<div class="mt-1"><span class="badge bg-danger-subtle text-danger">' +
                         '<i class="fas fa-hand me-1"></i>Soft hold</span></div>';
             }
-            html +=   '<div class="mt-2 d-flex gap-1">';
+            html +=   '<div class="mt-2 d-flex gap-1 flex-wrap align-items-center">';
             html +=     '<a href="' + row.show_url + '" class="btn btn-sm btn-outline-secondary">' +
                             '<i class="fas fa-eye"></i> View</a>';
             if (row.show_receive) {
@@ -652,6 +960,19 @@ $(function () {
                           'data-invoice-id="' + row.id + '" ' +
                           'data-invoice-code="' + escapeHtml(row.invoice_code) + '">' +
                           '<i class="fas fa-hand-holding-dollar me-1"></i>Receive</button>';
+            }
+            // Phase 1 (UI/UX): Call-it-a-day on mobile cards.
+            if (row.show_call_a_day) {
+                html +=   '<button type="button" class="btn btn-sm btn-outline-warning btn-call-it-a-day" ' +
+                          'data-invoice-id="' + row.id + '" ' +
+                          'data-invoice-code="' + escapeHtml(row.invoice_code) + '" title="Call it a day">' +
+                          '<i class="fas fa-check-circle me-1"></i>Done</button>';
+            }
+            // Phase 1 (UI/UX): Print on mobile cards.
+            if (row.show_print && row.print_invoice_url) {
+                html +=   '<a href="' + row.print_invoice_url + '" target="_blank" rel="noopener" ' +
+                          'class="btn btn-sm btn-outline-secondary" title="Print invoice">' +
+                          '<i class="fas fa-print"></i></a>';
             }
             html +=   '</div>';
             html += '</div>';
@@ -805,7 +1126,76 @@ $(function () {
             $submit.prop('disabled', true).html(
                 '<i class="fas fa-spinner fa-spin me-1"></i>Processing…'
             );
-            $form[0].submit();
+            // Phase 1 (UI/UX): AJAX submit — the user STAYS on the
+            // index page (no redirect). The controller returns JSON
+            // when expectsJson() / ajax() is true (X-Requested-With).
+            $.ajax({
+                url: $form.attr('action'),
+                method: 'POST',
+                data: $form.serialize(),
+                dataType: 'json',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            }).done(function (data) {
+                // Close the receive modal — payment succeeded.
+                getReceiveModalBs().hide();
+
+                var isFullyPaid = !!(data && data.is_fully_paid);
+                var invoiceId   = (data && data.invoice_id) || 0;
+                var printUrl    = (data && data.print_receipt_url) || '';
+                var payCode     = (data && data.payment_code) || '';
+
+                announceSR('Payment ' + payCode + ' recorded.');
+                // Refresh the table so due/paid columns update.
+                dt.ajax.reload();
+                scheduleSummary();
+
+                // Success dialog with "Print receipt" button.
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Payment recorded ✓',
+                    html: payCode
+                        ? '<div class="small text-muted">Payment <b>' + escapeHtml(payCode) + '</b> recorded'
+                          + (isFullyPaid ? ' — invoice is now fully paid.' : '.')
+                          + '</div>'
+                        : '',
+                    showCancelButton: !!printUrl,
+                    confirmButtonText: printUrl
+                        ? '<i class="fas fa-print me-1"></i>Print receipt'
+                        : 'OK',
+                    cancelButtonText: 'Close',
+                    confirmButtonColor: '#059669', // green-600
+                }).then(function (r) {
+                    if (r.isConfirmed && printUrl) {
+                        window.open(printUrl, '_blank', 'noopener');
+                    }
+                    // Follow-up: if fully paid, offer "Call it a day?".
+                    if (isFullyPaid && invoiceId > 0) {
+                        confirmCallItADay([invoiceId],
+                            'Call it a day?',
+                            'This invoice is now fully paid. Remove it from your daily collection list?');
+                    }
+                });
+            }).fail(function (xhr) {
+                var msg;
+                if (xhr.status === 422 && xhr.responseJSON && xhr.responseJSON.errors) {
+                    // Laravel validation errors — join the first message per field.
+                    var errs = xhr.responseJSON.errors;
+                    msg = Object.keys(errs).map(function (k) { return errs[k].join(' '); }).join(' ');
+                } else {
+                    msg = (xhr.responseJSON && xhr.responseJSON.message)
+                        || xhr.statusText
+                        || 'Server error';
+                }
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Payment failed',
+                    html: escapeHtml(msg),
+                });
+            }).always(function () {
+                $submit.prop('disabled', false).html(
+                    '<i class="fas fa-check me-1"></i>Receive payment'
+                );
+            });
         }
     }
 
@@ -933,6 +1323,65 @@ $(function () {
         background: rgba(255,255,255,0.9);
         border-radius: 8px;
         padding: 1rem 2rem;
+    }
+
+    /* ============================================================
+       Phase 1 (UI/UX): compact per-row action buttons (.rc-action-btn)
+       Matches the <x-erp.action-button> spec — Tailwind-equivalent
+       sizing/colors. Used by the DataTable actions column + mobile
+       cards. Defined here (not in rc-erp.css) because the buttons
+       are rendered client-side by DataTables JS.
+       ============================================================ */
+    .rc-action-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2rem;            /* size-8 */
+        height: 2rem;
+        border-radius: 0.375rem; /* rounded-md */
+        border: 1px solid #e5e7eb; /* border-gray-200 */
+        background: #fff;
+        color: #4b5563;          /* text-gray-600 */
+        transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+        text-decoration: none;
+        font-size: 0.8rem;
+        line-height: 1;
+        cursor: pointer;
+    }
+    .rc-action-btn:hover { background: #f9fafb; color: #1f2937; border-color: #d1d5db; }
+    .rc-action-btn.rc-action-edit:hover          { background: #fffbeb; color: #b45309; border-color: #fcd34d; } /* amber */
+    .rc-action-btn.rc-action-receive:hover       { background: #f0fdf4; color: #15803d; border-color: #86efac; } /* green */
+    .rc-action-btn.rc-action-callitaday:hover    { background: #fff7ed; color: #c2410c; border-color: #fdba74; } /* orange */
+    .rc-action-btn.rc-action-cancel:hover        { background: #fef2f2; color: #b91c1c; border-color: #fca5a5; } /* red */
+    .rc-action-btn.rc-action-print:hover         { background: #f9fafb; color: #1f2937; border-color: #d1d5db; }
+    .rc-action-btn:focus-visible {
+        outline: 2px solid #f59e9b;
+        outline-offset: 1px;
+    }
+
+    /* sr-only fallback — Tailwind's sr-only utility may not be in the
+       built CSS if no other element uses it. This guarantees the
+       screen-reader region is visually hidden. */
+    .sr-only {
+        position: absolute;
+        width: 1px; height: 1px;
+        padding: 0; margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+    }
+
+    /* Bulk action bar: slide-in animation when it appears. */
+    #invoiceBulkBar:not(.hidden) {
+        animation: rcBulkBarSlide 0.18s ease-out;
+    }
+    @media (prefers-reduced-motion: reduce) {
+        #invoiceBulkBar:not(.hidden) { animation: none; }
+    }
+    @keyframes rcBulkBarSlide {
+        from { opacity: 0; transform: translateY(-6px); }
+        to   { opacity: 1; transform: translateY(0); }
     }
 </style>
 @endpush
