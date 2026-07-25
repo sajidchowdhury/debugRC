@@ -815,7 +815,7 @@ class SalesInvoiceController extends Controller
         } elseif ($smartSort) {
             // R21 smart sort: unpaid first (asc=0), then oldest date.
             $filters->orderByRaw(
-                "(CASE WHEN due_amount > 0.01 AND status NOT IN ('cancelled','reversed') THEN 0 ELSE 1 END) ASC"
+                "(CASE WHEN (total_amount - paid_amount) > 0.01 AND status NOT IN ('cancelled','reversed') THEN 0 ELSE 1 END) ASC"
             )->orderBy('invoice_date', 'asc')->orderBy('id', 'asc');
         } else {
             // Default: newest first.
@@ -829,7 +829,13 @@ class SalesInvoiceController extends Controller
             ->skip($start)->take($length)->get();
 
         $data = $rows->map(function ($inv) {
-            $due = (float) $inv->due_amount;
+            // Compute due on-the-fly from total - paid instead of relying
+            // on the due_amount generated column, which may be 0 for
+            // invoices created before the GENERATED-column migration was
+            // applied (or if the INSERT didn't trigger the generation).
+            // This guarantees show_receive is correct for any invoice with
+            // an outstanding balance.
+            $due = round((float) $inv->total_amount - (float) $inv->paid_amount, 2);
             $isCancelled = $inv->status === 'cancelled';
             $isReversed = (bool) $inv->is_reversed;
             $isDraft = $inv->status === 'draft';
@@ -899,7 +905,7 @@ class SalesInvoiceController extends Controller
         // Clone for each bucket so we don't mutate the base query.
         $countAll = (clone $base)->count();
         $countAwaiting = (clone $base)
-            ->where('due_amount', '>', 0.01)
+            ->whereRaw('(total_amount - paid_amount) > 0.01')
             ->whereNotIn('status', ['cancelled'])
             ->where('is_reversed', false)
             ->count();
@@ -1019,7 +1025,11 @@ class SalesInvoiceController extends Controller
             } elseif ($chip && $chip !== 'all') {
                 switch ($chip) {
                     case 'awaiting_payment':
-                        $q->where('due_amount', '>', 0.01)
+                        // Use (total_amount - paid_amount) instead of the
+                        // due_amount generated column — same reason as
+                        // datatable(): the generated column may be 0 for
+                        // some rows, which would hide outstanding invoices.
+                        $q->whereRaw('(total_amount - paid_amount) > 0.01')
                           ->whereNotIn('status', ['cancelled'])
                           ->where('is_reversed', false);
                         break;

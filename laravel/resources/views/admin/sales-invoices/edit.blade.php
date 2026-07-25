@@ -245,6 +245,8 @@
     </form>
 </div>
 
+@endsection
+
 @push('scripts')
 <script>
 (function () {
@@ -373,6 +375,23 @@
     $('#editInvoiceForm').on('submit', function () {
         var $btn = $('#btnSave');
         $btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm me-1"></span> Saving…');
+    });
+
+    // -------- Select2 initialization --------
+    // The product dropdown and dispatcher multi-select use class="select2"
+    // but were never initialized, so they rendered as plain <select> elements
+    // without the search UI. This gives them the expected Select2 look + search.
+    $('#productSelect').select2({
+        theme: 'bootstrap-5',
+        width: '100%',
+        placeholder: '— Search product by name or code —',
+        allowClear: true,
+    });
+    $('select[name="dispatcher_ids[]"]').select2({
+        theme: 'bootstrap-5',
+        width: '100%',
+        placeholder: 'Select dispatchers…',
+        allowClear: true,
     });
 
     // -------- Initial calc --------

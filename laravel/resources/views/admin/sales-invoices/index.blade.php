@@ -75,14 +75,6 @@
         </div>
     </div>
 
-    {{-- Stat cards — showcase design (4 cards) --}}
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <x-erp.stat-card label="Pending Godown" label-bn="গোডাউন বাকি" :value="number_format((int) $stats['pending_godown'])" accent="amber" icon="clock" />
-        <x-erp.stat-card label="Pending Challan" label-bn="চালান বাকি" :value="number_format((int) $stats['pending_challan'])" accent="orange" icon="clipboard-list" />
-        <x-erp.stat-card label="Total Invoices" label-bn="মোট চালান" :value="number_format((int) $stats['total'])" accent="cyan" icon="file-text" />
-        <x-erp.stat-card label="Total Value" label-bn="মোট মূল্য" :value="'৳' . number_format((float) $stats['total_value'], 0)" accent="green" icon="banknote" />
-    </div>
-
     {{-- Hidden filter form — keeps JS selectors (#from_date, #to_date, etc.)
         alive so currentFilterParams() / localStorage / clear-all work without
         the visible filter card. The visible filter UI is the status-chip
