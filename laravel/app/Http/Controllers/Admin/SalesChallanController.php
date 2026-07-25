@@ -241,11 +241,14 @@ class SalesChallanController extends Controller
     }
 
     /**
-     * Save godown prep (assign warehouses + dispatchers).
+     * Save godown prep (assign warehouses + dispatchers + CTN packing).
      *
      * Phase 3: validation moved into PrepareGodownWebRequest; the
      * dispatcher_id[] array is passed through to the service which
      * syncs the BelongsToMany dispatchers() relationship.
+     *
+     * Phase 4: dispatched_ctn[] is passed through to the service which
+     * persists it into sales_invoice_dispatches.dispatched_ctn.
      */
     public function storeGodown(PrepareGodownWebRequest $request, int $invoiceId)
     {
@@ -256,7 +259,8 @@ class SalesChallanController extends Controller
                 $invoiceId,
                 $validated['warehouse_assignments'],
                 auth()->id(),
-                $validated['dispatcher_id']
+                $validated['dispatcher_id'],
+                $validated['dispatched_ctn'] ?? []
             );
 
             return redirect()->route('admin.sales-challans.challan-form', $invoiceId)

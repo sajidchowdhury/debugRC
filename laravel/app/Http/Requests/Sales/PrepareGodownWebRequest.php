@@ -8,7 +8,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Validator;
 
 /**
- * Phase 3 — Web Form Request for saving the godown copy.
+ * Phase 3 + Phase 4 — Web Form Request for saving the godown copy.
  *
  * Promotes the inline $request->validate() that used to live in
  * SalesChallanController::storeGodown into a typed Form Request so the
@@ -20,6 +20,8 @@ use Illuminate\Validation\Validator;
  *   warehouse_assignments.*    — required|integer|exists:warehouses,id
  *   dispatcher_id              — required|array|min:1 (at least one dispatcher)
  *   dispatcher_id.*            — integer|exists:employees,id
+ *   dispatched_ctn             — nullable|array (Phase 4: carton packing count)
+ *   dispatched_ctn.*           — nullable|numeric|min:0
  *
  * Additional server-side authorization (withValidator):
  *   Each dispatcher_id MUST reference an Employee whose:
@@ -55,6 +57,8 @@ class PrepareGodownWebRequest extends FormRequest
             'warehouse_assignments.*'  => ['required', 'integer', 'exists:warehouses,id'],
             'dispatcher_id'            => ['required', 'array', 'min:1'],
             'dispatcher_id.*'          => ['integer', 'exists:employees,id'],
+            'dispatched_ctn'           => ['nullable', 'array'],
+            'dispatched_ctn.*'         => ['nullable', 'numeric', 'min:0'],
         ];
     }
 
@@ -64,6 +68,8 @@ class PrepareGodownWebRequest extends FormRequest
             'warehouse_assignments'  => 'warehouse assignments',
             'dispatcher_id'          => 'dispatcher',
             'dispatcher_id.*'        => 'dispatcher',
+            'dispatched_ctn'         => 'dispatched cartons',
+            'dispatched_ctn.*'       => 'dispatched cartons',
         ];
     }
 

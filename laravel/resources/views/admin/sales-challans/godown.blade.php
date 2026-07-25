@@ -27,6 +27,35 @@
     $salesmanName = $invoice->sales_person ?? ($invoice->salesman?->name ?? '');
     $branchName = $invoice->branch?->branch_name ?? 'Branch';
 
+    // Phase 4: build a dispatch-lookup map [product_id => dispatched_ctn]
+    // so the CTN input can pre-fill from the persisted dispatch row (or
+    // from old('dispatched_ctn.{item_id}') on back-with-input).
+    $dispatchCtnByProduct = [];
+    foreach ($invoice->dispatches as $disp) {
+        $dispatchCtnByProduct[(int) $disp->product_id] = (float) ($disp->dispatched_ctn ?? 0);
+    }
+
+    // Phase 4: CTN pre-fill helper — old() takes priority (back-with-input),
+    // then the persisted dispatch row, then empty string.
+    $ctnForItem = function ($item) use ($dispatchCtnByProduct) {
+        $oldVal = old('dispatched_ctn.' . $item->id);
+        if ($oldVal !== null && $oldVal !== '') {
+            return $oldVal;
+        }
+        $persisted = $dispatchCtnByProduct[(int) $item->product_id] ?? 0;
+        return $persisted > 0 ? number_format($persisted, 2, '.', '') : '';
+    };
+
+    // Phase 4: pcs_per_carton — Project B's products table has NO
+    // pcs_per_carton column (confirmed in Phase 4 code inspection).
+    // Default to 1 so "Fill all CTN" = qty / 1 = qty (functional but
+    // 1:1). When a pcs_per_carton column is added (carry-forward to
+    // Phase 11 or a master-data phase), this default can be replaced
+    // with $item->product->pcs_per_carton ?? 1.
+    $pcsPerCartonForItem = function ($item): float {
+        return 1.0;
+    };
+
     // Display status derived from the boolean workflow flags so the pill
     // reflects the actual pipeline stage regardless of the literal status
     // column (which may be 'draft' or 'confirmed' on this screen).
@@ -163,6 +192,41 @@
                 </span>
             </div>
 
+            {{-- Phase 4: Bulk tools bar — Apply warehouse to all + Fill all CTN + progress bar --}}
+            @if (!$warehouses->isEmpty())
+            <div class="bg-amber-50/40 border-b border-amber-100 px-4 py-3 flex items-center gap-3 flex-wrap">
+                <div class="flex items-center gap-2">
+                    <x-erp.icon name="warehouse" class="size-4 text-amber-600" />
+                    <label for="chBulkWarehouse" class="text-xs font-medium text-gray-600 whitespace-nowrap">Apply warehouse to all</label>
+                </div>
+                <select id="chBulkWarehouse" class="form-select form-select-sm" style="width:200px;">
+                    <option value="">— Choose warehouse —</option>
+                    @foreach ($warehouses as $w)
+                        <option value="{{ $w->id }}">{{ $w->warehouse_name }}</option>
+                    @endforeach
+                </select>
+                <button type="button" id="chApplyBulkWarehouse"
+                        class="inline-flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium transition-colors shadow-sm">
+                    <x-erp.icon name="check" class="size-3.5" /> Apply
+                </button>
+                <span class="text-gray-300">|</span>
+                <button type="button" id="chFillAllCtn"
+                        class="inline-flex items-center gap-1.5 border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
+                        title="Compute CTN = qty / pcs_per_carton for every row">
+                    <x-erp.icon name="package" class="size-3.5" /> Fill all CTN
+                </button>
+
+                {{-- Warehouse-assignment progress bar --}}
+                <div class="flex items-center gap-2 ml-auto min-w-[180px]">
+                    <div class="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden" role="progressbar"
+                         aria-valuenow="0" aria-valuemin="0" aria-valuemax="{{ $itemCount }}" aria-label="Warehouse assignment progress">
+                        <div id="chAssignProgressBar" class="bg-gradient-to-r from-amber-500 to-green-500 h-full rounded-full transition-all duration-300" style="width: 0%;"></div>
+                    </div>
+                    <span id="chAssignProgressLabel" class="text-xs text-gray-500 whitespace-nowrap">0 / {{ $itemCount }}</span>
+                </div>
+            </div>
+            @endif
+
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
@@ -172,6 +236,7 @@
                             <th class="px-4 py-3 text-left font-medium">Warehouse</th>
                             <th class="px-4 py-3 text-left font-medium">Available Stock</th>
                             <th class="px-4 py-3 text-right font-medium">Avg Cost (Tk)</th>
+                            <th class="px-4 py-3 text-center font-medium">Disp. CTN <span class="text-gray-400 font-normal">(editable)</span></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -203,6 +268,7 @@
                                                 data-item-id="{{ $item->id }}"
                                                 data-product-id="{{ $item->product_id }}"
                                                 data-qty="{{ $item->qty }}"
+                                                data-pcs-per-carton="{{ $pcsPerCartonForItem($item) }}"
                                                 required>
                                             <option value="">— select warehouse —</option>
                                             @foreach ($warehouses as $w)
@@ -265,6 +331,16 @@
                                     @else
                                         <span class="text-gray-400">—</span>
                                     @endif
+                                </td>
+                                {{-- Phase 4: Disp. CTN input (carton packing count, editable) --}}
+                                <td class="px-4 py-3 text-center">
+                                    <input type="number" step="0.01" min="0"
+                                           class="form-control form-control-sm dispatched-ctn-input text-center"
+                                           name="dispatched_ctn[{{ $item->id }}]"
+                                           value="{{ $ctnForItem($item) }}"
+                                           placeholder="CTN"
+                                           style="width:80px;"
+                                           title="Carton packing count for this line (invoice demand qty stays fixed)">
                                 </td>
                             </tr>
                         @endforeach
@@ -355,6 +431,71 @@ $(function () {
                     .text(parseFloat(avgCost).toFixed(2));
             }
         }
+    });
+
+    // Phase 4 — Warehouse-assignment progress bar.
+    // Updates on any warehouse-select change (manual or bulk-apply).
+    function updateAssignProgress() {
+        var total = $('.warehouse-select').length;
+        var set = 0;
+        $('.warehouse-select').each(function () {
+            if ($(this).val()) set++;
+        });
+        var pct = total > 0 ? Math.round((set / total) * 100) : 0;
+        $('#chAssignProgressBar').css('width', pct + '%');
+        $('#chAssignProgressLabel').text(set + ' / ' + total);
+        $('#chAssignProgressBar').closest('[role="progressbar"]').attr('aria-valuenow', set);
+    }
+    // Wire up + initial render.
+    $('.warehouse-select').on('change select2:select select2:unselect', updateAssignProgress);
+    updateAssignProgress();
+
+    // Phase 4 — Bulk: Apply warehouse to all rows.
+    $('#chApplyBulkWarehouse').on('click', function () {
+        var wid = $('#chBulkWarehouse').val();
+        if (!wid) {
+            Swal.fire({
+                icon: 'info',
+                title: 'Choose a warehouse',
+                text: 'Please pick a warehouse from the dropdown first.',
+                confirmButtonColor: '#d97706'
+            });
+            return;
+        }
+        $('.warehouse-select').each(function () {
+            // Only set if the warehouse is not disabled for this row.
+            var $opt = $(this).find('option[value="' + wid + '"]');
+            if ($opt.length && !$opt.prop('disabled')) {
+                $(this).val(wid).trigger('change.select2').trigger('select2:select');
+            }
+        });
+        updateAssignProgress();
+    });
+
+    // Phase 4 — Bulk: Fill all CTN.
+    // Computes CTN = qty / pcs_per_carton for every row. Project B has
+    // no pcs_per_carton column (defaults to 1 → CTN = qty). When the
+    // column is added, data-pcs-per-carton will carry the real value.
+    $('#chFillAllCtn').on('click', function () {
+        $('.warehouse-select').each(function () {
+            var itemId = $(this).data('item-id');
+            var qty = parseFloat($(this).data('qty')) || 0;
+            var pcsPerCarton = parseFloat($(this).data('pcs-per-carton')) || 1;
+            var ctn = pcsPerCarton > 0 ? (qty / pcsPerCarton) : 0;
+            var $input = $('input[name="dispatched_ctn[' + itemId + ']"]');
+            if ($input.length) {
+                $input.val(ctn.toFixed(2));
+            }
+        });
+        Swal.fire({
+            icon: 'success',
+            title: 'CTN filled',
+            text: 'All carton counts computed from ordered qty.',
+            timer: 1500,
+            showConfirmButton: false,
+            toast: true,
+            position: 'top-end'
+        });
     });
 
     // Phase 3 — Dispatcher multi-select (Select2 AJAX).

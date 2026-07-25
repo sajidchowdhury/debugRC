@@ -51,18 +51,33 @@ class SalesChallanService
 
     /**
      * Step 1: Prepare godown — assign warehouse_id to invoice items +
-     * dispatches, and sync dispatcher(s) for the delivery.
+     * dispatches, sync dispatcher(s), and persist carton-packing count.
      * No stock movement, no GL.
      *
      * Phase 3: added optional $dispatcherIds param (defaults to [] so
      * the Mobile API caller — SalesChallanApiController::prepareGodown,
      * which doesn't send dispatchers — stays backward-compatible).
      *
+     * Phase 4: added optional $dispatchedCtn param (defaults to []).
+     * Keyed by sales_invoice_items.id (matching the view's field name
+     * dispatched_ctn[{item->id}]). Persisted into
+     * sales_invoice_dispatches.dispatched_ctn (matched by
+     * sales_invoice_id + product_id).
+     *
+     * Phase 4 BUG FIX: the warehouse lookup was keyed by $item->product_id
+     * but the web view sends warehouse_assignments[{item->id}]. Changed
+     * the lookup to $item->id so the web path works. The API path sends
+     * a different structure (list of {product_id, warehouse_id} objects)
+     * and was already broken independently — NOT fixed here (out of
+     * scope for Phase 4; carry-forward to a separate API remediation).
+     *
      * @param int $invoiceId
-     * @param array $warehouseAssignments [product_id => warehouse_id]
+     * @param array $warehouseAssignments [item_id => warehouse_id] (web)
+     *                                      or [product_id => warehouse_id] (API — broken, see above)
      * @param int $preparedBy
      * @param array $dispatcherIds Employee IDs to sync as dispatchers
      *                              (role=dispatcher, branch-scoped).
+     * @param array $dispatchedCtn [item_id => ctn_count] carton packing
      * @return SalesInvoice
      * @throws \RuntimeException If invoice not draft or already godown-prepared.
      */
@@ -70,9 +85,10 @@ class SalesChallanService
         int $invoiceId,
         array $warehouseAssignments,
         int $preparedBy,
-        array $dispatcherIds = []
+        array $dispatcherIds = [],
+        array $dispatchedCtn = []
     ): SalesInvoice {
-        return DB::transaction(function () use ($invoiceId, $warehouseAssignments, $preparedBy, $dispatcherIds) {
+        return DB::transaction(function () use ($invoiceId, $warehouseAssignments, $preparedBy, $dispatcherIds, $dispatchedCtn) {
             $invoice = SalesInvoice::with('items', 'dispatches')->lockForUpdate()->find($invoiceId);
 
             if (!$invoice) {
@@ -83,8 +99,13 @@ class SalesChallanService
             }
 
             // Assign warehouse_id to each invoice item.
+            // Phase 4: lookup by $item->id (web view keying). Falls back
+            // to $item->product_id for the API path (which is broken
+            // anyway — the API sends a list of objects, not a keyed array).
             foreach ($invoice->items as $item) {
-                $wid = $warehouseAssignments[$item->product_id] ?? null;
+                $wid = $warehouseAssignments[$item->id]
+                    ?? $warehouseAssignments[$item->product_id]
+                    ?? null;
                 if (!$wid) {
                     throw new \RuntimeException("Warehouse not assigned for product {$item->product_id}.");
                 }
@@ -102,10 +123,17 @@ class SalesChallanService
                     ->where('id', $item->id)
                     ->update(['warehouse_id' => (int) $wid]);
 
+                // Phase 4: persist dispatched_ctn alongside warehouse_id.
+                $ctn = $dispatchedCtn[$item->id] ?? $dispatchedCtn[$item->product_id] ?? null;
+                $ctnValue = $ctn !== null ? (float) $ctn : null;
+
                 DB::table('sales_invoice_dispatches')
                     ->where('sales_invoice_id', $invoiceId)
                     ->where('product_id', $item->product_id)
-                    ->update(['warehouse_id' => (int) $wid]);
+                    ->update(array_filter([
+                        'warehouse_id' => (int) $wid,
+                        'dispatched_ctn' => $ctnValue,
+                    ], static fn($v) => $v !== null));
             }
 
             // Phase 3: sync dispatcher(s) — DELETE + INSERT via
