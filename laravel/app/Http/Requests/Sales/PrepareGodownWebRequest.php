@@ -1,0 +1,119 @@
+<?php
+
+namespace App\Http\Requests\Sales;
+
+use App\Models\Employee;
+use App\Models\SalesInvoice;
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Validator;
+
+/**
+ * Phase 3 — Web Form Request for saving the godown copy.
+ *
+ * Promotes the inline $request->validate() that used to live in
+ * SalesChallanController::storeGodown into a typed Form Request so the
+ * validation rules + the branch-scoped dispatcher authorization are
+ * declared in one place and reusable.
+ *
+ * Rules:
+ *   warehouse_assignments      — required|array (keyed by sales_invoice_items.id)
+ *   warehouse_assignments.*    — required|integer|exists:warehouses,id
+ *   dispatcher_id              — required|array|min:1 (at least one dispatcher)
+ *   dispatcher_id.*            — integer|exists:employees,id
+ *
+ * Additional server-side authorization (withValidator):
+ *   Each dispatcher_id MUST reference an Employee whose:
+ *     - role         = 'dispatcher'
+ *     - is_active    = true
+ *     - branch_id    = the invoice's branch_id
+ *   This is the "branch-scoped dispatcher existence" check from
+ *   challan_godown_copy.md Phase 3 task 5. It cannot be expressed as a
+ *   single exists: rule because it depends on the invoice's branch
+ *   (resolved from the {invoiceId} route param), so it is added as a
+ *   custom after-validator.
+ *
+ * Note: the warehouse_assignments.* branch scoping is still enforced
+ * downstream by SalesChallanService::prepareGodown (it looks the
+ * warehouse up against the invoice's branch via StockService). The
+ * branch.isolation route middleware also runs and rejects cross-branch
+ * writes at the RLS layer.
+ */
+class PrepareGodownWebRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        // RBAC is handled by the route middleware (role:warehouse_manager,
+        // dispatcher, manager, admin). Branch access for the invoice is
+        // enforced by EnforceBranchIsolation + the SalesAccess service.
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'warehouse_assignments'    => ['required', 'array'],
+            'warehouse_assignments.*'  => ['required', 'integer', 'exists:warehouses,id'],
+            'dispatcher_id'            => ['required', 'array', 'min:1'],
+            'dispatcher_id.*'          => ['integer', 'exists:employees,id'],
+        ];
+    }
+
+    public function attributes(): array
+    {
+        return [
+            'warehouse_assignments'  => 'warehouse assignments',
+            'dispatcher_id'          => 'dispatcher',
+            'dispatcher_id.*'        => 'dispatcher',
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'dispatcher_id.required' => 'Please select at least one dispatcher for this delivery.',
+            'dispatcher_id.min'      => 'Please select at least one dispatcher for this delivery.',
+            'dispatcher_id.*.exists' => 'One of the selected dispatchers is not a valid employee.',
+        ];
+    }
+
+    /**
+     * After-validation: each dispatcher must be an active, dispatcher-role
+     * employee belonging to the SAME branch as the invoice.
+     */
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator) {
+            $invoiceId = (int) $this->route('invoiceId');
+            if ($invoiceId <= 0) {
+                return; // route param missing — let the 404 path handle it
+            }
+
+            $invoice = SalesInvoice::select('id', 'branch_id')->find($invoiceId);
+            if (!$invoice) {
+                return; // controller's findOrFail will 404
+            }
+
+            $ids = array_values((array) $this->input('dispatcher_id', []));
+            $ids = array_filter(array_map('intval', $ids), static fn($v) => $v > 0);
+            if (empty($ids)) {
+                return; // required|min:1 already covers this
+            }
+
+            // Count how many of the submitted ids match an active dispatcher
+            // in the invoice's branch.
+            $valid = Employee::query()
+                ->where('role', 'dispatcher')
+                ->where('is_active', true)
+                ->where('branch_id', $invoice->branch_id)
+                ->whereIn('id', $ids)
+                ->count();
+
+            if ($valid !== count($ids)) {
+                $validator->errors()->add(
+                    'dispatcher_id',
+                    'All dispatchers must be active employees with the dispatcher role in the invoice\'s branch.'
+                );
+            }
+        });
+    }
+}

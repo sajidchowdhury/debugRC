@@ -50,18 +50,29 @@ class SalesChallanService
     ) {}
 
     /**
-     * Step 1: Prepare godown — assign warehouse_id to invoice items + dispatches.
+     * Step 1: Prepare godown — assign warehouse_id to invoice items +
+     * dispatches, and sync dispatcher(s) for the delivery.
      * No stock movement, no GL.
+     *
+     * Phase 3: added optional $dispatcherIds param (defaults to [] so
+     * the Mobile API caller — SalesChallanApiController::prepareGodown,
+     * which doesn't send dispatchers — stays backward-compatible).
      *
      * @param int $invoiceId
      * @param array $warehouseAssignments [product_id => warehouse_id]
      * @param int $preparedBy
+     * @param array $dispatcherIds Employee IDs to sync as dispatchers
+     *                              (role=dispatcher, branch-scoped).
      * @return SalesInvoice
      * @throws \RuntimeException If invoice not draft or already godown-prepared.
      */
-    public function prepareGodown(int $invoiceId, array $warehouseAssignments, int $preparedBy): SalesInvoice
-    {
-        return DB::transaction(function () use ($invoiceId, $warehouseAssignments, $preparedBy) {
+    public function prepareGodown(
+        int $invoiceId,
+        array $warehouseAssignments,
+        int $preparedBy,
+        array $dispatcherIds = []
+    ): SalesInvoice {
+        return DB::transaction(function () use ($invoiceId, $warehouseAssignments, $preparedBy, $dispatcherIds) {
             $invoice = SalesInvoice::with('items', 'dispatches')->lockForUpdate()->find($invoiceId);
 
             if (!$invoice) {
@@ -97,6 +108,23 @@ class SalesChallanService
                     ->update(['warehouse_id' => (int) $wid]);
             }
 
+            // Phase 3: sync dispatcher(s) — DELETE + INSERT via
+            // BelongsToMany::sync(). Each pivot row carries dispatch_role
+            // = 'dispatcher' (the column's DEFAULT, but sync() requires
+            // it to be set explicitly when using the pivot data form).
+            // Validation already guaranteed each id is an active
+            // dispatcher in the invoice's branch (PrepareGodownWebRequest
+            // for web; API path doesn't send dispatchers yet).
+            $dispatcherIds = array_values(array_unique(array_filter(
+                array_map('intval', $dispatcherIds),
+                static fn($v) => $v > 0
+            )));
+            $syncPayload = [];
+            foreach ($dispatcherIds as $eid) {
+                $syncPayload[$eid] = ['dispatch_role' => 'dispatcher'];
+            }
+            $invoice->dispatchers()->sync($syncPayload);
+
             // Update invoice status.
             DB::table('sales_invoices')
                 ->where('id', $invoiceId)
@@ -112,7 +140,7 @@ class SalesChallanService
                 $preparedBy, $invoiceId, $invoice->invoice_code, (int) $invoice->branch_id
             );
 
-            return SalesInvoice::with(['items.product', 'dispatches', 'customer', 'branch'])->find($invoiceId);
+            return SalesInvoice::with(['items.product', 'dispatches', 'dispatchers', 'customer', 'branch'])->find($invoiceId);
         });
     }
 

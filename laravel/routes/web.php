@@ -761,6 +761,12 @@ Route::middleware('auth')->group(function () {
     // cancel (reverse) is manager/admin only (legacy reverse_challan).
     // ============================================================
     Route::prefix('admin/sales-challans')->name('admin.sales-challans.')->group(function () {
+        // Phase 3: AJAX list of active dispatcher-role employees for the
+        // invoice's branch. Literal segment 'dispatchers' is registered
+        // BEFORE the {id} resource routes below so Laravel's route
+        // matcher doesn't treat it as a challan id.
+        Route::get('dispatchers', [SalesChallanController::class, 'dispatchers'])
+            ->name('dispatchers')->middleware('role:warehouse_manager,dispatcher,manager,admin');
         // Godown prep + challan issue — warehouse_manager, dispatcher, manager, admin
         Route::get('godown/{invoiceId}', [SalesChallanController::class, 'godown'])
             ->name('godown')->middleware('role:warehouse_manager,dispatcher,manager,admin');

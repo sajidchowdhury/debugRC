@@ -273,6 +273,38 @@
             </div>
         </div>
 
+        {{-- Dispatcher assignment card (Phase 3 — multi-select via Select2 AJAX) --}}
+        <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+            <div class="px-4 py-3 border-b border-amber-100 flex items-center justify-between flex-wrap gap-2">
+                <div>
+                    <h3 class="text-base flex items-center gap-2 font-medium">
+                        <x-erp.icon name="users" class="size-5 text-amber-600" />
+                        Dispatcher(s)
+                        <span class="text-red-500" title="Required">*</span>
+                    </h3>
+                    <p class="text-xs text-gray-500">ডেলিভারির জন্য কমপক্ষে একজন ডিসপ্যাচার নির্বাচন করুন</p>
+                </div>
+                <span class="bg-amber-100 border border-amber-300 text-amber-700 rounded-full px-2 py-0.5 text-xs font-medium" id="dispatcher-count-badge">
+                    {{ $invoice->dispatchers->count() }} selected
+                </span>
+            </div>
+            <div class="p-4">
+                <select id="dispatcher_id" name="dispatcher_id[]" multiple
+                        class="form-select"
+                        data-invoice-id="{{ $invoice->id }}"
+                        data-ajax-url="{{ route('admin.sales-challans.dispatchers') }}"
+                        required>
+                    @foreach ($invoice->dispatchers as $dispatcher)
+                        <option value="{{ $dispatcher->id }}" selected>{{ $dispatcher->name }}@if($dispatcher->employee_code) ({{ $dispatcher->employee_code }})@endif</option>
+                    @endforeach
+                </select>
+                <p class="text-xs text-gray-500 mt-2 flex items-start gap-1.5">
+                    <i class="fas fa-circle-info text-amber-500 mt-0.5"></i>
+                    <span>Dispatchers are filtered to active employees with the dispatcher role in this invoice's branch. Type to search by name, code, or phone.</span>
+                </p>
+            </div>
+        </div>
+
         <!-- Sticky save bar (matches template PAGE 3) -->
         <div class="flex gap-3 sticky bottom-4 bg-white/80 backdrop-blur-sm py-4 px-4 border-t rounded-t-lg shadow-lg mt-4 items-center justify-end flex-wrap">
             <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="border border-gray-200 hover:bg-gray-50 rounded-lg px-4 py-2 text-sm">
@@ -325,13 +357,55 @@ $(function () {
         }
     });
 
-    // Intercept submit if any row has insufficient stock selected (defensive).
+    // Phase 3 — Dispatcher multi-select (Select2 AJAX).
+    // Pre-filled <option> tags carry already-selected dispatchers (from
+    // $invoice->dispatchers); the AJAX endpoint returns the full list of
+    // active dispatcher-role employees for the invoice's branch so the
+    // user can search/add more.
+    var $dispatcherSelect = $('#dispatcher_id');
+    var dispatcherAjaxUrl = $dispatcherSelect.data('ajax-url');
+    var dispatcherInvoiceId = $dispatcherSelect.data('invoice-id');
+
+    $dispatcherSelect.select2({
+        theme: 'bootstrap-5',
+        width: '100%',
+        placeholder: '— select dispatcher(s) —',
+        allowClear: false,
+        minimumInputLength: 0,
+        ajax: {
+            url: dispatcherAjaxUrl,
+            dataType: 'json',
+            delay: 250,
+            data: function (params) {
+                return {
+                    invoice_id: dispatcherInvoiceId,
+                    q: params.term || ''
+                };
+            },
+            processResults: function (data) {
+                return { results: data.results || [] };
+            },
+            cache: true
+        }
+    });
+
+    // Live-update the "N selected" badge on add/remove.
+    $dispatcherSelect.on('change select2:select select2:unselect', function () {
+        var count = ($(this).val() || []).length;
+        $('#dispatcher-count-badge').text(count + (count === 1 ? ' selected' : ' selected'));
+    });
+
+    // Intercept submit if any row has insufficient stock selected (defensive),
+    // OR if no dispatcher is selected.
     $('form').on('submit', function (e) {
-        var ok = true;
+        var warehouseOk = true;
         $('.warehouse-select').each(function () {
-            if (!$(this).val()) ok = false;
+            if (!$(this).val()) warehouseOk = false;
         });
-        if (!ok) {
+
+        var dispatcherCount = ($dispatcherSelect.val() || []).length;
+
+        if (!warehouseOk) {
             e.preventDefault();
             Swal.fire({
                 icon: 'warning',
@@ -339,6 +413,18 @@ $(function () {
                 text: 'Please assign a warehouse to every line item before confirming.',
                 confirmButtonColor: '#d97706'
             });
+            return;
+        }
+
+        if (dispatcherCount < 1) {
+            e.preventDefault();
+            Swal.fire({
+                icon: 'warning',
+                title: 'Dispatcher required',
+                text: 'Please select at least one dispatcher for this delivery before saving the godown copy.',
+                confirmButtonColor: '#d97706'
+            });
+            return;
         }
     });
 });

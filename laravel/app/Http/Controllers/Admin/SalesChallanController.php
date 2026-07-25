@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Sales\PrepareGodownWebRequest;
 use App\Models\SalesChallan;
 use App\Models\SalesInvoice;
 use App\Services\Sales\SalesChallanService;
@@ -153,7 +154,7 @@ class SalesChallanController extends Controller
      */
     public function godown(Request $request, int $invoiceId)
     {
-        $invoice = SalesInvoice::with(['items.product', 'dispatches', 'customer', 'branch'])
+        $invoice = SalesInvoice::with(['items.product', 'dispatches', 'dispatchers', 'customer', 'branch'])
             ->findOrFail($invoiceId);
 
         if (!$invoice->isDraft()) {
@@ -189,20 +190,73 @@ class SalesChallanController extends Controller
     }
 
     /**
-     * Save godown prep (assign warehouses).
+     * Phase 3 — AJAX: list active dispatcher-role employees for the
+     * invoice's branch. Returns Select2-compatible JSON
+     * `[{id, text, name, phone}, ...]`.
+     *
+     * The branch is resolved from the required `?invoice_id=` query
+     * param (NOT from a user-supplied branch_id) so the caller cannot
+     * tamper with branch scoping. The invoice itself is branch-access
+     * checked via SalesAccess::assertBranchAccessible.
      */
-    public function storeGodown(Request $request, int $invoiceId)
+    public function dispatchers(Request $request)
     {
-        $validated = $request->validate([
-            'warehouse_assignments' => 'required|array',
-            'warehouse_assignments.*' => 'required|integer|exists:warehouses,id',
+        $invoiceId = (int) $request->query('invoice_id', 0);
+        if ($invoiceId <= 0) {
+            return response()->json(['error' => 'invoice_id query parameter is required.'], 422);
+        }
+
+        $invoice = SalesInvoice::select('id', 'invoice_code', 'branch_id')->find($invoiceId);
+        if (!$invoice) {
+            return response()->json(['error' => 'Invoice not found.'], 404);
+        }
+
+        // Branch access check — defensive; route middleware already
+        // enforces this for the session, but we double-check the
+        // resolved invoice belongs to a branch the user can see.
+        app(\App\Services\Sales\SalesAccess::class)->assertBranchAccessible($invoice->branch_id);
+
+        $rows = \App\Models\Employee::query()
+            ->where('role', 'dispatcher')
+            ->where('is_active', true)
+            ->where('branch_id', $invoice->branch_id)
+            ->when($request->query('q'), static fn($q, $term) => $q
+                ->where(static fn($qq) => $qq
+                    ->where('name', 'ILIKE', "%{$term}%")
+                    ->orWhere('employee_code', 'ILIKE', "%{$term}%")
+                    ->orWhere('phone', 'ILIKE', "%{$term}%")))
+            ->orderBy('name')
+            ->select(['id', 'name', 'phone', 'employee_code'])
+            ->get();
+
+        $data = $rows->map(static fn($e) => [
+            'id'            => $e->id,
+            'text'          => $e->name . ($e->employee_code ? ' (' . $e->employee_code . ')' : ''),
+            'name'          => $e->name,
+            'phone'         => $e->phone,
+            'employee_code' => $e->employee_code,
         ]);
+
+        return response()->json(['results' => $data]);
+    }
+
+    /**
+     * Save godown prep (assign warehouses + dispatchers).
+     *
+     * Phase 3: validation moved into PrepareGodownWebRequest; the
+     * dispatcher_id[] array is passed through to the service which
+     * syncs the BelongsToMany dispatchers() relationship.
+     */
+    public function storeGodown(PrepareGodownWebRequest $request, int $invoiceId)
+    {
+        $validated = $request->validated();
 
         try {
             $invoice = $this->challanService->prepareGodown(
                 $invoiceId,
                 $validated['warehouse_assignments'],
-                auth()->id()
+                auth()->id(),
+                $validated['dispatcher_id']
             );
 
             return redirect()->route('admin.sales-challans.challan-form', $invoiceId)
