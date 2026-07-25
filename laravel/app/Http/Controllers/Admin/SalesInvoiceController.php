@@ -115,6 +115,24 @@ class SalesInvoiceController extends Controller
             'total_value'     => (float) (clone $statsBase)->whereNotIn('status', ['cancelled'])->sum('total_amount'),
         ];
 
+        // F-20: Stale-draft count for the dismissible warning banner.
+        // A draft is "stale" when it is older than config('sales.stale_draft_days')
+        // (default 14), not reversed, and (consistent with the page's call_a_day
+        // filter) not flagged call-it-a-day unless the user opted into those.
+        // The count is independent of the active date/scope chips so the banner
+        // surfaces stale drafts even when the user is viewing "today" only.
+        $staleDays = (int) config('sales.stale_draft_days', 14);
+        $staleCount = (clone $statsBase)
+            ->where('status', 'draft')
+            ->where('is_reversed', false)
+            ->where('invoice_date', '<', now()->subDays($staleDays)->format('Y-m-d'))
+            ->count();
+
+        // F-20: "Cancel stale drafts" link is role-gated to match the
+        // admin.sales.cancel-stale-drafts route middleware (role:manager,admin).
+        // Salesmen / accountants see a disabled tooltip instead.
+        $canCancelStaleDrafts = auth()->user()?->hasRole('manager', 'admin') ?? false;
+
         return view('admin.sales-invoices.index', [
             'title'    => 'Sales Invoices',
             'invoices' => $invoices,
@@ -123,6 +141,9 @@ class SalesInvoiceController extends Controller
             'stats'    => $stats,
             'filters'  => $request->only(['from_date', 'to_date', 'customer_id', 'branch_id', 'status', 'search', 'scope']),
             'scope'    => $scope,
+            'staleCount'           => $staleCount,
+            'staleDays'            => $staleDays,
+            'canCancelStaleDrafts' => $canCancelStaleDrafts,
         ]);
     }
 

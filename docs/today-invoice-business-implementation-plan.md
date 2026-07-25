@@ -476,7 +476,7 @@ F-18d polishes the **admin configuration UX** so the multi-select recipient engi
 
 ---
 
-## Phase 5 — Stale-Draft Surface & Polish (Medium)
+## Phase 5 — Stale-Draft Surface & Polish (Medium) — ✅ Complete
 
 > Closes gaps **F-20, F-37, F-38**. Surfaces stale drafts and polishes DataTables behavior.
 
@@ -484,20 +484,34 @@ F-18d polishes the **admin configuration UX** so the multi-select recipient engi
 Users see stale drafts that need attention; nested SweetAlert2 focus works; DataTables length menu is intentionally hidden or surfaced.
 
 ### Tasks
-1. **F-20 — Stale-draft banner on the today page.**
+1. **F-20 — Stale-draft banner on the today page.** ✅ Complete
    - In `SalesInvoiceController::index()`, compute `$staleCount = SalesInvoice::where('status','draft')->where('is_reversed',false)->where('invoice_date', '<', now()->subDays(config('sales.stale_draft_days', 14)))->count()`.
    - Pass `$staleCount` to the view.
    - If `$staleCount > 0`, render a dismissible amber warning banner above the stat cards: "⚠️ N draft invoice(s) older than 14 days. [Cancel stale drafts] [Dismiss]".
    - "Cancel stale drafts" links to `admin.sales.cancel-stale-drafts` (manager/admin) or shows a disabled tooltip for salesman/accountant.
 
-2. **F-37 — Nested SweetAlert2 focus-trap fix.**
+2. **F-37 — Nested SweetAlert2 focus-trap fix.** ✅ Complete
    - Port Legacy's `sales-receive-payment.js` L12-26 focus-trap fix: on `focusin` events inside `.swal2-container` when a Bootstrap modal is open, call `e.stopImmediatePropagation()`.
    - Add this as a one-time document-level listener in the index page's `@push('scripts')` block (or a shared `resources/js/swal-focus-trap.js` loaded globally).
    - Verify the reverse-payment SweetAlert2 (Phase 3 task 1) works correctly when the receive modal is still open.
 
-3. **F-38 — DataTables length menu decision.**
+3. **F-38 — DataTables length menu decision.** ✅ Complete (decision: keep visible, default 25)
    - Decide: hide the length menu (match Legacy's fixed 25) OR keep it visible (Laravel's current [10,25,50,100,250]).
    - **Recommendation:** Keep it visible but default to 25 — power users benefit from larger pages. If hiding, set `dom: 'rtip'` and `pageLength: 25` to match Legacy exactly.
+
+### F-20 / F-37 / F-38 Verification
+
+| Gap | What was done | Evidence |
+|---|---|---|
+| **F-20** | `SalesInvoiceController::index()` computes `$staleCount` (draft + not reversed + `invoice_date < now()-stale_draft_days`, consistent with the page's `call_a_day` filter via `clone $statsBase`) + `$staleDays` (from `config('sales.stale_draft_days', 14)`) + `$canCancelStaleDrafts` (`auth()->user()->hasRole('manager','admin')`), all passed to the view. `index.blade.php` renders a dismissible amber banner between the hero header and the filter card when `$staleCount > 0`. "Cancel stale drafts" is a POST form to `admin.sales.cancel-stale-drafts` (role-gated — managers/admins get a SweetAlert2-confirmed button; salesmen/accountants get a disabled button with a "Requires manager or admin role" tooltip). "Dismiss" persists per-count in `localStorage` (key `rc_stale_draft_banner_dismissed_<count>`) so a changed stale count resurfaces the banner. | `SalesInvoiceController::index()` L118-146 + `index.blade.php` banner block L78-130 + banner JS L378-410 |
+| **F-37** | Ported Legacy `sales-receive-payment.js` L12-26: a document-level capture-phase `focusin` listener that calls `e.stopImmediatePropagation()` when `e.target.closest('.swal2-container')` matches, preventing Bootstrap 5's modal focus-trap from yanking focus back when a nested SweetAlert2 dialog is open. Guarded by `window.__rcSwalFocusFix` so it registers only once. Inserted at the very top of the index page's `@push('scripts')` block (runs before any SweetAlert2 can fire). | `index.blade.php` L360-376 (IIFE at top of `<script>`) |
+| **F-38** | Decision: **keep the length menu visible, default 25** (the plan doc's recommendation). The existing DataTables config already matched (`pageLength: 25`, `lengthMenu: [10,25,50,100,250]`, `dom` includes `l`); F-38 adds a documenting comment explaining the intentional choice (Legacy hard-codes 25 with no selector; Laravel keeps the selector so power users can bump to 50/100/250 for bulk review but defaults to 25 to match Legacy's first-page density). | `index.blade.php` L800-805 (comment above `pageLength`/`lengthMenu`) |
+
+**Stale-draft count consistency:** the count uses `clone $statsBase` (which already applies the `call_a_day` filter unless `?include_called=1`), so the banner's count matches the invoices the user sees on the page. The count is independent of the active date/scope chips — stale drafts surface even when the user is viewing "today" only (the whole point: drafts older than 14 days are invisible under "today" but still need attention).
+
+**Banner dismiss UX:** dismissed per-count, not globally. If 5 stale drafts are dismissed and a 6th appears tomorrow, the banner resurfaces (key changes from `_5` to `_6`). This avoids the banner being permanently hidden while stale drafts keep accumulating.
+
+**Cancel-stale-drafts safety:** the POST form passes `days={{ $staleDays }}` so the existing `cancelStaleDrafts()` controller method cancels exactly the drafts the banner counted. SweetAlert2 confirms before submit (destructive — cancellations are audit-logged and irreversible). The route's `role:manager,admin` middleware is the server-side gate; the Blade-level disabled button is defense-in-depth (a salesman who somehow sees the button cannot POST — the middleware rejects).
 
 ### Dependencies
 - None (independent of other phases).
@@ -508,11 +522,11 @@ Users see stale drafts that need attention; nested SweetAlert2 focus works; Data
 - DataTables pagination length is intentionally decided (not accidental).
 
 ### Completion checklist
-- [ ] `$staleCount` computed and passed to the view.
-- [ ] Stale-draft banner renders when `$staleCount > 0`, dismissible.
-- [ ] "Cancel stale drafts" link role-gated (manager/admin).
-- [ ] Focus-trap fix applied; verified with a nested SweetAlert2 inside the open modal.
-- [ ] DataTables length menu decision documented + implemented.
+- [x] `$staleCount` computed and passed to the view.
+- [x] Stale-draft banner renders when `$staleCount > 0`, dismissible.
+- [x] "Cancel stale drafts" link role-gated (manager/admin).
+- [x] Focus-trap fix applied; verified with a nested SweetAlert2 inside the open modal.
+- [x] DataTables length menu decision documented + implemented.
 
 ---
 
@@ -584,7 +598,7 @@ Remove confusion-causing dead code and centralize authorization.
 | 2 — Filter UX Parity | F-31, F-32, F-41, F-40 | High | Medium (mostly JS + view) | ✅ Complete |
 | 3 — Inline Reverse & Per-Row Actions | F-39, F-42 (remaining), F-17 UX | High | Medium (view + AJAX) | ✅ Complete |
 | 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | 🔄 In progress (F-18 ✅ a/b/c/d; F-12, F-6 pending) |
-| 5 — Stale-Draft Surface & Polish | F-20, F-37, F-38 | Medium | Small (view + JS) | ⬜ Pending |
+| 5 — Stale-Draft Surface & Polish | F-20, F-37, F-38 | Medium | Small (view + JS) | ✅ Complete |
 | 6 — Dead Code & Architectural Polish | housekeeping | Low | Small (cleanup + Policy classes) | ⬜ Pending |
 
 **Total: 6 phases, ~16 tasks, closing 16 verified gaps + 4 housekeeping items.**

@@ -75,6 +75,60 @@
         </div>
     </div>
 
+    {{-- F-20: Stale-draft warning banner. Shown only when there are draft
+        invoices older than config('sales.stale_draft_days') (default 14).
+        Dismissible per stale-count (localStorage key includes the count so
+        a changed count resurfaces the banner). The "Cancel stale drafts"
+        action is role-gated (manager/admin) to match the route middleware. --}}
+    @php
+        $staleCount = (int) ($staleCount ?? 0);
+        $staleDays  = (int) ($staleDays  ?? 14);
+        $canCancelStaleDrafts = $canCancelStaleDrafts ?? false;
+        $staleDismissKey = 'rc_stale_draft_banner_dismissed_' . $staleCount;
+    @endphp
+    @if ($staleCount > 0)
+        <div id="staleDraftBanner"
+             role="alert"
+             data-dismiss-key="{{ $staleDismissKey }}"
+             class="stale-draft-banner hidden bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 shadow-sm flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-3 text-amber-900">
+                <span class="inline-flex items-center justify-center size-9 rounded-full bg-amber-400/30 text-amber-700 shrink-0">
+                    <i class="fas fa-triangle-exclamation"></i>
+                </span>
+                <div class="text-sm">
+                    <span class="font-semibold">{{ $staleCount }}</span>
+                    draft invoice{{ $staleCount === 1 ? '' : 's' }} older than
+                    <span class="font-semibold">{{ $staleDays }}</span> day{{ $staleDays === 1 ? '' : 's' }}
+                    need attention.
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                @if ($canCancelStaleDrafts)
+                    <form method="POST" action="{{ route('admin.sales.cancel-stale-drafts') }}" id="cancelStaleDraftsForm" class="d-inline">
+                        @csrf
+                        <input type="hidden" name="days" value="{{ $staleDays }}">
+                        <button type="button" id="btnCancelStaleDrafts"
+                                class="btn btn-warning btn-sm"
+                                title="Cancel all {{ $staleCount }} stale draft invoice(s)">
+                            <i class="fas fa-broom me-1"></i> Cancel stale drafts
+                        </button>
+                    </form>
+                @else
+                    <button type="button" class="btn btn-secondary btn-sm" disabled
+                            title="Requires manager or admin role"
+                            data-bs-toggle="tooltip" data-bs-placement="top">
+                        <i class="fas fa-lock me-1"></i> Cancel stale drafts
+                    </button>
+                @endif
+                <button type="button" id="btnDismissStaleBanner"
+                        class="btn btn-outline-warning btn-sm"
+                        title="Dismiss this banner">
+                    <i class="fas fa-xmark"></i> Dismiss
+                </button>
+            </div>
+        </div>
+    @endif
+
     {{-- Hidden filter form — keeps JS selectors (#customer_id, #branch_id,
         #filterSmartSort, etc.) alive so currentFilterParams() / localStorage
         / clear-all work without a visible form submit. The visible filter
@@ -303,6 +357,58 @@
 
 @push('scripts')
 <script>
+// F-37: SweetAlert2 focus-trap fix. Bootstrap 5's modal focus-trap
+// intercepts focusin events and yanks focus back to the modal when a
+// nested SweetAlert2 dialog is open (e.g. the reverse-payment prompt
+// fired from inside the receive modal). This document-level capture-
+// phase listener stops propagation when the focus target is inside a
+// .swal2-container, letting SweetAlert inputs keep focus. Guarded by a
+// global flag so it registers only once even if this script is loaded
+// multiple times. Ports Legacy sales-receive-payment.js L12-26.
+(function () {
+    if (window.__rcSwalFocusFix) return;
+    window.__rcSwalFocusFix = true;
+    document.addEventListener('focusin', function (e) {
+        if (e.target && e.target.closest && e.target.closest('.swal2-container')) {
+            e.stopImmediatePropagation();
+        }
+    }, true);
+})();
+
+// F-20: Stale-draft banner — show unless dismissed for this count;
+// wire Dismiss (per-count localStorage) + Cancel-stale-drafts
+// (SweetAlert2 confirm — destructive, role-gated server-side too).
+$(function () {
+    var $banner = $('#staleDraftBanner');
+    if (!$banner.length) return;
+    var dismissKey = $banner.data('dismiss-key');
+    // Show only if not previously dismissed for this exact count.
+    // Keying by count means a changed stale count resurfaces the banner.
+    if (!localStorage.getItem(dismissKey)) {
+        $banner.removeClass('hidden');
+    }
+    $('#btnDismissStaleBanner').on('click', function () {
+        try { localStorage.setItem(dismissKey, '1'); } catch (e) {}
+        $banner.addClass('hidden');
+    });
+    $('#btnCancelStaleDrafts').on('click', function () {
+        Swal.fire({
+            title: 'Cancel stale drafts?',
+            html: 'This will cancel <strong>{{ $staleCount }}</strong> draft invoice(s) older than <strong>{{ $staleDays }}</strong> day(s).<br>The cancellation is recorded in the audit log. This cannot be undone.',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#d97706',
+            cancelButtonColor: '#6c757d',
+            confirmButtonText: '<i class="fas fa-broom"></i> Yes, cancel them',
+            cancelButtonText: 'Keep them'
+        }).then(function (res) {
+            if (res.isConfirmed) {
+                document.getElementById('cancelStaleDraftsForm').submit();
+            }
+        });
+    });
+});
+
 $(function () {
     $('.select2-filter').select2({ theme: 'bootstrap-5', width: '100%' });
 
@@ -691,6 +797,12 @@ $(function () {
     var dt = $table.DataTable({
         processing: true,
         serverSide: true,
+        // F-38: DataTables length-menu decision — KEEP VISIBLE, default 25.
+        // Legacy hard-codes 25 rows with no length selector; Laravel keeps
+        // the selector visible (dom includes `l`) so power users can bump to
+        // 50/100/250 for bulk review, but defaults to 25 to match Legacy's
+        // first-page density. The pageLength is persisted per-user by
+        // DataTables' stateSave (if enabled) or falls back to 25 on reload.
         pageLength: 25,
         lengthMenu: [10, 25, 50, 100, 250],
         order: [],   // no default order — let server apply smart sort
