@@ -7,6 +7,7 @@ use App\Models\NotificationRule;
 use App\Models\NotificationRuleRecipient;
 use App\Models\User;
 use App\Services\Notification\NotificationService;
+use Database\Seeders\NotificationRuleSeeder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -132,6 +133,33 @@ class NotificationController extends Controller
 
         return redirect()->route('admin.notifications.rules')
             ->with('success', "Rule '{$rule->name}' deleted.");
+    }
+
+    /**
+     * F-18d — Reset all notification rules to the default set.
+     *
+     * Hard-deletes every existing notification_rules row (bypasses
+     * SoftDeletes via the query builder), which cascades to the
+     * notification_rule_recipients pivot via the FK, then re-runs the
+     * NotificationRuleSeeder for a clean default set. Custom rules
+     * created by admins are lost — the SweetAlert2 confirm on the
+     * button makes this explicit.
+     */
+    public function resetDefaults()
+    {
+        DB::transaction(function () {
+            // Hard-delete every rule (bypasses SoftDeletes). The FK on
+            // notification_rule_recipients has cascadeOnDelete, so every
+            // pivot row is removed automatically.
+            DB::table('notification_rules')->delete();
+
+            // Re-seed the default rule set (idempotent — table is empty
+            // here so every default is inserted).
+            app(NotificationRuleSeeder::class)->run();
+        });
+
+        return redirect()->route('admin.notifications.rules')
+            ->with('success', 'Notification rules reset to the default set.');
     }
 
     /**

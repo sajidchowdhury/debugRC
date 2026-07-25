@@ -313,7 +313,7 @@ This phase adds the missing `min:5` to the invoice-cancel rule (1-word change) s
 
 ---
 
-## Phase 4 — Notifications, Rate Limits & Search Coverage (Medium) — F-18a/b/c ✅ / F-12, F-6, F-18d pending
+## Phase 4 — Notifications, Rate Limits & Search Coverage (Medium) — F-18a/b/c/d ✅ / F-12, F-6 pending
 
 > Closes gaps **F-18, F-12, F-6**. Improves observability and robustness.
 
@@ -335,7 +335,7 @@ A configurable notification-rule engine (admin picks, per predefined event, who 
 | **F-18a** | Security + bell + JS + Gate — make the existing engine work end-to-end | ✅ Complete |
 | **F-18b** | Schema: multi-select recipient types per event (pivot table) + context-aware recipient resolution (`warehouse_manager_of_branch`, `salesman_of_invoice`, etc.) + expand EVENTS to the user's 9 predefined events + expand RECIPIENTS + clean up vestigial `broadcast` channel | ✅ Complete |
 | **F-18c** | Wire explicit `dispatch()` calls into all 9 event trigger points (only 3/10 are dispatched in PHP today; the rest rely on PG triggers + a worker process that may not be running) | ✅ Complete (8/9 — `branch_demand_created` deferred: no Laravel code path exists yet) |
-| **F-18d** | Admin UX polish: redesign `rules.blade.php` for multi-select per event, default-rules seeder, "Reset to defaults" button | ⬜ Pending |
+| **F-18d** | Admin UX polish: redesign `rules.blade.php` for multi-select per event, default-rules seeder, "Reset to defaults" button | ✅ Complete |
 
 **Architecture decision (F-18a):** Real-time delivery uses the existing **SSE pipeline** (PostgreSQL `LISTEN/NOTIFY` → Redis Pub/Sub → browser `EventSource`), NOT Laravel broadcasting. The database is only hit when a notification is created (event-driven, not polled) — satisfying the "no continuous DB pressure" requirement. The vestigial `broadcast` channel in `ERPNotification` (which silently no-ops due to missing `config/broadcasting.php`) was cleaned up in F-18b.
 
@@ -400,7 +400,42 @@ F-18c wires explicit `NotificationService::dispatch()` calls (with `$context`) i
 
 **What F-18c does NOT do (deferred):**
 - `branch_demand_created` — no Laravel code path exists. Requires a new `BranchDemandService` (the table + RLS policies exist; only the Eloquent layer is missing). This is a separate feature, not a notification wiring task.
-- F-18d — admin UX polish (Select2 multi-select, default-rules seeder, "Reset to defaults" button). The current F-18b form is functional (native `<select multiple>`) but not yet polished.
+- Admin-UX polish (Select2 multi-select, default-rules seeder, "Reset to defaults" button) — that is F-18d, now complete (see below).
+
+### F-18d Verification
+
+F-18d polishes the **admin configuration UX** so the multi-select recipient engine from F-18b is pleasant to use and ships with a sensible default rule set out of the box. Three concrete changes:
+
+| Change | What was done | Evidence |
+|---|---|---|
+| **Select2 multi-select** | The native `<select multiple size=8>` for `recipient_types[]` on `rules.blade.php` is upgraded to a Select2 widget (searchable, `closeOnSelect:false` so the admin picks several without the dropdown collapsing, `theme:bootstrap-5` matching the existing `#recipientUser` dropdown). The show/hide-Specific-User logic + the empty-recipient submit guard were rewritten to read Select2's `.val()` (the native `selectedOptions`/`required` no longer fire once Select2 hides the `<select>`). | `resources/views/admin/notifications/rules.blade.php` — `#recipientTypes` Select2 init + `syncSpecificUser()` + `#createRuleForm` submit guard |
+| **Default-rules seeder** | New `database/seeders/NotificationRuleSeeder.php` (+ minimal `DatabaseSeeder.php` so `php artisan db:seed` works project-wide for the first time — the project previously had no seeders dir at all). Seeds 11 default rules (the user's 9 predefined events + the 2 sales-return sub-flows already dispatched by `SalesReturnService`), each with a multi-select of recipient types written to the `notification_rule_recipients` pivot. Idempotent by `(event, name)` — safe to re-run. Default rules use the ` — default` name suffix so admins can tell them from custom rules. | `database/seeders/NotificationRuleSeeder.php` (DEFAULTS const, 11 rows) + `database/seeders/DatabaseSeeder.php` |
+| **"Reset to defaults" button** | New `POST admin/notifications/rules/reset-defaults` route (inside the existing `role:admin` middleware group) + `NotificationController::resetDefaults()`. Hard-deletes every `notification_rules` row (bypasses `SoftDeletes` via the query builder; the pivot FK `cascadeOnDelete` clears `notification_rule_recipients` automatically), then calls `app(NotificationRuleSeeder::class)->run()` for a clean default set. SweetAlert2 confirms the destructive action. | `routes/web.php` (resetDefaults route) + `NotificationController::resetDefaults()` + `rules.blade.php` (`#btnResetDefaults` + `#resetDefaultsForm`) |
+
+**Default rule set** (11 rules — seeded by `NotificationRuleSeeder::DEFAULTS`):
+
+| Event | Default recipients |
+|---|---|
+| `sales_finalize` (After Sales Confirm) | Admin · Warehouse Manager of branch ★ · Salesman of invoice ★ |
+| `challan_create` (After Create Challan Copy) | Admin · Warehouse Manager of branch ★ |
+| `user_login` (After Login) | Admin |
+| `user_logout` (After Logout) | Admin |
+| `damage_invoice_created` (After Create Damage Invoice) | Admin · Warehouse Manager of branch ★ · Accountant |
+| `payment_receive` (After Receive Money) | Admin · Accountant |
+| `return_created` (After Sales Return) | Admin |
+| `return_confirmed` (Sales Return Confirmed) | Admin · Warehouse Manager of branch ★ · Accountant |
+| `return_reversed` (Sales Return Reversed) | Admin · Accountant |
+| `branch_demand_created` (After Branch Demand) | Admin · Warehouse Manager of branch ★ |
+| `customer_limit_increased` (After Increasing Customer Limit) | Admin · Accountant |
+
+★ = context-aware recipient type (resolves from the `$context` array that F-18c wired into every dispatch call). Every ★ selection above will resolve at dispatch time because F-18c passes the matching `branch_id` / `salesman_id` / `created_by` / `customer_id` key.
+
+**Reset flow:** Admin clicks "Reset to defaults" → SweetAlert2 warns that ALL existing rules (including custom ones) will be deleted → on confirm, `resetDefaults()` runs inside a `DB::transaction`: `DB::table('notification_rules')->delete()` (hard delete, cascade clears pivot) → `app(NotificationRuleSeeder::class)->run()` (table is empty so every default inserts) → redirect back with a success flash. The `branch_demand_created` default is seeded **active** even though no Laravel creation path exists yet (F-18c deferred it) — it will start firing automatically once a `BranchDemandService` is built in a future phase.
+
+**What F-18d does NOT do (deferred):**
+- `branch_demand_created` still has no Laravel trigger path (F-18c gap). The default rule is seeded ready-to-fire; the `BranchDemandService` is a separate feature.
+- The `godown_create` / `soft_delete` / `accounts_entry` infrastructure events (not in the user's 9) get NO default rules — admins can add them manually if desired.
+- The legacy migration-seeded return rules (`2025_01_09_000003`, old-style names like "Sales Return Created — Notify Admins") coexist with F-18d defaults on existing installs. "Reset to defaults" wipes them for a clean slate; on a fresh `db:seed` they'd coexist (both fire — harmless duplication the admin can prune).
 
 ### Tasks (remaining Phase 4 tasks — unchanged from original spec)
 
@@ -433,7 +468,7 @@ F-18c wires explicit `NotificationService::dispatch()` calls (with `$context`) i
 - [x] **F-18a:** Real-time delivery via SSE (PostgreSQL LISTEN/NOTIFY → Redis → EventSource) — no continuous DB polling.
 - [x] **F-18b:** Multi-select recipient types per event (pivot table `notification_rule_recipients`) + context-aware recipient resolution (`warehouse_manager_of_branch`, `salesman_of_invoice`, `invoice_creator`) + EVENTS expanded to the user's 9 predefined events (+ 5 pre-existing) + RECIPIENTS expanded to 10 types (3 context-aware) + vestigial `broadcast` channel removed from `ERPNotification` (`via()` now database-only, `toBroadcast()` deleted, `BroadcastMessage` import dropped).
 - [x] **F-18c:** Explicit `dispatch()` calls wired into 8 of 9 event trigger points (`sales_finalize`, `challan_create`, `payment_receive`, `damage_invoice_created`, `user_login`, `user_logout`, `customer_limit_increased` + 3 existing `return_*` calls upgraded with `$context`). `branch_demand_created` deferred — no Laravel BranchDemand controller/service exists yet (table only; legacy-only code path).
-- [ ] **F-18d:** Admin UX polish (multi-select rules UI + default-rules seeder + "Reset to defaults").
+- [x] **F-18d:** Admin UX polish — Select2 multi-select for `recipient_types[]` on `rules.blade.php` (searchable, `closeOnSelect:false`, show/hide-Specific-User + empty-recipient submit guard rewritten for Select2's hidden `<select>`) + `NotificationRuleSeeder` (11 default rules for the 9 predefined events + 2 return sub-flows, idempotent by `(event,name)`, ` — default` suffix) + `DatabaseSeeder` (enables `php artisan db:seed` project-wide) + `POST rules/reset-defaults` route + `NotificationController::resetDefaults()` (hard-delete all rules → cascade clears pivot → re-seed; SweetAlert2 confirms).
 - [ ] **F-12:** `throttle:180,1` on datatable route; `throttle:120,1` on summary route.
 - [ ] **F-12:** 429 response test confirms rate limiting works.
 - [ ] **F-6:** Smart search returns matches for salesman name, creator username, product name/code.
@@ -548,7 +583,7 @@ Remove confusion-causing dead code and centralize authorization.
 | 1 — Call-It-A-Day Parity | F-2, F-33, F-42, F-43 | Critical | Medium (controller + view + JS) | ✅ Complete |
 | 2 — Filter UX Parity | F-31, F-32, F-41, F-40 | High | Medium (mostly JS + view) | ✅ Complete |
 | 3 — Inline Reverse & Per-Row Actions | F-39, F-42 (remaining), F-17 UX | High | Medium (view + AJAX) | ✅ Complete |
-| 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | 🔄 In progress (F-18a/b/c ✅; F-12, F-6, F-18d pending) |
+| 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | 🔄 In progress (F-18 ✅ a/b/c/d; F-12, F-6 pending) |
 | 5 — Stale-Draft Surface & Polish | F-20, F-37, F-38 | Medium | Small (view + JS) | ⬜ Pending |
 | 6 — Dead Code & Architectural Polish | housekeeping | Low | Small (cleanup + Policy classes) | ⬜ Pending |
 

@@ -877,6 +877,7 @@ Route::middleware('auth')->group(function () {
         Route::middleware('role:admin')->group(function () {
             Route::get('rules', [NotificationController::class, 'rules'])->name('rules');
             Route::post('rules', [NotificationController::class, 'storeRule'])->name('storeRule');
+            Route::post('rules/reset-defaults', [NotificationController::class, 'resetDefaults'])->name('resetDefaults');
             Route::post('rules/{id}/toggle', [NotificationController::class, 'toggleRule'])->name('toggleRule');
             Route::delete('rules/{id}', [NotificationController::class, 'destroyRule'])->name('destroyRule');
         });

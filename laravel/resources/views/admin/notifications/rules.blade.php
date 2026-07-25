@@ -58,6 +58,14 @@
             <button type="button" class="btn btn-light btn-sm" data-bs-toggle="collapse" data-bs-target="#createRuleCard" aria-expanded="true">
                 <i class="fas fa-plus me-1"></i> Create Rule
             </button>
+            {{-- F-18d: Reset to defaults — destructive; SweetAlert2 confirms --}}
+            <form method="POST" action="{{ route('admin.notifications.resetDefaults') }}" id="resetDefaultsForm" class="d-inline">
+                @csrf
+                <button type="button" class="btn btn-outline-light btn-sm" id="btnResetDefaults"
+                        title="Delete every rule and restore the default set">
+                    <i class="fas fa-rotate-left me-1"></i> Reset to Defaults
+                </button>
+            </form>
         </div>
     </header>
 
@@ -146,7 +154,7 @@
                 </button>
             </div>
             <div class="card-body">
-                <form method="POST" action="{{ route('admin.notifications.storeRule') }}">
+                <form method="POST" action="{{ route('admin.notifications.storeRule') }}" id="createRuleForm">
                     @csrf
                     <div class="row g-3">
                         <div class="col-md-6">
@@ -164,19 +172,21 @@
                             </select>
                         </div>
 
-                        {{-- F-18b: multi-select recipient types --}}
+                        {{-- F-18b/F-18d: multi-select recipient types (Select2-powered) --}}
                         <div class="col-md-4">
                             <label class="form-label fw-semibold">Recipient Types <span class="text-danger">*</span></label>
-                            <select name="recipient_types[]" id="recipientTypes" class="form-select" size="8" multiple required>
+                            <select name="recipient_types[]" id="recipientTypes" class="form-select" multiple required>
                                 @foreach ($recipients as $key => $label)
                                     @php
                                         $isContextAware = in_array($key, $contextAware, true);
                                     @endphp
-                                    <option value="{{ $key }}">{{ $label }}{{ $isContextAware ? ' ★' : '' }}</option>
+                                    <option value="{{ $key }}" @if ($isContextAware) data-context="1" @endif>
+                                        {{ $label }}{{ $isContextAware ? ' ★' : '' }}
+                                    </option>
                                 @endforeach
                             </select>
                             <small class="text-muted">
-                                Hold Ctrl/Cmd to pick multiple. ★ = resolved from event context (branch / invoice).
+                                Click to pick one or more. <span class="text-warning fw-semibold">★</span> = resolved from event context (branch / salesman / creator).
                             </small>
                         </div>
                         <div class="col-md-4" id="specificUserWrap" style="display:none;">
@@ -379,29 +389,64 @@
 
 @push('scripts')
 <script>
-    // F-18b: Show/hide Specific User field when 'specific_user' is among
-    // the multi-select recipient_types selections.
-    (function () {
-        var sel = document.getElementById('recipientTypes');
-        var wrap = document.getElementById('specificUserWrap');
-        var userSel = document.getElementById('recipientUser');
-        function sync() {
-            if (!sel || !wrap) return;
-            var selected = Array.prototype.map.call(sel.selectedOptions, function (o) { return o.value; });
-            var show = (selected.indexOf('specific_user') !== -1);
-            wrap.style.display = show ? '' : 'none';
-            if (userSel) userSel.required = show;
-        }
-        if (sel) { sel.addEventListener('change', sync); sync(); }
-    })();
+    // F-18d: Select2 multi-select for recipient types. The native
+    // <select multiple> is upgraded to a searchable Select2 widget with
+    // checkboxes (closeOnSelect:false lets the admin pick several
+    // without the dropdown collapsing each time).
+    $(function () {
+        $('#recipientTypes').select2({
+            placeholder: '— Select recipient type(s) —',
+            allowClear: false,
+            width: '100%',
+            theme: 'bootstrap-5',
+            closeOnSelect: false,
+            minimumResultsForSearch: 0
+        });
 
-    // Select2 for the user dropdown (nicer search)
+        // Show/hide the Specific User field when 'specific_user' is
+        // among the Select2 selections. Select2 hides the native
+        // <select>, so read .val() (returns an array) instead of
+        // selectedOptions.
+        var $types   = $('#recipientTypes');
+        var $wrap    = $('#specificUserWrap');
+        var $userSel = $('#recipientUser');
+        function syncSpecificUser() {
+            var selected = $types.val() || [];
+            var show = (selected.indexOf('specific_user') !== -1);
+            $wrap.toggle(show);
+            $userSel.prop('required', show);
+            if (!show) { $userSel.val(null).trigger('change'); }
+        }
+        $types.on('change', syncSpecificUser);
+        syncSpecificUser();
+    });
+
+    // Select2 for the specific-user dropdown (nicer search)
     $(function () {
         $('#recipientUser').select2({
             placeholder: '— Select user —',
             allowClear: true,
             width: '100%',
             theme: 'bootstrap-5'
+        });
+    });
+
+    // F-18d: client-side guard for empty recipient_types. Select2 hides
+    // the native <select>, so the HTML5 `required` attribute may not
+    // fire on submit — validate explicitly.
+    $(function () {
+        $('#createRuleForm').on('submit', function (e) {
+            var selected = $('#recipientTypes').val();
+            if (!selected || selected.length === 0) {
+                e.preventDefault();
+                Swal.fire({
+                    title: 'Recipient required',
+                    text: 'Please select at least one recipient type.',
+                    icon: 'warning',
+                    confirmButtonColor: '#6366f1'
+                });
+                return false;
+            }
         });
     });
 
@@ -441,6 +486,27 @@
                     '<input type="hidden" name="_method" value="DELETE">';
                 document.body.appendChild(form);
                 form.submit();
+            });
+        });
+    });
+
+    // F-18d: Reset to defaults confirmation — destructive (deletes ALL
+    // rules including custom ones) and re-seeds the default set.
+    $(function () {
+        $('#btnResetDefaults').on('click', function () {
+            Swal.fire({
+                title: 'Reset to defaults?',
+                html: 'This will <strong>delete ALL existing notification rules</strong> (including any custom rules you created) and restore the default set.<br><br>This cannot be undone.',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#dc3545',
+                cancelButtonColor: '#6c757d',
+                confirmButtonText: '<i class="fas fa-rotate-left"></i> Yes, reset',
+                cancelButtonText: 'Cancel'
+            }).then(function (res) {
+                if (res.isConfirmed) {
+                    document.getElementById('resetDefaultsForm').submit();
+                }
             });
         });
     });
