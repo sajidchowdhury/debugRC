@@ -227,7 +227,7 @@ This phase:
 
 ---
 
-## Phase 3 — Receive-Modal Inline Reverse & Per-Row Actions (High)
+## Phase 3 — Receive-Modal Inline Reverse & Per-Row Actions (High) ✅ Complete
 
 > Closes gaps **F-39, F-42 (remaining actions: edit/cancel on index), F-17 UX**. Brings the index page's per-row action set to parity with Legacy (view / edit / cancel / receive / call-it-a-day) and lets accountants reverse a payment without leaving the modal.
 
@@ -258,13 +258,58 @@ The index page becomes the single hub for daily collection: every action is reac
 - The index table's action column matches Legacy's action set.
 
 ### Completion checklist
-- [ ] "Reverse" button per payment in the receive modal (role-gated to accountant/manager/admin).
-- [ ] SweetAlert2 textarea with min:5 client validation.
-- [ ] AJAX POST to `admin.customer-payments.cancel` succeeds; modal reloads; table + summary refresh.
-- [ ] Per-row "Edit" button renders only for `status==='draft'`.
-- [ ] Per-row "Cancel" button renders only for `status==='draft'`; SweetAlert2 reason prompt; AJAX POST.
-- [ ] Per-row action group is responsive (collapses to dropdown on mobile).
-- [ ] Audit log entries `payment_reversed` + `sale_cancelled` written.
+- [x] "Reverse" button per payment in the receive modal (role-gated to accountant/manager/admin).
+- [x] SweetAlert2 textarea with min:5 client validation.
+- [x] AJAX POST to `admin.customer-payments.cancel` succeeds; modal reloads; table + summary refresh.
+- [x] Per-row "Edit" button renders only for `status==='draft'`.
+- [x] Per-row "Cancel" button renders only for `status==='draft'`; SweetAlert2 reason prompt; AJAX POST.
+- [x] Per-row action group is responsive (collapses to dropdown on mobile).
+- [x] Audit log entries `payment_reversed` + `sale_cancelled` written.
+
+### Phase 3 Verification
+
+**F-39 — Receive-modal inline reverse-payment** (already implemented in the UI/UX phase):
+
+| Criterion | Evidence |
+|---|---|
+| "Reverse" button per payment row, role-gated | `_receive_modal_body.blade.php` L221-223 renders `<x-erp.reverse-payment-button :payment-id="$p['payment_id']" :payment-code="$p['payment_code']" />` inside the per-payment list, wrapped in `@if($canReversePayments)` (L193-194) where `$canReversePayments` is true only for accountant/manager/admin/superadmin. The component (`resources/views/components/erp/reverse-payment-button.blade.php` L32-40) renders a plain `<button type="button" class="btn-reverse-payment ..." data-payment-id data-payment-code>` — no form, no inline JS; all behavior is delegated from `index.blade.php`. |
+| SweetAlert2 textarea for `cancel_reason` with min:5 client validation | `index.blade.php` L1709-1727 — `Swal.fire({ title: 'Reverse payment?', input: 'textarea', inputPlaceholder: 'Reason for reversal (min 5 chars)', inputValidator: v => (!v \|\| String(v).trim().length < 5) ? 'Reason must be at least 5 characters.' : undefined })`. The `inputValidator` is SweetAlert2's canonical preConfirm-time validation hook. |
+| AJAX POST to `admin.customer-payments.cancel` with `cancel_reason` + CSRF | `index.blade.php` L1731-1737 — `$.ajax({ url: `/admin/customer-payments/${pid}/cancel`, method: 'POST', data: { _token: ROUTES.csrf, cancel_reason: reason }, headers: { 'X-Requested-With': 'XMLHttpRequest' } })`. Route registered at `routes/web.php` L800-801 (POST, role+branch.isolation middleware). |
+| On success: reload modal body + fire `salesToday:paymentRecorded` | `index.blade.php` L1750-1774 — re-fetches `/admin/sales-invoices/${invoiceId}/receive-modal` via `$.ajax` GET, replaces `$modalContent.html(html)`, re-runs `initReceiveModalBody()`, then `dt.ajax.reload()` + `scheduleSummary()`, then `$(document).trigger('salesToday:paymentRecorded', [{ reversedPaymentId: pid, paymentCode: payCode }])`. Matches the F-39 spec payload exactly. |
+| 422 validation errors surfaced | L1776-1789 — joins Laravel's `responseJSON.errors` object into a single string for the error toast. |
+
+**F-42 — Per-row Edit + Cancel buttons on the index table** (already implemented in the UI/UX phase):
+
+| Criterion | Evidence |
+|---|---|
+| "Edit" button (outline-primary, fa-edit), draft-only | `index.blade.php` DataTables actions column L849-933 (col 11) renders `<a class="rc-action-edit ..." href="${row.edit_url}">` only when `row.show_edit === true`. `SalesInvoiceController::datatable()` L870-876 sets `show_edit = $isDraft && !$isReversed` and `edit_url = route('admin.sales-invoices.edit', $inv)`. Route (`routes/web.php` L714-715) is gated `['role:salesman,manager,admin','branch.isolation']`. |
+| "Cancel" button (outline-danger, fa-ban), draft-only | Rendered in the overflow ⋯ dropdown as `<button class="btn-cancel-invoice text-danger" data-invoice-id data-invoice-code>`, only when `row.show_cancel === true` (also `$isDraft && !$isReversed`). `dropdown-divider` above it visually separates the destructive action. Route (`routes/web.php` L711-712) is gated identically. |
+| Cancel opens SweetAlert2 reason prompt → AJAX POST → redraw + summary | `index.blade.php` L1188-1193 delegated `.btn-cancel-invoice` click → `cancelInvoice(id, code)` helper (L1242-1283) → `Swal.fire({ input: 'textarea', inputValidator: min:5 })` → `$.ajax POST /admin/sales-invoices/${id}/cancel { cancel_reason }` → on success: toast + `dt.ajax.reload()` + `scheduleSummary()`. |
+| Compact button group, collapses to ⋯ dropdown on mobile | Desktop actions column (L849-933) keeps View + Receive inline, collapses Edit / Call-it-a-day / Print / Cancel into a Bootstrap ⋯ dropdown. Mobile cards variant (L1389-1437) renders View + Receive inline + the same ⋯ overflow dropdown — single source of truth for the action set, responsive collapse by breakpoint. |
+| Keyboard shortcut `e` for Edit (Phase 5 a11y) | `triggerRowAction('.rc-action-edit', 'Edit invoice')` bound to `e` key (L1955) — works the same as the click handler. |
+
+**F-17 UX — Reversal reason min-length enforcement (client + server)** (client-side already done in UI/UX phase; **server-side parity gap fixed in this phase**):
+
+| Criterion | Evidence |
+|---|---|
+| Client-side `inputValidator` enforces min:5 on reverse-payment SweetAlert2 | `index.blade.php` L1717-1722 — `inputValidator: v => (!v \|\| String(v).trim().length < 5) ? 'Reason must be at least 5 characters.' : undefined`. |
+| Client-side `inputValidator` enforces min:5 on cancel-invoice SweetAlert2 | `index.blade.php` L1249-1254 — identical min:5 `inputValidator`. |
+| Server-side `min:5` on `customer-payments.cancel` | `CustomerPaymentController::cancel()` L301 — `'cancel_reason' => 'required|string|min:5|max:500'` (with explicit R27 parity comment referencing Legacy's `SalesPaymentOperationsTrait::reverseCustomerPayment()` runtime `strlen($reason) < 5` check). |
+| Server-side `min:5` on `sales-invoices.cancel` | **Fixed in this phase.** `SalesInvoiceController::cancel()` L577 — `'cancel_reason' => 'required|string|min:5|max:500'` (was `required|string|max:500`). Previously only the client-side `inputValidator` enforced min:5; a direct POST (curl) could submit a 1-char reason and have it audit-logged + committed. Now matches the customer-payments side + Legacy. |
+
+**Audit log entries** (already implemented in the UI/UX phase services):
+
+| Action | Logger method | Call site | Written inside DB tx? |
+|---|---|---|---|
+| `payment_reversed` | `SalesAuditLogger::paymentReversed()` (L106-116) | `CustomerPaymentService::cancelPayment()` L291 | ✅ Yes — inside the `DB::transaction()` that reverses GL + ledger + allocations + intercompany (L220-299). |
+| `sale_cancelled` | `SalesAuditLogger::saleCancelled()` (L74-84) | `SalesInvoiceService::cancelInvoice()` L388 | ✅ Yes — inside the `DB::transaction()` that reverses GL + ledger (L343-399). |
+| Both actions appear in recent-events feed | `SalesAuditLogger::recentSalesEvents()` L405-410 — action list includes both `sale_cancelled` + `payment_reversed`. | — | — |
+
+**F-17 server-side parity gap fixed in this phase:**
+
+The audit (`audit-3`) found that all three sub-tasks (F-39, F-42, F-17 client-side) were already fully implemented by the prior UI/UX phase. The only real defect was a server-side validation asymmetry: `CustomerPaymentController::cancel` enforced `cancel_reason: min:5` (matching Legacy) but `SalesInvoiceController::cancel` enforced only `required|string|max:500`. The client-side SweetAlert2 `inputValidator` protected honest users, but a direct POST (curl, devtools, scripted client) could bypass the UI and submit a 1-char reason to the invoice-cancel endpoint — which would then be audit-logged + committed.
+
+This phase adds the missing `min:5` to the invoice-cancel rule (1-word change) so both endpoints match Legacy + each other. No new files, routes, Blade components, audit-logger methods, or JS handlers were needed.
 
 ---
 
@@ -420,7 +465,7 @@ Remove confusion-causing dead code and centralize authorization.
 |---|---|---|---|---|
 | 1 — Call-It-A-Day Parity | F-2, F-33, F-42, F-43 | Critical | Medium (controller + view + JS) | ✅ Complete |
 | 2 — Filter UX Parity | F-31, F-32, F-41, F-40 | High | Medium (mostly JS + view) | ✅ Complete |
-| 3 — Inline Reverse & Per-Row Actions | F-39, F-42 (remaining), F-17 UX | High | Medium (view + AJAX) | ⬜ Pending |
+| 3 — Inline Reverse & Per-Row Actions | F-39, F-42 (remaining), F-17 UX | High | Medium (view + AJAX) | ✅ Complete |
 | 4 — Notifications, Rate Limits, Search | F-18, F-12, F-6 | Medium | Medium (notification + middleware + query) | ⬜ Pending |
 | 5 — Stale-Draft Surface & Polish | F-20, F-37, F-38 | Medium | Small (view + JS) | ⬜ Pending |
 | 6 — Dead Code & Architectural Polish | housekeeping | Low | Small (cleanup + Policy classes) | ⬜ Pending |

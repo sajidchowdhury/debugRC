@@ -567,7 +567,14 @@ class SalesInvoiceController extends Controller
     public function cancel(Request $request, int $id)
     {
         $request->validate([
-            'cancel_reason' => 'required|string|max:500',
+            // Phase 3 (business): min:5 parity with Legacy
+            // SalesPaymentOperationsTrait::reverseCustomerPayment() runtime
+            // check `if (strlen($reason) < 5) { return error; }` — and with
+            // CustomerPaymentController::cancel() (line 301) which already
+            // enforces min:5. Closes the curl-bypass gap where the client-side
+            // SweetAlert2 inputValidator (index.blade.php) could be skipped by
+            // a direct POST, allowing a 1-char reason to be audit-logged.
+            'cancel_reason' => 'required|string|min:5|max:500',
         ]);
 
         try {
