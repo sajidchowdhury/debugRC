@@ -21,9 +21,9 @@
 
 Each phase = one commit. Each leaves the app working. Context is recoverable from `worklog.md` + this doc.
 
-| # | Phase | Touches | Risk |
-|---|---|---|---|
-| **0** | **Tailwind coexistence foundation** | `laravel/package.json`, `laravel/resources/css/rc-erp.css`, `laravel/public/assets/css/rc-erp.css`, `laravel/resources/views/layouts/admin.blade.php` (one `<link>`), `laravel/config/branches.php`, `laravel/app/Support/StatusPalette.php`, `laravel/app/Support/Accents.php` | Low — additive only |
+| # | Phase | Touches | Risk | Status |
+|---|---|---|---|---|
+| **0** | **Tailwind coexistence foundation** | `laravel/package.json`, `laravel/resources/css/rc-erp.css`, `laravel/public/assets/css/rc-erp.css`, `laravel/resources/views/layouts/admin.blade.php` (one `<link>`), `laravel/config/branches.php`, `laravel/app/Support/StatusPalette.php`, `laravel/app/Support/Accents.php` | Low — additive only | ✅ Complete |
 | 1 | Icon + core display components | `laravel/app/View/Components/Erp/*`, `laravel/resources/views/components/erp/*` | Low |
 | 2 | Buttons + form components | same dirs | Low |
 | 3 | Navigation, table, feedback components | same dirs | Low |
@@ -41,7 +41,7 @@ Each phase = one commit. Each leaves the app working. Context is recoverable fro
 
 ---
 
-## Phase 0 — Tailwind coexistence foundation (current)
+## Phase 0 — Tailwind coexistence foundation (✅ complete)
 
 ### Goal
 Install Tailwind v4 so it compiles to a stable `/assets/css/rc-erp.css`, linked into the admin layout. **Zero visual change** to existing pages — just makes Tailwind utilities available for Phase 1+ components.
@@ -70,6 +70,30 @@ Install Tailwind v4 so it compiles to a stable `/assets/css/rc-erp.css`, linked 
 - `admin.blade.php` loads `/assets/css/rc-erp.css` after Bootstrap.
 - Token helpers exist and are autoloadable (PSR-4 `App\Support\*`).
 - No existing Blade view is modified (only the one `<link>` added to the shared layout).
+
+### Verification (completed)
+All 5 acceptance criteria verified against the working tree on 2025-07-25 (Task ID `phase0-verify`, see `worklog.md`):
+
+| # | Criterion | Result | Evidence |
+|---|---|---|---|
+| 1 | `build:css` succeeds & writes `public/assets/css/rc-erp.css` | ✅ | `npx tailwindcss -i resources/css/rc-erp.css -o … --minify` → "Done in 242ms", exit 0, 72 538-byte output byte-identical to committed file |
+| 2 | `rc-erp.css` has Tailwind utilities + custom classes, NO preflight | ✅ | grep finds `.flex`, `.bg-amber-500`, `.text-amber-600`, `.p-4`, `.rounded-lg`, `.grid`, `.gap-4` + all 9 custom classes (`.custom-scroll`, `.write-in`, `.write-in-hint`, `.watermark`, `.nav-btn`, `.pulse`, `.page-break`, `.print-only`, `.no-print`, `.rc-erp-print-page`); grep for `tailwindcss/preflight` / `@layer base` = 0 matches |
+| 3 | `admin.blade.php` loads `/assets/css/rc-erp.css` after Bootstrap | ✅ | `<link>` at `layouts/admin.blade.php:30`, after `bootstrap.min.css` (L16) + `custom.css` (L24) |
+| 4 | Token helpers exist & are PSR-4 autoloadable | ✅ | `app/Support/StatusPalette.php`, `app/Support/Accents.php`, `app/Support/BranchColor.php` — all `namespace App\Support`; `composer.json` maps `"App\\": "app/"` |
+| 5 | Only the one `<link>` added to shared layout in Phase 0 scope | ✅ | `admin.blade.php` head gains exactly one `<link>` (L30); no other Blade view touched by Phase 0 itself |
+
+Additional checks performed:
+- Orphan files cleaned: `next-env.d.ts`, `.next/`, root `node_modules/`, `tsconfig.tsbuildinfo` — all absent from repo root. ✅
+- `laravel/package.json` declares `tailwindcss ^4.3.3` + `@tailwindcss/cli ^4.3.3` as devDeps; `dev:css` (watch) + `build:css` (minify) scripts present. ✅
+- `laravel/resources/css/rc-erp.css` source imports only `tailwindcss/theme` + `tailwindcss/utilities` (no `preflight`); `@theme` declares `--font-sans` (Inter + Noto Sans Bengali + system-ui) + `--font-bengali`; `@media print` block is class-scoped to `.rc-erp-print-page` (existing print pages unaffected). ✅
+- `laravel/config/branches.php` carries HO=Red `#dc2626`, PAT=Blue `#2563eb`, NOW=Green `#16a34a`, TAR=Orange `#ea580c` with `color_hex` + Tailwind class helpers + Bengali names. ✅
+
+#### Known minor gap (non-blocking, recommended follow-up)
+The `rc-erp.css` `<link>` (`admin.blade.php:30`) lacks the `?v=filemtime()` cache-busting query that `custom.css` (L24) has. After a future rebuild, browsers may serve a stale cached `rc-erp.css`. Suggested one-line fix:
+```blade
+<link rel="stylesheet" href="/assets/css/rc-erp.css?v={{ filemtime(public_path('assets/css/rc-erp.css')) }}">
+```
+Tracked as a follow-up; does NOT block Phase 0 acceptance.
 
 ---
 
