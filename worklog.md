@@ -1975,3 +1975,33 @@ Stage Summary:
   - 3 print layouts — Phase 10
   - Challan list (index) + Challan detail (show) — Phase 11
 - The full Invoice → Godown → Challan workflow is now visually consistent with the amber/orange showcase design, bilingual labels, left-accent cards, stat cards, journey stepper, step indicators, and design-system buttons. All backend logic, DataTables AJAX, SweetAlert2 flows, role-gating, and idempotency tokens are preserved.
+
+---
+Task ID: CSS-INVEST-1
+Agent: Main (Senior Laravel Architect + Tailwind Expert)
+Task: Investigate the missing-styles failure on the godown page after `git pull` and produce three markdown deliverables (investigation, recommendation, action plan). NO code changes.
+
+Work Log:
+- Read laravel/package.json — confirmed TWO build scripts: dev:css / build:css (Tailwind CLI) AND dev / build (Vite). build:css uses --minify.
+- Read laravel/resources/css/rc-erp.css (input) — confirmed Tailwind v4 zero-config: imports only theme + utilities layers, Preflight intentionally skipped, NO @source directive, NO tailwind.config.js, NO postcss.config.js.
+- Read laravel/vite.config.js — confirmed Vite entry is resources/css/app.css + resources/js/app.js (NOT rc-erp.css). Vite outputs to public/build/ (gitignored).
+- Read laravel/resources/css/app.css — confirmed it is an EMPTY placeholder (comment only). Vite pipeline is dead weight for the design system.
+- Read laravel/.gitignore — confirmed node_modules/ and public/build/ ignored, but public/assets/css/rc-erp.css is NOT ignored (compiled CSS IS committed).
+- Read the ERP layout (components/layouts/erp.blade.php) — confirmed line 53 loads rc-erp.css via plain <link> with NO cache-busting (?v=), unlike custom.css on line 49 which DOES cache-bust.
+- Ran git log --oneline -- laravel/public/assets/css/rc-erp.css → last commit touching compiled CSS is f2544b6 (Phase 11, Jul 26 07:41 UTC).
+- Ran git log for godown.blade.php → 4 later commits (e1f99a2, 9519ff4, 2a02cf3, cdfe719) redesigned it (514/2/885/516 lines) but NONE touched rc-erp.css.
+- Confirmed via git show --stat for each of the 4 commits — none list rc-erp.css as a changed file.
+- Ran git diff --stat f2544b6 HEAD -- rc-erp.css → EMPTY. Committed CSS unchanged since Phase 11 (STALE).
+- Grep-verified 18 new godown utility classes (bg-indigo-600, from-orange-400, text-slate-500..900, lg:grid-cols-4, bg-yellow-400, etc.) → ALL 0 matches in committed CSS.
+- Grep-verified Phase-11-era classes (bg-amber-500, bg-orange-500, size-9, rounded-xl, bg-slate-800) → all PRESENT (1-3 matches each).
+- Wrote /home/z/my-project/debugRC/laravel/docs/css-build-investigation.md — full evidence-based root-cause analysis, timeline, reproduction steps, architecture assessment.
+- Wrote /home/z/my-project/debugRC/laravel/docs/css-build-recommendation.md — evaluated 4 options (A build-on-deploy, B commit-CSS+guardrail, C Play CDN, D hybrid); recommended Option B with 5 targeted changes; risk assessment.
+- Wrote /home/z/my-project/debugRC/laravel/docs/css-build-action-plan.md — 7-phase implementation plan (immediate fix → cache-busting → @source directive → pre-commit hook → Vite removal → CI guard → docs), with verification matrix and approval gate.
+- NO code was modified. NO Blade, NO CSS, NO config files touched. Pure investigation + documentation as instructed.
+
+Stage Summary:
+- ROOT CAUSE (single): The compiled Tailwind CSS is committed to git and served statically, but 4 consecutive godown-redesign commits skipped the mandatory `build:css` step, so GitHub holds a stale stylesheet missing 18 utility classes. git pull faithfully reproduces the stale file locally. Tailwind v4 correctly purged the missing classes because the build that would emit them never ran before commit.
+- This is a PROCESS failure (implicit, unenforced rebuild discipline), not an architecture bug. The core Tailwind v4 setup is sound; the dead Vite pipeline and missing cache-busting are secondary issues.
+- RECOMMENDATION: Option B — keep committing compiled CSS, add a pre-commit hook that auto-rebuilds + re-stages rc-erp.css on Blade changes, add ?v=filemtime cache-busting, add explicit @source directive, remove dead Vite pipeline, add CI guard, document in README. This satisfies the user's "git pull → refresh → works" workflow and makes the stale-CSS failure mode structurally impossible.
+- DELIVERABLES (3 markdown files in laravel/docs/): css-build-investigation.md, css-build-recommendation.md, css-build-action-plan.md. All evidence-backed, all reproducible.
+- STATUS: Investigation complete. Awaiting user approval before executing any phase of the action plan.
