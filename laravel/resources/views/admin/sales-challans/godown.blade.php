@@ -616,7 +616,7 @@
                         @if ($warehousesEmpty) disabled @endif>
                     <x-erp.icon name="save" class="size-4" /> Save godown
                 </button>
-                <a href="{{ route('admin.sales-challans.issue', $invoice) }}"
+                <a href="{{ route('admin.sales-challans.challan-form', $invoice) }}"
                    class="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white shadow-md transition-all bg-gradient-to-r from-amber-400 to-yellow-500 hover:from-amber-500 hover:to-yellow-600 min-w-[180px]">
                     <x-erp.icon name="check-circle" class="size-4" /> Finalize challan
                 </a>
