@@ -185,6 +185,7 @@
 
     {{-- Select2 + DataTables --}}
     <link href="/assets/css/select2.min.css" rel="stylesheet">
+    <link href="/assets/css/select2-bootstrap-5-theme.min.css" rel="stylesheet">
     <script src="/assets/js/bootstrep/select2.min.js"></script>
     <link rel="stylesheet" href="/assets/css/jquery.dataTables.min.css">
     <script src="/assets/js/bootstrep/jquery.dataTables.min.js"></script>

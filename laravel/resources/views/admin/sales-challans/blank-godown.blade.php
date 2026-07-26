@@ -171,6 +171,78 @@
         </div>
     </div>
 
+    {{-- ===== ITEMS LIST (read-only — what the warehouse will pick) ===== --}}
+    <section class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div class="flex items-center gap-2.5 border-b border-amber-200 bg-amber-50 px-4 py-3 md:px-5">
+            <span class="flex size-8 items-center justify-center rounded-md bg-amber-100 text-amber-700">
+                <x-erp.icon name="package" class="size-[18px]" />
+            </span>
+            <h2 class="text-sm font-semibold text-amber-900 m-0">Invoice items</h2>
+            <div class="ml-auto">
+                <span class="inline-flex items-center rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-white">{{ $itemCount }} line{{ $itemCount === 1 ? '' : 's' }}</span>
+            </div>
+        </div>
+
+        @if ($invoice->items->isEmpty())
+            <div class="p-6 text-center">
+                <x-erp.icon name="inbox" class="size-10 text-slate-300 mx-auto mb-2" />
+                <p class="text-sm font-medium text-slate-600 m-0">This invoice has no line items.</p>
+                <p class="text-xs text-slate-400 mt-1 m-0">Add items to the invoice first before printing the blank godown copy.</p>
+            </div>
+        @else
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm border-collapse min-w-[640px]" id="blankGodownItemsTable">
+                    <thead>
+                        <tr>
+                            <th class="bg-black px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-white first:pl-5">SL</th>
+                            <th class="bg-black px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-white">Product</th>
+                            <th class="bg-black px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-white">SKU / Code</th>
+                            <th class="bg-black px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-white">Ordered qty</th>
+                            <th class="bg-black px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-white">Unit price</th>
+                            <th class="bg-black px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-white last:pr-5">Line total</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        @php $sl = 1; @endphp
+                        @foreach ($invoice->items as $item)
+                            @php
+                                $productName = $item->product?->product_name
+                                    ?? ($item->product_name ?? '—');
+                                $productCode = $item->product?->product_code
+                                    ?? ($item->product_code ?? '');
+                                $qty = (float) ($item->qty ?? 0);
+                                $unitPrice = (float) ($item->rate ?? 0);
+                                $lineTotal = (float) ($item->amount ?? ($qty * $unitPrice));
+                            @endphp
+                            <tr class="hover:bg-slate-50/60 transition-colors">
+                                <td class="px-3 py-2.5 text-slate-500 first:pl-5">{{ $sl++ }}</td>
+                                <td class="px-3 py-2.5 font-medium text-slate-800">{{ $productName }}</td>
+                                <td class="px-3 py-2.5 font-mono text-xs text-slate-500">
+                                    @if ($productCode) {{ $productCode }} @else <span class="text-slate-300">—</span> @endif
+                                </td>
+                                <td class="px-3 py-2.5 text-right font-mono text-slate-700">{{ number_format($qty, 2) }}</td>
+                                <td class="px-3 py-2.5 text-right font-mono text-slate-700">Tk {{ number_format($unitPrice, 2) }}</td>
+                                <td class="px-3 py-2.5 text-right font-mono font-semibold text-slate-900 last:pr-5">Tk {{ number_format($lineTotal, 2) }}</td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                    <tfoot>
+                        <tr class="border-t-2 border-slate-200 bg-slate-50">
+                            <td colspan="5" class="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 first:pl-5">Invoice total</td>
+                            <td class="px-3 py-3 text-right font-mono font-bold text-slate-900 last:pr-5">Tk {{ number_format($invoiceTotal, 2) }}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+            <div class="border-t border-slate-100 bg-amber-50/40 px-4 py-3 md:px-5">
+                <p class="text-xs text-amber-800 m-0 flex items-start gap-2">
+                    <x-erp.icon name="info" class="size-3.5 mt-0.5 shrink-0" />
+                    <span>This read-only list shows what the warehouse team will pick. The blank godown copy you print here will contain empty <strong>CTN</strong> and <strong>Warehouse</strong> columns to be filled in by hand on the warehouse floor.</span>
+                </p>
+            </div>
+        @endif
+    </section>
+
     {{-- ===== MAIN FORM ===== --}}
     <form method="POST" action="{{ route('admin.sales-challans.store-blank-godown', $invoice) }}">
         @csrf
