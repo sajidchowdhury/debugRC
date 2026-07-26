@@ -32,29 +32,6 @@
     'tabs' => null,
 ])
 
-@php
-    // Active branches for the switcher dropdown (small list, cached per request)
-    $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
-    $currentBranchId = session('branch_id');
-    $currentBranchCode = session('branch_code');
-
-    // Current user role for the badge
-    $role = auth()->user()?->getRole() ?? 'user';
-    $roleMap = [
-        'admin'            => ['label' => 'Admin',          'label_bn' => 'অ্যাডমিন',      'classes' => 'bg-gray-100 text-gray-700 border-gray-300'],
-        'superadmin'       => ['label' => 'Super Admin',    'label_bn' => 'সুপার অ্যাডমিন','classes' => 'bg-gray-100 text-gray-700 border-gray-300'],
-        'manager'          => ['label' => 'Manager',        'label_bn' => 'ম্যানেজার',     'classes' => 'bg-cyan-100 text-cyan-700 border-cyan-300'],
-        'sales_manager'    => ['label' => 'SM',             'label_bn' => 'বিক্রেতা',       'classes' => 'bg-amber-100 text-amber-700 border-amber-300'],
-        'warehouse_manager'=> ['label' => 'WM',             'label_bn' => 'গুদাম',         'classes' => 'bg-orange-100 text-orange-700 border-orange-300'],
-        'dispatcher'       => ['label' => 'Dispatcher',     'label_bn' => 'ডিসপ্যাচার',    'classes' => 'bg-gray-100 text-gray-700 border-gray-300'],
-        'accountant'       => ['label' => 'Accountant',     'label_bn' => 'হিসাবরক্ষক',    'classes' => 'bg-gray-100 text-gray-700 border-gray-300'],
-    ];
-    $roleCfg = $roleMap[$role] ?? ['label' => ucfirst($role), 'label_bn' => '', 'classes' => 'bg-gray-100 text-gray-700 border-gray-300'];
-
-    // Can this user switch branches? (admin/superadmin/manager only)
-    $canSwitchBranch = in_array($role, ['admin', 'superadmin', 'manager']);
-@endphp
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -102,106 +79,8 @@
 </head>
 <body class="bg-gradient-to-b from-amber-50/30 to-white min-h-screen flex flex-col font-sans text-gray-900">
 
-    {{-- ==================== STICKY NAV (no-print) ==================== --}}
-    <div class="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-amber-200 shadow-sm no-print">
-        <div class="px-4 py-2">
-
-            {{-- Row 1: hamburger + brand + role + branch switcher + notification bell --}}
-            <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
-                <div class="flex items-center gap-3">
-                    {{-- Mobile sidebar toggle (mirrors layouts/admin.blade.php) --}}
-                    <button type="button" class="btn btn-outline-dark btn-sm d-lg-none" onclick="toggleSidebar()" aria-label="Toggle menu">
-                        <i class="fas fa-bars"></i>
-                    </button>
-                    <div class="bg-gradient-to-r from-amber-500 to-orange-500 rounded-lg px-3 py-1.5 text-white font-bold text-sm shadow">RC ERP</div>
-                    <span class="text-xs text-amber-700 font-medium hidden sm:inline">আর সি বণিক — Sales</span>
-                </div>
-                <div class="flex items-center gap-2 flex-wrap">
-                    {{-- Role badge (read-only — real role switching = re-login) --}}
-                    <span class="inline-flex items-center gap-1 font-medium text-xs rounded-full px-2.5 py-1 border {{ $roleCfg['classes'] }}">
-                        <x-erp.icon name="users" class="size-3" />
-                        {{ $roleCfg['label'] }}@if ($roleCfg['label_bn']) / {{ $roleCfg['label_bn'] }}@endif
-                    </span>
-
-                    {{-- Branch switcher (admin/manager only) --}}
-                    @if ($canSwitchBranch && $branches->isNotEmpty())
-                        <form method="POST" action="{{ route('branch.switch') }}" class="inline-flex items-center gap-1 bg-amber-50/60 border border-amber-200 rounded-full px-2.5 py-1">
-                            @csrf
-                            <x-erp.icon name="map-pin" class="size-3 text-amber-600" />
-                            <select name="branch_id" onchange="this.form.submit()"
-                                class="bg-transparent border-0 text-xs font-medium text-amber-900 outline-none cursor-pointer focus:ring-0"
-                                aria-label="Switch branch">
-                                @foreach ($branches as $branch)
-                                    <option value="{{ $branch->id }}" {{ (string) $currentBranchId === (string) $branch->id ? 'selected' : '' }}>
-                                        {{ $branch->branch_name }} ({{ $branch->branch_code }})
-                                    </option>
-                                @endforeach
-                            </select>
-                        </form>
-                    @elseif ($branches->isNotEmpty())
-                        {{-- Read-only branch pill for non-admin users --}}
-                        <span class="inline-flex items-center gap-1 bg-amber-50/60 border border-amber-200 rounded-full px-2.5 py-1 text-xs font-medium text-amber-900">
-                            <x-erp.icon name="map-pin" class="size-3 text-amber-600" />
-                            {{ session('branch_name', 'No Branch') }}
-                        </span>
-                    @endif
-
-                    {{-- Notification bell (links to notification rules page; Phase 10 wires unread count) --}}
-                    @can('view-notification-rules')
-                        <a href="{{ route('admin.notifications.rules') }}" class="relative inline-flex items-center justify-center size-8 rounded-full bg-amber-50/60 border border-amber-200 text-amber-700 hover:bg-amber-100 transition-colors" title="Notifications">
-                            <x-erp.icon name="bell" class="size-4" />
-                        </a>
-                    @endcan
-
-                    {{-- User menu (logout) --}}
-                    <div class="dropdown">
-                        <button type="button" class="inline-flex items-center gap-1.5 bg-amber-50/60 border border-amber-200 rounded-full px-2.5 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100 transition-colors" data-bs-toggle="dropdown" aria-expanded="false">
-                            <x-erp.icon name="users" class="size-3" />
-                            <span class="max-w-[100px] truncate">{{ auth()->user()?->username ?? 'User' }}</span>
-                        </button>
-                        <ul class="dropdown-menu dropdown-menu-end shadow">
-                            <li class="dropdown-item-text">
-                                <strong>{{ auth()->user()?->employee?->name ?? auth()->user()?->username }}</strong><br>
-                                <small class="text-muted">{{ $role }}</small>
-                            </li>
-                            <li><hr class="dropdown-divider"></li>
-                            <li>
-                                <a class="dropdown-item" href="{{ route('dashboard') }}">
-                                    <i class="fas fa-tachometer-alt me-2"></i> Dashboard
-                                </a>
-                            </li>
-                            <li><hr class="dropdown-divider"></li>
-                            <li>
-                                <form method="POST" action="{{ route('logout') }}">
-                                    @csrf
-                                    <button type="submit" class="dropdown-item text-danger">
-                                        <i class="fas fa-sign-out-alt me-2"></i> Logout
-                                    </button>
-                                </form>
-                            </li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-
-            {{-- Row 2: optional tab strip (via $tabs prop) --}}
-            @isset($tabs)
-                <div class="flex flex-wrap gap-1.5 overflow-x-auto pb-1">
-                    @foreach ($tabs as $tab)
-                        @php
-                            $isActive = !empty($tab['active']);
-                            $tabClass = $isActive
-                                ? 'nav-btn active text-white'
-                                : 'nav-btn text-amber-700 hover:bg-amber-50';
-                        @endphp
-                        <a href="{{ $tab['href'] }}" class="{{ $tabClass }} rounded-full px-3 py-1 text-xs font-medium border border-amber-200 whitespace-nowrap">
-                            {{ $tab['label'] }}
-                        </a>
-                    @endforeach
-                </div>
-            @endisset
-        </div>
-    </div>
+    {{-- ==================== STICKY NAV (unified top-nav component — shared with layouts.admin) ==================== --}}
+    <x-erp.top-nav :tabs="$tabs" />
 
     {{-- ==================== MAIN LAYOUT: SIDEBAR + CONTENT ==================== --}}
     <div class="container-fluid flex-1">
@@ -355,7 +234,7 @@
     </div>
 
     {{-- ==================== STICKY FOOTER (no-print) ==================== --}}
-    <footer class="no-print shrink-0 bg-amber-900 text-amber-100 py-3 text-center text-xs">
+    <footer class="no-print shrink-0 bg-amber-900 text-amber-100 py-3 text-center text-xs mt-auto">
         RC ERP / আর সি বণিক — Warehouse Distribution System © {{ date('Y') }}
     </footer>
 
