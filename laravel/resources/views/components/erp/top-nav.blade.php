@@ -15,11 +15,12 @@
   mark-all-read, SSE real-time push via notification.js) that was previously
   only on layouts/admin — now available app-wide.
 
-  Usage:
-    <x-erp.top-nav />                       {{-- no tabs --}}
-    <x-erp.top-nav :tabs="$tabs" />         {{-- with tab strip --}}
+  Usage (do NOT use blade-comment delimiters inside this header — they are
+  not nestable and would break this block):
+    <x-erp.top-nav />                  (no tabs)
+    <x-erp.top-nav :tabs="$tabs" />    (with tab strip)
 
-  Dependencies (must be loaded in the layout's <head> BEFORE this component's
+  Dependencies (must be loaded in the layout's head BEFORE this component's
   @push('scripts') runs):
     - jQuery 3.6  (for $() in dropdown JS)
     - Bootstrap bundle (for data-bs-toggle="dropdown")
