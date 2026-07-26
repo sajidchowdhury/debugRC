@@ -108,10 +108,16 @@
   `challan/create.php` view (Bootstrap). Visual parity with the lagachy
   "Godown Prep" screen. All Laravel form field names (warehouse_assignments[],
   dispatched_ctn[], dispatcher_id[], transport_cost) + JS hooks preserved.
+
+  Top-bar (hero) intentionally mirrors admin/sales-challans/issue.blade.php
+  (pure orange gradient + icon box + bilingual title + journey-stepper inside)
+  so every page in the Challan module shares the identical header treatment.
+  Body sections use the polished SectionCard pattern (amber-50 header strip
+  with icon chip) consistent with the rest of the RC ERP design system.
 --}}
-<div class="challan-scope pb-24">
+<div class="space-y-5 challan-scope pb-24">
     {{-- Breadcrumb --}}
-    <nav aria-label="Breadcrumb" class="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap mb-3">
+    <nav aria-label="Breadcrumb" class="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
         <a href="{{ route('dashboard') }}" class="hover:text-amber-700 transition-colors">Sales</a>
         <x-erp.icon name="chevron-right" class="size-3 text-gray-400" />
         <a href="{{ route('admin.sales-challans.index') }}" class="hover:text-amber-700 transition-colors">Challan</a>
@@ -119,32 +125,120 @@
         <span class="text-amber-800 font-medium">Godown Preparation</span>
     </nav>
 
-    {{-- ===== HERO (amber-600 → indigo-600, 135deg gradient — legacy parity) ===== --}}
-    <header class="flex justify-between items-start gap-4 flex-wrap mb-4 px-5 py-4 rounded-2xl text-white shadow-[0_12px_32px_rgba(217,119,6,0.28)] bg-gradient-to-br from-amber-600 to-indigo-600">
-        <div>
-            <h1 class="text-xl font-bold flex items-center gap-2 m-0">
-                <i class="fas fa-dolly"></i> Godown &amp; Challan
-            </h1>
-            <p class="mt-1 text-sm opacity-95 flex items-center gap-1.5 flex-wrap">
-                <span class="inline-block px-2 py-0.5 bg-white/20 rounded font-bold">{{ $invoice->invoice_code }}</span>
-                <span>·</span>
-                <span>{{ $branchName }}</span>
-            </p>
-            <span class="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 bg-white/20 rounded text-xs font-semibold">
-                <i class="fas fa-map-marker-alt"></i> Warehouse dispatch
-            </span>
+    {{-- ===== HERO (pure orange gradient — parity with issue.blade.php) ===== --}}
+    <div class="bg-gradient-to-r from-orange-400 to-orange-500 rounded-xl p-5 md:p-6 shadow-lg">
+        <div class="flex items-start justify-between flex-wrap gap-4">
+            <div class="flex items-start gap-4">
+                <div class="bg-white/20 backdrop-blur-sm rounded-xl size-14 flex items-center justify-center text-white shrink-0">
+                    <x-erp.icon name="warehouse" class="size-7" />
+                </div>
+                <div>
+                    <p class="text-amber-100 text-xs font-medium uppercase tracking-wider">গুদাম ও চালান / Godown &amp; Challan</p>
+                    <div class="flex items-center gap-3 flex-wrap mt-1">
+                        <h1 class="text-2xl font-bold text-white m-0">Godown &amp; Challan</h1>
+                        <span class="bg-white/20 rounded-full px-3 py-1 text-sm font-mono text-white">{{ $invoice->invoice_code }}</span>
+                    </div>
+                    <p class="text-amber-100 text-sm mt-1.5 flex items-center gap-2 flex-wrap">
+                        <span class="inline-flex items-center gap-1">
+                            <x-erp.icon name="map-pin" class="size-3.5" />
+                            {{ $branchName }}
+                        </span>
+                        <span class="text-amber-200">·</span>
+                        <span>Step 2 of 4 — Prepare warehouse dispatch. Stock is reserved, not yet moved.</span>
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2 flex-wrap">
+                <a href="{{ route('admin.sales-challans.index') }}"
+                   class="inline-flex items-center gap-1.5 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-3 py-2 text-xs font-medium transition-colors">
+                    <x-erp.icon name="arrow-left" class="size-3.5" /> Back to list
+                </a>
+                <a href="{{ route('admin.sales-invoices.show', $invoice) }}"
+                   class="inline-flex items-center gap-1.5 bg-white text-amber-700 hover:bg-amber-50 rounded-lg px-3 py-2 text-xs font-semibold transition-colors shadow-sm">
+                    <x-erp.icon name="file-text" class="size-3.5" /> View invoice
+                </a>
+            </div>
         </div>
-        <div class="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
-            <a href="{{ route('admin.sales-challans.index') }}"
-               class="inline-flex items-center gap-1.5 bg-white text-gray-700 hover:bg-gray-100 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors shadow-sm">
-                <x-erp.icon name="arrow-left" class="size-3.5" /> List
-            </a>
+
+        {{-- 4-step workflow indicator (inside hero — parity with issue page) --}}
+        <x-erp.journey-stepper :current="2" />
+    </div>
+
+    {{-- ===== SUMMARY (4-col grid, icon-chip cards — Next.js parity) ===== --}}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {{-- Customer --}}
+        <div class="group rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md">
+            <div class="flex items-start justify-between gap-2">
+                <div class="flex flex-col gap-1 min-w-0">
+                    <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 m-0">Customer</p>
+                    <p class="text-base font-bold leading-snug break-words text-slate-800 m-0">{{ $customerName }}</p>
+                </div>
+                <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                    <x-erp.icon name="users" class="size-[18px]" />
+                </span>
+            </div>
+            <div class="mt-2.5">
+                @if ($customerMobile)
+                    <p class="font-mono text-xs text-slate-500 m-0">{{ $customerMobile }}</p>
+                @else
+                    <p class="text-xs text-slate-400 m-0">— no mobile —</p>
+                @endif
+            </div>
         </div>
-    </header>
+        {{-- Invoice date --}}
+        <div class="group rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md">
+            <div class="flex items-start justify-between gap-2">
+                <div class="flex flex-col gap-1 min-w-0">
+                    <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 m-0">Invoice date</p>
+                    <p class="text-base font-bold leading-snug break-words text-slate-800 m-0">{{ $invoiceDate }}</p>
+                </div>
+                <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+                    <x-erp.icon name="clock" class="size-[18px]" />
+                </span>
+            </div>
+            <div class="mt-2.5">
+                @if ($salesmanName)
+                    <p class="text-xs text-slate-500 m-0"><span class="text-slate-400">Salesman:</span> {{ $salesmanName }}</p>
+                @else
+                    <p class="text-xs text-slate-400 m-0">— no salesman —</p>
+                @endif
+            </div>
+        </div>
+        {{-- Items --}}
+        <div class="group rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md">
+            <div class="flex items-start justify-between gap-2">
+                <div class="flex flex-col gap-1 min-w-0">
+                    <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 m-0">Items</p>
+                    <p class="text-base font-bold leading-snug break-words text-slate-800 m-0">{{ $itemCount }}</p>
+                </div>
+                <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                    <x-erp.icon name="box" class="size-[18px]" />
+                </span>
+            </div>
+            <div class="mt-2.5">
+                <p class="text-xs text-slate-500 m-0">line{{ $itemCount === 1 ? '' : 's' }} on this invoice</p>
+            </div>
+        </div>
+        {{-- Invoice total (highlight card with status pill) --}}
+        <div class="group rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md">
+            <div class="flex items-start justify-between gap-2">
+                <div class="flex flex-col gap-1 min-w-0">
+                    <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 m-0">Invoice total</p>
+                    <p class="text-base font-bold leading-snug break-words text-slate-800 m-0" id="challan-invoice-total-display">Tk {{ number_format($invoiceTotal, 2) }}</p>
+                </div>
+                <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-600">
+                    <x-erp.icon name="banknote" class="size-[18px]" />
+                </span>
+            </div>
+            <div class="mt-2.5">
+                <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium {{ $statusPillClass }}">{{ $pipelineLabel }}</span>
+            </div>
+        </div>
+    </div>
 
     {{-- edit-godown policy callout (blue — godown_prepared stage) --}}
     @if ($isEditGodown)
-        <div class="flex items-start gap-2.5 mb-4 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-gray-800">
+        <div class="flex items-start gap-2.5 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-gray-800">
             <i class="fas fa-lock text-blue-600 mt-0.5"></i>
             <div>
                 <strong>Godown saved</strong> — warehouses and dispatchers are locked.
@@ -154,87 +248,6 @@
             </div>
         </div>
     @endif
-
-    {{-- ===== STEPS (separate white card, centered — legacy parity) ===== --}}
-    <div class="flex items-center justify-center gap-0 mb-4 px-4 py-3 bg-white border border-stone-200 rounded-2xl">
-        @php
-            // Step state resolver (legacy is-done/is-active logic).
-            $stepStates = [
-                1 => 'done',                                                              // Invoice always done here
-                2 => $godownReady ? 'done' : 'active',                                    // Godown
-                3 => $invoice->is_challan_issued ? 'done' : ($godownReady ? 'active' : 'pending'), // Challan
-            ];
-            $dotClass = [
-                'done'    => 'bg-emerald-600 border-emerald-600 text-white',
-                'active'  => 'bg-amber-600/15 border-amber-600 text-amber-700',
-                'pending' => 'bg-stone-100 border-stone-200 text-stone-500',
-            ];
-            $labelClass = [
-                'done'    => 'text-gray-800',
-                'active'  => 'text-gray-800',
-                'pending' => 'text-stone-500',
-            ];
-            $lineDone = 'bg-emerald-600';
-            $linePending = 'bg-stone-200';
-        @endphp
-        {{-- Step 1: Invoice (done) --}}
-        <div class="flex flex-col items-center gap-1 min-w-[72px]">
-            <span class="size-8 rounded-full flex items-center justify-center text-xs font-bold border-2 {{ $dotClass[$stepStates[1]] }}">
-                <x-erp.icon name="check" class="size-4" />
-            </span>
-            <span class="text-[0.7rem] font-semibold {{ $labelClass[$stepStates[1]] }}">Invoice</span>
-        </div>
-        <div class="flex-1 max-w-12 h-0.5 mx-1 mb-4 rounded-full {{ $stepStates[2] === 'done' ? $lineDone : $linePending }}"></div>
-        {{-- Step 2: Godown --}}
-        <div class="flex flex-col items-center gap-1 min-w-[72px]">
-            <span class="size-8 rounded-full flex items-center justify-center text-xs font-bold border-2 {{ $dotClass[$stepStates[2]] }}">
-                @if ($stepStates[2] === 'done')<x-erp.icon name="check" class="size-4" />@else 2 @endif
-            </span>
-            <span class="text-[0.7rem] font-semibold {{ $labelClass[$stepStates[2]] }}">Godown</span>
-        </div>
-        <div class="flex-1 max-w-12 h-0.5 mx-1 mb-4 rounded-full {{ $stepStates[3] === 'done' || $stepStates[3] === 'active' ? $lineDone : $linePending }}"></div>
-        {{-- Step 3: Challan --}}
-        <div class="flex flex-col items-center gap-1 min-w-[72px]">
-            <span class="size-8 rounded-full flex items-center justify-center text-xs font-bold border-2 {{ $dotClass[$stepStates[3]] }}">
-                @if ($stepStates[3] === 'done')<x-erp.icon name="check" class="size-4" />@else 3 @endif
-            </span>
-            <span class="text-[0.7rem] font-semibold {{ $labelClass[$stepStates[3]] }}">Challan</span>
-        </div>
-    </div>
-
-    {{-- ===== SUMMARY (4-col grid, plain white cards — legacy parity) ===== --}}
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 mb-4">
-        {{-- Customer --}}
-        <div class="px-3 py-2.5 bg-white border border-stone-200 rounded-xl">
-            <span class="block text-[0.68rem] font-semibold uppercase tracking-wide text-stone-500">Customer</span>
-            <span class="block text-sm font-bold mt-0.5 text-amber-700">{{ $customerName }}</span>
-            <span class="block text-xs text-stone-500 mt-0.5">
-                @if ($customerMobile) <span class="font-mono">{{ $customerMobile }}</span> @else — no mobile — @endif
-            </span>
-        </div>
-        {{-- Invoice date --}}
-        <div class="px-3 py-2.5 bg-white border border-stone-200 rounded-xl">
-            <span class="block text-[0.68rem] font-semibold uppercase tracking-wide text-stone-500">Invoice date</span>
-            <span class="block text-sm font-bold mt-0.5 text-amber-700">{{ $invoiceDate }}</span>
-            <span class="block text-xs text-stone-500 mt-0.5">
-                @if ($salesmanName) {{ $salesmanName }} @else — no salesman — @endif
-            </span>
-        </div>
-        {{-- Items --}}
-        <div class="px-3 py-2.5 bg-white border border-stone-200 rounded-xl">
-            <span class="block text-[0.68rem] font-semibold uppercase tracking-wide text-stone-500">Items</span>
-            <span class="block text-sm font-bold mt-0.5 text-amber-700">{{ $itemCount }}</span>
-            <span class="block text-xs text-stone-500 mt-0.5">line{{ $itemCount === 1 ? '' : 's' }}</span>
-        </div>
-        {{-- Invoice total (highlight card — amber→indigo tint) --}}
-        <div class="px-3 py-2.5 bg-gradient-to-br from-amber-600/[0.08] to-indigo-600/[0.06] border border-amber-600/30 rounded-xl">
-            <span class="block text-[0.68rem] font-semibold uppercase tracking-wide text-stone-500">Invoice total</span>
-            <span class="block text-sm font-bold mt-0.5" id="challan-invoice-total-display">Tk {{ number_format($invoiceTotal, 2) }}</span>
-            <span class="block text-xs mt-0.5">
-                <span class="inline-block px-1.5 py-0.5 rounded-full text-[0.7rem] font-bold {{ $statusPillClass }}">{{ $pipelineLabel }}</span>
-            </span>
-        </div>
-    </div>
 
     {{-- Empty state — no active warehouses --}}
     @if ($warehousesEmpty)
@@ -265,100 +278,126 @@
         @else
 
         {{-- ===== Delivery details panel ===== --}}
-        <section class="mb-4 bg-white border border-stone-200 rounded-2xl overflow-hidden shadow-[0_1px_4px_rgba(28,25,23,0.05)]">
-            <div class="flex items-center gap-2 px-4 py-2.5 bg-[#fffbeb] border-b border-stone-200 font-bold text-sm text-gray-800">
-                <i class="fas fa-user text-amber-600"></i>
-                <span>Delivery details</span>
+        <section class="mb-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="flex items-center gap-2.5 border-b border-amber-200 bg-amber-50 px-4 py-3 md:px-5">
+                <span class="flex size-8 items-center justify-center rounded-md bg-amber-100 text-amber-700">
+                    <x-erp.icon name="users" class="size-[18px]" />
+                </span>
+                <h2 class="text-sm font-semibold text-amber-900 m-0">Delivery details</h2>
             </div>
-            <div class="p-4">
-                <p class="text-sm text-stone-500 mb-0 flex items-start gap-1.5">
-                    <i class="fas fa-location-dot mt-0.5 text-stone-400"></i>
-                    <span>{{ $customerAddress }}</span>
-                </p>
+            <div class="p-4 md:p-5">
+                <dl class="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2 m-0">
+                    <div class="flex flex-col gap-0.5">
+                        <dt class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 m-0">Customer</dt>
+                        <dd class="text-sm font-medium text-slate-800 m-0">{{ $customerName }}</dd>
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <dt class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 m-0">Mobile</dt>
+                        <dd class="text-sm font-medium text-slate-800 font-mono m-0">@if ($customerMobile) {{ $customerMobile }} @else — @endif</dd>
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <dt class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 m-0">Salesman</dt>
+                        <dd class="text-sm font-medium text-slate-800 m-0">@if ($salesmanName) {{ $salesmanName }} @else — @endif</dd>
+                    </div>
+                    <div class="flex flex-col gap-0.5">
+                        <dt class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 m-0">Address</dt>
+                        <dd class="text-sm font-medium text-slate-800 m-0">{{ $customerAddress }}</dd>
+                    </div>
+                </dl>
             </div>
         </section>
 
-        {{-- ===== Transport cost panel (input + helper only — legacy parity) ===== --}}
-        <section class="mb-4 bg-white border border-stone-200 rounded-2xl overflow-hidden shadow-[0_1px_4px_rgba(28,25,23,0.05)]">
-            <div class="flex items-center gap-2 px-4 py-2.5 bg-[#fffbeb] border-b border-stone-200 font-bold text-sm text-gray-800">
-                <i class="fas fa-truck text-amber-600"></i>
-                <span>Transport cost</span>
+        {{-- ===== Transport cost panel ===== --}}
+        <section class="mb-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="flex items-center gap-2.5 border-b border-amber-200 bg-amber-50 px-4 py-3 md:px-5">
+                <span class="flex size-8 items-center justify-center rounded-md bg-amber-100 text-amber-700">
+                    <x-erp.icon name="truck" class="size-[18px]" />
+                </span>
+                <h2 class="text-sm font-semibold text-amber-900 m-0">Transport cost</h2>
             </div>
-            <div class="p-4">
-                <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-start">
-                    <div class="md:col-span-4 lg:col-span-3">
-                        <label class="block text-sm font-medium text-gray-700 mb-1" for="godown_transport_cost">Amount (Tk)</label>
+            <div class="p-4 md:p-5">
+                <div class="flex flex-col gap-4 md:flex-row md:items-end md:gap-6">
+                    <div class="flex flex-col gap-1.5 md:w-56">
+                        <label class="text-xs font-medium text-slate-500" for="godown_transport_cost">Amount (Tk)</label>
                         <input type="number" step="0.01" min="0" id="godown_transport_cost" name="transport_cost"
-                               class="form-control w-full font-semibold min-h-[44px] border border-stone-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-400"
+                               class="w-full h-10 font-mono border border-slate-300 rounded-md px-3 text-sm outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400"
                                value="{{ old('transport_cost', number_format($transportCostDefault, 2, '.', '')) }}"
                                data-sub-total="{{ $subTotal }}"
                                data-discount="{{ $discountAmount }}"
                                inputmode="decimal">
                     </div>
-                    <div class="md:col-span-8">
-                        <p class="text-xs text-stone-500 mt-0 mb-0 md:pt-7">
-                            Saved with <strong>Save godown</strong> (updates invoice total).
-                            You can change it again before finalizing the challan.
-                        </p>
-                    </div>
+                    <button type="button" id="chApplyTransport"
+                            class="inline-flex h-10 items-center gap-2 rounded-md bg-yellow-400 text-slate-900 shadow-sm hover:bg-yellow-500 hover:text-slate-900 px-4 text-sm font-medium transition-colors">
+                        <x-erp.icon name="check" class="size-4" /> Apply
+                    </button>
+                    <p class="text-xs text-slate-500 md:flex-1 m-0">
+                        <span class="text-slate-400">Saved with</span>
+                        <span class="font-medium text-slate-700">Save godown</span>
+                        <span class="text-slate-400">or</span>
+                        <span class="font-medium text-slate-700">Update CTN</span>
+                        <span class="text-slate-400">(updates invoice total). You can change it again before finalize challan.</span>
+                    </p>
                 </div>
             </div>
         </section>
 
         {{-- ===== Dispatch items panel ===== --}}
-        <section class="mb-4 bg-white border border-stone-200 rounded-2xl overflow-hidden shadow-[0_1px_4px_rgba(28,25,23,0.05)]">
-            <div class="flex items-center gap-2 px-4 py-2.5 bg-[#fffbeb] border-b border-stone-200 font-bold text-sm text-gray-800">
-                <i class="fas fa-boxes-stacked text-amber-600"></i>
-                <span>Dispatch items</span>
-                <span class="ml-auto inline-block px-2 py-0.5 text-xs font-semibold bg-stone-200 text-stone-700 rounded-full">{{ $itemCount }}</span>
+        <section class="mb-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="flex items-center gap-2.5 border-b border-amber-200 bg-amber-50 px-4 py-3 md:px-5">
+                <span class="flex size-8 items-center justify-center rounded-md bg-amber-100 text-amber-700">
+                    <x-erp.icon name="package" class="size-[18px]" />
+                </span>
+                <h2 class="text-sm font-semibold text-amber-900 m-0">Dispatch items <span class="ml-0.5 text-red-500">*</span></h2>
+                <div class="ml-auto">
+                    <span class="inline-flex items-center rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-white">{{ $itemCount }} line{{ $itemCount === 1 ? '' : 's' }}</span>
+                </div>
             </div>
 
-            {{-- Bulk tools bar (cream bg — legacy parity) --}}
+            {{-- Bulk tools bar --}}
             @if (!$warehouses->isEmpty())
-            <div class="px-4 py-3 bg-[#fffbeb] border-b border-stone-200">
-                <div class="flex flex-wrap items-center gap-2">
-                    <label for="chBulkWarehouse" class="text-xs font-semibold text-gray-700 whitespace-nowrap m-0 flex items-center gap-1">
-                        <i class="fas fa-layer-group text-amber-600"></i> Apply warehouse to all
-                    </label>
-                    <select id="chBulkWarehouse" class="form-select form-select-sm min-w-[160px] max-w-[220px]">
-                        <option value="">— Choose warehouse —</option>
-                        @foreach ($warehouses as $w)
-                            <option value="{{ $w->id }}">{{ $w->warehouse_name }}</option>
-                        @endforeach
-                    </select>
-                    <button type="button" id="chApplyBulkWarehouse"
-                            class="inline-flex items-center gap-1.5 bg-amber-400 hover:bg-amber-500 text-white rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors min-h-[36px]">
-                        <x-erp.icon name="check" class="size-3.5" /> Apply
-                    </button>
-                    <button type="button" id="chFillAllCtn"
-                            class="inline-flex items-center gap-1.5 border border-stone-300 hover:bg-stone-50 text-gray-700 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors min-h-[36px]"
-                            title="Copy order CTN to dispatch CTN column">
-                        <i class="fas fa-clone"></i> Fill all CTN
-                    </button>
+            <div class="flex flex-col gap-3 border-b border-slate-200 bg-slate-50/80 px-4 py-3 md:flex-row md:items-center md:px-5">
+                <div class="flex items-center gap-2 text-sm font-medium text-slate-600">
+                    <x-erp.icon name="warehouse" class="size-4 text-slate-400" />
+                    <span>Apply warehouse to all</span>
                 </div>
-                <div class="flex items-center gap-2.5 mt-2">
-                    <div class="flex-1 h-1.5 bg-stone-200 rounded-full overflow-hidden max-w-[280px]" role="progressbar"
+                <select id="chBulkWarehouse" class="form-select form-select-sm h-9 w-full bg-white md:w-56 min-w-[160px]">
+                    <option value="">— Choose warehouse —</option>
+                    @foreach ($warehouses as $w)
+                        <option value="{{ $w->id }}">{{ $w->warehouse_name }}</option>
+                    @endforeach
+                </select>
+                <button type="button" id="chApplyBulkWarehouse"
+                        class="inline-flex h-9 items-center gap-2 rounded-md bg-yellow-400 text-slate-900 shadow-sm hover:bg-yellow-500 hover:text-slate-900 px-4 text-sm font-medium transition-colors">
+                    <x-erp.icon name="check" class="size-4" /> Apply
+                </button>
+                <button type="button" id="chFillAllCtn"
+                        class="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 px-4 text-sm font-medium transition-colors"
+                        title="Copy order CTN to dispatch CTN column">
+                    <i class="fas fa-clone"></i> Fill all CTN
+                </button>
+                <div class="ml-auto flex items-center gap-3 md:w-44 md:flex-col md:items-end md:gap-1">
+                    <span id="chAssignProgressLabel" class="text-xs font-medium text-slate-500 whitespace-nowrap">0 / 0 warehouses set</span>
+                    <div class="h-1.5 w-24 md:w-full rounded-full bg-slate-200 overflow-hidden" role="progressbar"
                          aria-valuenow="0" aria-valuemin="0" aria-valuemax="{{ $itemCount }}" aria-label="Warehouse assignment progress">
-                        <div id="chAssignProgressBar" class="h-full w-0 bg-gradient-to-r from-amber-600 to-indigo-600 rounded-full transition-all duration-200"></div>
+                        <div id="chAssignProgressBar" class="h-full w-0 bg-gradient-to-r from-amber-500 to-orange-500 rounded-full transition-all duration-200"></div>
                     </div>
-                    <span id="chAssignProgressLabel" class="text-xs text-stone-500 whitespace-nowrap">0 / 0 warehouses set</span>
                 </div>
             </div>
             @endif
 
-            {{-- Items table (stone-900 header — legacy parity) --}}
-            <div class="overflow-x-auto max-h-[min(55vh,520px)] overflow-y-auto">
-                <table class="w-full text-sm border-collapse" id="godownItemsTable">
-                    <thead class="sticky top-0 z-10">
+            {{-- Items table (black header — Next.js parity) --}}
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm border-collapse min-w-[860px]" id="godownItemsTable">
+                    <thead>
                         <tr>
-                            <th class="px-3 py-2 text-left font-semibold whitespace-nowrap bg-stone-900 text-white border border-stone-800">SL</th>
-                            <th class="px-3 py-2 text-left font-semibold whitespace-nowrap bg-stone-900 text-white border border-stone-800">Product</th>
-                            <th class="px-3 py-2 text-right font-semibold whitespace-nowrap bg-stone-900 text-white border border-stone-800">Ordered</th>
-                            <th class="px-3 py-2 text-right font-semibold whitespace-nowrap bg-stone-900 text-white border border-stone-800">CTN</th>
-                            <th class="px-3 py-2 text-left font-semibold whitespace-nowrap bg-stone-900 text-white border border-stone-800">Warehouse <span class="text-red-400">*</span></th>
-                            <th class="px-3 py-2 text-right font-semibold whitespace-nowrap bg-stone-900 text-white border border-stone-800">{{ $isEditGodown ? 'Reserved' : 'Available' }}</th>
-                            <th class="px-3 py-2 text-right font-semibold whitespace-nowrap bg-stone-900 text-white border border-stone-800">Demand (locked)</th>
-                            <th class="px-3 py-2 text-right font-semibold whitespace-nowrap bg-stone-900 text-white border border-stone-800">Disp. CTN <span class="text-stone-400 font-normal">(editable)</span></th>
+                            <th class="bg-black px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-white first:pl-5">SL</th>
+                            <th class="bg-black px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-white">Product</th>
+                            <th class="bg-black px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-white">Ordered</th>
+                            <th class="bg-black px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-white">CTN</th>
+                            <th class="bg-black px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-white">Warehouse <span class="text-red-400">*</span></th>
+                            <th class="bg-black px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-white">{{ $isEditGodown ? 'Reserved' : 'Available' }}</th>
+                            <th class="bg-black px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-white">Demand (locked)</th>
+                            <th class="bg-black px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-white">Disp. CTN</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -368,32 +407,35 @@
                                 $totalAvail = $totalAvailForProduct($item->product_id);
                                 $selectedWid = old('warehouse_assignments.' . $item->id, (string) ($item->warehouse_id ?? ''));
                                 $computedCtn = $computedCtnForItem($item);
+                                $isOdd = $loop->iteration % 2 === 0;
                             @endphp
-                            <tr class="border-b border-stone-100 hover:bg-amber-50/30" data-item-id="{{ $item->id }}">
+                            <tr class="border-b border-slate-100 {{ $isOdd ? 'bg-slate-50/60' : '' }} hover:bg-amber-50/40 transition-colors" data-item-id="{{ $item->id }}">
                                 {{-- SL --}}
-                                <td class="px-3 py-2.5 border border-stone-100">{{ $loop->iteration }}</td>
+                                <td class="px-3 py-3 pl-5 text-center text-sm font-medium text-slate-600">{{ $loop->iteration }}</td>
                                 {{-- Product --}}
-                                <td class="px-3 py-2.5 border border-stone-100 font-semibold text-gray-800">
-                                    @if ($item->product)
-                                        {{ $item->product->product_name }}
-                                        <div class="text-xs text-stone-500 font-normal">{{ $item->product->product_code }}</div>
-                                    @else
-                                        Product #{{ $item->product_id }}
-                                    @endif
+                                <td class="px-3 py-3">
+                                    <div class="flex flex-col">
+                                        @if ($item->product)
+                                            <span class="text-sm font-semibold text-slate-800">{{ $item->product->product_name }}</span>
+                                            <span class="font-mono text-[11px] text-slate-400">{{ $item->product->product_code }}</span>
+                                        @else
+                                            <span class="text-sm font-semibold text-slate-800">Product #{{ $item->product_id }}</span>
+                                        @endif
+                                    </div>
                                 </td>
                                 {{-- Ordered --}}
-                                <td class="px-3 py-2.5 text-right border border-stone-100">{{ number_format((float) $item->qty, 2) }}</td>
+                                <td class="px-3 py-3 text-center text-sm tabular-nums text-slate-700">{{ number_format((float) $item->qty, 2) }}</td>
                                 {{-- CTN (computed) --}}
-                                <td class="px-3 py-2.5 text-right border border-stone-100">{{ number_format($computedCtn, 2) }}</td>
+                                <td class="px-3 py-3 text-center text-sm tabular-nums text-slate-700">{{ number_format($computedCtn, 2) }}</td>
                                 {{-- Warehouse * --}}
-                                <td class="px-3 py-2.5 border border-stone-100">
+                                <td class="px-3 py-3">
                                     @if ($warehouses->isEmpty())
-                                        <span class="bg-red-100 text-red-700 border border-red-300 font-semibold text-xs rounded px-2 py-0.5 inline-flex items-center gap-1">
+                                        <span class="inline-flex items-center gap-1 bg-red-100 text-red-700 border border-red-300 font-semibold text-xs rounded px-2 py-1">
                                             <i class="fas fa-ban"></i> No warehouses
                                         </span>
                                     @else
                                         <select name="warehouse_assignments[{{ $item->id }}]"
-                                                class="form-select form-select-sm warehouse-select w-full min-w-[200px]"
+                                                class="form-select form-select-sm warehouse-select w-full min-w-[180px]"
                                                 data-item-id="{{ $item->id }}"
                                                 data-product-id="{{ $item->product_id }}"
                                                 data-qty="{{ $item->qty }}"
@@ -428,22 +470,25 @@
                                         </select>
                                     @endif
                                 </td>
-                                {{-- Available / Reserved (stock badge — legacy parity) --}}
-                                <td class="px-3 py-2.5 text-right border border-stone-100">
+                                {{-- Available / Reserved (stock badge) --}}
+                                <td class="px-3 py-3 text-center text-sm tabular-nums text-slate-500">
                                     <span id="stock-badge-{{ $item->id }}"
-                                          class="stock-badge inline-block px-2 py-1 rounded text-xs font-bold bg-stone-100 text-stone-500"
+                                          class="stock-badge inline-block px-2 py-1 rounded text-xs font-bold bg-slate-100 text-slate-500"
                                           role="status" aria-live="polite"
                                           data-aria-label="Stock status for this line">—</span>
                                     <span id="avg-cost-{{ $item->id }}" class="hidden avg-cost-display"></span>
                                 </td>
-                                {{-- Demand (locked) — legacy `challan-qty-locked` styling --}}
-                                <td class="px-3 py-2.5 text-right border border-stone-100">
-                                    <span class="inline-block px-2 py-1 font-bold bg-stone-100 rounded border border-dashed border-stone-300">{{ number_format((float) $item->qty, 2) }}</span>
+                                {{-- Demand (locked) --}}
+                                <td class="px-3 py-3 text-center">
+                                    <span class="inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2 py-1 text-sm font-semibold tabular-nums text-slate-700">
+                                        <i class="fas fa-lock text-slate-400" style="font-size:0.7rem;"></i>
+                                        {{ number_format((float) $item->qty, 2) }}
+                                    </span>
                                 </td>
                                 {{-- Disp. CTN (editable) --}}
-                                <td class="px-3 py-2.5 text-right border border-stone-100">
+                                <td class="px-3 py-3">
                                     <input type="number" step="0.01" min="0"
-                                           class="form-control form-control-sm dispatched-ctn-input text-center w-20 inline-block"
+                                           class="form-control form-control-sm dispatched-ctn-input h-9 w-20 text-center font-mono tabular-nums border border-slate-300 rounded-md px-2"
                                            name="dispatched_ctn[{{ $item->id }}]"
                                            value="{{ $ctnForItem($item) }}"
                                            placeholder="CTN"
@@ -457,14 +502,17 @@
         </section>
 
         {{-- ===== Dispatcher(s) panel ===== --}}
-        <section class="mb-4 bg-white border border-stone-200 rounded-2xl overflow-hidden shadow-[0_1px_4px_rgba(28,25,23,0.05)]">
-            <div class="flex items-center gap-2 px-4 py-2.5 bg-[#fffbeb] border-b border-stone-200 font-bold text-sm text-gray-800">
-                <i class="fas fa-users text-amber-600"></i>
-                <span>Dispatcher(s)</span>
-                <span class="text-red-500">*</span>
-                <span class="ml-auto inline-block px-2 py-0.5 text-xs font-semibold bg-amber-100 border border-amber-300 text-amber-800 rounded-full" id="dispatcher-count-badge">{{ $invoice->dispatchers->count() }} selected</span>
+        <section class="mb-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="flex items-center gap-2.5 border-b border-amber-200 bg-amber-50 px-4 py-3 md:px-5">
+                <span class="flex size-8 items-center justify-center rounded-md bg-amber-100 text-amber-700">
+                    <x-erp.icon name="users" class="size-[18px]" />
+                </span>
+                <h2 class="text-sm font-semibold text-amber-900 m-0">Dispatcher(s) <span class="ml-0.5 text-red-500">*</span></h2>
+                <div class="ml-auto">
+                    <span class="inline-flex items-center rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-white" id="dispatcher-count-badge">{{ $invoice->dispatchers->count() }} selected</span>
+                </div>
             </div>
-            <div class="p-4">
+            <div class="p-4 md:p-5">
                 {{-- loading skeleton --}}
                 <div id="dispatcher-loading" class="space-y-2 mb-3" aria-hidden="true">
                     <div class="ch-skeleton h-10 w-full"></div>
@@ -482,40 +530,44 @@
                 <div id="dispatcher-empty" class="hidden mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
                     <i class="fas fa-user-slash text-amber-600 mt-0.5"></i>
                     <div>
-                        <p class="font-medium text-amber-800 text-sm">No dispatchers found</p>
-                        <p class="text-xs text-amber-700 mt-0.5">No active dispatcher-role employees in this invoice's branch.</p>
+                        <p class="font-medium text-amber-800 text-sm m-0">No dispatchers found</p>
+                        <p class="text-xs text-amber-700 mt-0.5 m-0">No active dispatcher-role employees in this invoice's branch.</p>
                     </div>
                 </div>
-                <p class="text-xs text-stone-500 mt-2 mb-0">Select one or more warehouse dispatchers for this delivery.</p>
+                <p class="text-xs text-slate-500 mt-2 mb-0">Select one or more warehouse dispatchers for this delivery.</p>
             </div>
         </section>
 
-        {{-- ===== BOTTOM ACTION BAR (fixed, justify-end — legacy parity) ===== --}}
-        <footer class="fixed bottom-0 inset-x-0 z-40 flex flex-wrap items-center justify-end gap-2 px-4 py-3 bg-white/96 backdrop-blur-sm border-t border-stone-200 shadow-[0_-8px_24px_rgba(28,25,23,0.1)] no-print">
-            <a href="{{ route('admin.sales-invoices.show', $invoice) }}"
-               class="inline-flex items-center justify-center gap-2 rounded-[10px] border border-stone-300 bg-white hover:bg-stone-50 text-gray-700 px-4 py-2.5 text-sm font-semibold transition-colors min-h-[44px]">
-                <x-erp.icon name="arrow-left" class="size-4" /> Back
-            </a>
-            <button type="submit" id="btn-save-godown"
-                    class="inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white shadow-md transition-all bg-gradient-to-br from-indigo-600 to-indigo-500 hover:from-indigo-700 hover:to-indigo-600 disabled:opacity-50 disabled:pointer-events-none min-h-[48px]"
-                    @if ($warehousesEmpty) disabled @endif>
-                <i class="fas fa-save"></i> {{ $isEditGodown ? 'Update CTN' : 'Save godown' }}
-            </button>
-            @if ($godownReady)
-                <a href="{{ route('admin.sales-challans.challan-form', $invoice) }}"
-                   class="inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white shadow-md transition-all bg-gradient-to-br from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 min-h-[48px]"
-                   title="Issue stock and complete challan">
-                    <i class="fas fa-check-double"></i> Finalize challan
+        {{-- ===== BOTTOM ACTION BAR (fixed, Next.js parity) ===== --}}
+        <footer class="fixed bottom-0 inset-x-0 z-40 border-t border-slate-200 bg-white px-4 py-3 shadow-[0_-4px_16px_rgba(15,23,42,0.08)] no-print">
+            <div class="mx-auto flex max-w-[1600px] flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <a href="{{ route('admin.sales-invoices.show', $invoice) }}"
+                   class="inline-flex items-center justify-center gap-2 self-start rounded-md px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors min-h-[40px]">
+                    <x-erp.icon name="arrow-left" class="size-4" /> Back
                 </a>
-            @else
-                <button type="button" disabled title="Save godown copy first"
-                        class="inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white min-h-[48px] opacity-50 cursor-not-allowed bg-gradient-to-br from-amber-600 to-amber-700">
-                    <i class="fas fa-check-double"></i> Finalize challan
-                </button>
-            @endif
-            <span id="ctrl-s-hint" class="hidden md:inline-flex items-center gap-1 text-xs text-stone-500 ml-1">
-                <kbd class="px-1 py-0.5 bg-stone-100 border border-stone-300 rounded text-[10px] font-mono">Ctrl</kbd>+<kbd class="px-1 py-0.5 bg-stone-100 border border-stone-300 rounded text-[10px] font-mono">S</kbd> save godown
-            </span>
+                <div class="flex flex-wrap items-center gap-2 sm:gap-3">
+                    <button type="submit" id="btn-save-godown"
+                            class="inline-flex h-10 items-center gap-2 rounded-md bg-indigo-600 text-white shadow-md hover:bg-indigo-700 px-4 text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                            @if ($warehousesEmpty) disabled @endif>
+                        <x-erp.icon name="save" class="size-4" /> {{ $isEditGodown ? 'Update CTN' : 'Save godown' }}
+                    </button>
+                    <span id="ctrl-s-hint" class="hidden sm:inline-flex items-center gap-1 rounded-md bg-slate-900 px-2 py-1 text-[10px] font-medium text-slate-300">
+                        <kbd class="font-sans">Ctrl</kbd><span>+</span><kbd class="font-sans">S</kbd>
+                    </span>
+                    @if ($godownReady)
+                        <a href="{{ route('admin.sales-challans.challan-form', $invoice) }}"
+                           class="inline-flex h-10 items-center gap-2 rounded-md bg-amber-500 text-white shadow-md hover:bg-amber-600 px-4 text-sm font-medium transition-colors min-h-[40px]"
+                           title="Issue stock and complete challan">
+                            <i class="fas fa-check-double"></i> Finalize challan
+                        </a>
+                    @else
+                        <button type="button" disabled title="Save godown copy first"
+                                class="inline-flex h-10 items-center gap-2 rounded-md bg-amber-500 text-white px-4 text-sm font-medium opacity-50 cursor-not-allowed min-h-[40px]">
+                            <i class="fas fa-check-double"></i> Finalize challan
+                        </button>
+                    @endif
+                </div>
+            </div>
         </footer>
     </form>
     @endif {{-- end of @else (has items) --}}
@@ -547,7 +599,7 @@ $(function () {
         var base = 'stock-badge inline-block px-2 py-1 rounded text-xs font-bold';
 
         if (!wid) {
-            $badge.attr('class', base + ' bg-stone-100 text-stone-500')
+            $badge.attr('class', base + ' bg-slate-100 text-slate-500')
                   .attr('aria-label', 'No warehouse selected').text('—');
             return;
         }
@@ -656,6 +708,12 @@ $(function () {
     }
     $('#godown_transport_cost').on('input', updateGodownTotalPreview);
     updateGodownTotalPreview();
+
+    // Transport "Apply" button — toast confirmation (visual only; value is saved on form submit).
+    $('#chApplyTransport').on('click', function () {
+        var v = parseFloat($('#godown_transport_cost').val()) || 0;
+        Swal.fire({ icon: 'success', title: 'Transport cost applied', text: 'Tk ' + v.toFixed(2) + ' will be saved with the godown entry.', timer: 1600, showConfirmButton: false, toast: true, position: 'top-end' });
+    });
 
     // Dispatcher multi-select (Select2 AJAX).
     var $dispatcherSelect = $('#dispatcher_id');
