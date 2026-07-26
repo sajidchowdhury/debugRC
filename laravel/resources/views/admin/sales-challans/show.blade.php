@@ -61,7 +61,7 @@
     $challan->loadMissing(['items.product', 'items.warehouse']);
 @endphp
 
-<div class="space-y-6">
+<div class="space-y-6 challan-scope">
 
     {{-- Breadcrumb --}}
     <nav aria-label="Breadcrumb" class="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
@@ -72,8 +72,8 @@
         <span class="text-amber-800 font-medium">{{ $challan->challan_code }}</span>
     </nav>
 
-    {{-- Hero header (amber/orange gradient — showcase spec) --}}
-    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
+    {{-- Hero header (pure orange gradient — Phase 11 polish to match lagachy reference design) --}}
+    <div class="bg-gradient-to-r from-orange-400 to-orange-500 rounded-xl p-6 shadow-lg">
         <div class="flex items-start justify-between flex-wrap gap-4">
             <div class="flex items-start gap-4">
                 <div class="bg-white/20 backdrop-blur-sm rounded-xl size-14 flex items-center justify-center text-white text-2xl shrink-0">
@@ -375,6 +375,11 @@
                 </table>
             </div>
         </div>
+    @else
+        {{-- Phase 11: empty state — challan has no line items (edge case) --}}
+        <x-erp.left-accent-card accent="red" icon="inbox" title="No challan items" title-bn="কোনো চালান আইটেম নেই">
+            <p class="text-sm text-gray-600">This challan has no line items recorded. This is unusual — contact your administrator if you believe this is an error.</p>
+        </x-erp.left-accent-card>
     @endif
 
     {{-- Two-column section: stock movements + GL journal (left), status & actions (right) --}}

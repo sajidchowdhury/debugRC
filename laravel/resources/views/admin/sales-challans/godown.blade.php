@@ -83,7 +83,7 @@
     $transportCostDefault = (float) ($invoice->transport_cost ?? 0);
 @endphp
 
-<div class="space-y-6">
+<div class="space-y-6 challan-scope">
     <!-- Breadcrumb -->
     <nav aria-label="Breadcrumb" class="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
         <a href="{{ route('dashboard') }}" class="hover:text-amber-700 transition-colors">Sales</a>
@@ -93,8 +93,8 @@
         <span class="text-amber-800 font-medium">Godown Preparation</span>
     </nav>
 
-    {{-- Hero header (amber/orange gradient — Phase 2 parity with Project A) --}}
-    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
+    {{-- Hero header (pure orange gradient — Phase 11 polish to match lagachy reference design) --}}
+    <div class="bg-gradient-to-r from-orange-400 to-orange-500 rounded-xl p-6 shadow-lg">
         <div class="flex items-start justify-between flex-wrap gap-4">
             <div class="flex items-start gap-4">
                 <div class="bg-white/20 backdrop-blur-sm rounded-xl size-14 flex items-center justify-center text-white shrink-0">
@@ -167,15 +167,17 @@
         </x-erp.stat-card>
     </div>
 
-    <!-- Info / warning banner -->
+    {{-- Phase 11: Empty state — no active warehouses (left-accent-card with red accent + action link) --}}
     @if ($warehousesEmpty)
-        <div class="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
-            <i class="fas fa-triangle-exclamation text-red-600 mt-0.5"></i>
-            <div>
-                <p class="font-medium text-red-800">No active warehouses / কোনো সক্রিয় গুদাম নেই</p>
-                <p class="text-sm text-red-700 mt-1">No active warehouses configured for this branch. Please add warehouses before assigning godown.</p>
+        <x-erp.left-accent-card accent="red" icon="warehouse" title="No active warehouses" title-bn="কোনো সক্রিয় গুদাম নেই">
+            <p class="text-sm text-gray-600">No active warehouses configured for this branch. Please add warehouses before assigning godown.</p>
+            <p class="text-xs text-gray-500 mt-2">Please add warehouses before assigning godown.</p>
+            <div class="mt-3">
+                <a href="{{ route('dashboard') }}" class="inline-flex items-center gap-1.5 text-sm font-medium text-amber-700 hover:text-amber-800 transition-colors">
+                    <x-erp.icon name="arrow-left" class="size-3.5" /> Back to dashboard
+                </a>
             </div>
-        </div>
+        </x-erp.left-accent-card>
     @else
         <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
             <i class="fas fa-circle-info text-amber-600 mt-0.5"></i>
@@ -202,6 +204,18 @@
     <!-- Godown assignment form -->
     <form method="POST" action="{{ route('admin.sales-challans.storeGodown', $invoice) }}">
         @csrf
+
+        {{-- Phase 11: Empty state — no invoice items (left-accent-card with red accent) --}}
+        @if ($invoice->items->isEmpty())
+            <x-erp.left-accent-card accent="red" icon="inbox" title="No invoice items" title-bn="কোনো আইটেম নেই">
+                <p class="text-sm text-gray-600">This invoice has no line items. Add items to the invoice first before preparing the godown copy.</p>
+                <div class="mt-3">
+                    <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="inline-flex items-center gap-1.5 text-sm font-medium text-amber-700 hover:text-amber-800 transition-colors">
+                        <x-erp.icon name="arrow-left" class="size-3.5" /> Back to invoice
+                    </a>
+                </div>
+            </x-erp.left-accent-card>
+        @else
 
         <!-- Warehouse assignment card (matches template PAGE 3 table) -->
         <div class="bg-white rounded-xl shadow-sm overflow-hidden">
@@ -499,6 +513,11 @@
                 </span>
             </div>
             <div class="p-4">
+                {{-- Phase 11: loading skeleton shown while Select2 AJAX fetches the dispatcher list. --}}
+                <div id="dispatcher-loading" class="space-y-2 mb-3" aria-hidden="true">
+                    <div class="ch-skeleton h-10 w-full"></div>
+                    <div class="ch-skeleton h-3 w-3/4"></div>
+                </div>
                 <select id="dispatcher_id" name="dispatcher_id[]" multiple
                         class="form-select"
                         data-invoice-id="{{ $invoice->id }}"
@@ -508,6 +527,14 @@
                         <option value="{{ $dispatcher->id }}" selected>{{ $dispatcher->name }}@if($dispatcher->employee_code) ({{ $dispatcher->employee_code }})@endif</option>
                     @endforeach
                 </select>
+                {{-- Phase 11: empty state shown if the AJAX fetch returns zero dispatchers. --}}
+                <div id="dispatcher-empty" class="hidden mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
+                    <i class="fas fa-user-slash text-amber-600 mt-0.5"></i>
+                    <div>
+                        <p class="font-medium text-amber-800 text-sm">No dispatchers found / কোনো ডিসপ্যাচার নেই</p>
+                        <p class="text-xs text-amber-700 mt-0.5">No active dispatcher-role employees in this invoice's branch. Add employees with the dispatcher role first.</p>
+                    </div>
+                </div>
                 <p class="text-xs text-gray-500 mt-2 flex items-start gap-1.5">
                     <i class="fas fa-circle-info text-amber-500 mt-0.5"></i>
                     <span>Dispatchers are filtered to active employees with the dispatcher role in this invoice's branch. Type to search by name, code, or phone.</span>
@@ -602,6 +629,7 @@
             </div>
         </x-erp.sticky-action-bar>
     </form>
+    @endif {{-- end of @else (has items) --}}
 </div>
 
 </x-layouts.erp>
@@ -823,16 +851,29 @@ $(function () {
                 };
             },
             processResults: function (data) {
+                // Phase 11: show the no-dispatchers empty state if the AJAX
+                // fetch returns zero results AND no dispatchers are already
+                // selected. Hidden again as soon as the user picks one.
+                var hasResults = !!(data.results && data.results.length);
+                var alreadySelected = ($dispatcherSelect.val() || []).length > 0;
+                $('#dispatcher-empty').toggleClass('hidden', hasResults || alreadySelected);
                 return { results: data.results || [] };
             },
             cache: true
         }
     });
 
+    // Phase 11: hide the loading skeleton once Select2 has initialised
+    // (the AJAX fetch above is the slow part; once Select2 is ready the
+    // skeleton has served its purpose).
+    $('#dispatcher-loading').addClass('hidden');
+
     // Live-update the "N selected" badge on add/remove.
     $dispatcherSelect.on('change select2:select select2:unselect', function () {
         var count = ($(this).val() || []).length;
         $('#dispatcher-count-badge').text(count + (count === 1 ? ' selected' : ' selected'));
+        // Phase 11: hide the empty state as soon as one dispatcher is picked.
+        $('#dispatcher-empty').toggleClass('hidden', count > 0);
     });
 
     // Phase 8 — Godown save: Swal2 confirmation → loading → native submit.

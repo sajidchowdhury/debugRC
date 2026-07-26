@@ -45,7 +45,7 @@
     $challanModel = $canReverse ? $invoice->challan : null;
 @endphp
 
-<div class="space-y-6">
+<div class="space-y-6 challan-scope">
     <!-- Breadcrumb -->
     <nav aria-label="Breadcrumb" class="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
         <a href="{{ route('dashboard') }}" class="hover:text-amber-700 transition-colors">Sales</a>
@@ -55,8 +55,8 @@
         <span class="text-amber-800 font-medium">Issue Challan</span>
     </nav>
 
-    {{-- Hero header (amber/orange gradient — Phase 2 parity with Project A) --}}
-    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-6 shadow-lg">
+    {{-- Hero header (pure orange gradient — Phase 11 polish to match lagachy reference design) --}}
+    <div class="bg-gradient-to-r from-orange-400 to-orange-500 rounded-xl p-6 shadow-lg">
         <div class="flex items-start justify-between flex-wrap gap-4">
             <div class="flex items-start gap-4">
                 <div class="bg-white/20 backdrop-blur-sm rounded-xl size-14 flex items-center justify-center text-white shrink-0">
@@ -128,6 +128,18 @@
             <x-erp.status-pill :status="$displayStatus" />
         </x-erp.stat-card>
     </div>
+
+    {{-- Phase 11: Empty state — no invoice items (left-accent-card with red accent) --}}
+    @if ($invoice->items->isEmpty())
+        <x-erp.left-accent-card accent="red" icon="inbox" title="No invoice items" title-bn="কোনো আইটেম নেই">
+            <p class="text-sm text-gray-600">This invoice has no line items. Add items to the invoice first before issuing the challan.</p>
+            <div class="mt-3">
+                <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="inline-flex items-center gap-1.5 text-sm font-medium text-amber-700 hover:text-amber-800 transition-colors">
+                    <x-erp.icon name="arrow-left" class="size-3.5" /> Back to invoice
+                </a>
+            </div>
+        </x-erp.left-accent-card>
+    @else
 
     <!-- COGS preview card (green left accent — display only, outside form) -->
     <div class="bg-white rounded-xl shadow-sm border-l-4 border-l-green-500 overflow-hidden">
@@ -410,6 +422,7 @@
             <input type="hidden" name="cancel_reason" id="reverseReasonInput" value="">
         </form>
     @endif
+    @endif {{-- end of @else (has items) — Phase 11 empty-state guard --}}
 </div>
 
 </x-layouts.erp>

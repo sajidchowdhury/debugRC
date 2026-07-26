@@ -32,7 +32,7 @@
     };
 @endphp
 
-<div class="space-y-6">
+<div class="space-y-6 challan-scope">
 
     {{-- Page title bar (compact, matches other pages) --}}
     <div class="flex items-center justify-between flex-wrap gap-2">
