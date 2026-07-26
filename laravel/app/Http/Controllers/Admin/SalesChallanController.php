@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Sales\CancelChallanWebRequest;
+use App\Http\Requests\Sales\IssueChallanWebRequest;
 use App\Http\Requests\Sales\PrepareGodownWebRequest;
 use App\Models\SalesChallan;
 use App\Models\SalesInvoice;
@@ -347,18 +349,9 @@ class SalesChallanController extends Controller
      * "Challan already issued for this invoice." Mirrors the finalize
      * (finalize:*) and payment-create (payment:*) cache-key conventions.
      */
-    public function issueChallan(Request $request, int $invoiceId)
+    public function issueChallan(IssueChallanWebRequest $request, int $invoiceId)
     {
-        $validated = $request->validate([
-            'transport_name' => 'nullable|string|max:100',
-            'transport_phone' => 'nullable|string|max:30',
-            'vehicle_number' => 'nullable|string|max:50',
-            'driver_name' => 'nullable|string|max:100',
-            'transport_cost' => 'nullable|numeric|min:0',
-            'notes' => 'nullable|string|max:500',
-            // R3: Idempotency token (UUID v4) — mirrors the finalize pattern.
-            'idempotency_token' => 'required|string|uuid',
-        ]);
+        $validated = $request->validated();
 
         // R3: Idempotency check — must run BEFORE the service call so a
         // replay is fully side-effect-free (no DB locks, no stock reads).
@@ -444,11 +437,12 @@ class SalesChallanController extends Controller
     /**
      * Cancel a challan (reverse stock + GL).
      */
-    public function cancel(Request $request, int $id)
+    public function cancel(CancelChallanWebRequest $request, int $id)
     {
-        $request->validate([
-            'cancel_reason' => 'required|string|max:500',
-        ]);
+        // Phase 10: validation moved into CancelChallanWebRequest
+        // (cancel_reason: required|string|min:5|max:500). The min:5
+        // mirrors the Phase 8 Swal2 preConfirm guard on the issue
+        // screen's Reverse button.
 
         try {
             $challan = $this->challanService->cancelChallan($id, auth()->id(), $request->input('cancel_reason'));

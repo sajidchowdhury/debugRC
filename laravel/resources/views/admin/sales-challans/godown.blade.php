@@ -232,12 +232,14 @@
                     @endforeach
                 </select>
                 <button type="button" id="chApplyBulkWarehouse"
-                        class="inline-flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium transition-colors shadow-sm">
+                        aria-label="Apply the selected warehouse to all invoice lines"
+                        class="inline-flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium transition-colors shadow-sm min-h-[36px]">
                     <x-erp.icon name="check" class="size-3.5" /> Apply
                 </button>
-                <span class="text-gray-300">|</span>
+                <span class="text-gray-300" aria-hidden="true">|</span>
                 <button type="button" id="chFillAllCtn"
-                        class="inline-flex items-center gap-1.5 border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
+                        aria-label="Fill carton count for all lines based on qty divided by pieces per carton"
+                        class="inline-flex items-center gap-1.5 border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors min-h-[36px]"
                         title="Compute CTN = qty / pcs_per_carton for every row">
                     <x-erp.icon name="package" class="size-3.5" /> Fill all CTN
                 </button>
@@ -253,7 +255,17 @@
             </div>
             @endif
 
-            <div class="overflow-x-auto">
+            {{-- Phase 10 (U16, U24): responsive items layout.
+                 Desktop (≥ sm): the editable table (Select2-enhanced warehouse
+                 selects, per-row stock badges, CTN inputs). All form fields
+                 live here; on mobile this container is display:none but the
+                 inputs still submit their persisted/old values.
+                 Mobile (< sm): a read-only card list (<x-erp.left-accent-card>)
+                 summarising each line. Per-row editing on mobile uses the
+                 bulk-apply tool above (which targets .warehouse-select in the
+                 hidden table); the cards show the current state without
+                 duplicating form inputs (avoids duplicate-name submission). --}}
+            <div class="hidden sm:block overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
                         <tr class="bg-amber-50/50">
@@ -400,6 +412,74 @@
                         @endforeach
                     </tbody>
                 </table>
+            </div>
+
+            {{-- Phase 10 (U16, U24): mobile card list (< sm). Each invoice
+                 line as a <x-erp.left-accent-card> with the same data as the
+                 desktop table row, in a stacked mobile-friendly layout.
+                 Read-only summary — the editable form fields live in the
+                 hidden desktop table above (they still submit their values). --}}
+            <div class="sm:hidden space-y-3 p-4" aria-label="Invoice items — mobile card view">
+                @foreach ($invoice->items as $item)
+                    @php
+                        $rows = $availForProduct($item->product_id);
+                        $totalAvail = $totalAvailForProduct($item->product_id);
+                        $selectedWid = old('warehouse_assignments.' . $item->id, (string) ($item->warehouse_id ?? ''));
+                        $selectedWh = $selectedWid ? $warehouses->firstWhere('id', (int) $selectedWid) : null;
+                        $rowForSelected = $selectedWh ? $rows->firstWhere('warehouse_id', $selectedWh->id) : null;
+                        $availForSelected = $rowForSelected ? (float) $rowForSelected->qty : 0.0;
+                        $demand = (float) $item->qty;
+                        $isSufficient = $availForSelected >= $demand && $availForSelected > 0;
+                        $isShort = $availForSelected > 0 && $availForSelected < $demand;
+                        $isOut = $selectedWh && $availForSelected <= 0;
+                    @endphp
+                    <x-erp.left-accent-card accent="amber" icon="package" :title="($item->product?->product_name ?: 'Product #' . $item->product_id)" :titleBn="$item->product?->product_code">
+                        <div class="space-y-2.5 text-sm">
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="text-gray-500 text-xs">Ordered Qty</span>
+                                <span class="font-semibold">{{ number_format($demand, 2) }}</span>
+                            </div>
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="text-gray-500 text-xs">Warehouse</span>
+                                @if ($selectedWh)
+                                    <span class="inline-flex items-center gap-1 bg-amber-50 border border-amber-200 rounded-lg px-2 py-0.5 text-xs font-medium">
+                                        <i class="fas fa-warehouse text-amber-600"></i> {{ $selectedWh->warehouse_name }}
+                                    </span>
+                                @else
+                                    <span class="bg-red-100 text-red-700 border border-red-300 text-xs rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                        <i class="fas fa-ban"></i> unassigned
+                                    </span>
+                                @endif
+                            </div>
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="text-gray-500 text-xs">Stock status</span>
+                                @if (!$selectedWh)
+                                    <span class="text-xs text-gray-500">— select warehouse —</span>
+                                @elseif ($isSufficient)
+                                    <span class="bg-green-100 text-green-700 border border-green-300 text-xs rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                        <i class="fas fa-check"></i> {{ number_format($availForSelected, 2) }} avail
+                                    </span>
+                                @elseif ($isShort)
+                                    <span class="bg-yellow-100 text-yellow-700 border border-yellow-300 text-xs rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                        <i class="fas fa-triangle-exclamation"></i> short ({{ number_format($availForSelected, 2) }})
+                                    </span>
+                                @elseif ($isOut)
+                                    <span class="bg-red-100 text-red-700 border border-red-300 text-xs rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                        <i class="fas fa-ban"></i> no stock
+                                    </span>
+                                @endif
+                            </div>
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="text-gray-500 text-xs">Avg Cost</span>
+                                <span class="text-muted">{{ $rowForSelected ? number_format((float) $rowForSelected->avg_cost, 2) : '—' }}</span>
+                            </div>
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="text-gray-500 text-xs">Disp. CTN</span>
+                                <span class="font-medium">{{ $ctnForItem($item) ?: '—' }}</span>
+                            </div>
+                        </div>
+                    </x-erp.left-accent-card>
+                @endforeach
             </div>
         </div>
 

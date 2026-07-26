@@ -143,7 +143,13 @@
                 {{ $invoice->items->count() }} line(s)
             </span>
         </div>
-        <div class="overflow-x-auto">
+        {{-- Phase 10 (U16, U24): responsive items layout.
+             Desktop (≥ sm): the COGS table. Hidden on mobile.
+             Mobile (< sm): a read-only card list (<x-erp.left-accent-card>).
+             The issue screen has NO editable fields in the items table
+             (warehouse is locked at godown prep, qty/cogs are computed),
+             so the cards are a pure display equivalent. --}}
+        <div class="hidden sm:block overflow-x-auto">
             <table class="w-full text-sm">
                 <thead>
                     <tr class="bg-green-50/50">
@@ -200,6 +206,50 @@
                     </tr>
                 </tbody>
             </table>
+        </div>
+
+        {{-- Phase 10 (U16, U24): mobile card list (< sm). Each invoice line
+             as a <x-erp.left-accent-card> mirroring the COGS table row.
+             Read-only — the issue screen has no editable item fields. --}}
+        <div class="sm:hidden space-y-3 p-4" aria-label="COGS breakdown — mobile card view">
+            @foreach ($invoice->items as $item)
+                <x-erp.left-accent-card accent="green" icon="package" :title="($item->product?->product_name ?: 'Product #' . $item->product_id)" :titleBn="$item->product?->product_code">
+                    <div class="space-y-2.5 text-sm">
+                        <div class="flex items-center justify-between gap-2">
+                            <span class="text-gray-500 text-xs">Warehouse</span>
+                            @if ($item->warehouse)
+                                <span class="inline-flex items-center gap-1 bg-amber-50 border border-amber-200 rounded-lg px-2 py-0.5 text-xs font-medium">
+                                    <i class="fas fa-lock text-amber-600 text-xs"></i>
+                                    <i class="fas fa-warehouse text-amber-600"></i> {{ $item->warehouse->warehouse_name }}
+                                </span>
+                            @else
+                                <span class="bg-red-100 text-red-700 border border-red-300 text-xs rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                    — unassigned —
+                                </span>
+                            @endif
+                        </div>
+                        <div class="flex items-center justify-between gap-2">
+                            <span class="text-gray-500 text-xs">Qty</span>
+                            <span class="font-semibold">{{ number_format((float) $item->qty, 2) }}</span>
+                        </div>
+                        <div class="flex items-center justify-between gap-2">
+                            <span class="text-gray-500 text-xs">Avg Cost</span>
+                            <span>{{ number_format((float) ($item->avg_cost ?? 0), 2) }}</span>
+                        </div>
+                        <div class="flex items-center justify-between gap-2 pt-1 border-t border-gray-100">
+                            <span class="text-gray-500 text-xs font-medium">COGS</span>
+                            <span class="font-bold text-green-700">Tk {{ number_format((float) ($item->cogs_amount ?? 0), 2) }}</span>
+                        </div>
+                    </div>
+                </x-erp.left-accent-card>
+            @endforeach
+            {{-- Total COGS footer card --}}
+            <x-erp.left-accent-card accent="green" :strong="true" title="Total COGS" titleBn="মোট">
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-gray-500">Sum of all lines</span>
+                    <span class="text-lg font-bold text-green-700">Tk {{ number_format($totalCogs, 2) }}</span>
+                </div>
+            </x-erp.left-accent-card>
         </div>
     </div>
 
@@ -335,8 +385,9 @@
                 @if ($canReverse && $challanModel)
                     <button type="button"
                             id="btn-reverse-challan"
-                            class="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-md transition-colors bg-red-500 hover:bg-red-600 disabled:opacity-50 disabled:pointer-events-none w-full md:w-auto">
-                        <i class="fas fa-rotate-left"></i>
+                            aria-label="Reverse this challan — opens a prompt for a cancellation reason"
+                            class="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-md transition-colors bg-red-500 hover:bg-red-600 disabled:opacity-50 disabled:pointer-events-none w-full md:w-auto min-h-[44px]">
+                        <i class="fas fa-rotate-left" aria-hidden="true"></i>
                         <span>Reverse Challan</span>
                     </button>
                 @endif
