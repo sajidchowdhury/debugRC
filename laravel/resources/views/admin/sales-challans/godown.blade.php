@@ -1,9 +1,4 @@
-<x-layouts.erp :title="$title" :tabs="[
-    ['label' => 'Dashboard', 'href' => route('dashboard')],
-    ['label' => 'Invoices', 'href' => route('admin.sales-invoices.index')],
-    ['label' => 'Challans', 'href' => route('admin.sales-challans.index')],
-    ['label' => 'UI Preview', 'href' => route('ui-preview')],
-]">
+<x-layouts.erp :title="$title" :tabs="[]">
 @php
     // Pre-compute per-product availability helpers
     $availability = $availability ?? [];
@@ -116,26 +111,16 @@
   with icon chip) consistent with the rest of the RC ERP design system.
 --}}
 <div class="space-y-5 challan-scope pb-24">
-    {{-- Breadcrumb --}}
-    <nav aria-label="Breadcrumb" class="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
-        <a href="{{ route('dashboard') }}" class="hover:text-amber-700 transition-colors">Sales</a>
-        <x-erp.icon name="chevron-right" class="size-3 text-gray-400" />
-        <a href="{{ route('admin.sales-challans.index') }}" class="hover:text-amber-700 transition-colors">Challan</a>
-        <x-erp.icon name="chevron-right" class="size-3 text-gray-400" />
-        <span class="text-amber-800 font-medium">Godown Preparation</span>
-    </nav>
-
     {{-- ===== HERO (pure orange gradient — parity with issue.blade.php) ===== --}}
-    <div class="bg-gradient-to-r from-orange-400 to-orange-500 rounded-xl p-5 md:p-6 shadow-lg">
+    <div class="bg-gradient-to-r from-orange-400 to-orange-500 rounded-xl p-4 md:p-6 shadow-lg">
         <div class="flex items-start justify-between flex-wrap gap-4">
             <div class="flex items-start gap-4">
                 <div class="bg-white/20 backdrop-blur-sm rounded-xl size-14 flex items-center justify-center text-white shrink-0">
                     <x-erp.icon name="warehouse" class="size-7" />
                 </div>
                 <div>
-                    <p class="text-amber-100 text-xs font-medium uppercase tracking-wider">গুদাম ও চালান / Godown &amp; Challan</p>
                     <div class="flex items-center gap-3 flex-wrap mt-1">
-                        <h1 class="text-2xl font-bold text-white m-0">Godown &amp; Challan</h1>
+                        <h3 class="text-2xl font-bold text-white m-0">Godown &amp; Challan</h3>
                         <span class="bg-white/20 rounded-full px-3 py-1 text-sm font-mono text-white">{{ $invoice->invoice_code }}</span>
                     </div>
                     <p class="text-amber-100 text-sm mt-1.5 flex items-center gap-2 flex-wrap">
@@ -144,7 +129,6 @@
                             {{ $branchName }}
                         </span>
                         <span class="text-amber-200">·</span>
-                        <span>Step 2 of 4 — Prepare warehouse dispatch. Stock is reserved, not yet moved.</span>
                     </p>
                 </div>
             </div>
@@ -283,7 +267,7 @@
                 <span class="flex size-8 items-center justify-center rounded-md bg-amber-100 text-amber-700">
                     <x-erp.icon name="users" class="size-[18px]" />
                 </span>
-                <h2 class="text-sm font-semibold text-amber-900 m-0">Delivery details</h2>
+                <h5 class="text-sm font-semibold text-amber-900 m-0">Delivery details</h5>
             </div>
             <div class="p-4 md:p-5">
                 <dl class="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2 m-0">
@@ -313,7 +297,7 @@
                 <span class="flex size-8 items-center justify-center rounded-md bg-amber-100 text-amber-700">
                     <x-erp.icon name="truck" class="size-[18px]" />
                 </span>
-                <h2 class="text-sm font-semibold text-amber-900 m-0">Transport cost</h2>
+                <h5 class="text-sm font-semibold text-amber-900 m-0">Transport cost</h5>
             </div>
             <div class="p-4 md:p-5">
                 <div class="flex flex-col gap-4 md:flex-row md:items-end md:gap-6">
@@ -347,7 +331,7 @@
                 <span class="flex size-8 items-center justify-center rounded-md bg-amber-100 text-amber-700">
                     <x-erp.icon name="package" class="size-[18px]" />
                 </span>
-                <h2 class="text-sm font-semibold text-amber-900 m-0">Dispatch items <span class="ml-0.5 text-red-500">*</span></h2>
+                <h5 class="text-sm font-semibold text-amber-900 m-0">Dispatch items <span class="ml-0.5 text-red-500">*</span></h5>
                 <div class="ml-auto">
                     <span class="inline-flex items-center rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-white">{{ $itemCount }} line{{ $itemCount === 1 ? '' : 's' }}</span>
                 </div>
