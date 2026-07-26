@@ -14,11 +14,23 @@
       so it cannot leak onto Bootstrap pages.
    4. This file is compiled by @tailwindcss/cli to
       public/assets/css/rc-erp.css and linked in the layout AFTER
-      bootstrap.min.css + custom.css. Build: `npm run build:css`.
+      bootstrap.min.css + custom.css. Build: `bun run build:css`.
+      A pre-commit hook auto-rebuilds the compiled output whenever a
+      .blade.php file changes — you normally never run this manually.
    ================================================================== */
 
 @import "tailwindcss/theme" layer(theme);
 @import "tailwindcss/utilities" layer(utilities);
+
+/* ---- Explicit scan scope ----
+   Tells Tailwind v4 exactly where to look for utility classes. Without this,
+   v4 auto-detects from the current working directory, which is fragile if the
+   build is ever invoked from a different directory (CI, deploy script, etc.).
+   `@source` is relative to THIS file (resources/css/), so "../views" resolves
+   to resources/views/ — covering all admin pages + components/erp/* +
+   components/layouts/*. Auto-detection still runs as a fallback; this just
+   makes the primary scope explicit and deterministic. */
+@source "../views";
 
 /* ---- Design tokens ----
    Fonts: Inter (latin) + Noto Sans Bengali (বাংলা). The app avoids CDN,

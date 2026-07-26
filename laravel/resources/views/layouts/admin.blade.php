@@ -26,8 +26,10 @@
 
     {{-- RC ERP design-system (Tailwind v4, no preflight — coexists with Bootstrap).
         Additive utilities + class-scoped custom rules; zero impact on existing
-        Bootstrap pages. Build: `npm run build:css` (or `npm run dev:css` for watch). --}}
-    <link rel="stylesheet" href="/assets/css/rc-erp.css">
+        Bootstrap pages. Build: `bun run build:css` (or `bun run dev:css` for watch).
+        A pre-commit hook auto-rebuilds this file when Blade changes.
+        filemtime() cache-busting ensures browsers always fetch the latest CSS. --}}
+    <link rel="stylesheet" href="/assets/css/rc-erp.css?v={{ filemtime(public_path('assets/css/rc-erp.css')) }}">
 
     {{-- Sidebar toggle: chevron rotation when expanded --}}
     <style>

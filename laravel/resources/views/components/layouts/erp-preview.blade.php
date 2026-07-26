@@ -21,8 +21,10 @@
     <link rel="stylesheet" href="/assets/css/custom.css">
     <link rel="stylesheet" href="/assets/css/footer-dropup.css">
 
-    {{-- RC ERP design-system (Tailwind v4, no preflight — coexists with Bootstrap) --}}
-    <link rel="stylesheet" href="/assets/css/rc-erp.css">
+    {{-- RC ERP design-system (Tailwind v4, no preflight — coexists with Bootstrap).
+        filemtime() cache-busting ensures browsers always fetch the latest
+        rc-erp.css after a rebuild+pull. --}}
+    <link rel="stylesheet" href="/assets/css/rc-erp.css?v={{ filemtime(public_path('assets/css/rc-erp.css')) }}">
 
     @stack('css')
 </head>
