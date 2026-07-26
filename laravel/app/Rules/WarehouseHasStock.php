@@ -27,10 +27,12 @@ class WarehouseHasStock implements ValidationRule
 {
     public function __construct(
         public ?int $invoiceId = null,
-        private readonly ?StockAvailabilityService $availability = null,
     ) {
-        // resolve at validate-time so the rule is DI-constructible
-        $this->availability ??= app(StockAvailabilityService::class);
+        // The StockAvailabilityService is resolved lazily inside validate()
+        // via app() — it is stateless and resolves from the container on
+        // each call. This avoids the PHP 8.4 "Cannot modify readonly
+        // property" error that occurred when $availability was declared
+        // readonly with a default value and then reassigned here with ??=.
     }
 
     public function validate(string $attribute, mixed $value, Closure $fail): void
@@ -64,8 +66,12 @@ class WarehouseHasStock implements ValidationRule
             return;
         }
 
+        // Resolve the service lazily — stateless, singleton-cached by the
+        // container so this is effectively free after the first resolve.
+        $availability = app(StockAvailabilityService::class);
+
         $demand = (float) $item->qty;
-        $available = (float) $this->availability->getWarehouseAvailableQty(
+        $available = (float) $availability->getWarehouseAvailableQty(
             (int) $item->product_id,
             $warehouseId,
             (int) $this->invoiceId
