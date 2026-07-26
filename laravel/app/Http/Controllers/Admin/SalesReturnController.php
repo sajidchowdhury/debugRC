@@ -3,6 +3,10 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\SalesReturn\ConfirmSalesReturnRequest;
+use App\Http\Requests\SalesReturn\GetInvoiceDetailsRequest;
+use App\Http\Requests\SalesReturn\ReverseSalesReturnRequest;
+use App\Http\Requests\SalesReturn\StoreSalesReturnRequest;
 use App\Models\SalesReturn;
 use App\Services\Sales\SalesReturnService;
 use Illuminate\Http\Request;
@@ -82,19 +86,9 @@ class SalesReturnController extends Controller
         ]);
     }
 
-    public function store(Request $request)
+    public function store(StoreSalesReturnRequest $request)
     {
-        $validated = $request->validate([
-            'sales_invoice_id' => 'required|integer|exists:sales_invoices,id',
-            'return_date' => 'required|date',
-            'reason' => 'nullable|string|max:1000',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.warehouse_id' => 'required|integer|exists:warehouses,id',
-            'items.*.qty' => 'required|numeric|min:0.001',
-            'items.*.rate' => 'nullable|numeric|min:0',
-            'items.*.sales_invoice_item_id' => 'nullable|integer',
-        ]);
+        $validated = $request->validated();
 
         try {
             $return = $this->returnService->createReturn([
@@ -163,12 +157,8 @@ class SalesReturnController extends Controller
         ]);
     }
 
-    public function confirm(Request $request, int $id)
+    public function confirm(ConfirmSalesReturnRequest $request, int $id)
     {
-        $request->validate([
-            'confirm_reason' => 'nullable|string|max:500',
-        ]);
-
         try {
             $return = $this->returnService->confirmReturn($id, auth()->id());
             return redirect()->route('admin.sales-returns.show', $return)
@@ -178,12 +168,8 @@ class SalesReturnController extends Controller
         }
     }
 
-    public function reverse(Request $request, int $id)
+    public function reverse(ReverseSalesReturnRequest $request, int $id)
     {
-        $request->validate([
-            'reverse_reason' => 'required|string|max:500',
-        ]);
-
         try {
             $return = $this->returnService->reverseReturn($id, auth()->id(), $request->input('reverse_reason'));
             return redirect()->route('admin.sales-returns.show', $return)
@@ -196,12 +182,8 @@ class SalesReturnController extends Controller
     /**
      * AJAX: Get invoice details for return form pre-fill.
      */
-    public function getInvoiceDetails(Request $request)
+    public function getInvoiceDetails(GetInvoiceDetailsRequest $request)
     {
-        $request->validate([
-            'invoice_id' => 'required|integer|exists:sales_invoices,id',
-        ]);
-
         $invoice = \App\Models\SalesInvoice::with(['items.product', 'items.warehouse', 'customer', 'branch'])
             ->where('is_challan_issued', true)
             ->where('is_reversed', false)
