@@ -148,6 +148,20 @@
         <x-erp.journey-stepper :current="2" />
     </div>
 
+    {{-- ===== BLANK GODOWN PRINTED BANNER (Step 1 completed) ===== --}}
+    @if (!empty($invoice->is_blank_godown_printed) && $invoice->blank_godown_printed_at)
+        @php $blankPrintedAt = \Carbon\Carbon::parse($invoice->blank_godown_printed_at)->format('d M Y, h:i A'); @endphp
+        <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex items-center gap-3">
+            <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600">
+                <x-erp.icon name="check-circle" class="size-4" />
+            </span>
+            <p class="text-xs text-emerald-800 m-0">
+                <strong>Step 1 done:</strong> blank godown copy printed on {{ $blankPrintedAt }}.
+                Now assign a warehouse to each line and save to complete Step 2.
+            </p>
+        </div>
+    @endif
+
     {{-- ===== SUMMARY (4-col grid, icon-chip cards — Next.js parity) ===== --}}
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {{-- Customer --}}

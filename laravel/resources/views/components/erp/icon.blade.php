@@ -114,6 +114,9 @@
         case 'check':
             $svgContent = '<polyline points="20 6 9 17 4 12"/>';
             break;
+        case 'user-check':
+            $svgContent = '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/>';
+            break;
         case 'more-horizontal':
             $svgContent = '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>';
             break;

@@ -144,7 +144,8 @@
                     </span>
                 </div>
                 <p class="px-6 pt-3 text-xs text-gray-500">
-                    Freshly finalized invoices from salesmen. Assign a warehouse to each line, then save to advance the invoice to “Pending Challan Issue”.
+                    Freshly finalized invoices from salesmen. <strong>Step 1:</strong> print a blank godown copy (requires a dispatcher).
+                    <strong>Step 2:</strong> assign a warehouse to each line, then save to advance the invoice to “Pending Challan Issue”.
                 </p>
 
                 {{-- Table with sticky header + custom-scroll --}}
@@ -207,13 +208,28 @@
                                         @endif
                                     </td>
                                     <td class="px-4 py-3 text-right whitespace-nowrap">
-                                        <a href="{{ route('admin.sales-challans.godown', $inv->id) }}"
-                                           class="inline-flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white h-8 px-2.5 text-xs rounded-md font-medium transition-colors shadow-sm"
-                                           title="Prepare godown copy">
-                                            <x-erp.icon name="warehouse" class="size-3.5" />
-                                            Prepare Godown
-                                            <x-erp.icon name="chevron-right" class="size-3" />
-                                        </a>
+                                        @if (!empty($inv->is_blank_godown_printed))
+                                            {{-- Blank godown printed → show "Prepare Godown" (Step 2) --}}
+                                            <a href="{{ route('admin.sales-challans.godown', $inv->id) }}"
+                                               class="inline-flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white h-8 px-2.5 text-xs rounded-md font-medium transition-colors shadow-sm"
+                                               title="Blank godown printed — prepare godown copy (Step 2)">
+                                                <x-erp.icon name="warehouse" class="size-3.5" />
+                                                Prepare Godown
+                                                <x-erp.icon name="chevron-right" class="size-3" />
+                                            </a>
+                                            <span class="inline-flex items-center gap-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-1.5 py-0.5 text-[10px] font-medium ml-1" title="Blank godown copy printed">
+                                                <i class="fas fa-check"></i>
+                                            </span>
+                                        @else
+                                            {{-- Blank godown NOT printed → show "Print Blank" (Step 1) --}}
+                                            <a href="{{ route('admin.sales-challans.blank-godown-form', $inv->id) }}"
+                                               class="inline-flex items-center gap-1.5 bg-indigo-500 hover:bg-indigo-600 text-white h-8 px-2.5 text-xs rounded-md font-medium transition-colors shadow-sm"
+                                               title="Print blank godown copy first (Step 1 — requires dispatcher)">
+                                                <x-erp.icon name="printer" class="size-3.5" />
+                                                Print Blank
+                                                <x-erp.icon name="chevron-right" class="size-3" />
+                                            </a>
+                                        @endif
                                         <a href="{{ route('admin.sales-invoices.show', $inv) }}"
                                            class="inline-flex items-center justify-center bg-white border border-gray-200 hover:bg-amber-50 text-gray-600 hover:text-amber-700 size-8 text-xs rounded-md transition-colors ml-1"
                                            title="View invoice">

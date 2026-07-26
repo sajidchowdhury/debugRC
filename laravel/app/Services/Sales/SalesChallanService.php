@@ -140,6 +140,18 @@ class SalesChallanService
                 );
             }
 
+            // 3-step workflow gate (defense-in-depth — the controller also
+            // guards this). A NEW invoice (not yet godown-prepared) must have
+            // the blank godown copy printed (Step 1) before godown prep
+            // (Step 2) can run. Legacy invoices that were godown-prepared
+            // before this column existed sail through (is_godown_prepared
+            // short-circuits the check).
+            if (!$invoice->is_blank_godown_printed && !$invoice->is_godown_prepared) {
+                throw new \RuntimeException(
+                    'Blank godown copy has not been printed yet. Please print the blank godown copy (with a dispatcher selected) before preparing the godown.'
+                );
+            }
+
             // Assign warehouse_id to each invoice item.
             // Phase 4: lookup by $item->id (web view keying). Falls back
             // to $item->product_id for the API path (which is broken

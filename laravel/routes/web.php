@@ -767,6 +767,15 @@ Route::middleware('auth')->group(function () {
         // matcher doesn't treat it as a challan id.
         Route::get('dispatchers', [SalesChallanController::class, 'dispatchers'])
             ->name('dispatchers')->middleware('role:warehouse_manager,dispatcher,manager,admin');
+        // 3-step godown workflow — Step 1: print blank godown copy (requires
+        // dispatcher selection). Sits BEFORE the godown/{invoiceId} routes so
+        // the literal segment 'blank-godown' isn't swallowed by the {invoiceId}
+        // wildcard. The WM must complete this step before godown prep opens.
+        Route::get('blank-godown/{invoiceId}', [SalesChallanController::class, 'blankGodownForm'])
+            ->name('blank-godown-form')->middleware('role:warehouse_manager,dispatcher,manager,admin');
+        Route::post('blank-godown/{invoiceId}', [SalesChallanController::class, 'storeBlankGodown'])
+            ->name('store-blank-godown')->middleware(['role:warehouse_manager,dispatcher,manager,admin', 'branch.isolation']);
+
         // Godown prep + challan issue — warehouse_manager, dispatcher, manager, admin
         Route::get('godown/{invoiceId}', [SalesChallanController::class, 'godown'])
             ->name('godown')->middleware('role:warehouse_manager,dispatcher,manager,admin');

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Sales\CancelChallanWebRequest;
 use App\Http\Requests\Sales\IssueChallanWebRequest;
 use App\Http\Requests\Sales\PrepareGodownWebRequest;
+use App\Http\Requests\Sales\PrintBlankGodownWebRequest;
 use App\Models\SalesChallan;
 use App\Models\SalesInvoice;
 use App\Services\Sales\SalesChallanService;
@@ -186,6 +187,16 @@ class SalesChallanController extends Controller
                 ->with('error', "Godown cannot be edited at this stage (status: {$invoice->status}, issued: " . ($invoice->is_challan_issued ? 'yes' : 'no') . ").");
         }
 
+        // 3-step workflow gate: a NEW invoice (not yet godown-prepared) must
+        // have the blank godown copy printed (Step 1) BEFORE the godown prep
+        // form opens (Step 2). Legacy invoices that were godown-prepared
+        // before this gate existed are allowed through (is_godown_prepared
+        // short-circuits the check) so the migration is non-breaking.
+        if (!$invoice->is_blank_godown_printed && !$invoice->is_godown_prepared) {
+            return redirect()->route('admin.sales-challans.blank-godown-form', $invoiceId)
+                ->with('error', 'Please print the blank godown copy first (with a dispatcher selected) before preparing the godown.');
+        }
+
         // Get warehouses for the branch.
         $warehouses = \App\Models\Warehouse::active()
             ->where('branch_id', $invoice->branch_id)
@@ -238,6 +249,109 @@ class SalesChallanController extends Controller
             'availability' => $availability,
             'eligibleDispatchers' => $eligibleDispatchers,
         ]);
+    }
+
+    /**
+     * 3-step godown workflow — Step 1: show the "Print Blank Godown Copy"
+     * form.
+     *
+     * The warehouse manager selects one or more dispatchers, then clicks
+     * "Print Blank Godown Copy". The dispatcher carries the handwriting
+     * picking sheet to the warehouse floor, fills in warehouse/CTN by
+     * hand, and returns. Only AFTER this print is recorded can the godown
+     * prep form (Step 2) be opened.
+     *
+     * The form is reachable for invoices that are:
+     *   - draft (first-time, blank not yet printed), OR
+     *   - blank-godown-printed but not yet godown-prepared (re-print /
+     *     change dispatchers before proceeding), OR
+     *   - godown-prepared but not challan-issued (re-print for reference).
+     * It is rejected for issued / reversed / cancelled invoices (same
+     * guard as godown()).
+     */
+    public function blankGodownForm(int $invoiceId)
+    {
+        $invoice = SalesInvoice::with(['items.product', 'customer', 'branch', 'dispatchers'])
+            ->findOrFail($invoiceId);
+
+        $canAccess = $invoice->isDraft()
+            || ($invoice->is_godown_prepared
+                && !$invoice->is_challan_issued
+                && !$invoice->isReversed()
+                && !$invoice->isCancelled());
+        // Also allow re-entry when blank is printed but godown not yet prepared.
+        $canAccess = $canAccess
+            || ($invoice->is_blank_godown_printed
+                && !$invoice->is_godown_prepared
+                && !$invoice->is_challan_issued
+                && !$invoice->isReversed()
+                && !$invoice->isCancelled());
+
+        if (!$canAccess) {
+            return redirect()->route('admin.sales-invoices.show', $invoice)
+                ->with('error', "Blank godown cannot be printed at this stage (status: {$invoice->status}, issued: " . ($invoice->is_challan_issued ? 'yes' : 'no') . ").");
+        }
+
+        $eligibleDispatchers = $this->eligibleDispatchers($invoice);
+
+        return view('admin.sales-challans.blank-godown', [
+            'title' => 'Blank Godown — ' . $invoice->invoice_code,
+            'invoice' => $invoice,
+            'eligibleDispatchers' => $eligibleDispatchers,
+        ]);
+    }
+
+    /**
+     * 3-step godown workflow — Step 1 POST: record the blank godown print.
+     *
+     * Validates dispatcher selection via PrintBlankGodownWebRequest, syncs
+     * the dispatchers onto the invoice (BelongsToMany pivot), stamps
+     * is_blank_godown_printed=true + blank_godown_printed_at (first print
+     * only — subsequent re-prints preserve the original timestamp) +
+     * blank_godown_printed_by, then redirects to the existing read-only
+     * print view (SalesInvoiceController::printBlankGodown) for the actual
+     * browser print dialog.
+     */
+    public function storeBlankGodown(PrintBlankGodownWebRequest $request, int $invoiceId)
+    {
+        $invoice = SalesInvoice::findOrFail($invoiceId);
+        $validated = $request->validated();
+
+        try {
+            $dispatcherIds = array_values(array_unique(array_filter(
+                array_map('intval', $validated['dispatcher_id']),
+                static fn($v) => $v > 0
+            )));
+
+            // Sync dispatchers onto the invoice pivot (idempotent DELETE+INSERT).
+            $syncPayload = [];
+            foreach ($dispatcherIds as $eid) {
+                $syncPayload[$eid] = ['dispatch_role' => 'dispatcher'];
+            }
+            $invoice->dispatchers()->sync($syncPayload);
+
+            // Stamp the print state. is_blank_godown_printed_at is only set
+            // on the FIRST print — re-prints (e.g. dispatcher changed) keep
+            // the original timestamp so the workflow age is preserved.
+            $update = [
+                'is_blank_godown_printed' => true,
+                'blank_godown_printed_by' => auth()->id(),
+                'updated_at' => now(),
+            ];
+            if (!$invoice->blank_godown_printed_at) {
+                $update['blank_godown_printed_at'] = now();
+            }
+            DB::table('sales_invoices')
+                ->where('id', $invoiceId)
+                ->update($update);
+
+            // Redirect to the read-only print view so the browser print
+            // dialog opens. The flash tells the WM what just happened.
+            return redirect()->route('admin.sales-invoices.print-blank-godown', $invoiceId)
+                ->with('success', 'Blank godown copy ready. Use your browser\'s print dialog to print it, then return to prepare the godown copy.');
+        } catch (\Throwable $e) {
+            return back()->withInput()->with('error', $e->getMessage());
+        }
     }
 
     /**

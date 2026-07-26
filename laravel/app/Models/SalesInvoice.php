@@ -51,6 +51,9 @@ use App\Models\Scopes\BranchScope;
  * @property string $status draft|confirmed|cancelled|reversed
  * @property bool $is_godown_prepared
  * @property string|null $godown_prepared_at
+ * @property bool $is_blank_godown_printed
+ * @property string|null $blank_godown_printed_at
+ * @property int|null $blank_godown_printed_by
  * @property bool $is_challan_issued
  * @property string|null $challan_issued_at
  * @property int|null $journal_entry_id
@@ -89,6 +92,7 @@ class SalesInvoice extends Model
         'branch_id', 'sub_total', 'discount_amount', 'transport_cost', 'pre_challan_transport', 'total_amount', 'pre_challan_total',
         'paid_amount', 'payment_mode', 'status',
         'is_godown_prepared', 'godown_prepared_at',
+        'is_blank_godown_printed', 'blank_godown_printed_at', 'blank_godown_printed_by',
         'is_challan_issued', 'challan_issued_at',
         'journal_entry_id', 'cogs_journal_entry_id',
         'is_reversed', 'reversed_at', 'reversed_by', 'reverse_reason',
@@ -104,11 +108,13 @@ class SalesInvoice extends Model
         'paid_amount' => 'decimal:2',
         'due_amount' => 'decimal:2', // GENERATED: total_amount - paid_amount
         'is_godown_prepared' => 'boolean',
+        'is_blank_godown_printed' => 'boolean',
         'is_challan_issued' => 'boolean',
         'is_reversed' => 'boolean',
         'is_soft_hold' => 'boolean',
         'call_a_day' => 'boolean',
         'godown_prepared_at' => 'datetime',
+        'blank_godown_printed_at' => 'datetime',
         'challan_issued_at' => 'datetime',
         'reversed_at' => 'datetime',
         'customer_id' => 'integer',
@@ -118,6 +124,7 @@ class SalesInvoice extends Model
         'cogs_journal_entry_id' => 'integer',
         'created_by' => 'integer',
         'reversed_by' => 'integer',
+        'blank_godown_printed_by' => 'integer',
     ];
 
     public function items(): \Illuminate\Database\Eloquent\Relations\HasMany
@@ -193,6 +200,15 @@ class SalesInvoice extends Model
         return $this->hasOne(\App\Models\SalesChallan::class, 'sales_invoice_id')
             ->latestOfMany();
     }
+
+    /**
+     * Step 1 of the 3-step godown workflow: has the blank godown copy
+     * (handwriting picking sheet) been printed with at least one
+     * dispatcher attached? Set by SalesChallanController::storeBlankGodown()
+     * and gated by SalesChallanController::godown() +
+     * SalesChallanService::prepareGodown().
+     */
+    public function isBlankGodownPrinted(): bool { return (bool) $this->is_blank_godown_printed; }
 
     public function isDraft(): bool { return $this->status === 'draft'; }
     public function isConfirmed(): bool { return $this->status === 'confirmed'; }

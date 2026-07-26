@@ -116,9 +116,22 @@ class PrepareGodownWebRequest extends FormRequest
                 return; // route param missing — let the 404 path handle it
             }
 
-            $invoice = SalesInvoice::select('id', 'branch_id')->find($invoiceId);
+            $invoice = SalesInvoice::select('id', 'branch_id', 'is_blank_godown_printed', 'is_godown_prepared')->find($invoiceId);
             if (!$invoice) {
                 return; // controller's findOrFail will 404
+            }
+
+            // 3-step workflow gate (defense-in-depth — the controller +
+            // service also guard this). A NEW invoice (not yet
+            // godown-prepared) must have the blank godown copy printed
+            // (Step 1) before godown prep (Step 2) can be submitted.
+            // Legacy godown-prepared invoices are exempt.
+            if (!$invoice->is_blank_godown_printed && !$invoice->is_godown_prepared) {
+                $validator->errors()->add(
+                    'warehouse_assignments',
+                    'Blank godown copy has not been printed yet. Please print the blank godown copy (with a dispatcher selected) first.'
+                );
+                return; // no point checking dispatchers — the gate failed
             }
 
             $ids = array_values((array) $this->input('dispatcher_id', []));

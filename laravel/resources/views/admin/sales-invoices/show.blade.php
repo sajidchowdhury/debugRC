@@ -640,9 +640,17 @@
                         <a href="{{ route('admin.sales-invoices.print-godown', $invoice->id) }}" class="btn btn-outline-secondary w-100" target="_blank">
                             <i class="fas fa-warehouse me-1"></i> Print Godown Copy
                         </a>
-                        <a href="{{ route('admin.sales-invoices.print-blank-godown', $invoice->id) }}" class="btn btn-outline-warning w-100" target="_blank">
-                            <i class="fas fa-pen me-1"></i> Print Blank Godown
-                        </a>
+                        @if (!empty($invoice->is_blank_godown_printed))
+                            {{-- Already printed → re-print the read-only view --}}
+                            <a href="{{ route('admin.sales-invoices.print-blank-godown', $invoice->id) }}" class="btn btn-outline-warning w-100" target="_blank">
+                                <i class="fas fa-pen me-1"></i> Re-print Blank Godown
+                            </a>
+                        @else
+                            {{-- Not yet printed → go through the Step 1 flow (dispatcher required) --}}
+                            <a href="{{ route('admin.sales-challans.blank-godown-form', $invoice->id) }}" class="btn btn-outline-warning w-100">
+                                <i class="fas fa-pen me-1"></i> Print Blank Godown
+                            </a>
+                        @endif
                     @endif
 
                     {{-- BUG-52: Sales → Warehouse handoff buttons (state-aware) --}}
