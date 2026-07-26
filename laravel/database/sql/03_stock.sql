@@ -25,10 +25,12 @@ CREATE TABLE stock_transactions (
     rate numeric(12,2) NOT NULL DEFAULT 0,
     -- PG supports GENERATED ALWAYS AS (...) STORED — same syntax as MySQL.
     total_value numeric(14,2) GENERATED ALWAYS AS (qty * rate) STORED,
+    -- 'reversal' is written by StockService::reverseTransaction() and queried
+    -- by StockTransactionController; it MUST be in the allowed set (Phase 0.1).
     reference_type varchar(30) NOT NULL CHECK (reference_type IN (
         'purchase_receive','purchase_return','sales_challan','sales_return',
         'stock_adjustment','stock_take','warehouse_transfer','damage',
-        'branch_demand','opening_balance'
+        'branch_demand','opening_balance','reversal'
     )),
     reference_id integer NOT NULL,
     branch_demand_item_id integer,

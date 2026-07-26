@@ -593,7 +593,7 @@ class SalesReturnService
         // Group Damage-condition items by warehouse.
         $damageByWarehouse = [];
         foreach ($return->items as $item) {
-            if (($item->condition_state ?? 'Good') !== 'Damage') {
+            if (!$item->isDamage()) {
                 continue;
             }
             $wid = (int) $item->warehouse_id;

@@ -83,8 +83,8 @@
                         <td>{{ ++$globalSl }}</td>
                         <td>
                             {{ $item->product?->product_name ?? 'Product #' . $item->product_id }}
-                            @if ($item->condition_state === 'Damage')
-                                <span class="badge bg-danger-subtle text-danger ms-1">Damage</span>
+                            @if ($item->isDamage())
+                                <span class="badge bg-danger-subtle text-danger ms-1">{{ $item->conditionLabel() }}</span>
                             @endif
                         </td>
                         <td>{{ $item->warehouse?->warehouse_name ?? '—' }}</td>
