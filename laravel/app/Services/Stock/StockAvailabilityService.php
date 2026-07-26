@@ -418,6 +418,128 @@ class StockAvailabilityService
     }
 
     /**
+     * Batched version of getBranchWarehouseBreakdown — fetches the
+     * per-warehouse breakdown for MANY products in just 3 queries
+     * (warehouses + warehouse_stock + pipeline), instead of N(1+W)
+     * queries when called per-product in a loop.
+     *
+     * Used by the godown page (SalesChallanController::godown) which
+     * previously called getBranchWarehouseBreakdown() once per invoice
+     * item, causing an O(N×W) N+1 query storm that made the page slow.
+     *
+     * @param array<int> $productIds
+     * @param int $branchId
+     * @param int|null $excludeInvoiceId
+     * @return array<int, array{id: int, warehouse_name: string, physical_qty: float, pipeline_qty: float, available_qty: float, avg_cost: float}>  keyed by product_id
+     */
+    public function getBranchWarehouseBreakdownForProducts(array $productIds, int $branchId, ?int $excludeInvoiceId = null): array
+    {
+        $productIds = array_values(array_filter(array_map('intval', $productIds), static fn($id) => $id > 0));
+        if (empty($productIds) || $branchId <= 0) {
+            return [];
+        }
+
+        // Query 1 — warehouses for the branch (fetched once, reused for all products).
+        $warehouses = DB::table('warehouses')
+            ->where('branch_id', $branchId)
+            ->where('is_active', true)
+            ->orderBy('warehouse_name')
+            ->pluck('warehouse_name', 'id');
+
+        if ($warehouses->isEmpty()) {
+            return [];
+        }
+
+        $warehouseIds = $warehouses->keys()->all();
+
+        // Query 2 — physical stock for ALL products × ALL warehouses in one go.
+        // Left join on warehouses so every product×warehouse combo appears
+        // (COALESCE to 0 where no stock row exists).
+        $stockRows = DB::table('warehouses as w')
+            ->leftJoin('warehouse_stock as ws', function ($join) use ($productIds) {
+                $join->on('ws.warehouse_id', '=', 'w.id')
+                     ->whereIn('ws.product_id', $productIds);
+            })
+            ->where('w.branch_id', $branchId)
+            ->where('w.is_active', true)
+            ->whereIn('ws.product_id', $productIds)
+            ->select(
+                'ws.product_id',
+                'ws.warehouse_id',
+                DB::raw('COALESCE(ws.qty, 0) as physical_qty'),
+                DB::raw('COALESCE(ws.avg_cost, 0) as avg_cost')
+            )
+            ->get();
+
+        // Index stock by [productId => [warehouseId => {physical, avg_cost}]]
+        $stockByProduct = [];
+        foreach ($stockRows as $row) {
+            $pid = (int) $row->product_id;
+            $wid = (int) $row->warehouse_id;
+            $stockByProduct[$pid][$wid] = [
+                'physical_qty' => (float) $row->physical_qty,
+                'avg_cost' => (float) $row->avg_cost,
+            ];
+        }
+
+        // Query 3 — pipeline qty for ALL products × ALL warehouses in ONE query.
+        // Replaces N×W individual getWarehousePipelineQty() calls.
+        $pipelineQuery = DB::table('sales_invoice_dispatches as sid')
+            ->join('sales_invoices as si', function ($join) {
+                $join->on('si.id', '=', 'sid.sales_invoice_id')
+                     ->where('si.is_reversed', false)
+                     ->whereNotIn('si.status', ['challan_completed', 'reversed', 'cancelled']);
+            })
+            ->whereIn('sid.product_id', $productIds)
+            ->whereIn('sid.warehouse_id', $warehouseIds)
+            ->whereRaw('sid.ordered_qty > sid.dispatched_qty');
+
+        if ($excludeInvoiceId) {
+            $pipelineQuery->where('sid.sales_invoice_id', '!=', $excludeInvoiceId);
+        }
+
+        $pipelineRows = $pipelineQuery
+            ->select(
+                'sid.product_id',
+                'sid.warehouse_id',
+                DB::raw('SUM(sid.ordered_qty - sid.dispatched_qty) as pipeline_qty')
+            )
+            ->groupBy('sid.product_id', 'sid.warehouse_id')
+            ->get();
+
+        // Index pipeline by [productId => [warehouseId => pipelineQty]]
+        $pipelineByProduct = [];
+        foreach ($pipelineRows as $row) {
+            $pid = (int) $row->product_id;
+            $wid = (int) $row->warehouse_id;
+            $pipelineByProduct[$pid][$wid] = (float) $row->pipeline_qty;
+        }
+
+        // Assemble the breakdown per product (same shape as
+        // getBranchWarehouseBreakdown, keyed by product_id).
+        $result = [];
+        foreach ($productIds as $pid) {
+            $breakdown = [];
+            foreach ($warehouses as $wid => $wname) {
+                $physical = $stockByProduct[$pid][$wid]['physical_qty'] ?? 0.0;
+                $avgCost = $stockByProduct[$pid][$wid]['avg_cost'] ?? 0.0;
+                $pipeline = $pipelineByProduct[$pid][$wid] ?? 0.0;
+                $breakdown[] = [
+                    'id' => (int) $wid,
+                    'warehouse_name' => $wname,
+                    'physical_qty' => $physical,
+                    'pipeline_qty' => $pipeline,
+                    'available_qty' => max(0.0, $physical - $pipeline),
+                    'avg_cost' => $avgCost,
+                ];
+            }
+            $result[$pid] = $breakdown;
+        }
+
+        return $result;
+    }
+
+    /**
      * Assert that the requested quantities are available in the branch.
      * Throws if any product is insufficient.
      *

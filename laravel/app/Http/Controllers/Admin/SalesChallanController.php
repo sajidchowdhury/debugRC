@@ -198,14 +198,19 @@ class SalesChallanController extends Controller
         // the extra physical_qty + pipeline_qty keys for an informative
         // tooltip. excludeInvoiceId = current invoice so its own open
         // dispatch rows do not count against the shown availability.
+        //
+        // PERF: batched into 3 queries total (was N×(1+W) queries per page
+        // load — an N+1 storm that made the page slow with many items).
+        $productIds = $invoice->items->pluck('product_id')->unique()->values()->all();
+        $batched = $this->availabilityService->getBranchWarehouseBreakdownForProducts(
+            $productIds,
+            (int) $invoice->branch_id,
+            (int) $invoice->id
+        );
+
         $availability = [];
-        foreach ($invoice->items as $item) {
-            $breakdown = $this->availabilityService->getBranchWarehouseBreakdown(
-                (int) $item->product_id,
-                (int) $invoice->branch_id,
-                (int) $invoice->id
-            );
-            $availability[$item->product_id] = collect($breakdown)->map(
+        foreach ($batched as $productId => $breakdown) {
+            $availability[$productId] = collect($breakdown)->map(
                 static fn ($r) => (object) [
                     'warehouse_id'  => $r['id'],
                     'warehouse_name'=> $r['warehouse_name'],
@@ -252,26 +257,47 @@ class SalesChallanController extends Controller
         // resolved invoice belongs to a branch the user can see.
         app(\App\Services\Sales\SalesAccess::class)->assertBranchAccessible($invoice->branch_id);
 
+        // Admin/superadmin can see dispatchers from ALL branches (they
+        // have cross-branch access per SalesAccess). Non-admins are
+        // locked to the invoice's branch. This fixes the "saved
+        // dispatcher not showing" bug where a dispatcher was saved
+        // under a different branch than the invoice's branch.
+        $user = $request->user();
+        $canCrossBranch = $user && $user->isAdmin();
+
         $rows = \App\Models\Employee::query()
             ->where('role', 'dispatcher')
             ->where('is_active', true)
-            ->where('branch_id', $invoice->branch_id)
+            ->when(!$canCrossBranch, static fn($q) => $q->where('branch_id', $invoice->branch_id))
             ->when($request->query('q'), static fn($q, $term) => $q
                 ->where(static fn($qq) => $qq
                     ->where('name', 'ILIKE', "%{$term}%")
                     ->orWhere('employee_code', 'ILIKE', "%{$term}%")
                     ->orWhere('phone', 'ILIKE', "%{$term}%")))
             ->orderBy('name')
-            ->select(['id', 'name', 'phone', 'employee_code'])
+            ->select(['id', 'name', 'phone', 'employee_code', 'branch_id'])
+            ->with('branch:id,branch_name')
             ->get();
 
-        $data = $rows->map(static fn($e) => [
-            'id'            => $e->id,
-            'text'          => $e->name . ($e->employee_code ? ' (' . $e->employee_code . ')' : ''),
-            'name'          => $e->name,
-            'phone'         => $e->phone,
-            'employee_code' => $e->employee_code,
-        ]);
+        // Build the label — include branch name for cross-branch admins
+        // so it's clear which branch each dispatcher belongs to.
+        $showBranch = $canCrossBranch;
+        $data = $rows->map(static function ($e) use ($showBranch) {
+            $label = $e->name;
+            if ($e->employee_code) {
+                $label .= ' (' . $e->employee_code . ')';
+            }
+            if ($showBranch && $e->branch) {
+                $label .= ' — ' . $e->branch->branch_name;
+            }
+            return [
+                'id'            => $e->id,
+                'text'          => $label,
+                'name'          => $e->name,
+                'phone'         => $e->phone,
+                'employee_code' => $e->employee_code,
+            ];
+        });
 
         return response()->json(['results' => $data]);
     }

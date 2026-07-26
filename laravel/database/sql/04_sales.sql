@@ -120,6 +120,8 @@ CREATE TABLE sales_invoice_dispatches (
 );
 CREATE INDEX idx_sdis_invoice ON sales_invoice_dispatches(sales_invoice_id);
 CREATE INDEX idx_sdis_warehouse ON sales_invoice_dispatches(warehouse_id);
+CREATE INDEX idx_sdis_product_warehouse ON sales_invoice_dispatches(product_id, warehouse_id)
+    INCLUDE (ordered_qty, dispatched_qty, sales_invoice_id);
 
 CREATE TABLE sales_challans (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -515,7 +515,7 @@
                     <i class="fas fa-user-slash text-amber-600 mt-0.5"></i>
                     <div>
                         <p class="font-medium text-amber-800 text-sm m-0">No dispatchers found</p>
-                        <p class="text-xs text-amber-700 mt-0.5 m-0">No active dispatcher-role employees in this invoice's branch.</p>
+                        <p class="text-xs text-amber-700 mt-0.5 m-0">@if(auth()->user()?->isAdmin()) No active dispatcher-role employees found in any branch. Check that the employee's role is set to "dispatcher" and "is active" is checked. @else No active dispatcher-role employees in this invoice's branch. @endif</p>
                     </div>
                 </div>
                 <p class="text-xs text-slate-500 mt-2 mb-0">Select one or more warehouse dispatchers for this delivery.</p>
