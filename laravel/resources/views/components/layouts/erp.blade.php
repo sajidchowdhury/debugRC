@@ -237,7 +237,7 @@
 
     {{-- ==================== STICKY FOOTER (no-print) ==================== --}}
     <footer class="no-print shrink-0 bg-amber-900 text-amber-100 py-3 text-center text-xs mt-auto">
-        RC ERP / আর সি বণিক — Warehouse Distribution System © {{ date('Y') }}
+        Remote Center — code with love and coffee by mycreativecode © {{ date('Y') }}
     </footer>
 
     {{-- ==================== SCRIPTS ==================== --}}
