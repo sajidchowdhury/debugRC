@@ -222,12 +222,63 @@ class SalesChallanController extends Controller
             );
         }
 
+        // Eligible dispatchers — rendered server-side as <option> elements
+        // so the dropdown is populated immediately on page load (no AJAX
+        // round-trip, no "type to search" friction). Admins/superadmins
+        // see dispatchers from ALL branches (cross-branch access); the
+        // branch name is appended to the label for clarity. Non-admins
+        // only see dispatchers in the invoice's branch (they have no
+        // cross-branch access anyway).
+        $eligibleDispatchers = $this->eligibleDispatchers($invoice);
+
         return view('admin.sales-challans.godown', [
             'title' => 'Godown Prep — ' . $invoice->invoice_code,
             'invoice' => $invoice,
             'warehouses' => $warehouses,
             'availability' => $availability,
+            'eligibleDispatchers' => $eligibleDispatchers,
         ]);
+    }
+
+    /**
+     * Build the list of active dispatcher-role employees eligible to be
+     * assigned to the given invoice.
+     *
+     * - Admin/superadmin: dispatchers from ALL branches (cross-branch
+     *   access), with the branch name appended to the label.
+     * - Non-admin: only dispatchers in the invoice's branch.
+     *
+     * Each entry carries a `selected` flag set to true when the employee
+     * is already attached to the invoice (via the dispatchers()
+     * BelongsToMany relationship) so the view can mark the <option>.
+     *
+     * @return \Illuminate\Support\Collection<int, array{id:int, name:string, employee_code:?string, branch_name:?string, selected:bool}>
+     */
+    private function eligibleDispatchers(SalesInvoice $invoice): \Illuminate\Support\Collection
+    {
+        $user = request()->user();
+        $canCrossBranch = $user && $user->isAdmin();
+
+        $attachedIds = $invoice->dispatchers->pluck('id')->all();
+
+        $rows = \App\Models\Employee::query()
+            ->where('role', 'dispatcher')
+            ->where('is_active', true)
+            ->when(!$canCrossBranch, static fn($q) => $q->where('branch_id', $invoice->branch_id))
+            ->orderBy('name')
+            ->select(['id', 'name', 'employee_code', 'branch_id'])
+            ->with('branch:id,branch_name')
+            ->get();
+
+        return $rows->map(static function ($e) use ($canCrossBranch, $attachedIds) {
+            return [
+                'id'            => $e->id,
+                'name'          => $e->name,
+                'employee_code' => $e->employee_code,
+                'branch_name'   => $canCrossBranch ? ($e->branch?->branch_name) : null,
+                'selected'      => in_array($e->id, $attachedIds, true),
+            ];
+        });
     }
 
     /**

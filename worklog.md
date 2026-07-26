@@ -2056,3 +2056,30 @@ Stage Summary:
 - INDEX: New composite index on sales_invoice_dispatches(product_id, warehouse_id) will accelerate the pipeline SUM query. User needs to run `php artisan migrate` to apply the migration.
 - USER ACTION NEEDED: (1) `git pull` on their server. (2) Run `php artisan migrate` to apply the new index migration. (3) Hard-refresh the godown page — dispatchers should now show, and the page should load fast.
 - PUSH STATUS: fix commit pushed (1af441e). CI workflow commit still local (needs workflow token scope).
+
+---
+Task ID: 4-dispatcher-server-render
+Agent: Main
+Task: Fix dispatcher select STILL not showing after the previous AJAX-cross-branch fix (user reports "no dispatcher showing")
+
+Work Log:
+- Re-examined the previous fix (commit 1af441e): it relaxed the AJAX endpoint's branch filter for admins. But the user reports dispatchers STILL don't appear. The AJAX-based approach is fragile: Select2 AJAX with minimumInputLength:0 does not reliably auto-populate on dropdown open, and any 500/403/empty-response from the endpoint yields a blank dropdown with no visible error.
+- ROOT CAUSE (this round): the dispatcher <select> relied ENTIRELY on a Select2 AJAX round-trip to populate options. If the AJAX call didn't fire on open, returned empty, or errored silently, the dropdown appeared empty — even though eligible dispatcher employees existed in the DB. The pre-selected <option> elements only covered dispatchers already ATTACHED to the invoice (via $invoice->dispatchers), NOT the full pool of selectable dispatchers.
+- FIX STRATEGY: eliminate the AJAX dependency. Render ALL eligible dispatchers as server-side <option> elements (same proven pattern already used by the warehouse <select> on this page). Select2 is kept only for styling + built-in client-side search. This makes the dropdown populate immediately on page load with zero AJAX, zero "type to search" friction, and zero hidden-failure modes.
+- Controller (app/Http/Controllers/Admin/SalesChallanController.php):
+  * Added private helper eligibleDispatchers(SalesInvoice $invoice) that queries active dispatcher-role employees — admins/superadmins see ALL branches (branch name appended to label), non-admins see only the invoice's branch. Each row carries a `selected` flag set when the employee is already attached to the invoice (via the eager-loaded dispatchers relationship — no N+1).
+  * godown() now calls eligibleDispatchers() and passes the result to the view as $eligibleDispatchers.
+- Blade (resources/views/admin/sales-challans/godown.blade.php):
+  * Replaced the AJAX-driven <select> (data-ajax-url, data-invoice-id, only pre-selected options) with a server-rendered <option> loop over $eligibleDispatchers — marks attached ones as `selected`, appends employee_code + branch_name to the label.
+  * Removed the Select2 `ajax` config block; kept Select2 init for styling + client-side search (minimumResultsForSearch: 0). Removed the now-unused #dispatcher-loading skeleton div and its JS hide call.
+  * The #dispatcher-empty hint is now driven server-side: shown only when $eligibleDispatchers is empty. The <select> itself is hidden when there are no eligible dispatchers (so the empty hint is the only thing shown).
+- Verified Blade directive balance in the edited block (@php/@endphp ×2, @foreach/@endforeach ×1, @if/@endif ×3, @if/@else/@endif ×1 — all balanced).
+- Rebuilt compiled CSS (bun run build:css) — trivial diff (1 line, the purged ch-skeleton class since the loading skeleton was removed). Pre-commit hook will also handle this on commit.
+- The AJAX endpoint SalesChallanController::dispatchers() is LEFT INTACT (not deleted) as a fallback / for any future use; the godown page simply no longer calls it.
+
+Stage Summary:
+- DEFINITIVE FIX: the dispatcher dropdown now renders ALL eligible dispatchers as server-side <option> elements the moment the page loads. No AJAX, no typing required, no hidden failure modes. If a dispatcher employee exists in the DB (role=dispatcher, is_active=true, and — for non-admins — in the invoice's branch), they WILL appear in the dropdown. Already-attached dispatchers appear pre-selected.
+- This supersedes the previous AJAX-based fix (1af441e). The cross-branch admin behavior is preserved (admins see all branches, with branch name in the label).
+- SLOW LOAD: the previous batched-availability fix (1af441e) is untouched and still in effect — no regression.
+- USER ACTION NEEDED: (1) `git pull` on their server. (2) Hard-refresh the godown page (/admin/sales-challans/godown/2). Dispatchers should now be visible and selectable immediately. (3) If the dropdown STILL shows the "No dispatchers found" hint after this fix, the issue is data-side: verify the saved employee has role exactly "dispatcher" and is_active=true (Employees → edit the employee → check the Role dropdown + Active checkbox).
+- NO test code written (per project rules). PHP is not installed in this sandbox so the Laravel app cannot be booted here; the fix was verified by manual syntax/directive review + the CSS build succeeding.

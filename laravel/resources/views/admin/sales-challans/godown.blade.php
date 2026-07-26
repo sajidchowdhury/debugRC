@@ -497,21 +497,22 @@
                 </div>
             </div>
             <div class="p-4 md:p-5">
-                {{-- loading skeleton --}}
-                <div id="dispatcher-loading" class="space-y-2 mb-3" aria-hidden="true">
-                    <div class="ch-skeleton h-10 w-full"></div>
-                    <div class="ch-skeleton h-3 w-3/4"></div>
-                </div>
+                @php
+                    $hasEligibleDispatchers = $eligibleDispatchers->isNotEmpty();
+                @endphp
                 <select id="dispatcher_id" name="dispatcher_id[]" multiple
-                        class="form-select"
-                        data-invoice-id="{{ $invoice->id }}"
-                        data-ajax-url="{{ route('admin.sales-challans.dispatchers') }}"
+                        class="form-select @if(!$hasEligibleDispatchers) hidden @endif"
                         required>
-                    @foreach ($invoice->dispatchers as $dispatcher)
-                        <option value="{{ $dispatcher->id }}" selected>{{ $dispatcher->name }}@if($dispatcher->employee_code) ({{ $dispatcher->employee_code }})@endif</option>
+                    @foreach ($eligibleDispatchers as $d)
+                        @php
+                            $label = $d['name'];
+                            if (!empty($d['employee_code'])) { $label .= ' (' . $d['employee_code'] . ')'; }
+                            if (!empty($d['branch_name'])) { $label .= ' — ' . $d['branch_name']; }
+                        @endphp
+                        <option value="{{ $d['id'] }}" @if($d['selected']) selected @endif>{{ $label }}</option>
                     @endforeach
                 </select>
-                <div id="dispatcher-empty" class="hidden mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
+                <div id="dispatcher-empty" class="@if($hasEligibleDispatchers) hidden @endif mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
                     <i class="fas fa-user-slash text-amber-600 mt-0.5"></i>
                     <div>
                         <p class="font-medium text-amber-800 text-sm m-0">No dispatchers found</p>
@@ -699,32 +700,19 @@ $(function () {
         Swal.fire({ icon: 'success', title: 'Transport cost applied', text: 'Tk ' + v.toFixed(2) + ' will be saved with the godown entry.', timer: 1600, showConfirmButton: false, toast: true, position: 'top-end' });
     });
 
-    // Dispatcher multi-select (Select2 AJAX).
+    // Dispatcher multi-select (server-rendered options, Select2 for
+    // styling + client-side search only — no AJAX). All eligible
+    // dispatchers are emitted as <option> elements by the server, so
+    // the dropdown is populated immediately on page load.
     var $dispatcherSelect = $('#dispatcher_id');
-    var dispatcherAjaxUrl = $dispatcherSelect.data('ajax-url');
-    var dispatcherInvoiceId = $dispatcherSelect.data('invoice-id');
-
     $dispatcherSelect.select2({
         theme: 'bootstrap-5',
         width: '100%',
         placeholder: '— select dispatcher(s) —',
         allowClear: false,
         minimumInputLength: 0,
-        ajax: {
-            url: dispatcherAjaxUrl,
-            dataType: 'json',
-            delay: 250,
-            data: function (params) { return { invoice_id: dispatcherInvoiceId, q: params.term || '' }; },
-            processResults: function (data) {
-                var hasResults = !!(data.results && data.results.length);
-                var alreadySelected = ($dispatcherSelect.val() || []).length > 0;
-                $('#dispatcher-empty').toggleClass('hidden', hasResults || alreadySelected);
-                return { results: data.results || [] };
-            },
-            cache: true
-        }
+        minimumResultsForSearch: 0
     });
-    $('#dispatcher-loading').addClass('hidden');
 
     $dispatcherSelect.on('change select2:select select2:unselect', function () {
         var count = ($(this).val() || []).length;
