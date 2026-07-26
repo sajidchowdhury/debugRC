@@ -494,28 +494,33 @@
             </div>
         </div>
 
-        <!-- Sticky save bar (matches template PAGE 3) -->
-        <div class="flex gap-3 sticky bottom-4 bg-white/80 backdrop-blur-sm py-4 px-4 border-t rounded-t-lg shadow-lg mt-4 items-center justify-end flex-wrap">
+        {{-- Phase 8: unified sticky action bar (replaces inline save bar).
+             Preserves Phase 7's #btn-save-godown (Ctrl+S target) + #ctrl-s-hint
+             (shortcut visibility gate). Uses <x-erp.sticky-action-bar> for
+             parity with the issue screen + ui-preview. The bar is INSIDE the
+             form so the submit button posts to storeGodown. The <x-layouts.erp>
+             wrapper (sidebar + topbar) is UNCHANGED — consistency preserved. --}}
+        <x-erp.sticky-action-bar variant="phase8" align="between">
             {{-- Phase 7: Ctrl+S hint — desktop only (hidden md:inline).
                  Also doubles as the JS visibility gate for the shortcut:
                  on mobile the hint is display:none, so Ctrl+S is a no-op. --}}
-            <span id="ctrl-s-hint" class="hidden md:inline-flex items-center gap-1 text-xs text-gray-400 mr-auto">
+            <span id="ctrl-s-hint" class="hidden md:inline-flex items-center gap-1 text-xs text-gray-400">
                 <kbd class="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-[10px] font-mono shadow-sm">Ctrl</kbd>
                 <span>+</span>
                 <kbd class="px-1.5 py-0.5 bg-gray-100 border border-gray-300 rounded text-[10px] font-mono shadow-sm">S</kbd>
                 <span>to save</span>
             </span>
-            <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="border border-gray-200 hover:bg-gray-50 rounded-lg px-4 py-2 text-sm">
-                Cancel / বাতিল
-            </a>
-            <button type="submit"
-                    id="btn-save-godown"
-                    @if ($warehousesEmpty) disabled @endif
-                    class="bg-amber-500 hover:bg-amber-600 text-white gap-2 rounded-lg px-4 py-2 font-medium inline-flex items-center text-sm shadow-md disabled:bg-gray-300 disabled:cursor-not-allowed">
-                <i class="fas fa-save"></i>
-                Save Godown Copy
-            </button>
-        </div>
+            {{-- Button group: stacks vertically full-width on mobile,
+                 horizontal row on desktop (flex-col w-full md:flex-row). --}}
+            <div class="flex flex-col w-full md:flex-row md:w-auto gap-3">
+                <x-erp.outline-button href="{{ route('admin.sales-invoices.show', $invoice) }}" icon="arrow-left" class="w-full md:w-auto">
+                    Cancel / বাতিল
+                </x-erp.outline-button>
+                <x-erp.gradient-button icon="save" type="submit" id="btn-save-godown" class="w-full md:w-auto" :disabled="$warehousesEmpty">
+                    Save Godown Copy
+                </x-erp.gradient-button>
+            </div>
+        </x-erp.sticky-action-bar>
     </form>
 </div>
 
@@ -750,18 +755,22 @@ $(function () {
         $('#dispatcher-count-badge').text(count + (count === 1 ? ' selected' : ' selected'));
     });
 
-    // Intercept submit if any row has insufficient stock selected (defensive),
-    // OR if no dispatcher is selected.
+    // Phase 8 — Godown save: Swal2 confirmation → loading → native submit.
+    // Guards (warehouse + dispatcher) run first; if they pass, a confirmation
+    // dialog summarises the action, then a loading toast holds the UI while
+    // the form POSTs. storeGodown redirects to the issue screen on success,
+    // so the "Proceed to Issue" next-step is implicit in the redirect.
+    // e.target.submit() is the native DOM submit — it does NOT re-fire the
+    // 'submit' event, so this handler is not re-entered.
     $('form').on('submit', function (e) {
+        e.preventDefault();
+
+        // --- Guard 1: every line has a warehouse ---
         var warehouseOk = true;
         $('.warehouse-select').each(function () {
             if (!$(this).val()) warehouseOk = false;
         });
-
-        var dispatcherCount = ($dispatcherSelect.val() || []).length;
-
         if (!warehouseOk) {
-            e.preventDefault();
             Swal.fire({
                 icon: 'warning',
                 title: 'Incomplete assignment',
@@ -771,8 +780,9 @@ $(function () {
             return;
         }
 
+        // --- Guard 2: at least one dispatcher ---
+        var dispatcherCount = ($dispatcherSelect.val() || []).length;
         if (dispatcherCount < 1) {
-            e.preventDefault();
             Swal.fire({
                 icon: 'warning',
                 title: 'Dispatcher required',
@@ -781,6 +791,36 @@ $(function () {
             });
             return;
         }
+
+        // --- Phase 8: confirmation → loading → submit ---
+        var lineCount = $('.warehouse-select').length;
+        var transportVal = parseFloat($('#godown_transport_cost').val()) || 0;
+        Swal.fire({
+            icon: 'question',
+            title: 'Save godown copy?',
+            html: '<p class="mb-1">You are about to save <strong>' + lineCount + '</strong> warehouse assignment(s)' +
+                  (transportVal > 0 ? ' with transport <strong>Tk ' + transportVal.toFixed(2) + '</strong>' : '') +
+                  '.</p>' +
+                  '<p class="mb-0 text-muted small">You will proceed to the <strong>Issue Challan</strong> step next. ' +
+                  'You can re-edit the godown copy later if needed.</p>',
+            showCancelButton: true,
+            confirmButtonColor: '#d97706',
+            cancelButtonColor: '#6c757d',
+            confirmButtonText: '<i class="fas fa-save"></i> Save & proceed',
+            cancelButtonText: 'Cancel'
+        }).then(function (res) {
+            if (!res.isConfirmed) return;
+            Swal.fire({
+                title: 'Saving godown copy…',
+                html: '<span class="text-muted small">Reserving stock assignments</span>',
+                timer: 8000,
+                timerProgressBar: true,
+                didOpen: function () { Swal.showLoading(); },
+                showConfirmButton: false
+            });
+            // Native submit — bypasses this jQuery handler (no re-entry).
+            e.target.submit();
+        });
     });
 
     // Phase 7 — Ctrl/Cmd+S → Save godown (desktop only).

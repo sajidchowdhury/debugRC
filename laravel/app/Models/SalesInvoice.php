@@ -181,6 +181,19 @@ class SalesInvoice extends Model
         return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'journal_entry_id');
     }
 
+    /**
+     * The challan issued against this invoice (Phase 8 — Reverse button on
+     * the issue screen needs the challan id for the cancel route).
+     * HasOne: an invoice has at most one non-reversed challan; in the rare
+     * case of multiple (reverse + re-issue), the latest is returned via
+     * latestOfMany(). The FK is sales_invoice_id on sales_challans.
+     */
+    public function challan(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(\App\Models\SalesChallan::class, 'sales_invoice_id')
+            ->latestOfMany();
+    }
+
     public function isDraft(): bool { return $this->status === 'draft'; }
     public function isConfirmed(): bool { return $this->status === 'confirmed'; }
     public function isCancelled(): bool { return $this->status === 'cancelled'; }

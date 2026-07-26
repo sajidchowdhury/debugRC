@@ -31,6 +31,18 @@
         : ($invoice->is_godown_prepared
             ? App\Support\StatusPalette::GODOWN_PREPARED
             : App\Support\StatusPalette::DRAFT);
+
+    // Phase 8 — Reverse Challan button (shown when the challan is already
+    // issued AND the user is admin/superadmin/manager, matching the cancel
+    // route's role:manager,admin middleware). $invoice->challan is the latest
+    // SalesChallan for this invoice (HasOne, eager-loaded in the controller).
+    // Non-admin viewers see neither the Issue button (already issued) nor the
+    // Reverse button — just the Back button.
+    $isIssued = (bool) $invoice->is_challan_issued;
+    $userRole = auth()->user()?->getRole() ?? 'user';
+    $canReverse = $isIssued && in_array($userRole, ['admin', 'superadmin', 'manager'])
+        && $invoice->challan !== null;
+    $challanModel = $canReverse ? $invoice->challan : null;
 @endphp
 
 <div class="space-y-6">
@@ -292,18 +304,61 @@
             </div>
         </div>
 
-        <!-- Sticky issue button bar (matches template PAGE 4) -->
-        <div class="flex gap-3 sticky bottom-4 bg-white/80 backdrop-blur-sm py-4 px-4 border-t rounded-t-lg shadow-lg mt-4 items-center justify-end flex-wrap">
-            <a href="{{ route('admin.sales-invoices.show', $invoice) }}" class="border border-gray-200 hover:bg-gray-50 rounded-lg px-4 py-2 text-sm">
-                Cancel / বাতিল
-            </a>
-            <button type="submit"
-                    class="bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white gap-2 min-w-[200px] shadow-md rounded-lg px-4 py-2 font-medium inline-flex items-center justify-center text-sm">
-                <i class="fas fa-paper-plane"></i>
-                Issue Challan
-            </button>
-        </div>
+        {{-- Phase 8: unified sticky action bar (replaces inline issue button bar).
+             Uses <x-erp.sticky-action-bar> for parity with the godown screen.
+             Layout: [spacer] [Cancel] [Issue Challan | Reverse Challan].
+             The <x-layouts.erp> wrapper (sidebar + topbar) is UNCHANGED.
+             Mobile: buttons stack full-width (flex-col w-full md:flex-row). --}}
+        <x-erp.sticky-action-bar variant="phase8" align="between">
+            {{-- Left-side spacer keeps the buttons right-aligned on desktop
+                 (justify-between with one empty left child). On mobile the
+                 button-group is full-width so the spacer collapses. --}}
+            <span class="hidden md:inline-flex items-center gap-1.5 text-xs text-gray-400">
+                <i class="fas fa-circle-info text-amber-500"></i>
+                @if ($isIssued)
+                    Challan issued — irreversible
+                @else
+                    Stock moves OUT on issue
+                @endif
+            </span>
+            <div class="flex flex-col w-full md:flex-row md:w-auto gap-3">
+                <x-erp.outline-button href="{{ route('admin.sales-invoices.show', $invoice) }}" icon="arrow-left" class="w-full md:w-auto">
+                    Cancel / বাতিল
+                </x-erp.outline-button>
+
+                {{-- Phase 8: Reverse Challan button (issued + admin/manager only).
+                     The button is type="button" — it does NOT submit the issue
+                     form. JS opens a Swal2 textarea-prompt; on confirm it sets
+                     the hidden reason field in #reverseForm (a SIBLING form,
+                     placed after </form> below to avoid nested-form invalid
+                     HTML) and submits it to the cancel route. --}}
+                @if ($canReverse && $challanModel)
+                    <button type="button"
+                            id="btn-reverse-challan"
+                            class="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-md transition-colors bg-red-500 hover:bg-red-600 disabled:opacity-50 disabled:pointer-events-none w-full md:w-auto">
+                        <i class="fas fa-rotate-left"></i>
+                        <span>Reverse Challan</span>
+                    </button>
+                @endif
+
+                @if (! $isIssued)
+                    <x-erp.gradient-button icon="paper-plane" type="submit" id="btn-issue-challan" class="w-full md:w-auto">
+                        Issue Challan
+                    </x-erp.gradient-button>
+                @endif
+            </div>
+        </x-erp.sticky-action-bar>
     </form>
+
+    {{-- Phase 8: Reverse form — a SIBLING of #issueForm (NOT nested), so HTML
+         stays valid. Invisible (no visible children); JS populates the hidden
+         reason field + submits when the Swal2 reverse prompt confirms. --}}
+    @if ($canReverse && $challanModel)
+        <form method="POST" action="{{ route('admin.sales-challans.cancel', $challanModel) }}" id="reverseForm" aria-hidden="true" style="display:none;">
+            @csrf
+            <input type="hidden" name="cancel_reason" id="reverseReasonInput" value="">
+        </form>
+    @endif
 </div>
 
 </x-layouts.erp>
@@ -311,6 +366,11 @@
 @push('scripts')
 <script>
 $(function () {
+    // Phase 8 — Issue flow: warning → confirm → loading → native submit.
+    // e.target.submit() is the native DOM submit (bypasses this handler).
+    // The server redirects to the challan show page on success; the success
+    // flash renders as a banner there. A print-options success modal is
+    // deferred to Phase 9 (which owns show.blade.php + the print buttons).
     $('#issueForm').on('submit', function (e) {
         e.preventDefault();
         Swal.fire({
@@ -324,11 +384,58 @@ $(function () {
             confirmButtonText: '<i class="fas fa-paper-plane"></i> Yes, issue challan',
             cancelButtonText: 'Cancel'
         }).then(function (res) {
-            if (res.isConfirmed) {
-                e.target.submit();
-            }
+            if (!res.isConfirmed) return;
+            Swal.fire({
+                title: 'Issuing challan…',
+                html: '<span class="text-muted small">Moving stock + posting COGS journal entry</span>',
+                timer: 10000,
+                timerProgressBar: true,
+                didOpen: function () { Swal.showLoading(); },
+                showConfirmButton: false
+            });
+            e.target.submit(); // native — no handler re-entry
         });
     });
+
+    // Phase 8 — Reverse flow (mirrors show.blade.php's #cancelBtn pattern).
+    // Only wired when the #btn-reverse-challan button exists (issued + admin).
+    var $reverseBtn = $('#btn-reverse-challan');
+    if ($reverseBtn.length) {
+        $reverseBtn.on('click', function () {
+            Swal.fire({
+                icon: 'warning',
+                title: 'Reverse this challan?',
+                html: '<p class="mb-2">This will <strong>reverse stock movements</strong> and <strong>reverse the GL journal entry</strong>.</p>' +
+                      '<p class="mb-2 text-muted small">A reason is required (min 5 chars, max 500).</p>' +
+                      '<textarea id="reverseReason" class="form-control" placeholder="Enter reversal reason..." maxlength="500" rows="3"></textarea>',
+                showCancelButton: true,
+                confirmButtonColor: '#dc3545',
+                cancelButtonColor: '#6c757d',
+                confirmButtonText: '<i class="fas fa-rotate-left"></i> Yes, reverse challan',
+                cancelButtonText: 'Keep challan',
+                preConfirm: function () {
+                    var reason = $('#reverseReason').val().trim();
+                    if (reason.length < 5) {
+                        Swal.showValidationMessage('A reversal reason of at least 5 characters is required.');
+                        return false;
+                    }
+                    return reason;
+                }
+            }).then(function (res) {
+                if (!res.isConfirmed) return;
+                $('#reverseReasonInput').val(res.value);
+                Swal.fire({
+                    title: 'Reversing challan…',
+                    html: '<span class="text-muted small">Reversing stock + GL</span>',
+                    timer: 10000,
+                    timerProgressBar: true,
+                    didOpen: function () { Swal.showLoading(); },
+                    showConfirmButton: false
+                });
+                $('#reverseForm').submit();
+            });
+        });
+    }
 });
 </script>
 @endpush

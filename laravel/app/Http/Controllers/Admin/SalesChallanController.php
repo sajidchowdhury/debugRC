@@ -315,7 +315,7 @@ class SalesChallanController extends Controller
      */
     public function challanForm(int $invoiceId)
     {
-        $invoice = SalesInvoice::with(['items.product', 'items.warehouse', 'dispatches', 'customer', 'branch'])
+        $invoice = SalesInvoice::with(['items.product', 'items.warehouse', 'dispatches', 'customer', 'branch', 'challan'])
             ->findOrFail($invoiceId);
 
         if (!$invoice->is_godown_prepared) {
