@@ -651,7 +651,7 @@ Return's `audit.blade.php`. It includes the shared partial
 
 ---
 
-## Phase 4 — Create Page Rewrite (Workspace Pattern + Condition Toggle)
+## Phase 4 — Create Page Rewrite (Workspace Pattern + Condition Toggle)  ✅ COMPLETE
 
 > **Goal**: Replace the decent-but-not-great `create.blade.php` with the 2-step
 > workspace pattern from Purchase Return: Step 1 find invoice via typeahead,
@@ -781,6 +781,162 @@ adapted).
 - [ ] `bun run dev` / Laravel serves without 404s for asset files
 
 **Dependencies**: Phases 3.1, 3.2, 4.2, 4.3 (new files must be in place first).
+
+> **Phase 4.5 status**: DEFERRED to run together with Phase 3 (orphan
+> deletion needs the Phase 3.1/3.2 replacements in place first). The new
+> `SalesReturn.js` (4.3) and `sales-return-create.css` (4.2) are already
+> in place; the legacy `sales-return-index.{js,css}` are untouched and
+> still referenced by the current `index.blade.php` until Phase 3 lands.
+
+---
+
+### Phase 4 Execution Log
+
+> Phase 4 implements 4.1–4.4. Two **necessary pre-fixes** were discovered
+> during implementation and are documented here (they are in-scope: without
+> them, two Phase 4 acceptance criteria would be cosmetic-only).
+
+#### Pre-fix A — `SalesReturnService` must persist `condition_state`
+**Problem found**: `SalesReturnService::validateItems()` did NOT read
+`condition_state` from the input, and `createReturn()` did NOT insert it
+into `sales_return_items`. So even though Phase 0.3 added the model
+helpers (`isDamage()`), Phase 1 validated the field, and the DB column
+exists (default `'Good'`), the service silently dropped the value —
+meaning the Phase 4.3 condition toggle would have been cosmetic and
+`createLinkedDamageWriteOffs()` (which reads `$item->isDamage()` on
+confirm) would never trigger for Damage items.
+
+**Fix** (`laravel/app/Services/Sales/SalesReturnService.php`):
+- `validateItems()`: read `condition_state` from each item, normalize to
+  `'Good'|'Damage'` (default `'Good'`), include it in the validated row.
+- `createReturn()` `$itemRows` insert: add `'condition_state' => $item['condition_state'] ?? 'Good'`.
+
+This makes the confirm-step damage write-off actually fire for Damage
+lines (the original Phase 0.3 intent).
+
+#### Pre-fix B — `getInvoiceDetails` must return `original_cost`
+**Problem found**: Phase 4.2's acceptance criterion is an "Original-cost
+column highlighting (yellow tint — preserves Laravel's BETTER-than-legacy
+original_cost snapshot display)". But `getInvoiceDetails()` did NOT
+return `original_cost`, so the yellow column would show "—" for every
+AJAX-loaded invoice (it only worked for the rare `?invoice_id=` prefill
+path, which the old `create.blade.php` computed in PHP). The service
+re-derives `original_cost` from the challan's `stock_transactions` on
+store (source of truth), so the UI value is display-only — but it must
+exist for the column to be meaningful.
+
+**Fix** (`laravel/app/Http/Controllers/Admin/SalesReturnController.php` ::
+`getInvoiceDetails()`): look up the active challan, build an
+`origCostMap` keyed by `product_id:warehouse_id` from
+`stock_transactions` (reference_type='sales_challan', is_reversed=false),
+and add `'original_cost'` to each item. Mirrors the prefill PHP that was
+inlined in the old `create.blade.php` (now removed).
+
+#### 4.1 — Shared workspace partial  ✅
+Created `laravel/resources/views/admin/sales-returns/partials/create-workspace.blade.php`
+(~60 lines). Mirrors `purchase-returns/partials/create-workspace.blade.php`
+with `srt-*` classes and `data-srt-workspace` auto-bind attribute. Two
+steps: Find Invoice (search input + clear + hint + results listbox) and
+Return form (invoice-bar + details container, hidden until pick).
+Accepts `$workspaceId` + `$compact`. The new partials directory
+`resources/views/admin/sales-returns/partials/` was created.
+
+#### 4.2 — Dedicated CSS  ✅
+Rewrote `laravel/public/assets/css/sales-return-create.css` (384 → ~410
+lines, fresh content). Mirrors `purchase-return-create.css` with
+`--srt-*` custom properties (orange→red palette per Decision D-2:
+`--srt-primary:#ea580c`, `--srt-accent:#dc2626`). Sections: hero +
+branch-tag pill, panel, find-step (search, result cards, empty/loading
+states), form-step (invoice-bar, black-header lines table, total-strip
+with revenue + COGS, actions), **condition_state pill toggle**
+(Good=green `#16a34a`, Damage=red `#dc2626`), **original-cost column
+yellow tint** (`--srt-cost-tint`/`--srt-cost-tint-strong`), offcanvas
+quick-create (720px, gradient header), compact mode, mobile fallback.
+Original-cost column uses `.col-original-cost` on `<th>`/`<td>` +
+`.orig-cost-value` / `.orig-cost-na` for the value span.
+
+#### 4.3 — `SalesReturn.js` workspace class  ✅
+Rewrote `laravel/public/assets/js/SalesReturn.js` (609 → ~480 lines,
+fresh content) as a `SalesReturnWorkspace` IIFE class. Unlike
+Purchase Return (which **inlines** the JS in both create + index
+blades), this is a **separate linked file** — cleaner, DRY, and ready
+for Phase 3.3 to `<script src>` it on the index page without
+duplication.
+
+Methods: constructor (binds `[data-srt-workspace]` root), `bindEvents`,
+`onSearchKeydown` (↑↓ Enter Esc), `runSearch` (debounced 280ms →
+`search-invoices`), `renderResultCards`, `selectInvoice` (→
+`invoice-details`), `renderInvoiceBar`, `renderReturnForm`,
+`calculateRow`, `calculateTotal` (revenue + COGS), `resetWorkspace`,
+`submitReturn`, `prefill`.
+
+**Sales-return-specific deviations from Purchase Return** (per plan
+4.3 "Dual stock-cap logic"):
+- Cap = `returnable_qty` ONLY (no warehouse-availability check — we are
+  RECEIVING stock, not consuming). Simpler than Purchase Return's
+  `min(returnable, warehouse avail)`.
+- Warehouse is **read-only** (each invoice item shipped from ONE
+  warehouse; returning elsewhere would break the original_cost snapshot
+  lookup). Rendered as a display span + hidden input, not a select.
+- `condition_state` is a **Good/Damage pill toggle** (radio + styled
+  labels). Both states still require the warehouse (Damage items get a
+  linked damage write-off on confirm). Unlike Purchase Return, Damage
+  does NOT disable the warehouse or relax the cap — both are identical
+  for Good/Damage here; only the flag differs.
+- Form serialization uses Laravel `items[idx][key]` array notation
+  (BUG-50 lesson) with sales-return field names:
+  `sales_invoice_item_id`, `product_id`, `warehouse_id`, `qty`, `rate`,
+  `condition_state`.
+- On success: dispatches `salesReturn:created` CustomEvent +
+  SweetAlert2 "View return" / "New return" → `onSaved` callback
+  (redirect on full page, hide+reload on offcanvas).
+- 422 validation errors are unwrapped (`errors` object → first message).
+
+#### 4.4 — `create.blade.php` rewrite  ✅
+Rewrote `laravel/resources/views/admin/sales-returns/create.blade.php`
+(446 → ~95 lines). Structure:
+1. `@extends('layouts.admin')` + `@push('css')` linking
+   `sales-return-index.css` + `sales-return-create.css`.
+   **Deviation**: omitted `sales-dt-mobile.css` (file does not exist;
+   purchase-returns references it and 404s — pre-existing issue, not
+   introduced here). Mobile rules live inside `sales-return-create.css`.
+2. `@section('content')`: orange→red gradient hero (`<i class="fas fa-undo-alt">`)
+   + branch-tag pill + "All returns" button; **critical-info banner
+   PRESERVED** verbatim from the pre-rewrite page (documents the
+   original_cost snapshot rule + the confirm-step GL postings);
+   session-error alert; `<section class="srt-create-panel">` wrapping
+   `@include('admin.sales-returns.partials.create-workspace', compact=false)`.
+3. `@push('scripts')`: `window.CSRF_TOKEN`, `window.SALES_RETURN_BASE`,
+   `window.SALES_RETURN_CREATE_BOOT` ({workspace_id, prefill}),
+   `window.SALES_RETURN_BOOT` ({csrf, endpoints{datatables, summary,
+   search_invoices, invoice_details, store, export}}), then
+   `<script src="/assets/js/SalesReturn.js">` (auto-binds on
+   DOMContentLoaded).
+
+The controller `create()` was simplified: dropped the select2
+`$invoices` list (typeahead replaces it) and the eager-loaded `$invoice`
+(the workspace fetches details via AJAX). Prefill now resolves
+`?invoice_id=` → `invoice_code` (or raw `?q=`) and is passed to the view
+as `$prefill`, consumed by `SalesReturnWorkspace.prefill()`.
+
+#### Verification (static — no PHP/runtime in this sandbox)
+- Route names used in `create.blade.php` all exist in `routes/web.php`
+  (index, summary, search-invoices, invoice-details, store, export).
+- `node --check public/assets/js/SalesReturn.js` → JS OK.
+- Blade directive balance: `@push/@endpush` 2/2, `@section/@endsection`
+  1/1, `@php/@endphp` 1/1, `@include` 1 (create.blade.php); partial
+  `@php/@endphp` 1/1.
+- No other view references the old `$invoices`/`$invoice` create-page
+  variables.
+- `GetInvoiceDetailsRequest` form request exists (Phase 1).
+
+#### Outstanding (carried to later phases)
+- **Live E2E create test** (deferred): find invoice → return form →
+  save → redirect to show. Needs a running Laravel + Postgres stack
+  (not available in this sandbox).
+- **4.5 orphan deletion**: deferred to Phase 3 (needs 3.1/3.2 in place).
+- **`sales-dt-mobile.css`**: create a shared file (or drop the reference
+  from purchase-returns too) — tracked as a Phase 3 cleanup item.
 
 ---
 

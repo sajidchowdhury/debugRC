@@ -125,6 +125,7 @@ class SalesReturnService
                     'qty' => $item['qty'],
                     'rate' => $item['rate'],
                     'original_cost' => $item['original_cost'],
+                    'condition_state' => $item['condition_state'] ?? 'Good', // Phase 4.3
                 ];
             }
             DB::table('sales_return_items')->insert($itemRows);
@@ -510,6 +511,17 @@ class SalesReturnService
 
             if ($productId <= 0 || $qty <= 0 || $warehouseId <= 0) continue;
 
+            // Phase 4.3: persist condition_state (Good/Damage). The DB column
+            // defaults to 'Good', but accepting it here lets the create-page
+            // toggle drive the linked-damage write-off on confirm
+            // (createLinkedDamageWriteOffs reads $item->isDamage()). Without
+            // this, Damage items would be silently treated as Good.
+            $conditionState = strtoupper((string) ($item['condition_state'] ?? 'Good'));
+            if (!in_array($conditionState, ['GOOD', 'DAMAGE'], true)) {
+                $conditionState = 'GOOD';
+            }
+            $conditionState = ucfirst(strtolower($conditionState)); // 'Good' | 'Damage'
+
             // Check returnable_qty (invoice item qty - already returned).
             if ($invoiceItemId > 0) {
                 $invoiceItem = DB::table('sales_invoice_items')->where('id', $invoiceItemId)->first();
@@ -561,6 +573,7 @@ class SalesReturnService
                 'rate' => $rate, // sales rate (for revenue reversal)
                 'original_cost' => $originalCost, // ORIGINAL avg_cost (for COGS + stock IN)
                 'sales_invoice_item_id' => $invoiceItemId > 0 ? $invoiceItemId : null,
+                'condition_state' => $conditionState, // Phase 4.3: Good | Damage
             ];
         }
 

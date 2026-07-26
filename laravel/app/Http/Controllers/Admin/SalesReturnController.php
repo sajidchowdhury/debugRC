@@ -80,27 +80,25 @@ class SalesReturnController extends Controller
 
     public function create(Request $request)
     {
-        $invoice = null;
-        $invoiceId = $request->input('invoice_id');
-        if ($invoiceId) {
-            $invoice = \App\Models\SalesInvoice::with(['items.product', 'items.warehouse', 'customer', 'branch'])
+        // Phase 4 — workspace create page (typeahead find-invoice → return form).
+        // Pre-fill the search box from ?invoice_id= (resolve to invoice_code) or
+        // ?q= (raw search term). The workspace JS calls search-invoices +
+        // invoice-details via AJAX, so we no longer eager-load the invoice's
+        // items here (the old select2 dropdown list is dropped).
+        $prefill = trim((string) (request()->input('q') ?? ''));
+        if (!$prefill && request()->has('invoice_id')) {
+            $inv = \App\Models\SalesInvoice::select('id', 'invoice_code')
                 ->where('is_challan_issued', true)
                 ->where('is_reversed', false)
-                ->findOrFail($invoiceId);
+                ->find((int) request()->input('invoice_id'));
+            if ($inv) {
+                $prefill = $inv->invoice_code;
+            }
         }
 
-        // Get challan-issued invoices for the selector.
-        $invoices = \App\Models\SalesInvoice::with(['customer', 'branch'])
-            ->where('is_challan_issued', true)
-            ->where('is_reversed', false)
-            ->orderBy('invoice_date', 'desc')
-            ->limit(100)
-            ->get();
-
         return view('admin.sales-returns.create', [
-            'title' => 'New Sales Return',
-            'invoices' => $invoices,
-            'invoice' => $invoice,
+            'title'    => 'New Sales Return',
+            'prefill'  => $prefill,
         ]);
     }
 
@@ -207,14 +205,41 @@ class SalesReturnController extends Controller
             ->where('is_reversed', false)
             ->findOrFail($request->input('invoice_id'));
 
+        // Phase 4.3: look up ORIGINAL avg_cost per (product_id, warehouse_id)
+        // from the active challan's stock_transactions, so the create-page
+        // workspace can show the yellow-tinted "Original Cost" column that
+        // documents the COGS-reversal + stock-IN cost (Laravel's BETTER-than-
+        // legacy original_cost snapshot). Mirrors the prefill PHP in the old
+        // create.blade.php. The service re-looks this up on store as the
+        // source of truth (defense-in-depth); the UI value is display-only.
+        $challan = \Illuminate\Support\Facades\DB::table('sales_challans')
+            ->where('sales_invoice_id', $invoice->id)
+            ->where('is_reversed', false)
+            ->first();
+
+        $origCostMap = [];
+        if ($challan) {
+            $costRows = \Illuminate\Support\Facades\DB::table('stock_transactions')
+                ->where('reference_type', 'sales_challan')
+                ->where('reference_id', $challan->id)
+                ->where('is_reversed', false)
+                ->select('product_id', 'warehouse_id', 'rate')
+                ->get();
+            foreach ($costRows as $row) {
+                $origCostMap[(int) $row->product_id . ':' . (int) $row->warehouse_id] = (float) $row->rate;
+            }
+        }
+
         // Calculate returnable_qty for each item.
-        $items = $invoice->items->map(function ($item) {
+        $items = $invoice->items->map(function ($item) use ($origCostMap) {
             $alreadyReturned = (float) DB::table('sales_return_items as sri')
                 ->join('sales_returns as sr', 'sr.id', '=', 'sri.sales_return_id')
                 ->where('sri.sales_invoice_item_id', $item->id)
                 ->whereIn('sr.status', ['created', 'confirmed'])
                 ->where('sr.is_reversed', false)
                 ->sum('sri.qty');
+
+            $origCost = $origCostMap[(int) $item->product_id . ':' . (int) $item->warehouse_id] ?? 0;
 
             return [
                 'id' => $item->id,
@@ -225,6 +250,7 @@ class SalesReturnController extends Controller
                 'already_returned' => $alreadyReturned,
                 'returnable_qty' => max(0, (float) $item->qty - $alreadyReturned),
                 'rate' => (float) $item->rate,
+                'original_cost' => $origCost,
                 'warehouse_id' => $item->warehouse_id,
                 'warehouse_name' => $item->warehouse?->warehouse_name,
             ];
