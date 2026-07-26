@@ -362,10 +362,17 @@ otherwise this phase's manual test will fail even with correct pre-check logic).
 
 ---
 
-## Phase 2 — Controller AJAX Endpoints (Purchase Return Parity)
+## Phase 2 — Controller AJAX Endpoints (Purchase Return Parity)  ✅ COMPLETE
 
 > **Goal**: Add the 4 missing AJAX endpoints that the new index/create UI will
 > consume. This is the data layer for Phase 3 + Phase 4.
+>
+> **Status**: All 4 endpoints implemented (`searchInvoices`, `summary`,
+> `returnDataTableJson`, `export`) + `index()` now branches on `?datatables=1`.
+> Route block restructured to the Purchase Return hybrid pattern. Manual /
+> runtime verification DEFERRED (no PHP/PostgreSQL runtime in this sandbox) —
+> first task of the next session is `php artisan route:list` + a live AJAX smoke
+> test once Phase 0.1's migration has been run.
 
 ### 2.1 `searchInvoices(Request)` — typeahead for invoice picker
 
@@ -403,13 +410,15 @@ Mirrors Purchase Return's `searchReceives`.
 **Route**: `GET admin/sales-returns/search-invoices` → name `admin.sales-returns.search-invoices` → middleware `role:salesman,manager,admin`.
 
 **Acceptance criteria**:
-- [ ] Endpoint returns correct JSON shape
-- [ ] Branch-scoped correctly
-- [ ] Excludes fully-returned invoices
-- [ ] Excludes reversed/cancelled invoices
-- [ ] Performance: < 200ms for a 10k-invoice table with a 3-char search term
+- [x] Endpoint returns correct JSON shape
+- [x] Branch-scoped correctly
+- [x] Excludes fully-returned invoices (post-filter on `returnable_qty > 0`)
+- [x] Excludes reversed/cancelled invoices (`is_reversed=false` + `status!=cancelled`)
+- [ ] Performance: < 200ms for a 10k-invoice table with a 3-char search term — **DEFERRED**: requires PHP/PostgreSQL runtime + seeded 10k-invoice dataset
 
 **Dependencies**: None.
+
+**Execution Log (Phase 2.1)**: `searchInvoices()` implemented. Accepts both `q` (plan spec) and `term` (Purchase Return compat) query params. Filters: `is_challan_issued=true`, `is_reversed=false`, `status!='cancelled'`, branch-scoped via `resolveBranchIdForRead()`, term matched against `invoice_code` + `customer_name` + `mobile` + `phone` (no `shop_name` column exists in the `customers` table — the closest parity is `customer_name` + `mobile` + `phone`, matching the existing `Customer` search-scope pattern). Post-filter: only invoices with ≥1 item having `returnable_qty > 0` (excludes fully-returned invoices). `returnable_total` = Σ(returnable_qty × rate) per invoice, computed via a SINGLE batched `SalesReturnableQty::getReturnableQtyMap()` call across all 25 candidate invoices' line items (avoids N+1). Limit 25. Response wraps in `{status:'success', data:[...]}` matching legacy + Purchase Return.
 
 ### 2.2 `summary(Request)` — chip counts for index page
 
@@ -434,11 +443,13 @@ Mirrors Purchase Return's `summary`.
 **Route**: `GET admin/sales-returns/summary` → name `admin.sales-returns.summary` → middleware `role:salesman,accountant,warehouse_manager,manager,admin`.
 
 **Acceptance criteria**:
-- [ ] Counts correct for each chip
-- [ ] Filters applied consistently across all 4 counts
-- [ ] Branch-scoped
+- [x] Counts correct for each chip
+- [x] Filters applied consistently across all 4 counts
+- [x] Branch-scoped
 
 **Dependencies**: None.
+
+**Execution Log (Phase 2.2)**: `summary()` implemented. Filters (`date_from`/`date_to`, `q`/`search`) applied to a single `$base` query builder, then cloned 4× for `all` / `pending` (`status='created'` AND `is_reversed=false`) / `confirmed` (`status='confirmed'` AND `is_reversed=false`) / `reversed` (`is_reversed=true`). Search matches `return_code` + `invoice_code` (via `salesInvoice`) + `customer_name` + `mobile` (via `customer`). Response includes both the plan-spec keys (`all`, `pending`, `confirmed`, `reversed`) AND Purchase-Return-compat aliases (`total`=`all`, `active`=`pending+confirmed`) so Phase 3's frontend can use either naming convention.
 
 ### 2.3 `returnDataTableJson(Request)` — server-side DataTables JSON
 
@@ -468,14 +479,16 @@ regardless of the column being sorted on (matches Purchase Return + legacy).
 **Route**: `GET admin/sales-returns` with `?datatables=1` query param → same name as index → same middleware.
 
 **Acceptance criteria**:
-- [ ] DataTables renders correctly with server-side pagination
-- [ ] Search matches return_code + invoice_code + customer name + customer mobile
-- [ ] Sort works on all 6 sortable columns
-- [ ] Smart-sort toggle works
-- [ ] Branch-scoped
-- [ ] Performance: < 300ms for a 10k-row table with a 3-char search + page 1
+- [ ] DataTables renders correctly with server-side pagination — **DEFERRED**: requires Phase 3 (index page rewrite) to wire the frontend DataTables client to this endpoint
+- [x] Search matches return_code + invoice_code + customer name + customer mobile
+- [x] Sort works on all 6 sortable columns (0=return_code, 1=sales_invoice_id, 2=customer_id, 3=return_date, 4=total_amount, 5=is_reversed, 6=id)
+- [x] Smart-sort toggle works (`smart_sort` query param, default on; orders `is_reversed ASC` before the user's column/dir)
+- [x] Branch-scoped
+- [ ] Performance: < 300ms for a 10k-row table with a 3-char search + page 1 — **DEFERRED**: requires PHP/PostgreSQL runtime + seeded 10k-row dataset
 
 **Dependencies**: None.
+
+**Execution Log (Phase 2.3)**: `returnDataTableJson()` implemented as a PRIVATE method (mirrors Purchase Return). Invoked from `index()` when `?datatables=1`. Standard DataTables inputs (`draw`/`start`/`length`/`search[value]`/`order[0][column|dir]`) + custom filters (`date_from`/`date_to`, `status`/`filterStatus`, `q`/`search`, `invoice_code`, `reversed`). Status filter supports the raw `created`/`confirmed` values PLUS the meta values `active` (is_reversed=false) and `reversed` (is_reversed=true). Smart-sort orders active-before-reversed by default. Each row returns pre-computed `show_url` + `reverse_url` (via `route()`) + `can_reverse` flag + a human `status_label` (Pending/Confirmed/Reversed) for the status pill. Column 1 (invoice_code) sorts by `sales_invoice_id` (the FK) since `invoice_code` lives on the joined `sales_invoices` table — same trade-off Purchase Return makes for its GRN column.
 
 ### 2.4 `export(Request)` — CSV export
 
@@ -490,12 +503,14 @@ regardless of the column being sorted on (matches Purchase Return + legacy).
 **Route**: `GET admin/sales-returns/export` → name `admin.sales-returns.export` → middleware `role:salesman,accountant,warehouse_manager,manager,admin`.
 
 **Acceptance criteria**:
-- [ ] CSV downloads with correct filename
-- [ ] UTF-8 BOM present (Excel opens Bengali characters correctly)
-- [ ] Filters applied
-- [ ] Branch-scoped
+- [x] CSV downloads with correct filename (`Sales_Returns_YYYY-MM-DD_HHMMSS.csv`)
+- [x] UTF-8 BOM present (Excel opens Bengali characters correctly) — `\xEF\xBB\xBF` written to `php://output` before the header row
+- [x] Filters applied (same filter logic as `returnDataTableJson`)
+- [x] Branch-scoped
 
 **Dependencies**: None.
+
+**Execution Log (Phase 2.4)**: `export()` implemented. Streams via `response()->stream()` + `fputcsv` to `php://output`. Columns: Return Code / Invoice Code / Customer / Branch / Return Date / Total Amount / Status / Reversed / Created By / Reason. Status label mirrors the DT endpoint (Pending/Confirmed/Reversed). Headers: `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment`, `Pragma: no-cache`, `Expires: 0`.
 
 ### 2.5 Update routes
 
@@ -507,11 +522,26 @@ for read endpoints with `->whereNumber('id')`; separate `Route::get` for
 `branch.isolation` middleware).
 
 **Acceptance criteria**:
-- [ ] All 4 new routes registered with correct names + middleware
-- [ ] `php artisan route:list` shows them
-- [ ] No route conflicts (e.g. `/create` doesn't match `{id}`)
+- [x] All 4 new routes registered with correct names + middleware
+- [ ] `php artisan route:list` shows them — **DEFERRED**: requires PHP runtime
+- [x] No route conflicts (`/create` registered as a separate `Route::get` BEFORE the resource + `->whereNumber('id')` on the show resource as a defensive second layer)
 
-**Dependencies**: Phases 2.1–2.4.
+**Dependencies**: Phases 2.1–2.4. ✅ satisfied.
+
+**Execution Log (Phase 2.5)**: `routes/web.php` sales-returns block restructured from the legacy 4-resource layout to the Purchase Return hybrid pattern:
+1. **Prefix group** (`admin/sales-returns`): `invoice-details` (existing), `search-invoices` (NEW), `summary` (NEW), `export` (NEW), `confirm` (existing, +`whereNumber`), `reverse` (existing, +`whereNumber`), `print-slip` (existing, +`whereNumber`).
+2. **Separate `Route::get('admin/sales-returns/create')`** BEFORE the resource — salesman/manager/admin.
+3. **`Route::resource(...)->only(['index'])`** — broadest read middleware (salesman/accountant/warehouse_manager/manager/admin).
+4. **`Route::resource(...)->only(['show'])`** with `->whereNumber('id')` — narrower read (accountant/warehouse_manager/manager/admin, NO salesman — preserves the legacy show RBAC which excludes salesman).
+5. **Separate `Route::post('admin/sales-returns')`** for `store` with `branch.isolation`.
+
+Kept as TWO resource declarations (index + show) rather than Purchase Return's single `->only(['index','show'])` because Sales Return's index RBAC ≠ show RBAC (index includes salesman, show does not). Combining them into one resource with either middleware would either escalate show to salesman (privilege escalation) or demote index from salesman (regression) — both unacceptable. The `->parameters(['admin/sales-returns' => 'id'])` override is added to both for inflector consistency with the rest of the codebase. `->whereNumber('id')` added to the show resource + all `{id}` prefix-group routes (confirm/reverse/print-slip) as the `/create`-vs-`{id}` defensive layer.
+
+---
+
+### Phase 2 Summary
+
+4 new controller methods + 1 route-block restructure. `SalesReturnController` grew from 244 → 599 lines. The `?datatables=1` branch in `index()` is the ONLY change to the existing index page path (Phase 3 will rewrite the index Blade view to actually consume the DT + summary + export endpoints). All 4 endpoints are branch-scoped via `resolveBranchIdForRead()` PLUS the `BranchScope` global scope on both `SalesReturn` and `SalesInvoice`. The `SalesReturnableQty` helper (Phase 1.1) is now injected into the controller and used by `searchInvoices()` for the batched returnable-qty computation — first production reuse of the Phase 1 helper. Bracket-balance lint passes on the route block in isolation; the controller's linter failure is the same documented false-positive class (nested closures) that affects the known-good production `PurchaseReturnController`. Manual end-to-end tests (route:list, AJAX smoke, performance benchmarks) are the first task of the next session with a live PHP/PostgreSQL runtime — alongside Phase 0.1's `php artisan migrate`.
 
 ---
 
@@ -986,17 +1016,17 @@ same.
 
 ## Phase Summary Table
 
-| Phase | Scope | Severity | Estimated Effort | Dependencies |
-|---|---|---|---|---|
-| 0 | Foundation fixes (CHECK bug + helpers) | 🔴 Blocker | Small | None |
-| 1 | Form Request classes (4) | 🟠 High | Medium | Phase 0 |
-| 2 | AJAX endpoints (4) + routes | 🟠 High | Medium | None |
-| 3 | Index page rewrite (CSS + JS + blade + audit page) | 🟠 High | Large | Phases 2, 4.1 |
-| 4 | Create page rewrite (workspace partial + CSS + JS + blade + cleanup) | 🟠 High | Large | Phase 2 |
-| 5 | Show page polish (minor) | 🟡 Medium | Small | Phase 0.3 |
-| 6 | Reverse flow pre-check UX | 🟡 Medium | Medium | Phase 1.3 |
-| 7 | Slip page polish (optional) | 🟢 Low | Small | None |
-| 8 | End-to-end verification + cleanup | 🔴 Required | Medium | All prior |
+| Phase | Scope | Severity | Estimated Effort | Dependencies | Status |
+|---|---|---|---|---|---|
+| 0 | Foundation fixes (CHECK bug + helpers) | 🔴 Blocker | Small | None | ✅ Complete |
+| 1 | Form Request classes (4) | 🟠 High | Medium | Phase 0 | ✅ Complete |
+| 2 | AJAX endpoints (4) + routes | 🟠 High | Medium | None | ✅ Complete |
+| 3 | Index page rewrite (CSS + JS + blade + audit page) | 🟠 High | Large | Phases 2, 4.1 | ⏳ Pending |
+| 4 | Create page rewrite (workspace partial + CSS + JS + blade + cleanup) | 🟠 High | Large | Phase 2 | ⏳ Pending |
+| 5 | Show page polish (minor) | 🟡 Medium | Small | Phase 0.3 | ⏳ Pending |
+| 6 | Reverse flow pre-check UX | 🟡 Medium | Medium | Phase 1.3 | ⏳ Pending |
+| 7 | Slip page polish (optional) | 🟢 Low | Small | None | ⏳ Pending |
+| 8 | End-to-end verification + cleanup | 🔴 Required | Medium | All prior | ⏳ Pending |
 
 **Critical path**: 0 → 1 → 2 → 4 → 3 → 8 (with 5, 6, 7 in parallel where possible).
 

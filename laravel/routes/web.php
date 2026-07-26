@@ -835,45 +835,75 @@ Route::middleware('auth')->group(function () {
         ->middleware(['role:salesman,accountant,manager,admin', 'branch.isolation']);
 
     // ============================================================
-    // Phase 8.5: Sales Returns (stock IN at ORIGINAL avg_cost + GL)
+    // Phase 8.5 + Phase 2: Sales Returns (stock IN at ORIGINAL avg_cost + GL)
     // P0-7: RBAC — create/store is salesman/manager/admin; confirm is
     // warehouse_manager/accountant/manager/admin (two-step return);
     // reverse is accountant/manager/admin only (legacy SalesReturn::reverse).
+    //
+    // Phase 2 (Purchase Return parity) adds 4 AJAX endpoints:
+    //   search-invoices (typeahead) : salesman, manager, admin
+    //   summary       (chip counts) : salesman, accountant, warehouse_manager, manager, admin
+    //   export        (CSV)         : salesman, accountant, warehouse_manager, manager, admin
+    //   ?datatables=1 (server-side) : index middleware (salesman, accountant, warehouse_manager, manager, admin)
+    //
+    // Route layout mirrors Purchase Return's hybrid pattern:
+    //   1. explicit prefix group for AJAX helpers + write actions + print-slip
+    //   2. separate Route::get('/create') BEFORE the resource (so /create
+    //      doesn't match {id})
+    //   3. Route::resource limited to index/show with ->whereNumber('id')
+    //      (kept as TWO resources because index RBAC ≠ show RBAC — index
+    //      includes salesman, show does not)
+    //   4. separate Route::post for store (branch.isolation on the body)
     // ============================================================
     Route::prefix('admin/sales-returns')->name('admin.sales-returns.')->group(function () {
         // Return create flow — salesman, manager, admin
         Route::get('invoice-details', [SalesReturnController::class, 'getInvoiceDetails'])
             ->name('invoice-details')->middleware('role:salesman,manager,admin');
+        // Phase 2 — invoice typeahead for the create-page picker
+        Route::get('search-invoices', [SalesReturnController::class, 'searchInvoices'])
+            ->name('search-invoices')->middleware('role:salesman,manager,admin');
+        // Phase 2 — chip counts AJAX for the index page
+        Route::get('summary', [SalesReturnController::class, 'summary'])
+            ->name('summary')->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
+        // Phase 2 — CSV export of filtered returns
+        Route::get('export', [SalesReturnController::class, 'export'])
+            ->name('export')->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
         // Return confirm — warehouse_manager, accountant, manager, admin (legacy confirm_store)
         Route::post('{id}/confirm', [SalesReturnController::class, 'confirm'])
-            ->name('confirm')->middleware(['role:warehouse_manager,accountant,manager,admin', 'branch.isolation']);
+            ->name('confirm')->middleware(['role:warehouse_manager,accountant,manager,admin', 'branch.isolation'])
+            ->whereNumber('id');
         // Return reverse — accountant, manager, admin (legacy SalesReturn::reverse)
         Route::post('{id}/reverse', [SalesReturnController::class, 'reverse'])
-            ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+            ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation'])
+            ->whereNumber('id');
         // P1-6: Print return slip
         Route::get('{id}/print-slip', [SalesReturnController::class, 'printSlip'])
-            ->name('print-slip')->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
+            ->name('print-slip')->middleware('role:salesman,accountant,warehouse_manager,manager,admin')
+            ->whereNumber('id');
     });
-    // index — broadest (legacy: admin,manager,salesman,accountant,warehouse_manager)
+    // create — salesman, manager, admin. Registered BEFORE the resource so
+    // /create doesn't match {id}. (Mirrors Purchase Return.)
+    Route::get('admin/sales-returns/create', [SalesReturnController::class, 'create'])
+        ->name('admin.sales-returns.create')
+        ->middleware('role:salesman,manager,admin');
+    // index — broadest read (legacy: admin,manager,salesman,accountant,warehouse_manager)
     Route::resource('admin/sales-returns', SalesReturnController::class)
         ->only(['index'])
+        ->parameters(['admin/sales-returns' => 'id'])
         ->names('admin.sales-returns')
         ->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
-    // create, store — salesman, manager, admin (legacy create/store)
-    // store carries branch_id (resolved from invoice) → branch.isolation
-    Route::resource('admin/sales-returns', SalesReturnController::class)
-        ->only(['create'])
-        ->names('admin.sales-returns')
-        ->middleware('role:salesman,manager,admin');
-    Route::resource('admin/sales-returns', SalesReturnController::class)
-        ->only(['store'])
-        ->names('admin.sales-returns')
-        ->middleware(['role:salesman,manager,admin', 'branch.isolation']);
-    // show — accountant, warehouse_manager, manager, admin (legacy details)
+    // show — narrower read: accountant, warehouse_manager, manager, admin (legacy details)
+    // whereNumber('id') prevents /create from matching {id} as a defensive second layer.
     Route::resource('admin/sales-returns', SalesReturnController::class)
         ->only(['show'])
+        ->parameters(['admin/sales-returns' => 'id'])
         ->names('admin.sales-returns')
-        ->middleware('role:accountant,warehouse_manager,manager,admin');
+        ->middleware('role:accountant,warehouse_manager,manager,admin')
+        ->whereNumber('id');
+    // store — salesman, manager, admin; branch.isolation (branch_id resolved from invoice)
+    Route::post('admin/sales-returns', [SalesReturnController::class, 'store'])
+        ->name('admin.sales-returns.store')
+        ->middleware(['role:salesman,manager,admin', 'branch.isolation']);
 
     // ============================================================
     // Phase 9.5: Accounting Period Close + Year-End
