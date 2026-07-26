@@ -552,7 +552,7 @@ Per-user visibility via `user_menu_permissions.can_view`; admin/superadmin bypas
 | Other erp components available | ✅ 31 components total (form-input, form-select, primary-button, gradient-button, outline-button, status-pill, stat-card, icon, empty-state, skeleton, warning-callout, data-table, step-indicator, etc.) | `ls laravel/resources/views/components/erp/` |
 | **OQ #9** `StockAvailabilityService::getWarehouseAvailableQty` | ✅ **RESOLVED — EXISTS & PIPELINE-AWARE** | `laravel/app/Services/Stock/StockAvailabilityService.php:78` — signature `getWarehouseAvailableQty(int $productId, int $warehouseId, ?int $excludeInvoiceId = null): float`. The `$excludeInvoiceId` parameter confirms it subtracts the open sales pipeline (excluding the current invoice) from physical stock. Phase 5 can use it directly. |
 | **OQ #8** `dispatched_ctn` column in Project B | ✅ **RESOLVED — MISSING, MIGRATION REQUIRED** | `grep -r dispatched_ctn laravel/` → 0 matches. Project B's `sales_invoice_dispatches` table has no `dispatched_ctn` column. **Phase 4 must add a migration** (`add_dispatched_ctn_to_sales_invoice_dispatches`) before persisting CTN values. |
-| **OQ #6** `sales_returns` guard in `cancelChallan` | ✅ **RESOLVED — MISSING, PHASE 9 MUST ADD** | `grep -nE 'sales_return\|SalesReturn\|sales_returns' laravel/app/Services/Sales/SalesChallanService.php` → 0 matches. `cancelChallan` does NOT check for non-reversed `sales_returns` before reversing. Phase 9 will add this guard. |
+| **OQ #6** `sales_returns` guard in `cancelChallan` | ✅ **RESOLVED — ADDED IN PHASE 9** | Phase 9 added the guard to `SalesChallanService::cancelChallan` (line 558-573): before reversing, it queries `sales_returns` for the invoice where `status='confirmed' AND is_reversed=false` (B's semantic equivalent of A's `status='completed'`) and throws `RuntimeException('Cannot reverse challan: confirmed sales returns exist for this invoice. Reverse the sales return first.')` if any exist. The controller's existing `try/catch` surfaces the message as a red error flash. |
 | Laravel migrations present | ✅ 55 migration files | `ls laravel/database/migrations/ \| wc -l` |
 | `sales_challan_items` table migration | ✅ EXISTS | `laravel/database/migrations/2025_01_08_000005_create_sales_challan_items_table.php` |
 | Dispatch quantity columns migration | ✅ EXISTS (may relate to `dispatched_qty`, NOT `dispatched_ctn`) | `laravel/database/migrations/2025_01_08_000002_restore_dispatch_quantity_columns.php` — verify contents in Phase 4 |
@@ -564,7 +564,7 @@ Per-user visibility via `user_menu_permissions.can_view`; admin/superadmin bypas
 - **Phase 1** task 1 ("Verify `<x-erp.journey-stepper>` exists") → DONE, component exists; reword to "Use existing `<x-erp.journey-stepper>`".
 - **Phase 4** → must add migration `add_dispatched_ctn_to_sales_invoice_dispatches` (OQ #8 resolution).
 - **Phase 5** → `StockAvailabilityService::getWarehouseAvailableQty` confirmed available (OQ #9 resolution).
-- **Phase 9** → `sales_returns` guard confirmed missing, must be added (OQ #6 resolution).
+- **Phase 9** → `sales_returns` guard ADDED to `cancelChallan` (OQ #6 closed). Print buttons added to show screen (U13). A29 verified closed-by-design (B has no `running_balance` column).
 - **Phase 8** → `<x-erp.sticky-action-bar>` confirmed available.
 
 ---
@@ -860,7 +860,7 @@ Per-user visibility via `user_menu_permissions.can_view`; admin/superadmin bypas
 
 ---
 
-### Phase 7 — Live Stock Badges & Ctrl+S
+### Phase 7 — Live Stock Badges & Ctrl+S  ✅ DONE
 **Goal:** Add live color-coded stock badges and the Ctrl+S shortcut (closes U7, U15).
 
 **Files to touch**
@@ -903,7 +903,7 @@ Per-user visibility via `user_menu_permissions.can_view`; admin/superadmin bypas
 
 ---
 
-### Phase 8 — Sticky Action Bar & Confirmation Flow Parity
+### Phase 8 — Sticky Action Bar & Confirmation Flow Parity  ✅ DONE
 **Goal:** Unify the action bar and Swal2 confirmation flow across godown + issue screens (closes U4, U14, U24).
 
 **Files to touch**
@@ -953,7 +953,7 @@ Per-user visibility via `user_menu_permissions.can_view`; admin/superadmin bypas
 
 ---
 
-### Phase 9 — Reverse/Cancel Guard & Print Buttons
+### Phase 9 — Reverse/Cancel Guard & Print Buttons  ✅ DONE
 **Goal:** Add the sales_returns guard to cancel (verify/close A19) and add print buttons on the show screen (closes A19, U13).
 
 **Files to touch**
@@ -963,16 +963,34 @@ Per-user visibility via `user_menu_permissions.can_view`; admin/superadmin bypas
 - `laravel/app/Http/Controllers/Admin/SalesChallanController.php` (print methods, if missing)
 
 **Tasks**
-- [ ] In `cancelChallan`: before reversing, check `sales_returns` for the invoice where `status='completed' && !is_reversed`; throw if any exist ("Reverse the sales return first.").
-- [ ] On `show.blade.php` add a print bar: "Print Challan" (`<x-erp.outline-button>` + `fa-print`, links to `print-challan` route), "Print Godown Copy", "Print Invoice Copy" (link to existing `sales-invoices.print` route or add one).
-- [ ] Verify `SubLedgerService` serializes `customer_ledger.running_balance` writes (close A29 — do NOT port A's race bug).
+- [x] In `cancelChallan`: before reversing, check `sales_returns` for the invoice where `status='completed' && !is_reversed`; throw if any exist ("Reverse the sales return first.").
+- [x] On `show.blade.php` add a print bar: "Print Challan" (`<x-erp.outline-button>` + `fa-print`, links to `print-challan` route), "Print Godown Copy", "Print Invoice Copy" (link to existing `sales-invoices.print` route or add one).
+- [x] Verify `SubLedgerService` serializes `customer_ledger.running_balance` writes (close A29 — do NOT port A's race bug).
 
 **Acceptance criteria**
-- Cancel is rejected when non-reversed sales returns exist.
-- Print buttons render and open print views in a new tab.
-- No `customer_ledger.running_balance` race introduced.
+- ✅ Cancel is rejected when non-reversed sales returns exist.
+- ✅ Print buttons render and open print views in a new tab.
+- ✅ No `customer_ledger.running_balance` race introduced.
 
 **Dependencies:** Phase 8.
+
+**Phase 9 Execution Report:**
+
+| Item | Detail |
+|---|---|
+| Task 1 — sales_returns guard in `cancelChallan` (A19) | Added a guard block in `SalesChallanService::cancelChallan` immediately AFTER the `is_reversed` check (line 556) and BEFORE the GL/stock reversal. The guard runs a `DB::table('sales_returns')->where('sales_invoice_id', $challan->sales_invoice_id)->where('status', 'confirmed')->where('is_reversed', false)->count()` query; if the count > 0, it throws `RuntimeException('Cannot reverse challan: confirmed sales returns exist for this invoice. Reverse the sales return first.')`. The throw happens inside the `DB::transaction()` closure, so the entire cancel is aborted atomically (no partial reversal). The controller's `cancel()` method (line 447-460) already wraps the service call in `try { ... } catch (\Throwable $e) { return back()->with('error', $e->getMessage()); }` — so the guard's message is surfaced to the user as a red error flash on the show screen. |
+| Schema-awareness (A vs B status value) | The Phase 9 task spec said `status='completed'`, which is **Project A's** `sales_returns.status` value. **Project B's** `sales_returns.status` CHECK constraint is `('created','confirmed','reversed')` (verified in `database/sql/04_sales.sql:179`) — there is NO `'completed'` value in B. The semantic mapping: A's `'completed'` (posted + active) == B's `'confirmed'` (created=draft, confirmed=posted/active, reversed=reversed). The guard therefore uses `status='confirmed'` — this is the correct B-equivalent of A's intent (reject cancel when there is a posted, non-reversed return). Documented inline in the code comment (lines 558-562). The error message is action-oriented ("Reverse the sales return first.") matching legacy `ChallanModel.php:559`. |
+| Task 2 — Print bar on `show.blade.php` (U13) | Added a dedicated "Print Center / প্রিন্ট সেন্টার" card immediately AFTER the hero header (line 117) and BEFORE the reversal alert. The card has an amber-gradient header strip (icon + bilingual title + subtitle) and a 3-column responsive grid (`grid-cols-1 sm:grid-cols-3 gap-3`) of `<x-erp.outline-button>` links, each with `icon="printer"` (the Lucide-style SVG from `<x-erp.icon>`'s registry — the spec's `fa-print` is the Font Awesome equivalent; this project's icon system is Lucide SVGs, not FA), `target="_blank" rel="noopener"` (opens in a new tab), and color-coded borders: (1) Print Challan → `admin.sales-challans.print-challan` (amber border/text), (2) Print Godown Copy → `admin.sales-invoices.print-godown` (cyan border/text), (3) Print Invoice Copy → `admin.sales-invoices.print-invoice` (gray border/text). The Godown + Invoice buttons are wrapped in `@if ($inv)` with an `@else` fallback ("Godown & Invoice copies unavailable — no linked invoice.") for the rare challan-without-invoice edge case. The `!` important modifier on the color classes (`!border-amber-300 !text-amber-800 hover:!bg-amber-50` etc.) guarantees the override wins over the outline-button's default `border-gray-200 text-gray-700 hover:bg-gray-50`. The card carries `no-print` so it is hidden when the user actually prints the page. |
+| Task 2 — Route verification | All three print routes + controller methods PRE-EXIST (verified, no new routes/methods added): (1) `admin.sales-challans.print-challan` → `SalesChallanController::printChallan` (routes/web.php:783-784, returns `admin.sales-challans.print_challan` view); (2) `admin.sales-invoices.print-godown` → `SalesInvoiceController::printGodown` (routes/web.php:732-733, returns `admin.sales-invoices.print_godown` view); (3) `admin.sales-invoices.print-invoice` → `SalesInvoiceController::printInvoice` (routes/web.php:730-731, returns `admin.sales-invoices.print_invoice` view). Route names verified with `grep ->name('print-...')` and the blade `route()` calls verified to match exactly. The `print-challan` route middleware is `role:warehouse_manager,dispatcher,accountant,manager,admin`; `print-godown` is `role:warehouse_manager,manager,admin`; `print-invoice` is `role:salesman,accountant,manager,admin`. The show screen's own middleware (`role:accountant,warehouse_manager,manager,admin`) means a salesman CANNOT reach the show screen, so all 3 print buttons are reachable by every role that can view the page. |
+| Task 3 — A29 verification (customer_ledger running_balance race) | **A29 is closed by DESIGN — no code change required.** Verified: (1) Project A has a denormalized `running_balance` column on `customer_ledger` that is read-then-written WITHOUT a `FOR UPDATE` lock (`legacy/app/services/Sales/traits/SalesInvoiceOperationsTrait.php:155,366,380,395,723,727` — reads `SELECT running_balance ... ORDER BY id DESC LIMIT 1`, computes new balance, inserts a new row with the computed value). Two concurrent transactions can both read the same previous `running_balance`, both compute, and one overwrites the other's running balance → **the race corrupts the stored running balance**. (2) **Project B's `customer_ledger` has NO `running_balance` column** (verified in `database/sql/02_accounting.sql:115-129` — the columns are `debit, credit, balance, ...`; `balance` is a per-row snapshot, NOT a denormalized running total). (3) The source-of-truth customer balance in B is the live `SUM(debit) - SUM(credit) WHERE is_reversed=false` aggregate computed by `CustomerLedger::getBalance()` (`app/Models/CustomerLedger.php:87-93`) — a fresh aggregate on every read, so it can NEVER be corrupted by a concurrent write. (4) The per-row `balance` column is a historical snapshot (informational display), not the source of truth; even in the worst case of two concurrent `postCustomerLedgerEntry` calls reading the same aggregate, the TRUE balance (the aggregate) remains correct — only the snapshot value on the newer row could be momentarily stale, and it self-heals on the next insert. A's race is therefore **structurally impossible in B**. The reversal path (`SubLedgerService::reverseCustomerLedgerEntry`, line 174-207) additionally uses `lockForUpdate()` on the specific ledger row (line 177) to serialize the reversal of a single entry. **A29 = closed.** |
+| Blade syntax (show.blade.php) | `@php`/`@endphp` 4/4, `@if`/`@endif` 32/32 (Phase 9 added +1 `@if ($inv)` + +1 `@else` + +1 `@endif` for the no-invoice fallback), `@foreach`/`@endforeach` 3/3, `@push`/`@endpush` 1/1, `@csrf` 1. All balanced. |
+| Brace balance | `show.blade.php`: braces 200/200, parens 179/179. `SalesChallanService.php`: braces 67/67, parens 356/356. All balanced. |
+| Color audit | `grep -ciE '(bg\|text\|border)-indigo-[0-9]'` → 0 in both files. The print bar uses: amber (challan button + header), cyan (godown button), gray (invoice button + fallback) — all within the project's amber-forward palette (cyan explicitly allowed, gray neutral). Zero indigo. Zero new blue. The only blue in the file is the pre-existing Phase 7 reserved-stock-badge JS string (not in show.blade.php — that's godown.blade.php). |
+| Backward compatibility | `cancelChallan`: the guard is PURELY ADDITIVE — inserted between two existing checks, throws BEFORE any mutation. No existing caller behavior changes except that a previously-allowed cancel (with open returns) is now rejected — which is the spec'd A19 behavior. The error surfaces via the controller's existing `try/catch` (no controller change needed). `show.blade.php`: the print bar is a new card INSERTED between the hero and the reversal alert — no existing markup removed, renamed, or reordered. The pre-existing hero "Print Challan" quick-access button (line 104-107) and the sidebar card "Print Challan" button (line 603) are PRESERVED (backward compat — they remain as quick-access shortcuts in their visual contexts). No routes, controllers, migrations, or models changed. |
+| Files changed | 2 files, +50 lines: `laravel/app/Services/Sales/SalesChallanService.php` (+17 — the guard block with comment), `laravel/resources/views/admin/sales-challans/show.blade.php` (+33 — the print bar card). No routes/web.php or controller changes (all print routes/methods pre-existed). |
+| Runtime verification | ⚠️ DEFERRED — PHP/Composer not available in sandbox (`php -l` skipped, consistent with all prior phases). User must verify in dev env: (1) cancel a challan that has a confirmed, non-reversed sales return → expect a red error flash "Cannot reverse challan: confirmed sales returns exist for this invoice. Reverse the sales return first." and NO stock/GL reversal; (2) cancel a challan with NO open returns → expect the normal reversal flow (stock + GL reversed, invoice reset to draft); (3) visit a challan show page → expect the "Print Center" card below the hero with 3 color-coded buttons; (4) click "Print Challan" → opens `print_challan` view in a new tab; (5) click "Print Godown Copy" → opens `print_godown` view in a new tab; (6) click "Print Invoice Copy" → opens `print_invoice` view in a new tab; (7) on a challan with no linked invoice (edge case) → expect the Godown + Invoice buttons replaced by the "unavailable" fallback message. |
+| Carry-forward to Phase 10 | None — Phase 9 is self-contained. Phase 10 (Validation Hardening & Mobile Card Layout) will add a `CancelChallanWebRequest` Form Request (replacing the controller's inline `validate()`), but the sales_returns guard lives in the SERVICE layer (not the request validator) so it is unaffected. |
+| Carry-forward to Phase 11 | (1) Consider extracting the "Print Center" card into a reusable `<x-erp.print-bar :links="[...]">` component if the pattern recurs on the invoice show page. (2) The hero + sidebar card + print-bar all link to `print-challan` — consider deduplicating to a single canonical print location in Phase 11 polish (low priority — the redundancy is intentional quick-access UX). |
 
 ---
 

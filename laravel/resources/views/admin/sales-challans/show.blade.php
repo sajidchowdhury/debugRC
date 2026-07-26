@@ -116,6 +116,39 @@
         <x-erp.journey-stepper :current="4" />
     </div>
 
+    {{-- Phase 9: Print Center — centralized print access (Challan / Godown / Invoice) --}}
+    <div class="bg-white border border-amber-200 rounded-xl shadow-sm overflow-hidden no-print">
+        <div class="bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-100 px-5 py-3 flex items-center gap-3">
+            <div class="size-9 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0">
+                <i class="fas fa-print"></i>
+            </div>
+            <div class="min-w-0">
+                <p class="font-semibold text-amber-900 text-sm">Print Center / প্রিন্ট সেন্টার</p>
+                <p class="text-xs text-amber-700">Open a printable copy in a new tab.</p>
+            </div>
+        </div>
+        <div class="p-5">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <x-erp.outline-button icon="printer" href="{{ route('admin.sales-challans.print-challan', $challan->id) }}" target="_blank" rel="noopener" class="w-full justify-center !border-amber-300 !text-amber-800 hover:!bg-amber-50">
+                    Print Challan / চালান
+                </x-erp.outline-button>
+                @if ($inv)
+                    <x-erp.outline-button icon="printer" href="{{ route('admin.sales-invoices.print-godown', $inv->id) }}" target="_blank" rel="noopener" class="w-full justify-center !border-cyan-300 !text-cyan-800 hover:!bg-cyan-50">
+                        Print Godown Copy / গোডাউন
+                    </x-erp.outline-button>
+                    <x-erp.outline-button icon="printer" href="{{ route('admin.sales-invoices.print-invoice', $inv->id) }}" target="_blank" rel="noopener" class="w-full justify-center !border-gray-300 !text-gray-800 hover:!bg-gray-50">
+                        Print Invoice Copy / ইনভয়েস
+                    </x-erp.outline-button>
+                @else
+                    <div class="sm:col-span-2 inline-flex items-center justify-center gap-2 rounded-lg border border-dashed border-gray-200 px-4 py-2 text-sm text-gray-400">
+                        <i class="fas fa-link-slash"></i>
+                        Godown &amp; Invoice copies unavailable — no linked invoice.
+                    </div>
+                @endif
+            </div>
+        </div>
+    </div>
+
     {{-- Reversal alert (red callout) --}}
     @if ($challan->is_reversed)
         <div class="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">

@@ -555,6 +555,23 @@ class SalesChallanService
                 throw new \RuntimeException("Challan is already cancelled.");
             }
 
+            // P9 (A19): sales_returns guard — reject cancel when non-reversed
+            // confirmed returns exist for this invoice. Mirrors legacy
+            // ChallanModel::reverseChallan's guard. Uses B's 'confirmed' status
+            // (the semantic equivalent of A's 'completed' — B's sales_returns.status
+            // CHECK is ('created','confirmed','reversed'); 'confirmed' = posted/active).
+            $openReturns = DB::table('sales_returns')
+                ->where('sales_invoice_id', $challan->sales_invoice_id)
+                ->where('status', 'confirmed')
+                ->where('is_reversed', false)
+                ->count();
+            if ($openReturns > 0) {
+                throw new \RuntimeException(
+                    'Cannot reverse challan: confirmed sales returns exist for this invoice. '
+                    . 'Reverse the sales return first.'
+                );
+            }
+
             // Reverse GL (COGS journal) + linked sub-ledger via JournalReversalService (cascade).
             if ($challan->journal_entry_id) {
                 $this->journalReversal->reverseByJournalEntry(
