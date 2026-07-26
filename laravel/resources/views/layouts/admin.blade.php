@@ -32,6 +32,12 @@
     <link rel="stylesheet" href="/assets/css/rc-erp.css?v={{ filemtime(public_path('assets/css/rc-erp.css')) }}">
 
     {{-- Sidebar toggle: chevron rotation when expanded --}}
+    {{-- Sidebar modernization: dark slate-900 background, amber active accent,
+         clean spacing/typography. Scoped to #sidebar so it overrides the legacy
+         light-gray #f7f7f7 from custom.css. On mobile (<lg) the sidebar becomes
+         a fixed slide-in drawer with an overlay backdrop (matching the Z.ai
+         preview / x-layouts.erp design). Ported from components/layouts/erp.blade.php
+         so EVERY page that extends layouts.admin gets the same premium sidebar. --}}
     <style>
         .sidebar-toggle[aria-expanded="true"] .fa-chevron-down {
             transform: rotate(180deg);
@@ -39,6 +45,137 @@
         }
         .sidebar-toggle .fa-chevron-down {
             transition: transform 0.2s ease;
+        }
+
+        /* ===== MODERN SIDEBAR (dark slate, matching the design preview) ===== */
+        #sidebar {
+            background: #0f172a !important;            /* slate-900 */
+            color: #cbd5e1;                              /* slate-300 */
+            border-right: 1px solid #1e293b;             /* slate-800 */
+            width: 260px;
+        }
+        #sidebar .sidebar-header {
+            padding: 14px 18px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            margin-bottom: 8px;
+        }
+        #sidebar .sidebar-header .logo {
+            color: #f8fafc;                              /* slate-50 */
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        #sidebar .sidebar-header .logo i {
+            color: #f59e0b;                              /* amber-500 */
+            font-size: 1.1rem;
+        }
+        #sidebar .nav-link {
+            color: #94a3b8;                              /* slate-400 */
+            border-radius: 8px;
+            padding: 8px 14px;
+            margin: 2px 8px;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            transition: background 0.15s ease, color 0.15s ease;
+            border-left: 3px solid transparent;
+        }
+        #sidebar .nav-link:hover {
+            background: rgba(255,255,255,0.06);
+            color: #f1f5f9;                              /* slate-100 */
+        }
+        #sidebar .nav-link.active {
+            background: rgba(245,158,11,0.10) !important; /* amber tint */
+            color: #fbbf24 !important;                   /* amber-400 */
+            font-weight: 600;
+            border-left-color: #f59e0b;                  /* amber-500 */
+        }
+        #sidebar .nav-link.active i,
+        #sidebar .nav-link.active .fas {
+            color: #fbbf24 !important;                   /* amber-400 */
+        }
+        #sidebar .nav-link i {
+            width: 18px;
+            text-align: center;
+            font-size: 0.85rem;
+        }
+        #sidebar .submenu {
+            border-left: 1px solid rgba(255,255,255,0.06);
+            margin-left: 22px;
+        }
+        #sidebar .submenu .nav-link {
+            font-size: 0.78rem;
+            padding-left: 18px;
+        }
+        /* Submenu show/hide via .is-open (no Bootstrap .collapse) */
+        #sidebar .submenu:not(.is-open) {
+            display: none;
+        }
+        #sidebar .submenu.is-open {
+            display: block;
+        }
+
+        /* ===== MOBILE DRAWER (< lg / 991.98px) ===== */
+        @media (max-width: 991.98px) {
+            #sidebar {
+                position: fixed !important;
+                top: 56px;                                /* below sticky top-nav */
+                left: -280px;                            /* off-screen left */
+                bottom: 0;
+                height: calc(100vh - 56px) !important;
+                width: 260px;
+                z-index: 1060;
+                transition: left 0.3s ease;
+                overflow-y: auto;
+                box-shadow: 0 0 40px rgba(0,0,0,0.3);
+            }
+            #sidebar.active {
+                left: 0;                                 /* slide in */
+            }
+            #sidebarOverlay {
+                position: fixed;
+                top: 56px;                               /* below top-nav */
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(15,23,42,0.55);        /* slate-900/55 */
+                z-index: 1055;
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.3s ease;
+            }
+            #sidebarOverlay.active {
+                opacity: 1;
+                pointer-events: auto;
+            }
+            /* Main content full-width on mobile (sidebar is a drawer) */
+            #mainContent {
+                margin-left: 0 !important;
+                width: 100% !important;
+            }
+        }
+
+        /* ===== DESKTOP (>= lg / 992px) — fixed sidebar + offset main ===== */
+        @media (min-width: 992px) {
+            #sidebar {
+                position: fixed !important;
+                top: 56px;                                /* below sticky top-nav */
+                left: 0;
+                bottom: 0;
+                height: calc(100vh - 56px) !important;
+                width: 260px;
+                z-index: 40;                             /* below top-nav z-50 */
+            }
+            /* Offset main content to account for the fixed 260px sidebar.
+               Overrides Bootstrap col-lg-10 + ms-auto which misaligns with
+               a fixed-width sidebar. */
+            #mainContent {
+                margin-left: 260px !important;
+                width: calc(100% - 260px) !important;
+                max-width: none !important;
+            }
         }
     </style>
 
@@ -65,7 +202,7 @@
     <div class="container-fluid flex-1">
         <div class="row">
             {{-- Sidebar — DB-driven menu with per-user permissions --}}
-            <nav id="sidebar" class="sidebar col-lg-2 col-md-3 d-none d-lg-block">
+            <nav id="sidebar" class="sidebar col-lg-2 col-md-3" aria-label="Main navigation">
                 <div class="sidebar-header">
                     <span class="logo">
                         <i class="fas fa-store"></i>
@@ -180,6 +317,9 @@
                 </ul>
             </nav>
 
+            {{-- Mobile sidebar overlay backdrop — click to close the drawer --}}
+            <div id="sidebarOverlay" aria-hidden="true"></div>
+
             {{-- Main content --}}
             <main class="col-lg-10 col-md-9 ms-sm-auto px-3 px-md-4 py-4" id="mainContent">
                 {{-- Flash messages --}}
@@ -216,63 +356,64 @@
     <script src="/assets/js/bootstrep/bootstrap.bundle.min.js"></script>
     <script>
         window.CSRF_TOKEN = '{{ csrf_token() }}';
+        // Toggle the mobile sidebar drawer + overlay backdrop. On desktop
+        // (lg+) the sidebar is always visible in normal flow — this is a
+        // no-op. On mobile (<lg) the sidebar is a fixed slide-in drawer.
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
             if (!sidebar) return;
-            // On mobile the sidebar is hidden by `d-none` (display:none) AND
-            // positioned off-screen (left:-300px). To reveal it we must remove
-            // `d-none` (so it renders) and add `.active` (so it slides into
-            // view). Toggling both keeps behaviour consistent with
-            // closeSidebarOnMobile() in custom.js.
-            sidebar.classList.toggle('d-none');
             sidebar.classList.toggle('active');
+            if (overlay) overlay.classList.toggle('active');
         }
+        // Close the drawer when the overlay backdrop is clicked.
+        document.addEventListener('DOMContentLoaded', function() {
+            const overlay = document.getElementById('sidebarOverlay');
+            if (overlay) {
+                overlay.addEventListener('click', function() {
+                    const sidebar = document.getElementById('sidebar');
+                    if (sidebar) sidebar.classList.remove('active');
+                    overlay.classList.remove('active');
+                });
+            }
+            // Close the drawer on ESC.
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    const sidebar = document.getElementById('sidebar');
+                    if (sidebar && sidebar.classList.contains('active')) {
+                        sidebar.classList.remove('active');
+                        const ov = document.getElementById('sidebarOverlay');
+                        if (ov) ov.classList.remove('active');
+                    }
+                }
+            });
+        });
 
-        // ─── Sidebar submenu toggle (truly bulletproof — no Bootstrap .collapse/.show) ──
-        // Earlier attempts toggled Bootstrap's `.show` class on `.collapse` <ul>s,
-        // but in this Bootstrap 5 + Tailwind v4 environment that mechanism was
-        // unreliable (submenu flashed open then vanished, or stayed invisible).
-        // We now use a SELF-CONTAINED `.is-open` class on `.submenu` elements,
-        // with display:none/block rules scoped to `.sidebar .submenu` (see
-        // custom.css) — nothing in Bootstrap or Tailwind can override them.
-        // jQuery just toggles `.is-open` and aria-expanded; chevron rotates via CSS.
+        // Sidebar submenu toggle — self-contained .is-open class (no Bootstrap .collapse/.show).
         (function() {
-            // Versioned key. Earlier ('rcerp_sidebar_expanded', no suffix) stored
-            // .show-based boolean state that, after the .is-open migration,
-            // caused EVERY submenu to auto-restore as open on page load
-            // ("all menus open by default"). Bumping the suffix discards that
-            // stale data so the sidebar starts collapsed (only the server-side
-            // active section opens via the $isActive 'is-open' class).
             var STORAGE_KEY = 'rcerp_sidebar_expanded_v2';
-            // One-time cleanup of the obsolete key (best effort).
             try { localStorage.removeItem('rcerp_sidebar_expanded'); } catch(e) {}
 
-            // Restore saved state on DOM ready
             $(document).ready(function() {
                 var saved = {};
                 try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch(e) {}
 
-                // For each collapsible submenu, apply saved state
                 $('.sidebar-toggle').each(function() {
                     var targetSel = $(this).data('target');
                     if (!targetSel) return;
                     var $target = $(targetSel);
                     var targetId = targetSel.replace('#', '');
 
-                    // If server-side $isActive already added 'is-open', respect it
                     if ($target.hasClass('is-open')) {
                         $(this).attr('aria-expanded', 'true');
                         return;
                     }
-
-                    // If localStorage says it was expanded, expand it
                     if (saved[targetId] === true) {
                         $target.addClass('is-open');
                         $(this).attr('aria-expanded', 'true');
                     }
                 });
 
-                // Click handler for parent menu toggles
                 $('.sidebar-toggle').on('click', function(e) {
                     e.preventDefault();
                     var targetSel = $(this).data('target');
@@ -289,7 +430,6 @@
                         $(this).attr('aria-expanded', 'true');
                     }
 
-                    // Save state to localStorage
                     try {
                         var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
                         saved[targetId] = !isExpanded;
@@ -297,14 +437,12 @@
                     } catch(err) {}
                 });
 
-                // Mobile: close sidebar when a leaf nav-link (no data-target) is clicked
                 $('#sidebarMenu a.nav-link').not('.sidebar-toggle').on('click', function() {
                     if (window.innerWidth < 992) {
                         var sidebar = document.getElementById('sidebar');
-                        if (sidebar) {
-                            sidebar.classList.remove('active');
-                            sidebar.classList.add('d-none'); // fully hide (matches toggleSidebar)
-                        }
+                        var overlay = document.getElementById('sidebarOverlay');
+                        if (sidebar) sidebar.classList.remove('active');
+                        if (overlay) overlay.classList.remove('active');
                     }
                 });
             });
