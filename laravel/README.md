@@ -2,6 +2,62 @@
 
 This directory will contain the Laravel 11 application that progressively replaces the legacy PHP app.
 
+## Frontend CSS build (Tailwind v4)
+
+The ERP design system uses **Tailwind CSS v4**, compiled by the Tailwind
+CLI (not Vite). It coexists with Bootstrap 5 — Tailwind's Preflight is
+intentionally skipped so Bootstrap's Reboot stays as the global base.
+
+| | |
+|---|---|
+| **Source CSS** | `resources/css/rc-erp.css` |
+| **Compiled CSS** | `public/assets/css/rc-erp.css` (**committed to git**) |
+| **Build command** | `bun run build:css` |
+| **Watch mode** | `bun run dev:css` |
+| **Package manager** | **bun** (not npm — `package-lock.json` is gitignored) |
+
+### The workflow (for AI + developers)
+
+**You normally never run the build manually.** A pre-commit hook
+(`git-hooks/pre-commit`, auto-installed via `composer install`)
+detects when a `.blade.php` file changes, runs `bun run build:css`
+for you, and re-stages the compiled CSS. Just:
+
+1. Edit Blade (add/remove Tailwind classes)
+2. `git add` + `git commit`
+3. `git push`
+
+The hook handles the rebuild. The end user then just runs `git pull`
+and refreshes — no build step on their side.
+
+### Why the compiled CSS is committed
+
+So that `git pull` → refresh browser → everything works, with **zero
+build step** on the consumer machine. The compiled CSS is served
+statically via a cache-busted `<link>` tag
+(`?v={{ filemtime(...) }}`).
+
+### If you need to rebuild manually
+
+```bash
+cd laravel
+bun install          # first time only
+bun run build:css    # rebuild
+```
+
+### CI safety net
+
+The `.github/workflows/css-guard.yml` workflow rebuilds the CSS in CI
+on every push/PR and fails if the committed file differs from a fresh
+build — catching any `git commit --no-verify` bypass.
+
+### Full pipeline documentation
+
+See `docs/css-build-investigation.md`, `docs/css-build-recommendation.md`,
+and `docs/css-build-action-plan.md` for the full architecture rationale.
+
+---
+
 ## Current status (end of Phase 2)
 
 - **Schema migrations:** ✅ Complete. `database/migrations/2025_01_01_000001_create_rcerp_schema.php` + `database/sql/01-07_*.sql` define the full PostgreSQL schema (66 tables + 1 view + 4 triggers + 42 FKs).
