@@ -1,4 +1,4 @@
-<x-layouts.erp :title="$title" :tabs="[
+<x-layouts.erp :title="$title" :hero="true" :tabs="[
     ['label' => 'Dashboard', 'href' => route('dashboard')],
     ['label' => 'Invoices', 'href' => route('admin.sales-invoices.index')],
     ['label' => 'Challans', 'href' => route('admin.sales-challans.index')],

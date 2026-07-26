@@ -2083,3 +2083,51 @@ Stage Summary:
 - SLOW LOAD: the previous batched-availability fix (1af441e) is untouched and still in effect — no regression.
 - USER ACTION NEEDED: (1) `git pull` on their server. (2) Hard-refresh the godown page (/admin/sales-challans/godown/2). Dispatchers should now be visible and selectable immediately. (3) If the dropdown STILL shows the "No dispatchers found" hint after this fix, the issue is data-side: verify the saved employee has role exactly "dispatcher" and is_active=true (Employees → edit the employee → check the Role dropdown + Active checkbox).
 - NO test code written (per project rules). PHP is not installed in this sandbox so the Laravel app cannot be booted here; the fix was verified by manual syntax/directive review + the CSS build succeeding.
+
+---
+Task ID: 5-layout-parity
+Agent: Main
+Task: Fix the Laravel UI to match the Z.ai preview — eliminate the "big gap", modernize the sidebar, make it responsive with a mobile drawer toggle
+
+Work Log:
+- User compared the Laravel godown page UI (screenshot 1) with the Z.ai Next.js preview UI (screenshot 2). User reports: Z.ai is cleaner/premium/professional with perfect text sizing; Laravel has a "big gap in CSS"; Z.ai sidebar is more professional and responsive (toggle on mobile); Laravel sidebar not up to the mark.
+- Used VLM (z-ai vision) to analyze both screenshots. Diagnosed 3 root causes:
+  1. REDUNDANT H1 (the "big gap"): The erp layout renders <h1>{{ $title }}</h1> BEFORE the page content slot. The godown page has its own gradient hero header. So the page showed a plain amber H1 ("Godown Prep — INV-...") stacked ABOVE the orange gradient hero card — a double-header with a visible gap between them.
+  2. SIDEBAR NOT RESPONSIVE: The sidebar used `d-none d-lg-block` (hidden below lg). The toggleSidebar() JS function existed but there was NO overlay backdrop element, and toggling `d-none` conflicted with the CSS `left: -260px` positioning. On mobile the sidebar was effectively inaccessible or rendered inline (pushing content).
+  3. SIDEBAR STYLING LEGACY: The sidebar used the legacy custom.css light-gray (#f7f7f7) background with green (#61bc91) active states — looked dated compared to the Z.ai preview's clean dark-slate sidebar with amber accents.
+
+FIX 1 — hero prop (eliminates the "big gap"):
+- Added `hero` prop to <x-layouts.erp>. When true: suppresses the <h1> title and reduces main content top padding (py-4 → pt-3 pb-6). The page provides its own gradient hero header, so the layout's text H1 is redundant.
+- Updated godown.blade.php and issue.blade.php to pass :hero="true" (both have their own gradient hero headers).
+
+FIX 2 — mobile drawer + overlay:
+- Removed `d-none d-lg-block` from the sidebar <nav>. The sidebar is now always in the DOM; CSS handles show/hide.
+- Mobile (< lg): sidebar is position:fixed at left:-280px (off-screen). `.active` slides it to left:0. A #sidebarOverlay backdrop element (semi-transparent slate-900) fades in behind it. Click overlay or press ESC to close. Nav-link click also closes the drawer.
+- Updated toggleSidebar() to toggle both sidebar + overlay. Added DOMContentLoaded listeners for overlay-click-close and ESC-close. Updated the existing nav-link-click-close handler to remove the old `d-none` toggle.
+- The hamburger button in <x-erp.top-nav> (d-lg-none, onclick="toggleSidebar()") already exists — it now properly opens the drawer.
+
+FIX 3 — modern sidebar styling:
+- Added a scoped <style> block in erp.blade.php that overrides the legacy custom.css sidebar rules (scoped to #sidebar so it only affects this layout, not layouts/admin.blade.php):
+  * Background: #f7f7f7 → #0f172a (slate-900)
+  * Nav links: #333 → #94a3b8 (slate-400), hover → rgba(255,255,255,0.06) + slate-100 text
+  * Active: green #61bc91 → amber tint (rgba(245,158,11,0.10)) + amber-400 text + 3px amber-500 left border
+  * Icons: 18px width, centered, active = amber-400
+  * Sidebar header: white text, amber-500 store icon, border-bottom for separation
+  * Submenu: 1px rgba white border-left, smaller font, .is-open show/hide
+  * Border-radius: 8px on nav links, 2px×8px margin for breathing room
+  * Font: 0.8125rem (13px) base, 0.78rem submenu — matches the Z.ai preview's compact typography
+
+FIX 4 — desktop sidebar positioning:
+- Desktop (>= lg): sidebar is position:fixed at top:56px (below the sticky top-nav), left:0, width:260px, height:calc(100vh - 56px), z-index:40 (below top-nav z-50).
+- Main content (#mainContent): margin-left:260px + width:calc(100% - 260px) — overrides Bootstrap col-lg-10 + ms-auto which misaligned with the fixed-width sidebar. Eliminates the previous 26px overlap between sidebar and main content.
+- The top-nav remains sticky at top:0, z-50 — always visible above the sidebar.
+
+- Rebuilt CSS (bun run build:css) — no change (pt-3/pb-6/py-4 already in compiled CSS). Pre-commit hook will also fire on commit.
+- All 6 pages using <x-layouts.erp> (godown, issue, index, show, sales-invoices/show, ui-preview) get the modernized sidebar + mobile drawer for free. Only godown + issue get :hero="true" (they have gradient heroes); the others keep the H1 title (appropriate for list/detail pages).
+
+Stage Summary:
+- THE "BIG GAP" IS ELIMINATED: the redundant plain-text H1 above the gradient hero is suppressed when :hero="true". The hero card now sits at the top of the main content area with tight pt-3 padding — matching the Z.ai preview's clean header treatment.
+- SIDEBAR IS NOW MODERN + RESPONSIVE: dark slate-900 background with amber active accents (matching the Z.ai preview). On mobile (< 992px), the hamburger button in the top-nav opens a slide-in drawer with a semi-transparent backdrop. Click the backdrop, press ESC, or select a nav item to close. On desktop, the sidebar is fixed left at 260px with the main content offset accordingly — no overlap, no misalignment.
+- ALL PAGES BENEFIT: the layout improvements (sidebar styling, mobile drawer, positioning) apply to every page using <x-layouts.erp>. The hero-prop gap fix applies to godown + issue (the two pages with gradient heroes).
+- USER ACTION NEEDED: (1) `git pull` on their server. (2) Hard-refresh the godown page. The sidebar should now be dark slate with amber accents, the "big gap" above the hero should be gone, and on mobile the hamburger should open a proper drawer with overlay. (3) Check other sales-challan pages (issue, index, show) — they all get the modernized sidebar too.
+- NO test code written (per project rules). PHP is not installed in this sandbox; the fix was verified by manual CSS/Blade review + the CSS build succeeding.

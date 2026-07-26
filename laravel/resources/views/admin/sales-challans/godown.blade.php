@@ -1,4 +1,4 @@
-<x-layouts.erp :title="$title" :tabs="[]">
+<x-layouts.erp :title="$title" :tabs="[]" :hero="true">
 @php
     // Pre-compute per-product availability helpers
     $availability = $availability ?? [];
