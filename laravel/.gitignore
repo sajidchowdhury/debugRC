@@ -3,7 +3,8 @@ phpunit-coverage.xml
 bootstrap/cache/*.php
 vendor/
 node_modules/
-public/build/
-!public/build/.gitkeep
 .env
 server.php
+# Bun is the project's package manager — ignore stray npm lockfiles so an
+# accidental `npm install` doesn't dirty the tree. bun.lock is committed.
+package-lock.json
