@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# ====================================================================
+# RC ERP pre-commit guard — auto-rebuild rc-erp.css when Blade/CSS changes.
+#
+# This hook is the keystone of the CSS build pipeline (see
+# docs/css-build-action-plan.md, Phase 4). It makes the "rebuild before
+# commit" discipline automatic and unbreakable, eliminating the stale-CSS
+# failure mode that broke the godown page (commit cdfe719 et al.).
+#
+# Behaviour:
+#   1. If no .blade.php / source-CSS file is staged → exit 0 (no-op).
+#   2. If bun is not on PATH → warn + exit 0 (let CI catch a stale CSS;
+#      we never block a commit just because bun is missing locally).
+#   3. Hash the currently-committed rc-erp.css (HEAD version).
+#   4. Run `bun run build:css` from laravel/.
+#   5. Hash the rebuilt file. If it changed → `git add` it so the commit
+#      includes the freshly-rebuilt CSS.
+#
+# Escape hatch: `git commit --no-verify` bypasses this hook. The CI
+# workflow (.github/workflows/css-guard.yml) catches any bypass.
+#
+# Installed to .git/hooks/pre-commit by git-hooks/install.sh, which is
+# wired into composer.json's post-autoload-dump script.
+# ====================================================================
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$ROOT" ]; then
+    exit 0   # not a git repo — nothing to guard
+fi
+
+LARAVEL="$ROOT/laravel"
+CSS_PATH="laravel/public/assets/css/rc-erp.css"
+
+# Only act if staged files include a Blade view or the source CSS.
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null \
+    | grep -E '^laravel/resources/views/.*\.blade\.php$|^laravel/resources/css/rc-erp\.css$' \
+    || true)
+
+if [ -z "$STAGED" ]; then
+    exit 0   # nothing relevant changed; allow commit
+fi
+
+# If bun isn't available, warn but don't block — CI will catch a stale CSS.
+if ! command -v bun >/dev/null 2>&1; then
+    echo "[pre-commit] WARNING: bun not found — skipped CSS rebuild." >&2
+    echo "[pre-commit] Run 'bun run build:css' in laravel/ and 'git add' the result." >&2
+    exit 0
+fi
+
+# Hash the currently-committed version of the compiled CSS (if it exists).
+BEFORE=$(git cat-file -p "HEAD:$CSS_PATH" 2>/dev/null | sha256sum | cut -d' ' -f1 || echo "none")
+
+# Rebuild. Run from laravel/ so package.json scripts resolve correctly.
+echo "[pre-commit] Blade/CSS-source changed — rebuilding rc-erp.css…" >&2
+( cd "$LARAVEL" && bun run build:css >/dev/null 2>&1 )
+BUILD_EXIT=$?
+
+if [ $BUILD_EXIT -ne 0 ]; then
+    echo "[pre-commit] WARNING: build:css exited $BUILD_EXIT — CSS not rebuilt." >&2
+    echo "[pre-commit] The commit will proceed; CI will verify the CSS is in sync." >&2
+    exit 0
+fi
+
+if [ ! -f "$ROOT/$CSS_PATH" ]; then
+    echo "[pre-commit] ERROR: build did not produce $CSS_PATH" >&2
+    exit 1
+fi
+
+AFTER=$(sha256sum "$ROOT/$CSS_PATH" | cut -d' ' -f1)
+
+if [ "$BEFORE" = "$AFTER" ]; then
+    echo "[pre-commit] CSS unchanged after rebuild — no restage needed." >&2
+    exit 0
+fi
+
+echo "[pre-commit] CSS changed — re-staging $CSS_PATH" >&2
+git add "$CSS_PATH"
+exit 0
