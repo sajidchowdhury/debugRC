@@ -420,6 +420,21 @@ Route::middleware('auth')->group(function () {
             ->name('count')->middleware('role:admin,manager,warehouse_manager');
         Route::post('{session}/warehouses/{warehouse}/count', [StockTakeController::class, 'saveCounts'])
             ->name('saveCounts')->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+        // Phase 7 (Stock Take plan): Count UX — barcode scan, bulk paste, CSV
+        // import, recount, autosave. All five share the write-role middleware
+        // (admin/manager/warehouse_manager) + branch.isolation so a non-admin
+        // cannot forge a cross-branch write. The {session} URL param lets
+        // EnforceBranchIsolation resolve stock_take_sessions.branch_id.
+        Route::post('{session}/warehouses/{warehouse}/scan', [StockTakeController::class, 'scanCount'])
+            ->name('scanCount')->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+        Route::post('{session}/warehouses/{warehouse}/bulk-paste', [StockTakeController::class, 'bulkPaste'])
+            ->name('bulkPaste')->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+        Route::post('{session}/warehouses/{warehouse}/import', [StockTakeController::class, 'importCounts'])
+            ->name('importCounts')->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+        Route::post('{session}/warehouses/{warehouse}/recount', [StockTakeController::class, 'recount'])
+            ->name('recount')->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+        Route::post('{session}/warehouses/{warehouse}/autosave', [StockTakeController::class, 'autosave'])
+            ->name('autosave')->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
         Route::post('{session}/post', [StockTakeController::class, 'post'])
             ->name('post')->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
         Route::post('{session}/cancel', [StockTakeController::class, 'cancel'])

@@ -9,10 +9,16 @@ use Illuminate\Database\Eloquent\Model;
  * Links a session to the warehouses being counted. Each warehouse has its own
  * count status (pending → counting → completed).
  *
+ * Phase 7: 'recounting' added as a transient state between 'completed' and
+ * 'counting'. recountWarehouse() sets 'recounting' (audited) then immediately
+ * 'counting'; the vocab is forward-compatible with a future async recount
+ * assignment that leaves the warehouse in 'recounting' until the counter
+ * opens the page.
+ *
  * @property int $id
  * @property int $stock_take_session_id
  * @property int $warehouse_id
- * @property string $status pending|counting|completed
+ * @property string $status pending|counting|completed|recounting
  */
 class StockTakeWarehouse extends Model
 {
@@ -46,4 +52,12 @@ class StockTakeWarehouse extends Model
         return $this->hasMany(StockTakeItem::class, 'stock_take_session_id', 'stock_take_session_id')
                     ->whereColumn('warehouse_id', 'warehouse_id');
     }
+
+    /**
+     * Phase 7: is this warehouse mid-recount? 'recounting' is transient
+     * (recountWarehouse() flips it to 'counting' in the same transaction),
+     * but this helper lets the count page badge a recount in progress if a
+     * future async flow leaves the state here.
+     */
+    public function isRecounting(): bool { return $this->status === 'recounting'; }
 }

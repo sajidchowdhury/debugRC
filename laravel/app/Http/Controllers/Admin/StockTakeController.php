@@ -819,6 +819,299 @@ class StockTakeController extends Controller
             ->with('error', 'ABC refresh failed: ' . $result['error']);
     }
 
+    // ========================================================================
+    // Phase 7 (Stock Take plan): Count UX — barcode scan, bulk paste, CSV
+    // import, recount, autosave. All five endpoints share the {session}/
+    // warehouses/{warehouse} prefix (registered in routes/web.php) and the
+    // role:admin,manager,warehouse_manager + branch.isolation middleware so a
+    // non-admin cannot forge a cross-branch write.
+    // ========================================================================
+
+    /**
+     * Phase 7: Barcode-driven single-line count entry (AJAX).
+     *
+     * Accepts {code, qty, reason?}. Resolves the product by exact code, upserts
+     * the physical_qty on the matching stock_take_items row, and returns the
+     * updated line + recomputed variance so the count page can update the grid
+     * live without a full reload (acceptance criterion: "saving updates the
+     * grid without a full reload").
+     *
+     * Returns 200 {status:'success', line:{...}} on success; 422 with a clear
+     * message for unknown codes / out-of-scope products / negative qty; 500
+     * for unexpected errors.
+     */
+    public function scanCount(Request $request, int $sessionId, int $warehouseId)
+    {
+        $validated = $request->validate([
+            'code'   => 'required|string|max:80',
+            'qty'    => 'required|numeric|min:0',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $line = $this->stockTakeService->upsertCount(
+                $sessionId,
+                $warehouseId,
+                $validated['code'],
+                (float) $validated['qty'],
+                $validated['reason'] ?? null,
+                auth()->id()
+            );
+            return response()->json(['status' => 'success', 'line' => $line]);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Phase 7: Bulk-paste count entry (AJAX).
+     *
+     * Accepts a textarea of `code,qty[,reason]` lines (one per row, comma or
+     * tab separated). Parses into the $lines array and calls bulkUpsertCounts,
+     * which upserts every valid line in a single transaction. Unknown / out-
+     * of-scope codes are skipped (not fatal) and reported back per-line.
+     *
+     * Returns 200 {status:'success', updated, skipped, errors:[{line,code,error}]}.
+     */
+    public function bulkPaste(Request $request, int $sessionId, int $warehouseId)
+    {
+        $validated = $request->validate([
+            'lines' => 'required|string|max:50000',
+        ]);
+
+        $parsed = $this->parseBulkLines($validated['lines']);
+        if (empty($parsed)) {
+            return response()->json([
+                'message' => 'No parseable lines found. Use one product per line: code,qty[,reason].',
+            ], 422);
+        }
+
+        try {
+            $result = $this->stockTakeService->bulkUpsertCounts(
+                $sessionId,
+                $warehouseId,
+                $parsed,
+                auth()->id()
+            );
+            return response()->json(['status' => 'success', ...$result]);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Phase 7: CSV import of count lines (multipart POST).
+     *
+     * Accepts an uploaded CSV file with headers `product_code, physical_qty`
+     * (an optional `reason` column is also accepted). Validates the headers,
+     * parses the rows, and calls bulkUpsertCounts. Redirects back to the
+     * count page with a success/error flash summarising the result.
+     *
+     * Acceptance criterion: "CSV import validates headers (product_code,
+     * physical_qty) and rejects unknown codes with a clear error."
+     */
+    public function importCounts(Request $request, int $sessionId, int $warehouseId)
+    {
+        $request->validate([
+            'csv_file' => 'required|file|mimes:csv,txt|max:2048',
+        ]);
+
+        $file = $request->file('csv_file');
+        $raw = file_get_contents($file->getRealPath());
+        if ($raw === false || $raw === '') {
+            return back()->with('error', 'The uploaded CSV file is empty.');
+        }
+
+        // Strip BOM if present (Excel exports often start with one).
+        $raw = preg_replace('/^\xEF\xBB\xBF/', '', $raw);
+
+        $parsed = $this->parseCsv($raw);
+        if (isset($parsed['error'])) {
+            return back()->with('error', $parsed['error']);
+        }
+
+        try {
+            $result = $this->stockTakeService->bulkUpsertCounts(
+                $sessionId,
+                $warehouseId,
+                $parsed['lines'],
+                auth()->id(),
+                'csv_import'
+            );
+            $msg = "CSV import: {$result['updated']} line(s) updated, {$result['skipped']} skipped.";
+            if (!empty($result['errors'])) {
+                $msg .= ' Skipped rows: ' . collect($result['errors'])
+                    ->map(fn($e) => "line {$e['line']} ({$e['code']}): {$e['error']}")
+                    ->take(5)->implode('; ');
+                if (count($result['errors']) > 5) {
+                    $msg .= ' … (+' . (count($result['errors']) - 5) . ' more)';
+                }
+            }
+            return redirect()->route('admin.stock-take.count', [$sessionId, $warehouseId])
+                ->with($result['skipped'] > 0 ? 'warning' : 'success', $msg);
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Phase 7: Recount a completed warehouse (POST).
+     *
+     * Transitions the warehouse completed → counting (via the transient
+     * 'recounting' state) and pushes the session back to 'counting' if it
+     * was submitted/approved. Requires a reason (the counter needs to know
+     * why). Redirects to the count page so the counter can re-enter counts.
+     */
+    public function recount(Request $request, int $sessionId, int $warehouseId)
+    {
+        $validated = $request->validate([
+            'reason' => 'required|string|min:3|max:1000',
+        ]);
+
+        try {
+            $result = $this->stockTakeService->recountWarehouse(
+                $sessionId,
+                $warehouseId,
+                $validated['reason'],
+                auth()->id()
+            );
+            $msg = "Recount started — {$result['lines_recounted']} line(s) ready for re-entry.";
+            if ($result['reset_to_system']) {
+                $msg .= ' Previous physical quantities were RESET to system qty (policy on).';
+            } else {
+                $msg .= ' Previous physical quantities were PRESERVED — adjust as needed.';
+            }
+            return redirect()->route('admin.stock-take.count', [$sessionId, $warehouseId])
+                ->with('warning', $msg);
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Phase 7: Auto-save a single count line (AJAX, optimistic concurrency).
+     *
+     * Accepts {product_id, qty, reason?, expected_updated_at?} and upserts
+     * the line. When expected_updated_at doesn't match the current row's
+     * updated_at, returns 409 {status:'conflict', line:{...}} so the UI can
+     * re-prompt (two counters editing the same line). Otherwise returns
+     * 200 {status:'saved', line:{...}, current_updated_at}.
+     */
+    public function autosave(Request $request, int $sessionId, int $warehouseId)
+    {
+        $validated = $request->validate([
+            'product_id'         => 'required|integer|min:1',
+            'qty'                => 'required|numeric|min:0',
+            'reason'             => 'nullable|string|max:500',
+            'expected_updated_at' => 'nullable|string|max:30',
+        ]);
+
+        try {
+            $result = $this->stockTakeService->autosaveCount(
+                $sessionId,
+                $warehouseId,
+                (int) $validated['product_id'],
+                (float) $validated['qty'],
+                $validated['reason'] ?? null,
+                $validated['expected_updated_at'] ?? null,
+                auth()->id()
+            );
+            if ($result['status'] === 'conflict') {
+                return response()->json($result, 409);
+            }
+            return response()->json($result);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Phase 7: parse a bulk-paste textarea into the $lines array.
+     *
+     * Accepts one product per line. Each line is split on the first comma or
+     * tab; the first field is the code, the second the qty, and an optional
+     * third field is the reason. Blank lines and lines starting with '#' are
+     * ignored. Trims every field. Returns the array of
+     * {code, qty, reason?} rows.
+     *
+     * @return array<int, array{code: string, qty: numeric, reason?: string}>
+     */
+    private function parseBulkLines(string $text): array
+    {
+        $out = [];
+        foreach (preg_split('/\r\n|\r|\n/', $text) as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) continue;
+            // Split on the first comma OR tab; the reason may contain commas,
+            // so we split on the first 2 delimiters only and treat the rest
+            // of the string as the reason.
+            $parts = preg_split('/[,\t]/', $line, 3);
+            if (count($parts) < 2) continue;
+            $code = trim($parts[0]);
+            $qty  = trim($parts[1]);
+            $reason = isset($parts[2]) ? trim($parts[2]) : null;
+            if ($code === '') continue;
+            $out[] = [
+                'code'   => $code,
+                'qty'    => $qty,
+                'reason' => $reason !== '' ? $reason : null,
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Phase 7: parse a CSV string into the $lines array.
+     *
+     * Validates the header row contains at least `product_code` and
+     * `physical_qty` (case-insensitive; underscores/spaces flexible). An
+     * optional `reason` column is also honoured. Returns either
+     * ['error' => message] on a header/parse failure, or
+     * ['lines' => [...]] on success.
+     *
+     * @return array{lines?: array<int, array{code: string, qty: numeric, reason?: string}>, error?: string}
+     */
+    private function parseCsv(string $raw): array
+    {
+        // str_getcsv over each line — simple and good enough for the small
+        // count files (a warehouse rarely has more than a few thousand lines).
+        $lines = preg_split('/\r\n|\r|\n/', trim($raw));
+        if ($lines === false || count($lines) < 2) {
+            return ['error' => 'CSV must have a header row and at least one data row.'];
+        }
+        $header = array_map(fn($h) => trim(strtolower(str_replace([' ', '-'], '_', $h))), str_getcsv(array_shift($lines)));
+        $codeIdx = array_search('product_code', $header, true);
+        $qtyIdx  = array_search('physical_qty', $header, true);
+        if ($codeIdx === false || $qtyIdx === false) {
+            return ['error' => 'CSV header must contain product_code and physical_qty columns (found: ' . implode(', ', $header) . ').'];
+        }
+        $reasonIdx = array_search('reason', $header, true);
+
+        $out = [];
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '') continue;
+            $cols = str_getcsv($line);
+            $code = isset($cols[$codeIdx]) ? trim($cols[$codeIdx]) : '';
+            $qty  = isset($cols[$qtyIdx]) ? trim($cols[$qtyIdx]) : '';
+            $reason = ($reasonIdx !== false && isset($cols[$reasonIdx])) ? trim($cols[$reasonIdx]) : null;
+            if ($code === '') continue;
+            $out[] = [
+                'code'   => $code,
+                'qty'    => $qty,
+                'reason' => $reason !== '' ? $reason : null,
+            ];
+        }
+        if (empty($out)) {
+            return ['error' => 'No data rows found in the CSV after the header.'];
+        }
+        return ['lines' => $out];
+    }
+
     /**
      * Phase 5: count how many products a scope+payload would load for a
      * warehouse. Mirrors StockTakeService::buildScopedProductsQuery exactly

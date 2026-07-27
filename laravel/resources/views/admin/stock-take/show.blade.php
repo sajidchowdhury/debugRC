@@ -16,9 +16,11 @@
 
     $whStatusBadge = function (string $s): string {
         return [
-            'pending'   => '<span class="badge bg-secondary-subtle text-secondary"><i class="fas fa-hourglass-half me-1"></i>Pending</span>',
-            'counting'  => '<span class="badge bg-info-subtle text-info"><i class="fas fa-clipboard-list me-1"></i>Counting</span>',
-            'completed' => '<span class="badge bg-success-subtle text-success"><i class="fas fa-circle-check me-1"></i>Completed</span>',
+            'pending'    => '<span class="badge bg-secondary-subtle text-secondary"><i class="fas fa-hourglass-half me-1"></i>Pending</span>',
+            'counting'   => '<span class="badge bg-info-subtle text-info"><i class="fas fa-clipboard-list me-1"></i>Counting</span>',
+            'completed'  => '<span class="badge bg-success-subtle text-success"><i class="fas fa-circle-check me-1"></i>Completed</span>',
+            // Phase 7: transient state between completed and counting.
+            'recounting' => '<span class="badge bg-warning-subtle text-warning"><i class="fas fa-rotate me-1"></i>Recounting</span>',
         ][$s] ?? '<span class="badge bg-light text-dark">' . e($s) . '</span>';
     };
 
@@ -330,6 +332,22 @@
                                                    class="btn btn-sm btn-outline-secondary" title="Enter counts">
                                                     <i class="fas fa-pen-to-square me-1"></i> Count
                                                 </a>
+                                                @php
+                                                    // Phase 7: Recount button — only for completed warehouses on an
+                                                    // editable (pre-post) session. The service re-checks; this gate
+                                                    // just hides a dead click.
+                                                    $canRecount = $wh->status === 'completed'
+                                                        && in_array($session->status, ['counting','submitted','approved'], true);
+                                                @endphp
+                                                @if ($canRecount)
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-warning ms-1 js-st-recount"
+                                                            title="Recount this warehouse"
+                                                            data-recount-url="{{ route('admin.stock-take.recount', [$session->id, $wh->warehouse_id]) }}"
+                                                            data-warehouse="{{ e($wh->warehouse?->warehouse_name ?? 'Warehouse #' . $wh->warehouse_id) }}">
+                                                        <i class="fas fa-rotate me-1"></i> Recount
+                                                    </button>
+                                                @endif
                                             @endif
                                         </td>
                                     </tr>
@@ -1240,7 +1258,53 @@ $(function () {
             language: { search: 'Filter variance lines:' }
         });
     @endif
+
+    // ====== Phase 7: Recount a completed warehouse ======
+    // Opens a reason-prompt Swal, then POSTs to the recount route. The
+    // service transitions completed → recounting → counting, captures a
+    // pre-recount snapshot in the audit log, and (per policy) preserves or
+    // resets the previous physical_qty values.
+    $('.js-st-recount').on('click', function () {
+        var url = $(this).data('recount-url');
+        var whName = $(this).data('warehouse') || 'this warehouse';
+        Swal.fire({
+            icon: 'warning',
+            title: 'Recount ' + whName + '?',
+            html: '<p class="text-start">This moves the warehouse <strong>back to counting</strong> so you can re-enter the physical quantities.</p>' +
+                  '<p class="text-start small text-muted">The previous physical quantities are captured in the audit log. ' +
+                  'They are preserved by default (you see the prior count and adjust); set the policy to reset them to system qty if needed.</p>' +
+                  '<p class="text-start">If the session was submitted/approved, it returns to <strong>counting</strong> and the approval is cleared.</p>',
+            input: 'textarea',
+            inputLabel: 'Reason (required)',
+            inputPlaceholder: 'e.g. Counter reported a misread on the bulk pallet; safety recount requested.',
+            inputValidator: function (v) {
+                if (!v || v.trim().length < 3) return 'Enter a reason (at least 3 characters).';
+            },
+            showCancelButton: true,
+            confirmButtonColor: '#d97706',
+            confirmButtonText: '<i class="fas fa-rotate"></i> Recount',
+            cancelButtonText: 'Keep as completed'
+        }).then(function (result) {
+            if (!result.isConfirmed) return;
+            // Submit the reason via a hidden form POST (the route expects a
+            // POST + branch.isolation; a fetch with FormData is simplest).
+            var $f = $('<form method="POST" action="' + url + '"></form>');
+            $f.append('<input type="hidden" name="_token" value="' + ($('meta[name="csrf-token"]').attr('content') || $('input[name="_token"]').first().val()) + '">');
+            $f.append('<input type="hidden" name="reason" value="' + $('<div>').text(result.value).html() + '">');
+            $('body').append($f);
+            $f.submit();
+        });
+    });
 });
 </script>
+@endpush
+
+@push('css')
+<style>
+/* Phase 7: keep the recount button visible alongside Count on narrow widths. */
+@media (max-width: 575.98px) {
+    .js-st-recount { --bs-btn-padding-y: 0.35rem; }
+}
+</style>
 @endpush
 @endsection

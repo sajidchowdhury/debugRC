@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\DB;
  *   stock_take.auto_approve_below_value  (numeric) — skip gate below this value
  *   stock_take.approver_roles            (array)   — roles that can approve
  *   stock_take.variance_threshold_block  (numeric) — force approval ≥ this value
+ *   stock_take.recount_reset_to_system   (bool)    — Phase 7: reset physical_qty on recount
  *
  * The `approvalRequiredForVariance()` helper combines require_approval and
  * variance_threshold_block to answer: "given this total |gain|+|loss| value,
@@ -142,6 +143,18 @@ class StockTakePolicyService
         }
 
         return false;
+    }
+
+    /**
+     * Phase 7: when true, recountWarehouse() resets physical_qty to
+     * system_qty on every line of the recounted warehouse (counter starts
+     * fresh). When false (default), the previous physical_qty is preserved
+     * so the counter sees the prior count and adjusts. Either way, the
+     * recount audit row captures the pre-recount snapshot.
+     */
+    public function recountResetToSystem(): bool
+    {
+        return (bool) ($this->all()['stock_take.recount_reset_to_system'] ?? false);
     }
 
     /**

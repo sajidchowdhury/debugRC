@@ -195,7 +195,13 @@ CREATE TABLE stock_take_warehouses (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     stock_take_session_id integer NOT NULL REFERENCES stock_take_sessions(id) ON DELETE CASCADE,
     warehouse_id integer NOT NULL REFERENCES warehouses(id),
-    status varchar(20) DEFAULT 'pending' CHECK (status IN ('pending','counting','completed'))
+    -- Phase 7: 'recounting' added to the status vocab. It is a transient
+    -- state inserted by recountWarehouse() between 'completed' and
+    -- 'counting' so the audit timeline can show the recount request
+    -- distinctly. The transition is atomic (recounting is set + audited,
+    -- then immediately counting), but the vocab is forward-compatible with
+    -- a future async recount assignment.
+    status varchar(20) DEFAULT 'pending' CHECK (status IN ('pending','counting','completed','recounting'))
 );
 CREATE INDEX idx_stw_session ON stock_take_warehouses(stock_take_session_id);
 
@@ -215,6 +221,12 @@ CREATE TABLE stock_take_items (
     -- postSession — links each variance item to the exact journal_lines row
     -- that recorded its GL impact. Nullable (null = no variance or not yet posted).
     journal_line_id integer REFERENCES journal_lines(id) ON DELETE SET NULL,
+    -- Phase 7 (Stock Take plan): per-line recount tracking. Set when
+    -- recountWarehouse() touches this warehouse's items. recounted_by is a
+    -- plain integer FK (ON DELETE SET NULL) so a deleted user does not
+    -- cascade-wipe the recount context.
+    recounted_at timestamp(0),
+    recounted_by integer REFERENCES users(id) ON DELETE SET NULL,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uk_sti_session_wh_product UNIQUE (stock_take_session_id, warehouse_id, product_id)
 );
@@ -238,7 +250,8 @@ CREATE TABLE stock_take_audit_log (
     stock_take_item_id integer REFERENCES stock_take_items(id) ON DELETE SET NULL,
     action varchar(40) NOT NULL CHECK (
         action IN ('create','setup','save_count','mark_complete','submit',
-                   'approve','reject','post','reverse','re_open','delete','cancel')
+                   'approve','reject','post','reverse','re_open','delete',
+                   'cancel','recount','scan_count','bulk_upsert','csv_import','autosave')
     ),
     actor_id integer,
     from_status varchar(20),
@@ -249,9 +262,10 @@ CREATE TABLE stock_take_audit_log (
 );
 -- Timeline query: ordered list of audit rows for one session.
 CREATE INDEX idx_stal_session ON stock_take_audit_log(stock_take_session_id, created_at);
--- Partial index: only the "critical" transitions (post/reverse/re_open).
+-- Partial index: only the "critical" transitions (post/reverse/re_open,
+-- plus Phase 7 recount — a warehouse-level state change worth flagging).
 CREATE INDEX idx_stal_critical ON stock_take_audit_log(stock_take_session_id)
-    WHERE action IN ('post','reverse','re_open');
+    WHERE action IN ('post','reverse','re_open','recount');
 -- Branch filter for the global audit screen.
 CREATE INDEX idx_stal_branch ON stock_take_audit_log(branch_id, created_at);
 -- "Actions by user" report.
@@ -268,6 +282,12 @@ CREATE INDEX idx_stal_actor ON stock_take_audit_log(actor_id, created_at);
 --   stock_take.auto_approve_below_value  (numeric) — skip gate below this value
 --   stock_take.approver_roles            (array)   — roles that can approve
 --   stock_take.variance_threshold_block  (numeric) — force approval ≥ this value
+-- Phase 7 seed (2025_07_30_000001_add_recount_columns_to_stock_take.php):
+--   stock_take.recount_reset_to_system (bool, default false) — when true,
+--     recountWarehouse() resets physical_qty to system_qty (counter starts
+--     fresh); when false, the previous physical_qty is preserved so the
+--     counter sees the prior count and adjusts. The pre-recount values are
+--     always captured in the recount audit row regardless.
 CREATE TABLE stock_take_policies (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     key varchar(80) NOT NULL,

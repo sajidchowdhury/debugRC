@@ -21,7 +21,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int $stock_take_session_id
  * @property int|null $stock_take_warehouse_id
  * @property int|null $stock_take_item_id
- * @property string $action create|setup|save_count|mark_complete|submit|approve|reject|post|reverse|re_open|delete|cancel
+ * @property string $action create|setup|save_count|mark_complete|submit|approve|reject|post|reverse|re_open|delete|cancel|recount|scan_count|bulk_upsert|csv_import|autosave
  * @property int|null $actor_id users.id of the user who performed the action
  * @property string|null $from_status
  * @property string|null $to_status
@@ -95,6 +95,12 @@ class StockTakeAuditLog extends Model
             're_open'       => 'Re-opened after reversal',
             'delete'        => 'Deleted',
             'cancel'        => 'Cancelled',
+            // Phase 7: count-UX actions.
+            'recount'       => 'Warehouse recounted',
+            'scan_count'    => 'Barcode scan saved a line',
+            'bulk_upsert'   => 'Bulk paste upserted lines',
+            'csv_import'    => 'CSV import upserted lines',
+            'autosave'      => 'Line auto-saved',
         ][$action] ?? ucfirst(str_replace('_', ' ', $action));
     }
 
@@ -116,6 +122,12 @@ class StockTakeAuditLog extends Model
             're_open'       => 'warning',
             'delete'        => 'danger',
             'cancel'        => 'secondary',
+            // Phase 7: count-UX actions.
+            'recount'       => 'warning',
+            'scan_count'    => 'info',
+            'bulk_upsert'   => 'info',
+            'csv_import'    => 'info',
+            'autosave'      => 'secondary',
         ][$action] ?? 'secondary';
     }
 
@@ -125,6 +137,8 @@ class StockTakeAuditLog extends Model
      */
     public static function isCritical(string $action): bool
     {
-        return in_array($action, ['post', 'reverse', 're_open'], true);
+        // Phase 7: 'recount' added — a warehouse-level state change worth
+        // flagging in the critical-events summary alongside post/reverse.
+        return in_array($action, ['post', 'reverse', 're_open', 'recount'], true);
     }
 }

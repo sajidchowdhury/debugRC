@@ -647,6 +647,574 @@ class StockTakeService
         });
     }
 
+    // ========================================================================
+    // Phase 7 (Stock Take plan) — Count UX: barcode, bulk paste, CSV import,
+    // recount, autosave. The methods below are the single-line / batch / recount
+    // entry points used by the new count page. Each runs inside its own
+    // DB::transaction with a session-row lockForUpdate (same concurrency story
+    // as saveCounts) and writes an audit row in the same transaction.
+    // ========================================================================
+
+    /**
+     * Phase 7: Transition a completed warehouse back to counting for a recount.
+     *
+     * Flow (atomic, single transaction):
+     *   1. Lock the session row.
+     *   2. Verify the warehouse belongs to the session AND is currently
+     *      'completed' (a recount of a pending/counting warehouse is a no-op
+     *      — the counter is already in the counting page).
+     *   3. Capture a pre-recount snapshot of every item's physical_qty
+     *      (product_id, product_code, physical_qty) — this is the forensic
+     *      record the acceptance criterion demands ("the previous physical_qty
+     *      values are preserved in the audit log").
+     *   4. Set stock_take_warehouses.status = 'recounting' (the transient
+     *      state — audited distinctly from a plain save_count).
+     *   5. Stamp recounted_at = now() + recounted_by = actor on every item in
+     *      the warehouse. Optionally reset physical_qty = system_qty when the
+     *      stock_take.recount_reset_to_system policy is true (default false =
+     *      preserve, so the counter sees the prior count and adjusts).
+     *   6. Flip the warehouse to 'counting' (open for re-entry).
+     *   7. If the session was 'submitted' or 'approved', push it back to
+     *      'counting' (a recount invalidates any prior approval) and clear
+     *      the approval artifacts so the workflow restarts cleanly.
+     *   8. Audit-log the recount (warehouse-scoped, action='recount',
+     *      from_status='completed', to_status='counting', payload carries
+     *      the pre-recount snapshot + the reset decision + line count).
+     *
+     * Returns a summary: { lines_recounted, reset_to_system, previous_snapshot }
+     * (previous_snapshot is the same array persisted to the audit payload —
+     * returned so the controller can flash a "we kept your previous counts"
+     * hint to the counter).
+     *
+     * @param int $sessionId
+     * @param int $warehouseId
+     * @param string $reason  Mandatory (the counter needs to know why a
+     *     recount was requested; surfaced in the audit timeline).
+     * @param int|null $actorId  Defaults to auth()->id().
+     * @return array{lines_recounted: int, reset_to_system: bool, previous_snapshot: array<int, array{product_id: int, product_code: string, physical_qty: float}>}
+     * @throws \RuntimeException  When the warehouse is not 'completed' or not
+     *     part of the session, or the session is in a terminal state.
+     */
+    public function recountWarehouse(int $sessionId, int $warehouseId, string $reason, ?int $actorId = null): array
+    {
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \InvalidArgumentException('A recount reason is required (the counter needs to know why).');
+        }
+        if (mb_strlen($reason) > 1000) {
+            throw new \InvalidArgumentException('Recount reason is too long (max 1000 characters).');
+        }
+
+        return DB::transaction(function () use ($sessionId, $warehouseId, $reason, $actorId) {
+            $session = StockTakeSession::lockForUpdate()->find($sessionId);
+            if (!$session) {
+                throw new \RuntimeException("Session {$sessionId} not found.");
+            }
+            // A recount is only meaningful before the session is posted. A
+            // posted/cancelled session is frozen — use reverse+re-open (Phase 10)
+            // instead. This guard keeps recount strictly a pre-post correction.
+            if (in_array($session->status, ['posted', 'cancelled', 'reversed'], true)) {
+                throw new \RuntimeException(
+                    "Cannot recount a {$session->status} session. Use reverse + re-open instead."
+                );
+            }
+
+            $stw = DB::table('stock_take_warehouses')
+                ->where('stock_take_session_id', $sessionId)
+                ->where('warehouse_id', $warehouseId)
+                ->first();
+            if (!$stw) {
+                throw new \RuntimeException("Warehouse {$warehouseId} is not part of session {$sessionId}.");
+            }
+            if ($stw->status !== 'completed') {
+                throw new \RuntimeException(
+                    "Only completed warehouses can be recounted (current: {$stw->status}). "
+                    . 'Open the count page to continue counting instead.'
+                );
+            }
+
+            // Pre-recount snapshot — the forensic record of the previous
+            // physical_qty values. Stored on the audit row's payload so it
+            // survives even if the counter overwrites every line.
+            $snapshotRows = DB::table('stock_take_items as sti')
+                ->join('products as p', 'p.id', '=', 'sti.product_id')
+                ->where('sti.stock_take_session_id', $sessionId)
+                ->where('sti.warehouse_id', $warehouseId)
+                ->orderBy('p.product_code')
+                ->select('sti.product_id', 'p.product_code', 'sti.physical_qty', 'sti.system_qty')
+                ->get();
+
+            $previousSnapshot = $snapshotRows->map(fn($r) => [
+                'product_id'   => (int) $r->product_id,
+                'product_code' => $r->product_code,
+                'physical_qty' => (float) $r->physical_qty,
+                'system_qty'   => (float) $r->system_qty,
+            ])->all();
+
+            // Phase 7 policy: reset physical_qty to system_qty, or preserve?
+            $resetToSystem = $this->policyService->recountResetToSystem();
+
+            $now = now();
+            $update = [
+                'recounted_at' => $now,
+                'recounted_by' => $actorId ?? auth()->id(),
+                'updated_at'   => $now,
+            ];
+            if ($resetToSystem) {
+                // Counter starts fresh — physical_qty is reset to the snapshot
+                // system_qty so the counter re-counts from "as-book".
+                $update['physical_qty'] = DB::raw('system_qty');
+            }
+            DB::table('stock_take_items')
+                ->where('stock_take_session_id', $sessionId)
+                ->where('warehouse_id', $warehouseId)
+                ->update($update);
+
+            // Warehouse: completed → recounting → counting (two writes so the
+            // audit timeline shows the transient state distinctly; both happen
+            // in the same transaction so no reader ever sees 'recounting'
+            // committed unless a future async flow deliberately leaves it).
+            DB::table('stock_take_warehouses')
+                ->where('stock_take_session_id', $sessionId)
+                ->where('warehouse_id', $warehouseId)
+                ->update(['status' => 'recounting']);
+            DB::table('stock_take_warehouses')
+                ->where('stock_take_session_id', $sessionId)
+                ->where('warehouse_id', $warehouseId)
+                ->update(['status' => 'counting']);
+
+            // If the session was submitted/approved, a recount invalidates the
+            // approval — push back to counting and clear the approval artifacts
+            // so the workflow restarts cleanly after the recount + save.
+            $sessionFromStatus = $session->status;
+            if (in_array($sessionFromStatus, ['submitted', 'approved'], true)) {
+                DB::table('stock_take_sessions')
+                    ->where('id', $sessionId)
+                    ->update([
+                        'status'             => 'counting',
+                        'submitted_by'       => null,
+                        'submitted_at'       => null,
+                        'approved_by'        => null,
+                        'approved_at'        => null,
+                        'approval_comments'  => null,
+                        'updated_at'         => $now,
+                    ]);
+            } else {
+                DB::table('stock_take_sessions')
+                    ->where('id', $sessionId)
+                    ->update(['status' => 'counting', 'updated_at' => $now]);
+            }
+
+            $this->auditLogger->log(
+                session:      $session,
+                action:       'recount',
+                fromStatus:   $sessionFromStatus,
+                toStatus:     'counting',
+                payload:      [
+                    'warehouse_id'     => $warehouseId,
+                    'reason'           => $reason,
+                    'lines_recounted'  => $snapshotRows->count(),
+                    'reset_to_system'  => $resetToSystem,
+                    'previous_physical_qty' => $previousSnapshot,
+                ],
+                warehouseId:  $warehouseId,
+                actorId:      $actorId,
+            );
+
+            return [
+                'lines_recounted'  => $snapshotRows->count(),
+                'reset_to_system'  => $resetToSystem,
+                'previous_snapshot' => $previousSnapshot,
+            ];
+        });
+    }
+
+    /**
+     * Phase 7: Upsert a single count line by product code (barcode scan path).
+     *
+     * Resolves the product by EXACT product_code match (barcodes are expected
+     * to encode the product code; a fuzzy match would silently bind a scan to
+     * the wrong product — unacceptable for a count). If the product is not in
+     * the session's stock_take_items for this warehouse, the scan is rejected
+     * with a clear error (the product was either never loaded — out of cycle-
+     * count scope — or the code is wrong).
+     *
+     * Runs inside a DB::transaction with a session-row lockForUpdate. The
+     * warehouse is NOT auto-completed (a scan is one line among many); the
+     * counter finishes with the normal Save Counts button (or autosave handles
+     * persistence line-by-line). This matches the acceptance criterion:
+     * "saving updates the grid without a full reload" — the controller returns
+     * the updated line + recomputed variance so the page updates live.
+     *
+     * @param int $sessionId
+     * @param int $warehouseId
+     * @param string $productCode  The scanned/typed code (exact match).
+     * @param float $physicalQty   The counted quantity.
+     * @param string|null $reason  Optional per-line reason.
+     * @param int|null $actorId
+     * @return array{product_id: int, product_code: string, product_name: string, unit: string, system_qty: float, physical_qty: float, difference: float, rate: float, value_diff: float, updated_at: string}
+     * @throws \RuntimeException  When the product code is unknown, not in this
+     *     warehouse's count, or the session/warehouse state doesn't allow edits.
+     */
+    public function upsertCount(int $sessionId, int $warehouseId, string $productCode, float $physicalQty, ?string $reason = null, ?int $actorId = null): array
+    {
+        $productCode = trim($productCode);
+        if ($productCode === '') {
+            throw new \InvalidArgumentException('Product code is required.');
+        }
+        if ($physicalQty < 0) {
+            throw new \InvalidArgumentException('Physical quantity cannot be negative.');
+        }
+
+        return DB::transaction(function () use ($sessionId, $warehouseId, $productCode, $physicalQty, $reason, $actorId) {
+            $session = StockTakeSession::lockForUpdate()->find($sessionId);
+            if (!$session) {
+                throw new \RuntimeException("Session {$sessionId} not found.");
+            }
+            // Scans are only valid while the session is editable (draft/counting/
+            // submitted/approved — a submitted/approved session can still be
+            // edited during a recount, but a posted/cancelled one cannot).
+            if (in_array($session->status, ['posted', 'cancelled', 'reversed'], true)) {
+                throw new \RuntimeException("Cannot edit a {$session->status} session.");
+            }
+
+            // Resolve the product by exact code. A failed resolution is the
+            // most common scan error — surface it as a clear message.
+            $product = DB::table('products')
+                ->where('product_code', $productCode)
+                ->select('id', 'product_code', 'product_name', 'unit')
+                ->first();
+            if (!$product) {
+                throw new \RuntimeException("Unknown product code '{$productCode}'. No product matches that barcode.");
+            }
+
+            // The product must be in this warehouse's count (it was loaded at
+            // setup). If not, it's out of scope for a cycle count or was never
+            // set up — reject so the counter doesn't silently add a phantom line.
+            $item = DB::table('stock_take_items')
+                ->where('stock_take_session_id', $sessionId)
+                ->where('warehouse_id', $warehouseId)
+                ->where('product_id', $product->id)
+                ->first();
+            if (!$item) {
+                throw new \RuntimeException(
+                    "Product '{$productCode}' is not in this warehouse's count. "
+                    . 'It may be out of the cycle-count scope — set up counts first or pick a different product.'
+                );
+            }
+
+            $now = now();
+            DB::table('stock_take_items')
+                ->where('id', $item->id)
+                ->update([
+                    'physical_qty' => $physicalQty,
+                    'reason'       => $reason !== null ? $reason : $item->reason,
+                    'updated_at'   => $now,
+                ]);
+
+            $systemQty = (float) $item->system_qty;
+            $rate      = (float) $item->rate;
+            $difference = $physicalQty - $systemQty;
+
+            $this->auditLogger->log(
+                session:      $session,
+                action:       'scan_count',
+                fromStatus:   $session->status,
+                toStatus:     $session->status,
+                payload:      [
+                    'warehouse_id'  => $warehouseId,
+                    'product_id'    => (int) $product->id,
+                    'product_code'  => $product->product_code,
+                    'physical_qty'  => $physicalQty,
+                    'system_qty'    => $systemQty,
+                    'difference'    => $difference,
+                    'reason'        => $reason,
+                ],
+                warehouseId:  $warehouseId,
+                itemId:       (int) $item->id,
+                actorId:      $actorId,
+            );
+
+            return [
+                'product_id'   => (int) $product->id,
+                'product_code' => $product->product_code,
+                'product_name' => $product->product_name,
+                'unit'         => $product->unit ?? '',
+                'system_qty'   => $systemQty,
+                'physical_qty' => $physicalQty,
+                'difference'   => $difference,
+                'rate'         => $rate,
+                'value_diff'   => $difference * $rate,
+                'updated_at'   => $now->toDateTimeString(),
+            ];
+        });
+    }
+
+    /**
+     * Phase 7: Bulk-upsert count lines from parsed `code,qty` rows.
+     *
+     * Used by both the bulk-paste modal and the CSV import path (the
+     * controller parses the input into a uniform $lines array before calling
+     * this). Each line is {code: string, qty: float, reason?: string}. Unknown
+     * codes / out-of-scope products are SKIPPED (not fatal) — the caller gets
+     * a per-line report so the user can fix the bad rows and re-submit them.
+     *
+     * Runs inside a single DB::transaction with a session-row lockForUpdate,
+     * so either ALL valid lines upsert or NONE do (the acceptance criterion:
+     * "Pasting 50 code,qty lines upserts all 50 in one transaction"). Skipped
+     * rows are reported back but do not abort the batch.
+     *
+     * @param int $sessionId
+     * @param int $warehouseId
+     * @param array<int, array{code: string, qty: numeric, reason?: string|null}> $lines
+     * @param int|null $actorId
+     * @param string $channel  Audit-action label distinguishing the import
+     *     source: 'bulk_upsert' (bulk paste, default) or 'csv_import' (CSV
+     *     upload). Both write the same data; the label lets the audit timeline
+     *     show which channel produced the change.
+     * @return array{updated: int, skipped: int, errors: array<int, array{line: int, code: string, error: string}>}
+     * @throws \RuntimeException  When the session is not editable.
+     */
+    public function bulkUpsertCounts(int $sessionId, int $warehouseId, array $lines, ?int $actorId = null, string $channel = 'bulk_upsert'): array
+    {
+        if (empty($lines)) {
+            return ['updated' => 0, 'skipped' => 0, 'errors' => []];
+        }
+
+        return DB::transaction(function () use ($sessionId, $warehouseId, $lines, $actorId) {
+            $session = StockTakeSession::lockForUpdate()->find($sessionId);
+            if (!$session) {
+                throw new \RuntimeException("Session {$sessionId} not found.");
+            }
+            if (in_array($session->status, ['posted', 'cancelled', 'reversed'], true)) {
+                throw new \RuntimeException("Cannot edit a {$session->status} session.");
+            }
+
+            // Pre-load the session's items for this warehouse keyed by
+            // product_code → item row. One query, then in-memory lookups —
+            // faster than N single-row queries and avoids N round-trips.
+            $itemsByCode = DB::table('stock_take_items as sti')
+                ->join('products as p', 'p.id', '=', 'sti.product_id')
+                ->where('sti.stock_take_session_id', $sessionId)
+                ->where('sti.warehouse_id', $warehouseId)
+                ->select('sti.*', 'p.product_code', 'p.product_name', 'p.unit')
+                ->get()
+                ->keyBy('product_code');
+
+            $updated = 0;
+            $skipped = 0;
+            $errors  = [];
+            $now     = now();
+            $touchedCodes = [];
+
+            foreach ($lines as $idx => $line) {
+                $lineNo = $idx + 1;
+                $code = trim((string) ($line['code'] ?? ''));
+                $qty  = $line['qty'] ?? null;
+                $reason = isset($line['reason']) ? trim((string) $line['reason']) : null;
+
+                if ($code === '') {
+                    $skipped++;
+                    $errors[] = ['line' => $lineNo, 'code' => '', 'error' => 'Empty product code.'];
+                    continue;
+                }
+                if ($qty === null || !is_numeric($qty)) {
+                    $skipped++;
+                    $errors[] = ['line' => $lineNo, 'code' => $code, 'error' => 'Quantity is not a number.'];
+                    continue;
+                }
+                $qty = (float) $qty;
+                if ($qty < 0) {
+                    $skipped++;
+                    $errors[] = ['line' => $lineNo, 'code' => $code, 'error' => 'Quantity cannot be negative.'];
+                    continue;
+                }
+
+                $item = $itemsByCode->get($code);
+                if (!$item) {
+                    $skipped++;
+                    $errors[] = [
+                        'line'  => $lineNo,
+                        'code'  => $code,
+                        'error' => "Product code '{$code}' is not in this warehouse's count (out of scope or unknown).",
+                    ];
+                    continue;
+                }
+
+                // Skip duplicate codes within the same batch — keep the FIRST
+                // occurrence so the user sees a deterministic result (and a
+                // clear error pointing at the duplicate).
+                if (isset($touchedCodes[$code])) {
+                    $skipped++;
+                    $errors[] = [
+                        'line'  => $lineNo,
+                        'code'  => $code,
+                        'error' => "Duplicate code '{$code}' in this batch (already updated on line {$touchedCodes[$code]}).",
+                    ];
+                    continue;
+                }
+                $touchedCodes[$code] = $lineNo;
+
+                DB::table('stock_take_items')
+                    ->where('id', $item->id)
+                    ->update([
+                        'physical_qty' => $qty,
+                        'reason'       => $reason !== null && $reason !== '' ? $reason : $item->reason,
+                        'updated_at'   => $now,
+                    ]);
+                $updated++;
+            }
+
+            $this->auditLogger->log(
+                session:      $session,
+                action:       $channel,
+                fromStatus:   $session->status,
+                toStatus:     $session->status,
+                payload:      [
+                    'warehouse_id'  => $warehouseId,
+                    'lines_received' => count($lines),
+                    'lines_updated'  => $updated,
+                    'lines_skipped'  => $skipped,
+                    'errors'         => $errors,
+                ],
+                warehouseId:  $warehouseId,
+                actorId:      $actorId,
+            );
+
+            return ['updated' => $updated, 'skipped' => $skipped, 'errors' => $errors];
+        });
+    }
+
+    /**
+     * Phase 7: Auto-save a single count line with optimistic concurrency.
+     *
+     * The count page auto-saves each line as the counter types (debounced).
+     * To prevent lost-update when two counters have the page open, the caller
+     * passes the `updated_at` it last saw for the row; this method rejects
+     * (HTTP 409-style) if the row's updated_at has moved since then, returning
+     * the fresh row so the UI can re-prompt.
+     *
+     * @param int $sessionId
+     * @param int $warehouseId
+     * @param int $productId
+     * @param float $physicalQty
+     * @param string|null $reason
+     * @param string|null $expectedUpdatedAt  ISO timestamp the caller last saw.
+     * @param int|null $actorId
+     * @return array{status: 'saved'|'conflict', line: array, current_updated_at: string}
+     * @throws \RuntimeException  When the session/item is not editable.
+     */
+    public function autosaveCount(int $sessionId, int $warehouseId, int $productId, float $physicalQty, ?string $reason = null, ?string $expectedUpdatedAt = null, ?int $actorId = null): array
+    {
+        if ($physicalQty < 0) {
+            throw new \InvalidArgumentException('Physical quantity cannot be negative.');
+        }
+
+        return DB::transaction(function () use ($sessionId, $warehouseId, $productId, $physicalQty, $reason, $expectedUpdatedAt, $actorId) {
+            $session = StockTakeSession::lockForUpdate()->find($sessionId);
+            if (!$session) {
+                throw new \RuntimeException("Session {$sessionId} not found.");
+            }
+            if (in_array($session->status, ['posted', 'cancelled', 'reversed'], true)) {
+                throw new \RuntimeException("Cannot edit a {$session->status} session.");
+            }
+
+            $item = DB::table('stock_take_items')
+                ->where('stock_take_session_id', $sessionId)
+                ->where('warehouse_id', $warehouseId)
+                ->where('product_id', $productId)
+                ->first();
+            if (!$item) {
+                throw new \RuntimeException("Product {$productId} is not in this warehouse's count.");
+            }
+
+            $currentUpdatedAt = $item->updated_at ? (\Illuminate\Support\Carbon::parse($item->updated_at)->toDateTimeString()) : null;
+
+            // Optimistic concurrency: if the caller passed an expected
+            // updated_at and it doesn't match the current row, someone else
+            // saved the line since the caller last loaded it. Return the
+            // fresh row (status='conflict') so the UI can re-prompt; do NOT
+            // overwrite the newer value.
+            if ($expectedUpdatedAt !== null && $currentUpdatedAt !== null && $expectedUpdatedAt !== $currentUpdatedAt) {
+                return [
+                    'status'            => 'conflict',
+                    'line'              => $this->formatItemLine($item),
+                    'current_updated_at' => $currentUpdatedAt,
+                ];
+            }
+
+            $now = now();
+            DB::table('stock_take_items')
+                ->where('id', $item->id)
+                ->update([
+                    'physical_qty' => $physicalQty,
+                    'reason'       => $reason !== null ? $reason : $item->reason,
+                    'updated_at'   => $now,
+                ]);
+
+            $this->auditLogger->log(
+                session:      $session,
+                action:       'autosave',
+                fromStatus:   $session->status,
+                toStatus:     $session->status,
+                payload:      [
+                    'warehouse_id'  => $warehouseId,
+                    'product_id'    => $productId,
+                    'physical_qty'  => $physicalQty,
+                    'reason'        => $reason,
+                ],
+                warehouseId:  $warehouseId,
+                itemId:       (int) $item->id,
+                actorId:      $actorId,
+            );
+
+            // Reload to pick up the fresh updated_at + computed difference.
+            $fresh = DB::table('stock_take_items')->where('id', $item->id)->first();
+            return [
+                'status'            => 'saved',
+                'line'              => $this->formatItemLine($fresh),
+                'current_updated_at' => $now->toDateTimeString(),
+            ];
+        });
+    }
+
+    /**
+     * Phase 7: format a stock_take_items row (joined with product) as the
+     * JSON shape the count page's autosave + scan handlers expect. Kept
+     * private — only the Phase 7 count-UX methods return this shape.
+     */
+    private function formatItemLine($item): array
+    {
+        // When called from autosave, $item is the bare stock_take_items row
+        // (no product join). Re-fetch the joined shape for the UI.
+        if (!isset($item->product_code)) {
+            $item = DB::table('stock_take_items as sti')
+                ->join('products as p', 'p.id', '=', 'sti.product_id')
+                ->where('sti.id', $item->id)
+                ->select('sti.*', 'p.product_code', 'p.product_name', 'p.unit')
+                ->first();
+        }
+        $systemQty  = (float) ($item->system_qty ?? 0);
+        $physicalQty = (float) ($item->physical_qty ?? 0);
+        $rate        = (float) ($item->rate ?? 0);
+        $difference  = $physicalQty - $systemQty;
+        return [
+            'id'           => (int) $item->id,
+            'product_id'   => (int) $item->product_id,
+            'product_code' => $item->product_code,
+            'product_name' => $item->product_name,
+            'unit'         => $item->unit ?? '',
+            'system_qty'   => $systemQty,
+            'physical_qty' => $physicalQty,
+            'difference'   => $difference,
+            'rate'         => $rate,
+            'value_diff'   => $difference * $rate,
+            'reason'       => $item->reason,
+            'updated_at'   => $item->updated_at ? \Illuminate\Support\Carbon::parse($item->updated_at)->toDateTimeString() : null,
+            'recounted_at' => $item->recounted_at ?? null,
+        ];
+    }
+
     /**
      * Phase 4 (Stock Take plan): Submit a counting session for approval.
      *
