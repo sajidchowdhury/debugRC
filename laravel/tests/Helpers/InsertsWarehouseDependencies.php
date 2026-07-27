@@ -92,11 +92,15 @@ trait InsertsWarehouseDependencies
 
     /**
      * Insert a stock_take_sessions + stock_take_warehouses pair.
-     * Note: `status` must be one of: draft, counting, posted, cancelled (CHECK constraint).
+     * Note: `status` must be one of: draft, counting, submitted, approved,
+     *       posted, cancelled (CHECK constraint — Phase 4 added submitted/approved;
+     *       'reversed' is also allowed but reserved for Phase 10).
      * Note: reversal columns (is_reversed, reversed_at, reversed_by, reverse_reason)
      *       were added to stock_take_sessions in Phase 0 of the Stock Take plan
      *       (migration 2025_07_26_000003). StockTakeService::createSession writes
      *       is_reversed=false on insert, so test rows must match the service contract.
+     * Note: Phase 4 added submitted_by/at, approved_by/at, approval_comments
+     *       (migration 2025_07_28_000001). All nullable — test rows can omit them.
      */
     protected function insertActiveStockTake(int $warehouseId, int $branchId, string $status = 'draft'): int
     {

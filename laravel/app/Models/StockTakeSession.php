@@ -23,7 +23,7 @@ use App\Traits\AuditableMasterData;
  * @property string $session_code
  * @property string $session_date
  * @property int $branch_id
- * @property string $status draft|counting|posted|cancelled
+ * @property string $status draft|counting|submitted|approved|posted|cancelled|reversed
  * @property int|null $journal_entry_id GL journal (set on post)
  * @property bool $is_reversed
  * @property string|null $reversed_at
@@ -32,6 +32,11 @@ use App\Traits\AuditableMasterData;
  * @property string|null $frozen_at      Phase 3: when outbound freeze took effect
  * @property bool $freeze_outbound       Phase 3: true = lock warehouses during count
  * @property array|null $count_snapshot  Phase 3: jsonb product list at setup time
+ * @property int|null $submitted_by      Phase 4: user who submitted for approval
+ * @property string|null $submitted_at   Phase 4: when submitted
+ * @property int|null $approved_by       Phase 4: user who approved (must differ from submitted_by)
+ * @property string|null $approved_at    Phase 4: when approved
+ * @property string|null $approval_comments Phase 4: approval/rejection comments
  * @property string|null $notes
  * @property int|null $created_by
  */
@@ -58,6 +63,12 @@ class StockTakeSession extends Model
         'frozen_at',
         'freeze_outbound',
         'count_snapshot',
+        // Phase 4: approval workflow columns.
+        'submitted_by',
+        'submitted_at',
+        'approved_by',
+        'approved_at',
+        'approval_comments',
         'notes',
         'created_by',
     ];
@@ -73,6 +84,11 @@ class StockTakeSession extends Model
         'journal_entry_id' => 'integer',
         'created_by' => 'integer',
         'reversed_by' => 'integer',
+        // Phase 4: approval workflow casts.
+        'submitted_at' => 'datetime',
+        'approved_at' => 'datetime',
+        'submitted_by' => 'integer',
+        'approved_by' => 'integer',
     ];
 
     public function branch(): \Illuminate\Database\Eloquent\Relations\BelongsTo
@@ -99,15 +115,28 @@ class StockTakeSession extends Model
     public function isCounting(): bool { return $this->status === 'counting'; }
     public function isPosted(): bool { return $this->status === 'posted'; }
     public function isCancelled(): bool { return $this->status === 'cancelled'; }
+    // Phase 4: approval-workflow states.
+    public function isSubmitted(): bool { return $this->status === 'submitted'; }
+    public function isApproved(): bool { return $this->status === 'approved'; }
 
     /**
      * Phase 3: is this session actively freezing its warehouses?
      * True when freeze_outbound is on AND the session is still in a counting
-     * state (draft/counting). Once posted or cancelled the freeze is released.
+     * state. Once posted or cancelled the freeze is released.
+     *
+     * Phase 4: the active-freeze state set expands to include 'submitted' and
+     * 'approved' — a session that has been submitted for approval (or already
+     * approved) but NOT yet posted is still mid-count from the warehouse's
+     * perspective: no variances have been applied, stock is still "in flux",
+     * and outbound movements must remain blocked until the post commits.
      */
     public function isActivelyFreezing(): bool
     {
         return (bool) $this->freeze_outbound
-            && in_array($this->status, ['draft', 'counting'], true);
+            && in_array(
+                $this->status,
+                ['draft', 'counting', 'submitted', 'approved'],
+                true
+            );
     }
 }

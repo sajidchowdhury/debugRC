@@ -6,6 +6,9 @@
         return [
             'draft'     => '<span class="badge bg-warning-subtle text-warning fs-6"><i class="fas fa-pen-to-square me-1"></i>Draft</span>',
             'counting'  => '<span class="badge bg-info-subtle text-info fs-6"><i class="fas fa-clipboard-list me-1"></i>Counting</span>',
+            // Phase 4: approval-workflow states.
+            'submitted' => '<span class="badge bg-primary-subtle text-primary fs-6"><i class="fas fa-paper-plane me-1"></i>Submitted</span>',
+            'approved'  => '<span class="badge bg-teal-subtle text-teal fs-6" style="background:#d1f5e6;color:#0d6e51;"><i class="fas fa-thumbs-up me-1"></i>Approved</span>',
             'posted'    => '<span class="badge bg-success-subtle text-success fs-6"><i class="fas fa-circle-check me-1"></i>Posted</span>',
             'cancelled' => '<span class="badge bg-secondary-subtle text-secondary fs-6"><i class="fas fa-ban me-1"></i>Cancelled</span>',
         ][$session->status] ?? '<span class="badge bg-light text-dark fs-6">' . e($session->status) . '</span>';
@@ -38,9 +41,14 @@
     $debitTotal  = $jeLines->sum(fn ($l) => (float) $l->debit);
     $creditTotal = $jeLines->sum(fn ($l) => (float) $l->credit);
 
-    // Can post? (draft or counting, all warehouses completed, has at least one warehouse)
+    // Phase 4: $canPost, $canSubmit, $canApprove, $canReject, $approvalRequired,
+    // $requireApproval, $autoApproveBelowValue, $varianceThresholdBlock,
+    // $approverRoles, $isApproverRole, $isSubmitter, $submitterUser,
+    // $approverUser, $varianceValue are all passed by the controller
+    // (StockTakeController::show) — do NOT recompute them here. The
+    // controller is the single source of truth for the approval-gate UI
+    // flags so the blade never disagrees with the service-layer guards.
     $allCompleted = $progress['total_wh'] > 0 && $progress['completed_wh'] === $progress['total_wh'];
-    $canPost      = ($session->isDraft() || $session->isCounting()) && $allCompleted;
     $canCancel    = ! $session->isCancelled();
 @endphp
 
@@ -617,7 +625,68 @@
                         <div class="mb-2">{!! $statusBadge() !!}</div>
                     </div>
 
-                    {{-- POST (only if draft/counting + all warehouses completed) --}}
+                    {{-- Phase 4: SUBMIT (counting + all completed + approval gate enabled) --}}
+                    @if ($canSubmit)
+                        <form method="POST" action="{{ route('admin.stock-take.submit', $session->id) }}" id="submitForm">
+                            @csrf
+                            <button type="button" class="btn btn-primary w-100 mb-2" id="submitBtn">
+                                <i class="fas fa-paper-plane me-1"></i> Submit for approval
+                            </button>
+                        </form>
+                        <div class="alert alert-info small mb-3">
+                            <i class="fas fa-circle-info me-1"></i>
+                            Submitting sends this session to an <strong>approver</strong>. You will not be able to
+                            edit counts after submission. An approver (a different user) will review and approve or reject it.
+                            @if ($varianceValue > 0)
+                                <br>Variance value: <strong>{{ number_format($varianceValue, 2) }}</strong>.
+                            @endif
+                        </div>
+                    @endif
+
+                    {{-- Phase 4: APPROVE / REJECT (submitted + approver + not submitter) --}}
+                    @if ($session->isSubmitted())
+                        @if ($canApprove || $canReject)
+                            <form method="POST" action="{{ route('admin.stock-take.approve', $session->id) }}" id="approveForm" class="mb-2">
+                                @csrf
+                                <div class="mb-2">
+                                    <label class="form-label small mb-1">Approval comments (optional)</label>
+                                    <textarea name="approval_comments" id="approvalCommentsField"
+                                              class="form-control form-control-sm" rows="2"
+                                              maxlength="2000" placeholder="Add a note for the audit trail…"></textarea>
+                                </div>
+                                <button type="button" class="btn btn-success w-100 mb-2" id="approveBtn">
+                                    <i class="fas fa-thumbs-up me-1"></i> Approve &amp; enable posting
+                                </button>
+                            </form>
+                            <form method="POST" action="{{ route('admin.stock-take.reject', $session->id) }}" id="rejectForm">
+                                @csrf
+                                <div class="mb-2">
+                                    <label class="form-label small mb-1">Rejection reason (required)</label>
+                                    <textarea name="rejection_reason" id="rejectionReasonField"
+                                              class="form-control form-control-sm" rows="2"
+                                              maxlength="2000" required
+                                              placeholder="Tell the counter what to fix…"></textarea>
+                                </div>
+                                <button type="button" class="btn btn-outline-warning w-100" id="rejectBtn">
+                                    <i class="fas fa-rotate-left me-1"></i> Reject &amp; return to counter
+                                </button>
+                            </form>
+                        @elseif ($isSubmitter)
+                            <div class="alert alert-warning small mb-0">
+                                <i class="fas fa-lock me-1"></i>
+                                You submitted this session — <strong>you cannot approve your own count</strong>
+                                (segregation of duties). Another approver must review it.
+                            </div>
+                        @elseif (! $isApproverRole)
+                            <div class="alert alert-secondary small mb-0">
+                                <i class="fas fa-clock me-1"></i>
+                                Awaiting approval from an approver
+                                (roles: <strong>{{ implode(', ', $approverRoles) }}</strong>).
+                            </div>
+                        @endif
+                    @endif
+
+                    {{-- Phase 4: POST (approved, or counting/draft when approval NOT required) --}}
                     @if ($canPost)
                         <form method="POST" action="{{ route('admin.stock-take.post', $session->id) }}" id="postForm">
                             @csrf
@@ -630,12 +699,29 @@
                             <i class="fas fa-circle-info me-1"></i>
                             Posting will <strong>apply variances</strong> to stock and <strong>post the GL journal entry</strong>.
                             Cannot be undone — cancellations will reverse it.
+                            @if ($session->isApproved())
+                                <br>Session was approved — posting is now unlocked.
+                            @endif
                         </div>
-                    @elseif ($session->isDraft() || $session->isCounting())
+                    @elseif ($session->isSubmitted())
+                        {{-- Submitted but not yet approved — post is blocked. --}}
+                        <div class="alert alert-secondary small mb-3">
+                            <i class="fas fa-lock me-1"></i>
+                            Posting is <strong>locked</strong> until an approver approves this session.
+                        </div>
+                    @elseif (($session->isDraft() || $session->isCounting()) && ! $allCompleted)
                         <div class="alert alert-warning small mb-3">
                             <i class="fas fa-triangle-exclamation me-1"></i>
-                            All warehouses must be <strong>completed</strong> before posting.
+                            All warehouses must be <strong>completed</strong> before posting or submitting.
                             Currently {{ (int) $progress['completed_wh'] }} / {{ (int) $progress['total_wh'] }} completed.
+                        </div>
+                    @elseif (($session->isDraft() || $session->isCounting()) && $approvalRequired && ! $canSubmit)
+                        {{-- Approval required but the gate flags didn't enable Submit (edge case) --}}
+                        <div class="alert alert-warning small mb-3">
+                            <i class="fas fa-triangle-exclamation me-1"></i>
+                            This session <strong>requires approval</strong> before posting
+                            (variance value {{ number_format($varianceValue, 2) }} meets the threshold).
+                            Complete all warehouses, then submit for approval.
                         </div>
                     @endif
 
@@ -677,6 +763,110 @@
                     @endif
                 </div>
             </div>
+
+            {{-- Phase 4: Approval-info card (submitted/approved sessions) --}}
+            @if ($session->isSubmitted() || $session->isApproved() || $session->submitted_by || $session->approved_by)
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white">
+                        <h2 class="h6 mb-0"><i class="fas fa-user-check me-1 text-primary"></i> Approval workflow</h2>
+                    </div>
+                    <div class="card-body small">
+                        {{-- Policy summary line --}}
+                        <div class="alert alert-light border mb-3 py-2">
+                            @if ($requireApproval)
+                                <i class="fas fa-shield-halved me-1 text-primary"></i>
+                                <strong>Approval gate: ON</strong>.
+                                Counters must submit; an approver (roles: <strong>{{ implode(', ', $approverRoles) }}</strong>) must approve before posting.
+                                @if ($autoApproveBelowValue > 0)
+                                    <br><small class="text-muted">Auto-approval below variance value {{ number_format($autoApproveBelowValue, 2) }}.</small>
+                                @endif
+                            @else
+                                <i class="fas fa-shield me-1 text-muted"></i>
+                                <strong>Approval gate: OFF</strong>.
+                                Counters can post directly.
+                                @if ($varianceThresholdBlock > 0)
+                                    <br><small class="text-muted">Force-approval when variance value ≥ {{ number_format($varianceThresholdBlock, 2) }}.</small>
+                                @endif
+                            @endif
+                            @if ($varianceValue > 0 || $session->isCounting() || $session->isSubmitted() || $session->isApproved())
+                                <br><small>Variance value: <strong>{{ number_format($varianceValue, 2) }}</strong>
+                                    @if ($approvalRequired)
+                                        <span class="text-danger">— approval required</span>
+                                    @else
+                                        <span class="text-success">— approval not required</span>
+                                    @endif
+                                </small>
+                            @endif
+                        </div>
+
+                        {{-- Submitter info --}}
+                        @if ($session->submitted_by)
+                            <div class="d-flex justify-content-between py-1 border-bottom">
+                                <span class="text-muted"><i class="fas fa-paper-plane me-1"></i>Submitted by</span>
+                                <strong>
+                                    @if ($submitterUser)
+                                        {{ $submitterUser->username }}
+                                        @if ($submitterUser->employee?->employee_name)
+                                            <span class="text-muted small">({{ $submitterUser->employee->employee_name }})</span>
+                                        @endif
+                                    @else
+                                        <span class="text-muted">user #{{ $session->submitted_by }}</span>
+                                    @endif
+                                </strong>
+                            </div>
+                            @if ($session->submitted_at)
+                                <div class="d-flex justify-content-between py-1 border-bottom">
+                                    <span class="text-muted">Submitted at</span>
+                                    <strong>{{ $session->submitted_at->format('d M Y H:i') }}</strong>
+                                </div>
+                            @endif
+                        @endif
+
+                        {{-- Approver info --}}
+                        @if ($session->approved_by)
+                            <div class="d-flex justify-content-between py-1 border-bottom">
+                                <span class="text-muted"><i class="fas fa-thumbs-up me-1"></i>Approved by</span>
+                                <strong>
+                                    @if ($approverUser)
+                                        {{ $approverUser->username }}
+                                        @if ($approverUser->employee?->employee_name)
+                                            <span class="text-muted small">({{ $approverUser->employee->employee_name }})</span>
+                                        @endif
+                                    @else
+                                        <span class="text-muted">user #{{ $session->approved_by }}</span>
+                                    @endif
+                                </strong>
+                            </div>
+                            @if ($session->approved_at)
+                                <div class="d-flex justify-content-between py-1 border-bottom">
+                                    <span class="text-muted">Approved at</span>
+                                    <strong>{{ $session->approved_at->format('d M Y H:i') }}</strong>
+                                </div>
+                            @endif
+                        @elseif ($session->isApproved() && ! $session->approved_by)
+                            {{-- Auto-approved (system) --}}
+                            <div class="d-flex justify-content-between py-1 border-bottom">
+                                <span class="text-muted"><i class="fas fa-robot me-1"></i>Approved by</span>
+                                <strong><span class="badge bg-light text-dark">SYSTEM (auto)</span></strong>
+                            </div>
+                        @endif
+
+                        {{-- Approval / rejection comments --}}
+                        @if ($session->approval_comments)
+                            <div class="mt-2">
+                                <div class="text-muted small mb-1">
+                                    @if ($session->isApproved() || $session->isPosted())
+                                        <i class="fas fa-comment me-1"></i>Approval comments
+                                    @else
+                                        <i class="fas fa-comment-dots me-1"></i>Comments
+                                    @endif
+                                </div>
+                                <div class="bg-light rounded p-2 small border">{!! nl2br(e($session->approval_comments)) !!}</div>
+                            </div>
+                        @endif
+                    </div>
+                </div>
+            @endif
 
             {{-- Quick facts card --}}
             <div class="card border-0 shadow-sm">
@@ -882,6 +1072,93 @@ $(function () {
                     $btn.prop('disabled', true)
                         .html('<i class="fas fa-spinner fa-spin me-1"></i> Posting…');
                     $('#postForm').submit();
+                }
+            });
+        });
+    @endif
+
+    // ====== Phase 4: SUBMIT for approval ======
+    @if ($canSubmit)
+        $('#submitBtn').on('click', function () {
+            Swal.fire({
+                icon: 'question',
+                title: 'Submit for approval?',
+                html: '<p class="text-start">This sends the session to an <strong>approver</strong>. '
+                    + 'You will not be able to edit counts after submission. '
+                    + 'An approver (a different user) will review and approve or reject it.</p>',
+                showCancelButton: true,
+                confirmButtonText: '<i class="fas fa-paper-plane"></i> Submit',
+                confirmButtonColor: '#0d6efd',
+                cancelButtonText: 'Keep counting',
+                reverseButtons: true
+            }).then(function (result) {
+                if (result.isConfirmed) {
+                    var $btn = $('#submitBtn');
+                    $btn.prop('disabled', true)
+                        .html('<i class="fas fa-spinner fa-spin me-1"></i> Submitting…');
+                    $('#submitForm').submit();
+                }
+            });
+        });
+    @endif
+
+    // ====== Phase 4: APPROVE submitted session ======
+    @if ($canApprove)
+        $('#approveBtn').on('click', function () {
+            Swal.fire({
+                icon: 'success',
+                title: 'Approve this session?',
+                html: '<p class="text-start">Approving unlocks <strong>posting</strong>. '
+                    + 'The counter will be notified that their count was accepted.</p>',
+                input: 'textarea',
+                inputLabel: 'Approval comments (optional)',
+                inputPlaceholder: 'Add a note for the audit trail…',
+                showCancelButton: true,
+                confirmButtonText: '<i class="fas fa-thumbs-up"></i> Approve',
+                confirmButtonColor: '#198754',
+                cancelButtonText: 'Cancel',
+                reverseButtons: true
+            }).then(function (result) {
+                if (result.isConfirmed) {
+                    $('#approvalCommentsField').val(result.value || '');
+                    var $btn = $('#approveBtn');
+                    $btn.prop('disabled', true)
+                        .html('<i class="fas fa-spinner fa-spin me-1"></i> Approving…');
+                    $('#approveForm').submit();
+                }
+            });
+        });
+    @endif
+
+    // ====== Phase 4: REJECT submitted session ======
+    @if ($canReject)
+        $('#rejectBtn').on('click', function () {
+            Swal.fire({
+                icon: 'warning',
+                title: 'Reject and return to counter?',
+                html: '<p class="text-start">The session goes back to <strong>counting</strong> for re-count / correction. '
+                    + 'A <strong>rejection reason is required</strong> so the counter knows what to fix.</p>',
+                input: 'textarea',
+                inputLabel: 'Rejection reason (required)',
+                inputPlaceholder: 'Tell the counter what to fix…',
+                showCancelButton: true,
+                confirmButtonText: '<i class="fas fa-rotate-left"></i> Reject',
+                confirmButtonColor: '#fd7e14',
+                cancelButtonText: 'Keep submitted',
+                reverseButtons: true,
+                inputValidator: function (value) {
+                    if (!value || !value.trim()) {
+                        return 'A rejection reason is required.';
+                    }
+                    return null;
+                }
+            }).then(function (result) {
+                if (result.isConfirmed) {
+                    $('#rejectionReasonField').val(result.value.trim());
+                    var $btn = $('#rejectBtn');
+                    $btn.prop('disabled', true)
+                        .html('<i class="fas fa-spinner fa-spin me-1"></i> Rejecting…');
+                    $('#rejectForm').submit();
                 }
             });
         });

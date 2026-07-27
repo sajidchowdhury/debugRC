@@ -417,6 +417,22 @@ Route::middleware('auth')->group(function () {
             ->name('post')->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
         Route::post('{session}/cancel', [StockTakeController::class, 'cancel'])
             ->name('cancel')->middleware(['role:admin,manager', 'branch.isolation']);
+
+        // Phase 4: approval workflow & segregation of duties.
+        //   submit : counter (admin/manager/warehouse_manager) — counting → submitted.
+        //   approve: approver (admin/manager) — submitted → approved. The
+        //            service enforces approver ≠ submitter (segregation of
+        //            duties); the role middleware is the first gate, the
+        //            service check is the second.
+        //   reject : approver (admin/manager) — submitted → counting.
+        // All three carry branch.isolation so a non-admin cannot submit/
+        // approve/reject another branch's session by guessing its URL id.
+        Route::post('{session}/submit', [StockTakeController::class, 'submit'])
+            ->name('submit')->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+        Route::post('{session}/approve', [StockTakeController::class, 'approve'])
+            ->name('approve')->middleware(['role:admin,manager', 'branch.isolation']);
+        Route::post('{session}/reject', [StockTakeController::class, 'reject'])
+            ->name('reject')->middleware(['role:admin,manager', 'branch.isolation']);
     });
     // Resource: read verbs only (index/create/show) get baseline read role.
     // `store` is split out below for tighter RBAC + branch.isolation.

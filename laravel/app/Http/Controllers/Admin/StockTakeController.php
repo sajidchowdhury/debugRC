@@ -9,6 +9,7 @@ use App\Models\StockTakeAuditLog;
 use App\Models\StockTakeSession;
 use App\Models\User;
 use App\Services\Stock\StockTakeHealthCheckService;
+use App\Services\Stock\StockTakePolicyService;
 use App\Services\Stock\StockTakeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -32,7 +33,8 @@ class StockTakeController extends Controller
 {
     public function __construct(
         private StockTakeService $stockTakeService,
-        private StockTakeHealthCheckService $healthCheckService
+        private StockTakeHealthCheckService $healthCheckService,
+        private StockTakePolicyService $policyService
     ) {}
 
     public function index(Request $request)
@@ -55,6 +57,9 @@ class StockTakeController extends Controller
             'total' => StockTakeSession::count(),
             'draft' => StockTakeSession::where('status', 'draft')->count(),
             'counting' => StockTakeSession::where('status', 'counting')->count(),
+            // Phase 4: approval-workflow status counts.
+            'submitted' => StockTakeSession::where('status', 'submitted')->count(),
+            'approved' => StockTakeSession::where('status', 'approved')->count(),
             'posted' => StockTakeSession::where('status', 'posted')->count(),
             'cancelled' => StockTakeSession::where('status', 'cancelled')->count(),
         ];
@@ -171,6 +176,65 @@ class StockTakeController extends Controller
             }
         }
 
+        // Phase 4: approval-workflow context for the show page.
+        //   - varianceValue: total |gain|+|loss| value (drives the gate).
+        //   - approvalRequired: does this session need approval before post?
+        //   - policy flags: require_approval, auto_approve_below_value,
+        //     variance_threshold_block (for the policy info card).
+        //   - canSubmit/canApprove/canReject/canPost: UI gate flags computed
+        //     server-side (the blade trusts these, never re-derives).
+        //   - submitterUser/approverUser: resolved User models for the
+        //     approval-info card (may be null — submitted_by/approved_by are
+        //     plain integers, not FKs, so a deleted user leaves null).
+        $varianceValue = (float) ($progress['variance_value'] ?? 0);
+        $approvalRequired = $this->policyService->approvalRequiredForVariance($varianceValue);
+        $user = auth()->user();
+        $userRole = $user?->getRole() ?? '';
+        $isApproverRole = $this->policyService->isApproverRole($userRole);
+        $allCompleted = $progress['total_wh'] > 0 && $progress['completed_wh'] === $progress['total_wh'];
+
+        // canSubmit: counting + all warehouses completed + (approval is or
+        // might be required for this session). Even when approval is not
+        // strictly required right now, the counter may still submit for
+        // review — so the button shows whenever the session is counting +
+        // complete + the approval gate is globally enabled OR the variance
+        // threshold would force it. When the gate is fully off and the
+        // variance is small, the Post button shows directly instead.
+        $canSubmit = $session->isCounting()
+            && $allCompleted
+            && (
+                $this->policyService->requireApproval()
+                || $this->policyService->varianceThresholdBlock() > 0
+            );
+
+        // canApprove / canReject: submitted + user has approver role +
+        // user is NOT the submitter (segregation of duties). The service
+        // re-checks all of these, but the UI hides the buttons when they
+        // would certainly fail, to avoid dead clicks.
+        $isSubmitter = $session->submitted_by !== null
+            && $user !== null
+            && (int) $session->submitted_by === (int) $user->id;
+        $canApprove = $session->isSubmitted() && $isApproverRole && !$isSubmitter;
+        $canReject = $session->isSubmitted() && $isApproverRole && !$isSubmitter;
+
+        // canPost: approved (any role that can post) OR counting/draft when
+        // approval is NOT required (legacy direct-post path). The service
+        // makes the final call; this flag just controls button visibility.
+        $canPost = ($session->isApproved()
+                || (
+                    in_array($session->status, ['counting', 'draft'], true)
+                    && !$approvalRequired
+                ))
+            && $allCompleted;
+
+        // Resolve submitter / approver users for the approval-info card.
+        $submitterUser = $session->submitted_by
+            ? User::with('employee')->find($session->submitted_by)
+            : null;
+        $approverUser = $session->approved_by
+            ? User::with('employee')->find($session->approved_by)
+            : null;
+
         return view('admin.stock-take.show', [
             'title' => 'Stock Take ' . $session->session_code,
             'session' => $session,
@@ -181,6 +245,21 @@ class StockTakeController extends Controller
             'healthCheck' => $healthCheck,
             // Phase 3: freeze + reconciliation context for the show page.
             'stockDrift' => $stockDrift,
+            // Phase 4: approval-workflow context.
+            'varianceValue' => $varianceValue,
+            'approvalRequired' => $approvalRequired,
+            'requireApproval' => $this->policyService->requireApproval(),
+            'autoApproveBelowValue' => $this->policyService->autoApproveBelowValue(),
+            'varianceThresholdBlock' => $this->policyService->varianceThresholdBlock(),
+            'approverRoles' => $this->policyService->approverRoles(),
+            'canSubmit' => $canSubmit,
+            'canApprove' => $canApprove,
+            'canReject' => $canReject,
+            'canPost' => $canPost,
+            'isApproverRole' => $isApproverRole,
+            'isSubmitter' => $isSubmitter,
+            'submitterUser' => $submitterUser,
+            'approverUser' => $approverUser,
         ]);
     }
 
@@ -294,6 +373,89 @@ class StockTakeController extends Controller
             $session = $this->stockTakeService->cancelSession($id, auth()->id(), $request->input('cancel_reason'));
             return redirect()->route('admin.stock-take.show', $session)
                 ->with('success', "Session {$session->session_code} cancelled.");
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Phase 4: Submit a counting session for approval.
+     *
+     * Transitions counting → submitted. The session is now locked for the
+     * counter; only an approver (a different user with an approver role)
+     * can move it forward (approve → post) or back (reject → counting).
+     *
+     * Defence in depth: the route middleware restricts by role, but the
+     * service also validates state + warehouse completion, so a forged
+     * request cannot submit an incomplete session.
+     */
+    public function submit(Request $request, int $id)
+    {
+        $request->validate([
+            'submit_comments' => 'nullable|string|max:1000',
+        ]);
+
+        try {
+            $session = $this->stockTakeService->submit($id, auth()->id());
+            $msg = "Session {$session->session_code} submitted for approval. "
+                . 'An approver will review it.';
+            return redirect()->route('admin.stock-take.show', $session)
+                ->with('success', $msg);
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Phase 4: Approve a submitted session.
+     *
+     * Transitions submitted → approved. The approver CANNOT be the same
+     * user who submitted (segregation of duties) — the service enforces
+     * this. After approval, the session can be posted.
+     *
+     * Optional approval comments are stored on the session and surfaced
+     * in the audit timeline.
+     */
+    public function approve(Request $request, int $id)
+    {
+        $request->validate([
+            'approval_comments' => 'nullable|string|max:2000',
+        ]);
+
+        try {
+            $session = $this->stockTakeService->approve(
+                $id,
+                auth()->id(),
+                $request->input('approval_comments', '')
+            );
+            return redirect()->route('admin.stock-take.show', $session)
+                ->with('success', "Session {$session->session_code} approved. You can now post it.");
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Phase 4: Reject a submitted session.
+     *
+     * Transitions submitted → counting. The session goes back to the
+     * counter for re-count/correction. A rejection reason is required
+     * (the counter needs to know what to fix).
+     */
+    public function reject(Request $request, int $id)
+    {
+        $request->validate([
+            'rejection_reason' => 'required|string|max:2000',
+        ]);
+
+        try {
+            $session = $this->stockTakeService->reject(
+                $id,
+                auth()->id(),
+                $request->input('rejection_reason')
+            );
+            return redirect()->route('admin.stock-take.show', $session)
+                ->with('success', "Session {$session->session_code} rejected and returned to counting.");
         } catch (\Throwable $e) {
             return back()->with('error', $e->getMessage());
         }

@@ -40,7 +40,8 @@ class StockTakeService
     public function __construct(
         private StockService $stockService,
         private JournalPostingService $journalPosting,
-        private StockTakeAuditLogger $auditLogger
+        private StockTakeAuditLogger $auditLogger,
+        private StockTakePolicyService $policyService
     ) {}
 
     /**
@@ -314,6 +315,235 @@ class StockTakeService
     }
 
     /**
+     * Phase 4 (Stock Take plan): Submit a counting session for approval.
+     *
+     * Transition: counting → submitted. Records submitted_by/at. The session
+     * is now locked for counters — only an approver (a different user, with
+     * an approver role) can move it forward (approve → posted) or back
+     * (reject → counting).
+     *
+     * Submitting is allowed only when all warehouses are 'completed' (the
+     * same precondition as post). This keeps the "ready for review" check
+     * in one place — the UI hides Submit until completed, but this server-
+     * side guard closes the direct-POST bypass hole.
+     *
+     * If the policy says approval is NOT required for this session's
+     * variance value, submit() still works (it's a no-op gate-wise) but
+     * the counter could equally call post() directly. The typical flow
+     * when require_approval=true is: counting → submit → approve → post.
+     *
+     * @param int $sessionId
+     * @param int $submittedBy
+     * @return StockTakeSession
+     */
+    public function submit(int $sessionId, int $submittedBy): StockTakeSession
+    {
+        return DB::transaction(function () use ($sessionId, $submittedBy) {
+            $session = StockTakeSession::lockForUpdate()->find($sessionId);
+            if (!$session) {
+                throw new \RuntimeException("Session {$sessionId} not found.");
+            }
+            if (!$session->isCounting()) {
+                throw new \RuntimeException(
+                    "Only counting sessions can be submitted (current: {$session->status})."
+                );
+            }
+
+            // Reuse the post-preflight guard: all warehouses must be completed.
+            $incompleteCount = DB::table('stock_take_warehouses')
+                ->where('stock_take_session_id', $sessionId)
+                ->where('status', '<>', 'completed')
+                ->count();
+            if ($incompleteCount > 0) {
+                throw new \RuntimeException(
+                    "All warehouses must be marked 'completed' before submitting ({$incompleteCount} warehouse(s) still pending/counting)."
+                );
+            }
+
+            $fromStatus = $session->status;
+            $now = now();
+            DB::table('stock_take_sessions')
+                ->where('id', $sessionId)
+                ->update([
+                    'status'             => 'submitted',
+                    'submitted_by'       => $submittedBy,
+                    'submitted_at'       => $now,
+                    // Clear any prior approval artifacts (e.g. from a previous
+                    // submit→reject→resubmit cycle) so the new submission
+                    // starts clean.
+                    'approved_by'        => null,
+                    'approved_at'        => null,
+                    'approval_comments'  => null,
+                    'updated_at'         => $now,
+                ]);
+
+            // Phase 3: the freeze stays on — a submitted session is still
+            // mid-count from the warehouse's perspective. No call to
+            // releaseSessionFreeze here.
+
+            $this->auditLogger->log(
+                session:    $session,
+                action:     'submit',
+                fromStatus: $fromStatus,
+                toStatus:   'submitted',
+                payload:    [
+                    'submitted_by'      => $submittedBy,
+                    'require_approval'  => $this->policyService->requireApproval(),
+                    'approver_roles'    => $this->policyService->approverRoles(),
+                    'variance_value'    => $this->computeVarianceValue($sessionId),
+                ],
+                actorId:    $submittedBy,
+            );
+
+            return StockTakeSession::with(['warehouses.warehouse', 'branch'])->find($sessionId);
+        });
+    }
+
+    /**
+     * Phase 4 (Stock Take plan): Approve a submitted session.
+     *
+     * Transition: submitted → approved. Records approved_by/at + comments.
+     *
+     * Segregation of duties: the approver CANNOT be the same user who
+     * submitted (submitted_by). This is the core SoD check — a counter
+     * cannot self-approve their own count. The check is here in the
+     * service (not just the UI) so a forged request cannot bypass it.
+     *
+     * After approval, the session can be posted by any user with the post
+     * permission (typically the same approver, or an admin). The post
+     * guard below requires status='approved' when approval was required.
+     *
+     * @param int $sessionId
+     * @param int $approvedBy
+     * @param string $comments  Approver comments (optional but recommended).
+     * @return StockTakeSession
+     */
+    public function approve(int $sessionId, int $approvedBy, string $comments = ''): StockTakeSession
+    {
+        return DB::transaction(function () use ($sessionId, $approvedBy, $comments) {
+            $session = StockTakeSession::lockForUpdate()->find($sessionId);
+            if (!$session) {
+                throw new \RuntimeException("Session {$sessionId} not found.");
+            }
+            if (!$session->isSubmitted()) {
+                throw new \RuntimeException(
+                    "Only submitted sessions can be approved (current: {$session->status})."
+                );
+            }
+
+            // ── Segregation of duties: approver ≠ submitter ─────────────
+            // The counter who submitted cannot approve their own count.
+            // admin/superadmin can override ONLY via an explicit policy
+            // decision (not implemented by default — SoD is a hard rule).
+            if ($session->submitted_by !== null && (int) $session->submitted_by === (int) $approvedBy) {
+                throw new \RuntimeException(
+                    'Segregation of duties: the user who submitted this session cannot approve it. '
+                    . 'Ask another approver to review.'
+                );
+            }
+
+            $fromStatus = $session->status;
+            $now = now();
+            DB::table('stock_take_sessions')
+                ->where('id', $sessionId)
+                ->update([
+                    'status'            => 'approved',
+                    'approved_by'       => $approvedBy,
+                    'approved_at'       => $now,
+                    'approval_comments' => $comments !== '' ? $comments : null,
+                    'updated_at'        => $now,
+                ]);
+
+            $this->auditLogger->log(
+                session:    $session,
+                action:     'approve',
+                fromStatus: $fromStatus,
+                toStatus:   'approved',
+                payload:    [
+                    'approved_by'         => $approvedBy,
+                    'submitted_by'        => $session->submitted_by,
+                    'comments'            => $comments,
+                    'variance_value'      => $this->computeVarianceValue($sessionId),
+                ],
+                actorId:    $approvedBy,
+            );
+
+            return StockTakeSession::with(['warehouses.warehouse', 'branch'])->find($sessionId);
+        });
+    }
+
+    /**
+     * Phase 4 (Stock Take plan): Reject a submitted session.
+     *
+     * Transition: submitted → counting. The session goes back to the
+     * counter for re-count / correction. approval_comments carries the
+     * approver's rejection reason (required — the counter needs to know
+     * what to fix).
+     *
+     * The submitted_by/at columns are PRESERVED (not cleared) so the audit
+     * timeline retains the full submit→reject→resubmit chain. The
+     * approved_* columns are cleared because no approval happened.
+     *
+     * @param int $sessionId
+     * @param int $rejectedBy
+     * @param string $comments  Rejection reason (required).
+     * @return StockTakeSession
+     */
+    public function reject(int $sessionId, int $rejectedBy, string $comments = ''): StockTakeSession
+    {
+        return DB::transaction(function () use ($sessionId, $rejectedBy, $comments) {
+            $session = StockTakeSession::lockForUpdate()->find($sessionId);
+            if (!$session) {
+                throw new \RuntimeException("Session {$sessionId} not found.");
+            }
+            if (!$session->isSubmitted()) {
+                throw new \RuntimeException(
+                    "Only submitted sessions can be rejected (current: {$session->status})."
+                );
+            }
+            if (trim($comments) === '') {
+                throw new \RuntimeException('A rejection reason is required.');
+            }
+
+            $fromStatus = $session->status;
+            $now = now();
+            DB::table('stock_take_sessions')
+                ->where('id', $sessionId)
+                ->update([
+                    'status'            => 'counting',
+                    // Clear approval artifacts; keep submitted_by/at as history.
+                    'approved_by'       => null,
+                    'approved_at'       => null,
+                    'approval_comments' => $comments,
+                    'updated_at'        => $now,
+                ]);
+
+            // Reset warehouse statuses from 'completed' back to 'counting'
+            // so the counter sees the session as "needs re-count". Items
+            // are NOT reset — the counter keeps their previous physical_qty
+            // values as a starting point.
+            DB::table('stock_take_warehouses')
+                ->where('stock_take_session_id', $sessionId)
+                ->update(['status' => 'counting']);
+
+            $this->auditLogger->log(
+                session:    $session,
+                action:     'reject',
+                fromStatus: $fromStatus,
+                toStatus:   'counting',
+                payload:    [
+                    'rejected_by'   => $rejectedBy,
+                    'submitted_by'  => $session->submitted_by,
+                    'comments'      => $comments,
+                ],
+                actorId:    $rejectedBy,
+            );
+
+            return StockTakeSession::with(['warehouses.warehouse', 'branch'])->find($sessionId);
+        });
+    }
+
+    /**
      * Phase 4: Post the session — apply variances + post GL.
      *
      * For each item where physical ≠ system:
@@ -321,10 +551,23 @@ class StockTakeService
      *   - Mark item is_applied=true
      * Then post a single GL journal for the net gain/loss.
      *
+     * Phase 4 approval gate (enforced BEFORE any stock movement):
+     *   - If approval is required for this session's variance value, the
+     *     session MUST be in status='approved'. Posting from counting/
+     *     draft is rejected with a clear error.
+     *   - If approval is NOT required, posting from counting/draft is still
+     *     allowed (backward-compatible — pre-Phase-4 behaviour).
+     *   - Auto-approve path: if the session is in counting/draft, approval
+     *     IS required, AND the variance value is strictly below
+     *     auto_approve_below_value, the session is auto-approved inline
+     *     (actor = system user id 0, comments='Auto-approved: below
+     *     threshold') and then posted. This lets small-variance counts
+     *     flow through without a human approver.
+     *
      * @param int $sessionId
      * @param int $postedBy
      * @return StockTakeSession
-     * @throws \RuntimeException If not countable, or stock/GL posting fails.
+     * @throws \RuntimeException If not postable, or stock/GL posting fails.
      */
     public function postSession(int $sessionId, int $postedBy): StockTakeSession
     {
@@ -333,9 +576,66 @@ class StockTakeService
             if (!$session) {
                 throw new \RuntimeException("Session {$sessionId} not found.");
             }
-            if (!in_array($session->status, ['counting', 'draft'])) {
-                throw new \RuntimeException("Only counting/draft sessions can be posted (current: {$session->status}).");
+
+            // Phase 4: approval gate (decided BEFORE any stock movement).
+            //
+            // Decision tree:
+            //   1. status='approved' → post (the approval already happened).
+            //   2. status='counting'/'draft':
+            //      a. require_approval=true:
+            //         - value < auto_approve_below_value → auto-approve inline,
+            //           then post (no human approver needed).
+            //         - else → REJECT: must be submitted + approved first.
+            //      b. require_approval=false:
+            //         - value >= variance_threshold_block → REJECT: forced
+            //           through approval despite the global gate being off.
+            //         - else → post directly (legacy pre-Phase-4 behaviour).
+            //   3. Any other status (submitted/cancelled/posted) → REJECT.
+            $varianceValue = $this->computeVarianceValue($sessionId);
+            $autoApproved = false;
+
+            if ($session->isApproved()) {
+                // Already approved by a human approver (or auto-approved in
+                // a previous post attempt that rolled back). Proceed to post.
+            } elseif (in_array($session->status, ['counting', 'draft'], true)) {
+                $requireApproval = $this->policyService->requireApproval();
+                $autoBelow = $this->policyService->autoApproveBelowValue();
+                $forceThreshold = $this->policyService->varianceThresholdBlock();
+
+                if ($requireApproval) {
+                    if ($autoBelow > 0 && $varianceValue < $autoBelow) {
+                        // Inline auto-approve. Actor = system (null actor_id).
+                        $autoApproved = $this->autoApproveInline(
+                            $session,
+                            $varianceValue,
+                            $autoBelow
+                        );
+                    } else {
+                        throw new \RuntimeException(
+                            'This session requires approval before posting (variance value '
+                            . number_format($varianceValue, 2) . ' meets the approval threshold). '
+                            . 'Submit the session for approval and have an approver review it.'
+                        );
+                    }
+                } else {
+                    // require_approval is off — but the force-threshold can
+                    // still mandate approval for high-impact variances.
+                    if ($forceThreshold > 0 && $varianceValue >= $forceThreshold) {
+                        throw new \RuntimeException(
+                            'This session requires approval before posting (variance value '
+                            . number_format($varianceValue, 2) . ' meets or exceeds the force-approval threshold '
+                            . number_format($forceThreshold, 2) . '). '
+                            . 'Submit the session for approval and have an approver review it.'
+                        );
+                    }
+                    // Otherwise: post directly (legacy path).
+                }
+            } else {
+                throw new \RuntimeException(
+                    "Only approved/counting/draft sessions can be posted (current: {$session->status})."
+                );
             }
+
 
             // Capture the transition's from-status BEFORE any writes mutate
             // the session row (used by the Phase 2 audit log below).
@@ -507,6 +807,15 @@ class StockTakeService
                     'stock_drift'      => $stockDrift,
                     'stock_drift_count' => count($stockDrift),
                     'freeze_outbound'  => (bool) $session->freeze_outbound,
+                    // Phase 4: record the approval-gate decision that admitted
+                    // this post. auto_approved=true means the session was
+                    // promoted counting→approved inline at post time (no human
+                    // approver); approval_required=false means the post went
+                    // through the legacy direct path.
+                    'approval_required' => $this->policyService->approvalRequiredForVariance($varianceValue),
+                    'auto_approved'     => $autoApproved,
+                    'approved_by'       => $session->approved_by,
+                    'variance_value'    => round($varianceValue, 4),
                 ],
                 actorId:    $postedBy,
             );
@@ -772,6 +1081,101 @@ class StockTakeService
     }
 
     /**
+     * Phase 4: compute the total |gain|+|loss| value of a session's variance.
+     *
+     * This is the single number that drives the approval-gate decision:
+     *   - approvalRequiredForVariance(value) → does this session need a
+     *     human approver before posting?
+     *
+     * The value is `SUM(ABS(physical_qty - system_qty) * COALESCE(rate, 0))`
+     * across all items in the session. It uses the per-line `rate` captured
+     * at setup time (Phase 3 snapshot); the post-time GL posting may use a
+     * slightly different post-time avg cost (Phase 9 will reconcile that).
+     *
+     * Runs OUTSIDE the postSession transaction's row locks (called before
+     * the lockForUpdate in the approval-gate block), but the value is
+     * read-only here — the actual post re-fetches everything under the
+     * session row lock. A race between this read and the post-commit state
+     * is harmless: the gate uses a snapshot of the variance value, and the
+     * post's negative-stock pre-check still catches corruption.
+     *
+     * @param int $sessionId
+     * @return float  Total |gain|+|loss| value in currency units (≥ 0).
+     */
+    private function computeVarianceValue(int $sessionId): float
+    {
+        $row = DB::table('stock_take_items')
+            ->where('stock_take_session_id', $sessionId)
+            ->whereRaw('physical_qty <> system_qty')
+            ->selectRaw(
+                'COALESCE(SUM(ABS(physical_qty - system_qty) * COALESCE(rate, 0)), 0) as total_value'
+            )
+            ->first();
+        return (float) ($row->total_value ?? 0);
+    }
+
+    /**
+     * Phase 4: inline auto-approval — promote a counting/draft session to
+     * 'approved' without a human approver, because its variance value is
+     * below the auto_approve_below_value threshold.
+     *
+     * Called from postSession when:
+     *   - require_approval=true
+     *   - session is counting/draft (not already approved)
+     *   - varianceValue < autoApproveBelowValue
+     *
+     * Writes the approved_by=null / approved_at=now() / approval_comments
+     * = "Auto-approved: ..." row, logs an 'approve' audit row with
+     * auto_approved=true (actor_id=null = system), and refreshes the
+     * session model so the caller's post logic sees status='approved'.
+     *
+     * MUST run inside the caller's DB::transaction (it is). The session
+     * row is already locked by postSession's lockForUpdate.
+     *
+     * @param StockTakeSession $session  (already locked for update)
+     * @param float $varianceValue
+     * @param float $autoBelow  The auto_approve_below_value threshold.
+     * @return bool  Always true (the caller uses the return as a flag).
+     */
+    private function autoApproveInline(StockTakeSession $session, float $varianceValue, float $autoBelow): bool
+    {
+        $now = now();
+        $fromStatus = $session->status;
+        $comments = 'Auto-approved: variance value '
+            . number_format($varianceValue, 2)
+            . ' is below threshold '
+            . number_format($autoBelow, 2) . '.';
+
+        DB::table('stock_take_sessions')
+            ->where('id', $session->id)
+            ->update([
+                'status'            => 'approved',
+                'approved_by'       => null, // system — no human approver
+                'approved_at'       => $now,
+                'approval_comments' => $comments,
+                'updated_at'        => $now,
+            ]);
+
+        $session->refresh();
+
+        $this->auditLogger->log(
+            session:    $session,
+            action:     'approve',
+            fromStatus: $fromStatus,
+            toStatus:   'approved',
+            payload:    [
+                'auto_approved'  => true,
+                'variance_value' => $varianceValue,
+                'threshold'      => $autoBelow,
+                'comments'       => $comments,
+            ],
+            actorId:    null, // system
+        );
+
+        return true;
+    }
+
+    /**
      * Phase 3: capture the per-warehouse count_snapshot jsonb on the session
      * row. Merges this warehouse's product list (product_id, product_code,
      * product_name, unit, system_qty, avg_cost) into the session-level jsonb
@@ -916,8 +1320,13 @@ class StockTakeService
 
     /**
      * Phase 3: recompute the is_frozen_for_count flag for the given warehouses
-     * based on the set of ACTIVE stock-take sessions (status IN draft/counting)
-     * with freeze_outbound=true that cover each warehouse.
+     * based on the set of ACTIVE stock-take sessions with freeze_outbound=true
+     * that cover each warehouse.
+     *
+     * Phase 4: "active" now includes 'submitted' and 'approved' — a session
+     * awaiting approval (or already approved but not yet posted) has not yet
+     * applied any variance, so the outbound freeze must remain in force.
+     * Only posted/cancelled/reversed sessions release the freeze.
      *
      * This is the single source of truth for the denormalized flag. It is
      * called from createSession (set true when the first freezing session
@@ -935,13 +1344,13 @@ class StockTakeService
         }
 
         foreach ($warehouseIds as $wid) {
-            // A warehouse is frozen iff at least one ACTIVE (draft/counting)
-            // session with freeze_outbound=true covers it.
+            // A warehouse is frozen iff at least one ACTIVE (draft/counting/
+            // submitted/approved) session with freeze_outbound=true covers it.
             $frozen = DB::table('stock_take_warehouses as stw')
                 ->join('stock_take_sessions as sts', 'sts.id', '=', 'stw.stock_take_session_id')
                 ->where('stw.warehouse_id', $wid)
                 ->where('sts.freeze_outbound', true)
-                ->whereIn('sts.status', ['draft', 'counting'])
+                ->whereIn('sts.status', ['draft', 'counting', 'submitted', 'approved'])
                 ->exists();
 
             DB::table('warehouses')

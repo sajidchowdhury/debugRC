@@ -134,7 +134,10 @@ CREATE TABLE stock_take_sessions (
     session_code varchar(30) NOT NULL,
     session_date date NOT NULL,
     branch_id integer NOT NULL REFERENCES branches(id),
-    status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','counting','posted','cancelled')),
+    -- Phase 4 (Stock Take plan): status CHECK expanded to allow 'submitted'
+    -- and 'approved' (approval-workflow states) plus 'reversed' (reserved
+    -- for Phase 10's reversal-vs-cancel distinction; harmless to allow now).
+    status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','counting','submitted','approved','posted','cancelled','reversed')),
     journal_entry_id integer REFERENCES journal_entries(id),
     -- Reversal columns (mirror stock_adjustments; added by Phase 0 of the
     -- Stock Take implementation plan). Required by StockTakeService::createSession
@@ -151,6 +154,17 @@ CREATE TABLE stock_take_sessions (
     frozen_at timestamp(0),
     freeze_outbound boolean NOT NULL DEFAULT false,
     count_snapshot jsonb,
+    -- Phase 4 (Stock Take plan): approval workflow & segregation of duties.
+    -- submitted_by/at: who submitted the counting session for approval.
+    -- approved_by/at:  who approved it (MUST differ from submitted_by —
+    --                  enforced by StockTakeService::approve). null when
+    --                  auto-approved by the system at post time.
+    -- approval_comments: approver's comments on approval OR rejection reason.
+    submitted_by integer,
+    submitted_at timestamp(0),
+    approved_by integer,
+    approved_at timestamp(0),
+    approval_comments text,
     notes text,
     created_by integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -163,6 +177,9 @@ CREATE INDEX idx_sts_is_reversed ON stock_take_sessions(is_reversed) WHERE is_re
 -- Partial index: only sessions that freeze outbound stock — powers the
 -- warehouse-flag recompute in StockTakeService::refreshWarehouseFreezeFlags.
 CREATE INDEX idx_sts_freeze_outbound ON stock_take_sessions(branch_id) WHERE freeze_outbound = true;
+-- Phase 4: partial index on submitted sessions — powers the "awaiting my
+-- approval" worklist query for approvers.
+CREATE INDEX idx_sts_submitted ON stock_take_sessions(branch_id, submitted_at) WHERE status = 'submitted';
 
 CREATE TABLE stock_take_warehouses (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -229,6 +246,28 @@ CREATE INDEX idx_stal_critical ON stock_take_audit_log(stock_take_session_id)
 CREATE INDEX idx_stal_branch ON stock_take_audit_log(branch_id, created_at);
 -- "Actions by user" report.
 CREATE INDEX idx_stal_actor ON stock_take_audit_log(actor_id, created_at);
+
+-- Phase 4 (Stock Take plan): approval-workflow configuration knobs.
+-- Lightweight key/value table: one row per policy key. The value is jsonb
+-- so a single column can carry bool / numeric / string / array (approver_roles
+-- is a jsonb array of role strings). The StockTakePolicyService caches all
+-- rows in memory for 5 min under the 'stock_take_policies:all' cache key.
+-- Seeded by 2025_07_28_000001_add_approval_workflow_to_stock_take_sessions.php
+-- with the four Phase 4 defaults:
+--   stock_take.require_approval          (bool)    — gate on/off
+--   stock_take.auto_approve_below_value  (numeric) — skip gate below this value
+--   stock_take.approver_roles            (array)   — roles that can approve
+--   stock_take.variance_threshold_block  (numeric) — force approval ≥ this value
+CREATE TABLE stock_take_policies (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    key varchar(80) NOT NULL,
+    value jsonb NOT NULL,
+    description text,
+    updated_by integer,
+    updated_at timestamp(0),
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT stock_take_policies_key_unique UNIQUE (key)
+);
 
 CREATE TABLE warehouse_transfers (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

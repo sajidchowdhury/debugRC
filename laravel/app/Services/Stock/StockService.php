@@ -310,15 +310,21 @@ class StockService
             return;
         }
 
-        // List the active sessions (draft/counting) that freeze this warehouse.
+        // List the active sessions that freeze this warehouse.
         // Joins stock_take_warehouses (which warehouses) → stock_take_sessions
         // (the freeze flag + status) so we only name sessions that are BOTH
         // active AND have freeze_outbound=true.
+        //
+        // Phase 4: "active" now includes 'submitted' and 'approved' — a
+        // session awaiting approval (or already approved but not yet posted)
+        // has not yet applied any variance, so the outbound freeze must
+        // remain in force. Only posted/cancelled/reversed sessions release
+        // the freeze.
         $sessions = DB::table('stock_take_warehouses as stw')
             ->join('stock_take_sessions as sts', 'sts.id', '=', 'stw.stock_take_session_id')
             ->where('stw.warehouse_id', $warehouseId)
             ->where('sts.freeze_outbound', true)
-            ->whereIn('sts.status', ['draft', 'counting'])
+            ->whereIn('sts.status', ['draft', 'counting', 'submitted', 'approved'])
             ->orderBy('sts.id')
             ->select('sts.id', 'sts.session_code', 'sts.status')
             ->get()

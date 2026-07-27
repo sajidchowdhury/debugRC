@@ -295,7 +295,7 @@ class StockTakeHealthCheckService
             ->first()->c ?? 0;
 
         $openStale = (int) DB::table('stock_take_sessions as sts')
-            ->whereIn('sts.status', ['draft', 'counting'])
+            ->whereIn('sts.status', ['draft', 'counting', 'submitted', 'approved'])
             ->where('sts.is_reversed', false)
             ->whereRaw("sts.session_date < (CURRENT_DATE - INTERVAL '30 days')")
             ->when($branchId, fn($q) => $q->where('sts.branch_id', $branchId))
@@ -316,7 +316,7 @@ class StockTakeHealthCheckService
                 $this->item(
                     'stale_open',
                     'Stale open sessions (>30 days)',
-                    'Draft/counting sessions older than 30 days should be posted or deleted.',
+                    'Open sessions (draft/counting/submitted/approved) older than 30 days should be posted or cancelled.',
                     $openStale === 0 ? 'pass' : 'warn',
                     $openStale === 0 ? 'None' : "{$openStale} session(s)"
                 ),
