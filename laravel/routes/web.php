@@ -384,17 +384,42 @@ Route::middleware('auth')->group(function () {
 
     // ============================================================
     // Phase 6.4: Stock Take (sessions + per-warehouse counts + variance posting)
+    // ------------------------------------------------------------
+    // Phase 0 RBAC (Stock Take plan §7 Phase 0; mirrors legacy
+    // route_roles.php StockTakeController matrix):
+    //   index/show              : admin, manager, warehouse_manager, accountant  (read)
+    //   create/setup/count      : admin, manager, warehouse_manager             (write — form/GET)
+    //   store/saveCounts/post   : admin, manager, warehouse_manager             (write — POST)
+    //   cancel                  : admin, manager                                (destructive — reversal)
+    // salesman/dispatcher/hr/user have NO access to any stock-take route.
+    // All POST writes carry `branch.isolation` so a non-admin cannot forge a
+    // branch_id in the POST body, nor post/cancel another branch's session by
+    // guessing its URL id. (EnforceBranchIsolation resolves the {session} URL
+    // param to stock_take_sessions.branch_id — see middleware inferTableFromUri.)
     // ============================================================
     Route::prefix('admin/stock-take')->name('admin.stock-take.')->group(function () {
-        Route::get('{session}/warehouses/{warehouse}/setup', [StockTakeController::class, 'setupCounts'])->name('setup');
-        Route::get('{session}/warehouses/{warehouse}/count', [StockTakeController::class, 'count'])->name('count');
-        Route::post('{session}/warehouses/{warehouse}/count', [StockTakeController::class, 'saveCounts'])->name('saveCounts');
-        Route::post('{session}/post', [StockTakeController::class, 'post'])->name('post');
-        Route::post('{session}/cancel', [StockTakeController::class, 'cancel'])->name('cancel');
+        Route::get('{session}/warehouses/{warehouse}/setup', [StockTakeController::class, 'setupCounts'])
+            ->name('setup')->middleware('role:admin,manager,warehouse_manager');
+        Route::get('{session}/warehouses/{warehouse}/count', [StockTakeController::class, 'count'])
+            ->name('count')->middleware('role:admin,manager,warehouse_manager');
+        Route::post('{session}/warehouses/{warehouse}/count', [StockTakeController::class, 'saveCounts'])
+            ->name('saveCounts')->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+        Route::post('{session}/post', [StockTakeController::class, 'post'])
+            ->name('post')->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+        Route::post('{session}/cancel', [StockTakeController::class, 'cancel'])
+            ->name('cancel')->middleware(['role:admin,manager', 'branch.isolation']);
     });
+    // Resource: read verbs only (index/create/show) get baseline read role.
+    // `store` is split out below for tighter RBAC + branch.isolation.
     Route::resource('admin/stock-take', StockTakeController::class)
-        ->only(['index', 'create', 'store', 'show'])
-        ->names('admin.stock-take');
+        ->only(['index', 'create', 'show'])
+        ->names('admin.stock-take')
+        ->middleware('role:admin,manager,warehouse_manager,accountant');
+    // store — split out: drops accountant (read-only) + adds branch.isolation
+    // (the create form posts branch_id in the body).
+    Route::post('admin/stock-take', [StockTakeController::class, 'store'])
+        ->name('admin.stock-take.store')
+        ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
 
     // ============================================================
     // Phase 6.5: Warehouse Transfers (same-branch = no GL, cross-branch = intercompany GL)

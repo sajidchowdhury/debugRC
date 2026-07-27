@@ -136,6 +136,22 @@ class EnforceBranchIsolation
             }
         }
 
+        // Phase 0 (Stock Take plan): the admin/stock-take routes use `{session}`
+        // as the URL param name (not `{id}`). Resolve it the same way so that
+        // branch.isolation actually protects POST {session}/post and
+        // POST {session}/cancel for non-admin users (otherwise the middleware
+        // would silently no-op on these routes — security theater).
+        if (isset($params['session'])) {
+            $sessionId = (int) $params['session'];
+            if ($sessionId > 0) {
+                $table = $this->inferTableFromUri($request->path());
+                if ($table !== null) {
+                    $branchId = DB::table($table)->where('id', $sessionId)->value('branch_id');
+                    return $branchId !== null ? (int) $branchId : null;
+                }
+            }
+        }
+
         return null;
     }
 
@@ -170,6 +186,12 @@ class EnforceBranchIsolation
         }
         if (str_contains($path, 'purchase-returns')) {
             return 'purchase_returns';
+        }
+        // --- Phase 0 (Stock Take plan): stock-take routes carry the session
+        // id either as {id} (resource verbs) or {session} (custom verbs).
+        // Both resolve to stock_take_sessions.branch_id.
+        if (str_contains($path, 'stock-take')) {
+            return 'stock_take_sessions';
         }
         return null;
     }

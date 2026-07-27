@@ -136,6 +136,13 @@ CREATE TABLE stock_take_sessions (
     branch_id integer NOT NULL REFERENCES branches(id),
     status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','counting','posted','cancelled')),
     journal_entry_id integer REFERENCES journal_entries(id),
+    -- Reversal columns (mirror stock_adjustments; added by Phase 0 of the
+    -- Stock Take implementation plan). Required by StockTakeService::createSession
+    -- (writes is_reversed=false) and cancelSession (writes all four on reversal).
+    is_reversed boolean NOT NULL DEFAULT false,
+    reversed_at timestamp(0),
+    reversed_by integer,
+    reverse_reason text,
     notes text,
     created_by integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -143,6 +150,8 @@ CREATE TABLE stock_take_sessions (
     CONSTRAINT stock_take_session_code_unique UNIQUE (session_code)
 );
 CREATE INDEX idx_sts_branch ON stock_take_sessions(branch_id);
+-- Partial index: only reversed sessions, for fast reversal lookups.
+CREATE INDEX idx_sts_is_reversed ON stock_take_sessions(is_reversed) WHERE is_reversed = true;
 
 CREATE TABLE stock_take_warehouses (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
