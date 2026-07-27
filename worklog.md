@@ -2440,3 +2440,36 @@ Stage Summary:
 - WHY PG BELIEVED THE CONSTRAINT ALREADY EXISTED: the original column-level CHECK (from 03_stock.sql) was unnamed, so PG auto-named it `stock_take_warehouses_status_check` — the same name the migration's `ADD CONSTRAINT` used. Since the DO block didn't drop it (ILIKE didn't match), the name was still taken when ADD ran → 42710.
 - HOW THE FIX GUARANTEES IDEMPOTENCY: `DROP CONSTRAINT IF EXISTS <canonical_name>` drops by the exact name (which is also PG's auto-name), unconditionally, before every ADD. No text matching, no normalization fragility, no DO block. `IF EXISTS` makes it a no-op when the constraint is absent. Every other operation in the migration already had a proper guard (IF NOT EXISTS / name-guard / DROP+CREATE / updateOrInsert).
 - USER ACTION NEEDED: `git pull` then `docker compose exec rcerp_app php artisan migrate`. Should now apply Phase 5 (ABC functions, fixed in Task 12), Phase 7 (recount columns, fixed in Tasks 11+13), and Phase 8 (RLS/locks) in one run.
+
+---
+Task ID: 14-hotfix-phase8-multi-command-prepared-statement
+Agent: Main
+Task: Hotfix #4 — split multi-command DB::statement() in the Phase 8 migration. PostgreSQL's prepared-statement protocol (Laravel/PDO_PGSQL) allows exactly ONE SQL command per prepare; a string with two `;`-separated commands is rejected with SQLSTATE[42601] "cannot insert multiple commands into a prepared statement".
+
+Work Log:
+- User reported `SQLSTATE[42601]: cannot insert multiple commands into a prepared statement` at `database/migrations/2025_08_01_000001_phase8_concurrency_rls_locking_hardening.php`, with the offending SQL being the `DROP TRIGGER ...; CREATE TRIGGER ...;` pair.
+- Inspected the entire migration (401 lines). Wrote a precise static analyzer (Python) that:
+  * Extracts every DB::statement() call (single-quoted OR heredoc).
+  * Strips single-quoted string literals (so `;` inside RAISE EXCEPTION '...;...' doesn't false-positive).
+  * Replaces dollar-quoted bodies ($$ ... $$ and $tag$ ... $tag$) with placeholders — so semicolons INSIDE a DO block / CREATE FUNCTION body are not counted (they're part of ONE SQL statement: the DO or CREATE FUNCTION command itself).
+  * Counts only TOP-LEVEL semicolons (depth 0 parens).
+  * Flags any DB::statement() with >1 top-level semicolon as a violation.
+- Result of scan: exactly 1 violation out of 43 DB::statement() calls — the DROP TRIGGER + CREATE TRIGGER pair at lines 265-270. The 3 DO blocks (lines 97, 145, 175) and the CREATE FUNCTION (line 227) correctly contain exactly 1 top-level semicolon each (the `DO $$...$$;` or `CREATE FUNCTION ... AS $$...$$ LANGUAGE plpgsql;` — one statement). All 38 other calls are single statements.
+- Fix: split the single DB::statement() at lines 265-270 into TWO separate calls:
+    DB::statement('DROP TRIGGER IF EXISTS trg_stw_no_overlapping_frozen ON stock_take_warehouses');
+    DB::statement(<<<'SQL'
+        CREATE TRIGGER trg_stw_no_overlapping_frozen
+        BEFORE INSERT OR UPDATE OF warehouse_id, freeze_outbound ON stock_take_warehouses
+        FOR EACH ROW EXECUTE FUNCTION prevent_overlapping_frozen_stock_take()
+    SQL);
+  Removed the trailing `;` from each SQL string (the statement terminator is not needed inside DB::statement — PDO adds it). Added a comment block explaining the 42601 constraint so future contributors don't reintroduce the bug.
+- down() audit: every DB::statement() in down() was already single-command (verified by the analyzer — 0 violations). No changes needed there.
+- Re-ran the analyzer after the fix: 44 DB::statement() calls, 0 violations. PHP brace balance: 8/8.
+- Cross-file scan: ran the same analyzer across ALL 2025_07_* and 2025_08_* migrations (Phase 2/3/4/5/6/7/8). 0 violations in any other file. The Phase 8 file was the only offender.
+- COMMIT + PUSH: staged the migration file + this worklog entry. Commit: "hotfix(stock-take): split multi-command DB::statement in Phase 8 (PG prepared statements allow one command)".
+
+Stage Summary:
+- BLOCKER REMOVED: the Phase 8 migration will now execute cleanly under PostgreSQL's prepared-statement protocol. The DROP TRIGGER + CREATE TRIGGER run as two separate prepares.
+- WHY PG REJECTED THE ORIGINAL: PDO_PGSQL (which Laravel uses) prepares every DB::statement() call. PostgreSQL's extended query protocol allows exactly one SQL command per prepared statement — it parses the first command, and if there's trailing text after the first `;`, Parse returns error 42601 "cannot insert multiple commands into a prepared statement". (This is a protocol-level limit, not a server limit — psql can run multi-command strings via simple query protocol, but PDO uses the extended protocol exclusively.)
+- CONFIRMATION: 44 DB::statement() calls in the file, 0 contain multiple SQL commands. Verified by static analysis that correctly treats DO $$...$$; and CREATE FUNCTION ... AS $$...$$ LANGUAGE plpgsql; as single statements (semicolons inside the dollar-quoted body are part of the body, not statement separators).
+- USER ACTION NEEDED: `git pull` then `docker compose exec rcerp_app php artisan migrate`. Phase 5 + 7 + 8 should all apply in one run now.

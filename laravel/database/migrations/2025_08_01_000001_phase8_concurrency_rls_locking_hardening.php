@@ -262,11 +262,19 @@ return new class extends Migration
             $$ LANGUAGE plpgsql;
         SQL);
 
+        // PostgreSQL's prepared-statement protocol (which Laravel/PDO uses)
+        // allows exactly ONE SQL command per DB::statement() — a multi-
+        // command string separated by ';' is rejected with SQLSTATE[42601]
+        // "cannot insert multiple commands into a prepared statement". So
+        // the DROP TRIGGER and CREATE TRIGGER must be two separate calls.
+        DB::statement(
+            'DROP TRIGGER IF EXISTS trg_stw_no_overlapping_frozen ON stock_take_warehouses'
+        );
+
         DB::statement(<<<'SQL'
-            DROP TRIGGER IF EXISTS trg_stw_no_overlapping_frozen ON stock_take_warehouses;
             CREATE TRIGGER trg_stw_no_overlapping_frozen
             BEFORE INSERT OR UPDATE OF warehouse_id, freeze_outbound ON stock_take_warehouses
-            FOR EACH ROW EXECUTE FUNCTION prevent_overlapping_frozen_stock_take();
+            FOR EACH ROW EXECUTE FUNCTION prevent_overlapping_frozen_stock_take()
         SQL);
 
         // ───────────────────────────────────────────────────────────────
