@@ -194,7 +194,7 @@ return new class extends Migration
                 action IN ('create','setup','save_count','mark_complete','submit',
                            'approve','reject','post','reverse','re_open','delete','cancel')
             )
-        SQL');
+        SQL);
 
         // Revert recount tracking columns.
         DB::statement('ALTER TABLE stock_take_items DROP CONSTRAINT IF EXISTS sti_recounted_by_fk');
@@ -210,6 +210,6 @@ return new class extends Migration
             ALTER TABLE stock_take_warehouses
             ADD CONSTRAINT stock_take_warehouses_status_check
             CHECK (status IN ('pending','counting','completed'))
-        SQL');
+        SQL);
     }
 };
