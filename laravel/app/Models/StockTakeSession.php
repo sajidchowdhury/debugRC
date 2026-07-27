@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use App\Traits\AuditableMasterData;
 
 /**
@@ -48,7 +49,7 @@ use App\Traits\AuditableMasterData;
  */
 class StockTakeSession extends Model
 {
-    use SoftDeletes, AuditableMasterData;
+    use SoftDeletes, AuditableMasterData, HasFactory;
 
     protected $table = 'stock_take_sessions';
 

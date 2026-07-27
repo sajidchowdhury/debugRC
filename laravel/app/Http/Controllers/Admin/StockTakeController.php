@@ -710,6 +710,60 @@ class StockTakeController extends Controller
     }
 
     // ========================================================================
+    // Phase 12: AJAX health-summary endpoint for the admin dashboard tile.
+    // ========================================================================
+
+    /**
+     * Phase 12: lightweight AJAX endpoint that returns the stock-take
+     * health-check summary as JSON. Called by the dashboard health tile
+     * (`resources/views/admin/stock-take/_health_tile.blade.php`) to
+     * render pass/warn/fail counts without leaving the dashboard.
+     *
+     * Gate: `role:admin,manager,accountant` (declared on the route).
+     * RLS scopes the underlying queries to the acting user's branch
+     * automatically — no `branch_id` arg is passed to the service, so
+     * the service lets RLS do the filtering (admins see all branches
+     * via the RLS bypass).
+     *
+     * Response shape:
+     *   {
+     *     "summary": {"pass":N,"warn":N,"fail":N,"info":N,"total":N},
+     *     "ran_at": "2025-08-04 12:34:56",
+     *     "missing_session_journals_count": N,
+     *     "critical_failures": [
+     *       {"id":"...","title":"...","status":"fail","detail":"..."},
+     *       ...
+     *     ]
+     *   }
+     */
+    public function healthSummary(): \Illuminate\Http\JsonResponse
+    {
+        $result = $this->healthCheckService->runHealthChecks();
+
+        // Flatten the sections → list of fail-status items only.
+        $criticalFailures = [];
+        foreach ($result['sections'] ?? [] as $section) {
+            foreach ($section['items'] ?? [] as $item) {
+                if (($item['status'] ?? null) === 'fail') {
+                    $criticalFailures[] = [
+                        'id'     => $item['id']     ?? '',
+                        'title'  => $item['title']  ?? '',
+                        'status' => 'fail',
+                        'detail' => $item['detail'] ?? '',
+                    ];
+                }
+            }
+        }
+
+        return response()->json([
+            'summary'  => $result['summary'] ?? ['pass' => 0, 'warn' => 0, 'fail' => 0, 'info' => 0, 'total' => 0],
+            'ran_at'   => $result['ran_at']  ?? now()->format('Y-m-d H:i:s'),
+            'missing_session_journals_count' => count($result['missing_session_journals'] ?? []),
+            'critical_failures' => $criticalFailures,
+        ]);
+    }
+
+    // ========================================================================
     // Phase 5 (Stock Take plan): Cycle count & ABC classification endpoints.
     // ========================================================================
 

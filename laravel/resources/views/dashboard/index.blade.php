@@ -24,6 +24,18 @@
         </div>
     </div>
 
+    {{-- ========== Phase 12: Stock Take Health tile ========== --}}
+    {{-- Self-contained partial — renders only for admin/manager/accountant.
+        Safe to remove or comment out without affecting the rest of the
+        dashboard. The tile fetches its own data via AJAX so the page
+        renders immediately; a failure leaves a small error note in place
+        rather than breaking the dashboard. --}}
+    <div class="row g-3 mb-4">
+        <div class="col-12">
+            @include('admin.stock-take._health_tile')
+        </div>
+    </div>
+
     {{-- ========== KPI CARDS ========== --}}
     <div class="row g-3 mb-4">
         {{-- Today's Revenue --}}

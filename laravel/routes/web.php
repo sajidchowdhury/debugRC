@@ -413,6 +413,15 @@ Route::middleware('auth')->group(function () {
             ->name('checklist')->middleware('role:admin,manager,warehouse_manager,accountant');
         Route::get('audit', [StockTakeController::class, 'audit'])
             ->name('audit')->middleware('role:admin,manager,warehouse_manager,accountant');
+        // Phase 12: AJAX health-summary endpoint surfaced on the admin
+        // dashboard's "Stock Take Health" tile. Returns a tiny JSON payload
+        // (summary counts + critical-failure list) so the dashboard can
+        // render the tile without leaving the page. Restricted to admin /
+        // manager / accountant — the same read roles as checklist/audit
+        // minus warehouse_manager (the dashboard is finance-facing, not
+        // count-floor-facing).
+        Route::get('health-summary', [StockTakeController::class, 'healthSummary'])
+            ->name('health-summary')->middleware('role:admin,manager,accountant');
 
         Route::get('{session}/warehouses/{warehouse}/setup', [StockTakeController::class, 'setupCounts'])
             ->name('setup')->middleware('role:admin,manager,warehouse_manager');

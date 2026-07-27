@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 /**
  * Stock Take Warehouse — Phase 6.4.
@@ -24,6 +25,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class StockTakeWarehouse extends Model
 {
+    use HasFactory;
+
     protected $table = 'stock_take_warehouses';
 
     public $timestamps = false;
