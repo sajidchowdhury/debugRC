@@ -44,6 +44,11 @@ return Application::configure(basePath: dirname(__DIR__))
             'api.auth' => \App\Http\Middleware\ApiAuth::class,
             // Phase 19: API rate limiting — 60 req/min per token+IP by default.
             'api.rate' => \App\Http\Middleware\ApiRateLimit::class,
+            // Phase 11 (Stock Take plan): set app.branch_id GUC for API requests
+            // (runs after api.auth so Auth::user() is available; the global
+            // SetAppBranchId runs before route middleware and skips API requests
+            // because Auth::check() is false at that point).
+            'set.api.branch' => \App\Http\Middleware\SetApiBranchContext::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

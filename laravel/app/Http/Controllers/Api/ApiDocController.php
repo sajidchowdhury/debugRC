@@ -321,6 +321,162 @@ JSON,
                 'example'     => null,
                 'errors'      => ['401' => 'Missing or invalid Bearer token.'],
             ],
+
+            // ---------- Stock Take (Phase 11) ----------
+            [
+                'method'      => 'GET',
+                'path'        => '/stock-take/sessions',
+                'description' => 'List stock-take sessions (paginated + filtered). RLS-scoped to the authenticated user\'s branch (admins see all).',
+                'role'        => null,
+                'params'      => [
+                    'status'     => 'Filter by status: draft, counting, submitted, approved, posted, cancelled, reversed.',
+                    'branch_id'  => 'Filter by branch (admin only — non-admins are locked to their own).',
+                    'from_date'  => 'Session date ≥ (Y-m-d).',
+                    'to_date'    => 'Session date ≤ (Y-m-d).',
+                    'search'     => 'Search session_code or notes (ILIKE).',
+                    'per_page'   => 'Page size (default 25, max 100).',
+                ],
+                'body'        => null,
+                'response'    => <<<'JSON'
+{
+  "data": [
+    { "id": 1, "session_code": "ST-2025-001", "session_date": "2025-08-15", "status": "counting", "branch": { "id": 1, "name": "Head Office", "code": "HO" }, "progress": { "total_wh": 2, "completed_wh": 1, "pct": 50 }, "freeze_outbound": false, "journal_entry_id": null }
+  ],
+  "meta": { "current_page": 1, "last_page": 1, "per_page": 25, "total": 1 }
+}
+JSON,
+                'example'     => null,
+                'errors'      => ['401' => 'Missing or invalid Bearer token.'],
+            ],
+            [
+                'method'      => 'POST',
+                'path'        => '/stock-take/sessions',
+                'description' => 'Create a stock-take session (draft). The service validates warehouse existence + freeze-outbound overlap.',
+                'role'        => null,
+                'params'      => [],
+                'body'        => <<<'JSON'
+{
+  "branch_id": 1,
+  "session_date": "2025-08-15",
+  "warehouse_ids": [1, 2],
+  "freeze_outbound": false,
+  "count_scope": "full",
+  "notes": "Monthly cycle count"
+}
+JSON,
+                'response'    => <<<'JSON'
+{ "message": "Session ST-2025-001 created.", "data": { "id": 1, "session_code": "ST-2025-001", "status": "draft", "progress": { "total_wh": 2, "completed_wh": 0, "pct": 0 } } }
+JSON,
+                'example'     => null,
+                'errors'      => ['401' => 'Unauthenticated.', '422' => 'Validation error or service guard failed (e.g. overlapping frozen session).'],
+            ],
+            [
+                'method'      => 'GET',
+                'path'        => '/stock-take/sessions/{id}',
+                'description' => 'Show session detail with warehouses + items + approval + reversal context.',
+                'role'        => null,
+                'params'      => [],
+                'body'        => null,
+                'response'    => <<<'JSON'
+{ "data": { "id": 1, "session_code": "ST-2025-001", "status": "posted", "warehouses": [ { "id": 1, "status": "completed" } ], "progress": { "total_wh": 1, "completed_wh": 1, "pct": 100 }, "journal_entry_id": 42, "is_reversed": false, "re_open_count": 0 } }
+JSON,
+                'example'     => null,
+                'errors'      => ['401' => 'Unauthenticated.', '404' => 'Session not found (or RLS-blocked — wrong branch).'],
+            ],
+            [
+                'method'      => 'PUT',
+                'path'        => '/stock-take/sessions/{id}/counts/{warehouseId}',
+                'description' => 'Save physical counts for a warehouse. Body is a map of product_id → physical_qty. Optional reasons map.',
+                'role'        => null,
+                'params'      => [],
+                'body'        => <<<'JSON'
+{
+  "counts": { "10": 48, "11": 0, "12": 33.5 },
+  "reasons": { "10": "Damaged stock found during count" }
+}
+JSON,
+                'response'    => <<<'JSON'
+{ "message": "3 product count(s) saved.", "updated": 3 }
+JSON,
+                'example'     => null,
+                'errors'      => ['401' => 'Unauthenticated.', '422' => 'Session not in counting state, or product not in the warehouse\'s item set.'],
+            ],
+            [
+                'method'      => 'POST',
+                'path'        => '/stock-take/sessions/{id}/post',
+                'description' => 'Post the session — apply stock variances + post the GL journal entry (Dr/Cr Inventory vs Shrinkage/Surplus + Phase 9 revaluation). Admin/manager only.',
+                'role'        => 'admin, manager',
+                'params'      => [],
+                'body'        => <<<'JSON'
+{ "post_reason": "Approved by manager after audit review." }
+JSON,
+                'response'    => <<<'JSON'
+{ "message": "Session ST-2025-001 posted. Variances applied + GL entry created.", "data": { "id": 1, "status": "posted", "journal_entry_id": 42 } }
+JSON,
+                'example'     => null,
+                'errors'      => ['401' => 'Unauthenticated.', '403' => 'Forbidden (requires admin/manager).', '422' => 'Session not in a postable state, or approval required but not approved.'],
+            ],
+            [
+                'method'      => 'POST',
+                'path'        => '/stock-take/sessions/{id}/reverse',
+                'description' => 'Reverse a POSTED session (Phase 10) — full stock + GL reversal. Sets status=reversed. Re-openable up to max_reopens. Admin/manager only. Reason required.',
+                'role'        => 'admin, manager',
+                'params'      => [],
+                'body'        => <<<'JSON'
+{ "reason": "Counter found a miscounted warehouse; reversal needed before re-count." }
+JSON,
+                'response'    => <<<'JSON'
+{ "message": "Session ST-2025-001 reversed. Stock movements + GL entry undone.", "data": { "id": 1, "status": "reversed", "is_reversed": true, "reversal_of_entry_id": 42, "re_open_count": 0 } }
+JSON,
+                'example'     => null,
+                'errors'      => ['401' => 'Unauthenticated.', '403' => 'Forbidden.', '422' => 'Session not posted, or already reversed.'],
+            ],
+            [
+                'method'      => 'POST',
+                'path'        => '/stock-take/sessions/{id}/re-open',
+                'description' => 'Re-open a REVERSED session (Phase 10) — reversed → counting. Reversal stays as audit history; items reset for re-count. Capped by max_reopens. Admin/manager only. Reason required.',
+                'role'        => 'admin, manager',
+                'params'      => [],
+                'body'        => <<<'JSON'
+{ "reason": "Re-counting warehouse 2 — original count had a data-entry error." }
+JSON,
+                'response'    => <<<'JSON'
+{ "message": "Session ST-2025-001 re-opened. Reversal preserved as audit history; correct counts and re-post.", "data": { "id": 1, "status": "counting", "re_open_count": 1 }, "reopens_remaining": 0 }
+JSON,
+                'example'     => null,
+                'errors'      => ['401' => 'Unauthenticated.', '403' => 'Forbidden.', '422' => 'Session not reversed, or re-open cap reached.'],
+            ],
+            [
+                'method'      => 'GET',
+                'path'        => '/stock-take/sessions/{id}/variance',
+                'description' => 'Variance report — items with non-zero difference (physical_qty ≠ system_qty), sorted by |difference| desc. Includes gain/loss/net value summary.',
+                'role'        => null,
+                'params'      => [],
+                'body'        => null,
+                'response'    => <<<'JSON'
+{
+  "data": [
+    { "id": 10, "product_id": 5, "product": { "name": "Widget A", "code": "W-001" }, "system_qty": 50, "physical_qty": 48, "difference": -2, "variance_type": "loss", "value_diff": -240, "post_rate": 120, "journal_line_id": 101 }
+  ],
+  "meta": { "session_id": 1, "session_code": "ST-2025-001", "status": "posted", "variance_lines": 1, "total_gain": 0, "total_loss": 240, "net_value": -240 }
+}
+JSON,
+                'example'     => null,
+                'errors'      => ['401' => 'Unauthenticated.', '404' => 'Session not found.'],
+            ],
+            [
+                'method'      => 'POST',
+                'path'        => '/stock-take/sessions/{id}/import/{warehouseId}',
+                'description' => 'Import counts via CSV (multipart upload). Columns: product_code, physical_qty [, reason]. BOM stripped. Max 2MB.',
+                'role'        => null,
+                'params'      => [],
+                'body'        => 'multipart form-data: csv_file=<file>',
+                'response'    => <<<'JSON'
+{ "message": "CSV import: 48 updated, 2 skipped.", "updated": 48, "skipped": 2, "errors": [{ "line": 5, "code": "not_found", "error": "Product code XYZ not found" }] }
+JSON,
+                'example'     => null,
+                'errors'      => ['401' => 'Unauthenticated.', '422' => 'CSV empty, missing columns, or session not in counting state.'],
+            ],
         ];
     }
 

@@ -10,6 +10,8 @@ use App\Http\Controllers\Api\V1\Sales\SalesChallanApiController;
 use App\Http\Controllers\Api\V1\Sales\SalesReturnApiController;
 use App\Http\Controllers\Api\V1\Sales\CustomerPaymentApiController;
 use App\Http\Controllers\Api\V1\Sales\CommissionApiController;
+use App\Http\Controllers\Api\V1\StockTake\StockTakeItemApiController;
+use App\Http\Controllers\Api\V1\StockTake\StockTakeSessionApiController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -36,6 +38,25 @@ use Illuminate\Support\Facades\Route;
  *   GET    /api/v1/lookups/customers   active customers (id + code + name)
  *   GET    /api/v1/lookups/suppliers   active suppliers (id + code + name)
  *   GET    /api/v1/lookups/ledgers     active ledgers (id + code + name + type)
+ *
+ * Phase 11 (Stock Take plan) — stock-take API (mobile count app + 3rd-party):
+ *   GET    /api/v1/stock-take/sessions                        list (paginated + filtered)
+ *   POST   /api/v1/stock-take/sessions                        create (draft)
+ *   GET    /api/v1/stock-take/sessions/{id}                   show detail
+ *   POST   /api/v1/stock-take/sessions/{id}/setup/{wh}        set up counts for a warehouse
+ *   PUT    /api/v1/stock-take/sessions/{id}/counts/{wh}       save physical counts
+ *   POST   /api/v1/stock-take/sessions/{id}/import/{wh}       CSV import (multipart)
+ *   POST   /api/v1/stock-take/sessions/{id}/submit            submit for approval
+ *   POST   /api/v1/stock-take/sessions/{id}/approve           approve (admin/manager)
+ *   POST   /api/v1/stock-take/sessions/{id}/reject            reject → counting (admin/manager)
+ *   POST   /api/v1/stock-take/sessions/{id}/post              post — apply variances + GL (admin/manager)
+ *   POST   /api/v1/stock-take/sessions/{id}/cancel            cancel (draft/counting only; admin/manager)
+ *   POST   /api/v1/stock-take/sessions/{id}/reverse           reverse posted → reversed (admin/manager)
+ *   POST   /api/v1/stock-take/sessions/{id}/re-open           re-open reversed → counting (admin/manager)
+ *   GET    /api/v1/stock-take/sessions/{id}/items             list items (?warehouse_id, ?variance_only)
+ *   GET    /api/v1/stock-take/sessions/{id}/items/{itemId}    show one item
+ *   PUT    /api/v1/stock-take/sessions/{id}/items/{itemId}    autosave one count
+ *   GET    /api/v1/stock-take/sessions/{id}/variance          variance report + summary
  *
  * Phase 18 — interactive API docs page (publicly accessible, no auth):
  *   GET    /api/docs                   HTML docs + interactive tester
@@ -221,4 +242,91 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
     // ---------- Commission Confirmation — 30 req/min (admin only) ----------
     Route::post('sales/commission/confirm-period', [CommissionApiController::class, 'confirmPeriod'])
         ->middleware('api.auth:admin', 'api.rate:30');
+
+    // ======================================================================
+    // Phase 11 (Stock Take plan) — Stock Take API (mobile count app + 3rd-party)
+    // ======================================================================
+    // All stock-take routes sit behind api.auth (bearer token) + set.api.branch
+    // (sets the app.branch_id GUC so RLS on stock_take_sessions / _warehouses /
+    // _items filters by the authenticated user's branch — the global
+    // SetAppBranchId middleware runs before route middleware and skips API
+    // requests because Auth::check() is false at that point).
+    //
+    // Rate limits:
+    //   - Reads (list/show/items/variance): 60 req/min
+    //   - Writes (create/save/post/reverse/re-open/import): 30 req/min
+    //   - Setup (loads products for counting): 30 req/min (heavier query)
+    //
+    // Role enforcement:
+    //   - Read + count entry: any authenticated user (counter can be
+    //     admin/manager/warehouse_manager).
+    //   - Post + reverse + re-open + cancel: admin/manager (destructive —
+    //     undoes books or marks terminal). Mirrors the web routes.
+    // ======================================================================
+    Route::prefix('stock-take')->middleware('set.api.branch')->group(function (): void {
+
+        // ---------- Sessions — read (60 req/min) ----------
+        Route::get('sessions', [StockTakeSessionApiController::class, 'index'])
+            ->middleware('api.rate:60');
+        Route::get('sessions/{id}', [StockTakeSessionApiController::class, 'show'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.rate:60');
+
+        // ---------- Sessions — write (30 req/min) ----------
+        Route::post('sessions', [StockTakeSessionApiController::class, 'store'])
+            ->middleware('api.rate:30');
+
+        // Count entry (setup + save + import) — any authenticated counter.
+        Route::post('sessions/{id}/setup/{warehouseId}', [StockTakeSessionApiController::class, 'setup'])
+            ->where('id', '[0-9]+')->where('warehouseId', '[0-9]+')
+            ->middleware('api.rate:30');
+        Route::put('sessions/{id}/counts/{warehouseId}', [StockTakeSessionApiController::class, 'saveCounts'])
+            ->where('id', '[0-9]+')->where('warehouseId', '[0-9]+')
+            ->middleware('api.rate:30');
+        Route::post('sessions/{id}/import/{warehouseId}', [StockTakeSessionApiController::class, 'importCounts'])
+            ->where('id', '[0-9]+')->where('warehouseId', '[0-9]+')
+            ->middleware('api.rate:30');
+
+        // Approval workflow — submit (counter), approve/reject (approver).
+        Route::post('sessions/{id}/submit', [StockTakeSessionApiController::class, 'submit'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.rate:30');
+        Route::post('sessions/{id}/approve', [StockTakeSessionApiController::class, 'approve'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager', 'api.rate:30');
+        Route::post('sessions/{id}/reject', [StockTakeSessionApiController::class, 'reject'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager', 'api.rate:30');
+
+        // Post + cancel + reverse + re-open — admin/manager (destructive/terminal).
+        Route::post('sessions/{id}/post', [StockTakeSessionApiController::class, 'post'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager', 'api.rate:30');
+        Route::post('sessions/{id}/cancel', [StockTakeSessionApiController::class, 'cancel'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager', 'api.rate:30');
+        Route::post('sessions/{id}/reverse', [StockTakeSessionApiController::class, 'reverse'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager', 'api.rate:30');
+        Route::post('sessions/{id}/re-open', [StockTakeSessionApiController::class, 'reOpen'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager', 'api.rate:30');
+
+        // ---------- Items (per-line reads + single-line autosave) ----------
+        // GET list / GET one — 60 req/min. PUT single-line autosave — 30 req/min.
+        Route::get('sessions/{id}/items', [StockTakeItemApiController::class, 'index'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.rate:60');
+        Route::get('sessions/{id}/items/{itemId}', [StockTakeItemApiController::class, 'show'])
+            ->where('id', '[0-9]+')->where('itemId', '[0-9]+')
+            ->middleware('api.rate:60');
+        Route::put('sessions/{id}/items/{itemId}', [StockTakeItemApiController::class, 'update'])
+            ->where('id', '[0-9]+')->where('itemId', '[0-9]+')
+            ->middleware('api.rate:30');
+
+        // ---------- Variance report — 60 req/min ----------
+        Route::get('sessions/{id}/variance', [StockTakeItemApiController::class, 'variance'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.rate:60');
+    });
 });
