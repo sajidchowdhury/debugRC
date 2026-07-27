@@ -868,6 +868,10 @@ Route::middleware('auth')->group(function () {
         // Phase 2 — CSV export of filtered returns
         Route::get('export', [SalesReturnController::class, 'export'])
             ->name('export')->middleware('role:salesman,accountant,warehouse_manager,manager,admin');
+        // Phase 3.4 — Per-module audit log (accountant+manager+admin only —
+        // matches reverse RBAC; audit trail contains reverse reasons + GL amounts).
+        Route::get('audit', [SalesReturnController::class, 'audit'])
+            ->name('audit')->middleware('role:accountant,manager,admin');
         // Return confirm — warehouse_manager, accountant, manager, admin (legacy confirm_store)
         Route::post('{id}/confirm', [SalesReturnController::class, 'confirm'])
             ->name('confirm')->middleware(['role:warehouse_manager,accountant,manager,admin', 'branch.isolation'])

@@ -1,5 +1,13 @@
 /**
- * Sales return index — smart filters, collapsible panel, mobile cards.
+ * Sales return index — Phase 3.2
+ * Smart filters, status chips with live AJAX counts, server-side DataTables,
+ * active-filter bar, mobile card fallback, SweetAlert2 reverse flow, and
+ * offcanvas quick-create bootstrap.
+ *
+ * Mirrors purchase-returns/index.blade.php's inline JS, adapted for the
+ * 4-state created→confirmed→reversed workflow (Purchase Return has only 2:
+ * active/reversed). Endpoint URLs come from window.SALES_RETURN_BOOT.endpoints
+ * (set by the Blade boot block) — no hardcoded legacy URLs.
  */
 (function () {
     'use strict';
@@ -8,16 +16,25 @@
     let returnsTable = null;
     let summaryDebounce = null;
 
+    // 4-chip map (matches the controller's status values).
+    // The controller accepts: all / created / confirmed / reversed / active.
+    // Sales Return uses 4 chips (vs Purchase Return's 3) because the workflow
+    // has two distinct active states (created = pending warehouse confirm,
+    // confirmed = stock IN + GL posted) before the terminal reversed state.
     const STATUS_LABELS = {
-        all: 'All returns',
-        active: 'Active',
-        pending: 'Awaiting warehouse',
-        completed: 'Completed',
-        reversed: 'Reversed',
+        all:       'All returns',
+        created:   'Pending',
+        confirmed: 'Confirmed',
+        reversed:  'Reversed',
     };
 
     $(function () {
         if (!document.getElementById('sales-return-app')) return;
+
+        // Sync CSRF from the boot block (set by Blade).
+        window.CSRF_TOKEN = window.CSRF_TOKEN
+            || (window.SALES_RETURN_BOOT && window.SALES_RETURN_BOOT.csrf)
+            || '';
 
         initFromBootOrStorage();
         bindFilterUi();
@@ -25,21 +42,21 @@
         initDataTable();
         refreshSummary();
         updateActiveFilterBar();
+        initOffcanvasQuickCreate();
 
+        // The workspace JS (SalesReturn.js) dispatches salesReturn:created
+        // when a return is saved from the offcanvas. Reload the table + chips.
         document.addEventListener('salesReturn:created', function () {
-            if (returnsTable) {
-                returnsTable.ajax.reload(null, false);
-            }
+            if (returnsTable) returnsTable.ajax.reload(null, false);
             refreshSummary();
         });
     });
 
+    // ───────────── Filter state: boot or localStorage ─────────────
     function initFromBootOrStorage() {
         const boot = window.SALES_RETURN_BOOT || {};
         let saved = null;
-        try {
-            saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-        } catch (e) { saved = null; }
+        try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch (e) { saved = null; }
 
         const state = saved && !boot.forceUrlParams ? saved : boot;
 
@@ -49,6 +66,7 @@
         if (state.date_from) $('#filterDateFrom').val(state.date_from);
         if (state.date_to) $('#filterDateTo').val(state.date_to);
         if (state.status) $('#filterStatus').val(state.status);
+        else $('#filterStatus').val('all');
         if (state.search) $('#filterSearch').val(state.search);
         $('#filterSmartSort').prop('checked', state.smart_sort !== false && state.smart_sort !== '0');
         syncStatusChips();
@@ -63,8 +81,10 @@
             const status = $(this).data('status');
             $('#filterStatus').val(status);
             syncStatusChips();
-            if (status === 'pending') {
-                applyPendingFilterView(false);
+            // Pending returns may be older than today — widen date range so
+            // the user actually sees pending items that need attention.
+            if (status === 'created') {
+                widenDateRangeForPending();
             }
             persistAndReload();
         });
@@ -84,35 +104,22 @@
 
         $('#clearFilters').on('click', resetFilters);
         $('#filterSmartSort').on('change', persistAndReload);
-
-        $('#filterPendingOnly').on('click', () => {
-            applyPendingFilterView();
-        });
     }
 
-    /** Pending returns may be older than today — widen date range when filtering awaiting confirm. */
-    function applyPendingFilterView(reload = true) {
+    function widenDateRangeForPending() {
         const today = new Date();
         const fmt = d => d.toISOString().slice(0, 10);
         const from = new Date(today);
         from.setFullYear(from.getFullYear() - 1);
-        $('#filterStatus').val('pending');
         $('#filterDateFrom').val(fmt(from));
         $('#filterDateTo').val(fmt(today));
         $('.sales-return-preset-btn').removeClass('active');
         $('.sales-return-preset-btn[data-preset="custom"]').addClass('active');
-        syncStatusChips();
-        if (reload) persistAndReload(true);
-        const collapse = document.getElementById('salesReturnFiltersCollapse');
-        if (collapse && typeof bootstrap !== 'undefined' && !collapse.classList.contains('show')) {
-            bootstrap.Collapse.getOrCreateInstance(collapse).show();
-        }
     }
 
     function initFiltersCollapse() {
         const el = document.getElementById('salesReturnFiltersCollapse');
         if (!el) return;
-
         el.addEventListener('shown.bs.collapse', syncFiltersToggleBtn);
         el.addEventListener('hidden.bs.collapse', syncFiltersToggleBtn);
         syncFiltersToggleBtn();
@@ -125,18 +132,18 @@
             .attr('aria-expanded', open ? 'true' : 'false');
     }
 
-    function setActivePreset(preset, reload = false) {
+    function setActivePreset(preset, reload) {
         $('.sales-return-preset-btn').removeClass('active');
         $(`.sales-return-preset-btn[data-preset="${preset}"]`).addClass('active');
         if (reload) applyDatePreset(preset);
     }
 
-    function applyDatePreset(preset, reload = true) {
+    function applyDatePreset(preset, reload) {
         const range = dateRangeForPreset(preset);
         setActivePreset(preset, false);
         $('#filterDateFrom').val(range.from);
         $('#filterDateTo').val(range.to);
-        if (reload) persistAndReload();
+        if (reload !== false) persistAndReload();
     }
 
     function dateRangeForPreset(preset) {
@@ -164,7 +171,7 @@
     }
 
     function syncStatusChips() {
-        const status = $('#filterStatus').val();
+        const status = $('#filterStatus').val() || 'all';
         $('.sales-return-status-chip').removeClass('active');
         $(`.sales-return-status-chip[data-status="${status}"]`).addClass('active');
     }
@@ -173,7 +180,7 @@
         return {
             date_from: $('#filterDateFrom').val(),
             date_to: $('#filterDateTo').val(),
-            status: $('#filterStatus').val(),
+            status: $('#filterStatus').val() || 'all',
             search: $('#filterSearch').val().trim(),
             smart_sort: $('#filterSmartSort').is(':checked') ? '1' : '0',
         };
@@ -207,6 +214,7 @@
         persistAndReload(true);
     }
 
+    // ───────────── Summary (chip counts) ─────────────
     function scheduleSummary() {
         clearTimeout(summaryDebounce);
         summaryDebounce = setTimeout(refreshSummary, 280);
@@ -219,7 +227,9 @@
             date_to: p.date_to,
             search: p.search,
         });
-        fetch(window.SALES_RETURN_BASE + 'SalesReturn/return_filter_summary?' + qs.toString())
+        const url = (window.SALES_RETURN_BOOT?.endpoints?.summary || (window.SALES_RETURN_BASE + 'summary'))
+            + '?' + qs.toString();
+        fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
             .then(r => r.json())
             .then(updateChipCounts)
             .catch(() => {});
@@ -227,19 +237,18 @@
 
     function updateChipCounts(data) {
         const map = {
-            all: data.total ?? 0,
-            active: data.active ?? 0,
-            pending: data.pending ?? 0,
-            completed: data.completed ?? 0,
-            reversed: data.reversed ?? 0,
+            all:       data.all ?? data.total ?? 0,
+            created:   data.pending ?? data.created ?? 0,
+            confirmed: data.confirmed ?? 0,
+            reversed:  data.reversed ?? 0,
         };
         $('.sales-return-status-chip').each(function () {
-            $(this).find('.chip-count').text(map[$(this).data('status')] ?? 0);
+            const key = $(this).data('status');
+            $(this).find('.chip-count').text(map[key] ?? 0);
         });
-        const pendingBadge = document.getElementById('heroPendingCount');
-        if (pendingBadge) pendingBadge.textContent = data.pending ?? 0;
     }
 
+    // ───────────── Active filter bar ─────────────
     function updateActiveFilterBar() {
         const bar = document.getElementById('activeFilterBar');
         if (!bar) return;
@@ -257,60 +266,55 @@
             tags.push('<span class="filter-tag"><i class="fas fa-sort-amount-down"></i> Priority sort</span>');
         }
 
-        bar.innerHTML = tags.join('') +
-            '<button type="button" class="btn btn-link btn-sm p-0 ms-auto" id="clearFiltersInline">Clear all</button>';
+        bar.innerHTML = tags.join('')
+            + '<button type="button" class="btn btn-link btn-sm p-0 ms-auto" id="clearFiltersInline">Clear all</button>';
         $('#clearFiltersInline').on('click', resetFilters);
     }
 
+    // ───────────── DataTables (server-side) ─────────────
     function initDataTable() {
+        const ajaxUrl = window.SALES_RETURN_BOOT?.endpoints?.datatables || window.SALES_RETURN_BASE;
         returnsTable = $('#returnsTable').DataTable({
             processing: true,
             serverSide: true,
             pageLength: 25,
             order: [],
             language: {
-                emptyTable: 'No returns match your filters',
+                emptyTable: 'No sales returns match your filters',
                 processing: '<i class="fas fa-spinner fa-spin"></i> Loading…',
             },
             ajax: {
-                url: window.SALES_RETURN_BASE + 'SalesReturn/datatable_returns',
+                url: ajaxUrl,
                 data: d => {
                     const p = getFilterParams();
+                    d.datatables = 1;
                     d.date_from = p.date_from;
                     d.date_to = p.date_to;
-                    d.status = p.status;
+                    d.filterStatus = p.status;
                     d.smart_sort = p.smart_sort;
                 },
             },
             columns: [
                 {
                     data: 'return_code',
-                    render: (d, t, row) => {
-                        let html = `<strong class="text-danger">${escapeHtml(d)}</strong>`;
-                        if (parseInt(row.linked_damage_count || 0, 10) > 0) {
-                            html += ` <span class="badge bg-danger-subtle text-danger border" title="Linked damage write-off"><i class="fas fa-heart-crack"></i></span>`;
-                        }
-                        return html;
-                    },
+                    render: (d, t, row) =>
+                        `<a href="${escapeHtml(row.show_url)}" class="fw-bold text-decoration-none text-danger">${escapeHtml(d)}</a>`,
                 },
                 { data: 'invoice_code', defaultContent: '—', render: d => escapeHtml(d || '—') },
                 {
-                    data: null,
-                    render: (d, t, row) => {
-                        const name = row.shop_name || row.customer_name || '—';
-                        return `<div class="fw-semibold">${escapeHtml(name)}</div><small class="text-muted">${escapeHtml(row.mobile || '')}</small>`;
-                    },
+                    data: 'customer_name',
+                    render: (d, t, row) =>
+                        `<div class="fw-semibold">${escapeHtml(d || '—')}</div>`
+                        + `<small class="text-muted">${escapeHtml(row.branch_name || '')}</small>`,
                 },
-                { data: 'branch_name', defaultContent: '—' },
-                { data: 'return_date' },
-                {
-                    data: 'total_amount',
-                    className: 'text-end',
-                    render: d => 'Tk ' + parseFloat(d || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-                },
+                { data: 'return_date', render: formatDate },
+                { data: 'total_amount', className: 'text-end', render: d => formatMoney(d) },
                 { data: 'status', render: (s, t, row) => returnStatusBadge(s, row.is_reversed) },
                 { data: null, orderable: false, className: 'text-center', render: (d, t, row) => returnActions(row) },
             ],
+            rowCallback: (row, data) => {
+                if (data && data.is_reversed) row.classList.add('is-reversed');
+            },
             drawCallback: function () {
                 renderReturnCards(this.api());
                 $('#resultsCountNum').text(this.api().page.info().recordsDisplay);
@@ -322,37 +326,105 @@
     }
 
     function returnStatusBadge(status, isReversed) {
-        if (parseInt(isReversed || 0, 10)) {
-            return '<span class="badge rounded-pill bg-danger">Reversed</span>';
+        if (parseInt(isReversed || 0, 10) || status === 'reversed') {
+            return '<span class="srt-status-pill srt-status-pill--reversed"><i class="fas fa-rotate-left"></i> Reversed</span>';
         }
-        const map = {
-            pending: '<span class="badge rounded-pill bg-warning text-dark" title="Step 2 — warehouse confirm pending">Awaiting warehouse</span>',
-            completed: '<span class="badge rounded-pill bg-success">Confirmed</span>',
-            reversed: '<span class="badge rounded-pill bg-danger">Reversed</span>',
-        };
-        return map[status] || `<span class="badge bg-secondary">${escapeHtml(status || '')}</span>`;
+        if (status === 'confirmed') {
+            return '<span class="srt-status-pill srt-status-pill--confirmed"><i class="fas fa-circle-check"></i> Confirmed</span>';
+        }
+        return '<span class="srt-status-pill srt-status-pill--pending"><i class="fas fa-pen-to-square"></i> Pending</span>';
     }
 
     function returnActions(row) {
-        const base = window.SALES_RETURN_BASE + 'SalesReturn/';
         let html = '<div class="btn-group btn-group-sm flex-wrap sr-return-actions">';
-        if (row.status === 'pending' && !parseInt(row.is_reversed || 0, 10)) {
-            html += `<a href="${base}confirm/${row.id}" class="btn btn-success" title="Step 2 — Warehouse confirm"><i class="fas fa-warehouse me-1"></i><span class="d-none d-lg-inline">Confirm</span></a>`;
-        }
-        html += `<a href="${base}slip/${row.id}" class="btn btn-outline-info" target="_blank" rel="noopener" title="Print slip"><i class="fas fa-print"></i></a>`;
-        if (parseInt(row.linked_damage_count || 0, 10) > 0) {
-            const dmgId = parseInt(row.linked_damage_id || 0, 10);
-            const dmgUrl = dmgId > 0
-                ? (window.SALES_RETURN_BASE + 'Damage/details/' + dmgId)
-                : (window.SALES_RETURN_BASE + 'Damage?sales_return_id=' + row.id);
-            html += `<a href="${dmgUrl}" class="btn btn-outline-danger" title="Linked damage write-off" target="_blank" rel="noopener"><i class="fas fa-heart-crack"></i></a>`;
-        }
-        if (row.status !== 'reversed' && !parseInt(row.is_reversed || 0, 10)) {
-            html += `<a href="${base}reverse/${row.id}" class="btn btn-outline-danger" title="Reverse return"><i class="fas fa-undo"></i></a>`;
+        html += `<a href="${escapeHtml(row.show_url)}" class="btn btn-outline-info" title="View"><i class="fas fa-eye"></i></a>`;
+        // Reverse button — only on confirmed, non-reversed returns.
+        if (row.can_reverse) {
+            html += `<button type="button" class="btn btn-outline-danger btn-reverse-srt"`
+                + ` data-id="${row.id}"`
+                + ` data-code="${escapeHtml(row.return_code || '')}"`
+                + ` data-reverse-url="${escapeHtml(row.reverse_url || '')}"`
+                + ` title="Reverse return">`
+                + `<i class="fas fa-undo"></i>`
+                + `</button>`;
         }
         return html + '</div>';
     }
 
+    // ───────────── Reverse flow (SweetAlert2) ─────────────
+    $(document).on('click', '.btn-reverse-srt', function () {
+        const id = $(this).data('id');
+        const code = $(this).data('code') || ('SR-' + id);
+        const reverseUrl = $(this).data('reverse-url') || '';
+
+        if (!reverseUrl) {
+            Swal.fire('Error', 'Reverse URL missing for this return.', 'error');
+            return;
+        }
+
+        Swal.fire({
+            title: 'Reverse sales return?',
+            html: `Reverse <strong>${escapeHtml(code)}</strong>? Stock will be restored to warehouse (if available), GL entries reversed, and customer ledger debited back. Linked damage write-offs (if any) will be cancelled first.`,
+            input: 'textarea',
+            inputPlaceholder: 'Reason (min 5 characters)',
+            inputAttributes: { 'aria-label': 'Reason for reversal' },
+            showCancelButton: true,
+            confirmButtonText: 'Reverse return',
+            confirmButtonColor: '#dc2626',
+            cancelButtonText: 'Cancel',
+            returnFocus: false,
+            preConfirm: (v) => {
+                const r = String(v || '').trim();
+                if (r.length < 5) {
+                    Swal.showValidationMessage('Please provide a meaningful reason (min 5 chars).');
+                    return false;
+                }
+                return r;
+            },
+        }).then((result) => {
+            if (!result.isConfirmed || !result.value) return;
+
+            Swal.fire({
+                title: 'Reversing…',
+                allowOutsideClick: false,
+                didOpen: () => Swal.showLoading(),
+            });
+
+            $.ajax({
+                url: reverseUrl,
+                method: 'POST',
+                data: {
+                    // ReverseSalesReturnRequest expects 'reverse_reason' (min 5 chars).
+                    reverse_reason: result.value,
+                    _token: window.CSRF_TOKEN || '',
+                },
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                dataType: 'json',
+            }).done((resp) => {
+                // Laravel reverse() returns a redirect on success; JSON on error.
+                // Treat both shapes gracefully.
+                if (resp && resp.status === 'error') {
+                    Swal.fire('Error', resp.message || 'Failed to reverse return', 'error');
+                    return;
+                }
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Reversed',
+                    text: 'Sales return reversed successfully.',
+                    timer: 1800,
+                    showConfirmButton: false,
+                });
+                persistAndReload(true);
+            }).fail((xhr) => {
+                let msg = 'Server error';
+                if (xhr.responseJSON && xhr.responseJSON.message) msg = xhr.responseJSON.message;
+                else if (xhr.responseText) msg = xhr.responseText.slice(0, 200);
+                Swal.fire('Error', msg, 'error');
+            });
+        });
+    });
+
+    // ───────────── Mobile card fallback ─────────────
     function renderReturnCards(table) {
         const container = document.getElementById('returnCards');
         if (!container || window.innerWidth >= 768) {
@@ -364,28 +436,29 @@
         let html = '';
 
         data.each(row => {
-            const statusClass = row.status === 'pending' ? 'status-pending'
-                : row.status === 'reversed' || parseInt(row.is_reversed || 0, 10) ? 'status-reversed' : 'status-completed';
+            const statusClass = row.is_reversed || row.status === 'reversed'
+                ? 'status-reversed'
+                : (row.status === 'confirmed' ? 'status-confirmed' : 'status-pending');
 
             html += `<div class="sales-return-mobile-card ${statusClass}">
                 <div class="d-flex justify-content-between align-items-start">
                     <strong>${escapeHtml(row.return_code)}</strong>
                     ${returnStatusBadge(row.status, row.is_reversed)}
                 </div>
-                <div class="small text-muted mt-1">${escapeHtml(row.invoice_code || '—')} · ${escapeHtml(row.shop_name || row.customer_name || '')}</div>
+                <div class="small text-muted mt-1">${escapeHtml(row.invoice_code || '—')} · ${escapeHtml(row.customer_name || '')}</div>
                 <div class="mt-2 d-flex justify-content-between align-items-center">
-                    <span class="small text-muted">${escapeHtml(row.return_date || '')}</span>
-                    <strong>Tk ${parseFloat(row.total_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                    <span class="small text-muted">${formatDate(row.return_date)}</span>
+                    <strong>${formatMoney(row.total_amount)}</strong>
                 </div>
                 <div class="mt-2">${returnActions(row)}</div>
             </div>`;
         });
 
         container.innerHTML = html || `
-            <div class="text-center text-muted py-4">
-                <i class="fas fa-undo-alt fa-2x mb-2 opacity-50"></i>
-                <p class="mb-0">No returns for these filters</p>
-                <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="document.getElementById('clearFilters').click()">Reset filters</button>
+            <div class="srt-empty-state">
+                <i class="fas fa-undo-alt"></i>
+                <p>No returns for these filters</p>
+                <button type="button" class="btn btn-sm btn-outline-primary" onclick="document.getElementById('clearFilters').click()">Reset filters</button>
             </div>`;
     }
 
@@ -393,8 +466,50 @@
         if (returnsTable) renderReturnCards(returnsTable);
     });
 
+    // ───────────── Offcanvas quick-create bootstrap ─────────────
+    // SalesReturn.js (the workspace IIFE) auto-binds to [data-srt-workspace]
+    // on DOMContentLoaded. Here we wire the offcanvas show/hide events so the
+    // workspace is reset + focused when the user opens the offcanvas, and we
+    // listen for ?new=1 / ?return=1 to auto-open (deep link from other pages).
+    function initOffcanvasQuickCreate() {
+        const offcanvasEl = document.getElementById('salesReturnCreateOffcanvas');
+        if (!offcanvasEl) return;
+
+        offcanvasEl.addEventListener('shown.bs.offcanvas', function () {
+            const root = document.getElementById('salesReturnOffcanvasRoot');
+            if (root && root._srtWorkspace) {
+                root._srtWorkspace.resetWorkspace();
+                if (root._srtWorkspace.searchInput) root._srtWorkspace.searchInput.focus();
+            }
+        });
+
+        // Deep-link: ?new=1 or ?return=1 opens the offcanvas (used by the
+        // "New Return" button on the dashboard / invoice show page).
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('return') === '1' || params.get('new') === '1') {
+            const btn = document.getElementById('openSalesReturnCreate');
+            if (btn && typeof bootstrap !== 'undefined') {
+                bootstrap.Offcanvas.getOrCreateInstance(offcanvasEl).show();
+            }
+        }
+    }
+
+    // ───────────── Helpers ─────────────
+    function formatDate(d) {
+        if (!d) return '—';
+        const p = String(d).split('-');
+        return p.length === 3 ? `${p[2]}-${p[1]}-${p[0]}` : d;
+    }
+
+    function formatMoney(n) {
+        return 'Tk ' + (parseFloat(n) || 0).toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        });
+    }
+
     function escapeHtml(str) {
-        return String(str || '').replace(/[&<>"']/g, c => ({
+        return String(str == null ? '' : str).replace(/[&<>"']/g, c => ({
             '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
         })[c]);
     }

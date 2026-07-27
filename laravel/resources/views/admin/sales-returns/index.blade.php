@@ -1,301 +1,262 @@
 @extends('layouts.admin')
 
+@push('css')
+<link rel="stylesheet" href="/assets/css/sales-return-index.css?v={{ filemtime(public_path('assets/css/sales-return-index.css')) }}">
+<link rel="stylesheet" href="/assets/css/sales-return-create.css?v={{ filemtime(public_path('assets/css/sales-return-create.css')) }}">
+@endpush
+
 @section('content')
 @php
-    // Defaults for filter controls.
+    // Phase 3.3 — defaults for the smart-filter state.
+    // 4 status chips: all / created (Pending) / confirmed / reversed.
+    // Mirrors Purchase Return's filter shape but with the extra "created"
+    // state (Purchase Return only has active/reversed because its workflow
+    // auto-confirms on create; Sales Return is two-phase: created → confirmed).
     $filters = array_merge([
-        'from_date'   => '',
-        'to_date'     => '',
-        'customer_id' => '',
-        'branch_id'   => '',
-        'status'      => '',
+        'date_from'   => now()->format('Y-m-d'),
+        'date_to'     => now()->format('Y-m-d'),
+        'status'      => 'all',
+        'date_preset' => 'today',
         'search'      => '',
+        'smart_sort'  => true,
     ], is_array($filters ?? null) ? $filters : []);
 
-    $stats = array_merge([
-        'total'       => 0,
-        'created'     => 0,
-        'confirmed'   => 0,
-        'reversed'    => 0,
-        'total_value' => 0,
-    ], $stats ?? []);
+    $branchName = $session_branch_name ?? (auth()->user()?->branch?->branch_name ?? 'Branch');
+    $today      = now()->format('Y-m-d');
+    $csrf       = csrf_token();
 
-    // Phase 8.5 spec: created=warning, confirmed=info, reversed=danger.
-    $statusBadge = function (string $status): string {
-        return [
-            'created'   => '<span class="badge bg-warning text-dark"><i class="fas fa-pen-to-square me-1"></i>Created</span>',
-            'confirmed' => '<span class="badge bg-info text-dark"><i class="fas fa-circle-check me-1"></i>Confirmed</span>',
-            'reversed'  => '<span class="badge bg-danger"><i class="fas fa-rotate-left me-1"></i>Reversed</span>',
-        ][$status] ?? '<span class="badge bg-light text-dark">' . e($status) . '</span>';
-    };
+    // URL params that override localStorage persistence.
+    $forceUrlParams = request()->hasAny(['date_from', 'date_to', 'status', 'q', 'invoice_code']);
+
+    // Pre-fill term for the offcanvas workspace (deep-link from invoice show page).
+    $prefill = trim((string) (request()->input('invoice_code') ?? request()->input('q') ?? ''));
+
+    $smartSort = (bool) ($filters['smart_sort'] ?? true);
+
+    // BUG-45: Blade's @json() can't safely encode multi-key array literals,
+    // so we json_encode in @php and emit via {!! !!}.
+    $createBoot = json_encode([
+        'workspace_id' => 'salesReturnOffcanvasRoot',
+        'prefill'      => $prefill,
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+
+    $mainBoot = json_encode([
+        'date_from'      => $filters['date_from'] ?? $today,
+        'date_to'        => $filters['date_to']   ?? $today,
+        'status'         => $filters['status']    ?? 'all',
+        'search'         => $filters['search']    ?? '',
+        'smart_sort'     => $smartSort,
+        'date_preset'    => $filters['date_preset'] ?? 'today',
+        'forceUrlParams' => $forceUrlParams,
+        'csrf'           => $csrf,
+        'endpoints'      => [
+            'datatables'      => route('admin.sales-returns.index'),
+            'summary'         => route('admin.sales-returns.summary'),
+            'search_invoices' => route('admin.sales-returns.search-invoices'),
+            'invoice_details' => route('admin.sales-returns.invoice-details'),
+            'store'           => route('admin.sales-returns.store'),
+            'reverse'         => '',
+            'show'            => '',
+            'export'          => route('admin.sales-returns.export'),
+        ],
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
 @endphp
 
-<div class="container-fluid py-2">
-    {{-- Hero header (orange/amber gradient — goods coming back) --}}
-    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
-            style="background: linear-gradient(135deg,#ea580c,#d97706);">
+<div id="sales-return-app" class="sales-return-app container-fluid py-2">
+    {{-- Hero header (orange→red gradient) --}}
+    <header class="sales-return-hero">
         <div>
-            <h1 class="h4 mb-1"><i class="fas fa-rotate-left me-2"></i>{{ $title }}</h1>
-            <p class="mb-0 small opacity-75">
-                Customer returns — stock IN at the <em>ORIGINAL avg_cost</em> from the challan (not current avg_cost).
-                Two-phase: created → confirm (stock + GL Dr Sales Return / Cr AR + Dr Inventory / Cr COGS) → reverse.
-            </p>
+            <h1><i class="fas fa-undo-alt me-2"></i>{{ $title }}</h1>
+            <p>Customer returns — stock IN at the <em>ORIGINAL avg_cost</em> from the challan (not current avg_cost)</p>
+            <span class="sales-return-branch-tag">
+                <i class="fas fa-map-marker-alt me-1"></i>{{ e($branchName) }}
+            </span>
+            {{-- Two-step journey indicator --}}
+            <div class="sr-journey-steps sr-journey-steps--hero">
+                <span class="sr-journey-step is-active">
+                    <span class="sr-journey-num">1</span> Created
+                </span>
+                <i class="fas fa-chevron-right sr-journey-arrow"></i>
+                <span class="sr-journey-step is-muted">
+                    <span class="sr-journey-num">2</span> Confirmed
+                </span>
+                <i class="fas fa-chevron-right sr-journey-arrow"></i>
+                <span class="sr-journey-step is-muted">
+                    <span class="sr-journey-num">3</span> Reversed
+                </span>
+            </div>
         </div>
-        <div>
-            <a href="{{ route('admin.sales-returns.create') }}" class="btn btn-light btn-sm">
-                <i class="fas fa-plus me-1"></i> New Return
+        <div class="sales-return-hero-actions">
+            <button type="button"
+                    class="btn btn-light btn-sm"
+                    id="openSalesReturnCreate"
+                    data-bs-toggle="offcanvas"
+                    data-bs-target="#salesReturnCreateOffcanvas"
+                    aria-controls="salesReturnCreateOffcanvas">
+                <i class="fas fa-plus"></i> Return
+            </button>
+            <a href="{{ route('admin.sales-returns.create') }}"
+               class="btn btn-light btn-sm d-none d-md-inline-flex"
+               title="Full page return">
+                <i class="fas fa-external-link-alt"></i>
             </a>
+            <a href="{{ route('admin.sales-returns.export', request()->only(['date_from', 'date_to', 'search', 'status'])) }}"
+               class="btn btn-light btn-sm"
+               title="Export CSV">
+                <i class="fas fa-file-csv"></i>
+            </a>
+            <button type="button"
+                    class="btn btn-light btn-sm collapsed"
+                    id="toggleSalesReturnFilters"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#salesReturnFiltersCollapse"
+                    aria-expanded="false"
+                    aria-controls="salesReturnFiltersCollapse"
+                    title="Filters">
+                <i class="fas fa-filter me-1"></i>Filters
+            </button>
         </div>
     </header>
 
-    {{-- Stats cards: 5 cards --}}
-    <div class="row g-3 mb-3">
-        <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body d-flex align-items-center">
-                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
-                         style="width:48px;height:48px;background:#ea580c;">
-                        <i class="fas fa-list"></i>
-                    </div>
-                    <div>
-                        <div class="h4 mb-0">{{ number_format((int) $stats['total']) }}</div>
-                        <div class="text-muted small">Total Returns</div>
-                    </div>
+    {{-- Smart filter panel (collapsible) --}}
+    <section class="sales-return-filters-shell">
+        <div class="collapse" id="salesReturnFiltersCollapse">
+            <div class="sales-return-smart-panel">
+                <div class="sales-return-smart-label">Quick period</div>
+                <div class="sales-return-preset-row">
+                    <button type="button" class="sales-return-preset-btn active" data-preset="today">Today</button>
+                    <button type="button" class="sales-return-preset-btn" data-preset="yesterday">Yesterday</button>
+                    <button type="button" class="sales-return-preset-btn" data-preset="week">Last 7 days</button>
+                    <button type="button" class="sales-return-preset-btn" data-preset="month">This month</button>
+                    <button type="button" class="sales-return-preset-btn" data-preset="custom">Custom</button>
                 </div>
-            </div>
-        </div>
-        <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body d-flex align-items-center">
-                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
-                         style="width:48px;height:48px;background:#f59e0b;">
-                        <i class="fas fa-pen-to-square"></i>
-                    </div>
-                    <div>
-                        <div class="h4 mb-0">{{ number_format((int) $stats['created']) }}</div>
-                        <div class="text-muted small">Created</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body d-flex align-items-center">
-                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
-                         style="width:48px;height:48px;background:#0ea5e9;">
-                        <i class="fas fa-circle-check"></i>
-                    </div>
-                    <div>
-                        <div class="h4 mb-0">{{ number_format((int) $stats['confirmed']) }}</div>
-                        <div class="text-muted small">Confirmed</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body d-flex align-items-center">
-                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
-                         style="width:48px;height:48px;background:#dc2626;">
-                        <i class="fas fa-rotate-left"></i>
-                    </div>
-                    <div>
-                        <div class="h4 mb-0">{{ number_format((int) $stats['reversed']) }}</div>
-                        <div class="text-muted small">Reversed</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
-                <div class="card-body d-flex align-items-center">
-                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
-                         style="width:48px;height:48px;background:#d97706;">
-                        <i class="fas fa-taka-sign"></i>
-                    </div>
-                    <div>
-                        <div class="h4 mb-0">Tk {{ number_format((float) $stats['total_value'], 2) }}</div>
-                        <div class="text-muted small">Total value (confirmed)</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
 
-    {{-- Filter form --}}
-    <div class="card border-0 shadow-sm mb-3">
-        <div class="card-body">
-            <form method="GET" action="{{ route('admin.sales-returns.index') }}" class="row g-2 align-items-end">
-                <div class="col-md-2">
-                    <label class="form-label small text-muted mb-1" for="from_date">From date</label>
-                    <input type="date" id="from_date" name="from_date" class="form-control form-control-sm"
-                           value="{{ $filters['from_date'] }}">
+                <div class="sales-return-search-wrap">
+                    <i class="fas fa-search"></i>
+                    <input type="search"
+                           id="filterSearch"
+                           class="form-control sales-return-search-input"
+                           placeholder="Smart search — return #, invoice, customer…"
+                           value="{{ e($filters['search'] ?? '') }}"
+                           autocomplete="off">
                 </div>
-                <div class="col-md-2">
-                    <label class="form-label small text-muted mb-1" for="to_date">To date</label>
-                    <input type="date" id="to_date" name="to_date" class="form-control form-control-sm"
-                           value="{{ $filters['to_date'] }}">
+
+                <div class="sales-return-smart-label">
+                    Status <small class="text-muted fw-normal">(live counts)</small>
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label small text-muted mb-1" for="customer_id">Customer</label>
-                    <select id="customer_id" name="customer_id" class="form-select form-select-sm select2">
-                        <option value="">All customers</option>
-                        @foreach ($customers as $c)
-                            <option value="{{ $c->id }}"
-                                {{ (string) $filters['customer_id'] === (string) $c->id ? 'selected' : '' }}>
-                                {{ $c->customer_code }} — {{ $c->customer_name }}
-                            </option>
-                        @endforeach
-                    </select>
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label small text-muted mb-1" for="branch_id">Branch</label>
-                    <select id="branch_id" name="branch_id" class="form-select form-select-sm select2">
-                        <option value="">All branches</option>
-                        @foreach ($branches as $b)
-                            <option value="{{ $b->id }}"
-                                {{ (string) $filters['branch_id'] === (string) $b->id ? 'selected' : '' }}>
-                                {{ $b->branch_code }} — {{ $b->branch_name }}
-                            </option>
-                        @endforeach
-                    </select>
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label small text-muted mb-1" for="status">Status</label>
-                    <select id="status" name="status" class="form-select form-select-sm">
-                        <option value="">All statuses</option>
-                        <option value="created"   {{ $filters['status'] === 'created' ? 'selected' : '' }}>Created</option>
-                        <option value="confirmed" {{ $filters['status'] === 'confirmed' ? 'selected' : '' }}>Confirmed</option>
-                        <option value="reversed"  {{ $filters['status'] === 'reversed' ? 'selected' : '' }}>Reversed</option>
-                    </select>
-                </div>
-                <div class="col-md-1">
-                    <label class="form-label small text-muted mb-1" for="search">Search</label>
-                    <input type="text" id="search" name="search" class="form-control form-control-sm"
-                           placeholder="Return code" value="{{ $filters['search'] }}">
-                </div>
-                <div class="col-12 d-flex gap-2 justify-content-end">
-                    <button type="submit" class="btn btn-warning btn-sm">
-                        <i class="fas fa-filter me-1"></i> Filter
+                <div class="sales-return-status-chips mb-3">
+                    <button type="button" class="sales-return-status-chip active" data-status="all">
+                        <span>All</span><span class="chip-count">0</span>
                     </button>
-                    <a href="{{ route('admin.sales-returns.index') }}" class="btn btn-outline-secondary btn-sm">
-                        <i class="fas fa-eraser me-1"></i> Clear
-                    </a>
+                    <button type="button" class="sales-return-status-chip chip-pending" data-status="created">
+                        <span>Pending</span><span class="chip-count">0</span>
+                    </button>
+                    <button type="button" class="sales-return-status-chip chip-confirmed" data-status="confirmed">
+                        <span>Confirmed</span><span class="chip-count">0</span>
+                    </button>
+                    <button type="button" class="sales-return-status-chip chip-reversed" data-status="reversed">
+                        <span>Reversed</span><span class="chip-count">0</span>
+                    </button>
                 </div>
-            </form>
-        </div>
-    </div>
+                <input type="hidden" id="filterStatus" value="{{ e($filters['status'] ?? 'all') }}">
 
-    {{-- Returns table --}}
-    <div class="card border-0 shadow-sm">
-        <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-sm table-striped table-hover align-middle mb-0" id="dataTable">
-                    <thead class="table-light">
+                <div class="mt-3 pt-3 border-top">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-6 col-md-3">
+                            <label class="form-label small mb-0" for="filterDateFrom">From</label>
+                            <input type="date" id="filterDateFrom" class="form-control"
+                                   value="{{ e($filters['date_from'] ?? $today) }}">
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <label class="form-label small mb-0" for="filterDateTo">To</label>
+                            <input type="date" id="filterDateTo" class="form-control"
+                                   value="{{ e($filters['date_to'] ?? $today) }}">
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="form-check mt-2 mt-md-4">
+                                <input class="form-check-input" type="checkbox" id="filterSmartSort" checked>
+                                <label class="form-check-label small" for="filterSmartSort">
+                                    Priority sort — active first, then reversed
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-2">
+                            <button type="button" id="clearFilters" class="btn btn-outline-secondary w-100">Reset all</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    {{-- Active filter bar (populated by JS) --}}
+    <div class="sales-return-active-bar" id="activeFilterBar"></div>
+
+    {{-- Results card --}}
+    <section class="sales-return-results-card">
+        <div class="sales-return-results-head">
+            <div class="fw-bold"><span id="resultsCountNum">0</span> return(s)</div>
+            <div class="d-flex gap-2">
+                <a href="{{ route('admin.sales-returns.audit') }}"
+                   class="btn btn-outline-secondary btn-sm">
+                    <i class="fas fa-history me-1"></i> Audit log
+                </a>
+            </div>
+        </div>
+        <div class="p-2 p-md-3">
+            <div id="returnCards" class="sales-return-mobile-cards"></div>
+            <div class="table-responsive sales-dt-mobile-controls">
+                <table class="table table-hover align-middle mb-0" id="returnsTable" style="width:100%">
+                    <thead>
                         <tr>
-                            <th>Code</th>
-                            <th>Date</th>
-                            <th>Invoice Code</th>
+                            <th>Return</th>
+                            <th>Invoice</th>
                             <th>Customer</th>
-                            <th>Branch</th>
-                            <th class="text-end">Revenue (Tk)</th>
-                            <th class="text-end">COGS (Tk)</th>
+                            <th>Date</th>
+                            <th class="text-end">Amount</th>
                             <th>Status</th>
-                            <th class="text-center">Reversed?</th>
                             <th class="text-center">Actions</th>
                         </tr>
                     </thead>
-                    <tbody>
-                        @forelse ($returns as $r)
-                            <tr class="{{ $r->is_reversed ? 'table-danger' : '' }}">
-                                <td>
-                                    <a href="{{ route('admin.sales-returns.show', $r) }}"
-                                       class="fw-semibold text-decoration-none">
-                                        {{ $r->return_code }}
-                                    </a>
-                                </td>
-                                <td class="text-nowrap small">
-                                    {{ \Carbon\Carbon::parse($r->return_date)->format('d M Y') }}
-                                </td>
-                                <td>
-                                    @if ($r->salesInvoice)
-                                        <a href="{{ route('admin.sales-invoices.show', $r->salesInvoice) }}"
-                                           class="text-decoration-none">
-                                            <span class="badge bg-secondary-subtle text-secondary">
-                                                {{ $r->salesInvoice->invoice_code }}
-                                            </span>
-                                        </a>
-                                    @else
-                                        <span class="text-muted">—</span>
-                                    @endif
-                                </td>
-                                <td>
-                                    @if ($r->customer)
-                                        <span class="fw-semibold">{{ $r->customer->customer_name }}</span>
-                                        <div class="small text-muted">{{ $r->customer->customer_code }}</div>
-                                    @else
-                                        <span class="text-muted">—</span>
-                                    @endif
-                                </td>
-                                <td>
-                                    @if ($r->branch)
-                                        {{ $r->branch->branch_name }}
-                                    @else
-                                        <span class="text-muted">—</span>
-                                    @endif
-                                </td>
-                                <td class="text-end">{{ number_format((float) $r->total_amount, 2) }}</td>
-                                <td class="text-end text-muted">{{ number_format((float) $r->cogs_amount, 2) }}</td>
-                                <td>{!! $statusBadge($r->status) !!}</td>
-                                <td class="text-center">
-                                    @if ($r->is_reversed)
-                                        <span class="badge bg-danger" title="Reversed">
-                                            <i class="fas fa-rotate-left"></i> Yes
-                                        </span>
-                                    @else
-                                        <span class="text-muted">—</span>
-                                    @endif
-                                </td>
-                                <td class="text-center text-nowrap">
-                                    <a href="{{ route('admin.sales-returns.show', $r) }}"
-                                       class="btn btn-sm btn-outline-secondary" title="View">
-                                        <i class="fas fa-eye"></i>
-                                    </a>
-                                </td>
-                            </tr>
-                        @empty
-                            <tr>
-                                <td colspan="10" class="text-center text-muted py-5">
-                                    <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
-                                    No sales returns found. Try adjusting filters or
-                                    <a href="{{ route('admin.sales-returns.create') }}">create a new one</a>.
-                                </td>
-                            </tr>
-                        @endforelse
-                    </tbody>
+                    <tbody></tbody>
                 </table>
             </div>
         </div>
-        <div class="card-footer bg-white">
-            {{ $returns->links() }}
-        </div>
-    </div>
+    </section>
 </div>
 
-@push('scripts')
-<script>
-$(function () {
-    $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
-
-    // DataTables on the visible rows only (server-side pagination handles page size).
-    $('#dataTable').DataTable({
-        paging: false,
-        info: false,
-        ordering: true,
-        dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
-        language: { search: 'Filter rows:', emptyTable: 'No sales returns on this page.' }
-    });
-});
-</script>
-@endpush
+{{-- Offcanvas quick-create (uses the shared Phase 4 workspace partial) --}}
+<div class="offcanvas offcanvas-end sales-return-create-offcanvas"
+     tabindex="-1"
+     id="salesReturnCreateOffcanvas"
+     aria-labelledby="salesReturnCreateOffcanvasLabel">
+    <div class="offcanvas-header">
+        <div>
+            <h5 class="offcanvas-title mb-0" id="salesReturnCreateOffcanvasLabel">
+                <i class="fas fa-undo-alt me-2"></i>Quick return
+            </h5>
+            <p class="mb-0 small opacity-90">Search invoice → enter return qty &amp; warehouse → save</p>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+    </div>
+    <div class="offcanvas-body pt-2">
+        @include('admin.sales-returns.partials.create-workspace', [
+            'workspaceId' => 'salesReturnOffcanvasRoot',
+            'compact'     => true,
+        ])
+    </div>
+</div>
 @endsection
+
+@push('scripts')
+<script>window.CSRF_TOKEN = @json($csrf);</script>
+<script>
+window.SALES_RETURN_BASE = '{{ rtrim(route('admin.sales-returns.index'), '/') }}/';
+window.SALES_RETURN_CREATE_BOOT = {!! $createBoot !!};
+window.SALES_RETURN_BOOT = {!! $mainBoot !!};
+</script>
+{{-- SalesReturn.js — workspace IIFE (shared with create page). Auto-binds to [data-srt-workspace]. --}}
+<script src="/assets/js/SalesReturn.js?v={{ filemtime(public_path('assets/js/SalesReturn.js')) }}"></script>
+{{-- sales-return-index.js — index page JS (filters, chips, DataTables, reverse SweetAlert, offcanvas bootstrap). --}}
+<script src="/assets/js/sales-return-index.js?v={{ filemtime(public_path('assets/js/sales-return-index.js')) }}"></script>
+@endpush

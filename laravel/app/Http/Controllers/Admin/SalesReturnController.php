@@ -188,9 +188,29 @@ class SalesReturnController extends Controller
     {
         try {
             $return = $this->returnService->reverseReturn($id, auth()->id(), $request->input('reverse_reason'));
+
+            // Phase 3.2 — AJAX-aware response. The index page's reverse button
+            // posts via $.ajax and expects JSON; the show page's reverse button
+            // submits the form synchronously and expects a redirect. Detect
+            // via $request->expectsJson() (checks Accept: application/json header
+            // set automatically by $.ajax with dataType:'json').
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'status'  => 'success',
+                    'message' => "Return {$return->return_code} reversed.",
+                    'redirect' => route('admin.sales-returns.show', $return),
+                ]);
+            }
+
             return redirect()->route('admin.sales-returns.show', $return)
                 ->with('success', "Return {$return->return_code} reversed.");
         } catch (\Throwable $e) {
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => $e->getMessage(),
+                ], 422);
+            }
             return back()->with('error', $e->getMessage());
         }
     }
@@ -620,6 +640,65 @@ class SalesReturnController extends Controller
             'Content-Disposition' => 'attachment; filename="' . $filename . '"',
             'Pragma'              => 'no-cache',
             'Expires'             => '0',
+        ]);
+    }
+
+    /**
+     * Phase 3.4 — Per-module audit-log page for sales returns.
+     *
+     * Reads user_audit_log filtered by action prefix 'return_' (per
+     * SalesAuditLogger: return_created / return_confirmed / return_reversed).
+     * Mirrors PurchaseReturnController::audit() structure and reuses the
+     * shared admin.purchase.partials.audit-log-table partial (the partial is
+     * module-agnostic — accepts $module, $moduleLabel, $indexRoute, $filters).
+     *
+     * RBAC: accountant, manager, admin (matches the reverse action RBAC —
+     * anyone who can reverse a return can view its audit trail; salesman
+     * and warehouse_manager are excluded because the audit trail may
+     * contain reverse reasons + GL amounts that are accountant-scope).
+     */
+    public function audit(Request $request)
+    {
+        $branchId = $this->resolveBranchIdForRead($request->input('branch_id') ? (int) $request->input('branch_id') : null);
+
+        $query = DB::table('user_audit_log as ual')
+            ->leftJoin('users as u', 'u.id', '=', 'ual.user_id')
+            ->leftJoin('employees as e', 'e.id', '=', 'u.employee_id')
+            ->leftJoin('branches as b', 'b.id', '=', 'ual.branch_id')
+            ->where('ual.action', 'LIKE', 'return_%')
+            ->when($branchId > 0, fn($q) => $q->where('ual.branch_id', $branchId))
+            ->when($request->input('search'), function ($q, $search) {
+                $q->where(function ($qq) use ($search) {
+                    $qq->where('ual.action', 'ILIKE', "%{$search}%")
+                       ->orWhere('u.username', 'ILIKE', "%{$search}%")
+                       ->orWhere('e.name', 'ILIKE', "%{$search}%");
+                });
+            })
+            ->select(
+                'ual.id',
+                'ual.created_at as logged_at',
+                'ual.user_id',
+                'ual.action',
+                'ual.target_user_id as target_id',
+                'ual.branch_id',
+                'ual.details',
+                'ual.ip_address',
+                'u.username',
+                'e.name as employee_name',
+                'b.branch_name'
+            )
+            ->orderBy('ual.created_at', 'desc')
+            ->orderBy('ual.id', 'desc');
+
+        $logs = $query->paginate(100)->withQueryString();
+
+        return view('admin.sales-returns.audit', [
+            'title'       => 'Sales Return — Audit Log',
+            'logs'        => $logs,
+            'filters'     => $request->only(['search', 'branch_id']),
+            'module'      => 'sales_return',
+            'moduleLabel' => 'Sales Return',
+            'indexRoute'  => route('admin.sales-returns.index'),
         ]);
     }
 }
