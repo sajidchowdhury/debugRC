@@ -1073,11 +1073,12 @@ as `$prefill`, consumed by `SalesReturnWorkspace.prefill()`.
 
 ---
 
-## Phase 5 — Show Page Polish (Minor Tweaks)
+## Phase 5 — Show Page Polish (Minor Tweaks)  ✅ COMPLETE
 
-> **Goal**: The show page is already polished (760 lines, SweetAlert2, both GL
+> **Goal**: The show page was already polished (SweetAlert2, both GL
 > journals inline, stock movements, customer ledger). This phase makes small
-> parity tweaks — no full rewrite.
+> parity tweaks — condition helpers, linked damage write-off card, Quick facts
+> Good/Damage breakdown — no full rewrite.
 
 ### 5.1 Use `SalesReturnItem` condition helpers
 
@@ -1086,8 +1087,8 @@ helpers added in Phase 0.3, instead of raw column access. This makes the Blade
 cleaner and consistent with Purchase Return's show page.
 
 **Acceptance criteria**:
-- [ ] All `condition_state` accesses in `show.blade.php` use the helpers
-- [ ] Condition pills render correctly (Good=green, Damage=red)
+- [x] All `condition_state` accesses in `show.blade.php` use the helpers
+- [x] Condition pills render correctly (Good=green, Damage=red)
 
 **Dependencies**: Phase 0.3.
 
@@ -1104,8 +1105,8 @@ Damage-condition returns. If not, add a card mirroring Purchase Return's
 - is_reversed badge (if reversed)
 
 **Acceptance criteria**:
-- [ ] If a return has linked damage_invoices, a card renders showing them
-- [ ] If no linked damage_invoices, no card renders (no empty state needed)
+- [x] If a return has linked damage_invoices, a card renders showing them
+- [x] If no linked damage_invoices, no card renders (no empty state needed)
 
 **Dependencies**: None.
 
@@ -1118,10 +1119,119 @@ entry_no (or "Not posted"), COGS GL journal entry_no (or "Not posted"), Reversed
 (badge or "No").
 
 **Acceptance criteria**:
-- [ ] Quick facts card present with all 8 rows
-- [ ] Both GL journal numbers shown (revenue + COGS — Laravel's BETTER-than-legacy separate JEs)
+- [x] Quick facts card present with all 8 rows
+- [x] Both GL journal numbers shown (revenue + COGS — Laravel's BETTER-than-legacy separate JEs)
 
 **Dependencies**: None.
+
+### Phase 5 Execution Log
+
+> Phase 5 implements 5.1–5.3. The show page was already largely complete;
+> this phase closes the three parity gaps against Purchase Return's show page.
+
+#### Pre-fix — eager-load `items.damageInvoice.warehouse`
+**Problem found**: the controller's `show()` eager-loaded `items.product` +
+`items.warehouse` but NOT `items.damageInvoice`. The Phase 0.3 `damageInvoice()`
+BelongsTo on `SalesReturnItem` exists, but without eager loading the new 5.2
+damage card would trigger an N+1 (one query per Damage line). Also the card
+needs `$di->warehouse`, so a nested eager-load is required.
+
+**Fix** (`laravel/app/Http/Controllers/Admin/SalesReturnController.php` ::
+`show()`): added `'items.damageInvoice.warehouse'` to the `SalesReturn::with()`
+array. One extra join-batched query regardless of how many Damage lines exist.
+
+#### 5.1 — Condition column using helpers  ✅
+The items table previously had **no condition column at all** (only Product /
+Warehouse / Qty / Rate / Original Cost / Revenue / COGS). Added an 8th column
+"Condition" (header `<th class="text-center">Condition</th>`) whose cell uses
+the Phase 0.3 helpers:
+- `$item->isDamage()` → red pill (`bg-danger-subtle text-danger border-danger-subtle`)
+  with `fa-triangle-exclamation` + `$item->conditionLabel()`; tooltip explains
+  "Damaged — auto written off via linked damage invoice (net zero stock
+  movement)".
+- else (Good) → green pill (`bg-success-subtle text-success border-success-subtle`)
+  with `fa-check` + `$item->conditionLabel()`; tooltip explains "Good — stock
+  IN at original cost + COGS reversal + revenue reversal".
+
+`conditionLabel()` is used (not a raw column echo) so the helper is the single
+source of truth for the label text. colspan adjustments: empty row 7→8,
+footer gained an empty `<td></td>` for the new column (mirrors Purchase Return's
+footer pattern). No raw `condition_state` access remains anywhere in the file.
+
+#### 5.2 — Linked damage write-offs card  ✅
+**No such card existed before.** Added a new card in the left column (between
+Stock Movements and Revenue Reversal GL) that renders **only** when the return
+has Damage-condition items with a linked `damage_invoice`:
+
+```php
+$linkedDamageInvoices = $r->items
+    ->filter(fn ($i) => $i->isDamage() && $i->damageInvoice)
+    ->map(fn ($i) => $i->damageInvoice)
+    ->unique('id')->values();
+```
+
+For each linked damage invoice the card shows (per plan 5.2 spec):
+- **damage_code** — linked to `route('admin.damages.show', $di)` (plain `<a>`,
+  no `@can` — no `DamageInvoicePolicy` exists; the resource route is
+  middleware-protected already).
+- **warehouse** — `$di->warehouse->warehouse_name` (eager-loaded).
+- **damage_date** — formatted `d M Y`.
+- **is_reversed badge** — red "Reversed" pill if `$di->is_reversed`.
+- **linked items** — a nested table of the `sales_return_items` whose
+  `damage_invoice_id === $di->id` (product, qty, rate, value), with a footer
+  showing the damage write-off total (`$di->total_value`).
+- **reason** — `$di->reason` if present.
+
+When there are no linked damage invoices (Good-only returns, or a `created`
+return where damage invoices haven't been created yet), the collection is empty
+and the entire card is skipped — no empty state, per the acceptance criterion.
+
+#### 5.3 — Quick facts Good/Damage breakdown  ✅
+The Quick facts card already had 7 of the 8 spec rows (Items, Revenue total,
+COGS total, Stock movements, Customer ledger, Revenue GL journal, COGS GL
+journal, Reversed). The **missing** row was the "Good/Damage breakdown (if
+damage > 0)". Added it, mirroring Purchase Return's Quick facts exactly:
+
+```php
+$goodCount   = $r->items->filter(fn ($i) => !$i->isDamage())->count();
+$damageCount = $r->items->filter(fn ($i) => $i->isDamage())->count();
+$goodQty     = (float) $r->items->filter(fn ($i) => !$i->isDamage())->sum(fn ($i) => (float) $i->qty);
+$damageQty   = (float) $r->items->filter(fn ($i) => $i->isDamage())->sum(fn ($i) => (float) $i->qty);
+```
+
+When `$damageCount > 0`, two rows render: "Good lines" (green check, count +
+qty + "stock IN") and "Damage lines" (red triangle, count + qty + "written
+off"). The unit annotations differ from Purchase Return (which says "no stock
+move" / "stock OUT") because sales-return Damage semantics differ: a
+sales-return Damage line gets stock IN (sales_return) then stock OUT (damage
+write-off) = net zero, so the accurate label is "written off" rather than "no
+stock move". The card now has all 8 spec rows.
+
+#### Verification (static — no PHP/runtime in this sandbox)
+- Blade directive balance: `@php/@endphp` 6/6, `@if/@endif` 41/41,
+  `@foreach/@endforeach` 6/6, `@forelse/@empty/@endforelse` 1/1/1, `@else` 16,
+  `@push/@endpush` 1/1, `@section/@endsection` 1/1 — all balanced.
+- `bun run build:css` → OK (no errors, no CSS diff — the `bg-danger-subtle` /
+  `bg-success-subtle` / `border-danger-subtle` classes were already purged
+  into the compiled CSS from Purchase Return's show page usage).
+- Route `admin.damages.show` confirmed to exist (`Route::resource('admin/damages',
+  DamageController::class)` in `routes/web.php`).
+- `DamageInvoice` model confirmed to expose `damage_code`, `damage_date`,
+  `warehouse_id`, `total_value`, `is_reversed`, `reason` + `warehouse()`
+  BelongsTo + `items()` HasMany.
+- No `DamageInvoicePolicy` → used a plain `<a>` link (not `@can`) to avoid a
+  `PolicyNotFoundException`.
+
+#### Outstanding (carried to later phases)
+- **Live E2E show-page test** (deferred): render a confirmed return with both
+  Good + Damage lines and verify the condition pills + damage card + Quick
+  facts breakdown all render. Needs a running Laravel + Postgres stack (not
+  available in this sandbox).
+- **Phase 0.1 finding (stock-IN-then-OUT for Damage lines)**: still open —
+  `SalesReturnService::confirmReturn()` still applies stock IN to ALL items
+  then `createLinkedDamageWriteOffs()` separately stock-OUTs Damage items.
+  Net effect is correct (zero) but wasteful (2 stock tx per Damage line).
+  Cleanup deferred to Phase 6/8 (business-logic audit).
 
 ---
 

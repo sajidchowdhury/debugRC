@@ -2131,3 +2131,44 @@ Stage Summary:
 - ALL PAGES BENEFIT: the layout improvements (sidebar styling, mobile drawer, positioning) apply to every page using <x-layouts.erp>. The hero-prop gap fix applies to godown + issue (the two pages with gradient heroes).
 - USER ACTION NEEDED: (1) `git pull` on their server. (2) Hard-refresh the godown page. The sidebar should now be dark slate with amber accents, the "big gap" above the hero should be gone, and on mobile the hamburger should open a proper drawer with overlay. (3) Check other sales-challan pages (issue, index, show) — they all get the modernized sidebar too.
 - NO test code written (per project rules). PHP is not installed in this sandbox; the fix was verified by manual CSS/Blade review + the CSS build succeeding.
+
+---
+Task ID: 6-sales-return-phase5
+Agent: Main
+Task: Phase 5 — Show Page Polish (Minor Tweaks) for the Sales Return rewrite (3 sub-tasks: 5.1 condition helpers, 5.2 linked damage write-off card, 5.3 Quick facts Good/Damage breakdown). Also verify Phase 3 & 4 are pushed and push the unpushed CI-workflow commit if the new PAT has workflow scope.
+
+Work Log:
+- Read docs/SALES_RETURN_REWRITE_PLAN.md Phase 5 section (lines 1076-1124): goal = minor parity tweaks to the already-polished show page. Three sub-tasks: 5.1 use SalesReturnItem condition helpers (isGood/isDamage/conditionLabel); 5.2 add linked damage write-off card (damage_code/warehouse/damage_date/total_value/linked items/is_reversed); 5.3 add Quick facts Good/Damage breakdown (8th row, the other 7 already exist).
+- GIT STATUS CHECK: `git log origin/main` confirms Phase 3 (commit 2808722) AND Phase 4 (commit e15f4c3) are BOTH already pushed to origin/main. Local is 1 commit ahead — the only unpushed commit is 3c4c4ba (ci(css): css-build-guard workflow).
+- PAT WORKFLOW-SCOPE TEST: updated remote URL with the user-provided PAT (ghp_…QxKYV) and attempted `git push origin main`. REJECTED: "refusing to allow a Personal Access Token to create or update workflow .github/workflows/css-guard.yml without workflow scope". The PAT lacks the `workflow` scope, so the CI-workflow commit stays local (same situation as prior sessions — it sits on top of HEAD, pushable commits get rebased onto origin/main).
+- READ current state:
+  * app/Models/SalesReturnItem.php — confirmed Phase 0.3 helpers exist: isDamage(), isGood(), conditionLabel(), damageInvoice() BelongsTo. All good.
+  * resources/views/admin/sales-returns/show.blade.php (760 lines) — found: items table had NO condition column at all; NO damage write-off card; Quick facts card had 7 of 8 rows (missing Good/Damage breakdown). Zero raw condition_state accesses.
+  * resources/views/admin/purchase-returns/show.blade.php — read the parity patterns: condition column cell (lines 204-216, isDamage → red pill, else green pill) and Quick facts breakdown (lines 521-544, goodCount/damageCount/goodQty/damageQty with @if damageCount>0).
+  * app/Http/Controllers/Admin/SalesReturnController.php show() (line 141) — eager-loads items.product + items.warehouse + journalEntry.lines.ledger + cogsJournalEntry.lines.ledger but NOT items.damageInvoice.
+  * app/Models/DamageInvoice.php — confirmed fields: damage_code, damage_date, warehouse_id, total_value, is_reversed, reason + warehouse() BelongsTo + items() HasMany.
+  * routes/web.php — confirmed `Route::resource('admin/damages', DamageController::class)` so admin.damages.show exists.
+  * Confirmed NO DamageInvoicePolicy exists → must use plain <a> link (not @can) to avoid PolicyNotFoundException.
+
+- PRE-FIX (controller): added `'items.damageInvoice.warehouse'` to SalesReturn::with() in show(). Prevents N+1 on the new damage card and provides $di->warehouse without an extra query.
+
+- 5.1 (show.blade.php items table): added 8th column header `<th class="text-center">Condition</th>`. Cell uses $item->isDamage() → red pill (bg-danger-subtle text-danger border-danger-subtle + fa-triangle-exclamation + conditionLabel(), tooltip "Damaged — auto written off via linked damage invoice (net zero stock movement)"); else green pill (bg-success-subtle text-success border-success-subtle + fa-check + conditionLabel(), tooltip "Good — stock IN at original cost + COGS reversal + revenue reversal"). Updated empty-row colspan 7→8; added empty <td></td> to the totals footer for the new column (mirrors Purchase Return's footer pattern).
+
+- 5.2 (show.blade.php new card): added "Linked damage write-offs" card between Stock Movements and Revenue Reversal GL. Renders ONLY when $linkedDamageInvoices (computed from $r->items->filter(isDamage && damageInvoice)->map(damageInvoice)->unique('id')) is non-empty. Per damage invoice: damage_code linked to route('admin.damages.show', $di), warehouse name, damage_date, is_reversed badge, nested items table (product/qty/rate/value) with footer showing $di->total_value, and reason. Uses $loop->last to drop the bottom margin on the last item. When empty (Good-only returns or created-state returns) the whole card is skipped — no empty state.
+
+- 5.3 (show.blade.php Quick facts): inserted Good/Damage breakdown after the Items row. Computes goodCount/damageCount/goodQty/damageQty via $r->items->filter(isDamage). When damageCount>0, renders two rows: "Good lines" (green check, count + qty + "stock IN") and "Damage lines" (red triangle, count + qty + "written off"). Unit labels deliberately differ from Purchase Return's "no stock move"/"stock OUT" because sales-return Damage semantics differ (stock IN then OUT = net zero → "written off" is the accurate label). Card now has all 8 spec rows.
+
+- VERIFICATION (static — no PHP runtime in this sandbox):
+  * Blade directive balance: @php/@endphp 6/6, @if/@endif 41/41, @foreach/@endforeach 6/6, @forelse/@empty/@endforelse 1/1/1, @else 16, @push/@endpush 1/1, @section/@endsection 1/1 — all balanced.
+  * bun run build:css → OK (no errors, no CSS diff — bg-danger-subtle/bg-success-subtle/border-danger-subtle classes already purged into compiled CSS from Purchase Return's usage).
+  * Route admin.damages.show + DamageInvoice fields + no DamageInvoicePolicy all confirmed before writing the blade.
+
+- PLAN DOC UPDATE: marked Phase 5 header ✅ COMPLETE, checked off all 6 acceptance-criteria checkboxes (5.1 ×2, 5.2 ×2, 5.3 ×2), updated the goal blockquote, and added a full "Phase 5 Execution Log" section (Pre-fix + 5.1 + 5.2 + 5.3 + Verification + Outstanding) mirroring Phase 4's log style. (Note: a first MultiEdit attempt wrote literal \u2705 escapes instead of the ✅ emoji — caught and fixed with a follow-up Edit using literal Unicode characters; all emoji/arrows/em-dashes in the execution log are now real UTF-8.)
+
+- COMMIT + PUSH: staged ONLY the 3 Phase-5 files (show.blade.php, SalesReturnController.php, SALES_RETURN_REWRITE_PLAN.md) — left the pre-existing unstaged working-tree noise untouched. Committed as "feat(sales-return): Phase 5 show page polish — condition column + damage card + Quick facts breakdown". Pushed via the rebase-onto-origin-main technique (cherry-pick the Phase-5 commit onto a temp branch at origin/main, push temp→main, then rebase local main so the unpushable CI-workflow commit stays on top of the new origin/main). CI-workflow commit 3c4c4ba remains local (PAT lacks workflow scope).
+
+Stage Summary:
+- PHASE 5 COMPLETE: all three sub-tasks implemented and verified statically. The sales-return show page now has (a) a Condition column with Good/Damage pills driven by the Phase 0.3 helpers, (b) a Linked damage write-offs card that renders only for Damage-condition returns with linked damage_invoices, and (c) a Quick facts Good/Damage breakdown row (8th row) mirroring Purchase Return. Controller eager-loads items.damageInvoice.warehouse to keep the damage card N+1-free.
+- PHASE 3 & 4 PUSH STATUS: confirmed both already on origin/main (commits 2808722 + e15f4c3). The user-provided PAT lacks `workflow` scope so the CI-workflow commit (3c4c4ba) remains local — same as prior sessions. Phase 5 commit was pushed via the temp-branch + cherry-pick + rebase technique.
+- USER ACTION NEEDED: (1) `git pull` on their server. (2) Navigate to a confirmed sales return with at least one Damage line — the show page should now show: a Condition column (Good=green / Damage=red pills) on every item, a "Linked damage write-offs" card (between Stock movements and Revenue Reversal GL) with the damage_code link + warehouse + date + items table + write-off total, and a Good/Damage breakdown in the Quick facts card. (3) For a Good-only return, the damage card should be absent and the Quick facts breakdown should be absent (only shown when damageCount>0).
+- NO test code written (per project rules). PHP is not installed in this sandbox so the Laravel app cannot be booted here; the changes were verified by manual Blade directive-balance count + CSS build succeeding + route/model/policy existence checks.

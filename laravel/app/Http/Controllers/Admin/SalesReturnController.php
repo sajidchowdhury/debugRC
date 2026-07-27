@@ -141,7 +141,8 @@ class SalesReturnController extends Controller
     public function show(int $id)
     {
         $return = SalesReturn::with([
-            'items.product', 'items.warehouse', 'salesInvoice.customer', 'customer', 'branch',
+            'items.product', 'items.warehouse', 'items.damageInvoice.warehouse',
+            'salesInvoice.customer', 'customer', 'branch',
             'journalEntry.lines.ledger', 'cogsJournalEntry.lines.ledger',
         ])->findOrFail($id);
 

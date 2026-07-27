@@ -189,6 +189,7 @@
                                     </th>
                                     <th class="text-end">Revenue (Tk)</th>
                                     <th class="text-end">COGS (Tk)</th>
+                                    <th class="text-center">Condition</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -221,10 +222,24 @@
                                         </td>
                                         <td class="text-end">{{ number_format($itemRevenue, 2) }}</td>
                                         <td class="text-end text-muted">{{ number_format($itemCogs, 2) }}</td>
+                                        <td class="text-center">
+                                            {{-- Phase 5.1 — use SalesReturnItem condition helpers (isGood/isDamage/conditionLabel). --}}
+                                            @if ($item->isDamage())
+                                                <span class="badge bg-danger-subtle text-danger border border-danger-subtle"
+                                                      title="Damaged — auto written off via linked damage invoice (net zero stock movement)">
+                                                    <i class="fas fa-triangle-exclamation me-1"></i>{{ $item->conditionLabel() }}
+                                                </span>
+                                            @else
+                                                <span class="badge bg-success-subtle text-success border border-success-subtle"
+                                                      title="Good — stock IN at original cost + COGS reversal + revenue reversal">
+                                                    <i class="fas fa-check me-1"></i>{{ $item->conditionLabel() }}
+                                                </span>
+                                            @endif
+                                        </td>
                                     </tr>
                                 @empty
                                     <tr>
-                                        <td colspan="7" class="text-center text-muted py-4">No items.</td>
+                                        <td colspan="8" class="text-center text-muted py-4">No items.</td>
                                     </tr>
                                 @endforelse
                             </tbody>
@@ -233,6 +248,7 @@
                                     <td colspan="5" class="text-end">Totals</td>
                                     <td class="text-end">Tk {{ number_format((float) $r->total_amount, 2) }}</td>
                                     <td class="text-end">Tk {{ number_format((float) $r->cogs_amount, 2) }}</td>
+                                    <td></td>
                                 </tr>
                             </tfoot>
                         </table>
@@ -307,6 +323,95 @@
                                 </tbody>
                             </table>
                         </div>
+                    </div>
+                </div>
+            @endif
+
+            {{-- Phase 5.2 — Linked damage write-offs card (only if Damage-condition lines with linked damage invoices). --}}
+            @php
+                $linkedDamageInvoices = $r->items
+                    ->filter(fn ($i) => $i->isDamage() && $i->damageInvoice)
+                    ->map(fn ($i) => $i->damageInvoice)
+                    ->unique('id')
+                    ->values();
+            @endphp
+            @if ($linkedDamageInvoices->isNotEmpty())
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-triangle-exclamation me-1 text-danger"></i> Linked damage write-offs
+                            <span class="badge bg-danger-subtle text-danger ms-1">{{ $linkedDamageInvoices->count() }}</span>
+                        </h2>
+                        <span class="small text-muted">Auto-created for Damage lines (stock OUT + GL Dr Damage Loss / Cr Inventory)</span>
+                    </div>
+                    <div class="card-body">
+                        @foreach ($linkedDamageInvoices as $di)
+                            @php
+                                $diItems = $r->items->filter(fn ($i) => $i->damage_invoice_id === $di->id);
+                            @endphp
+                            <div class="border rounded-3 p-3 {{ $loop->last ? '' : 'mb-3' }}">
+                                <div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
+                                    <div>
+                                        <a href="{{ route('admin.damages.show', $di) }}" class="text-decoration-none fw-bold">
+                                            <i class="fas fa-link me-1"></i>{{ $di->damage_code }}
+                                        </a>
+                                        @if (!empty($di->is_reversed))
+                                            <span class="badge bg-danger ms-1">
+                                                <i class="fas fa-rotate-left me-1"></i>Reversed
+                                            </span>
+                                        @endif
+                                    </div>
+                                    <div class="small text-muted">
+                                        @if ($di->warehouse)
+                                            <i class="fas fa-warehouse me-1"></i>{{ $di->warehouse->warehouse_name }}
+                                        @endif
+                                        @if ($di->damage_date)
+                                            · <i class="fas fa-calendar me-1"></i>{{ \Carbon\Carbon::parse($di->damage_date)->format('d M Y') }}
+                                        @endif
+                                    </div>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-striped align-middle mb-0">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>Product</th>
+                                                <th class="text-end">Qty</th>
+                                                <th class="text-end">Rate (Tk)</th>
+                                                <th class="text-end">Value (Tk)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach ($diItems as $item)
+                                                <tr>
+                                                    <td>
+                                                        @if ($item->product)
+                                                            <span class="fw-semibold">{{ $item->product->product_name }}</span>
+                                                            <div class="small text-muted">{{ $item->product->product_code }}</div>
+                                                        @else
+                                                            <span class="text-muted">Product #{{ $item->product_id }}</span>
+                                                        @endif
+                                                    </td>
+                                                    <td class="text-end">{{ number_format((float) $item->qty, 4) }}</td>
+                                                    <td class="text-end">{{ number_format((float) $item->rate, 2) }}</td>
+                                                    <td class="text-end">{{ number_format((float) $item->qty * (float) $item->rate, 2) }}</td>
+                                                </tr>
+                                            @endforeach
+                                        </tbody>
+                                        <tfoot>
+                                            <tr class="table-light fw-bold">
+                                                <td class="text-end" colspan="3">Damage write-off total</td>
+                                                <td class="text-end">Tk {{ number_format((float) $di->total_value, 2) }}</td>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                </div>
+                                @if ($di->reason)
+                                    <div class="small text-muted mt-2">
+                                        <i class="fas fa-comment me-1"></i>{!! nl2br(e($di->reason)) !!}
+                                    </div>
+                                @endif
+                            </div>
+                        @endforeach
                     </div>
                 </div>
             @endif
@@ -647,6 +752,31 @@
                         <span class="text-muted">Items</span>
                         <strong>{{ $r->items->count() }}</strong>
                     </div>
+                    {{-- Phase 5.3 — Good/Damage breakdown (only when damage > 0), mirroring Purchase Return's Quick facts. --}}
+                    @php
+                        $goodCount   = $r->items->filter(fn ($i) => !$i->isDamage())->count();
+                        $damageCount = $r->items->filter(fn ($i) => $i->isDamage())->count();
+                        $goodQty     = (float) $r->items->filter(fn ($i) => !$i->isDamage())->sum(fn ($i) => (float) $i->qty);
+                        $damageQty   = (float) $r->items->filter(fn ($i) => $i->isDamage())->sum(fn ($i) => (float) $i->qty);
+                    @endphp
+                    @if ($damageCount > 0)
+                        <div class="d-flex justify-content-between py-1 border-bottom">
+                            <span class="text-muted">
+                                <i class="fas fa-check text-success me-1"></i>Good lines
+                            </span>
+                            <strong>
+                                {{ $goodCount }} <span class="text-muted small">({{ number_format($goodQty, 4) }} units · stock IN)</span>
+                            </strong>
+                        </div>
+                        <div class="d-flex justify-content-between py-1 border-bottom">
+                            <span class="text-muted">
+                                <i class="fas fa-triangle-exclamation text-danger me-1"></i>Damage lines
+                            </span>
+                            <strong>
+                                {{ $damageCount }} <span class="text-muted small">({{ number_format($damageQty, 4) }} units · written off)</span>
+                            </strong>
+                        </div>
+                    @endif
                     <div class="d-flex justify-content-between py-1 border-bottom">
                         <span class="text-muted">Revenue total</span>
                         <strong>Tk {{ number_format((float) $r->total_amount, 2) }}</strong>
