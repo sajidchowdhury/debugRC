@@ -185,6 +185,40 @@ CREATE INDEX idx_sti_warehouse_product ON stock_take_items(warehouse_id, product
 -- Partial index: only posted variance items (for fast drill-down queries).
 CREATE INDEX idx_sti_journal_line ON stock_take_items(journal_line_id) WHERE journal_line_id IS NOT NULL;
 
+-- Phase 2 (Stock Take plan): real audit trail. Append-only log of every
+-- state transition in the stock-take lifecycle. Written explicitly by
+-- StockTakeAuditLogger (inside the same DB::transaction as the data change),
+-- replacing the dead AuditableMasterData trait (which never fired because
+-- StockTakeService writes via DB::table(), bypassing Eloquent events).
+-- branch_id is denormalized from stock_take_sessions so RLS can scope reads
+-- without a join. RLS policies are created in the migration; see
+-- 2025_07_26_000005_create_stock_take_audit_log_table.php.
+CREATE TABLE stock_take_audit_log (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    stock_take_session_id integer NOT NULL REFERENCES stock_take_sessions(id) ON DELETE CASCADE,
+    stock_take_warehouse_id integer REFERENCES warehouses(id) ON DELETE SET NULL,
+    stock_take_item_id integer REFERENCES stock_take_items(id) ON DELETE SET NULL,
+    action varchar(40) NOT NULL CHECK (
+        action IN ('create','setup','save_count','mark_complete','submit',
+                   'approve','reject','post','reverse','re_open','delete','cancel')
+    ),
+    actor_id integer,
+    from_status varchar(20),
+    to_status varchar(20),
+    payload jsonb,
+    branch_id integer NOT NULL REFERENCES branches(id),
+    created_at timestamp(0) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+-- Timeline query: ordered list of audit rows for one session.
+CREATE INDEX idx_stal_session ON stock_take_audit_log(stock_take_session_id, created_at);
+-- Partial index: only the "critical" transitions (post/reverse/re_open).
+CREATE INDEX idx_stal_critical ON stock_take_audit_log(stock_take_session_id)
+    WHERE action IN ('post','reverse','re_open');
+-- Branch filter for the global audit screen.
+CREATE INDEX idx_stal_branch ON stock_take_audit_log(branch_id, created_at);
+-- "Actions by user" report.
+CREATE INDEX idx_stal_actor ON stock_take_audit_log(actor_id, created_at);
+
 CREATE TABLE warehouse_transfers (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     transfer_code varchar(30) NOT NULL,

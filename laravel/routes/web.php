@@ -398,6 +398,15 @@ Route::middleware('auth')->group(function () {
     // param to stock_take_sessions.branch_id — see middleware inferTableFromUri.)
     // ============================================================
     Route::prefix('admin/stock-take')->name('admin.stock-take.')->group(function () {
+        // Phase 2: read-only audit trail + health-check screens. Visible to
+        // every role that can read stock-take (admin, manager,
+        // warehouse_manager, accountant). No branch.isolation — RLS on
+        // stock_take_audit_log scopes reads by branch automatically.
+        Route::get('checklist', [StockTakeController::class, 'checklist'])
+            ->name('checklist')->middleware('role:admin,manager,warehouse_manager,accountant');
+        Route::get('audit', [StockTakeController::class, 'audit'])
+            ->name('audit')->middleware('role:admin,manager,warehouse_manager,accountant');
+
         Route::get('{session}/warehouses/{warehouse}/setup', [StockTakeController::class, 'setupCounts'])
             ->name('setup')->middleware('role:admin,manager,warehouse_manager');
         Route::get('{session}/warehouses/{warehouse}/count', [StockTakeController::class, 'count'])

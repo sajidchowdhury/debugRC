@@ -54,6 +54,12 @@
             </p>
         </div>
         <div class="d-flex gap-2 flex-wrap">
+            <a href="{{ route('admin.stock-take.checklist') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-clipboard-check me-1"></i> Health Check
+            </a>
+            <a href="{{ route('admin.stock-take.audit') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-clock-rotate-left me-1"></i> Audit Log
+            </a>
             <a href="{{ route('admin.stock-take.create') }}" class="btn btn-light btn-sm">
                 <i class="fas fa-plus me-1"></i> New Session
             </a>

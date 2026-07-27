@@ -4,7 +4,10 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Exceptions\StockTakeNegativeStockException;
+use App\Models\StockTakeAuditLog;
 use App\Models\StockTakeSession;
+use App\Models\User;
+use App\Services\Stock\StockTakeHealthCheckService;
 use App\Services\Stock\StockTakeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -15,17 +18,20 @@ use Illuminate\Support\Facades\DB;
  * Workflow:
  *   - index: list sessions
  *   - create / store: create a new session (draft) with selected warehouses
- *   - show: session detail with warehouses + items + variance + GL
+ *   - show: session detail with warehouses + items + variance + GL + audit timeline
  *   - setupCounts: load products for a warehouse (AJAX or route)
  *   - count: enter physical counts for a warehouse
  *   - saveCounts: save the counts (AJAX or POST)
  *   - post: apply variances + post GL
  *   - cancel: reverse if posted, or just mark cancelled
+ *   - checklist: Phase 2 global health-check screen (port of legacy StockTake/checklist)
+ *   - audit: Phase 2 global audit-log screen (filterable by date/actor/action)
  */
 class StockTakeController extends Controller
 {
     public function __construct(
-        private StockTakeService $stockTakeService
+        private StockTakeService $stockTakeService,
+        private StockTakeHealthCheckService $healthCheckService
     ) {}
 
     public function index(Request $request)
@@ -131,12 +137,23 @@ class StockTakeController extends Controller
                 ->get();
         }
 
+        // Phase 2: audit timeline + per-session health check.
+        $auditLogs = StockTakeAuditLog::with(['actor', 'warehouse'])
+            ->where('stock_take_session_id', $id)
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get();
+
+        $healthCheck = $this->healthCheckService->runSessionChecks($id);
+
         return view('admin.stock-take.show', [
             'title' => 'Stock Take ' . $session->session_code,
             'session' => $session,
             'progress' => $progress,
             'varianceLines' => $varianceLines,
             'stockMovements' => $stockMovements,
+            'auditLogs' => $auditLogs,
+            'healthCheck' => $healthCheck,
         ]);
     }
 
@@ -291,5 +308,95 @@ class StockTakeController extends Controller
             'gain_value' => (float) ($var->gain_value ?? 0),
             'loss_value' => (float) ($var->loss_value ?? 0),
         ];
+    }
+
+    /**
+     * Phase 2: Global health-check checklist screen (port of legacy
+     * StockTake/checklist). Surfaces data-integrity, GL-alignment, and
+     * operations checks across all in-scope sessions.
+     *
+     * Admins can optionally view all branches (RLS bypass); everyone else
+     * sees only their branch (RLS-scoped, with the explicit branchId arg
+     * omitted so the service lets RLS do the filtering).
+     */
+    public function checklist(Request $request)
+    {
+        $user = auth()->user();
+        $isAdmin = $user?->isAdmin() ?? false;
+        $viewAll = $isAdmin && $request->boolean('all_branches');
+        // Admins viewing all branches → null (RLS bypass shows everything).
+        // Everyone else → null too (RLS auto-scopes to their session branch).
+        // Admins scoping to one branch → the active session branch_id.
+        $branchId = ($isAdmin && !$viewAll)
+            ? (int) (session('branch_id') ?: $user?->getBranchId() ?: 0)
+            : null;
+
+        $result = $this->healthCheckService->runHealthChecks($branchId);
+
+        return view('admin.stock-take.checklist', [
+            'title'    => 'Stock Take — Health Check',
+            'sections' => $result['sections'],
+            'summary'  => $result['summary'],
+            'ranAt'    => $result['ran_at'],
+            'missingSessionJournals' => $result['missing_session_journals'],
+            'viewAllBranches' => $viewAll,
+            'canViewAllBranches' => $isAdmin,
+        ]);
+    }
+
+    /**
+     * Phase 2: Global audit-log screen — every stock_take_audit_log row
+     * across all in-scope sessions, filterable by date / actor / action /
+     * session. RLS scopes rows by branch (admins see all when ?all_branches=1).
+     */
+    public function audit(Request $request)
+    {
+        $user = auth()->user();
+        $isAdmin = $user?->isAdmin() ?? false;
+        $viewAll = $isAdmin && $request->boolean('all_branches');
+
+        $query = StockTakeAuditLog::with(['session', 'actor', 'warehouse'])
+            ->when($request->input('from_date'), fn($q, $d) => $q->where('created_at', '>=', $d . ' 00:00:00'))
+            ->when($request->input('to_date'), fn($q, $d) => $q->where('created_at', '<=', $d . ' 23:59:59'))
+            ->when($request->input('actor_id'), fn($q, $a) => $q->where('actor_id', (int) $a))
+            ->when($request->input('action'), fn($q, $a) => $q->where('action', $a))
+            ->when($request->input('session_id'), fn($q, $s) => $q->where('stock_take_session_id', (int) $s))
+            ->when($request->input('search'), function ($q, $search) {
+                // Search by session_code via a join to the session table.
+                $q->whereHas('session', fn($sq) => $sq->where('session_code', 'ILIKE', "%{$search}%"));
+            })
+            ->orderByDesc('created_at')
+            ->orderByDesc('id');
+
+        $logs = $query->paginate(50)->withQueryString();
+
+        // Distinct actions for the filter dropdown.
+        $actionOptions = StockTakeAuditLog::select('action')
+            ->distinct()
+            ->orderBy('action')
+            ->pluck('action')
+            ->mapWithKeys(fn($a) => [$a => StockTakeAuditLog::actionLabel($a)])
+            ->all();
+
+        // Actors for the filter dropdown (only users who have audit rows).
+        // Users have no `name` column — display label is `username` plus the
+        // linked employee's name (joined via the employee relationship).
+        $actorIds = StockTakeAuditLog::whereNotNull('actor_id')
+            ->distinct()
+            ->pluck('actor_id')
+            ->all();
+        $actors = $actorIds
+            ? User::with('employee')->whereIn('id', $actorIds)->orderBy('username')->get()
+            : collect();
+
+        return view('admin.stock-take.audit', [
+            'title'         => 'Stock Take — Audit Log',
+            'logs'          => $logs,
+            'actionOptions' => $actionOptions,
+            'actors'        => $actors,
+            'filters'       => $request->only(['from_date', 'to_date', 'actor_id', 'action', 'session_id', 'search']),
+            'canViewAllBranches' => $isAdmin,
+            'viewAllBranches'    => $viewAll,
+        ]);
     }
 }

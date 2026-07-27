@@ -622,6 +622,149 @@
             </div>
         </div>
     </div>
+
+    {{-- ====== Phase 2: Per-session health-check checklist ====== --}}
+    @php
+        $hcSummary = $healthCheck['summary'] ?? ['pass' => 0, 'warn' => 0, 'fail' => 0, 'info' => 0];
+        $hcItems   = $healthCheck['items'] ?? [];
+        $hcReady   = $healthCheck['ready_to_post'] ?? false;
+    @endphp
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center">
+            <h2 class="h6 mb-0">
+                <i class="fas fa-clipboard-check me-1 text-primary"></i> Session health check
+            </h2>
+            <span class="small text-muted">
+                {{ $hcSummary['pass'] }} pass ·
+                {{ $hcSummary['warn'] }} warn ·
+                {{ $hcSummary['fail'] }} fail ·
+                {{ $hcSummary['info'] }} info
+            </span>
+        </div>
+        <div class="card-body p-0">
+            <ul class="list-group list-group-flush">
+                @foreach ($hcItems as $it)
+                    @php
+                        $badgeClass = [
+                            'pass' => 'bg-success-subtle text-success',
+                            'warn' => 'bg-warning-subtle text-warning',
+                            'fail' => 'bg-danger-subtle text-danger',
+                            'info' => 'bg-info-subtle text-info',
+                        ][$it['status']] ?? 'bg-light text-muted';
+                        $icon = [
+                            'pass' => 'fa-circle-check',
+                            'warn' => 'fa-triangle-exclamation',
+                            'fail' => 'fa-circle-xmark',
+                            'info' => 'fa-circle-info',
+                        ][$it['status']] ?? 'fa-circle';
+                    @endphp
+                    <li class="list-group-item d-flex align-items-start gap-3 py-2">
+                        <i class="fas {{ $icon }} mt-1"></i>
+                        <div class="flex-grow-1">
+                            <div class="d-flex justify-content-between gap-2 flex-wrap">
+                                <strong>{{ $it['title'] }}</strong>
+                                <span class="badge {{ $badgeClass }}">{{ strtoupper($it['status']) }}</span>
+                            </div>
+                            <div class="small text-muted">{{ $it['expected'] }}</div>
+                            @if (!empty($it['detail']))
+                                <div class="small fw-semibold">{{ $it['detail'] }}</div>
+                            @endif
+                        </div>
+                    </li>
+                @endforeach
+                @if (empty($hcItems))
+                    <li class="list-group-item text-muted small py-3">No checks available for this session.</li>
+                @endif
+            </ul>
+            @if ($hcReady)
+                <div class="alert alert-success rounded-0 mb-0 small">
+                    <i class="fas fa-circle-check me-1"></i> This session is <strong>ready to post</strong> — all warehouses complete, no blocking failures.
+                </div>
+            @endif
+        </div>
+    </div>
+
+    {{-- ====== Phase 2: Audit timeline (chronological log of every action) ====== --}}
+    <div class="card border-0 shadow-sm">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center">
+            <h2 class="h6 mb-0">
+                <i class="fas fa-clock-rotate-left me-1 text-primary"></i> Audit timeline
+            </h2>
+            <span class="small text-muted">{{ $auditLogs->count() }} event(s) · <a href="{{ route('admin.stock-take.audit', ['session_id' => $session->id]) }}">View in global audit log</a></span>
+        </div>
+        <div class="card-body p-0">
+            @if ($auditLogs->isEmpty())
+                <div class="text-muted small py-4 text-center">No audit events recorded yet.</div>
+            @else
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped mb-0 align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width: 160px;">When</th>
+                                <th style="width: 180px;">Action</th>
+                                <th style="width: 140px;">Actor</th>
+                                <th style="width: 140px;">Transition</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach ($auditLogs as $log)
+                                @php
+                                    $color = \App\Models\StockTakeAuditLog::actionColor($log->action);
+                                    $isCritical = \App\Models\StockTakeAuditLog::isCritical($log->action);
+                                @endphp
+                                <tr>
+                                    <td class="small">
+                                        <div class="fw-semibold">{{ optional($log->created_at)->format('Y-m-d H:i') }}</div>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-{{ $color }}-subtle text-{{ $color }}">
+                                            @if ($isCritical)<i class="fas fa-star me-1"></i>@endif
+                                            {{ \App\Models\StockTakeAuditLog::actionLabel($log->action) }}
+                                        </span>
+                                    </td>
+                                    <td class="small">
+                                        @if ($log->actor)
+                                            {{ $log->actor->username }}
+                                            @if ($log->actor->employee?->name)
+                                                <div class="text-muted">{{ $log->actor->employee->name }}</div>
+                                            @endif
+                                        @else
+                                            <span class="text-muted">System</span>
+                                        @endif
+                                    </td>
+                                    <td class="small">
+                                        @if ($log->from_status || $log->to_status)
+                                            <span class="badge bg-secondary-subtle text-secondary">{{ $log->from_status ?? '—' }}</span>
+                                            <i class="fas fa-arrow-right mx-1 text-muted small"></i>
+                                            <span class="badge bg-secondary-subtle text-secondary">{{ $log->to_status ?? '—' }}</span>
+                                        @else
+                                            <span class="text-muted">—</span>
+                                        @endif
+                                    </td>
+                                    <td class="small">
+                                        @if ($log->warehouse)
+                                            <span class="badge bg-light text-dark me-1"><i class="fas fa-warehouse me-1"></i>{{ $log->warehouse->warehouse_name }}</span>
+                                        @endif
+                                        @if (is_array($log->payload) && !empty($log->payload))
+                                            @foreach ($log->payload as $k => $v)
+                                                @if (is_array($v))
+                                                    <span class="text-muted">{{ $k }}: {{ count($v) }} item(s)</span>
+                                                @else
+                                                    <span class="text-muted">{{ $k }}: <strong>{{ is_bool($v) ? ($v ? 'true' : 'false') : $v }}</strong></span>
+                                                @endif
+                                                @if (!$loop->last)<span class="text-muted mx-1">·</span>@endif
+                                            @endforeach
+                                        @endif
+                                    </td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+            @endif
+        </div>
+    </div>
 </div>
 
 @push('scripts')

@@ -9,6 +9,7 @@ use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use App\Services\Stock\StockTakeAuditLogger;
 
 /**
  * Stock Take Service — Phase 6.4.
@@ -38,7 +39,8 @@ class StockTakeService
 {
     public function __construct(
         private StockService $stockService,
-        private JournalPostingService $journalPosting
+        private JournalPostingService $journalPosting,
+        private StockTakeAuditLogger $auditLogger
     ) {}
 
     /**
@@ -86,6 +88,22 @@ class StockTakeService
                     'status' => 'pending',
                 ]);
             }
+
+            // Phase 2: audit-log the creation (same transaction).
+            $this->auditLogger->log(
+                session:    ['id' => $sessionId, 'branch_id' => (int) $data['branch_id']],
+                action:     'create',
+                fromStatus: null,
+                toStatus:   'draft',
+                payload:    [
+                    'session_code'   => $sessionCode,
+                    'session_date'   => $data['session_date'] ?? now()->format('Y-m-d'),
+                    'warehouse_ids'  => array_map('intval', $data['warehouse_ids']),
+                    'warehouse_count' => count($data['warehouse_ids']),
+                    'notes'          => $data['notes'] ?? null,
+                ],
+                actorId:    $data['created_by'] ?? null,
+            );
 
             return StockTakeSession::with('warehouses.warehouse', 'branch')->find($sessionId);
         });
@@ -168,9 +186,24 @@ class StockTakeService
                 ->update(['status' => 'counting']);
 
             // Mark session as counting.
+            $fromStatus = $session->status;
             DB::table('stock_take_sessions')
                 ->where('id', $sessionId)
                 ->update(['status' => 'counting', 'updated_at' => now()]);
+
+            // Phase 2: audit-log the setup (warehouse-scoped action).
+            $this->auditLogger->log(
+                session:      $session,
+                action:       'setup',
+                fromStatus:   $fromStatus,
+                toStatus:     'counting',
+                payload:      [
+                    'warehouse_id'   => $warehouseId,
+                    'products_loaded' => count($rows),
+                    're_setup'       => true, // setup always deletes existing items first
+                ],
+                warehouseId:  $warehouseId,
+            );
 
             return count($rows);
         });
@@ -217,6 +250,21 @@ class StockTakeService
                 ->where('warehouse_id', $warehouseId)
                 ->update(['status' => 'completed']);
 
+            // Phase 2: audit-log the save (warehouse-scoped; records count
+            // of lines saved + which products had reasons attached).
+            $this->auditLogger->log(
+                session:      $session,
+                action:       'save_count',
+                fromStatus:   $session->status,
+                toStatus:     $session->status, // session status does not change here
+                payload:      [
+                    'warehouse_id'  => $warehouseId,
+                    'lines_saved'   => $updated,
+                    'product_ids'   => array_map('intval', array_keys($counts)),
+                ],
+                warehouseId:  $warehouseId,
+            );
+
             return $updated;
         });
     }
@@ -244,6 +292,10 @@ class StockTakeService
             if (!in_array($session->status, ['counting', 'draft'])) {
                 throw new \RuntimeException("Only counting/draft sessions can be posted (current: {$session->status}).");
             }
+
+            // Capture the transition's from-status BEFORE any writes mutate
+            // the session row (used by the Phase 2 audit log below).
+            $fromStatus = $session->status;
 
             // Phase 1: Guard — all warehouses must be 'completed' before posting.
             // The UI hides the Post button until all warehouses are completed, but
@@ -368,6 +420,25 @@ class StockTakeService
                     'updated_at' => now(),
                 ]);
 
+            // Phase 2: audit-log the post (the critical transition). Logged
+            // AFTER the session status update, so the to_status='posted'
+            // reflects the committed state. If anything in this transaction
+            // rolls back, the audit row rolls back with it (same transaction).
+            $this->auditLogger->log(
+                session:    $session,
+                action:     'post',
+                fromStatus: $fromStatus,
+                toStatus:   'posted',
+                payload:    [
+                    'variance_lines'   => $varianceItems->count(),
+                    'total_gain'       => round($totalGain, 4),
+                    'total_loss'       => round($totalLoss, 4),
+                    'journal_entry_id' => $journalEntryId,
+                    'stock_movements'  => $varianceItems->count(),
+                ],
+                actorId:    $postedBy,
+            );
+
             return StockTakeSession::with(['warehouses.warehouse', 'branch', 'items.product', 'journalEntry.lines.ledger'])
                 ->find($sessionId);
         });
@@ -453,6 +524,12 @@ class StockTakeService
                 throw new \RuntimeException("Session is already cancelled.");
             }
 
+            // Capture the transition's from-status BEFORE any writes (Phase 2).
+            $fromStatus = $session->status;
+            $wasPosted  = $session->isPosted();
+            $stockTxsReversed = 0;
+            $journalReversed = false;
+
             if ($session->isPosted()) {
                 // Reverse GL.
                 if ($session->journal_entry_id) {
@@ -461,6 +538,7 @@ class StockTakeService
                         $cancelledBy,
                         "Stock take cancelled: {$reason}"
                     );
+                    $journalReversed = true;
                 }
 
                 // Reverse each stock movement.
@@ -475,6 +553,7 @@ class StockTakeService
                         $tx->id, $cancelledBy,
                         "Stock take cancelled: {$reason}"
                     );
+                    $stockTxsReversed++;
                 }
 
                 DB::table('stock_take_sessions')
@@ -490,6 +569,40 @@ class StockTakeService
             DB::table('stock_take_sessions')
                 ->where('id', $sessionId)
                 ->update(['status' => 'cancelled', 'updated_at' => now()]);
+
+            // Phase 2: audit-log the cancel. For a posted session this is a
+            // reversal (logged as action='reverse' so the critical-events
+            // partial index catches it); for a draft/counting session this
+            // is a plain cancel. Both write a 'cancel' row so the timeline
+            // shows the user-facing action; the 'reverse' row (when present)
+            // records the underlying stock+GL rollback.
+            if ($wasPosted) {
+                $this->auditLogger->log(
+                    session:    $session,
+                    action:     'reverse',
+                    fromStatus: $fromStatus,
+                    toStatus:   'cancelled',
+                    payload:    [
+                        'reason'              => $reason,
+                        'stock_reversed'      => $stockTxsReversed,
+                        'journal_reversed'    => $journalReversed,
+                        'journal_entry_id'    => $session->journal_entry_id,
+                    ],
+                    actorId:    $cancelledBy,
+                );
+            }
+
+            $this->auditLogger->log(
+                session:    $session,
+                action:     'cancel',
+                fromStatus: $fromStatus,
+                toStatus:   'cancelled',
+                payload:    [
+                    'reason'      => $reason,
+                    'was_posted'  => $wasPosted,
+                ],
+                actorId:    $cancelledBy,
+            );
 
             return StockTakeSession::find($sessionId);
         });
