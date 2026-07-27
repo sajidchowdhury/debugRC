@@ -55,26 +55,21 @@ return new class extends Migration
     public function up(): void
     {
         // ── (a) stock_take_warehouses: widen status CHECK ──────────────────
-        // Drop the existing CHECK (it was unnamed in the original CREATE TABLE,
-        // so we drop by re-adding a new one after dropping any matching). PG
-        // lets us drop an unnamed CHECK via its auto-generated name; we use
-        // a DO block to find + drop it portably.
-        DB::statement(<<<'SQL'
-            DO $$
-            DECLARE
-                chk text;
-            BEGIN
-                SELECT conname INTO chk
-                FROM pg_constraint
-                WHERE conrelid = 'stock_take_warehouses'::regclass
-                  AND contype = 'c'
-                  AND pg_get_constraintdef(oid) ILIKE '%status IN (%pending%'
-                LIMIT 1;
-                IF chk IS NOT NULL THEN
-                    EXECUTE format('ALTER TABLE stock_take_warehouses DROP CONSTRAINT %I', chk);
-                END IF;
-            END $$;
-        SQL);
+        // Drop any existing status CHECK by its canonical name. PostgreSQL
+        // auto-names a column-level CHECK on `status` as
+        // `stock_take_warehouses_status_check` — the same name the ADD below
+        // uses — so a single DROP IF EXISTS handles every prior state:
+        // unnamed column check, explicitly-named check from a prior run, or
+        // no check at all (IF EXISTS makes it a no-op).
+        //
+        // We deliberately do NOT match on pg_get_constraintdef() text: PG
+        // normalizes `x IN (a,b,c)` to `x = ANY (ARRAY[...])` internally, so
+        // an ILIKE on 'status IN (' never matches the stored definition and
+        // the drop silently skips — which is exactly the 42710 bug this fixes.
+        DB::statement(
+            'ALTER TABLE stock_take_warehouses '
+            . 'DROP CONSTRAINT IF EXISTS stock_take_warehouses_status_check'
+        );
 
         DB::statement(<<<'SQL'
             ALTER TABLE stock_take_warehouses
@@ -106,22 +101,14 @@ return new class extends Migration
         SQL);
 
         // ── (c) stock_take_audit_log: widen action CHECK + critical index ──
-        DB::statement(<<<'SQL'
-            DO $$
-            DECLARE
-                chk text;
-            BEGIN
-                SELECT conname INTO chk
-                FROM pg_constraint
-                WHERE conrelid = 'stock_take_audit_log'::regclass
-                  AND contype = 'c'
-                  AND pg_get_constraintdef(oid) ILIKE '%action IN (%create%'
-                LIMIT 1;
-                IF chk IS NOT NULL THEN
-                    EXECUTE format('ALTER TABLE stock_take_audit_log DROP CONSTRAINT %I', chk);
-                END IF;
-            END $$;
-        SQL);
+        // Drop the existing action CHECK by its canonical name (also PG's
+        // auto-name for a column-level CHECK on `action`). Idempotent — see
+        // the warehouse status CHECK above for why we drop by name instead of
+        // matching on pg_get_constraintdef() text.
+        DB::statement(
+            'ALTER TABLE stock_take_audit_log '
+            . 'DROP CONSTRAINT IF EXISTS stock_take_audit_log_action_check'
+        );
 
         DB::statement(<<<'SQL'
             ALTER TABLE stock_take_audit_log
@@ -171,22 +158,14 @@ return new class extends Migration
         SQL);
 
         // Revert audit action CHECK to the Phase 2 vocab.
-        DB::statement(<<<'SQL'
-            DO $$
-            DECLARE
-                chk text;
-            BEGIN
-                SELECT conname INTO chk
-                FROM pg_constraint
-                WHERE conrelid = 'stock_take_audit_log'::regclass
-                  AND contype = 'c'
-                  AND pg_get_constraintdef(oid) ILIKE '%action IN (%create%'
-                LIMIT 1;
-                IF chk IS NOT NULL THEN
-                    EXECUTE format('ALTER TABLE stock_take_audit_log DROP CONSTRAINT %I', chk);
-                END IF;
-            END $$;
-        SQL);
+        // Drop the existing action CHECK by its canonical name (also PG's
+        // auto-name for a column-level CHECK on `action`). Idempotent — see
+        // the warehouse status CHECK above for why we drop by name instead of
+        // matching on pg_get_constraintdef() text.
+        DB::statement(
+            'ALTER TABLE stock_take_audit_log '
+            . 'DROP CONSTRAINT IF EXISTS stock_take_audit_log_action_check'
+        );
         DB::statement(<<<'SQL'
             ALTER TABLE stock_take_audit_log
             ADD CONSTRAINT stock_take_audit_log_action_check
