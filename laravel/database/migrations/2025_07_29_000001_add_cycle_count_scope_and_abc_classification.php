@@ -88,7 +88,7 @@ return new class extends Migration
 CREATE OR REPLACE FUNCTION stock_take_abc_threshold_a()
 RETURNS numeric LANGUAGE sql STABLE AS $$
     SELECT COALESCE(
-        (SELECT (value::jsonb)#>>'{}')::numeric
+        (SELECT ((value::jsonb)#>>'{}')::numeric
          FROM stock_take_policies
          WHERE key = 'stock_take.abc_threshold_a'),
         0.80
@@ -101,7 +101,7 @@ CREATE OR REPLACE FUNCTION stock_take_abc_threshold_b()
 RETURNS numeric LANGUAGE sql STABLE AS $$
     -- Cumulative A+B threshold (default 0.95 → B spans 80%–95%, C is 95%–100%).
     SELECT COALESCE(
-        (SELECT (value::jsonb)#>>'{}')::numeric
+        (SELECT ((value::jsonb)#>>'{}')::numeric
          FROM stock_take_policies
          WHERE key = 'stock_take.abc_threshold_b'),
         0.95
@@ -113,7 +113,7 @@ SQL);
 CREATE OR REPLACE FUNCTION stock_take_abc_lookback_days()
 RETURNS integer LANGUAGE sql STABLE AS $$
     SELECT COALESCE(
-        (SELECT (value::jsonb)#>>'{}')::integer
+        (SELECT ((value::jsonb)#>>'{}')::integer
          FROM stock_take_policies
          WHERE key = 'stock_take.abc_lookback_days'),
         365

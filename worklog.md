@@ -2380,3 +2380,33 @@ Stage Summary:
 - USER ACTION NEEDED: (1) `git pull` on the server. (2) `docker compose exec rcerp_app php artisan migrate` — should now report "Migrated: 2025_07_30_000001_add_recount_columns_to_stock_take" + "Migrated: 2025_08_01_000001_phase8_concurrency_rls_locking_hardening". (3) OPTIONAL: `docker compose build rcerp_app && docker compose up -d rcerp_app` to clear the php.ini `#`-comment warning from the boot log (non-fatal; skip if you don't want a rebuild). (4) Proceed with the Phase 7 + Phase 8 verification steps already documented in docs/STOCK_TAKE_PHYSICAL_COUNT_IMPLEMENTATION_PLAN.md (§7 + §8 "how-to-verify" sections).
 - NO plan/schema changes — this is a pure typo fix. The .MD plan doc is unchanged (it already documents the migrate step correctly). Phase 8 status remains ✅ COMPLETE as committed in 1e061f8.
 - LESSON for future migrations: static "brace balance" + "blade directive balance" checks do NOT catch heredoc-closer spelling errors (`SQL');` vs `SQL);`). A `php -l` lint pass on every new migration file would have caught this in seconds. Adding a pre-commit `php -l database/migrations/*.php` hook is a Phase 12 (testing/monitoring) recommendation.
+
+---
+Task ID: 12-hotfix-phase5-abc-functions-sql-syntax
+Agent: Main
+Task: Hotfix #2 — fix PostgreSQL syntax error in the three ABC helper functions (stock_take_abc_threshold_a/_b/_lookback_days) created by the Phase 5 migration. The previous hotfix (Task 11) unblocked the PHP parser, which let the migrator finally reach Phase 5 and expose THIS bug.
+
+Work Log:
+- User reported Laravel still executing broken SQL after the Task 11 hotfix:
+    SELECT COALESCE(
+        (SELECT (value::jsonb)#>>'{}')::numeric
+         FROM stock_take_policies
+         WHERE key = 'stock_take.abc_threshold_a'),
+        0.80
+    );
+  PostgreSQL rejected it with a syntax error during CREATE OR REPLACE FUNCTION.
+- Root cause: in all three helper functions, the scalar subquery's closing paren was placed BEFORE the FROM clause, orphaning `FROM stock_take_policies WHERE key='...'` outside the subquery. The cast `::numeric`/`::integer` was applied to the subquery `(SELECT (value::jsonb)#>>'{}')` instead of to the selected value, and the trailing `)` after the WHERE then closed COALESCE prematurely — pushing the default (0.80/0.95/365) outside the COALESCE call entirely.
+- Fix: move the subquery's closing `)` to AFTER the WHERE clause, and move the cast INSIDE the subquery so it applies to the selected value. The corrected shape is:
+    (SELECT ((value::jsonb)#>>'{}')::numeric FROM stock_take_policies WHERE key = '...')
+  i.e. `((value::jsonb)#>>'{}')::numeric` is the selected value (cast on the value, not the subquery), and the FROM/WHERE live inside the subquery parens.
+- Edited 2 files, 3 functions each (6 total occurrences):
+  * laravel/database/migrations/2025_07_29_000001_add_cycle_count_scope_and_abc_classification.php (lines 91, 104, 116)
+  * laravel/database/sql/03_stock.sql (lines 351, 361, 371) — fresh-install parity
+- Verified: grep for the broken pattern `(SELECT (value::jsonb)#>>'{}')::` → 0 remaining across the repo. Grep for the fixed pattern `(SELECT ((value::jsonb)#>>'{}')::` → 6 occurrences (3 migration + 3 SQL). Full-block paren-balance trace on all 6 function bodies → all BALANCED (opens==closes).
+- Why Laravel was still executing the old SQL: the Task 11 hotfix fixed a PHP-LEVEL parse error in the Phase 7 migration (SQL'); typos in down()). That PHP parse error aborted `php artisan migrate` BEFORE the migrator reached any SQL execution. Phase 5 (timestamp 2025_07_29) sorts BEFORE Phase 7 (2025_07_30), so once Phase 7's PHP parsed cleanly, the migrator proceeded to Phase 5 and finally attempted the `CREATE OR REPLACE FUNCTION` statements — at which point PostgreSQL parsed the malformed function body and threw the syntax error echoing the broken SQL. The Phase 5 SQL bug was always present; it was just hidden behind the Phase 7 PHP crash. (LANGUAGE sql functions validate their body at CREATE time, so the function was never stored — the migration failed and rolled back, leaving the DB clean for a re-run with the fixed file.)
+- COMMIT + PUSH: staged the 2 fixed files + this worklog entry. Commit: "hotfix(stock-take): fix SQL syntax error in Phase 5 ABC helper functions (cast on value, not subquery)".
+
+Stage Summary:
+- BLOCKER REMOVED (for real this time): `php artisan migrate` will now successfully CREATE the three ABC helper functions and proceed to create the mv_product_abc_classification materialized view + schedule the pg_cron refresh job. Phase 5 + Phase 7 + Phase 8 should all apply in one run.
+- USER ACTION NEEDED: (1) `git pull`. (2) `docker compose exec rcerp_app php artisan migrate` — should now report Migrated: 2025_07_29_000001 (Phase 5 ABC), 2025_07_30_000001 (Phase 7 recount), 2025_08_01_000001 (Phase 8 RLS/locks). (3) Verify the functions work: `docker compose exec rcerp_postgres psql -U rcerp -d rcerp -c "SELECT stock_take_abc_threshold_a(), stock_take_abc_threshold_b(), stock_take_abc_lookback_days();"` should return `0.80 | 0.95 | 365`.
+- LESSON: the Task 11 static checks (brace balance, grep for SQL');) were necessary but not sufficient. The Phase 5 bug was a SQL-level syntax error inside a heredoc string — invisible to PHP brace counters and invisible to grep unless you know the pattern. A `php -l` lint + a dry-run `EXPLAIN` of the function bodies would have caught it. Reinforces the Phase 12 recommendation: lint + parse-check every migration's raw SQL before commit.
