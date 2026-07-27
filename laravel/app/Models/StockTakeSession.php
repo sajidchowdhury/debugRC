@@ -37,6 +37,8 @@ use App\Traits\AuditableMasterData;
  * @property int|null $approved_by       Phase 4: user who approved (must differ from submitted_by)
  * @property string|null $approved_at    Phase 4: when approved
  * @property string|null $approval_comments Phase 4: approval/rejection comments
+ * @property string $count_scope            Phase 5: full|category|abc|group|ad_hoc|negative_only|zero_only
+ * @property array|null $count_scope_payload Phase 5: scope params jsonb (category_ids/abc_classes/group_ids/product_ids)
  * @property string|null $notes
  * @property int|null $created_by
  */
@@ -69,6 +71,9 @@ class StockTakeSession extends Model
         'approved_by',
         'approved_at',
         'approval_comments',
+        // Phase 5: cycle count scope.
+        'count_scope',
+        'count_scope_payload',
         'notes',
         'created_by',
     ];
@@ -89,6 +94,8 @@ class StockTakeSession extends Model
         'approved_at' => 'datetime',
         'submitted_by' => 'integer',
         'approved_by' => 'integer',
+        // Phase 5: cycle count scope. count_scope_payload is jsonb → array.
+        'count_scope_payload' => 'array',
     ];
 
     public function branch(): \Illuminate\Database\Eloquent\Relations\BelongsTo
@@ -110,6 +117,12 @@ class StockTakeSession extends Model
     {
         return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'journal_entry_id');
     }
+
+    /**
+     * Phase 5: is this a full-warehouse count (the pre-Phase-5 default),
+     * or a narrowed cycle-count scope?
+     */
+    public function isFullCount(): bool { return ($this->count_scope ?? 'full') === 'full'; }
 
     public function isDraft(): bool { return $this->status === 'draft'; }
     public function isCounting(): bool { return $this->status === 'counting'; }

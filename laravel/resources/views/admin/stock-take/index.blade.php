@@ -66,6 +66,9 @@
             <a href="{{ route('admin.stock-take.audit') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-clock-rotate-left me-1"></i> Audit Log
             </a>
+            <a href="{{ route('admin.stock-take.abc-report') }}" class="btn btn-light btn-sm">
+                <i class="fas fa-chart-line me-1"></i> ABC Report
+            </a>
             <a href="{{ route('admin.stock-take.create') }}" class="btn btn-light btn-sm">
                 <i class="fas fa-plus me-1"></i> New Session
             </a>
@@ -263,6 +266,12 @@
                                        class="fw-semibold text-decoration-none">
                                         {{ $session->session_code }}
                                     </a>
+                                    {{-- Phase 5: cycle-count scope badge (only for non-full) --}}
+                                    @if (($session->count_scope ?? 'full') !== 'full')
+                                        <span class="badge bg-success-subtle text-success ms-1 small" title="Cycle count scope">
+                                            <i class="fas fa-bullseye me-1"></i>{{ ucfirst(str_replace('_', ' ', $session->count_scope)) }}
+                                        </span>
+                                    @endif
                                 </td>
                                 <td class="text-nowrap small">
                                     {{ \Carbon\Carbon::parse($session->session_date)->format('d M Y') }}

@@ -165,6 +165,16 @@ CREATE TABLE stock_take_sessions (
     approved_by integer,
     approved_at timestamp(0),
     approval_comments text,
+    -- Phase 5 (Stock Take plan): cycle count & ABC classification.
+    -- count_scope narrows the product set for a cycle count (vs a full
+    -- warehouse count). count_scope_payload carries the scope's parameters
+    -- as jsonb, e.g. {"category_ids":[3,5]}, {"abc_classes":["A"]},
+    -- {"group_ids":[1,2]}, {"product_ids":[101,202]}. 'full' (default) loads
+    -- every active product — the pre-Phase-5 behaviour. StockTakeService::
+    -- setupWarehouseCounts branches on count_scope to build the product query.
+    count_scope varchar(20) NOT NULL DEFAULT 'full'
+        CHECK (count_scope IN ('full','category','abc','group','ad_hoc','negative_only','zero_only')),
+    count_scope_payload jsonb,
     notes text,
     created_by integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -268,6 +278,107 @@ CREATE TABLE stock_take_policies (
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT stock_take_policies_key_unique UNIQUE (key)
 );
+
+-- ============================================================
+-- Phase 5 (Stock Take plan): Cycle count & ABC classification.
+-- ============================================================
+-- Three policy-driven helper functions (STABLE — read stock_take_policies
+-- at call time with a safe default). Defined BEFORE the materialized view
+-- so the view's SELECT can reference them. The view is refreshed nightly
+-- by a pg_cron job (refresh-abc-classification) using
+-- REFRESH MATERIALIZED VIEW CONCURRENTLY, so readers are never blocked.
+--
+-- Policies (seeded by 2025_07_29_000001_add_cycle_count_scope_and_abc_classification.php):
+--   stock_take.abc_threshold_a    (numeric, default 0.80) — A = top 80% of usage value
+--   stock_take.abc_threshold_b    (numeric, default 0.95) — A+B = top 95%; B spans 80–95%, C is bottom 5%
+--   stock_take.abc_lookback_days  (integer, default 365)  — consumption lookback window
+CREATE OR REPLACE FUNCTION stock_take_abc_threshold_a()
+RETURNS numeric LANGUAGE sql STABLE AS $$
+    SELECT COALESCE(
+        (SELECT (value::jsonb)#>>'{}')::numeric
+         FROM stock_take_policies
+         WHERE key = 'stock_take.abc_threshold_a'),
+        0.80
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION stock_take_abc_threshold_b()
+RETURNS numeric LANGUAGE sql STABLE AS $$
+    SELECT COALESCE(
+        (SELECT (value::jsonb)#>>'{}')::numeric
+         FROM stock_take_policies
+         WHERE key = 'stock_take.abc_threshold_b'),
+        0.95
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION stock_take_abc_lookback_days()
+RETURNS integer LANGUAGE sql STABLE AS $$
+    SELECT COALESCE(
+        (SELECT (value::jsonb)#>>'{}')::integer
+         FROM stock_take_policies
+         WHERE key = 'stock_take.abc_lookback_days'),
+        365
+    );
+$$;
+
+-- mv_product_abc_classification — per-warehouse ABC ranking.
+-- annual_usage_value = SUM(ABS(qty) * rate) for OUTBOUND (qty < 0) non-
+-- reversed stock_transactions within the lookback window. Ranking is per-
+-- warehouse so each warehouse has its own A/B/C distribution. The UNIQUE
+-- index on (warehouse_id, product_id) is REQUIRED for CONCURRENTLY refresh.
+CREATE MATERIALIZED VIEW mv_product_abc_classification AS
+WITH usage AS (
+    SELECT
+        st.warehouse_id,
+        st.product_id,
+        SUM(ABS(st.qty) * st.rate) AS annual_usage_value
+    FROM stock_transactions st
+    JOIN products p ON p.id = st.product_id
+    WHERE st.qty < 0
+      AND st.is_reversed = false
+      AND st.transaction_date >= (CURRENT_DATE - (stock_take_abc_lookback_days() || ' days')::interval)
+      AND p.deleted_at IS NULL
+    GROUP BY st.warehouse_id, st.product_id
+),
+wh_totals AS (
+    SELECT warehouse_id, COALESCE(SUM(annual_usage_value), 0) AS wh_total
+    FROM usage
+    GROUP BY warehouse_id
+),
+ranked AS (
+    SELECT
+        u.warehouse_id,
+        u.product_id,
+        u.annual_usage_value,
+        t.wh_total,
+        SUM(u.annual_usage_value) OVER (
+            PARTITION BY u.warehouse_id
+            ORDER BY u.annual_usage_value DESC, u.product_id
+        ) AS cum_value
+    FROM usage u
+    JOIN wh_totals t ON t.warehouse_id = u.warehouse_id
+)
+SELECT
+    r.warehouse_id,
+    r.product_id,
+    r.annual_usage_value,
+    CASE
+        WHEN r.wh_total = 0 OR r.cum_value <= r.wh_total * stock_take_abc_threshold_a() THEN 'A'
+        WHEN r.cum_value <= r.wh_total * stock_take_abc_threshold_b()                   THEN 'B'
+        ELSE 'C'
+    END AS abc_class,
+    CURRENT_TIMESTAMP AS computed_at
+FROM ranked r;
+CREATE UNIQUE INDEX mv_product_abc_classification_wh_prod_uidx
+    ON mv_product_abc_classification (warehouse_id, product_id);
+CREATE INDEX mv_product_abc_classification_class_idx
+    ON mv_product_abc_classification (abc_class);
+CREATE INDEX mv_product_abc_classification_product_idx
+    ON mv_product_abc_classification (product_id);
+-- Nightly refresh job scheduled by the Phase 5 migration:
+--   SELECT cron.schedule('refresh-abc-classification', '30 1 * * *',
+--       $$REFRESH MATERIALIZED VIEW CONCURRENTLY mv_product_abc_classification$$);
 
 CREATE TABLE warehouse_transfers (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

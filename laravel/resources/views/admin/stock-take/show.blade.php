@@ -135,6 +135,24 @@
         </div>
     @endif
 
+    {{-- Phase 5: Cycle-count scope banner (shown for non-full scopes so
+         reviewers immediately see this is a narrowed count, not a full
+         warehouse count). Affects how coverage / "items not counted" is
+         interpreted — a cycle count deliberately omits out-of-scope products. --}}
+    @if (!$session->isFullCount() && !empty($scopeDescription))
+        <div class="alert alert-success d-flex align-items-start mb-3" role="alert">
+            <i class="fas fa-bullseye me-2 fa-lg mt-1"></i>
+            <div class="flex-grow-1">
+                <strong>This is a cycle count — not a full warehouse count.</strong>
+                <div class="small mt-1">
+                    Scope: <span class="badge bg-success-subtle text-success">{{ ucfirst($session->count_scope) }}</span>
+                    {{ $scopeDescription }}.
+                    Only products matching this scope were loaded for counting; out-of-scope products are intentionally excluded.
+                </div>
+            </div>
+        </div>
+    @endif
+
     {{-- Phase 3: Stock-drift reconciliation warning (shown after a post if any
          product's live qty drifted from the setup-time snapshot) --}}
     @php
@@ -214,6 +232,15 @@
                                 <span class="text-muted">—</span>
                             @endif
                         </dd>
+
+                        {{-- Phase 5: cycle-count scope (only shown when not a full count) --}}
+                        @if (!empty($scopeDescription) && !$session->isFullCount())
+                            <dt class="col-sm-3 text-muted">Count scope</dt>
+                            <dd class="col-sm-9">
+                                <span class="badge bg-success-subtle text-success me-1">{{ ucfirst($session->count_scope) }}</span>
+                                {{ $scopeDescription }}
+                            </dd>
+                        @endif
 
                         <dt class="col-sm-3 text-muted">Status</dt>
                         <dd class="col-sm-9">{!! $statusBadge() !!}</dd>

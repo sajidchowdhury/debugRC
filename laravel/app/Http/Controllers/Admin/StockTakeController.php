@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\Stock\StockTakeHealthCheckService;
 use App\Services\Stock\StockTakePolicyService;
 use App\Services\Stock\StockTakeService;
+use App\Services\Stock\AbcClassificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -34,7 +35,8 @@ class StockTakeController extends Controller
     public function __construct(
         private StockTakeService $stockTakeService,
         private StockTakeHealthCheckService $healthCheckService,
-        private StockTakePolicyService $policyService
+        private StockTakePolicyService $policyService,
+        private AbcClassificationService $abcService
     ) {}
 
     public function index(Request $request)
@@ -78,10 +80,34 @@ class StockTakeController extends Controller
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
         $warehouses = \App\Models\Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
 
+        // Phase 5: cycle-count scope data for the create-form wizard.
+        //   - categories + groups: multi-selects for the category/group scopes.
+        //   - abc summary: per-class counts so the user can see how many
+        //     products each ABC class contains before choosing the abc scope.
+        //     Aggregated across all warehouses (null warehouseId) for the
+        //     summary card; the per-warehouse breakdown is fetched live by the
+        //     scope-preview AJAX endpoint when a warehouse is selected.
+        $categories = DB::table('product_categories')
+            ->where('is_active', true)
+            ->whereNull('deleted_at')
+            ->orderBy('category_name')
+            ->select('id', 'category_name')
+            ->get();
+        $groups = DB::table('product_groups')
+            ->where('is_active', true)
+            ->whereNull('deleted_at')
+            ->orderBy('group_name')
+            ->select('id', 'group_name')
+            ->get();
+        $abcSummary = $this->abcService->getSummary(null);
+
         return view('admin.stock-take.create', [
             'title' => 'New Stock Take Session',
             'branches' => $branches,
             'warehouses' => $warehouses,
+            'categories' => $categories,
+            'groups' => $groups,
+            'abcSummary' => $abcSummary,
         ]);
     }
 
@@ -98,6 +124,12 @@ class StockTakeController extends Controller
             // session is active. Default off (backward compatible; use for
             // full annual counts, leave off for cycle counts).
             'freeze_outbound' => 'sometimes|boolean',
+            // Phase 5: cycle-count scope. The payload is validated per-scope
+            // by StockTakeService::validateCountScope (which also checks that
+            // category/group/product ids exist + are active). Here we only
+            // validate the scope string + the payload's array shape.
+            'count_scope' => 'sometimes|string|in:full,category,abc,group,ad_hoc,negative_only,zero_only',
+            'count_scope_payload' => 'nullable|array',
         ]);
 
         try {
@@ -107,12 +139,19 @@ class StockTakeController extends Controller
                 'warehouse_ids' => $validated['warehouse_ids'],
                 'notes' => $validated['notes'] ?? '',
                 'freeze_outbound' => (bool) ($validated['freeze_outbound'] ?? false),
+                'count_scope' => $validated['count_scope'] ?? 'full',
+                'count_scope_payload' => $validated['count_scope_payload'] ?? null,
                 'created_by' => auth()->id(),
             ]);
 
             $msg = "Session {$session->session_code} created. Set up counts for each warehouse.";
             if ($session->freeze_outbound) {
                 $msg .= ' Outbound movements are now FROZEN for the selected warehouses until this session is posted or cancelled.';
+            }
+            // Phase 5: remind the user what scope they picked so they don't
+            // forget a cycle count is narrowed (not a full count).
+            if (!$session->isFullCount()) {
+                $msg .= ' Scope: ' . $this->stockTakeService->describeScope($session) . '.';
             }
 
             return redirect()->route('admin.stock-take.show', $session)
@@ -260,6 +299,8 @@ class StockTakeController extends Controller
             'isSubmitter' => $isSubmitter,
             'submitterUser' => $submitterUser,
             'approverUser' => $approverUser,
+            // Phase 5: cycle-count scope description (human-readable).
+            'scopeDescription' => $this->stockTakeService->describeScope($session),
         ]);
     }
 
@@ -587,5 +628,281 @@ class StockTakeController extends Controller
             'canViewAllBranches' => $isAdmin,
             'viewAllBranches'    => $viewAll,
         ]);
+    }
+
+    // ========================================================================
+    // Phase 5 (Stock Take plan): Cycle count & ABC classification endpoints.
+    // ========================================================================
+
+    /**
+     * Phase 5: AJAX product search for the ad_hoc scope's product picker.
+     *
+     * Returns active, non-deleted products matching the `q` term (code OR
+     * name, ILIKE). Optionally scoped to a warehouse via ?warehouse_id= so
+     * the picker can show current on-hand qty alongside each product. Output
+     * is a select2-friendly {results: [{id, text, code, name, unit, stock}]}
+     * plus a plain array fallback for non-select2 callers.
+     *
+     * Defence in depth: the route middleware restricts this to the stock-take
+     * write roles (admin, manager, warehouse_manager). The query is read-only
+     * and branch-agnostic (products are global master data); RLS on
+     * warehouse_stock scopes on-hand rows by the warehouse's branch.
+     */
+    public function searchProducts(Request $request)
+    {
+        $request->validate([
+            'q'            => 'nullable|string|max:80',
+            'warehouse_id' => 'nullable|integer|exists:warehouses,id',
+            'limit'        => 'nullable|integer|min:1|max:100',
+        ]);
+
+        $q = trim((string) $request->input('q', ''));
+        $warehouseId = $request->filled('warehouse_id') ? (int) $request->input('warehouse_id') : null;
+        $limit = (int) ($request->input('limit', 30));
+
+        $query = DB::table('products as p')
+            ->where('p.is_active', true)
+            ->whereNull('p.deleted_at')
+            ->select('p.id', 'p.product_code', 'p.product_name', 'p.unit');
+
+        if ($warehouseId) {
+            $query->leftJoin('warehouse_stock as ws', function ($join) use ($warehouseId) {
+                $join->on('ws.product_id', '=', 'p.id')
+                     ->where('ws.warehouse_id', '=', $warehouseId);
+            })->addSelect(DB::raw('COALESCE(ws.qty, 0) as stock'));
+        } else {
+            $query->addSelect(DB::raw('NULL as stock'));
+        }
+
+        if ($q !== '') {
+            $query->where(function ($sq) use ($q) {
+                $sq->where('p.product_code', 'ILIKE', "%{$q}%")
+                   ->orWhere('p.product_name', 'ILIKE', "%{$q}%");
+            });
+        }
+
+        $rows = $query->orderBy('p.product_name')->limit($limit)->get();
+
+        $results = $rows->map(fn($r) => [
+            'id'   => (int) $r->id,
+            'text' => "{$r->product_code} — {$r->product_name}",
+            'code' => $r->product_code,
+            'name' => $r->product_name,
+            'unit' => $r->unit,
+            'stock' => $r->stock !== null ? (float) $r->stock : null,
+        ])->values();
+
+        return response()->json(['results' => $results]);
+    }
+
+    /**
+     * Phase 5: AJAX scope preview — "if I set up a count with this scope +
+     * payload for this warehouse, how many products would be loaded?"
+     *
+     * Lets the user sanity-check a cycle-count scope BEFORE creating the
+     * session (so they don't create a session only to find the scope matches
+     * 0 products). Runs the SAME buildScopedProductsQuery logic the setup
+     * will use, via a transient in-memory validation (no session row written).
+     *
+     * Returns {count, scope, payload, sample: [{id, code, name, stock}]}
+     * (sample = first 10 matches). Errors (invalid payload) return 422 with
+     * the validation message.
+     */
+    public function previewScope(Request $request)
+    {
+        $request->validate([
+            'warehouse_id' => 'required|integer|exists:warehouses,id',
+            'count_scope'  => 'required|string|in:full,category,abc,group,ad_hoc,negative_only,zero_only',
+            'count_scope_payload' => 'nullable|array',
+        ]);
+
+        try {
+            $scope = $request->input('count_scope');
+            $payload = $request->input('count_scope_payload');
+            // Validate + normalize the payload the same way createSession will.
+            $normalized = $this->stockTakeService->validateCountScope($scope, $payload);
+
+            // Count + sample via the mirrored scoped-preview query. The count
+            // MUST match setupWarehouseCounts' result, so scopedPreviewQuery
+            // mirrors StockTakeService::buildScopedProductsQuery exactly.
+            $count = $this->countScopedProducts($scope, $normalized, (int) $request->input('warehouse_id'));
+
+            // Sample first 10 for the preview list.
+            $sample = $this->sampleScopedProducts($scope, $normalized, (int) $request->input('warehouse_id'), 10);
+
+            return response()->json([
+                'count'   => $count,
+                'scope'   => $scope,
+                'payload' => $normalized,
+                'sample'  => $sample,
+            ]);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Phase 5: ABC classification report screen.
+     *
+     * Shows the per-warehouse A/B/C distribution (product count + total
+     * annual usage value + value share per class), the last-computed timestamp,
+     * and a manual "Refresh now" action (calls AbcClassificationService::refresh).
+     * Filterable by warehouse. RLS scopes warehouse_stock reads by branch.
+     */
+    public function abcReport(Request $request)
+    {
+        $request->validate([
+            'warehouse_id' => 'nullable|integer|exists:warehouses,id',
+        ]);
+
+        $warehouseId = $request->filled('warehouse_id') ? (int) $request->input('warehouse_id') : null;
+        $summary = $this->abcService->getSummary($warehouseId);
+
+        // Per-warehouse breakdown table (for the report's main grid).
+        $perWarehouse = DB::table('mv_product_abc_classification as abc')
+            ->join('warehouses as w', 'w.id', '=', 'abc.warehouse_id')
+            ->selectRaw('
+                abc.warehouse_id,
+                w.warehouse_name,
+                abc.abc_class,
+                COUNT(*) AS product_count,
+                COALESCE(SUM(abc.annual_usage_value), 0) AS total_usage_value
+            ')
+            ->groupBy('abc.warehouse_id', 'w.warehouse_name', 'abc.abc_class')
+            ->orderBy('abc.warehouse_id')
+            ->orderBy('abc.abc_class')
+            ->get();
+
+        $warehouses = \App\Models\Warehouse::active()->orderBy('warehouse_name')->get(['id', 'warehouse_name']);
+
+        // Top A-class products (the high-value movers worth cycle-counting
+        // most frequently). Limited to 50 for the report.
+        $topProducts = DB::table('mv_product_abc_classification as abc')
+            ->join('products as p', 'p.id', '=', 'abc.product_id')
+            ->join('warehouses as w', 'w.id', '=', 'abc.warehouse_id')
+            ->when($warehouseId, fn($q, $wid) => $q->where('abc.warehouse_id', $wid))
+            ->where('abc.abc_class', 'A')
+            ->orderByDesc('abc.annual_usage_value')
+            ->limit(50)
+            ->select('p.product_code', 'p.product_name', 'w.warehouse_name', 'abc.annual_usage_value', 'abc.abc_class')
+            ->get();
+
+        return view('admin.stock-take.abc-report', [
+            'title'         => 'Stock Take — ABC Classification',
+            'summary'       => $summary,
+            'perWarehouse'  => $perWarehouse,
+            'topProducts'   => $topProducts,
+            'warehouses'    => $warehouses,
+            'selectedWarehouseId' => $warehouseId,
+            'thresholdA'    => (float) ($this->policyService->all()['stock_take.abc_threshold_a'] ?? 0.80),
+            'thresholdB'    => (float) ($this->policyService->all()['stock_take.abc_threshold_b'] ?? 0.95),
+            'lookbackDays'  => (int) ($this->policyService->all()['stock_take.abc_lookback_days'] ?? 365),
+        ]);
+    }
+
+    /**
+     * Phase 5: manual "Refresh ABC classification now" action. Triggers
+     * REFRESH MATERIALIZED VIEW CONCURRENTLY via the service. Admin/manager
+     * only (route middleware). Redirects back to the ABC report with the
+     * result (refreshed true/false + row count + computed_at).
+     */
+    public function refreshAbc()
+    {
+        $result = $this->abcService->refresh();
+        if ($result['refreshed']) {
+            return redirect()->route('admin.stock-take.abc-report')
+                ->with('success', 'ABC classification refreshed. ' . $result['rows'] . ' products classified, computed at ' . $result['computed_at'] . '.');
+        }
+        return redirect()->route('admin.stock-take.abc-report')
+            ->with('error', 'ABC refresh failed: ' . $result['error']);
+    }
+
+    /**
+     * Phase 5: count how many products a scope+payload would load for a
+     * warehouse. Mirrors StockTakeService::buildScopedProductsQuery exactly
+     * so the preview count matches the actual setup count. Kept here (not in
+     * the service) to avoid widening the service's public surface; the
+     * service's setup path is the source of truth and this is a read-only
+     * mirror for the preview UX.
+     */
+    private function countScopedProducts(string $scope, array $payload, int $warehouseId): int
+    {
+        return $this->scopedPreviewQuery($scope, $payload, $warehouseId)->count();
+    }
+
+    /**
+     * Phase 5: return up to $limit sample products for the preview list.
+     *
+     * @return array<int, array{id: int, code: string, name: string, unit: string, stock: float|null}>
+     */
+    private function sampleScopedProducts(string $scope, array $payload, int $warehouseId, int $limit): array
+    {
+        $rows = $this->scopedPreviewQuery($scope, $payload, $warehouseId)
+            ->limit($limit)
+            ->get();
+
+        return $rows->map(fn($r) => [
+            'id'    => (int) $r->product_id,
+            'code'  => $r->product_code,
+            'name'  => $r->product_name,
+            'unit'  => $r->unit,
+            'stock' => $r->system_qty !== null ? (float) $r->system_qty : null,
+        ])->values()->all();
+    }
+
+    /**
+     * Phase 5: the shared scoped-product query builder for the preview UX.
+     * Mirrors StockTakeService::buildScopedProductsQuery. If they ever
+     * diverge, the preview count will mismatch the setup count — a test
+     * should catch that. Returns the Builder (caller adds count()/get()/limit()).
+     */
+    private function scopedPreviewQuery(string $scope, array $payload, int $warehouseId)
+    {
+        $query = DB::table('products as p')
+            ->leftJoin('warehouse_stock as ws', function ($join) use ($warehouseId) {
+                $join->on('ws.product_id', '=', 'p.id')
+                     ->where('ws.warehouse_id', '=', $warehouseId);
+            })
+            ->where('p.is_active', true)
+            ->whereNull('p.deleted_at')
+            ->select(
+                'p.id as product_id',
+                'p.product_code',
+                'p.product_name',
+                'p.unit',
+                DB::raw('COALESCE(ws.qty, 0) as system_qty')
+            );
+
+        switch ($scope) {
+            case 'category':
+                $query->whereIn('p.category_id', $payload['category_ids'] ?? []);
+                break;
+            case 'group':
+                $query->whereIn('p.group_id', $payload['group_ids'] ?? []);
+                break;
+            case 'abc':
+                $classes = $payload['abc_classes'] ?? ['A', 'B', 'C'];
+                $query->join('mv_product_abc_classification as abc', function ($join) use ($warehouseId) {
+                    $join->on('abc.product_id', '=', 'p.id')
+                         ->where('abc.warehouse_id', '=', $warehouseId);
+                })->whereIn('abc.abc_class', $classes);
+                break;
+            case 'ad_hoc':
+                $query->whereIn('p.id', $payload['product_ids'] ?? []);
+                break;
+            case 'negative_only':
+                $query->whereRaw('COALESCE(ws.qty, 0) < -0.0001');
+                break;
+            case 'zero_only':
+                $query->whereRaw('ABS(COALESCE(ws.qty, 0)) < 0.0001');
+                break;
+            case 'full':
+            default:
+                break;
+        }
+
+        return $query->orderBy('p.product_name');
     }
 }

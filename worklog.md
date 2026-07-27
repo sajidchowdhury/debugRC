@@ -2286,3 +2286,33 @@ Stage Summary:
 - ARCHITECTURE: append-only stock_take_audit_log table with branch_id denormalized for RLS (read-scoped by branch without a join), 4 indexes (timeline + critical-events partial + branch + actor), full RLS policy set. StockTakeAuditLogger is a thin no-throw writer that accepts model OR array. StockTakeHealthCheckService is a faithful MySQL→PostgreSQL port of the legacy StockTakeAuditModel, with RLS doing the branch scoping in the default case.
 - USER ACTION NEEDED: (1) git pull on the server. (2) Run `php artisan migrate` to create the table + RLS policies. (3) Create a session, set up counts, save counts, post it — then visit the session detail page and scroll to the bottom: you should see the "Session health check" card + "Audit timeline" card with rows for create/setup/save_count/post. (4) Visit /admin/stock-take/checklist for the global health-check screen. (5) Visit /admin/stock-take/audit for the global filterable audit-log screen. (6) Cancel a posted session — the timeline should show both a 'reverse' row (critical, starred) and a 'cancel' row.
 - NO test code written (per project rules). PHP not installed in sandbox; verified by brace counts, blade directive balance, User-model API check, RLS pattern comparison, migration-ordering check, DI-injection safety review.
+
+---
+Task ID: 9-stock-take-phase5
+Agent: Main
+Task: Phase 5 (Stock Take plan) — Cycle count & ABC classification. After finish, update .MD and push all updates.
+
+Work Log:
+- Read worklog.md + the .MD plan's Phase 5 section + Phase 4 IMPLEMENTATION-COMPLETE subsection to learn the established patterns (migration style, files-changed table, decisions-diverged list, acceptance-criteria status table).
+- Read current source: StockTakeService.php (createSession/setupWarehouseCounts/postSession helpers), StockTakeController.php (create/store/show + approval endpoints), 03_stock.sql (stock_take_sessions + stock_take_policies defs), StockTakeSession model, StockTakePolicyService, create.blade.php, show.blade.php, routes/web.php stock-take prefix, the existing pg_cron migration (2025_01_20_000009), the existing report-materialized-views migration, products/product_categories/product_groups schema.
+- Created migration 2025_07_29_000001_add_cycle_count_scope_and_abc_classification.php: (a) count_scope varchar(20) DEFAULT 'full' + CHECK + count_scope_payload jsonb on stock_take_sessions; (b) 3 STABLE SQL helper functions stock_take_abc_threshold_a/_b/_lookback_days reading stock_take_policies with safe defaults; (c) mv_product_abc_classification materialized view computing per-warehouse annual usage value from outbound stock_transactions over the lookback window, ranked + classified A/B/C by cumulative-value share against the threshold functions; (d) UNIQUE index (warehouse_id, product_id) for CONCURRENTLY refresh + secondary indexes; (e) seeds 3 ABC policy defaults into stock_take_policies; (f) pg_cron job refresh-abc-classification at 01:30 nightly (try/catch wrapped). Removed an initial REFRESH CONCURRENTLY (can't run in Laravel's migration transaction; CREATE MATERIALIZED VIEW already populates the view). down() reverses everything idempotently.
+- Mirrored the columns + functions + materialized view + indexes into database/sql/03_stock.sql after the stock_take_policies table.
+- Updated StockTakeSession model: fillable + casts (count_scope_payload => array) + isFullCount() helper + @property docblock.
+- Created AbcClassificationService.php: refresh() (REFRESH CONCURRENTLY via Laravel fallback), getSummary(?warehouseId), getClassForProducts(), getLastComputedAt(), rowCount().
+- Updated StockTakeService: constructor takes AbcClassificationService (5th dep); createSession accepts/validates/persists count_scope + payload + audit-logs them; new public validateCountScope() (per-scope payload validation with existence/active checks); new private buildScopedProductsQuery() (branches on scope: category/group whereIn, abc INNER JOIN mv, ad_hoc whereIn p.id, negative_only/zero_only qty filters); new public describeScope() (human-readable for show page); private normalizeIntList/normalizeStringList/missingIds helpers; setupWarehouseCounts now uses buildScopedProductsQuery; setup audit payload records scope.
+- Updated StockTakeController: constructor injects AbcClassificationService; create() loads categories + groups + ABC summary; store() validates + passes scope; show() passes scopeDescription; new endpoints searchProducts (AJAX ad_hoc picker), previewScope (AJAX count+sample), abcReport (report screen), refreshAbc (manual refresh); private scopedPreviewQuery/countScopedProducts/sampleScopedProducts mirror the service's scoped query for the preview UX.
+- Added 4 routes (products/search, scope/preview, abc-report, abc/refresh) with role middleware, registered before the resource so abc-report isn't shadowed by show.
+- Rewrote create.blade.php: new "Count scope" card with 7-option radio-card selector + dynamic payload sections (category/group checkboxes, abc checkboxes + summary card, ad_hoc select2-AJAX picker) + live "Preview product count" AJAX button + per-scope submit validation; generic .select2 init excludes #adHocPicker.
+- Created abc-report.blade.php: policy threshold cards + freshness, warehouse filter, aggregate distribution, per-warehouse breakdown table, top-50 A-class products table.
+- Updated show.blade.php: cycle-count scope banner (non-full) + "Count scope" row in Session details card.
+- Updated index.blade.php: ABC Report header button + scope badge next to session code.
+- Updated docs/STOCK_TAKE_PHYSICAL_COUNT_IMPLEMENTATION_PLAN.md: added "#### ✅ Phase 5 — IMPLEMENTATION COMPLETE (applied)" subsection with files-changed table (11 rows), 9 decisions-diverged notes, acceptance-criteria status table, 10-step how-to-verify, known-limitations.
+- No PHP binary in env to lint; verified syntax via careful manual review of all edits (closures, switch statements, brace balance, Blade directives).
+
+Stage Summary:
+- Task 9 (Phase 5) COMPLETED: Cycle count & ABC classification fully implemented.
+- 1 new migration, 1 new service (AbcClassificationService), 1 new view (abc-report), 4 new routes, 1 new materialized view + 3 SQL functions + 3 policy seeds + 1 pg_cron job.
+- 7 count scopes: full (default/backward-compat), category, abc, group, ad_hoc, negative_only, zero_only.
+- ABC classification per-warehouse, policy-driven thresholds (80/15/5) + lookback (365d), nightly CONCURRENTLY refresh.
+- .MD plan updated with full IMPLEMENTATION-COMPLETE subsection.
+- Ready to commit + push.

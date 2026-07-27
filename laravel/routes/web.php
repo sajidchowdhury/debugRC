@@ -433,6 +433,28 @@ Route::middleware('auth')->group(function () {
             ->name('approve')->middleware(['role:admin,manager', 'branch.isolation']);
         Route::post('{session}/reject', [StockTakeController::class, 'reject'])
             ->name('reject')->middleware(['role:admin,manager', 'branch.isolation']);
+
+        // Phase 5 (Stock Take plan): cycle count & ABC classification.
+        //   products/search : AJAX product picker for the ad_hoc scope
+        //                     (admin/manager/warehouse_manager — write roles).
+        //   scope/preview   : AJAX "how many products will this scope match?"
+        //                     sanity check before creating a cycle-count session.
+        //   abc-report      : ABC classification report screen (read roles).
+        //   abc/refresh     : manual "refresh the ABC materialized view now"
+        //                     (admin/manager only — destructive-ish, runs a
+        //                     CONCURRENTLY refresh).
+        // No branch.isolation on these: products/search + scope/preview take
+        // an explicit warehouse_id in the query string (RLS scopes the
+        // warehouse_stock join by branch); abc-report + abc/refresh read the
+        // global materialized view (RLS-scoped per warehouse's branch).
+        Route::get('products/search', [StockTakeController::class, 'searchProducts'])
+            ->name('products.search')->middleware('role:admin,manager,warehouse_manager');
+        Route::post('scope/preview', [StockTakeController::class, 'previewScope'])
+            ->name('scope.preview')->middleware('role:admin,manager,warehouse_manager');
+        Route::get('abc-report', [StockTakeController::class, 'abcReport'])
+            ->name('abc-report')->middleware('role:admin,manager,warehouse_manager,accountant');
+        Route::post('abc/refresh', [StockTakeController::class, 'refreshAbc'])
+            ->name('abc.refresh')->middleware('role:admin,manager');
     });
     // Resource: read verbs only (index/create/show) get baseline read role.
     // `store` is split out below for tighter RBAC + branch.isolation.

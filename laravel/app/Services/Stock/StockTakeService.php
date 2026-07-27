@@ -10,6 +10,7 @@ use App\Services\Accounting\JournalPostingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Services\Stock\StockTakeAuditLogger;
+use App\Services\Stock\StockTakePolicyService;
 
 /**
  * Stock Take Service — Phase 6.4.
@@ -41,7 +42,8 @@ class StockTakeService
         private StockService $stockService,
         private JournalPostingService $journalPosting,
         private StockTakeAuditLogger $auditLogger,
-        private StockTakePolicyService $policyService
+        private StockTakePolicyService $policyService,
+        private AbcClassificationService $abcService
     ) {}
 
     /**
@@ -54,12 +56,20 @@ class StockTakeService
      * now() for audit purposes. The flag is released on post/cancel by
      * refreshWarehouseFreezeFlags (which honors overlapping sessions).
      *
+     * Phase 5: now accepts `count_scope` + `count_scope_payload`. The scope
+     * narrows which products setupWarehouseCounts loads (full / category /
+     * abc / group / ad_hoc / negative_only / zero_only). Defaults to 'full'
+     * (pre-Phase-5 behaviour). The payload is validated per-scope before the
+     * session row is inserted.
+     *
      * @param array $data {
      *     branch_id: int,
      *     session_date: string (Y-m-d),
      *     warehouse_ids: array<int>,
      *     notes: string|null,
      *     freeze_outbound: bool (default false),
+     *     count_scope: string (default 'full'),
+     *     count_scope_payload: array|null,
      *     created_by: int,
      * }
      * @return StockTakeSession
@@ -76,7 +86,13 @@ class StockTakeService
         $sessionCode = $this->generateSessionCode();
         $freezeOutbound = !empty($data['freeze_outbound']);
 
-        return DB::transaction(function () use ($data, $sessionCode, $freezeOutbound) {
+        // Phase 5: normalize + validate the count scope BEFORE the insert so
+        // an invalid scope/payload never produces a session row. 'full' is
+        // the default and carries an empty payload.
+        $countScope = $data['count_scope'] ?? 'full';
+        $countScopePayload = $this->validateCountScope($countScope, $data['count_scope_payload'] ?? null);
+
+        return DB::transaction(function () use ($data, $sessionCode, $freezeOutbound, $countScope, $countScopePayload) {
             $sessionId = DB::table('stock_take_sessions')->insertGetId([
                 'session_code' => $sessionCode,
                 'session_date' => $data['session_date'] ?? now()->format('Y-m-d'),
@@ -86,6 +102,11 @@ class StockTakeService
                 // Phase 3: outbound freeze columns.
                 'freeze_outbound' => $freezeOutbound,
                 'frozen_at' => $freezeOutbound ? now() : null,
+                // Phase 5: cycle-count scope + payload (jsonb stored as JSON text).
+                'count_scope' => $countScope,
+                'count_scope_payload' => empty($countScopePayload)
+                    ? null
+                    : json_encode($countScopePayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 'notes' => $data['notes'] ?? null,
                 'created_by' => $data['created_by'] ?? null,
                 'created_at' => now(),
@@ -128,6 +149,9 @@ class StockTakeService
                     // Phase 3: record the freeze decision in the audit trail.
                     'freeze_outbound' => $freezeOutbound,
                     'frozen_at'       => $freezeOutbound ? now()->toDateTimeString() : null,
+                    // Phase 5: record the cycle-count scope + payload.
+                    'count_scope'         => $countScope,
+                    'count_scope_payload' => $countScopePayload,
                 ],
                 actorId:    $data['created_by'] ?? null,
             );
@@ -170,27 +194,14 @@ class StockTakeService
                 ->where('warehouse_id', $warehouseId)
                 ->delete();
 
-            // Load all active products + their current warehouse_stock.
-            // Phase 3: also fetch product_code + product_name so the snapshot
-            // captured below can reconstruct the count even after a product is
-            // later renamed or soft-deleted.
-            $products = DB::table('products as p')
-                ->leftJoin('warehouse_stock as ws', function ($join) use ($warehouseId) {
-                    $join->on('ws.product_id', '=', 'p.id')
-                         ->where('ws.warehouse_id', '=', $warehouseId);
-                })
-                ->where('p.is_active', true)
-                ->whereNull('p.deleted_at')
-                ->select(
-                    'p.id as product_id',
-                    'p.product_code',
-                    'p.product_name',
-                    'p.unit',
-                    DB::raw('COALESCE(ws.qty, 0) as system_qty'),
-                    DB::raw('COALESCE(ws.avg_cost, 0) as rate')
-                )
-                ->orderBy('p.product_name')
-                ->get();
+            // Phase 5: load the product set for this warehouse, narrowed by the
+            // session's count_scope. The base query (all active products + their
+            // current warehouse_stock) is the 'full' scope; the other scopes
+            // layer additional WHERE/JOIN filters on top. Phase 3 also fetches
+            // product_code + product_name so the snapshot captured below can
+            // reconstruct the count even after a product is later renamed or
+            // soft-deleted.
+            $products = $this->buildScopedProductsQuery($session, $warehouseId)->get();
 
             $rows = [];
             $now = now();
@@ -246,12 +257,334 @@ class StockTakeService
                     're_setup'       => true, // setup always deletes existing items first
                     // Phase 3: record that a snapshot was captured for this wh.
                     'snapshot_captured' => true,
+                    // Phase 5: record the scope that produced this product set,
+                    // so the audit timeline shows exactly which products were
+                    // eligible to be counted (and which filter produced them).
+                    'count_scope'         => $session->count_scope ?? 'full',
+                    'count_scope_payload' => $session->count_scope_payload,
                 ],
                 warehouseId:  $warehouseId,
             );
 
             return count($rows);
         });
+    }
+
+    /**
+     * Phase 5: validate + normalize the count_scope / count_scope_payload.
+     *
+     * Returns the normalized payload array (empty for 'full' and for the
+     * no-payload scopes negative_only/zero_only). Throws on an unsupported
+     * scope or a payload that doesn't match the scope's contract.
+     *
+     * The payload contracts:
+     *   - full / negative_only / zero_only : no payload (ignored).
+     *   - category : {category_ids: int[]}  — at least one, all must exist.
+     *   - group    : {group_ids: int[]}     — at least one, all must exist.
+     *   - abc      : {abc_classes: string[]} — subset of ['A','B','C'], ≥1.
+     *   - ad_hoc   : {product_ids: int[]}   — at least one, all must be active
+     *                                          non-deleted products.
+     *
+     * Existence/active checks for category_ids / group_ids / product_ids are
+     * done here (cheap COUNT queries) so the create form gets a clear error
+     * BEFORE the session row is inserted, rather than a silent empty count at
+     * setup time.
+     *
+     * @param string $scope
+     * @param array|null $payload
+     * @return array  Normalized payload (possibly empty).
+     * @throws \InvalidArgumentException
+     */
+    public function validateCountScope(string $scope, ?array $payload): array
+    {
+        $allowed = ['full', 'category', 'abc', 'group', 'ad_hoc', 'negative_only', 'zero_only'];
+        if (!in_array($scope, $allowed, true)) {
+            throw new \InvalidArgumentException(
+                "Unsupported count_scope '{$scope}'. Allowed: " . implode(', ', $allowed) . '.'
+            );
+        }
+
+        $payload = is_array($payload) ? $payload : [];
+
+        // Scopes that take no payload.
+        if (in_array($scope, ['full', 'negative_only', 'zero_only'], true)) {
+            return [];
+        }
+
+        switch ($scope) {
+            case 'category':
+                $ids = $this->normalizeIntList($payload['category_ids'] ?? []);
+                if (empty($ids)) {
+                    throw new \InvalidArgumentException('category scope requires at least one category_id.');
+                }
+                $missing = $this->missingIds('product_categories', 'id', $ids, activeColumn: 'is_active');
+                if (!empty($missing)) {
+                    throw new \InvalidArgumentException(
+                        'Unknown/inactive category_ids: ' . implode(', ', $missing) . '.'
+                    );
+                }
+                return ['category_ids' => $ids];
+
+            case 'group':
+                $ids = $this->normalizeIntList($payload['group_ids'] ?? []);
+                if (empty($ids)) {
+                    throw new \InvalidArgumentException('group scope requires at least one group_id.');
+                }
+                $missing = $this->missingIds('product_groups', 'id', $ids, activeColumn: 'is_active');
+                if (!empty($missing)) {
+                    throw new \InvalidArgumentException(
+                        'Unknown/inactive group_ids: ' . implode(', ', $missing) . '.'
+                    );
+                }
+                return ['group_ids' => $ids];
+
+            case 'abc':
+                $classes = $this->normalizeStringList($payload['abc_classes'] ?? []);
+                $invalid = array_diff($classes, ['A', 'B', 'C']);
+                if (!empty($invalid)) {
+                    throw new \InvalidArgumentException(
+                        'abc_classes must be a subset of A, B, C. Invalid: ' . implode(', ', $invalid) . '.'
+                    );
+                }
+                if (empty($classes)) {
+                    throw new \InvalidArgumentException('abc scope requires at least one abc_class (A, B, and/or C).');
+                }
+                return ['abc_classes' => array_values($classes)];
+
+            case 'ad_hoc':
+                $ids = $this->normalizeIntList($payload['product_ids'] ?? []);
+                if (empty($ids)) {
+                    throw new \InvalidArgumentException('ad_hoc scope requires at least one product_id.');
+                }
+                // Validate every requested product exists + is active + not
+                // soft-deleted. We do NOT scope to a warehouse here (products
+                // are global); setupWarehouseCounts will LEFT JOIN warehouse_stock
+                // so a product with zero stock in a warehouse still gets a
+                // count line (system_qty=0). This honours "includes exactly
+                // those products" — if any requested id is invalid, we throw
+                // rather than silently dropping it.
+                $missing = $this->missingIds('products', 'id', $ids, activeColumn: 'is_active', deletedAt: true);
+                if (!empty($missing)) {
+                    throw new \InvalidArgumentException(
+                        'Unknown/inactive/deleted product_ids: ' . implode(', ', $missing) . '.'
+                    );
+                }
+                return ['product_ids' => $ids];
+        }
+
+        return [];
+    }
+
+    /**
+     * Phase 5: build the product query for a warehouse, narrowed by the
+     * session's count_scope. Returns the Builder (caller ->get()s it).
+     *
+     * The base query is the pre-Phase-5 'full' scope: all active, non-deleted
+     * products LEFT JOINed to warehouse_stock for the given warehouse (so a
+     * product with zero stock still appears with system_qty=0). The other
+     * scopes layer additional filters:
+     *
+     *   - category       : WHERE p.category_id IN (payload.category_ids)
+     *   - group          : WHERE p.group_id IN (payload.group_ids)
+     *   - abc            : INNER JOIN mv_product_abc_classification ON
+     *                      (warehouse_id, product_id) WHERE abc_class IN (...)
+     *                      → only classified products appear. A product with
+     *                      no usage in the lookback window has no MV row, so
+     *                      it's excluded from an ABC cycle count (correct:
+     *                      you're counting the high-value movers).
+     *   - ad_hoc         : WHERE p.id IN (payload.product_ids) — exactly the
+     *                      requested products (already validated at create).
+     *   - negative_only  : WHERE COALESCE(ws.qty,0) < -0.0001 (negative on-hand)
+     *   - zero_only      : WHERE ABS(COALESCE(ws.qty,0)) < 0.0001 (dead stock)
+     *
+     * @param StockTakeSession $session  (already locked for update by caller)
+     * @param int $warehouseId
+     * @return \Illuminate\Database\Query\Builder
+     */
+    private function buildScopedProductsQuery($session, int $warehouseId)
+    {
+        $scope = $session->count_scope ?? 'full';
+        $payload = is_array($session->count_scope_payload) ? $session->count_scope_payload : [];
+
+        $query = DB::table('products as p')
+            ->leftJoin('warehouse_stock as ws', function ($join) use ($warehouseId) {
+                $join->on('ws.product_id', '=', 'p.id')
+                     ->where('ws.warehouse_id', '=', $warehouseId);
+            })
+            ->where('p.is_active', true)
+            ->whereNull('p.deleted_at')
+            ->select(
+                'p.id as product_id',
+                'p.product_code',
+                'p.product_name',
+                'p.unit',
+                DB::raw('COALESCE(ws.qty, 0) as system_qty'),
+                DB::raw('COALESCE(ws.avg_cost, 0) as rate')
+            );
+
+        switch ($scope) {
+            case 'category':
+                $ids = $this->normalizeIntList($payload['category_ids'] ?? []);
+                $query->whereIn('p.category_id', $ids);
+                break;
+
+            case 'group':
+                $ids = $this->normalizeIntList($payload['group_ids'] ?? []);
+                $query->whereIn('p.group_id', $ids);
+                break;
+
+            case 'abc':
+                $classes = $this->normalizeStringList($payload['abc_classes'] ?? ['A', 'B', 'C']);
+                // INNER JOIN → only products with an ABC classification row
+                // for THIS warehouse appear. The mv is keyed by (warehouse_id,
+                // product_id) so the join is exact.
+                $query->join('mv_product_abc_classification as abc', function ($join) use ($warehouseId) {
+                    $join->on('abc.product_id', '=', 'p.id')
+                         ->where('abc.warehouse_id', '=', $warehouseId);
+                })->whereIn('abc.abc_class', $classes);
+                break;
+
+            case 'ad_hoc':
+                $ids = $this->normalizeIntList($payload['product_ids'] ?? []);
+                $query->whereIn('p.id', $ids);
+                break;
+
+            case 'negative_only':
+                // Negative on-hand is a red flag (oversold / data error) —
+                // these are exactly the products that need a recount. The
+                // warehouse_stock CHECK allows a tiny negative tolerance
+                // (-0.0001), so use a threshold below it.
+                $query->whereRaw('COALESCE(ws.qty, 0) < -0.0001');
+                break;
+
+            case 'zero_only':
+                // Dead stock: truly zero on-hand (no warehouse_stock row OR
+                // qty = 0). Worth counting periodically to catch shrinkage of
+                // "should-be-zero" items and to clear obsolete SKUs.
+                $query->whereRaw('ABS(COALESCE(ws.qty, 0)) < 0.0001');
+                break;
+
+            case 'full':
+            default:
+                // No extra filter — every active product.
+                break;
+        }
+
+        return $query->orderBy('p.product_name');
+    }
+
+    /**
+     * Phase 5: human-readable description of a session's count scope, for the
+     * show page + audit timeline. Returns a one-line summary like:
+     *   - "Full warehouse count"
+     *   - "Category: Beverages, Snacks (2 categories)"
+     *   - "ABC classes: A, B"
+     *   - "Product group: Grocery (1 group)"
+     *   - "Ad-hoc: 12 products"
+     *   - "Negative-stock-only count"
+     *   - "Zero-stock-only count"
+     *
+     * @param StockTakeSession $session
+     * @return string
+     */
+    public function describeScope($session): string
+    {
+        $scope = $session->count_scope ?? 'full';
+        $payload = is_array($session->count_scope_payload) ? $session->count_scope_payload : [];
+
+        switch ($scope) {
+            case 'full':
+                return 'Full warehouse count';
+            case 'category':
+                $ids = $this->normalizeIntList($payload['category_ids'] ?? []);
+                $names = $ids ? DB::table('product_categories')
+                    ->whereIn('id', $ids)->pluck('category_name')->all() : [];
+                return 'Category: ' . ($names ? implode(', ', $names) : '(none)')
+                    . ' (' . count($ids) . ' categor' . (count($ids) === 1 ? 'y' : 'ies') . ')';
+            case 'group':
+                $ids = $this->normalizeIntList($payload['group_ids'] ?? []);
+                $names = $ids ? DB::table('product_groups')
+                    ->whereIn('id', $ids)->pluck('group_name')->all() : [];
+                return 'Product group: ' . ($names ? implode(', ', $names) : '(none)')
+                    . ' (' . count($ids) . ' group' . (count($ids) === 1 ? '' : 's') . ')';
+            case 'abc':
+                $classes = $this->normalizeStringList($payload['abc_classes'] ?? []);
+                return 'ABC classes: ' . ($classes ? implode(', ', $classes) : '(none)');
+            case 'ad_hoc':
+                $ids = $this->normalizeIntList($payload['product_ids'] ?? []);
+                return 'Ad-hoc: ' . count($ids) . ' product' . (count($ids) === 1 ? '' : 's');
+            case 'negative_only':
+                return 'Negative-stock-only count';
+            case 'zero_only':
+                return 'Zero-stock-only count';
+            default:
+                return ucfirst($scope);
+        }
+    }
+
+    /**
+     * Phase 5: normalize a mixed list of ids into a unique array of positive
+     * integers. Accepts ints, numeric strings, and nested arrays (flattened).
+     *
+     * @param mixed $list
+     * @return array<int>
+     */
+    private function normalizeIntList($list): array
+    {
+        if (!is_array($list)) {
+            $list = $list === null ? [] : [$list];
+        }
+        $flat = [];
+        array_walk_recursive($list, function ($v) use (&$flat) {
+            $v = is_string($v) ? trim($v) : $v;
+            if ($v === '' || $v === null) return;
+            $i = (int) $v;
+            if ($i > 0) $flat[$i] = $i;
+        });
+        return array_values($flat);
+    }
+
+    /**
+     * Phase 5: normalize a mixed list of class strings into uppercased unique
+     * values. Accepts strings or single strings.
+     *
+     * @param mixed $list
+     * @return array<string>
+     */
+    private function normalizeStringList($list): array
+    {
+        if (!is_array($list)) {
+            $list = $list === null || $list === '' ? [] : [$list];
+        }
+        $out = [];
+        foreach ($list as $v) {
+            $v = is_string($v) ? trim($v) : $v;
+            if ($v === '' || $v === null) continue;
+            $out[mb_strtoupper((string) $v)] = mb_strtoupper((string) $v);
+        }
+        return array_values($out);
+    }
+
+    /**
+     * Phase 5: return the subset of $ids that do NOT exist (or are inactive /
+     * soft-deleted) in the given table. Used by validateCountScope to give the
+     * user a precise "these ids are bad" error.
+     *
+     * @param string $table
+     * @param string $idColumn
+     * @param array<int> $ids
+     * @param string|null $activeColumn  Column to require = true (null to skip).
+     * @param bool $deletedAt  When true, require deleted_at IS NULL.
+     * @return array<int>  Missing/invalid ids.
+     */
+    private function missingIds(string $table, string $idColumn, array $ids, ?string $activeColumn = null, bool $deletedAt = false): array
+    {
+        if (empty($ids)) return [];
+        $query = DB::table($table)->whereIn($idColumn, $ids);
+        if ($activeColumn) $query->where($activeColumn, true);
+        if ($deletedAt) $query->whereNull('deleted_at');
+        $found = $query->pluck($idColumn)->all();
+        return array_values(array_diff($ids, array_map('intval', $found)));
     }
 
     /**
