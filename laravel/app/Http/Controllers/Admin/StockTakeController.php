@@ -26,7 +26,9 @@ use Illuminate\Support\Facades\DB;
  *   - count: enter physical counts for a warehouse
  *   - saveCounts: save the counts (AJAX or POST)
  *   - post: apply variances + post GL
- *   - cancel: reverse if posted, or just mark cancelled
+ *   - cancel: Phase 10 — draft/counting/submitted/approved only (no reversal)
+ *   - reverse: Phase 10 — posted only; full stock + GL reversal (→ reversed)
+ *   - reOpen: Phase 10 — reversed → counting (re-openable up to max_reopens)
  *   - checklist: Phase 2 global health-check screen (port of legacy StockTake/checklist)
  *   - audit: Phase 2 global audit-log screen (filterable by date/actor/action)
  */
@@ -64,6 +66,8 @@ class StockTakeController extends Controller
             'approved' => StockTakeSession::where('status', 'approved')->count(),
             'posted' => StockTakeSession::where('status', 'posted')->count(),
             'cancelled' => StockTakeSession::where('status', 'cancelled')->count(),
+            // Phase 10: reversed = posted session rolled back (full stock + GL reversal).
+            'reversed' => StockTakeSession::where('status', 'reversed')->count(),
         ];
 
         return view('admin.stock-take.index', [
@@ -301,6 +305,17 @@ class StockTakeController extends Controller
             'approverUser' => $approverUser,
             // Phase 5: cycle-count scope description (human-readable).
             'scopeDescription' => $this->stockTakeService->describeScope($session),
+            // Phase 10: reversal vs cancellation + re-open context.
+            //   maxReopens: policy cap (default 1). 0 = reversed is hard terminal.
+            //   reopensRemaining: how many more times this session can be re-opened.
+            //   canReverse: posted sessions can be reversed (undoes stock + GL).
+            //   canReopen: reversed sessions under the cap can be re-opened.
+            'maxReopens' => $this->policyService->maxReopens(),
+            'reopensRemaining' => max(0, $this->policyService->maxReopens() - (int) $session->re_open_count),
+            'canReverse' => $session->isPosted(),
+            'canReopen' => $session->isReversed()
+                && $this->policyService->maxReopens() > 0
+                && ((int) $session->re_open_count) < $this->policyService->maxReopens(),
         ]);
     }
 
@@ -403,6 +418,10 @@ class StockTakeController extends Controller
 
     /**
      * Cancel the session.
+     *
+     * Phase 10: draft/counting only. A posted session cannot be cancelled —
+     * it must be reversed (which undoes the stock + GL impact). The service
+     * throws a clear error if a posted session reaches this method.
      */
     public function cancel(Request $request, int $id)
     {
@@ -414,6 +433,66 @@ class StockTakeController extends Controller
             $session = $this->stockTakeService->cancelSession($id, auth()->id(), $request->input('cancel_reason'));
             return redirect()->route('admin.stock-take.show', $session)
                 ->with('success', "Session {$session->session_code} cancelled.");
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Phase 10: Reverse a POSTED session.
+     *
+     * Full stock + GL reversal. Sets status='reversed'. The session can then
+     * be re-opened (reversed → counting) for correction + re-posting, up to
+     * the stock_take.max_reopens policy cap.
+     *
+     * A reversal reason is required (the audit trail must record why a
+     * posted session was rolled back).
+     */
+    public function reverse(Request $request, int $id)
+    {
+        $request->validate([
+            'reverse_reason' => 'required|string|max:500',
+        ]);
+
+        try {
+            $session = $this->stockTakeService->reverseSession(
+                $id,
+                auth()->id(),
+                $request->input('reverse_reason')
+            );
+            return redirect()->route('admin.stock-take.show', $session)
+                ->with('success', "Session {$session->session_code} reversed. Stock movements and GL entry have been undone.");
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Phase 10: Re-open a REVERSED session for correction + re-posting.
+     *
+     * Transitions reversed → counting. The reversal rows stay as audit
+     * history; stock_take_items.is_applied is reset so the counts can be
+     * re-entered. Re-posting creates a NEW journal entry; the old reversed
+     * entry stays linked via reversal_of_entry_id.
+     *
+     * A re-open reason is required (the audit trail must record why a
+     * reversed session is being re-opened). The re_open_count is capped by
+     * the stock_take.max_reopens policy (default 1).
+     */
+    public function reOpen(Request $request, int $id)
+    {
+        $request->validate([
+            'reopen_reason' => 'required|string|max:500',
+        ]);
+
+        try {
+            $session = $this->stockTakeService->reOpen(
+                $id,
+                auth()->id(),
+                $request->input('reopen_reason')
+            );
+            return redirect()->route('admin.stock-take.show', $session)
+                ->with('success', "Session {$session->session_code} re-opened. The reversal is preserved as audit history; you can now correct the counts and re-post.");
         } catch (\Throwable $e) {
             return back()->with('error', $e->getMessage());
         }

@@ -23,6 +23,8 @@ use Illuminate\Support\Facades\DB;
  *   stock_take.approver_roles            (array)   — roles that can approve
  *   stock_take.variance_threshold_block  (numeric) — force approval ≥ this value
  *   stock_take.recount_reset_to_system   (bool)    — Phase 7: reset physical_qty on recount
+ *   stock_take.revaluation_epsilon       (numeric) — Phase 9: cost-drift revaluation threshold
+ *   stock_take.max_reopens               (int)     — Phase 10: cap on re-opens after reversal
  *
  * The `approvalRequiredForVariance()` helper combines require_approval and
  * variance_threshold_block to answer: "given this total |gain|+|loss| value,
@@ -168,6 +170,18 @@ class StockTakePolicyService
     public function revaluationEpsilon(): float
     {
         return (float) ($this->all()['stock_take.revaluation_epsilon'] ?? 0.01);
+    }
+
+    /**
+     * Phase 10: maximum number of times a reversed stock-take session can
+     * be re-opened for correction + re-posting. Default 1 (one re-open per
+     * session — prevents endless re-open/re-post churn). 0 forbids re-
+     * opening entirely (reversed = hard terminal). The cap is enforced by
+     * StockTakeService::reOpen, which throws when re_open_count >= max.
+     */
+    public function maxReopens(): int
+    {
+        return (int) ($this->all()['stock_take.max_reopens'] ?? 1);
     }
 
     /**

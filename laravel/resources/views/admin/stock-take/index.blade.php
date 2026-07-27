@@ -20,6 +20,8 @@
         'approved'  => 0,
         'posted'    => 0,
         'cancelled' => 0,
+        // Phase 10: reversed = posted session rolled back (full stock + GL reversal).
+        'reversed'  => 0,
     ], $stats ?? []);
 
     $statusBadge = function (string $status): string {
@@ -31,6 +33,8 @@
             'approved'  => '<span class="badge" style="background:#d1f5e6;color:#0d6e51;"><i class="fas fa-thumbs-up me-1"></i>Approved</span>',
             'posted'    => '<span class="badge bg-success-subtle text-success"><i class="fas fa-circle-check me-1"></i>Posted</span>',
             'cancelled' => '<span class="badge bg-secondary-subtle text-secondary"><i class="fas fa-ban me-1"></i>Cancelled</span>',
+            // Phase 10: reversed = posted session rolled back (full stock + GL reversal). Re-openable.
+            'reversed'  => '<span class="badge bg-danger-subtle text-danger"><i class="fas fa-rotate-left me-1"></i>Reversed</span>',
         ][$status] ?? '<span class="badge bg-light text-dark">' . e($status) . '</span>';
     };
 
@@ -177,6 +181,21 @@
                 </div>
             </div>
         </div>
+        {{-- Phase 10: reversed stats card (posted sessions rolled back) --}}
+        <div class="col-sm-6 col-lg">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#dc3545;">
+                        <i class="fas fa-rotate-left"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">{{ number_format((int) $stats['reversed']) }}</div>
+                        <div class="text-muted small">Reversed</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     {{-- Filter form --}}
@@ -203,6 +222,7 @@
                         <option value="approved"  {{ $filters['status'] === 'approved' ? 'selected' : '' }}>Approved (ready to post)</option>
                         <option value="posted"    {{ $filters['status'] === 'posted' ? 'selected' : '' }}>Posted</option>
                         <option value="cancelled" {{ $filters['status'] === 'cancelled' ? 'selected' : '' }}>Cancelled</option>
+                        <option value="reversed" {{ $filters['status'] === 'reversed' ? 'selected' : '' }}>Reversed</option>
                     </select>
                 </div>
                 <div class="col-md-3">

@@ -39,6 +39,10 @@ use App\Traits\AuditableMasterData;
  * @property string|null $approval_comments Phase 4: approval/rejection comments
  * @property string $count_scope            Phase 5: full|category|abc|group|ad_hoc|negative_only|zero_only
  * @property array|null $count_scope_payload Phase 5: scope params jsonb (category_ids/abc_classes/group_ids/product_ids)
+ * @property int $re_open_count              Phase 10: # of times this session was re-opened after reversal
+ * @property string|null $last_reopened_at   Phase 10: timestamp of the most recent re-open
+ * @property int|null $last_reopened_by      Phase 10: user who performed the most recent re-open
+ * @property int|null $reversal_of_entry_id  Phase 10: journal_entry_id of the PRIOR post when reversed (audit chain)
  * @property string|null $notes
  * @property int|null $created_by
  */
@@ -74,6 +78,11 @@ class StockTakeSession extends Model
         // Phase 5: cycle count scope.
         'count_scope',
         'count_scope_payload',
+        // Phase 10: reversal vs cancellation + re-open after reversal.
+        're_open_count',
+        'last_reopened_at',
+        'last_reopened_by',
+        'reversal_of_entry_id',
         'notes',
         'created_by',
     ];
@@ -96,6 +105,11 @@ class StockTakeSession extends Model
         'approved_by' => 'integer',
         // Phase 5: cycle count scope. count_scope_payload is jsonb → array.
         'count_scope_payload' => 'array',
+        // Phase 10: reversal vs cancellation + re-open after reversal.
+        're_open_count' => 'integer',
+        'last_reopened_at' => 'datetime',
+        'last_reopened_by' => 'integer',
+        'reversal_of_entry_id' => 'integer',
     ];
 
     public function branch(): \Illuminate\Database\Eloquent\Relations\BelongsTo
@@ -128,6 +142,10 @@ class StockTakeSession extends Model
     public function isCounting(): bool { return $this->status === 'counting'; }
     public function isPosted(): bool { return $this->status === 'posted'; }
     public function isCancelled(): bool { return $this->status === 'cancelled'; }
+    // Phase 10: reversal vs cancellation distinction. 'reversed' is a
+    // terminal-ish state for POSTED sessions only — full stock + GL reversal
+    // happened. Re-openable (reversed → counting) up to max_reopens.
+    public function isReversed(): bool { return $this->status === 'reversed'; }
     // Phase 4: approval-workflow states.
     public function isSubmitted(): bool { return $this->status === 'submitted'; }
     public function isApproved(): bool { return $this->status === 'approved'; }

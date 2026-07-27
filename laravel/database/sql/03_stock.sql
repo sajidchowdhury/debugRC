@@ -175,6 +175,17 @@ CREATE TABLE stock_take_sessions (
     count_scope varchar(20) NOT NULL DEFAULT 'full'
         CHECK (count_scope IN ('full','category','abc','group','ad_hoc','negative_only','zero_only')),
     count_scope_payload jsonb,
+    -- Phase 10 (Stock Take plan): reversal vs cancellation distinction +
+    -- re-open after reversal. re_open_count caps how many times a reversed
+    -- session can be re-opened (policy: stock_take.max_reopens, default 1).
+    -- last_reopened_at/by record the most recent re-open. reversal_of_entry_id
+    -- links to the journal_entries.id of the PRIOR post when this session was
+    -- reversed — the audit chain back to the original post (the CURRENT post's
+    -- journal_entry_id is always in the journal_entry_id column above).
+    re_open_count integer NOT NULL DEFAULT 0,
+    last_reopened_at timestamp(0),
+    last_reopened_by integer REFERENCES users(id) ON DELETE SET NULL,
+    reversal_of_entry_id integer REFERENCES journal_entries(id) ON DELETE SET NULL,
     notes text,
     created_by integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -184,6 +195,9 @@ CREATE TABLE stock_take_sessions (
 CREATE INDEX idx_sts_branch ON stock_take_sessions(branch_id);
 -- Partial index: only reversed sessions, for fast reversal lookups.
 CREATE INDEX idx_sts_is_reversed ON stock_take_sessions(is_reversed) WHERE is_reversed = true;
+-- Phase 10: partial index on status='reversed' sessions — powers the admin
+-- "reversed sessions" worklist + the re-open-eligible list.
+CREATE INDEX idx_sts_reversed ON stock_take_sessions(branch_id, reversed_at) WHERE status = 'reversed';
 -- Partial index: only sessions that freeze outbound stock — powers the
 -- warehouse-flag recompute in StockTakeService::refreshWarehouseFreezeFlags.
 CREATE INDEX idx_sts_freeze_outbound ON stock_take_sessions(branch_id) WHERE freeze_outbound = true;
@@ -339,6 +353,11 @@ CREATE INDEX idx_stal_actor ON stock_take_audit_log(actor_id, created_at);
 --     between setup and post, an additional Dr/Cr Inventory/Inventory
 --     Revaluation Expense line is posted for (post_rate - system_rate) *
 --     physical_qty. Set to 0 to revalue on every post.
+-- Phase 10 seed (2025_08_03_000001_phase10_reversal_vs_cancel_reopen.php):
+--   stock_take.max_reopens (int, default 1) — maximum number of times a
+--     reversed stock-take session can be re-opened for correction + re-
+--     posting. Default 1 (one re-open per session). 0 forbids re-opening
+--     entirely (reversed = hard terminal). Enforced by StockTakeService::reOpen.
 CREATE TABLE stock_take_policies (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     key varchar(80) NOT NULL,

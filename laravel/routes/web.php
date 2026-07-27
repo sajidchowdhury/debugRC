@@ -440,6 +440,20 @@ Route::middleware('auth')->group(function () {
         Route::post('{session}/cancel', [StockTakeController::class, 'cancel'])
             ->name('cancel')->middleware(['role:admin,manager', 'branch.isolation']);
 
+        // Phase 10 (Stock Take plan): reversal vs cancellation distinction +
+        // re-open after reversal.
+        //   reverse : posted → reversed. Full stock + GL reversal. admin/manager
+        //              only (destructive — undoes a posted session's books).
+        //   re-open : reversed → counting. Re-openable up to max_reopens policy.
+        //              admin/manager only (re-posting a reversed session is a
+        //              materially significant action).
+        // Both carry branch.isolation so a non-admin cannot reverse/re-open
+        // another branch's session by guessing its URL id.
+        Route::post('{session}/reverse', [StockTakeController::class, 'reverse'])
+            ->name('reverse')->middleware(['role:admin,manager', 'branch.isolation']);
+        Route::post('{session}/re-open', [StockTakeController::class, 'reOpen'])
+            ->name('re-open')->middleware(['role:admin,manager', 'branch.isolation']);
+
         // Phase 4: approval workflow & segregation of duties.
         //   submit : counter (admin/manager/warehouse_manager) — counting → submitted.
         //   approve: approver (admin/manager) — submitted → approved. The

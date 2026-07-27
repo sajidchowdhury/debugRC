@@ -11,6 +11,10 @@
             'approved'  => '<span class="badge bg-teal-subtle text-teal fs-6" style="background:#d1f5e6;color:#0d6e51;"><i class="fas fa-thumbs-up me-1"></i>Approved</span>',
             'posted'    => '<span class="badge bg-success-subtle text-success fs-6"><i class="fas fa-circle-check me-1"></i>Posted</span>',
             'cancelled' => '<span class="badge bg-secondary-subtle text-secondary fs-6"><i class="fas fa-ban me-1"></i>Cancelled</span>',
+            // Phase 10: reversed = posted session rolled back (full stock + GL
+            // reversal). Distinct from cancelled (never-posted session marked
+            // dead). Re-openable up to max_reopens.
+            'reversed'  => '<span class="badge bg-danger-subtle text-danger fs-6"><i class="fas fa-rotate-left me-1"></i>Reversed</span>',
         ][$session->status] ?? '<span class="badge bg-light text-dark fs-6">' . e($session->status) . '</span>';
     };
 
@@ -51,7 +55,12 @@
     // controller is the single source of truth for the approval-gate UI
     // flags so the blade never disagrees with the service-layer guards.
     $allCompleted = $progress['total_wh'] > 0 && $progress['completed_wh'] === $progress['total_wh'];
-    $canCancel    = ! $session->isCancelled();
+    // Phase 10: cancel is draft/counting only (no reversal). Posted sessions
+    // use Reverse (which undoes stock + GL). Reversed sessions use Re-open.
+    // The service re-checks all of these; these flags just hide dead clicks.
+    // $canReverse / $canReopen / $maxReopens / $reopensRemaining are passed by
+    // the controller (StockTakeController::show) — do NOT recompute here.
+    $canCancel   = in_array($session->status, ['draft', 'counting', 'submitted', 'approved'], true);
 @endphp
 
 <div class="container-fluid py-2">
@@ -80,11 +89,11 @@
         </div>
     </header>
 
-    {{-- Reversal alert --}}
-    @if ($session->is_reversed)
-        <div class="alert alert-danger d-flex align-items-center mb-3" role="alert">
-            <i class="fas fa-rotate-left me-2 fa-lg"></i>
-            <div>
+    {{-- Reversal alert (Phase 10: now distinguishes reversed vs cancelled + shows re-open context) --}}
+    @if ($session->isReversed())
+        <div class="alert alert-danger d-flex align-items-start mb-3" role="alert">
+            <i class="fas fa-rotate-left me-2 fa-lg mt-1"></i>
+            <div class="flex-grow-1">
                 <strong>This session has been reversed.</strong>
                 @if ($session->reversed_at)
                     Reversed on {{ \Carbon\Carbon::parse($session->reversed_at)->format('d M Y H:i') }}
@@ -94,6 +103,30 @@
                 @endif
                 @if ($session->reverse_reason)
                     · Reason: <em>{{ $session->reverse_reason }}</em>
+                @endif
+                @if ($session->reversal_of_entry_id)
+                    · original JE #{{ $session->reversal_of_entry_id }}
+                @endif
+                @if ($maxReopens > 0)
+                    <hr class="my-2">
+                    <span class="text-dark">
+                        <i class="fas fa-arrow-rotate-right me-1"></i>
+                        Re-opens used: <strong>{{ (int) $session->re_open_count }}</strong> / {{ $maxReopens }}
+                        @if ($reopensRemaining > 0)
+                            · <strong>{{ $reopensRemaining }} re-open{{ $reopensRemaining === 1 ? '' : 's' }} remaining</strong>
+                        @else
+                            · <strong>re-open cap reached</strong> — create a new session for further correction
+                        @endif
+                        @if ($session->last_reopened_at)
+                            · last re-opened {{ \Carbon\Carbon::parse($session->last_reopened_at)->format('d M Y H:i') }}
+                        @endif
+                    </span>
+                @else
+                    <hr class="my-2">
+                    <span class="text-dark">
+                        <i class="fas fa-lock me-1"></i>
+                        Re-opening is disabled by policy (max_reopens = 0). Create a new session for further correction.
+                    </span>
                 @endif
             </div>
         </div>
@@ -770,27 +803,63 @@
                         </div>
                     @endif
 
-                    {{-- CANCEL (any non-cancelled status) --}}
+                    {{-- CANCEL (draft/counting/submitted/approved only — Phase 10) --}}
+                    {{-- Posted sessions use Reverse (below); Reversed sessions use Re-open (below). --}}
                     @if ($canCancel)
                         <form method="POST" action="{{ route('admin.stock-take.cancel', $session->id) }}" id="cancelForm">
                             @csrf
                             <input type="hidden" name="cancel_reason" id="cancelReasonField" value="">
                             <button type="button" class="btn btn-outline-danger w-100" id="cancelBtn">
                                 <i class="fas fa-ban me-1"></i>
-                                @if ($session->isPosted())
-                                    Cancel &amp; reverse
-                                @else
-                                    Cancel session
-                                @endif
+                                Cancel session
                             </button>
                         </form>
-                        @if ($session->isPosted())
-                            <div class="alert alert-warning small mt-2 mb-0">
-                                <i class="fas fa-triangle-exclamation me-1"></i>
-                                Cancelling a posted session <strong>reverses the stock movements and the GL entry</strong>.
-                                A reason is required.
-                            </div>
-                        @endif
+                        <div class="alert alert-light small mt-2 mb-0 text-muted">
+                            <i class="fas fa-circle-info me-1"></i>
+                            Marks this session as cancelled. No stock or GL impact (nothing was posted yet).
+                        </div>
+                    @endif
+
+                    {{-- Phase 10: REVERSE a posted session (full stock + GL reversal) --}}
+                    @if ($canReverse)
+                        <form method="POST" action="{{ route('admin.stock-take.reverse', $session->id) }}" id="reverseForm">
+                            @csrf
+                            <input type="hidden" name="reverse_reason" id="reverseReasonField" value="">
+                            <button type="button" class="btn btn-outline-danger w-100" id="reverseBtn">
+                                <i class="fas fa-rotate-left me-1"></i>
+                                Reverse posted session
+                            </button>
+                        </form>
+                        <div class="alert alert-warning small mt-2 mb-0">
+                            <i class="fas fa-triangle-exclamation me-1"></i>
+                            Reversing <strong>undoes the stock movements and the GL journal entry</strong>.
+                            The session becomes <strong>Reversed</strong> and can be re-opened for correction
+                            @if ($reopensRemaining > 0)
+                                ({{ $reopensRemaining }} re-open{{ $reopensRemaining === 1 ? '' : 's' }} remaining).
+                            @else
+                                (re-open cap reached — this will be terminal).
+                            @endif
+                            A reason is required.
+                        </div>
+                    @endif
+
+                    {{-- Phase 10: RE-OPEN a reversed session (reversed → counting) --}}
+                    @if ($canReopen)
+                        <form method="POST" action="{{ route('admin.stock-take.re-open', $session->id) }}" id="reopenForm">
+                            @csrf
+                            <input type="hidden" name="reopen_reason" id="reopenReasonField" value="">
+                            <button type="button" class="btn btn-warning w-100" id="reopenBtn">
+                                <i class="fas fa-arrow-rotate-right me-1"></i>
+                                Re-open for correction
+                            </button>
+                        </form>
+                        <div class="alert alert-info small mt-2 mb-0">
+                            <i class="fas fa-circle-info me-1"></i>
+                            Returns the session to <strong>Counting</strong>. The reversal stays as audit history.
+                            After correcting counts, you can <strong>re-post</strong> (creates a new journal entry).
+                            <br>Re-opens used: <strong>{{ (int) $session->re_open_count }}</strong> / {{ $maxReopens }}.
+                            A reason is required.
+                        </div>
                     @endif
 
                     @if ($session->isCancelled())
@@ -1209,19 +1278,14 @@ $(function () {
         });
     @endif
 
-    // ====== CANCEL session ======
+    // ====== CANCEL session (Phase 10: draft/counting/submitted/approved only) ======
     @if ($canCancel)
         $('#cancelBtn').on('click', function () {
-            var isPosted = @json($session->isPosted());
-            var title = isPosted ? 'Cancel & reverse this session?' : 'Cancel this session?';
-            var html  = isPosted
-                ? '<p class="text-start">This will <strong>reverse the stock movements and the GL journal entry</strong>. A reason is required.</p>'
-                : '<p class="text-start">The session will be marked cancelled. A reason is required.</p>';
-
             Swal.fire({
                 icon: 'warning',
-                title: title,
-                html: html,
+                title: 'Cancel this session?',
+                html: '<p class="text-start">The session will be marked <strong>cancelled</strong>. '
+                    + 'No stock or GL impact (nothing was posted yet). A reason is required.</p>',
                 input: 'textarea',
                 inputLabel: 'Cancel reason (required)',
                 inputPlaceholder: 'Why is this session being cancelled?',
@@ -1243,6 +1307,77 @@ $(function () {
                     $btn.prop('disabled', true)
                         .html('<i class="fas fa-spinner fa-spin me-1"></i> Cancelling…');
                     $('#cancelForm').submit();
+                }
+            });
+        });
+    @endif
+
+    // ====== Phase 10: REVERSE a posted session (full stock + GL reversal) ======
+    @if ($canReverse)
+        $('#reverseBtn').on('click', function () {
+            Swal.fire({
+                icon: 'warning',
+                title: 'Reverse this posted session?',
+                html: '<p class="text-start">This will <strong>reverse the stock movements and the GL journal entry</strong>. '
+                    + 'The session becomes <strong>Reversed</strong> and can be re-opened for correction + re-posting. '
+                    + 'A reason is required.</p>',
+                input: 'textarea',
+                inputLabel: 'Reversal reason (required)',
+                inputPlaceholder: 'Why is this posted session being reversed?',
+                showCancelButton: true,
+                confirmButtonText: '<i class="fas fa-rotate-left"></i> Reverse session',
+                confirmButtonColor: '#dc3545',
+                cancelButtonText: 'Keep posted',
+                reverseButtons: true,
+                inputValidator: function (value) {
+                    if (!value || !value.trim()) {
+                        return 'A reversal reason is required.';
+                    }
+                    return null;
+                }
+            }).then(function (result) {
+                if (result.isConfirmed) {
+                    $('#reverseReasonField').val(result.value.trim());
+                    var $btn = $('#reverseBtn');
+                    $btn.prop('disabled', true)
+                        .html('<i class="fas fa-spinner fa-spin me-1"></i> Reversing…');
+                    $('#reverseForm').submit();
+                }
+            });
+        });
+    @endif
+
+    // ====== Phase 10: RE-OPEN a reversed session (reversed → counting) ======
+    @if ($canReopen)
+        $('#reopenBtn').on('click', function () {
+            Swal.fire({
+                icon: 'warning',
+                title: 'Re-open this reversed session?',
+                html: '<p class="text-start">The session returns to <strong>Counting</strong>. '
+                    + 'The reversal stays as audit history; stock_take_items are reset so you can re-enter counts. '
+                    + 'After correcting, you can <strong>re-post</strong> (creates a new journal entry). '
+                    + 'A reason is required.</p>',
+                input: 'textarea',
+                inputLabel: 'Re-open reason (required)',
+                inputPlaceholder: 'Why is this reversed session being re-opened?',
+                showCancelButton: true,
+                confirmButtonText: '<i class="fas fa-arrow-rotate-right"></i> Re-open session',
+                confirmButtonColor: '#fd7e14',
+                cancelButtonText: 'Keep reversed',
+                reverseButtons: true,
+                inputValidator: function (value) {
+                    if (!value || !value.trim()) {
+                        return 'A re-open reason is required.';
+                    }
+                    return null;
+                }
+            }).then(function (result) {
+                if (result.isConfirmed) {
+                    $('#reopenReasonField').val(result.value.trim());
+                    var $btn = $('#reopenBtn');
+                    $btn.prop('disabled', true)
+                        .html('<i class="fas fa-spinner fa-spin me-1"></i> Re-opening…');
+                    $('#reopenForm').submit();
                 }
             });
         });

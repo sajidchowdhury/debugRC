@@ -27,7 +27,15 @@ use App\Services\Stock\StockTakePolicyService;
  *      b. Post GL journal (Dr/Cr Inventory vs Shrinkage/Surplus)
  *      c. Mark item is_applied=true
  *      status → posted
- *   5. cancelSession: if posted, reverse stock + GL; if draft/counting, just mark cancelled.
+ *   5. cancelSession: Phase 10 — draft/counting only (no reversal). Sets
+ *      status='cancelled'. For posted sessions, use reverseSession (below).
+ *   5b. reverseSession: Phase 10 — posted only. Full stock + GL reversal.
+ *      Sets status='reversed' + reversal columns. Re-openable.
+ *   5c. reOpen: Phase 10 — reversed → counting. Preserves the reversal rows
+ *      as audit history; resets stock_take_items.is_applied=false so the
+ *      counts can be corrected and the session re-posted (creates a NEW
+ *      journal entry; the old one stays linked via reversal_of_entry_id).
+ *      Capped by the stock_take.max_reopens policy.
  *
  * The difference column (physical_qty - system_qty) is a PG GENERATED STORED
  * column — the DB computes it, not the app.
@@ -1917,6 +1925,14 @@ class StockTakeService
                     'total_gain'       => round($totalGain, 4),
                     'total_loss'       => round($totalLoss, 4),
                     'journal_entry_id' => $journalEntryId,
+                    // Phase 10: if this is a re-post (after re-open), record
+                    // the re-open context so the audit timeline shows the full
+                    // post → reverse → re_open → re-post chain. re_open_count
+                    // is 0 for a first post; >0 for a re-post. reversal_of_
+                    // entry_id links back to the prior reversed post's JE.
+                    'is_repost'             => ((int) $session->re_open_count) > 0,
+                    're_open_count'         => (int) $session->re_open_count,
+                    'reversal_of_entry_id'  => $session->reversal_of_entry_id,
                     'stock_movements'  => $varianceItems->count(),
                     // Phase 9: cost-drift revaluation summary. total_revaluation
                     // is the net (post_rate - system_rate) * physical_qty across
@@ -2014,14 +2030,26 @@ class StockTakeService
     }
 
     /**
-     * Phase 5: Cancel a session.
-     * - If posted: reverse stock + GL.
-     * - If draft/counting: just mark cancelled.
+     * Phase 10: Cancel a session.
+     *
+     * Draft/counting only — NO stock or GL reversal (nothing was applied).
+     * Sets status='cancelled'. For posted sessions, use reverseSession() —
+     * cancelling a posted session is a category error (it has stock + GL
+     * impact that must be reversed, not just marked dead).
+     *
+     * Phase 0–9 behaviour was conflated: cancelSession did both "cancel a
+     * draft" and "reverse a posted session" under one method. Phase 10
+     * splits them so the audit trail distinguishes the two semantically
+     * different operations. The old `cancelled` terminal state is now
+     * reserved for never-posted sessions; `reversed` is the terminal-ish
+     * state for posted sessions that have been rolled back.
      *
      * @param int $sessionId
      * @param int $cancelledBy
      * @param string $reason
      * @return StockTakeSession
+     * @throws \RuntimeException If session is posted (use reverseSession),
+     *                           already cancelled/reversed, or not found.
      */
     public function cancelSession(int $sessionId, int $cancelledBy, string $reason = ''): StockTakeSession
     {
@@ -2033,82 +2061,36 @@ class StockTakeService
             if ($session->isCancelled()) {
                 throw new \RuntimeException("Session is already cancelled.");
             }
+            if ($session->isReversed()) {
+                throw new \RuntimeException("Session is already reversed. Use re-open to return it to counting.");
+            }
+            if ($session->isPosted()) {
+                // Phase 10: posted sessions must be REVERSED, not cancelled.
+                // Reversal properly undoes the stock movements + GL entry;
+                // cancelling would leave the books out of sync. Point the
+                // caller at the right method.
+                throw new \RuntimeException(
+                    "Posted sessions cannot be cancelled — they must be reversed. "
+                    . "Call reverseSession() to undo the stock movements and GL entry, "
+                    . "then optionally reOpen() to return the session to counting."
+                );
+            }
 
             // Capture the transition's from-status BEFORE any writes (Phase 2).
             $fromStatus = $session->status;
-            $wasPosted  = $session->isPosted();
-            $stockTxsReversed = 0;
-            $journalReversed = false;
-
-            if ($session->isPosted()) {
-                // Reverse GL.
-                if ($session->journal_entry_id) {
-                    $this->journalPosting->reverseJournalEntry(
-                        $session->journal_entry_id,
-                        $cancelledBy,
-                        "Stock take cancelled: {$reason}"
-                    );
-                    $journalReversed = true;
-                }
-
-                // Reverse each stock movement.
-                $stockTxs = DB::table('stock_transactions')
-                    ->where('reference_type', 'stock_take')
-                    ->where('reference_id', $sessionId)
-                    ->where('is_reversed', false)
-                    ->get();
-
-                foreach ($stockTxs as $tx) {
-                    $this->stockService->reverseTransaction(
-                        $tx->id, $cancelledBy,
-                        "Stock take cancelled: {$reason}"
-                    );
-                    $stockTxsReversed++;
-                }
-
-                DB::table('stock_take_sessions')
-                    ->where('id', $sessionId)
-                    ->update([
-                        'is_reversed' => true,
-                        'reversed_at' => now(),
-                        'reversed_by' => $cancelledBy,
-                        'reverse_reason' => $reason,
-                    ]);
-            }
 
             DB::table('stock_take_sessions')
                 ->where('id', $sessionId)
                 ->update(['status' => 'cancelled', 'updated_at' => now()]);
 
             // Phase 3: release the outbound freeze on this session's warehouses.
-            // A cancelled session is no longer "actively counting" — same as a
-            // posted session, the freeze must end. If the session was never
-            // frozen (freeze_outbound=false) this is a no-op recomputation that
-            // leaves flags unchanged. Honors overlapping sessions.
+            // A cancelled session is no longer "actively counting" — the freeze
+            // must end. If the session was never frozen (freeze_outbound=false)
+            // this is a no-op recomputation that leaves flags unchanged.
+            // Honors overlapping sessions.
             $this->releaseSessionFreeze($sessionId);
 
-            // Phase 2: audit-log the cancel. For a posted session this is a
-            // reversal (logged as action='reverse' so the critical-events
-            // partial index catches it); for a draft/counting session this
-            // is a plain cancel. Both write a 'cancel' row so the timeline
-            // shows the user-facing action; the 'reverse' row (when present)
-            // records the underlying stock+GL rollback.
-            if ($wasPosted) {
-                $this->auditLogger->log(
-                    session:    $session,
-                    action:     'reverse',
-                    fromStatus: $fromStatus,
-                    toStatus:   'cancelled',
-                    payload:    [
-                        'reason'              => $reason,
-                        'stock_reversed'      => $stockTxsReversed,
-                        'journal_reversed'    => $journalReversed,
-                        'journal_entry_id'    => $session->journal_entry_id,
-                    ],
-                    actorId:    $cancelledBy,
-                );
-            }
-
+            // Phase 2: audit-log the cancel (no reversal — nothing to reverse).
             $this->auditLogger->log(
                 session:    $session,
                 action:     'cancel',
@@ -2116,12 +2098,306 @@ class StockTakeService
                 toStatus:   'cancelled',
                 payload:    [
                     'reason'      => $reason,
-                    'was_posted'  => $wasPosted,
+                    'was_posted'  => false,
                     // Phase 3: record whether the freeze was released.
                     'freeze_outbound' => (bool) $session->freeze_outbound,
                     'freeze_released' => (bool) $session->freeze_outbound,
                 ],
                 actorId:    $cancelledBy,
+            );
+
+            return StockTakeSession::find($sessionId);
+        });
+    }
+
+    /**
+     * Phase 10: Reverse a POSTED session.
+     *
+     * Full stock + GL reversal. Sets status='reversed' + the four reversal
+     * columns (is_reversed, reversed_at, reversed_by, reverse_reason). The
+     * prior journal_entry_id is preserved on the session row AND linked via
+     * the new reversal_of_entry_id column so the audit chain is traceable
+     * (the original post's JE stays linked even after a re-post creates a
+     * new JE).
+     *
+     * The reversal is append-only: the original stock_transactions and
+     * journal_entries rows stay (they are history); new reversal rows are
+     * created with is_reversed=true pointing back at them. This matches the
+     * Phase 0 reversal pattern used by every other transactional table.
+     *
+     * A reversed session can be re-opened via reOpen() (reversed → counting)
+     * up to the stock_take.max_reopens policy cap.
+     *
+     * @param int $sessionId
+     * @param int $reversedBy
+     * @param string $reason  REQUIRED — the reversal reason (audit trail).
+     * @return StockTakeSession
+     * @throws \RuntimeException If session is not posted, already reversed,
+     *                           or not found.
+     */
+    public function reverseSession(int $sessionId, int $reversedBy, string $reason = ''): StockTakeSession
+    {
+        if (trim($reason) === '') {
+            throw new \RuntimeException('A reversal reason is required.');
+        }
+
+        return DB::transaction(function () use ($sessionId, $reversedBy, $reason) {
+            $session = StockTakeSession::lockForUpdate()->find($sessionId);
+            if (!$session) {
+                throw new \RuntimeException("Session {$sessionId} not found.");
+            }
+            if ($session->isReversed()) {
+                throw new \RuntimeException("Session is already reversed.");
+            }
+            if ($session->isCancelled()) {
+                throw new \RuntimeException("Session is cancelled (never posted) — nothing to reverse.");
+            }
+            if (!$session->isPosted()) {
+                throw new \RuntimeException(
+                    "Only posted sessions can be reversed (current: {$session->status}). "
+                    . "Draft/counting sessions should be cancelled instead."
+                );
+            }
+
+            // Capture the transition's from-status BEFORE any writes (Phase 2).
+            $fromStatus = $session->status;
+            $priorJournalEntryId = $session->journal_entry_id;
+
+            $stockTxsReversed = 0;
+            $journalReversed = false;
+            $reversalEntryId = null;
+
+            // Reverse GL.
+            if ($priorJournalEntryId) {
+                $reversalEntryId = $this->journalPosting->reverseJournalEntry(
+                    $priorJournalEntryId,
+                    $reversedBy,
+                    "Stock take reversed: {$reason}"
+                );
+                $journalReversed = true;
+            }
+
+            // Reverse each stock movement.
+            $stockTxs = DB::table('stock_transactions')
+                ->where('reference_type', 'stock_take')
+                ->where('reference_id', $sessionId)
+                ->where('is_reversed', false)
+                ->get();
+
+            foreach ($stockTxs as $tx) {
+                $this->stockService->reverseTransaction(
+                    $tx->id, $reversedBy,
+                    "Stock take reversed: {$reason}"
+                );
+                $stockTxsReversed++;
+            }
+
+            // Phase 10: set status='reversed' + reversal columns + link the
+            // prior journal entry via reversal_of_entry_id (the audit chain).
+            // journal_entry_id is left pointing at the ORIGINAL post's JE
+            // (which is now is_reversed=true) so the show page can still
+            // render the original JE; reversal_of_entry_id holds the SAME
+            // value, distinguishing "this is the post being reversed" from
+            // a future re-post's fresh journal_entry_id.
+            DB::table('stock_take_sessions')
+                ->where('id', $sessionId)
+                ->update([
+                    'status' => 'reversed',
+                    'is_reversed' => true,
+                    'reversed_at' => now(),
+                    'reversed_by' => $reversedBy,
+                    'reverse_reason' => $reason,
+                    // Preserve journal_entry_id (the original post's JE) AND
+                    // mirror it into reversal_of_entry_id so the audit chain
+                    // survives a re-post (which will overwrite journal_entry_id
+                    // with the NEW JE's id, leaving reversal_of_entry_id as
+                    // the permanent link to the reversed prior post).
+                    'reversal_of_entry_id' => $priorJournalEntryId,
+                    'updated_at' => now(),
+                ]);
+
+            // Phase 3: release the outbound freeze on this session's
+            // warehouses. A reversed session is no longer "actively counting".
+            $this->releaseSessionFreeze($sessionId);
+
+            // Phase 2: audit-log the reversal. action='reverse' so the
+            // critical-events partial index catches it. from→to is
+            // posted→reversed (the new Phase 10 distinction).
+            $this->auditLogger->log(
+                session:    $session,
+                action:     'reverse',
+                fromStatus: $fromStatus,
+                toStatus:   'reversed',
+                payload:    [
+                    'reason'              => $reason,
+                    'stock_reversed'      => $stockTxsReversed,
+                    'journal_reversed'    => $journalReversed,
+                    'journal_entry_id'    => $priorJournalEntryId,
+                    'reversal_entry_id'   => $reversalEntryId,
+                    'reversal_of_entry_id' => $priorJournalEntryId,
+                ],
+                actorId:    $reversedBy,
+            );
+
+            return StockTakeSession::find($sessionId);
+        });
+    }
+
+    /**
+     * Phase 10: Re-open a REVERSED session for correction + re-posting.
+     *
+     * Transitions reversed → counting. The reversal rows in
+     * stock_transactions and journal_entries STAY (they are audit history
+     * — append-only). stock_take_items.is_applied is reset to false so the
+     * counts can be re-entered and the session re-posted. Re-posting
+     * (postSession) creates a NEW journal entry; the old reversed entry
+     * stays linked on the session via reversal_of_entry_id.
+     *
+     * The re_open_count is incremented and capped by the
+     * stock_take.max_reopens policy (default 1). Exceeding the cap throws
+     * a clear error. last_reopened_at/by record the most recent re-open.
+     *
+     * The approval workflow is reset: submitted_by/at and approved_by/at
+     * are cleared so the re-counted session goes through approval again
+     * (a re-opened session is a materially different count from the
+     * original; the prior approval does not carry over).
+     *
+     * @param int $sessionId
+     * @param int $reopenedBy
+     * @param string $reason  REQUIRED — the re-open reason (audit trail).
+     * @return StockTakeSession
+     * @throws \RuntimeException If session is not reversed, the re-open cap
+     *                           is exceeded, or the session is not found.
+     */
+    public function reOpen(int $sessionId, int $reopenedBy, string $reason = ''): StockTakeSession
+    {
+        if (trim($reason) === '') {
+            throw new \RuntimeException('A re-open reason is required.');
+        }
+
+        return DB::transaction(function () use ($sessionId, $reopenedBy, $reason) {
+            $session = StockTakeSession::lockForUpdate()->find($sessionId);
+            if (!$session) {
+                throw new \RuntimeException("Session {$sessionId} not found.");
+            }
+            if (!$session->isReversed()) {
+                throw new \RuntimeException(
+                    "Only reversed sessions can be re-opened (current: {$session->status})."
+                );
+            }
+
+            // Phase 10: enforce the re-open cap. max_reopens=0 forbids re-
+            // opening entirely (reversed = hard terminal). max_reopens=1
+            // (default) allows one re-open per session.
+            $maxReopens = $this->policyService->maxReopens();
+            $currentCount = (int) $session->re_open_count;
+            if ($maxReopens <= 0) {
+                throw new \RuntimeException(
+                    "This session cannot be re-opened (policy stock_take.max_reopens=0 — "
+                    . "reversed is a hard terminal state)."
+                );
+            }
+            if ($currentCount >= $maxReopens) {
+                throw new \RuntimeException(
+                    "This session has already been re-opened {$currentCount} time(s) and "
+                    . "cannot be re-opened again (policy cap: stock_take.max_reopens={$maxReopens}). "
+                    . "Create a new stock-take session if further correction is needed."
+                );
+            }
+
+            // Capture the transition's from-status BEFORE any writes (Phase 2).
+            $fromStatus = $session->status;
+            $newCount = $currentCount + 1;
+
+            // Reset stock_take_items so the counts can be re-entered:
+            //   - is_applied = false (so postSession will re-apply them)
+            //   - journal_line_id = null (the old line points at the reversed JE)
+            //   - revaluation_line_id = null (same — the old reval line is reversed)
+            //   - post_rate = null (Phase 9: re-fetched at the next post)
+            //   - revaluation_amount = 0 (Phase 9: recomputed at the next post)
+            // physical_qty is PRESERVED so the counter sees the prior count
+            // and adjusts (same UX as a recount — the counter doesn't start
+            // from a blank slate). system_rate is the immutable setup
+            // snapshot and stays. rate (the GL rate) is overwritten at the
+            // next post with the new post-time cost.
+            DB::table('stock_take_items')
+                ->where('stock_take_session_id', $sessionId)
+                ->update([
+                    'is_applied' => false,
+                    'journal_line_id' => null,
+                    'revaluation_line_id' => null,
+                    'post_rate' => null,
+                    'revaluation_amount' => 0,
+                    'updated_at' => now(),
+                ]);
+
+            // Reset warehouse statuses: any 'completed' warehouse goes back
+            // to 'counting' so the counter can re-enter counts. 'pending'/
+            // 'counting' warehouses stay as-is (the counter was mid-count).
+            // 'recounting' (Phase 7 transient) also goes to 'counting'.
+            DB::table('stock_take_warehouses')
+                ->where('stock_take_session_id', $sessionId)
+                ->whereIn('status', ['completed', 'recounting'])
+                ->update(['status' => 'counting', 'updated_at' => now()]);
+
+            // Transition reversed → counting + bump re_open_count + record
+            // who/when + reset the approval workflow (the re-counted session
+            // must go through approval again — the prior approval does not
+            // carry over to a materially different count).
+            //
+            // journal_entry_id is LEFT pointing at the (now-reversed) prior
+            // post's JE. The show page renders it with a "reversed" badge.
+            // When the session is re-posted, postSession overwrites it with
+            // the NEW JE's id. reversal_of_entry_id stays as the permanent
+            // audit link to the reversed prior post.
+            DB::table('stock_take_sessions')
+                ->where('id', $sessionId)
+                ->update([
+                    'status' => 'counting',
+                    're_open_count' => $newCount,
+                    'last_reopened_at' => now(),
+                    'last_reopened_by' => $reopenedBy,
+                    // Reset approval workflow — the re-counted session must
+                    // be submitted + approved again.
+                    'submitted_by' => null,
+                    'submitted_at' => null,
+                    'approved_by' => null,
+                    'approved_at' => null,
+                    'approval_comments' => null,
+                    'updated_at' => now(),
+                ]);
+
+            // Phase 3: re-assert the outbound freeze if the session was
+            // originally freezing. A re-opened counting session is "actively
+            // counting" again, so the freeze must resume. refreshWarehouse-
+            // FreezeFlags recomputes from ALL active sessions — if this
+            // session freezes, its warehouses' flags go back to true.
+            if ($session->freeze_outbound) {
+                $whIds = DB::table('stock_take_warehouses')
+                    ->where('stock_take_session_id', $sessionId)
+                    ->pluck('warehouse_id')
+                    ->all();
+                $this->refreshWarehouseFreezeFlags($whIds);
+            }
+
+            // Phase 2: audit-log the re-open. action='re_open' so the
+            // critical-events partial index catches it. from→to is
+            // reversed→counting.
+            $this->auditLogger->log(
+                session:    $session,
+                action:     're_open',
+                fromStatus: $fromStatus,
+                toStatus:   'counting',
+                payload:    [
+                    'reason'              => $reason,
+                    're_open_count'       => $newCount,
+                    'max_reopens'         => $maxReopens,
+                    'reopens_remaining'   => max(0, $maxReopens - $newCount),
+                    'prior_journal_entry_id' => $session->journal_entry_id,
+                    'reversal_of_entry_id'   => $session->reversal_of_entry_id,
+                    'approval_reset'      => true,
+                ],
+                actorId:    $reopenedBy,
             );
 
             return StockTakeSession::find($sessionId);
