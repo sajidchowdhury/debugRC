@@ -6,24 +6,33 @@ use App\Http\Controllers\Controller;
 use App\Helpers\ReportsCatalog;
 use App\Services\Reports\ReportService;
 use App\Services\Reports\CteReportService;
+use App\Services\Stock\StockTakeVarianceReport;
+use App\Services\Stock\StockTakeWeeklyReport;
+use App\Services\Accounting\JournalPostingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
 /**
  * Report Controller — Phase 5.
  *
- * Serves the reports hub + 18 financial/operational reports.
+ * Serves the reports hub + 23 financial/operational reports.
  * Uses ReportService for query execution (which uses materialized views).
+ *
+ * Phase 6 (Stock Take plan): real variance + weekly reports with CSV
+ * export and per-line GL drill-down (replaces the previous stubs).
  */
 class ReportController extends Controller
 {
     public function __construct(
         private ReportService $reportService,
-        private CteReportService $cteReportService
+        private CteReportService $cteReportService,
+        private StockTakeVarianceReport $stocktakeVarianceReport,
+        private StockTakeWeeklyReport $stocktakeWeeklyReport,
+        private JournalPostingService $journalPosting,
     ) {}
 
     /**
-     * Reports hub — catalog of all 18 reports grouped by category.
+     * Reports hub — catalog of all 23 reports grouped by category.
      */
     public function index()
     {
@@ -433,20 +442,174 @@ SQL, [$data['from'], $data['to']]);
         return redirect()->route('admin.purchase-audit.checklist');
     }
 
+    // ============================================================
+    // Phase 6 (Stock Take plan): Variance + Weekly control reports.
+    // Replaces the previous session-listing stubs with real per-line
+    // variance numbers, summary totals, CSV export (Excel-friendly BOM),
+    // and a per-line GL drill-down modal. Branch isolation is enforced
+    // by RLS on stock_take_sessions (no manual WHERE branch_id needed).
+    // ============================================================
+
+    /**
+     * Stock Take Variance detail report — every count line where
+     * physical ≠ system, with filters (session / branch / warehouse /
+     * product / date range) and CSV export.
+     */
     public function stocktakeVariance(Request $request)
     {
         $data = $this->parseDateRange($request);
-        $rows = \Illuminate\Support\Facades\DB::table('stock_take_sessions as sts')
-            ->join('branches as b', 'b.id', '=', 'sts.branch_id')
-            ->whereBetween('sts.session_date', [$data['from'], $data['to']])
-            ->select('sts.id', 'sts.session_code', 'sts.session_date', 'sts.status', 'b.branch_name')
-            ->orderBy('sts.session_date', 'desc')
-            ->paginate(25);
+
+        $filters = [
+            'from'          => $data['from']->format('Y-m-d'),
+            'to'            => $data['to']->format('Y-m-d'),
+            'session_id'    => $request->filled('session_id') ? (int) $request->input('session_id') : null,
+            'branch_id'     => $request->filled('branch_id') ? (int) $request->input('branch_id') : null,
+            'warehouse_id'  => $request->filled('warehouse_id') ? (int) $request->input('warehouse_id') : null,
+            'product_id'    => $request->filled('product_id') ? (int) $request->input('product_id') : null,
+        ];
+
+        $rows    = $this->stocktakeVarianceReport->getVarianceLines($filters);
+        $summary = $this->stocktakeVarianceReport->summarize($rows);
+
+        // Paginate manually (the report materialises all matching rows so we
+        // can compute accurate totals across the full result set).
+        $page    = max(1, (int) $request->input('page', 1));
+        $perPage = 50;
+        $paged   = array_slice($rows, ($page - 1) * $perPage, $perPage);
+        $paginator = new \Illuminate\Pagination\LengthAwarePaginator(
+            $paged,
+            count($rows),
+            $perPage,
+            $page,
+            ['path' => $request->url(), 'query' => $request->query()],
+        );
+
+        // Filter dropdowns (RLS-scoped by branch automatically).
+        $sessions   = $this->stocktakeVarianceReport->getSessionsList();
+        $branches   = \App\Models\Branch::active()->orderBy('branch_name')->get();
+        $warehouses = \App\Models\Warehouse::orderBy('warehouse_name')->get();
 
         return view('admin.reports.stocktake_variance', [
-            'meta' => ['title' => 'Stock Take Variance', 'from_date' => $data['from']->format('Y-m-d'), 'to_date' => $data['to']->format('Y-m-d')],
-            'data' => $rows,
+            'meta'        => [
+                'title'     => 'Stock Take Variance',
+                'from_date' => $data['from']->format('Y-m-d'),
+                'to_date'   => $data['to']->format('Y-m-d'),
+            ],
+            'data'        => $paginator,
+            'summary'     => $summary,
+            'filters'     => $filters,
+            'sessions'    => $sessions,
+            'branches'    => $branches,
+            'warehouses'  => $warehouses,
+            'is_admin'    => $this->currentUserIsAdmin(),
         ]);
+    }
+
+    /**
+     * CSV export of the variance detail report (Excel-friendly, BOM-prefixed).
+     */
+    public function stocktakeVarianceExport(Request $request)
+    {
+        $data = $this->parseDateRange($request);
+
+        $filters = [
+            'from'          => $data['from']->format('Y-m-d'),
+            'to'            => $data['to']->format('Y-m-d'),
+            'session_id'    => $request->filled('session_id') ? (int) $request->input('session_id') : null,
+            'branch_id'     => $request->filled('branch_id') ? (int) $request->input('branch_id') : null,
+            'warehouse_id'  => $request->filled('warehouse_id') ? (int) $request->input('warehouse_id') : null,
+            'product_id'    => $request->filled('product_id') ? (int) $request->input('product_id') : null,
+        ];
+
+        $rows = $this->stocktakeVarianceReport->getVarianceLines($filters);
+        return $this->stocktakeVarianceReport->exportCsv($rows);
+    }
+
+    /**
+     * AJAX: return the journal entry + lines for a stock-take session
+     * (GL drill-down). Used by the variance report's "View GL" modal.
+     *
+     * The session must have a posted journal_entry_id; otherwise an empty
+     * payload is returned. RLS scopes the session row.
+     */
+    public function stocktakeVarianceJournal(Request $request, int $session)
+    {
+        $sessionId = (int) $session;
+        $sessionRow = \Illuminate\Support\Facades\DB::table('stock_take_sessions')
+            ->where('id', $sessionId)
+            ->select('id', 'session_code', 'journal_entry_id', 'status', 'is_reversed')
+            ->first();
+
+        if (!$sessionRow || empty($sessionRow->journal_entry_id)) {
+            return response()->json(['entry' => null, 'lines' => [], 'session' => $sessionRow]);
+        }
+
+        ['entry' => $entry, 'lines' => $lines] = $this->journalPosting->getEntryWithLines(
+            (int) $sessionRow->journal_entry_id
+        );
+
+        return response()->json([
+            'session' => $sessionRow,
+            'entry'   => $entry,
+            'lines'   => $lines,
+        ]);
+    }
+
+    /**
+     * Stock Take Weekly control report — posted/reversed/in-flight sessions
+     * in the period with gain/loss totals and top-variance SKUs.
+     */
+    public function stocktakeWeekly(Request $request)
+    {
+        $from = $request->input('from_date')
+            ? Carbon::parse($request->input('from_date'))->format('Y-m-d')
+            : Carbon::now()->subDays(6)->format('Y-m-d');
+        $to = $request->input('to_date')
+            ? Carbon::parse($request->input('to_date'))->format('Y-m-d')
+            : Carbon::now()->format('Y-m-d');
+        $branchId = $request->filled('branch_id') ? (int) $request->input('branch_id') : null;
+
+        $report = $this->stocktakeWeeklyReport->getWeekly($from, $to, $branchId);
+        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
+
+        return view('admin.reports.stocktake_weekly', array_merge($report, [
+            'meta'     => [
+                'title'     => 'Stock Take — Weekly Control',
+                'from_date' => $from,
+                'to_date'   => $to,
+            ],
+            'branches' => $branches,
+            'is_admin' => $this->currentUserIsAdmin(),
+        ]));
+    }
+
+    /**
+     * CSV export of the weekly control report (Excel-friendly, BOM-prefixed).
+     */
+    public function stocktakeWeeklyExport(Request $request)
+    {
+        $from = $request->input('from_date')
+            ? Carbon::parse($request->input('from_date'))->format('Y-m-d')
+            : Carbon::now()->subDays(6)->format('Y-m-d');
+        $to = $request->input('to_date')
+            ? Carbon::parse($request->input('to_date'))->format('Y-m-d')
+            : Carbon::now()->format('Y-m-d');
+        $branchId = $request->filled('branch_id') ? (int) $request->input('branch_id') : null;
+
+        $report = $this->stocktakeWeeklyReport->getWeekly($from, $to, $branchId);
+        return $this->stocktakeWeeklyReport->exportCsv($report);
+    }
+
+    /**
+     * Whether the authenticated user is an admin (sees all branches).
+     * Phase 6 (Stock Take plan): non-admin users only see their own
+     * branch's data — enforced by RLS, but we also hide the branch
+     * filter dropdown for non-admins (legacy parity).
+     */
+    private function currentUserIsAdmin(): bool
+    {
+        $user = \Illuminate\Support\Facades\Auth::user();
+        return $user && (method_exists($user, 'isAdmin') ? $user->isAdmin() : ($user->role ?? null) === 'admin');
     }
 
     public function branchDemandWeekly(Request $request)

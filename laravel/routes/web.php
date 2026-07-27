@@ -344,7 +344,14 @@ Route::middleware('auth')->group(function () {
         // Operations
         Route::get('sales-audit-checklist', [ReportController::class, 'salesAuditChecklist'])->name('salesAuditChecklist');
         Route::get('purchase-audit', [ReportController::class, 'purchaseAudit'])->name('purchaseAudit');
+        // Phase 6 (Stock Take plan): variance + weekly control reports with
+        // CSV export (Excel-friendly BOM) and per-line GL drill-down.
+        // RLS on stock_take_sessions scopes reads by branch automatically.
         Route::get('stocktake-variance', [ReportController::class, 'stocktakeVariance'])->name('stocktakeVariance');
+        Route::get('stocktake-variance/export', [ReportController::class, 'stocktakeVarianceExport'])->name('stocktakeVarianceExport');
+        Route::get('stocktake-variance/journal/{session}', [ReportController::class, 'stocktakeVarianceJournal'])->name('stocktakeVarianceJournal');
+        Route::get('stocktake-weekly', [ReportController::class, 'stocktakeWeekly'])->name('stocktakeWeekly');
+        Route::get('stocktake-weekly/export', [ReportController::class, 'stocktakeWeeklyExport'])->name('stocktakeWeeklyExport');
         Route::get('branch-demand-weekly', [ReportController::class, 'branchDemandWeekly'])->name('branchDemandWeekly');
 
         // Phase 1E (Task 32): CTE-Based Reports (single-query complex aggregation)
