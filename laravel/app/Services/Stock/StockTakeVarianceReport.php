@@ -19,6 +19,9 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  *                      (physical_qty - system_qty).
  *   - journal_line_id  per-line GL traceability (Phase 1 feature) —
  *                      exposed as a column for drill-down.
+ *   - system_rate / post_rate / revaluation_amount (Phase 9) — costing
+ *                      columns that show the setup-time vs post-time avg
+ *                      cost and the revaluation adjusting amount.
  *
  * RLS: branch isolation is enforced at the DB layer on stock_take_sessions
  * (and cascades to stock_take_items via the session join). No manual
@@ -60,9 +63,17 @@ class StockTakeVarianceReport
                 'sti.difference as variance_qty',
                 'sti.rate',
                 DB::raw('(sti.difference * COALESCE(sti.rate, 0)) as value_diff'),
+                // Phase 9: costing columns. system_rate = setup-time avg cost
+                // (snapshot); post_rate = post-time avg cost (re-fetched at post);
+                // revaluation_amount = (post_rate - system_rate) * physical_qty
+                // when the drift exceeded epsilon, else 0.
+                'sti.system_rate',
+                'sti.post_rate',
+                'sti.revaluation_amount',
                 'sti.reason',
                 'sti.is_applied',
-                'sti.journal_line_id'
+                'sti.journal_line_id',
+                'sti.revaluation_line_id'
             );
 
         if (!empty($filters['from']) && !empty($filters['to'])) {
@@ -93,7 +104,7 @@ class StockTakeVarianceReport
      * Totals for a set of variance lines.
      *
      * @param array<int, object> $rows
-     * @return array{total_items:int, total_variance:float, total_value_diff:float, gain_lines:int, loss_lines:int, gain_value:float, loss_value:float}
+     * @return array{total_items:int, total_variance:float, total_value_diff:float, gain_lines:int, loss_lines:int, gain_value:float, loss_value:float, total_revaluation:float, reval_lines:int}
      */
     public function summarize(array $rows): array
     {
@@ -104,6 +115,9 @@ class StockTakeVarianceReport
         $lossLines = 0;
         $gainValue = 0.0;
         $lossValue = 0.0;
+        // Phase 9: revaluation totals.
+        $totalRevaluation = 0.0;
+        $revalLines = 0;
 
         foreach ($rows as $row) {
             $qty = (float) ($row->variance_qty ?? 0);
@@ -117,16 +131,25 @@ class StockTakeVarianceReport
                 $lossLines++;
                 $lossValue += abs($val);
             }
+            // Phase 9: accumulate the revaluation adjusting amount.
+            $reval = (float) ($row->revaluation_amount ?? 0);
+            if (abs($reval) >= 0.01) {
+                $revalLines++;
+                $totalRevaluation += $reval;
+            }
         }
 
         return [
-            'total_items'      => $totalItems,
-            'total_variance'   => round($totalVariance, 4),
-            'total_value_diff' => round($totalValue, 2),
-            'gain_lines'       => $gainLines,
-            'loss_lines'       => $lossLines,
-            'gain_value'       => round($gainValue, 2),
-            'loss_value'       => round($lossValue, 2),
+            'total_items'        => $totalItems,
+            'total_variance'     => round($totalVariance, 4),
+            'total_value_diff'   => round($totalValue, 2),
+            'gain_lines'         => $gainLines,
+            'loss_lines'         => $lossLines,
+            'gain_value'         => round($gainValue, 2),
+            'loss_value'         => round($lossValue, 2),
+            // Phase 9: cost-drift revaluation summary.
+            'total_revaluation'  => round($totalRevaluation, 6),
+            'reval_lines'        => $revalLines,
         ];
     }
 
@@ -175,7 +198,8 @@ class StockTakeVarianceReport
             fprintf($out, chr(0xEF) . chr(0xBB) . chr(0xBF));
             fputcsv($out, [
                 'Session', 'Date', 'Branch', 'Warehouse', 'Code', 'Product',
-                'System', 'Physical', 'Variance Qty', 'Rate', 'Value Diff', 'Reason', 'Applied',
+                'System', 'Physical', 'Variance Qty', 'System Rate', 'Post Rate',
+                'Value Diff', 'Revaluation', 'Reason', 'Applied',
             ]);
             foreach ($rows as $r) {
                 fputcsv($out, [
@@ -188,8 +212,13 @@ class StockTakeVarianceReport
                     $r->system_qty ?? 0,
                     $r->physical_qty ?? 0,
                     $r->variance_qty ?? 0,
-                    $r->rate ?? 0,
+                    // Phase 9: system_rate = setup-time avg cost,
+                    // post_rate = post-time avg cost, revaluation_amount =
+                    // the adjusting entry for the cost drift.
+                    $r->system_rate ?? 0,
+                    $r->post_rate ?? 0,
                     $r->value_diff ?? 0,
+                    $r->revaluation_amount ?? 0,
                     $r->reason ?? '',
                     !empty($r->is_applied) ? 'Yes' : 'No',
                 ]);

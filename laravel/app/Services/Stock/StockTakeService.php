@@ -285,6 +285,18 @@ class StockTakeService
                     // Read off the (already locked) session row so it is always
                     // consistent with the session's branch.
                     'branch_id' => (int) $session->branch_id,
+                    // Phase 9: system_rate is the setup-time avg cost snapshot.
+                    // Immutable after insert — the post-time cost (post_rate) is
+                    // captured separately at postSession, and the drift between
+                    // the two drives the revaluation adjusting entry. `rate`
+                    // above is the post-time rate used for GL; it starts as the
+                    // setup rate (so the variance report shows something useful
+                    // before post) and is overwritten with the live avg cost at
+                    // post time.
+                    'system_rate' => $p->rate,
+                    'post_rate' => null,
+                    'revaluation_amount' => 0,
+                    'revaluation_line_id' => null,
                     'updated_at' => $now,
                 ];
             }
@@ -1685,16 +1697,45 @@ class StockTakeService
 
             $totalGain = 0.0;
             $totalLoss = 0.0;
-            $resolvedRates = []; // item_id => rate (for the deferred is_applied update)
+            $totalRevaluation = 0.0;
+            // item_id => [rate, post_rate, system_rate, revaluation_amount, revaluation_line_id]
+            // (resolved per line; written back to the item rows after GL posting so
+            // the per-line journal_line_id / revaluation_line_id are available.)
+            $resolved = [];
+
+            // Phase 9: epsilon for the revaluation trigger. When the post-time
+            // avg cost drifts from the setup-time system_rate by more than this,
+            // an additional Dr/Cr Inventory/Inventory Revaluation Expense line is
+            // posted for (post_rate - system_rate) * physical_qty.
+            $revaluationEpsilon = $this->policyService->revaluationEpsilon();
 
             foreach ($varianceItems as $item) {
                 $variance = (float) $item->physical_qty - (float) $item->system_qty;
-                $rate = (float) $item->rate;
-                if ($rate <= 0) {
-                    $rate = $this->stockService->getWarehouseAvgCost(
-                        $item->warehouse_id, $item->product_id
-                    );
+
+                // Phase 9: re-fetch the LIVE post-time avg cost. The snapshot
+                // rate (item->rate, captured at setup) may have drifted because
+                // of inbound receipts, cost adjustments, transfers, or another
+                // posted stock-take between setup and post. The GL must reflect
+                // the cost as it stands at the moment of posting, not setup —
+                // otherwise the books drift out of sync with the stock value.
+                $postRate = $this->stockService->getWarehouseAvgCost(
+                    $item->warehouse_id, $item->product_id
+                );
+                // Guard against a zero/negative post-time cost (e.g. a brand-
+                // new product with no inbound yet). Fall back to the snapshot
+                // rate so the GL entry still posts with a defensible value.
+                if ($postRate <= 0) {
+                    $postRate = (float) $item->rate;
+                    if ($postRate <= 0) {
+                        $postRate = (float) ($item->system_rate ?? 0);
+                    }
                 }
+                $rate = $postRate; // the rate used for GL valuation = post-time cost
+
+                // system_rate is the setup-time snapshot. For rows created
+                // before Phase 9, the migration backfills system_rate from
+                // rate; for rows created after, setupWarehouseCounts sets it.
+                $systemRate = (float) ($item->system_rate ?? $item->rate ?? 0);
 
                 // Apply the stock movement.
                 // Positive variance = IN (use rate for avg_cost recalc).
@@ -1712,7 +1753,7 @@ class StockTakeService
                     'created_by' => $postedBy,
                 ]);
 
-                // Track gain/loss for GL.
+                // Track gain/loss for GL (at post-time cost).
                 $value = abs($variance) * $rate;
                 if ($variance > 0) {
                     $totalGain += $value;
@@ -1720,21 +1761,60 @@ class StockTakeService
                     $totalLoss += $value;
                 }
 
-                $resolvedRates[$item->id] = $rate;
+                // Phase 9: compute the revaluation adjusting amount for this
+                // line. When the post-time cost drifted from the setup-time
+                // snapshot by more than epsilon, the book value of the
+                // COUNTED quantity (physical_qty) must be brought in line
+                // with the post-time cost. The revaluation amount is:
+                //   (post_rate - system_rate) * physical_qty
+                // Positive = cost rose → Cr Inventory Revaluation Expense /
+                // Dr Inventory (book value of counted stock increases).
+                // Negative = cost fell → Dr Revaluation Expense / Cr Inventory.
+                //
+                // Only triggered when physical_qty ≠ 0 (a zero count has no
+                // book value to revalue) AND the drift exceeds epsilon.
+                $revaluationAmount = 0.0;
+                $physicalQty = (float) $item->physical_qty;
+                if ($physicalQty != 0.0 && abs($postRate - $systemRate) > $revaluationEpsilon) {
+                    $revaluationAmount = ($postRate - $systemRate) * $physicalQty;
+                    // Round to 6dp to avoid float dust (matches the column precision).
+                    $revaluationAmount = round($revaluationAmount, 6);
+                    $totalRevaluation += $revaluationAmount;
+                }
+
+                $resolved[$item->id] = [
+                    'rate'                => $rate,
+                    'post_rate'           => $postRate,
+                    'system_rate'         => $systemRate,
+                    'revaluation_amount'  => $revaluationAmount,
+                ];
             }
 
-            // Post GL journal (single entry for the net gain/loss).
+            // Post GL journal (single entry for the net gain/loss + optional
+            // revaluation adjusting lines). Phase 9: totalRevaluation is folded
+            // into the same journal entry as separate Dr/Cr lines against
+            // Inventory Revaluation Expense, so the entire post's GL impact
+            // lives in one auditable journal entry.
             $journalEntryId = null;
             $gainInventoryLineId = null;
             $lossInventoryLineId = null;
-            if ($totalGain >= 0.01 || $totalLoss >= 0.01) {
-                $journalEntryId = $this->postStockTakeGL($session, $totalGain, $totalLoss, $postedBy);
+            $revaluationInventoryLineId = null;
+            $revaluationExpenseLineId = null;
+            if ($totalGain >= 0.01 || $totalLoss >= 0.01 || abs($totalRevaluation) >= 0.01) {
+                $journalEntryId = $this->postStockTakeGL(
+                    $session,
+                    $totalGain,
+                    $totalLoss,
+                    $postedBy,
+                    $totalRevaluation
+                );
 
                 // Phase 1: Capture per-line journal_line_id for traceability.
                 // Query back the journal lines and identify the Inventory-side lines
                 // (gain → Dr Inventory; loss → Cr Inventory). Each variance item is
-                // linked to the Inventory line of its bucket. This provides basic
-                // traceability; full 1:1 per-item lines are deferred to Phase 9.
+                // linked to the Inventory line of its bucket. Phase 9 also captures
+                // the revaluation lines so each item with cost drift links to its
+                // revaluation GL line.
                 $inventoryLedgerId = $this->journalPosting->lookupLedgerByNature('inventory');
                 if ($inventoryLedgerId) {
                     $journalLines = DB::table('journal_lines')
@@ -1748,6 +1828,29 @@ class StockTakeService
                     );
                     $gainInventoryLineId = $gainLine?->id;
                     $lossInventoryLineId = $lossLine?->id;
+
+                    // Phase 9: the revaluation pair. When totalRevaluation > 0
+                    // (cost rose), Dr Inventory / Cr Revaluation Expense. When
+                    // < 0 (cost fell), Dr Revaluation Expense / Cr Inventory.
+                    // The Inventory-side line of the revaluation pair is the
+                    // one linked to each item row (revaluation_line_id).
+                    if (abs($totalRevaluation) >= 0.01) {
+                        if ($totalRevaluation > 0) {
+                            // Dr Inventory, Cr Revaluation Expense.
+                            $revaluationInventoryLineId = $journalLines->first(
+                                fn($l) => $l->ledger_id == $inventoryLedgerId
+                                    && $l->debit > 0
+                                    && str_contains((string) $l->memo, 'revaluation')
+                            )?->id;
+                        } else {
+                            // Dr Revaluation Expense, Cr Inventory.
+                            $revaluationInventoryLineId = $journalLines->first(
+                                fn($l) => $l->ledger_id == $inventoryLedgerId
+                                    && $l->credit > 0
+                                    && str_contains((string) $l->memo, 'revaluation')
+                            )?->id;
+                        }
+                    }
                 }
             }
 
@@ -1755,15 +1858,29 @@ class StockTakeService
             // (Deferred to here — after GL posting — so journal_line_id is available.
             // If the transaction fails before this point, all stock movements and GL
             // inserts are rolled back, so items correctly remain is_applied=false.)
+            // Phase 9: also persist post_rate, system_rate, revaluation_amount, and
+            // revaluation_line_id so the variance report can show the cost columns
+            // without recomputation.
             foreach ($varianceItems as $item) {
                 $variance = (float) $item->physical_qty - (float) $item->system_qty;
                 $lineId = $variance > 0 ? $gainInventoryLineId : $lossInventoryLineId;
+                $r = $resolved[$item->id];
+                // Only link the revaluation line when this item actually
+                // contributed a revaluation amount (otherwise revaluation_line_id
+                // stays null, matching the 0 revaluation_amount).
+                $revalLineId = abs($r['revaluation_amount']) >= 0.01
+                    ? $revaluationInventoryLineId
+                    : null;
                 DB::table('stock_take_items')
                     ->where('id', $item->id)
                     ->update([
                         'is_applied' => true,
-                        'rate' => $resolvedRates[$item->id],
+                        'rate' => $r['rate'],
+                        'system_rate' => $r['system_rate'],
+                        'post_rate' => $r['post_rate'],
+                        'revaluation_amount' => $r['revaluation_amount'],
                         'journal_line_id' => $lineId,
+                        'revaluation_line_id' => $revalLineId,
                         'updated_at' => now(),
                     ]);
             }
@@ -1801,6 +1918,18 @@ class StockTakeService
                     'total_loss'       => round($totalLoss, 4),
                     'journal_entry_id' => $journalEntryId,
                     'stock_movements'  => $varianceItems->count(),
+                    // Phase 9: cost-drift revaluation summary. total_revaluation
+                    // is the net (post_rate - system_rate) * physical_qty across
+                    // all variance lines where the drift exceeded epsilon. A
+                    // non-zero value means an additional Dr/Cr Inventory/
+                    // Inventory Revaluation Expense pair was posted in the same
+                    // journal entry. reval_lines = count of items that
+                    // contributed a non-zero revaluation_amount.
+                    'total_revaluation'  => round($totalRevaluation, 6),
+                    'reval_lines'        => collect($resolved)
+                        ->filter(fn($r) => abs($r['revaluation_amount']) >= 0.01)
+                        ->count(),
+                    'revaluation_epsilon' => $revaluationEpsilon,
                     // Phase 3: surface the stock-drift warning so reviewers can
                     // see which products moved during the count. Empty when the
                     // outbound freeze held for the full count.
@@ -2000,17 +2129,33 @@ class StockTakeService
     }
 
     /**
-     * Post the GL journal for a stock take session.
-     * Single entry with up to 4 lines (gain + loss).
+     * Post the GL journal entry for a stock-take post.
      *
-     * @param StockTakeSession $session
-     * @param float $totalGain
-     * @param float $totalLoss
-     * @param int $createdBy
-     * @return int journal_entry_id
+     * Lines posted:
+     *   - Gain (totalGain > 0):  Dr Inventory / Cr Inventory Surplus
+     *   - Loss (totalLoss > 0):  Dr Inventory Shrinkage / Cr Inventory
+     *   - Phase 9 Revaluation (|totalRevaluation| > 0):
+     *       cost rose (totalRevaluation > 0): Dr Inventory / Cr Revaluation Expense
+     *       cost fell (totalRevaluation < 0): Dr Revaluation Expense / Cr Inventory
+     *
+     * All lines live in ONE journal entry so the entire post's GL impact is
+     * a single auditable unit. The Inventory-side line of each bucket is the
+     * one back-linked to each stock_take_items row (journal_line_id for
+     * variance, revaluation_line_id for revaluation).
+     *
+     * Phase 9: the $totalRevaluation param is new. When zero/absent, the
+     * behaviour is identical to pre-Phase-9 (no revaluation lines posted).
+     *
+     * @param float $totalRevaluation  Net (post_rate - system_rate) * physical_qty.
+     * @return int  journal_entries.id
      */
-    private function postStockTakeGL(StockTakeSession $session, float $totalGain, float $totalLoss, int $createdBy): int
-    {
+    private function postStockTakeGL(
+        StockTakeSession $session,
+        float $totalGain,
+        float $totalLoss,
+        int $createdBy,
+        float $totalRevaluation = 0.0
+    ): int {
         $inventoryLedgerId = $this->journalPosting->lookupLedgerByNature('inventory');
         if (!$inventoryLedgerId) {
             throw new \RuntimeException('Inventory ledger not found (nature: inventory).');
@@ -2052,6 +2197,50 @@ class StockTakeService
                 'debit' => 0, 'credit' => $totalLoss,
                 'memo' => 'Stock take decrease — ' . $session->session_code,
             ];
+        }
+
+        // Phase 9: cost-drift revaluation. When the post-time avg cost
+        // differs from the setup-time system_rate by more than epsilon,
+        // post an adjusting entry to bring the book value of the counted
+        // quantity in line with the post-time cost.
+        //   totalRevaluation > 0 (cost rose): Dr Inventory / Cr Revaluation Expense
+        //   totalRevaluation < 0 (cost fell): Dr Revaluation Expense / Cr Inventory
+        // The memo carries 'revaluation' so postSession can identify the
+        // Inventory-side line of the pair when back-linking revaluation_line_id.
+        if (abs($totalRevaluation) >= 0.01) {
+            $revaluationLedgerId = $this->journalPosting->lookupLedgerByNature('inventory_revaluation');
+            if (!$revaluationLedgerId) {
+                throw new \RuntimeException(
+                    'Inventory revaluation ledger not found (nature: inventory_revaluation). '
+                    . 'Run the Phase 9 migration to seed it, or add a ledger with that nature manually.'
+                );
+            }
+            $absAmount = abs($totalRevaluation);
+            if ($totalRevaluation > 0) {
+                // Cost rose → book value of counted stock increases.
+                $lines[] = [
+                    'ledger_id' => $inventoryLedgerId,
+                    'debit' => $absAmount, 'credit' => 0,
+                    'memo' => 'Stock take revaluation (cost rose) — ' . $session->session_code,
+                ];
+                $lines[] = [
+                    'ledger_id' => $revaluationLedgerId,
+                    'debit' => 0, 'credit' => $absAmount,
+                    'memo' => 'Stock take revaluation gain — ' . $session->session_code,
+                ];
+            } else {
+                // Cost fell → book value of counted stock decreases.
+                $lines[] = [
+                    'ledger_id' => $revaluationLedgerId,
+                    'debit' => $absAmount, 'credit' => 0,
+                    'memo' => 'Stock take revaluation loss — ' . $session->session_code,
+                ];
+                $lines[] = [
+                    'ledger_id' => $inventoryLedgerId,
+                    'debit' => 0, 'credit' => $absAmount,
+                    'memo' => 'Stock take revaluation (cost fell) — ' . $session->session_code,
+                ];
+            }
         }
 
         return $this->journalPosting->createJournalEntry([

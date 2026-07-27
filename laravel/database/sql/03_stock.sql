@@ -258,6 +258,17 @@ CREATE TABLE stock_take_items (
     -- scope reads by branch without a join — closes the cross-branch data
     -- leak that existed when only stock_take_sessions had RLS.
     branch_id integer NOT NULL REFERENCES branches(id),
+    -- Phase 9 (Stock Take plan): costing columns. system_rate is the setup-
+    -- time avg cost (snapshot, never updated). post_rate is the post-time
+    -- avg cost (re-fetched at postSession). The existing `rate` column above
+    -- is repurposed as the post-time rate used for GL (written at post, not
+    -- setup). revaluation_amount is the adjusting entry for the cost drift:
+    -- (post_rate - system_rate) * physical_qty when |drift| > epsilon, else 0.
+    -- revaluation_line_id mirrors journal_line_id for the revaluation entry.
+    system_rate numeric(18,6),
+    post_rate numeric(18,6),
+    revaluation_amount numeric(18,6) NOT NULL DEFAULT 0,
+    revaluation_line_id integer REFERENCES journal_lines(id) ON DELETE SET NULL,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uk_sti_session_wh_product UNIQUE (stock_take_session_id, warehouse_id, product_id)
 );
@@ -321,6 +332,13 @@ CREATE INDEX idx_stal_actor ON stock_take_audit_log(actor_id, created_at);
 --     fresh); when false, the previous physical_qty is preserved so the
 --     counter sees the prior count and adjusts. The pre-recount values are
 --     always captured in the recount audit row regardless.
+-- Phase 9 seed (2025_08_02_000001_phase9_post_time_cost_and_revaluation.php):
+--   stock_take.revaluation_epsilon (numeric, default 0.01) — minimum
+--     |post_rate - system_rate| delta that triggers a revaluation adjusting
+--     entry at post time. When the avg cost drifts by more than this epsilon
+--     between setup and post, an additional Dr/Cr Inventory/Inventory
+--     Revaluation Expense line is posted for (post_rate - system_rate) *
+--     physical_qty. Set to 0 to revalue on every post.
 CREATE TABLE stock_take_policies (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     key varchar(80) NOT NULL,

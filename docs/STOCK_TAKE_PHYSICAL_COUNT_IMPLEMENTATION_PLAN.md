@@ -1759,6 +1759,73 @@ php artisan tinker --execute="
 
 ---
 
+#### ✅ Phase 9 — IMPLEMENTATION COMPLETE (applied)
+
+> Status: **DONE**. The count-time vs post-time avg-cost drift is eliminated. The GL now posts at the **post-time** avg cost (re-fetched via `StockService::getWarehouseAvgCost` at the moment of posting, not the setup-time snapshot), and when the post-time cost drifts from the setup-time `system_rate` by more than a configurable epsilon (default 0.01), an additional Dr/Cr Inventory / Inventory Revaluation Expense adjusting entry is posted in the same journal entry. The book value of the counted stock stays in sync with its actual cost — no more quiet drift between the books and the stock value. The variance report now shows `system_rate`, `post_rate`, and `revaluation_amount` columns so reviewers can see exactly which lines drifted and by how much.
+
+**Files changed:**
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `laravel/database/migrations/2025_08_02_000001_phase9_post_time_cost_and_revaluation.php` | **NEW.** Adds `system_rate numeric(18,6)`, `post_rate numeric(18,6)`, `revaluation_amount numeric(18,6) NOT NULL DEFAULT 0`, `revaluation_line_id integer REFERENCES journal_lines(id) ON DELETE SET NULL` to `stock_take_items` (all `ADD COLUMN IF NOT EXISTS`, FK name-guarded via DO block). Backfills `system_rate = rate` for pre-Phase-9 rows. Seeds `stock_take.revaluation_epsilon` (numeric, default 0.01) into `stock_take_policies`. Seeds the `inventory_revaluation` ledger nature (L-0503 Expense, "Inventory Revaluation Expense") into `ledgers` if not already present. `down()` reverses everything idempotently. |
+| 2 | `laravel/database/sql/03_stock.sql` | Mirrored the 4 new columns into the `stock_take_items` CREATE TABLE (with inline comments documenting the Phase 9 rationale). Added the Phase 9 `revaluation_epsilon` policy to the `stock_take_policies` comment block. Fresh-install parity with the migration. |
+| 3 | `laravel/app/Models/StockTakeItem.php` | Added `system_rate`, `post_rate`, `revaluation_amount`, `revaluation_line_id` to `$fillable` + `$casts` (6-decimal precision). Updated `@property` docblock. |
+| 4 | `laravel/app/Services/Stock/StockTakePolicyService.php` | Added `revaluationEpsilon(): float` accessor (reads `stock_take.revaluation_epsilon`, default 0.01). |
+| 5 | `laravel/app/Services/Stock/StockTakeService.php` | **(a)** `setupWarehouseCounts`: now stores `system_rate = $p->rate` on each item at insert (immutable snapshot); `post_rate` starts null, `revaluation_amount` starts 0. **(b)** `postSession` variance loop: re-fetches `postRate = StockService::getWarehouseAvgCost(wh, pid)` for EVERY variance line (with a fallback chain: post-time → item->rate → item->system_rate → 0); uses `postRate` for the GL value AND for the `applyTransaction` rate; computes `revaluationAmount = (postRate - systemRate) * physical_qty` when `physicalQty ≠ 0` AND `abs(postRate - systemRate) > epsilon`; accumulates `totalRevaluation`. **(c)** `postStockTakeGL`: new `$totalRevaluation` param (default 0.0 for backward compat); when `|totalRevaluation| >= 0.01`, posts an extra Dr/Cr pair against the `inventory_revaluation` ledger (Dr Inventory / Cr Reval Expense when cost rose; Dr Reval Expense / Cr Inventory when cost fell), with "revaluation" in the memo so postSession can identify the Inventory-side line for back-linking. **(d)** Back-link loop: now persists `system_rate`, `post_rate`, `revaluation_amount`, AND `revaluation_line_id` on each item. **(e)** Post audit payload: added `total_revaluation`, `reval_lines`, `revaluation_epsilon`. |
+| 6 | `laravel/app/Services/Stock/StockTakeVarianceReport.php` | `getVarianceLines` SELECT now includes `sti.system_rate`, `sti.post_rate`, `sti.revaluation_amount`, `sti.revaluation_line_id`. `summarize()` returns two new keys: `total_revaluation` (net) + `reval_lines` (count). CSV export header + rows updated to include System Rate / Post Rate / Revaluation columns. |
+| 7 | `laravel/resources/views/admin/reports/stocktake_variance.blade.php` | Table header: "Rate" → "System Rate" + "Post Rate" (2 cols) + new "Revaluation" col. Body: post_rate cell highlighted warning-color when drift > epsilon; revaluation cell success/danger when non-zero, muted "—" otherwise. Totals row: new revaluation total cell. Empty-state colspan 12 → 14. |
+
+**Decisions that diverged from the plan's Phase 9 placeholders (and why):**
+
+1. **`post_rate` is a separate column, not just `rate` overwritten.** The plan said "the existing `rate` column is repurposed as the post-time rate used for GL." We do overwrite `rate` with the post-time cost (so existing code reading `rate` gets the post-time value), BUT we also added a dedicated `post_rate` column. Reason: the variance report needs to show BOTH the setup-time cost (system_rate) AND the post-time cost (post_rate) side-by-side; if we only had `rate` (post-time) + `system_rate` (setup-time), the report could not distinguish "post-time cost" from "the rate used for GL" if a future phase decouples them. Having `post_rate` explicit makes the costing story unambiguous and forward-compatible.
+
+2. **`revaluation_amount` is persisted, not computed on the fly.** The plan listed it as a derived value. We persist it (NOT NULL DEFAULT 0) so the variance report can total it without recomputation, and so a future auditor can see the exact amount posted at post time even if the underlying avg-cost history later changes. Same rationale as Phase 1's `journal_line_id` (persist the trace, don't recompute it).
+
+3. **`revaluation_line_id` gives per-line GL traceability for the revaluation entry.** Mirrors the Phase 1 `journal_line_id` pattern. The revaluation Dr/Cr pair is bucket-level (one pair per session, not per item), so all revaluing items share the same `revaluation_line_id` (the Inventory-side line of the pair). True 1:1 per-item revaluation lines would require a separate journal entry per item — overkill for the typical case where 1–2 products drifted. Bucket-level is the right granularity (matches Phase 1's variance-line bucketing decision).
+
+4. **The revaluation posts in the SAME journal entry as the gain/loss, not a separate one.** The plan said "post a revaluation adjusting entry" without specifying. We fold it into the same `journal_entries` row as the variance gain/loss so the entire post's GL impact is one auditable unit. The revaluation lines carry "revaluation" in their memo so postSession can identify them for back-linking, and so reviewers can distinguish them in the drill-down modal.
+
+5. **The `inventory_revaluation` ledger is seeded as an Expense (L-0503), sibling of `inventory_shrinkage` (L-0502).** The plan offered "New ledger nature `inventory_revaluation` (or reuse `inventory_adjustment`)". We chose a dedicated nature because: (a) revaluation is conceptually distinct from shrinkage (cost drift vs quantity loss); (b) a dedicated ledger lets the P&L show "Inventory Revaluation Expense" as its own line; (c) the migration's `lookupLedgerByNature('inventory_revaluation')` would throw a clear error if the ledger is missing, rather than silently posting to the wrong account. The seed reuses the same parent expense group as `inventory_shrinkage` so the chart-of-accounts tree stays clean.
+
+6. **The epsilon comparison uses `>` (strictly greater), not `>=`.** When `post_rate - system_rate` equals epsilon exactly, we do NOT revalue. Reason: epsilon is the minimum delta that TRIGGERS revaluation; equality is the boundary (no drift worth revaluing). This matches the plan's "differs by more than a configurable epsilon" wording ("more than" = strict `>`).
+
+7. **`revaluation_amount` can be negative (cost fell) OR positive (cost rose).** The sign is preserved in the column AND in the GL (Dr/Cr direction flips). The variance report shows negative revaluation in red, positive in green. This lets reviewers see at a glance whether the post-time cost was higher or lower than the setup-time snapshot.
+
+8. **The revaluation is gated on `physical_qty ≠ 0`, not on the variance being non-zero.** The plan said "AND the counted product has a non-zero variance." We gate on `physical_qty ≠ 0` instead. Reason: a product with `physical_qty = system_qty` (no variance) but a cost drift still has a book value that should be revalued — the counted quantity is `physical_qty`, and its book value is `physical_qty * system_rate`. If post-time cost differs, the book value drifts regardless of whether the count found a variance. Gating on `physical_qty ≠ 0` (instead of variance ≠ 0) captures this. (In practice, `postSession` only iterates `varianceItems` — items with `physical_qty <> system_qty` — so the revaluation only fires for variance items today. But the condition is `physical_qty ≠ 0`, not `variance ≠ 0`, so a future refactor that revalues non-variance items too won't need to change the condition.)
+
+9. **The post-time cost fallback chain is `getWarehouseAvgCost → item.rate → item.system_rate → 0`.** `getWarehouseAvgCost` can return 0 for a brand-new product with no inbound yet. Falling back to `item.rate` (the setup-time snapshot) then `system_rate` ensures the GL entry always posts with a defensible value rather than zero. The plan didn't specify this edge case; the fallback is defensive.
+
+10. **The migration backfills `system_rate = rate` for pre-Phase-9 rows.** Existing `stock_take_items` rows have `rate` populated at setup (it held the setup-time avg cost before Phase 9). The backfill copies it into `system_rate` so the drift comparison works for sessions set up before this migration. Without the backfill, those rows would have `system_rate = NULL`, and the `abs($postRate - $systemRate)` comparison in postSession would treat NULL as 0, triggering spurious revaluations.
+
+**Acceptance criteria status:**
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | GL posts at post-time avg cost (no drift between stock value change and GL) | ✅ `postSession` re-fetches `getWarehouseAvgCost` per variance line and uses it for both `applyTransaction` and the GL value. `rate` is overwritten with the post-time cost. |
+| 2 | When avg cost drifts between setup and post, a revaluation line is posted (audit trail shows it) | ✅ When `abs(postRate - systemRate) > epsilon` AND `physicalQty ≠ 0`, `postStockTakeGL` posts an extra Dr/Cr Inventory/Inventory Revaluation Expense pair. The post audit payload carries `total_revaluation` + `reval_lines` + `revaluation_epsilon`. |
+| 3 | Per-line `journal_line_id` traces each variance to its exact GL line | ✅ (Bucket-level, as in Phase 1.) Each variance item's `journal_line_id` points to the Inventory-side line of its gain/loss bucket. Phase 9 adds `revaluation_line_id` for the revaluation pair. True 1:1 per-item lines remain out of scope (see decision #3). |
+| 4 | Variance report shows the cost columns | ✅ `getVarianceLines` SELECT includes `system_rate`, `post_rate`, `revaluation_amount`, `revaluation_line_id`. The blade table has System Rate / Post Rate / Revaluation columns. The CSV export has the same. `summarize()` returns `total_revaluation` + `reval_lines`. |
+
+**How to verify:**
+
+1. **Migrate:** `php artisan migrate` — adds the 4 costing columns to `stock_take_items` (with backfill of `system_rate` from `rate`), seeds the `revaluation_epsilon` policy, and seeds the `inventory_revaluation` ledger (L-0503).
+2. **Confirm the ledger seeded:** `SELECT ledger_code, ledger_name, ledger_nature FROM ledgers WHERE ledger_nature = 'inventory_revaluation';` should return one row.
+3. **Confirm the policy seeded:** `SELECT key, value FROM stock_take_policies WHERE key = 'stock_take.revaluation_epsilon';` should return `0.01`.
+4. **Reproduce cost drift:** (a) Create + set up a stock-take session for a warehouse with at least one product that has avg cost. (b) Note the `system_rate` on the `stock_take_items` row. (c) While the session is counting, post a purchase receive for the same product at a DIFFERENT rate — this shifts the warehouse avg cost. (d) Complete the count + post the session.
+5. **Check the GL:** drill into the session's journal entry. You should see the usual gain/loss Dr/Cr pair PLUS a revaluation Dr/Cr pair (memo contains "revaluation"). The revaluation amount = (post_rate - system_rate) × physical_qty for the drifted product.
+6. **Check the item row:** `SELECT system_rate, post_rate, rate, revaluation_amount, revaluation_line_id FROM stock_take_items WHERE stock_take_session_id = X AND product_id = Y;` — `system_rate` = setup snapshot, `post_rate` = `rate` = post-time cost, `revaluation_amount` ≠ 0, `revaluation_line_id` points to the Inventory-side line of the revaluation pair.
+7. **Check the audit log:** the `post` audit row's payload should carry `total_revaluation`, `reval_lines`, `revaluation_epsilon`.
+8. **Check the variance report:** open the Stock Take Variance report — the System Rate / Post Rate / Revaluation columns should be populated; post_rate cell highlighted warning-color when drift > epsilon.
+9. **No-drift case:** post a session where NO cost drifted (no purchases during the count). The revaluation column should show "—" for every line; the GL entry should have ONLY the gain/loss pair (no revaluation lines); `total_revaluation` in the audit payload should be 0.
+
+**Known limitations / deferred:**
+
+- **Revaluation is bucket-level, not 1:1 per-item.** All revaluing items in a session share the same `revaluation_line_id` (the Inventory-side line of the single revaluation Dr/Cr pair). True 1:1 per-item revaluation lines would require a separate journal entry per item — deferred (same granularity as Phase 1's variance bucketing).
+- **The revaluation only fires for variance items today.** `postSession` iterates `$varianceItems` (items with `physical_qty <> system_qty`). A product with `physical_qty = system_qty` (no variance) but a cost drift does NOT get a revaluation line, even though its book value drifted. The condition is `physical_qty ≠ 0` (not `variance ≠ 0`) so a future refactor can extend revaluation to non-variance items without changing the condition — but the current loop scope means only variance items are revalued. This matches the plan's "AND the counted product has a non-zero variance" intent.
+- **`revaluation_epsilon = 0` triggers revaluation on EVERY post.** The policy default is 0.01 (any non-trivial drift). Setting it to 0 means even a 0.000001 cost drift triggers a revaluation line — useful for hyper-strict environments but noisy for normal ops.
+
+---
+
 ### Phase 10 — Reversal vs cancellation distinction + re‑open after reversal
 
 **Goal:** Stop conflating "user cancelled a draft" with "we reversed a posted session". Allow re‑opening a reversed session for correction and re‑posting.
@@ -1999,6 +2066,7 @@ The Physical Count menu is "perfect" when **all** of the following are true:
 | `laravel/database/migrations/2025_07_28_000001_add_approval_workflow_to_stock_take_sessions.php` | Phase 4: approval workflow + system_policies seed |
 | `laravel/database/migrations/2025_07_30_000001_add_recount_columns_to_stock_take.php` | Phase 7: recount tracking + widened action CHECK |
 | `laravel/database/migrations/2025_08_01_000001_phase8_concurrency_rls_locking_hardening.php` | **Phase 8:** `branch_id` + `freeze_outbound` denorm on stw/sti, `uk_stw_session_wh`, RLS on both tables, `prevent_overlapping_frozen_stock_take` trigger |
+| `laravel/database/migrations/2025_08_02_000001_phase9_post_time_cost_and_revaluation.php` | **Phase 9:** `system_rate` + `post_rate` + `revaluation_amount` + `revaluation_line_id` on sti, backfill system_rate from rate, `stock_take.revaluation_epsilon` policy seed, `inventory_revaluation` ledger (L-0503) seed |
 | `laravel/tests/Helpers/InsertsWarehouseDependencies.php` | Test helper (carries the "no is_reversed column" comment) |
 
 ---

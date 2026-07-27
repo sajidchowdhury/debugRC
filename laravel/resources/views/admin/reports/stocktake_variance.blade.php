@@ -163,8 +163,10 @@
                             <th class="text-end">System</th>
                             <th class="text-end">Physical</th>
                             <th class="text-end">Diff</th>
-                            <th class="text-end">Rate</th>
+                            <th class="text-end">System Rate</th>
+                            <th class="text-end">Post Rate</th>
                             <th class="text-end">Value Diff</th>
+                            <th class="text-end">Revaluation</th>
                             <th class="text-center">Status</th>
                             <th class="text-center">GL</th>
                         </tr>
@@ -174,6 +176,7 @@
                             @php
                                 $qty = (float) $r->variance_qty;
                                 $val = (float) $r->value_diff;
+                                $reval = (float) ($r->revaluation_amount ?? 0);
                                 $effectiveStatus = !empty($r->is_reversed) ? 'reversed' : $r->session_status;
                             @endphp
                             <tr>
@@ -194,9 +197,13 @@
                                 <td class="text-end font-monospace small fw-semibold {{ $qty >= 0 ? 'text-success' : 'text-danger' }}">
                                     {{ $qty >= 0 ? '+' : '' }}{{ $fmtQty($qty) }}
                                 </td>
-                                <td class="text-end font-monospace small">{{ $fmt($r->rate) }}</td>
+                                <td class="text-end font-monospace small">{{ $fmt($r->system_rate) }}</td>
+                                <td class="text-end font-monospace small fw-semibold {{ $r->post_rate && $r->system_rate && abs((float)$r->post_rate - (float)$r->system_rate) > 0.01 ? 'text-warning' : '' }}">{{ $fmt($r->post_rate) }}</td>
                                 <td class="text-end font-monospace small fw-semibold {{ $val >= 0 ? 'text-success' : 'text-danger' }}">
                                     {{ $val >= 0 ? '+' : '' }}{{ $fmt($val) }}
+                                </td>
+                                <td class="text-end font-monospace small fw-semibold {{ abs($reval) >= 0.01 ? ($reval >= 0 ? 'text-success' : 'text-danger') : 'text-muted' }}">
+                                    {{ abs($reval) >= 0.01 ? ($reval >= 0 ? '+' : '') . $fmt($reval) : '—' }}
                                 </td>
                                 <td class="text-center">
                                     <span class="badge bg-{{ $statusBadge[$effectiveStatus] ?? 'secondary' }}-subtle text-{{ $statusBadge[$effectiveStatus] ?? 'secondary' }}">
@@ -217,7 +224,7 @@
                                 </td>
                             </tr>
                         @empty
-                            <tr><td colspan="12" class="text-muted text-center py-4">No variance lines in the selected period. Adjust the filters and try again.</td></tr>
+                            <tr><td colspan="14" class="text-muted text-center py-4">No variance lines in the selected period. Adjust the filters and try again.</td></tr>
                         @endforelse
                     </tbody>
                     @if (!empty($data->total()))
@@ -225,8 +232,9 @@
                         <tr class="fw-semibold">
                             <td colspan="7" class="text-end">Totals ({{ number_format($data->total()) }} lines)</td>
                             <td class="text-end font-monospace {{ $summary['total_variance'] >= 0 ? 'text-success' : 'text-danger' }}">{{ $summary['total_variance'] >= 0 ? '+' : '' }}{{ $fmtQty($summary['total_variance']) }}</td>
-                            <td></td>
+                            <td colspan="2"></td>
                             <td class="text-end font-monospace {{ $summary['total_value_diff'] >= 0 ? 'text-success' : 'text-danger' }}">{{ $summary['total_value_diff'] >= 0 ? '+' : '' }}{{ $fmt($summary['total_value_diff']) }}</td>
+                            <td class="text-end font-monospace {{ ($summary['total_revaluation'] ?? 0) >= 0 ? 'text-success' : 'text-danger' }}">{{ ($summary['total_revaluation'] ?? 0) != 0 ? (($summary['total_revaluation'] >= 0 ? '+' : '') . $fmt($summary['total_revaluation'])) : '—' }}</td>
                             <td colspan="2"></td>
                         </tr>
                     </tfoot>

@@ -158,6 +158,19 @@ class StockTakePolicyService
     }
 
     /**
+     * Phase 9: minimum |post_rate - system_rate| delta (in currency units)
+     * that triggers a revaluation adjusting entry at post time. When the
+     * avg cost drifts by more than this epsilon between setup and post,
+     * postSession posts an additional Dr/Cr Inventory/Inventory Revaluation
+     * Expense line for (post_rate - system_rate) * physical_qty. Default
+     * 0.01 (any non-trivial drift). Set to 0 to revalue on every post.
+     */
+    public function revaluationEpsilon(): float
+    {
+        return (float) ($this->all()['stock_take.revaluation_epsilon'] ?? 0.01);
+    }
+
+    /**
      * Does the given user role have the approve permission? Used by the
      * controller to gate the approve/reject routes (defence in depth —
      * the route middleware already restricts by role, but the service

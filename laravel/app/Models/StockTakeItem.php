@@ -16,11 +16,15 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $system_qty  qty at time of count setup
  * @property string $physical_qty  counted qty entered by user
  * @property string $difference GENERATED: physical_qty - system_qty
- * @property string $rate  avg_cost at time of posting (for GL valuation)
+ * @property string $rate  Phase 9: post-time avg_cost used for GL valuation (written at post, not setup)
  * @property string|null $reason  per-line reason (e.g. "damaged", "lost", "found")
  * @property bool $is_applied  true after postSession applies the variance
  * @property int|null $journal_line_id  Phase 1: per-line GL traceability (links to journal_lines.id)
  * @property int $branch_id  Phase 8: denormalized from stock_take_sessions.branch_id for RLS
+ * @property string|null $system_rate  Phase 9: setup-time avg cost (snapshot, never updated)
+ * @property string|null $post_rate  Phase 9: post-time avg cost (re-fetched at post)
+ * @property string $revaluation_amount  Phase 9: (post_rate - system_rate) * physical_qty when drift > epsilon, else 0
+ * @property int|null $revaluation_line_id  Phase 9: per-line GL traceability for the revaluation entry
  */
 class StockTakeItem extends Model
 {
@@ -40,6 +44,13 @@ class StockTakeItem extends Model
         'journal_line_id',
         // Phase 8: denormalized branch_id for RLS (set at insert, never updated).
         'branch_id',
+        // Phase 9: costing columns — system_rate (setup snapshot, immutable),
+        // post_rate (post-time avg cost), revaluation_amount + revaluation_line_id
+        // (the cost-drift adjusting entry).
+        'system_rate',
+        'post_rate',
+        'revaluation_amount',
+        'revaluation_line_id',
         'updated_at',
     ];
 
@@ -54,6 +65,11 @@ class StockTakeItem extends Model
         'is_applied' => 'boolean',
         'journal_line_id' => 'integer',
         'branch_id' => 'integer',
+        // Phase 9: costing columns — 6-decimal precision for avg-cost math.
+        'system_rate' => 'decimal:6',
+        'post_rate' => 'decimal:6',
+        'revaluation_amount' => 'decimal:6',
+        'revaluation_line_id' => 'integer',
     ];
 
     public function session(): \Illuminate\Database\Eloquent\Relations\BelongsTo
