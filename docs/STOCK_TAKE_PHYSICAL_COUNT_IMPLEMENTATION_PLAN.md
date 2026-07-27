@@ -1137,6 +1137,95 @@ php artisan tinker --execute="echo \DB::table('stock_take_audit_log')->where('st
 
 **Effort:** L (3–4 days — touches multiple services).
 
+#### ✅ Phase 3 — IMPLEMENTATION COMPLETE (applied)
+
+> Status: **DONE**. The single biggest data-integrity risk in a physical count — stock moving WHILE the count is in progress — is now closed with two complementary layers. (a) **Snapshot freeze**: every `setupWarehouseCounts` captures a `count_snapshot` jsonb (product_id, product_code, product_name, unit, system_qty, avg_cost per warehouse) on the session row, so the count can be reconstructed "what the counter saw" months later even if products are renamed/deleted or stock drifts. (b) **Optional outbound freeze**: a `freeze_outbound` flag on the session (default off, backward compatible) marks the covered warehouses `is_frozen_for_count=true`; `StockService::applyTransaction` — the single chokepoint for ALL outbound stock movements (sales, transfers out, adjustments out, damages, purchase returns) — rejects any outbound movement (qty < 0) for a frozen warehouse with a clear 422 naming the active session(s), EXCEPT the stock-take's own variance application (`reference_type='stock_take'`) and reversals (`reference_type='reversal'`). A post-time `reconcileSnapshotWithLiveStock` warning lists any product whose live `warehouse_stock.qty` drifted from the snapshot (empty by construction when the freeze held; surfaces inbound receipts received during a frozen count). The freeze is released on post/cancel via `refreshWarehouseFreezeFlags`, which honors overlapping sessions (the flag stays true until the LAST freezing session ends). Below is the exact record of what was changed, the decisions that diverged from the plan's placeholders, and how to verify.
+
+**Files changed (10):**
+
+| # | File | Change |
+|---|---|---|
+| 1 | `laravel/database/migrations/2025_07_27_000001_add_freeze_columns_to_stock_take_sessions.php` | **NEW.** `ALTER TABLE stock_take_sessions ADD frozen_at timestamp(0), freeze_outbound boolean NOT NULL DEFAULT false, count_snapshot jsonb` + partial index `idx_sts_freeze_outbound` (only sessions with freeze_outbound=true). `ALTER TABLE warehouses ADD is_frozen_for_count boolean NOT NULL DEFAULT false` + partial index `idx_wh_is_frozen` (only frozen warehouses — the outbound check hits one row per frozen wh). Idempotent (`IF NOT EXISTS` / `IF EXISTS`) so re-running is safe; `down()` reverses both. |
+| 2 | `laravel/database/sql/03_stock.sql` | Mirrored the 3 new columns + `idx_sts_freeze_outbound` partial index into the `stock_take_sessions` CREATE TABLE for fresh installs. |
+| 3 | `laravel/database/sql/01_auth_and_master.sql` | Mirrored `is_frozen_for_count` + `idx_wh_is_frozen` partial index into the `warehouses` CREATE TABLE for fresh installs. |
+| 4 | `laravel/app/Exceptions/WarehouseFrozenForCountException.php` | **NEW.** Extends `\RuntimeException`. Carries `warehouseId`, `warehouseName`, and the list of active session codes freezing the warehouse. Message is user-actionable: names the session(s) and tells the user to finish/cancel them. Rendered to 422 globally (see bootstrap/app.php below). |
+| 5 | `laravel/app/Models/StockTakeSession.php` | Added `frozen_at`, `freeze_outbound`, `count_snapshot` to `$fillable`; casts `frozen_at`→datetime, `freeze_outbound`→boolean, `count_snapshot`→array. New helper `isActivelyFreezing()`: true iff `freeze_outbound` AND status in draft/counting (the window during which the freeze blocks outbound). |
+| 6 | `laravel/app/Models/Warehouse.php` | Added `is_frozen_for_count` to `$fillable` + casts (boolean). New helper `isFrozenForCount()`. |
+| 7 | `laravel/app/Services/Stock/StockService.php` | (a) `applyTransaction`: after `validate()`, if `qty < 0` AND `reference_type` NOT IN `['stock_take','reversal']`, calls `assertWarehouseNotFrozen($warehouseId)` BEFORE the ledger insert. (b) **NEW** private `assertWarehouseNotFrozen()`: single SELECT on `warehouses.is_frozen_for_count` (hits `idx_wh_is_frozen`); if frozen, queries the active freezing sessions (join `stock_take_warehouses` → `stock_take_sessions` WHERE freeze_outbound=true AND status IN draft/counting) and throws `WarehouseFrozenForCountException` naming them. Cheap: one row lookup in the common (unfrozen) case. |
+| 8 | `laravel/app/Services/Stock/StockTakeService.php` | (a) `createSession`: accepts `freeze_outbound` (default false); sets `frozen_at=now()` when on; calls `refreshWarehouseFreezeFlags($warehouseIds)` to mark the covered warehouses frozen; audit payload now records `freeze_outbound` + `frozen_at`. (b) `setupWarehouseCounts`: product query now also selects `product_code`, `product_name`, `unit`; calls **NEW** `captureWarehouseSnapshot()` which merges this warehouse's product slice into the session-level `count_snapshot` jsonb keyed by warehouse_id (re-setup overwrites that warehouse's slice). (c) `postSession`: after the negative-stock pre-check, calls **NEW** `reconcileSnapshotWithLiveStock()` which returns the drift list (products where live `warehouse_stock.qty` ≠ `sti.system_qty`); the drift is recorded in the post audit payload (`stock_drift` + `stock_drift_count` + `freeze_outbound`) as a WARNING (post still proceeds — the negative-stock pre-check already prevents corruption); after marking posted, calls `releaseSessionFreeze()` to clear the freeze (honoring overlapping sessions). (d) `cancelSession`: calls `releaseSessionFreeze()` after the status→cancelled update; cancel audit payload records `freeze_outbound` + `freeze_released`. (e) **NEW** private helpers: `captureWarehouseSnapshot`, `reconcileSnapshotWithLiveStock`, `releaseSessionFreeze`, `refreshWarehouseFreezeFlags` (the single source of truth for the denormalized flag — recomputes from the set of ACTIVE freezing sessions, idempotent). |
+| 9 | `laravel/app/Http/Controllers/Admin/StockTakeController.php` + `laravel/bootstrap/app.php` | Controller: `store()` validates `freeze_outbound` (sometimes|boolean) and passes it through; success message notes the freeze when active. `show()` extracts `stock_drift` from the latest `post` audit row's payload and passes it to the view. `bootstrap/app.php`: registers a global `$exceptions->render()` for `WarehouseFrozenForCountException` → 422 JSON for API/AJAX (`{message, error, warehouse, sessions}`) or redirect-back-with-error for web, so EVERY outbound service (sales, transfers, adjustments, damages, purchase returns) gets a consistent actionable response without each controller needing its own catch. |
+| 10 | `laravel/resources/views/admin/stock-take/create.blade.php` + `show.blade.php` | `create.blade.php`: new "Stock integrity options" card with a `freeze_outbound` switch + explanatory text (use for full annual counts; leave off for cycle counts; snapshot captured either way). `show.blade.php`: (a) freeze-status banner (amber while actively freezing, grey after release) showing frozen-since timestamp + covered warehouses + the block/released message; (b) stock-drift reconciliation warning table (product, warehouse, snapshot qty, live qty, delta with green/red coloring) shown only when drift > 0 after a post. |
+| — | `docs/STOCK_TAKE_PHYSICAL_COUNT_IMPLEMENTATION_PLAN.md` | This implementation log. |
+
+**Decisions that diverged from the plan's Phase 3 placeholders (and why):**
+
+1. **`count_snapshot` is captured in `setupWarehouseCounts`, NOT in `createSession`.** The plan's code-change note said "createSession: … capture count_snapshot (the product list at setup time…)". But the product list per warehouse is only known at setup time (when `setupWarehouseCounts` loads products from `warehouse_stock`) — at `createSession` we only know the warehouse IDs, not the products. Capturing an empty snapshot at create + filling it at setup would split the logic needlessly. Solution: `setupWarehouseCounts` calls `captureWarehouseSnapshot()` which merges that warehouse's slice into the session-level jsonb keyed by `warehouse_id`. A multi-warehouse session accumulates one slice per warehouse; re-setup overwrites that warehouse's slice. This is the natural capture point and matches the plan's scope item #5 ("Capture a jsonb snapshot of the product list + system qty + avg cost at setup").
+2. **The outbound freeze uses a denormalized `warehouses.is_frozen_for_count` flag, NOT a per-call join.** The plan offered both ("flag approach for clarity, with an advisory lock on the warehouse row during post"). We use the flag (the plan's recommended option) because it makes the outbound check a single partial-index lookup (`idx_wh_is_frozen` — one row per frozen warehouse) instead of a 2-table join on every outbound movement. The flag is recomputed by `refreshWarehouseFreezeFlags` on every create/post/cancel, so it is always consistent with the set of active freezing sessions. We did NOT add the advisory lock on the warehouse row during post — the existing `lockForUpdate` on the session row + the negative-stock pre-check's `lockForUpdate` on `warehouse_stock` rows already serialize the post; an additional advisory lock would add complexity without a concrete concurrency win for Phase 3. (Phase 8 — concurrency/RLS/locking hardening — may revisit.)
+3. **The freeze exempts `reference_type` IN `['stock_take','reversal']`, not just `'stock_take'`.** The plan said "block outbound stock movements (sales, transfers out, adjustments out, damages)". The stock-take's OWN variance application (`reference_type='stock_take'`, qty can be negative for shortages) MUST proceed while frozen — that's the whole point of the count. Reversals (`reference_type='reversal'`) are corrections of prior movements (e.g., the cancel flow calls `reverseTransaction` which calls `applyTransaction` with `reference_type='reversal'`); blocking them would make a frozen session un-cancellable. Exempting both keeps the freeze targeted at NEW outbound business activity while letting the count lifecycle complete.
+4. **The post-time reconciliation is a WARNING, not a block (configurable block deferred).** The plan said "either warn (configurable) or block". We implement warn-only: the drift is recorded in the post audit payload + surfaced on the show page. Rationale: the existing Phase 1 `assertNoNegativeStockOutcomes` pre-check already prevents the only truly corrupting outcome (negative stock); drift between snapshot and live qty makes the variance *less accurate* but not *destructive*, and blocking the post would strand legitimate counts where inbound receipts arrived during the count (a normal, expected scenario for a frozen warehouse — purchases received while counting). A configurable block can be added later (Phase 9 GL/costing refinements, which already revisits post-time cost) without a schema change.
+5. **`WarehouseFrozenForCountException` is rendered globally in `bootstrap/app.php`, not caught per-controller.** The plan said the freeze "returns a clear 422 naming the active session(s)". There are ~8 services that call `StockService::applyTransaction` for outbound movements (sales challan, sales return reversal, damage, stock adjustment out, warehouse transfer out, purchase return, purchase audit). Adding a `catch (WarehouseFrozenForCountException)` to each of their controllers would be repetitive and error-prone (one missed catch = a 500 instead of 422). A single `$exceptions->render()` in `bootstrap/app.php` handles it once: JSON 422 for `expectsJson()` / `api/*` (the shape AJAX callers need), redirect-back-with-error for web. This is the Laravel-11+ idiomatic pattern and matches how the codebase already centralizes exception rendering.
+6. **The freeze is released on BOTH post and cancel, but NOT on a soft-delete.** `releaseSessionFreeze` is called at the end of `postSession` and `cancelSession`. The codebase has no stock-take delete flow (drafts are cancelled, not deleted — `SoftDeletes` is on the model but no controller action hard-deletes), so there's no delete hook to wire. If a delete flow is added later (Phase 12 mentions soft-delete drafts), it must call `releaseSessionFreeze` too — this is documented in the method's docblock.
+7. **`frozen_at` is set at create time (not at setup), so it can be earlier than `count_snapshot.captured_at`.** When `freeze_outbound=true`, `frozen_at=now()` is written in `createSession`; the snapshot is captured later in `setupWarehouseCounts`. This means the freeze takes effect the instant the session is created (correct — outbound movements must be blocked from the moment the user decides to count), while the snapshot is captured when products are actually loaded. The gap between the two is the (usually seconds-to-minutes) window where the warehouse is frozen but no snapshot exists yet — which is fine, because no count has started. `frozen_at` answers "when did we lock the warehouse"; `count_snapshot.captured_at` answers "when did we freeze the product list for counting".
+8. **The drift reconciliation compares `sti.system_qty` (the snapshot on each item row) to live `warehouse_stock.qty`, NOT the `count_snapshot` jsonb.** The item rows' `system_qty` IS the snapshot (frozen at setup, never mutated). Comparing item-level system_qty to live qty is equivalent to comparing the jsonb snapshot to live qty, but avoids a jsonb decode + per-product lookup — it's a single SQL join. The `count_snapshot` jsonb is reserved for historical reconstruction (what the counter saw), not for the reconciliation query.
+
+**Acceptance criteria — status:**
+
+| Criterion | Status |
+|---|---|
+| With `freeze_outbound=true`, attempting to sell/transfer-out/adjust-out/damage a product in a frozen warehouse returns a clear 422 naming the active session(s) | ✅ `StockService::applyTransaction` calls `assertWarehouseNotFrozen` for every outbound movement (qty<0, ref not stock_take/reversal). `WarehouseFrozenForCountException` carries the warehouse + active session codes. `bootstrap/app.php` renders it as 422 JSON (API/AJAX) or redirect-back-with-error (web), with `error: 'warehouse_frozen_for_count'` + the `sessions` array. |
+| With `freeze_outbound=false`, outbound movements succeed; at post time, the reconciliation warning lists any products whose live qty drifted from the snapshot | ✅ The freeze check is gated on `is_frozen_for_count` (false when no freezing session covers the wh), so unfrozen warehouses are unaffected. `postSession` calls `reconcileSnapshotWithLiveStock` which returns the drift list; it's recorded in the post audit payload (`stock_drift`) and surfaced on the show page as a warning table. |
+| `count_snapshot` JSON contains the full product list at setup; the session detail page can reconstruct "what the counter saw" even months later | ✅ `captureWarehouseSnapshot` writes `{captured_at, warehouses: {wh_id: {warehouse_id, captured_at, product_count, products: [{product_id, product_code, product_name, unit, system_qty, avg_cost}]}}}` to the session row's `count_snapshot` jsonb at every `setupWarehouseCounts`. The product_code/product_name are captured at setup time, so even if a product is later renamed or soft-deleted, the snapshot preserves what the counter saw. |
+| Canceling or deleting a frozen session clears the warehouse flag | ✅ `cancelSession` calls `releaseSessionFreeze` → `refreshWarehouseFreezeFlags`, which recomputes the flag from remaining active freezing sessions (clears it when none remain). (No delete flow exists; documented for future.) |
+| Multiple sessions freezing the same warehouse are all reflected (flag stays true until the last session ends) | ✅ `refreshWarehouseFreezeFlags` queries ALL active (draft/counting) sessions with `freeze_outbound=true` covering the warehouse (`EXISTS` subquery). If session A and B both freeze wh W, posting A calls `refreshWarehouseFreezeFlags([W])` which finds B still active → flag stays true. Posting B then finds no active session → flag cleared. |
+
+**Verification commands (run inside the Docker container):**
+```bash
+# 1. Run the migration
+php artisan migrate
+
+# 2. Confirm the new columns + partial indexes exist
+php artisan tinker --execute="echo \DB::select(\"SELECT column_name FROM information_schema.columns WHERE table_name='stock_take_sessions' AND column_name IN ('frozen_at','freeze_outbound','count_snapshot') ORDER BY column_name\")[0]->column_name ?? 'MISSING';"
+# Expected: count_snapshot (or frozen_at / freeze_outbound)
+php artisan tinker --execute="echo \DB::table('pg_indexes')->where('indexname','idx_wh_is_frozen')->exists() ? 'OK' : 'MISSING';"
+# Expected: OK
+
+# 3. Create a session WITH freeze_outbound, then try an outbound movement:
+php artisan tinker --execute="
+  \$s = app(\App\Services\Stock\StockTakeService::class)->createSession([
+      'branch_id'=>1,'session_date'=>date('Y-m-d'),'warehouse_ids'=>[1],
+      'freeze_outbound'=>true,'created_by'=>1,
+  ]);
+  echo 'frozen_at='.\$s->frozen_at.' | wh_frozen='.\DB::table('warehouses')->where('id',1)->value('is_frozen_for_count');
+"
+# Expected: frozen_at=<timestamp> | wh_frozen=1
+# Then any sales/transfer-out/damage on warehouse 1 should return 422 with
+# error=warehouse_frozen_for_count naming session ST-...
+
+# 4. Post the frozen session → freeze released, drift warning recorded:
+php artisan tinker --execute="
+  \$s = app(\App\Services\Stock\StockTakeService::class)->postSession(SID, 1);
+  echo 'status='.\$s->status.' | wh_frozen='.\DB::table('warehouses')->where('id',1)->value('is_frozen_for_count');
+  \$drift = \DB::table('stock_take_audit_log')->where('stock_take_session_id',SID)->where('action','post')->latest()->value('payload');
+  echo ' | drift='.(json_decode(\$drift,true)['stock_drift_count'] ?? '?');
+"
+# Expected: status=posted | wh_frozen=0 | drift=<n>
+
+# 5. Visit /admin/stock-take/{id} — you should see:
+#    - an amber "Outbound movements are FROZEN" banner while the session is draft/counting
+#    - a grey "freeze was active during the count (now released)" banner after post
+#    - a "Stock moved during the count" warning table (only if drift > 0)
+# 6. Visit /admin/stock-take/create — you should see the "Stock integrity options"
+#    card with the "Freeze outbound movements during the count" switch.
+```
+
+**Not done in Phase 3 (deferred to later phases):**
+- Configurable block-vs-warn on stock drift at post time (currently warn-only) — deferred to Phase 9 (GL & costing refinements).
+- Advisory lock on the warehouse row during post (the plan's optional second layer) — deferred to Phase 8 (concurrency/RLS/locking hardening); the existing session-row + warehouse_stock-row locks are sufficient for Phase 3.
+- No feature tests for the freeze/drift paths — that's Phase 12.
+- No delete-flow hook for `releaseSessionFreeze` (no delete flow exists yet) — documented for Phase 12.
+
+**Next phase:** Phase 4 — Approval workflow & segregation of duties.
+
 ---
 
 ### Phase 4 — Approval workflow & segregation of duties

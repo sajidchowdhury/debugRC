@@ -29,13 +29,25 @@ class Warehouse extends Model
         'branch_id',
         'location',
         'is_active',
+        'is_frozen_for_count',
         'created_by',
         'deleted_by',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
+        'is_frozen_for_count' => 'boolean',
     ];
+
+    /**
+     * Phase 3: is this warehouse currently frozen by an active stock-take
+     * session? Mirrors the denormalized `is_frozen_for_count` flag maintained
+     * by StockTakeService::refreshWarehouseFreezeFlags.
+     */
+    public function isFrozenForCount(): bool
+    {
+        return (bool) $this->is_frozen_for_count;
+    }
 
     public function branch(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {

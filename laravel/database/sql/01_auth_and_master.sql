@@ -244,6 +244,13 @@ CREATE TABLE warehouses (
     branch_id integer NOT NULL REFERENCES branches(id),
     location text,
     is_active boolean NOT NULL DEFAULT true,
+    -- Phase 3 (Stock Take plan): denormalized freeze flag. True when any
+    -- ACTIVE stock_take_session (status IN draft/counting) with
+    -- freeze_outbound=true covers this warehouse. Recomputed by
+    -- StockTakeService::refreshWarehouseFreezeFlags on create/post/cancel/
+    -- delete. Checked at the top of StockService::applyTransaction for every
+    -- outbound movement (cheap single-row lookup via idx_wh_is_frozen).
+    is_frozen_for_count boolean NOT NULL DEFAULT false,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     deleted_at timestamp(0),
@@ -251,3 +258,6 @@ CREATE TABLE warehouses (
     CONSTRAINT warehouses_warehouse_code_unique UNIQUE (warehouse_code)
 );
 CREATE INDEX idx_warehouses_branch ON warehouses(branch_id);
+-- Partial index: only frozen warehouses — the outbound-movement freeze check
+-- in StockService::applyTransaction hits this (one row per frozen warehouse).
+CREATE INDEX idx_wh_is_frozen ON warehouses(id) WHERE is_frozen_for_count = true;

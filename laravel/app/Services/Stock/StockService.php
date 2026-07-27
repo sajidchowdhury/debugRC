@@ -2,6 +2,7 @@
 
 namespace App\Services\Stock;
 
+use App\Exceptions\WarehouseFrozenForCountException;
 use App\Models\StockTransaction;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -66,6 +67,29 @@ class StockService
         $referenceId = (int) $data['reference_id'];
 
         $transactionDate = $data['transaction_date'] ?? now()->format('Y-m-d');
+
+        // Phase 3 (Stock Take plan): outbound freeze guard.
+        //
+        // If this is an OUTBOUND movement (qty < 0) and the source warehouse
+        // is currently frozen by an active stock-take session, reject the
+        // movement with WarehouseFrozenForCountException naming the offending
+        // session(s). Inbound movements (qty > 0 — purchases received, transfers
+        // IN) are ALLOWED during a count; only stock LEAVING the warehouse
+        // would corrupt the physical count.
+        //
+        // The stock-take's OWN variance application (reference_type='stock_take')
+        // and reversals (reference_type='reversal') are explicitly exempt — the
+        // whole point of the freeze is to let the count be posted/cancelled
+        // while frozen, and reversals are corrections of prior movements, not
+        // new outbound activity.
+        //
+        // The check is a single SELECT on the partial index idx_wh_is_frozen
+        // (one row per frozen warehouse), so it is cheap for the common case
+        // where nothing is frozen.
+        if ($qty < 0
+            && !in_array($referenceType, ['stock_take', 'reversal'], true)) {
+            $this->assertWarehouseNotFrozen($warehouseId);
+        }
 
         // Step 1: Insert the immutable ledger row.
         $transactionId = DB::table('stock_transactions')->insertGetId([
@@ -260,6 +284,56 @@ class StockService
             ->whereIn('ws.product_id', $productIds)
             ->lockForUpdate()
             ->get();
+    }
+
+    /**
+     * Phase 3 (Stock Take plan): assert a warehouse is not currently frozen
+     * by an active stock-take session before allowing an OUTBOUND movement.
+     *
+     * Throws WarehouseFrozenForCountException naming the active session(s)
+     * that are freezing the warehouse, so the calling controller can render a
+     * clear 422 response. Cheap: one SELECT on the warehouses partial index +
+     * one query to list the offending sessions (only when frozen).
+     *
+     * @throws WarehouseFrozenForCountException
+     */
+    private function assertWarehouseNotFrozen(int $warehouseId): void
+    {
+        $warehouse = DB::table('warehouses')
+            ->where('id', $warehouseId)
+            ->select('id', 'warehouse_name', 'is_frozen_for_count')
+            ->first();
+
+        // No warehouse row (soft-deleted?) → cannot be frozen; let the caller
+        // proceed and fail on its own FK/stock checks.
+        if (!$warehouse || !(bool) $warehouse->is_frozen_for_count) {
+            return;
+        }
+
+        // List the active sessions (draft/counting) that freeze this warehouse.
+        // Joins stock_take_warehouses (which warehouses) → stock_take_sessions
+        // (the freeze flag + status) so we only name sessions that are BOTH
+        // active AND have freeze_outbound=true.
+        $sessions = DB::table('stock_take_warehouses as stw')
+            ->join('stock_take_sessions as sts', 'sts.id', '=', 'stw.stock_take_session_id')
+            ->where('stw.warehouse_id', $warehouseId)
+            ->where('sts.freeze_outbound', true)
+            ->whereIn('sts.status', ['draft', 'counting'])
+            ->orderBy('sts.id')
+            ->select('sts.id', 'sts.session_code', 'sts.status')
+            ->get()
+            ->map(fn($s) => [
+                'id'           => (int) $s->id,
+                'session_code' => $s->session_code,
+                'status'       => $s->status,
+            ])
+            ->all();
+
+        throw new WarehouseFrozenForCountException(
+            (int) $warehouse->id,
+            $warehouse->warehouse_name,
+            $sessions
+        );
     }
 
     /**

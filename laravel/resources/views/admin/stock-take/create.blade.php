@@ -86,6 +86,39 @@
             </div>
         </div>
 
+        {{-- Phase 3: Outbound freeze option --}}
+        <div class="card border-0 shadow-sm mb-3">
+            <div class="card-header bg-white">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-snowflake me-1 text-info"></i> Stock integrity options
+                </h2>
+            </div>
+            <div class="card-body">
+                <div class="form-check form-switch">
+                    @php
+                        $freezeChecked = old('freeze_outbound', false) ? 'checked' : '';
+                    @endphp
+                    <input class="form-check-input" type="checkbox" role="switch"
+                           name="freeze_outbound" value="1" id="freeze_outbound"
+                           {{ $freezeChecked }}>
+                    <label class="form-check-label" for="freeze_outbound">
+                        <span class="fw-semibold">Freeze outbound movements during the count</span>
+                    </label>
+                </div>
+                <div class="form-text small mt-2">
+                    <i class="fas fa-circle-info me-1 text-info"></i>
+                    When ON, sales, transfers out, stock adjustments out, and damages are
+                    <strong>blocked</strong> for the selected warehouses while this session is active
+                    (draft or counting). This guarantees the physical count is not corrupted by
+                    concurrent stock movements — use for <em>full annual counts</em>.
+                    Leave OFF for <em>cycle counts</em> where business must continue; in that case a
+                    reconciliation warning is shown at post time if any stock drifted from the snapshot.
+                    A historical <code>count_snapshot</code> (product list + system qty + avg cost) is
+                    captured at setup either way, so the count can be reconstructed later.
+                </div>
+            </div>
+        </div>
+
         {{-- Warehouses to count --}}
         <div class="card border-0 shadow-sm mb-3">
             <div class="card-header bg-white d-flex justify-content-between align-items-center">

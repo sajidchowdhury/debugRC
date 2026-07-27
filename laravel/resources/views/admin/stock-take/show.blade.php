@@ -89,6 +89,96 @@
         </div>
     @endif
 
+    {{-- Phase 3: Outbound-freeze status banner --}}
+    @if ($session->freeze_outbound)
+        @php
+            $activelyFreezing = $session->isActivelyFreezing();
+            $frozenWarehouses = $session->warehouses->pluck('warehouse')->filter();
+        @endphp
+        <div class="alert {{ $activelyFreezing ? 'alert-warning' : 'alert-secondary' }} d-flex align-items-start mb-3" role="alert">
+            <i class="fas fa-snowflake me-2 fa-lg mt-1"></i>
+            <div class="flex-grow-1">
+                <strong>
+                    @if ($activelyFreezing)
+                        Outbound movements are FROZEN for this session's warehouses.
+                    @else
+                        Outbound freeze was active during the count (now released).
+                    @endif
+                </strong>
+                <div class="small mt-1">
+                    @if ($session->frozen_at)
+                        Frozen since {{ \Carbon\Carbon::parse($session->frozen_at)->format('d M Y H:i') }}.
+                    @endif
+                    @if ($frozenWarehouses->isNotEmpty())
+                        Warehouses:
+                        @foreach ($frozenWarehouses as $wh)
+                            <span class="badge bg-secondary-subtle text-secondary ms-1">{{ $wh->warehouse_name }}</span>
+                        @endforeach
+                    @endif
+                </div>
+                <div class="small text-muted mt-1">
+                    @if ($activelyFreezing)
+                        Sales, transfers out, adjustments out, and damages are blocked for these warehouses until this session is posted or cancelled.
+                    @else
+                        The freeze was released when the session reached its terminal state. Stock movements are allowed again.
+                    @endif
+                </div>
+            </div>
+        </div>
+    @endif
+
+    {{-- Phase 3: Stock-drift reconciliation warning (shown after a post if any
+         product's live qty drifted from the setup-time snapshot) --}}
+    @php
+        $driftCount = is_array($stockDrift ?? null) ? count($stockDrift ?? []) : 0;
+    @endphp
+    @if ($driftCount > 0)
+        <div class="alert alert-warning d-flex align-items-start mb-3" role="alert">
+            <i class="fas fa-triangle-exclamation me-2 fa-lg mt-1"></i>
+            <div class="flex-grow-1">
+                <strong>Stock moved during the count — {{ $driftCount }} product(s) drifted from the snapshot.</strong>
+                <div class="small text-muted mt-1">
+                    These products had their live <code>warehouse_stock.qty</code> change between setup and post
+                    (inbound receipts while frozen, or any movement while unfrozen). The variance was still applied
+                    against the original snapshot <code>system_qty</code>; review the lines below for accuracy.
+                </div>
+                <div class="table-responsive mt-2 mb-0">
+                    <table class="table table-sm table-bordered mb-0 align-middle" style="max-height: 240px; overflow-y: auto;">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Product</th>
+                                <th>Warehouse</th>
+                                <th class="text-end">Snapshot qty</th>
+                                <th class="text-end">Live qty at post</th>
+                                <th class="text-end">Delta</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach ($stockDrift as $d)
+                                <tr>
+                                    <td>
+                                        <span class="fw-semibold">{{ $d['product_code'] ?? '?' }}</span>
+                                        — {{ $d['product_name'] ?? '?' }}
+                                    </td>
+                                    <td>{{ $d['warehouse_name'] ?? '?' }}</td>
+                                    <td class="text-end">{{ number_format($d['snapshot_qty'] ?? 0, 4) }}</td>
+                                    <td class="text-end">{{ number_format($d['live_qty'] ?? 0, 4) }}</td>
+                                    <td class="text-end">
+                                        @php
+                                            $delta = (float) ($d['delta'] ?? 0);
+                                            $cls = $delta > 0 ? 'text-success' : ($delta < 0 ? 'text-danger' : '');
+                                        @endphp
+                                        <span class="{{ $cls }}">{{ ($delta > 0 ? '+' : '') . number_format($delta, 4) }}</span>
+                                    </td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    @endif
+
     <div class="row g-3">
         {{-- ====== Left: main details ====== --}}
         <div class="col-lg-8">

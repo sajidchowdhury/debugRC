@@ -46,11 +46,19 @@ class StockTakeService
     /**
      * Phase 1: Create a stock take session (draft) with selected warehouses.
      *
+     * Phase 3: now accepts an optional `freeze_outbound` flag. When true, the
+     * covered warehouses are immediately marked is_frozen_for_count=true and
+     * StockService::applyTransaction will reject any outbound movement for
+     * them while the session is active (draft/counting). frozen_at is set to
+     * now() for audit purposes. The flag is released on post/cancel by
+     * refreshWarehouseFreezeFlags (which honors overlapping sessions).
+     *
      * @param array $data {
      *     branch_id: int,
      *     session_date: string (Y-m-d),
      *     warehouse_ids: array<int>,
      *     notes: string|null,
+     *     freeze_outbound: bool (default false),
      *     created_by: int,
      * }
      * @return StockTakeSession
@@ -65,20 +73,25 @@ class StockTakeService
         }
 
         $sessionCode = $this->generateSessionCode();
+        $freezeOutbound = !empty($data['freeze_outbound']);
 
-        return DB::transaction(function () use ($data, $sessionCode) {
+        return DB::transaction(function () use ($data, $sessionCode, $freezeOutbound) {
             $sessionId = DB::table('stock_take_sessions')->insertGetId([
                 'session_code' => $sessionCode,
                 'session_date' => $data['session_date'] ?? now()->format('Y-m-d'),
                 'branch_id' => (int) $data['branch_id'],
                 'status' => 'draft',
                 'is_reversed' => false,
+                // Phase 3: outbound freeze columns.
+                'freeze_outbound' => $freezeOutbound,
+                'frozen_at' => $freezeOutbound ? now() : null,
                 'notes' => $data['notes'] ?? null,
                 'created_by' => $data['created_by'] ?? null,
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
 
+            $warehouseIds = [];
             foreach ($data['warehouse_ids'] as $wid) {
                 $wid = (int) $wid;
                 if ($wid <= 0) continue;
@@ -87,6 +100,16 @@ class StockTakeService
                     'warehouse_id' => $wid,
                     'status' => 'pending',
                 ]);
+                $warehouseIds[] = $wid;
+            }
+
+            // Phase 3: if outbound freeze is on, mark the covered warehouses
+            // as frozen for count. refreshWarehouseFreezeFlags recomputes the
+            // flag from the set of active freezing sessions, so it correctly
+            // handles the case where another session already froze the same
+            // warehouse (flag stays true) or this is the first (flag set true).
+            if ($freezeOutbound && !empty($warehouseIds)) {
+                $this->refreshWarehouseFreezeFlags($warehouseIds);
             }
 
             // Phase 2: audit-log the creation (same transaction).
@@ -101,6 +124,9 @@ class StockTakeService
                     'warehouse_ids'  => array_map('intval', $data['warehouse_ids']),
                     'warehouse_count' => count($data['warehouse_ids']),
                     'notes'          => $data['notes'] ?? null,
+                    // Phase 3: record the freeze decision in the audit trail.
+                    'freeze_outbound' => $freezeOutbound,
+                    'frozen_at'       => $freezeOutbound ? now()->toDateTimeString() : null,
                 ],
                 actorId:    $data['created_by'] ?? null,
             );
@@ -144,6 +170,9 @@ class StockTakeService
                 ->delete();
 
             // Load all active products + their current warehouse_stock.
+            // Phase 3: also fetch product_code + product_name so the snapshot
+            // captured below can reconstruct the count even after a product is
+            // later renamed or soft-deleted.
             $products = DB::table('products as p')
                 ->leftJoin('warehouse_stock as ws', function ($join) use ($warehouseId) {
                     $join->on('ws.product_id', '=', 'p.id')
@@ -153,6 +182,9 @@ class StockTakeService
                 ->whereNull('p.deleted_at')
                 ->select(
                     'p.id as product_id',
+                    'p.product_code',
+                    'p.product_name',
+                    'p.unit',
                     DB::raw('COALESCE(ws.qty, 0) as system_qty'),
                     DB::raw('COALESCE(ws.avg_cost, 0) as rate')
                 )
@@ -179,6 +211,16 @@ class StockTakeService
                 DB::table('stock_take_items')->insert($rows);
             }
 
+            // Phase 3: capture the count_snapshot for this warehouse — the
+            // frozen product list at setup time (product_id, product_code,
+            // product_name, unit, system_qty, avg_cost). Stored on the session
+            // row as jsonb keyed by warehouse_id, merged across warehouses so a
+            // multi-warehouse session accumulates one snapshot per warehouse.
+            // This lets the session detail page reconstruct "what the counter
+            // saw" months later, even if products are renamed/deleted or stock
+            // drifts. Re-setup overwrites that warehouse's slice.
+            $this->captureWarehouseSnapshot($sessionId, $warehouseId, $products);
+
             // Mark warehouse as counting.
             DB::table('stock_take_warehouses')
                 ->where('stock_take_session_id', $sessionId)
@@ -201,6 +243,8 @@ class StockTakeService
                     'warehouse_id'   => $warehouseId,
                     'products_loaded' => count($rows),
                     're_setup'       => true, // setup always deletes existing items first
+                    // Phase 3: record that a snapshot was captured for this wh.
+                    'snapshot_captured' => true,
                 ],
                 warehouseId:  $warehouseId,
             );
@@ -326,6 +370,19 @@ class StockTakeService
             // check_violation error partway through the post.
             $this->assertNoNegativeStockOutcomes($sessionId);
 
+            // Phase 3: Reconcile the setup-time snapshot (system_qty) against
+            // the LIVE warehouse_stock.qty for every counted product. If stock
+            // moved between setup and post (possible when freeze_outbound=false,
+            // or via inbound receipts while frozen), the variance computed from
+            // the stale system_qty would be wrong. This is a WARNING, not a
+            // block — the post still proceeds (the negative-stock pre-check
+            // above already prevents corruption); the drift is recorded in the
+            // audit payload so reviewers can see exactly which products moved
+            // during the count. With freeze_outbound=true this list should be
+            // empty by construction for outbound drift (only inbound receipts
+            // can have changed live qty).
+            $stockDrift = $this->reconcileSnapshotWithLiveStock($sessionId);
+
             $totalGain = 0.0;
             $totalLoss = 0.0;
             $resolvedRates = []; // item_id => rate (for the deferred is_applied update)
@@ -420,6 +477,15 @@ class StockTakeService
                     'updated_at' => now(),
                 ]);
 
+            // Phase 3: release the outbound freeze on this session's warehouses.
+            // A posted session is no longer "actively counting", so its freeze
+            // must end. refreshWarehouseFreezeFlags recomputes the flag from
+            // ALL remaining active (draft/counting) freezing sessions, so if
+            // another overlapping session still covers a warehouse, its flag
+            // stays true (acceptance: "flag stays true until the last session
+            // ends").
+            $this->releaseSessionFreeze($sessionId);
+
             // Phase 2: audit-log the post (the critical transition). Logged
             // AFTER the session status update, so the to_status='posted'
             // reflects the committed state. If anything in this transaction
@@ -435,6 +501,12 @@ class StockTakeService
                     'total_loss'       => round($totalLoss, 4),
                     'journal_entry_id' => $journalEntryId,
                     'stock_movements'  => $varianceItems->count(),
+                    // Phase 3: surface the stock-drift warning so reviewers can
+                    // see which products moved during the count. Empty when the
+                    // outbound freeze held for the full count.
+                    'stock_drift'      => $stockDrift,
+                    'stock_drift_count' => count($stockDrift),
+                    'freeze_outbound'  => (bool) $session->freeze_outbound,
                 ],
                 actorId:    $postedBy,
             );
@@ -570,6 +642,13 @@ class StockTakeService
                 ->where('id', $sessionId)
                 ->update(['status' => 'cancelled', 'updated_at' => now()]);
 
+            // Phase 3: release the outbound freeze on this session's warehouses.
+            // A cancelled session is no longer "actively counting" — same as a
+            // posted session, the freeze must end. If the session was never
+            // frozen (freeze_outbound=false) this is a no-op recomputation that
+            // leaves flags unchanged. Honors overlapping sessions.
+            $this->releaseSessionFreeze($sessionId);
+
             // Phase 2: audit-log the cancel. For a posted session this is a
             // reversal (logged as action='reverse' so the critical-events
             // partial index catches it); for a draft/counting session this
@@ -600,6 +679,9 @@ class StockTakeService
                 payload:    [
                     'reason'      => $reason,
                     'was_posted'  => $wasPosted,
+                    // Phase 3: record whether the freeze was released.
+                    'freeze_outbound' => (bool) $session->freeze_outbound,
+                    'freeze_released' => (bool) $session->freeze_outbound,
                 ],
                 actorId:    $cancelledBy,
             );
@@ -687,5 +769,187 @@ class StockTakeService
             datePart: now()->format('Ymd'),
             padLength: 4,
         );
+    }
+
+    /**
+     * Phase 3: capture the per-warehouse count_snapshot jsonb on the session
+     * row. Merges this warehouse's product list (product_id, product_code,
+     * product_name, unit, system_qty, avg_cost) into the session-level jsonb
+     * keyed by warehouse_id. Re-setup overwrites that warehouse's slice.
+     *
+     * Must run inside the caller's transaction (it reads-modifies-writes the
+     * session row). The session row is already locked by setupWarehouseCounts'
+     * lockForUpdate.
+     *
+     * @param int $sessionId
+     * @param int $warehouseId
+     * @param \Illuminate\Support\Collection $products  Rows from the products
+     *     query in setupWarehouseCounts (product_id, product_code,
+     *     product_name, unit, system_qty, rate).
+     */
+    private function captureWarehouseSnapshot(int $sessionId, int $warehouseId, $products): void
+    {
+        $slice = [];
+        foreach ($products as $p) {
+            $slice[] = [
+                'product_id'   => (int) $p->product_id,
+                'product_code' => $p->product_code,
+                'product_name' => $p->product_name,
+                'unit'         => $p->unit,
+                'system_qty'   => (float) $p->system_qty,
+                'avg_cost'     => (float) $p->rate,
+            ];
+        }
+
+        // Read the raw jsonb (DB::table returns the jsonb column as a string).
+        $raw = DB::table('stock_take_sessions')
+            ->where('id', $sessionId)
+            ->value('count_snapshot');
+
+        $snapshot = $raw ? json_decode($raw, true) : [];
+        if (!is_array($snapshot)) {
+            $snapshot = [];
+        }
+        if (!isset($snapshot['warehouses']) || !is_array($snapshot['warehouses'])) {
+            $snapshot['warehouses'] = [];
+        }
+
+        $snapshot['warehouses'][(string) $warehouseId] = [
+            'warehouse_id' => $warehouseId,
+            'captured_at'  => now()->toDateTimeString(),
+            'product_count' => count($slice),
+            'products'     => $slice,
+        ];
+        // Refresh the top-level captured_at so the latest setup is reflected.
+        $snapshot['captured_at'] = now()->toDateTimeString();
+
+        DB::table('stock_take_sessions')
+            ->where('id', $sessionId)
+            ->update([
+                'count_snapshot' => json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'updated_at' => now(),
+            ]);
+    }
+
+    /**
+     * Phase 3: reconcile the setup-time snapshot (system_qty on each
+     * stock_take_items row) against the LIVE warehouse_stock.qty.
+     *
+     * Returns a list of products whose live qty has drifted from the snapshot
+     * captured at setup — i.e. stock moved between setup and post. Each entry
+     * carries the product identity, the snapshot system_qty, the live qty, and
+     * the delta (live − snapshot) so the UI can say "product X changed from
+     * 10 to 7".
+     *
+     * This is a WARNING, not a block. The post still proceeds; the drift is
+     * recorded in the post audit payload + surfaced on the session detail
+     * page. With freeze_outbound=true, outbound drift should be empty by
+     * construction; only inbound receipts (purchases, transfers IN) can have
+     * changed live qty while frozen.
+     *
+     * @param int $sessionId
+     * @return array<int, array{product_id: int, product_code: string, product_name: string, warehouse_id: int, warehouse_name: string, snapshot_qty: float, live_qty: float, delta: float}>
+     */
+    private function reconcileSnapshotWithLiveStock(int $sessionId): array
+    {
+        $rows = DB::table('stock_take_items as sti')
+            ->join('products as p', 'p.id', '=', 'sti.product_id')
+            ->join('warehouses as w', 'w.id', '=', 'sti.warehouse_id')
+            ->leftJoin('warehouse_stock as ws', function ($join) {
+                $join->on('ws.warehouse_id', '=', 'sti.warehouse_id')
+                     ->on('ws.product_id', '=', 'sti.product_id');
+            })
+            ->where('sti.stock_take_session_id', $sessionId)
+            ->whereRaw('COALESCE(ws.qty, 0) <> sti.system_qty')
+            ->select(
+                'sti.product_id',
+                'p.product_code',
+                'p.product_name',
+                'sti.warehouse_id',
+                'w.warehouse_name',
+                'sti.system_qty',
+                DB::raw('COALESCE(ws.qty, 0) as live_qty')
+            )
+            ->orderBy('w.warehouse_name')
+            ->orderBy('p.product_name')
+            ->get();
+
+        $drift = [];
+        foreach ($rows as $r) {
+            $snapshot = (float) $r->system_qty;
+            $live = (float) $r->live_qty;
+            $drift[] = [
+                'product_id'     => (int) $r->product_id,
+                'product_code'   => $r->product_code,
+                'product_name'   => $r->product_name,
+                'warehouse_id'   => (int) $r->warehouse_id,
+                'warehouse_name' => $r->warehouse_name,
+                'snapshot_qty'   => $snapshot,
+                'live_qty'       => $live,
+                'delta'          => round($live - $snapshot, 4),
+            ];
+        }
+        return $drift;
+    }
+
+    /**
+     * Phase 3: release the outbound freeze for a session's warehouses.
+     *
+     * Called on post + cancel (the two terminal transitions) and would be
+     * called on delete if a delete flow is added. Recomputes the
+     * is_frozen_for_count flag for each of the session's warehouses based on
+     * ALL remaining ACTIVE (draft/counting) sessions with freeze_outbound=true
+     * that still cover the warehouse — so an overlapping session keeps the
+     * flag true until IT ends.
+     *
+     * @param int $sessionId
+     */
+    private function releaseSessionFreeze(int $sessionId): void
+    {
+        $warehouseIds = DB::table('stock_take_warehouses')
+            ->where('stock_take_session_id', $sessionId)
+            ->pluck('warehouse_id')
+            ->all();
+
+        $this->refreshWarehouseFreezeFlags($warehouseIds);
+    }
+
+    /**
+     * Phase 3: recompute the is_frozen_for_count flag for the given warehouses
+     * based on the set of ACTIVE stock-take sessions (status IN draft/counting)
+     * with freeze_outbound=true that cover each warehouse.
+     *
+     * This is the single source of truth for the denormalized flag. It is
+     * called from createSession (set true when the first freezing session
+     * covers a warehouse) and from releaseSessionFreeze (post/cancel — clear
+     * when the last freezing session ends). Idempotent: running it twice with
+     * the same state produces the same flags.
+     *
+     * @param array<int> $warehouseIds
+     */
+    private function refreshWarehouseFreezeFlags(array $warehouseIds): void
+    {
+        $warehouseIds = array_values(array_unique(array_filter(array_map('intval', $warehouseIds))));
+        if (empty($warehouseIds)) {
+            return;
+        }
+
+        foreach ($warehouseIds as $wid) {
+            // A warehouse is frozen iff at least one ACTIVE (draft/counting)
+            // session with freeze_outbound=true covers it.
+            $frozen = DB::table('stock_take_warehouses as stw')
+                ->join('stock_take_sessions as sts', 'sts.id', '=', 'stw.stock_take_session_id')
+                ->where('stw.warehouse_id', $wid)
+                ->where('sts.freeze_outbound', true)
+                ->whereIn('sts.status', ['draft', 'counting'])
+                ->exists();
+
+            DB::table('warehouses')
+                ->where('id', $wid)
+                ->update([
+                    'is_frozen_for_count' => $frozen,
+                    'updated_at' => now(),
+                ]);
+        }
     }
 }

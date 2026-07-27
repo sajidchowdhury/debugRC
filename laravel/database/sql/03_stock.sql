@@ -143,6 +143,14 @@ CREATE TABLE stock_take_sessions (
     reversed_at timestamp(0),
     reversed_by integer,
     reverse_reason text,
+    -- Phase 3 (Stock Take plan): stock integrity. freeze_outbound=true locks
+    -- the source warehouses against outbound movements during the count;
+    -- frozen_at records when the lock took effect; count_snapshot jsonb
+    -- captures the product list at setup time (see StockTakeService::
+    -- setupWarehouseCounts) so the count can be reconstructed later.
+    frozen_at timestamp(0),
+    freeze_outbound boolean NOT NULL DEFAULT false,
+    count_snapshot jsonb,
     notes text,
     created_by integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -152,6 +160,9 @@ CREATE TABLE stock_take_sessions (
 CREATE INDEX idx_sts_branch ON stock_take_sessions(branch_id);
 -- Partial index: only reversed sessions, for fast reversal lookups.
 CREATE INDEX idx_sts_is_reversed ON stock_take_sessions(is_reversed) WHERE is_reversed = true;
+-- Partial index: only sessions that freeze outbound stock — powers the
+-- warehouse-flag recompute in StockTakeService::refreshWarehouseFreezeFlags.
+CREATE INDEX idx_sts_freeze_outbound ON stock_take_sessions(branch_id) WHERE freeze_outbound = true;
 
 CREATE TABLE stock_take_warehouses (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

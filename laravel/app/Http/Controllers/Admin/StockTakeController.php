@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Exceptions\StockTakeNegativeStockException;
+use App\Exceptions\WarehouseFrozenForCountException;
 use App\Models\StockTakeAuditLog;
 use App\Models\StockTakeSession;
 use App\Models\User;
@@ -87,6 +88,11 @@ class StockTakeController extends Controller
             'warehouse_ids' => 'required|array|min:1',
             'warehouse_ids.*' => 'integer|exists:warehouses,id',
             'notes' => 'nullable|string|max:1000',
+            // Phase 3: optional outbound freeze. When on, the covered
+            // warehouses are locked against outbound movements while the
+            // session is active. Default off (backward compatible; use for
+            // full annual counts, leave off for cycle counts).
+            'freeze_outbound' => 'sometimes|boolean',
         ]);
 
         try {
@@ -95,11 +101,17 @@ class StockTakeController extends Controller
                 'session_date' => $validated['session_date'],
                 'warehouse_ids' => $validated['warehouse_ids'],
                 'notes' => $validated['notes'] ?? '',
+                'freeze_outbound' => (bool) ($validated['freeze_outbound'] ?? false),
                 'created_by' => auth()->id(),
             ]);
 
+            $msg = "Session {$session->session_code} created. Set up counts for each warehouse.";
+            if ($session->freeze_outbound) {
+                $msg .= ' Outbound movements are now FROZEN for the selected warehouses until this session is posted or cancelled.';
+            }
+
             return redirect()->route('admin.stock-take.show', $session)
-                ->with('success', "Session {$session->session_code} created. Set up counts for each warehouse.");
+                ->with('success', $msg);
         } catch (\Throwable $e) {
             return back()->withInput()->with('error', $e->getMessage());
         }
@@ -146,6 +158,19 @@ class StockTakeController extends Controller
 
         $healthCheck = $this->healthCheckService->runSessionChecks($id);
 
+        // Phase 3: extract the stock-drift reconciliation warning from the
+        // latest 'post' audit row (if the session has been posted). The post
+        // audit payload carries `stock_drift` — the list of products whose
+        // live qty drifted from the setup-time snapshot. Empty/absent when the
+        // outbound freeze held for the full count.
+        $stockDrift = [];
+        if ($session->isPosted()) {
+            $postLog = $auditLogs->firstWhere('action', 'post');
+            if ($postLog && is_array($postLog->payload)) {
+                $stockDrift = $postLog->payload['stock_drift'] ?? [];
+            }
+        }
+
         return view('admin.stock-take.show', [
             'title' => 'Stock Take ' . $session->session_code,
             'session' => $session,
@@ -154,6 +179,8 @@ class StockTakeController extends Controller
             'stockMovements' => $stockMovements,
             'auditLogs' => $auditLogs,
             'healthCheck' => $healthCheck,
+            // Phase 3: freeze + reconciliation context for the show page.
+            'stockDrift' => $stockDrift,
         ]);
     }
 

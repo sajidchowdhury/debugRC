@@ -47,6 +47,26 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        // Phase 3 (Stock Take plan): render the outbound-freeze block as a
+        // clear 422 — JSON for API/AJAX callers, a redirect-back-with-error
+        // for web. This is registered globally so EVERY outbound service
+        // (sales, transfers, adjustments, damages, purchase returns) gets a
+        // consistent, actionable response naming the active session(s) that
+        // froze the warehouse, without each controller needing its own catch.
+        $exceptions->render(function (\App\Exceptions\WarehouseFrozenForCountException $e, \Illuminate\Http\Request $request) {
+            $payload = [
+                'message' => $e->getMessage(),
+                'error'   => 'warehouse_frozen_for_count',
+                'warehouse' => [
+                    'id'   => $e->getWarehouseId(),
+                    'name' => $e->getWarehouseName(),
+                ],
+                'sessions' => $e->getSessions(),
+            ];
+            if ($request->expectsJson() || $request->is('api/*')) {
+                return response()->json($payload, 422);
+            }
+            return redirect()->back()->withInput()->with('error', $e->getMessage());
+        });
     })
     ->create();

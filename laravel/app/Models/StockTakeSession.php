@@ -29,6 +29,9 @@ use App\Traits\AuditableMasterData;
  * @property string|null $reversed_at
  * @property int|null $reversed_by
  * @property string|null $reverse_reason
+ * @property string|null $frozen_at      Phase 3: when outbound freeze took effect
+ * @property bool $freeze_outbound       Phase 3: true = lock warehouses during count
+ * @property array|null $count_snapshot  Phase 3: jsonb product list at setup time
  * @property string|null $notes
  * @property int|null $created_by
  */
@@ -52,6 +55,9 @@ class StockTakeSession extends Model
         'reversed_at',
         'reversed_by',
         'reverse_reason',
+        'frozen_at',
+        'freeze_outbound',
+        'count_snapshot',
         'notes',
         'created_by',
     ];
@@ -60,6 +66,9 @@ class StockTakeSession extends Model
         'session_date' => 'date',
         'is_reversed' => 'boolean',
         'reversed_at' => 'datetime',
+        'frozen_at' => 'datetime',
+        'freeze_outbound' => 'boolean',
+        'count_snapshot' => 'array',
         'branch_id' => 'integer',
         'journal_entry_id' => 'integer',
         'created_by' => 'integer',
@@ -90,4 +99,15 @@ class StockTakeSession extends Model
     public function isCounting(): bool { return $this->status === 'counting'; }
     public function isPosted(): bool { return $this->status === 'posted'; }
     public function isCancelled(): bool { return $this->status === 'cancelled'; }
+
+    /**
+     * Phase 3: is this session actively freezing its warehouses?
+     * True when freeze_outbound is on AND the session is still in a counting
+     * state (draft/counting). Once posted or cancelled the freeze is released.
+     */
+    public function isActivelyFreezing(): bool
+    {
+        return (bool) $this->freeze_outbound
+            && in_array($this->status, ['draft', 'counting'], true);
+    }
 }
