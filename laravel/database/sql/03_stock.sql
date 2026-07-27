@@ -195,15 +195,40 @@ CREATE TABLE stock_take_warehouses (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     stock_take_session_id integer NOT NULL REFERENCES stock_take_sessions(id) ON DELETE CASCADE,
     warehouse_id integer NOT NULL REFERENCES warehouses(id),
+    -- Phase 8 (Stock Take plan): branch_id denormalized from
+    -- stock_take_sessions.branch_id at insert time (set by
+    -- StockTakeService::createSession, never updated afterwards). Lets RLS
+    -- scope reads by branch without a join — the same pattern used on
+    -- stock_take_audit_log. RLS policies live in
+    -- 07_views_triggers_constraints.sql.
+    branch_id integer NOT NULL REFERENCES branches(id),
+    -- Phase 8: denormalized mirror of stock_take_sessions.freeze_outbound,
+    -- set at insert (createSession) and never updated. The overlapping-
+    -- frozen-session trigger (prevent_overlapping_frozen_stock_take, see
+    -- 07_views_triggers_constraints.sql) reads this flag instead of joining
+    -- to the session row, keeping the trigger cheap. The session's flag is
+    -- the source of truth for runtime behavior (e.g. warehouses.is_frozen_
+    -- for_count recompute); this column is only the snapshot that powers
+    -- the no-overlap invariant.
+    freeze_outbound boolean NOT NULL DEFAULT false,
     -- Phase 7: 'recounting' added to the status vocab. It is a transient
     -- state inserted by recountWarehouse() between 'completed' and
     -- 'counting' so the audit timeline can show the recount request
     -- distinctly. The transition is atomic (recounting is set + audited,
     -- then immediately counting), but the vocab is forward-compatible with
     -- a future async recount assignment.
-    status varchar(20) DEFAULT 'pending' CHECK (status IN ('pending','counting','completed','recounting'))
+    status varchar(20) DEFAULT 'pending' CHECK (status IN ('pending','counting','completed','recounting')),
+    -- Phase 8: a session can cover a given warehouse at most once. The
+    -- service dedupes warehouse_ids in PHP before insert, but the DB
+    -- constraint is the race-condition backstop.
+    CONSTRAINT uk_stw_session_wh UNIQUE (stock_take_session_id, warehouse_id)
 );
 CREATE INDEX idx_stw_session ON stock_take_warehouses(stock_take_session_id);
+-- Phase 8: RLS branch filter scan.
+CREATE INDEX idx_stw_branch ON stock_take_warehouses(branch_id);
+-- Phase 8: the overlapping-frozen-session trigger's fast path — one row per
+-- (frozen) warehouse per session.
+CREATE INDEX idx_stw_frozen_wh ON stock_take_warehouses(warehouse_id) WHERE freeze_outbound = true;
 
 CREATE TABLE stock_take_items (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -227,6 +252,12 @@ CREATE TABLE stock_take_items (
     -- cascade-wipe the recount context.
     recounted_at timestamp(0),
     recounted_by integer REFERENCES users(id) ON DELETE SET NULL,
+    -- Phase 8 (Stock Take plan): branch_id denormalized from
+    -- stock_take_sessions.branch_id at insert time (set by
+    -- StockTakeService::setupWarehouseCounts, never updated). Lets RLS
+    -- scope reads by branch without a join — closes the cross-branch data
+    -- leak that existed when only stock_take_sessions had RLS.
+    branch_id integer NOT NULL REFERENCES branches(id),
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uk_sti_session_wh_product UNIQUE (stock_take_session_id, warehouse_id, product_id)
 );
@@ -234,6 +265,8 @@ CREATE INDEX idx_sti_session ON stock_take_items(stock_take_session_id);
 CREATE INDEX idx_sti_warehouse_product ON stock_take_items(warehouse_id, product_id);
 -- Partial index: only posted variance items (for fast drill-down queries).
 CREATE INDEX idx_sti_journal_line ON stock_take_items(journal_line_id) WHERE journal_line_id IS NOT NULL;
+-- Phase 8: RLS branch filter scan.
+CREATE INDEX idx_sti_branch ON stock_take_items(branch_id);
 
 -- Phase 2 (Stock Take plan): real audit trail. Append-only log of every
 -- state transition in the stock-take lifecycle. Written explicitly by

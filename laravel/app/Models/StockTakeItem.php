@@ -20,6 +20,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property string|null $reason  per-line reason (e.g. "damaged", "lost", "found")
  * @property bool $is_applied  true after postSession applies the variance
  * @property int|null $journal_line_id  Phase 1: per-line GL traceability (links to journal_lines.id)
+ * @property int $branch_id  Phase 8: denormalized from stock_take_sessions.branch_id for RLS
  */
 class StockTakeItem extends Model
 {
@@ -37,6 +38,8 @@ class StockTakeItem extends Model
         'reason',
         'is_applied',
         'journal_line_id',
+        // Phase 8: denormalized branch_id for RLS (set at insert, never updated).
+        'branch_id',
         'updated_at',
     ];
 
@@ -50,6 +53,7 @@ class StockTakeItem extends Model
         'rate' => 'decimal:2',
         'is_applied' => 'boolean',
         'journal_line_id' => 'integer',
+        'branch_id' => 'integer',
     ];
 
     public function session(): \Illuminate\Database\Eloquent\Relations\BelongsTo

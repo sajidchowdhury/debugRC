@@ -38,6 +38,19 @@ use App\Services\Stock\StockTakePolicyService;
  */
 class StockTakeService
 {
+    /**
+     * Phase 8: advisory-lock namespace for stock-take postSession.
+     *
+     * Used with pg_advisory_xact_lock(namespace, warehouse_id) — the two-int
+     * form. The namespace isolates stock-take post locks from every other
+     * advisory lock in the system (DocumentSequenceService uses the single-
+     * int form with a CRC32 hash; the two-int form with a fixed namespace
+     * cannot collide with it). The value 0x53544B50 ("STKP" in hex) was
+     * chosen to be memorable + unlikely to clash with any other namespace
+     * constant someone might add later.
+     */
+    public const POST_ADVISORY_LOCK_NAMESPACE = 0x53544B50;
+
     public function __construct(
         private StockService $stockService,
         private JournalPostingService $journalPosting,
@@ -92,6 +105,30 @@ class StockTakeService
         $countScope = $data['count_scope'] ?? 'full';
         $countScopePayload = $this->validateCountScope($countScope, $data['count_scope_payload'] ?? null);
 
+        // Phase 8: pre-check the no-overlapping-frozen-sessions invariant
+        // BEFORE opening the transaction + inserting the session row. This
+        // is the friendly-error path; the DB trigger
+        // (prevent_overlapping_frozen_stock_take) is the race-condition
+        // backstop for two concurrent createSession calls. We check here so
+        // the user gets a clear message naming the conflicting warehouse(s)
+        // rather than a generic trigger exception.
+        if ($freezeOutbound) {
+            $conflictingWarehouseIds = $this->findWarehousesWithActiveFrozenSession(
+                $data['warehouse_ids']
+            );
+            if (!empty($conflictingWarehouseIds)) {
+                $names = DB::table('warehouses')
+                    ->whereIn('id', $conflictingWarehouseIds)
+                    ->pluck('warehouse_name')
+                    ->all();
+                throw new \RuntimeException(
+                    'Cannot freeze outbound for warehouse(s): ' . implode(', ', $names)
+                    . ' — another active stock-take session already froze them. '
+                    . 'Post or cancel the existing session first, or create this session without the outbound freeze.'
+                );
+            }
+        }
+
         return DB::transaction(function () use ($data, $sessionCode, $freezeOutbound, $countScope, $countScopePayload) {
             $sessionId = DB::table('stock_take_sessions')->insertGetId([
                 'session_code' => $sessionCode,
@@ -117,11 +154,39 @@ class StockTakeService
             foreach ($data['warehouse_ids'] as $wid) {
                 $wid = (int) $wid;
                 if ($wid <= 0) continue;
-                DB::table('stock_take_warehouses')->insert([
-                    'stock_take_session_id' => $sessionId,
-                    'warehouse_id' => $wid,
-                    'status' => 'pending',
-                ]);
+                try {
+                    DB::table('stock_take_warehouses')->insert([
+                        'stock_take_session_id' => $sessionId,
+                        'warehouse_id' => $wid,
+                        // Phase 8: denormalized branch_id + freeze_outbound so
+                        // RLS can scope reads without a join and the no-overlap
+                        // trigger can read the flag off the row directly.
+                        'branch_id' => (int) $data['branch_id'],
+                        'freeze_outbound' => $freezeOutbound,
+                        'status' => 'pending',
+                    ]);
+                } catch (\Illuminate\Database\QueryException $e) {
+                    // Two expected SQLSTATEs from the stw insert:
+                    //   23505 = unique_violation on uk_stw_session_wh — a
+                    //           duplicate warehouse_id in the request (the
+                    //           service should have deduped, but a malformed
+                    //           request could still try). Surface a clear msg.
+                    //   23000 = the prevent_overlapping_frozen_stock_take
+                    //           trigger's ERRCODE for the overlap case. Its
+                    //           message already names the warehouse + explains
+                    //           the conflict, so surface it verbatim.
+                    // Anything else is unexpected — re-throw unchanged.
+                    $sqlState = $e->errorInfo[0] ?? $e->getCode();
+                    if ($sqlState === '23505') {
+                        throw new \RuntimeException(
+                            "Warehouse {$wid} is already part of this stock-take session (duplicate warehouse_id in the request)."
+                        );
+                    }
+                    if ($sqlState === '23000') {
+                        throw new \RuntimeException($e->getMessage());
+                    }
+                    throw $e;
+                }
                 $warehouseIds[] = $wid;
             }
 
@@ -215,6 +280,11 @@ class StockTakeService
                     'rate' => $p->rate,
                     'reason' => null,
                     'is_applied' => false,
+                    // Phase 8: denormalized branch_id for RLS on stock_take_items
+                    // (the security fix that closes the cross-branch data leak).
+                    // Read off the (already locked) session row so it is always
+                    // consistent with the session's branch.
+                    'branch_id' => (int) $session->branch_id,
                     'updated_at' => $now,
                 ];
             }
@@ -1555,6 +1625,35 @@ class StockTakeService
                 );
             }
 
+            // Phase 8: per-warehouse transaction-scoped advisory lock.
+            //
+            // Two concurrent postSession calls for the SAME warehouse (e.g. the
+            // same session double-clicked, or two overlapping sessions covering
+            // a shared warehouse posted at once) would race on the
+            // warehouse_stock rows and the negative-stock pre-check below. The
+            // session-row lockForUpdate above already serializes posts of the
+            // SAME session; this advisory lock additionally serializes posts
+            // that touch the SAME warehouse across DIFFERENT sessions (which
+            // the session-row lock cannot do — different sessions, different
+            // rows).
+            //
+            // We use the two-int form pg_advisory_xact_lock(namespace, key)
+            // with a fixed namespace constant so stock-take posts cannot
+            // collide with the DocumentSequenceService single-int locks (which
+            // hash doc_type/branch/period into one int4). The lock is
+            // transaction-scoped — auto-released on COMMIT/ROLLBACK, so no
+            // manual unlock is needed if the post throws partway through.
+            $postWarehouseIds = DB::table('stock_take_warehouses')
+                ->where('stock_take_session_id', $sessionId)
+                ->pluck('warehouse_id')
+                ->all();
+            foreach ($postWarehouseIds as $lockWhId) {
+                DB::select(
+                    'SELECT pg_advisory_xact_lock(?, ?)',
+                    [StockTakeService::POST_ADVISORY_LOCK_NAMESPACE, (int) $lockWhId]
+                );
+            }
+
             // Get all items with variance that haven't been applied yet.
             $varianceItems = DB::table('stock_take_items')
                 ->where('stock_take_session_id', $sessionId)
@@ -2217,6 +2316,41 @@ class StockTakeService
             ->all();
 
         $this->refreshWarehouseFreezeFlags($warehouseIds);
+    }
+
+    /**
+     * Phase 8: find which of the given warehouse_ids are already covered by
+     * an ACTIVE (status in draft/counting/submitted/approved) stock-take
+     * session that has freeze_outbound=true.
+     *
+     * Used by createSession() as the friendly-error pre-check before opening
+     * the transaction + inserting. The DB trigger
+     * prevent_overlapping_frozen_stock_take is the race-condition backstop;
+     * this method gives the user a clear message naming the conflicting
+     * warehouses instead of a generic trigger exception.
+     *
+     * Mirrors the predicate in refreshWarehouseFreezeFlags (so the two always
+     * agree on what "active + frozen" means).
+     *
+     * @param array<int> $warehouseIds
+     * @return array<int>  Subset of $warehouseIds that conflict (may be empty).
+     */
+    private function findWarehousesWithActiveFrozenSession(array $warehouseIds): array
+    {
+        $warehouseIds = array_values(array_unique(array_filter(array_map('intval', $warehouseIds))));
+        if (empty($warehouseIds)) {
+            return [];
+        }
+
+        return DB::table('stock_take_warehouses as stw')
+            ->join('stock_take_sessions as sts', 'sts.id', '=', 'stw.stock_take_session_id')
+            ->whereIn('stw.warehouse_id', $warehouseIds)
+            ->where('sts.freeze_outbound', true)
+            ->whereIn('sts.status', ['draft', 'counting', 'submitted', 'approved'])
+            ->pluck('stw.warehouse_id')
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**

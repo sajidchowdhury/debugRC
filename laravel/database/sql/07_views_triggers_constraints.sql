@@ -640,6 +640,71 @@ CREATE POLICY rls_stock_take_sessions_update ON stock_take_sessions FOR UPDATE U
 CREATE POLICY rls_stock_take_sessions_delete ON stock_take_sessions FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
 CREATE POLICY rls_stock_take_sessions_admin ON stock_take_sessions FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
 
+-- Phase 8 (Stock Take plan): RLS on the two stock-take child tables that
+-- were missing it after Phases 0–7. Before this, a non-admin user from
+-- Branch A could read stock_take_warehouses / stock_take_items for a
+-- Branch B session via direct query (the EnforceBranchIsolation middleware
+-- only checks the session row, not the child rows). branch_id is
+-- denormalized onto both tables at insert time (migration
+-- 2025_08_01_000001) so the policies can scope by branch without a join.
+ALTER TABLE stock_take_warehouses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_take_warehouses FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_stock_take_warehouses_select ON stock_take_warehouses FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_take_warehouses_insert ON stock_take_warehouses FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_take_warehouses_update ON stock_take_warehouses FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_take_warehouses_delete ON stock_take_warehouses FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_take_warehouses_admin ON stock_take_warehouses FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+ALTER TABLE stock_take_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_take_items FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_stock_take_items_select ON stock_take_items FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_take_items_insert ON stock_take_items FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_take_items_update ON stock_take_items FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_take_items_delete ON stock_take_items FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);
+CREATE POLICY rls_stock_take_items_admin ON stock_take_items FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+-- Phase 8 (Stock Take plan): the EXCLUDE constraint the plan asked for —
+-- prevent two ACTIVE frozen sessions from covering the same warehouse. The
+-- plan noted the "active + frozen" predicate spans two tables (stw + sts),
+-- which a plain partial unique index cannot express; the trigger is the
+-- cleanest DB-level enforcement. App logic in StockTakeService::
+-- createSession provides the friendly error; the trigger is the race-
+-- condition backstop (two concurrent createSession calls would otherwise
+-- both pass the app check and both insert).
+CREATE OR REPLACE FUNCTION prevent_overlapping_frozen_stock_take()
+RETURNS trigger AS $$
+DECLARE
+    conflict_count integer;
+BEGIN
+    IF NEW.freeze_outbound IS NOT TRUE THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT count(*) INTO conflict_count
+    FROM stock_take_warehouses stw
+    JOIN stock_take_sessions sts ON sts.id = stw.stock_take_session_id
+    WHERE stw.warehouse_id = NEW.warehouse_id
+      AND stw.freeze_outbound = true
+      AND stw.id IS DISTINCT FROM NEW.id
+      AND stw.stock_take_session_id IS DISTINCT FROM NEW.stock_take_session_id
+      AND sts.status IN ('draft','counting','submitted','approved');
+
+    IF conflict_count > 0 THEN
+        RAISE EXCEPTION
+            'Warehouse % is already covered by an active frozen stock-take session. Post or cancel the existing session first, or create this session without the outbound freeze.',
+            NEW.warehouse_id
+            USING ERRCODE = '23000';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_stw_no_overlapping_frozen ON stock_take_warehouses;
+CREATE TRIGGER trg_stw_no_overlapping_frozen
+    BEFORE INSERT OR UPDATE OF warehouse_id, freeze_outbound ON stock_take_warehouses
+    FOR EACH ROW EXECUTE FUNCTION prevent_overlapping_frozen_stock_take();
+
 ALTER TABLE damage_invoices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE damage_invoices FORCE ROW LEVEL SECURITY;
 CREATE POLICY rls_damage_invoices_select ON damage_invoices FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int);

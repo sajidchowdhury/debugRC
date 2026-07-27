@@ -18,6 +18,8 @@ use Illuminate\Database\Eloquent\Model;
  * @property int $id
  * @property int $stock_take_session_id
  * @property int $warehouse_id
+ * @property int $branch_id  Phase 8: denormalized from stock_take_sessions.branch_id for RLS
+ * @property bool $freeze_outbound  Phase 8: denormalized mirror of the session's flag (set at insert, never updated)
  * @property string $status pending|counting|completed|recounting
  */
 class StockTakeWarehouse extends Model
@@ -29,12 +31,17 @@ class StockTakeWarehouse extends Model
     protected $fillable = [
         'stock_take_session_id',
         'warehouse_id',
+        // Phase 8: denormalized for RLS + the no-overlap trigger.
+        'branch_id',
+        'freeze_outbound',
         'status',
     ];
 
     protected $casts = [
         'stock_take_session_id' => 'integer',
         'warehouse_id' => 'integer',
+        'branch_id' => 'integer',
+        'freeze_outbound' => 'boolean',
     ];
 
     public function session(): \Illuminate\Database\Eloquent\Relations\BelongsTo
