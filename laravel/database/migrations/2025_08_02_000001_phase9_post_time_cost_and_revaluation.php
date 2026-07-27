@@ -36,12 +36,23 @@ use Illuminate\Support\Facades\DB;
  *   - stock_take_items.revaluation_amount numeric(18,6) — the reval adj amount.
  *   - stock_take_items.revaluation_line_id integer      — per-line GL trace.
  *   - stock_take_policies: stock_take.revaluation_epsilon (numeric, default 0.01).
- *   - ledgers: inventory_revaluation nature seeded (L-0503 Expense).
+ *   - ledgers: inventory_revaluation nature seeded (L-0504 Expense).
  *
  * Idempotency: every ALTER uses IF NOT EXISTS / IF EXISTS, every constraint
  * add is name-guarded, every CREATE uses IF NOT EXISTS, and the ledger seed
- * uses a lookup-then-insert pattern. Re-running (or running against a
- * partially-migrated DB) is safe.
+ * uses a lookup-then-insert pattern guarded by BOTH ledger_nature AND
+ * ledger_code (defense in depth — see Hotfix #5 below). Re-running (or
+ * running against a partially-migrated DB) is safe.
+ *
+ * Hotfix #5 (Task 16): the original Phase 9 seed used L-0503 for the
+ * inventory_revaluation ledger. L-0503 was already taken by "Damage Loss"
+ * (ledger_nature='damage_loss') in the chart-of-accounts seeder
+ * (2025_01_05_000001_seed_default_chart_of_accounts.php line 111). The
+ * original idempotency check only counted ledgers by ledger_nature, so it
+ * saw 0 rows with nature='inventory_revaluation' and tried to INSERT L-0503
+ * — colliding with the unique constraint ledgers_ledger_code_unique with
+ * SQLSTATE[23505]. Fix: use L-0504 (next free code in the L-05xx inventory-
+ * expense range) AND guard the insert by checking ledger_code too.
  *
  * PostgreSQL prepared-statement safety: every DB::statement() in this file
  * contains exactly ONE SQL command. Multi-command strings are rejected by
@@ -140,19 +151,25 @@ return new class extends Migration
         );
 
         // ── (4) Seed the inventory_revaluation ledger nature ──────────────
-        // Revaluation expense ledger (L-0503), sibling of inventory_shrinkage
-        // (L-0502). Dr this when post_rate < system_rate (cost fell — the
-        // book value of counted stock decreases); Cr this when post_rate >
-        // system_rate (cost rose — book value increases). The offset is
-        // always Inventory.
+        // Revaluation expense ledger (L-0504), sibling of inventory_shrinkage
+        // (L-0502) and Damage Loss (L-0503). Dr this when post_rate <
+        // system_rate (cost fell — the book value of counted stock decreases);
+        // Cr this when post_rate > system_rate (cost rose — book value
+        // increases). The offset is always Inventory.
         //
-        // Idempotent: skip if a ledger with nature='inventory_revaluation'
-        // already exists (the chart-of-accounts seeder may have added it, or
-        // a prior partial run of this migration).
+        // Idempotency (Hotfix #5, Task 16): guard by BOTH ledger_nature AND
+        // ledger_code. The original Phase 9 seed only checked ledger_nature,
+        // which returned 0 (no ledger had that nature yet) — but L-0503 was
+        // already taken by "Damage Loss" (ledger_nature='damage_loss') in the
+        // chart-of-accounts seeder, so the INSERT crashed with SQLSTATE[23505]
+        // on the ledgers_ledger_code_unique constraint. Now we use L-0504
+        // (next free code) and also check the code is free before inserting,
+        // so the migration is safe even if a future seeder assigns L-0504 to
+        // another nature.
         $existing = DB::table('ledgers')
             ->where('ledger_nature', 'inventory_revaluation')
-            ->count();
-        if ($existing === 0) {
+            ->exists();
+        if (! $existing) {
             // Look up the parent expense group id (the same parent used by
             // inventory_shrinkage in the chart-of-accounts seeder).
             $shrinkage = DB::table('ledgers')
@@ -160,17 +177,28 @@ return new class extends Migration
                 ->first();
             $parentExpenseId = $shrinkage?->parent_id;
             if ($parentExpenseId !== null) {
-                DB::table('ledgers')->insert([
-                    'ledger_code'   => 'L-0503',
-                    'ledger_name'   => 'Inventory Revaluation Expense',
-                    'parent_id'     => $parentExpenseId,
-                    'account_type'  => 'Expense',
-                    'ledger_nature' => 'inventory_revaluation',
-                    'sort_order'    => 530,
-                    'is_active'     => true,
-                    'created_at'    => now(),
-                    'updated_at'    => now(),
-                ]);
+                // Defense in depth: also verify L-0504 is free. If a future
+                // seeder grabs L-0504 for another nature, skip the insert
+                // rather than crashing the migration. The application looks
+                // up the ledger by ledger_nature (via lookupLedgerByNature),
+                // so a missing seed is a clear runtime error, not silent
+                // corruption.
+                $codeTaken = DB::table('ledgers')
+                    ->where('ledger_code', 'L-0504')
+                    ->exists();
+                if (! $codeTaken) {
+                    DB::table('ledgers')->insert([
+                        'ledger_code'   => 'L-0504',
+                        'ledger_name'   => 'Inventory Revaluation Expense',
+                        'parent_id'     => $parentExpenseId,
+                        'account_type'  => 'Expense',
+                        'ledger_nature' => 'inventory_revaluation',
+                        'sort_order'    => 540,
+                        'is_active'     => true,
+                        'created_at'    => now(),
+                        'updated_at'    => now(),
+                    ]);
+                }
             }
         }
     }
@@ -189,7 +217,9 @@ return new class extends Migration
             ->where('key', 'stock_take.revaluation_epsilon')
             ->delete();
 
-        // Remove the inventory_revaluation ledger seed. Only delete the
+        // Remove the inventory_revaluation ledger seed (L-0504). Delete by
+        // ledger_nature (not by ledger_code) so this still works even if a
+        // future seeder reassigns L-0504 to another nature. Only deletes the
         // ledger we created — leave any journal_lines referencing it (there
         // should be none after the column drop above, but defence in depth).
         DB::table('ledgers')

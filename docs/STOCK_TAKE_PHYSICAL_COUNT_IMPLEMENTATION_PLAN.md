@@ -1767,7 +1767,7 @@ php artisan tinker --execute="
 
 | # | File | Change |
 |---|------|--------|
-| 1 | `laravel/database/migrations/2025_08_02_000001_phase9_post_time_cost_and_revaluation.php` | **NEW.** Adds `system_rate numeric(18,6)`, `post_rate numeric(18,6)`, `revaluation_amount numeric(18,6) NOT NULL DEFAULT 0`, `revaluation_line_id integer REFERENCES journal_lines(id) ON DELETE SET NULL` to `stock_take_items` (all `ADD COLUMN IF NOT EXISTS`, FK name-guarded via DO block). Backfills `system_rate = rate` for pre-Phase-9 rows. Seeds `stock_take.revaluation_epsilon` (numeric, default 0.01) into `stock_take_policies`. Seeds the `inventory_revaluation` ledger nature (L-0503 Expense, "Inventory Revaluation Expense") into `ledgers` if not already present. `down()` reverses everything idempotently. |
+| 1 | `laravel/database/migrations/2025_08_02_000001_phase9_post_time_cost_and_revaluation.php` | **NEW.** Adds `system_rate numeric(18,6)`, `post_rate numeric(18,6)`, `revaluation_amount numeric(18,6) NOT NULL DEFAULT 0`, `revaluation_line_id integer REFERENCES journal_lines(id) ON DELETE SET NULL` to `stock_take_items` (all `ADD COLUMN IF NOT EXISTS`, FK name-guarded via DO block). Backfills `system_rate = rate` for pre-Phase-9 rows. Seeds `stock_take.revaluation_epsilon` (numeric, default 0.01) into `stock_take_policies`. Seeds the `inventory_revaluation` ledger nature (L-0504 Expense, "Inventory Revaluation Expense") into `ledgers` if not already present. Idempotency guarded by BOTH `ledger_nature` AND `ledger_code` (Hotfix #5 — see below). `down()` reverses everything idempotently. |
 | 2 | `laravel/database/sql/03_stock.sql` | Mirrored the 4 new columns into the `stock_take_items` CREATE TABLE (with inline comments documenting the Phase 9 rationale). Added the Phase 9 `revaluation_epsilon` policy to the `stock_take_policies` comment block. Fresh-install parity with the migration. |
 | 3 | `laravel/app/Models/StockTakeItem.php` | Added `system_rate`, `post_rate`, `revaluation_amount`, `revaluation_line_id` to `$fillable` + `$casts` (6-decimal precision). Updated `@property` docblock. |
 | 4 | `laravel/app/Services/Stock/StockTakePolicyService.php` | Added `revaluationEpsilon(): float` accessor (reads `stock_take.revaluation_epsilon`, default 0.01). |
@@ -1785,7 +1785,7 @@ php artisan tinker --execute="
 
 4. **The revaluation posts in the SAME journal entry as the gain/loss, not a separate one.** The plan said "post a revaluation adjusting entry" without specifying. We fold it into the same `journal_entries` row as the variance gain/loss so the entire post's GL impact is one auditable unit. The revaluation lines carry "revaluation" in their memo so postSession can identify them for back-linking, and so reviewers can distinguish them in the drill-down modal.
 
-5. **The `inventory_revaluation` ledger is seeded as an Expense (L-0503), sibling of `inventory_shrinkage` (L-0502).** The plan offered "New ledger nature `inventory_revaluation` (or reuse `inventory_adjustment`)". We chose a dedicated nature because: (a) revaluation is conceptually distinct from shrinkage (cost drift vs quantity loss); (b) a dedicated ledger lets the P&L show "Inventory Revaluation Expense" as its own line; (c) the migration's `lookupLedgerByNature('inventory_revaluation')` would throw a clear error if the ledger is missing, rather than silently posting to the wrong account. The seed reuses the same parent expense group as `inventory_shrinkage` so the chart-of-accounts tree stays clean.
+5. **The `inventory_revaluation` ledger is seeded as an Expense (L-0504), sibling of `inventory_shrinkage` (L-0502) and `damage_loss` (L-0503).** The plan offered "New ledger nature `inventory_revaluation` (or reuse `inventory_adjustment`)". We chose a dedicated nature because: (a) revaluation is conceptually distinct from shrinkage (cost drift vs quantity loss); (b) a dedicated ledger lets the P&L show "Inventory Revaluation Expense" as its own line; (c) the migration's `lookupLedgerByNature('inventory_revaluation')` would throw a clear error if the ledger is missing, rather than silently posting to the wrong account. The seed reuses the same parent expense group as `inventory_shrinkage` so the chart-of-accounts tree stays clean. **(Hotfix #5, Task 16: the original seed used L-0503, which was already taken by Damage Loss — `ledger_nature='damage_loss'` — in the chart-of-accounts seeder. The migration's idempotency check counted by `ledger_nature` only, so it saw 0 rows with `nature='inventory_revaluation'` and tried to INSERT L-0503, colliding with `ledgers_ledger_code_unique` (SQLSTATE[23505]). Fix: use L-0504 (next free code in the L-05xx inventory-expense range) AND guard the insert by checking `ledger_code` too, not just `ledger_nature`.)**
 
 6. **The epsilon comparison uses `>` (strictly greater), not `>=`.** When `post_rate - system_rate` equals epsilon exactly, we do NOT revalue. Reason: epsilon is the minimum delta that TRIGGERS revaluation; equality is the boundary (no drift worth revaluing). This matches the plan's "differs by more than a configurable epsilon" wording ("more than" = strict `>`).
 
@@ -1808,7 +1808,7 @@ php artisan tinker --execute="
 
 **How to verify:**
 
-1. **Migrate:** `php artisan migrate` — adds the 4 costing columns to `stock_take_items` (with backfill of `system_rate` from `rate`), seeds the `revaluation_epsilon` policy, and seeds the `inventory_revaluation` ledger (L-0503).
+1. **Migrate:** `php artisan migrate` — adds the 4 costing columns to `stock_take_items` (with backfill of `system_rate` from `rate`), seeds the `revaluation_epsilon` policy, and seeds the `inventory_revaluation` ledger (L-0504).
 2. **Confirm the ledger seeded:** `SELECT ledger_code, ledger_name, ledger_nature FROM ledgers WHERE ledger_nature = 'inventory_revaluation';` should return one row.
 3. **Confirm the policy seeded:** `SELECT key, value FROM stock_take_policies WHERE key = 'stock_take.revaluation_epsilon';` should return `0.01`.
 4. **Reproduce cost drift:** (a) Create + set up a stock-take session for a warehouse with at least one product that has avg cost. (b) Note the `system_rate` on the `stock_take_items` row. (c) While the session is counting, post a purchase receive for the same product at a DIFFERENT rate — this shifts the warehouse avg cost. (d) Complete the count + post the session.
@@ -1823,6 +1823,19 @@ php artisan tinker --execute="
 - **Revaluation is bucket-level, not 1:1 per-item.** All revaluing items in a session share the same `revaluation_line_id` (the Inventory-side line of the single revaluation Dr/Cr pair). True 1:1 per-item revaluation lines would require a separate journal entry per item — deferred (same granularity as Phase 1's variance bucketing).
 - **The revaluation only fires for variance items today.** `postSession` iterates `$varianceItems` (items with `physical_qty <> system_qty`). A product with `physical_qty = system_qty` (no variance) but a cost drift does NOT get a revaluation line, even though its book value drifted. The condition is `physical_qty ≠ 0` (not `variance ≠ 0`) so a future refactor can extend revaluation to non-variance items without changing the condition — but the current loop scope means only variance items are revalued. This matches the plan's "AND the counted product has a non-zero variance" intent.
 - **`revaluation_epsilon = 0` triggers revaluation on EVERY post.** The policy default is 0.01 (any non-trivial drift). Setting it to 0 means even a 0.000001 cost drift triggers a revaluation line — useful for hyper-strict environments but noisy for normal ops.
+
+**Hotfix #5 (Task 16) — L-0503 ledger_code collision with Damage Loss:**
+
+The original Phase 9 seed (commit `1a5be44`) used `ledger_code = 'L-0503'` for the new `inventory_revaluation` ledger. The chart-of-accounts seeder (`2025_01_05_000001_seed_default_chart_of_accounts.php` line 111) already assigns `L-0503` to "Damage Loss" (`ledger_nature = 'damage_loss'`). The migration's idempotency check counted rows by `ledger_nature = 'inventory_revaluation'` (which correctly returned 0 — no ledger had that nature yet), but the subsequent INSERT collided on the `ledgers_ledger_code_unique` index with `SQLSTATE[23505]: Unique violation: Key (ledger_code)=(L-0503) already exists`.
+
+**Root cause:** the idempotency guard checked the wrong column. The unique constraint is on `ledger_code`, but the guard checked `ledger_nature`. A ledger_code can exist with any nature, so a nature-count of 0 does NOT imply the code is free.
+
+**Fix:**
+1. Use `L-0504` (next free code in the L-05xx inventory-expense range; L-0502 = Shrinkage, L-0503 = Damage Loss, L-0504 = Revaluation).
+2. Guard the INSERT by checking BOTH `ledger_nature = 'inventory_revaluation'` (skip if already seeded) AND `ledger_code = 'L-0504'` (skip if the code is taken by another nature — defense in depth for future seeders).
+3. The application looks up the ledger by `ledger_nature` via `JournalPostingService::lookupLedgerByNature('inventory_revaluation')`, NOT by code — so the code change from L-0503 → L-0504 is transparent to all callers.
+
+**Lesson (5th hotfix in this series):** when seeding a row with a unique constraint on column X, the idempotency guard MUST check column X (not just column Y). Counting by nature when the constraint is on code is a category error. The Task 11/12/13/14 hotfixes covered PHP-level, SQL-syntax, constraint-name, and prepared-statement pitfalls; this one adds the column-mismatch-in-idempotency-check pitfall. All five lessons are now codified in the migration file's docblock.
 
 ---
 
@@ -2066,7 +2079,7 @@ The Physical Count menu is "perfect" when **all** of the following are true:
 | `laravel/database/migrations/2025_07_28_000001_add_approval_workflow_to_stock_take_sessions.php` | Phase 4: approval workflow + system_policies seed |
 | `laravel/database/migrations/2025_07_30_000001_add_recount_columns_to_stock_take.php` | Phase 7: recount tracking + widened action CHECK |
 | `laravel/database/migrations/2025_08_01_000001_phase8_concurrency_rls_locking_hardening.php` | **Phase 8:** `branch_id` + `freeze_outbound` denorm on stw/sti, `uk_stw_session_wh`, RLS on both tables, `prevent_overlapping_frozen_stock_take` trigger |
-| `laravel/database/migrations/2025_08_02_000001_phase9_post_time_cost_and_revaluation.php` | **Phase 9:** `system_rate` + `post_rate` + `revaluation_amount` + `revaluation_line_id` on sti, backfill system_rate from rate, `stock_take.revaluation_epsilon` policy seed, `inventory_revaluation` ledger (L-0503) seed |
+| `laravel/database/migrations/2025_08_02_000001_phase9_post_time_cost_and_revaluation.php` | **Phase 9:** `system_rate` + `post_rate` + `revaluation_amount` + `revaluation_line_id` on sti, backfill system_rate from rate, `stock_take.revaluation_epsilon` policy seed, `inventory_revaluation` ledger (L-0504 — was L-0503, changed in Hotfix #5/Task 16 to avoid collision with Damage Loss) seed |
 | `laravel/tests/Helpers/InsertsWarehouseDependencies.php` | Test helper (carries the "no is_reversed column" comment) |
 
 ---
