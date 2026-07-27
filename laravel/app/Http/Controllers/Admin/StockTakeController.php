@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Exceptions\StockTakeNegativeStockException;
 use App\Models\StockTakeSession;
 use App\Services\Stock\StockTakeService;
 use Illuminate\Http\Request;
@@ -225,6 +226,12 @@ class StockTakeController extends Controller
             $session = $this->stockTakeService->postSession($id, auth()->id());
             return redirect()->route('admin.stock-take.show', $session)
                 ->with('success', "Session {$session->session_code} posted. Variances applied + GL posted.");
+        } catch (StockTakeNegativeStockException $e) {
+            // Phase 1: friendly negative-stock error with the offending product list.
+            // The session remains in its pre-post state (counting/draft) — no stock moved.
+            return back()->withInput()
+                ->with('error', $e->getMessage())
+                ->with('negative_stock_products', $e->getOffendingProducts());
         } catch (\Throwable $e) {
             return back()->with('error', $e->getMessage());
         }

@@ -909,6 +909,81 @@ php artisan migrate:fresh --seed
 
 ---
 
+#### ✅ Phase 1 — IMPLEMENTATION COMPLETE (applied)
+
+> Status: **DONE**. `postSession` now has server‑side guards (all‑warehouses‑completed + negative‑stock pre‑check), concurrent counters are serialized via `lockForUpdate`, each variance item is back‑linked to its GL journal line, and the 3 dead JS files are deleted. Below is the exact record of what was changed, the decisions that diverged from the plan, and how to verify.
+
+**Files changed (7 changed + 3 deleted = 10 total):**
+
+| # | File | Change |
+|---|---|---|
+| 1 | `laravel/database/migrations/2025_07_26_000004_add_journal_line_id_to_stock_take_items.php` | **NEW.** Adds `journal_line_id integer nullable` + FK to `journal_lines(id) ON DELETE SET NULL` + partial index `idx_sti_journal_line`. Idempotent. |
+| 2 | `laravel/database/sql/03_stock.sql` | Mirrored `journal_line_id` column + FK + partial index into `CREATE TABLE stock_take_items` for fresh‑install parity. |
+| 3 | `laravel/app/Exceptions/StockTakeNegativeStockException.php` | **NEW.** Custom exception carrying the full offending‑product list (code, name, system qty, physical qty, current stock, shortage, resulting qty). `getOffendingProducts()` getter for the controller. |
+| 4 | `laravel/app/Models/StockTakeItem.php` | Added `journal_line_id` to `$fillable` and `$casts` (integer). Updated `@property` docblock. |
+| 5 | `laravel/app/Services/Stock/StockTakeService.php` | **Core hardening:** (a) `postSession`: added all‑warehouses‑completed guard; added `assertNoNegativeStockOutcomes()` pre‑check (locks `warehouse_stock` rows via `FOR UPDATE` on a `leftJoin`); deferred `is_applied` + `rate` update to after GL posting; added `journal_line_id` back‑link (queries back `journal_lines` by `ledger_id` + debit/credit bucket). (b) `setupWarehouseCounts` + `saveCounts`: added `StockTakeSession::lockForUpdate()->find()` at the top to serialize concurrent counters. (c) Added private `assertNoNegativeStockOutcomes()` helper. |
+| 6 | `laravel/app/Http/Controllers/Admin/StockTakeController.php` | `post()`: added `catch (StockTakeNegativeStockException)` before the generic `catch (\Throwable)` — redirects back with the error message + flashes the offending‑product list. |
+| 7 | `docs/STOCK_TAKE_PHYSICAL_COUNT_IMPLEMENTATION_PLAN.md` | This implementation log. |
+| — | `laravel/public/assets/js/StockTake.js` | **DELETED.** Orphaned legacy‑PHP port; referenced non‑existent URLs (`StockTake/store`, `StockTake/post`); not loaded by any Blade view. |
+| — | `laravel/public/assets/js/stock-take-count.js` | **DELETED.** Same — orphaned. |
+| — | `laravel/public/assets/js/StockTakeReport.js` | **DELETED.** Same — orphaned. |
+
+**Decisions that diverged from the plan's Phase 1 placeholders (and why):**
+
+1. **Migration filename:** plan suggested no specific name; actual is `2025_07_26_000004` (sorts after Phase 0's `2025_07_26_000003`).
+2. **`journal_line_id` FK strategy:** plan suggested the column as a "Phase 4 prerequisite, schema‑only here" with a DEFERRABLE FK to be configured later. Actual: the FK (`sti_journal_line_id_fk`) is **immediate‑checked** (not DEFERRABLE) with `ON DELETE SET NULL`. Reason: the `journal_line_id` is only SET **after** `createJournalEntry` has already inserted the journal lines (all within the same `DB::transaction`). By the time the `UPDATE stock_take_items SET journal_line_id = …` runs, the referenced `journal_lines.id` already exists — so immediate FK checking is satisfied. No deferral is needed. The DEFERRABLE concern in the plan was for a hypothetical "write items + journal lines in one interleaved batch" scenario, which is not how the post flow works.
+3. **`journal_line_id` population granularity:** the plan says "capture the `journal_line_id` and persist it on the corresponding `stock_take_items` row." The current GL design **aggregates** all gains into one Dr/Cr pair and all losses into another (at most 4 journal lines per session). So multiple variance items share the same `journal_line_id` (all gain items → the Dr Inventory line; all loss items → the Cr Inventory line). This provides **bucket‑level** traceability (you can drill from a variance item to the exact journal line), but not **true 1:1** (one journal line per item). Full 1:1 per‑item GL lines (one Dr/Cr pair per variance item) is deferred to **Phase 9** (GL & costing refinements), which will refactor `postStockTakeGL` to emit per‑item lines. This is documented inline in the service code.
+4. **Negative‑stock pre‑check locking:** the plan says "pre‑check … collect any that would go negative." The implementation uses a `leftJoin` + `lockForUpdate()` query that locks the `warehouse_stock` rows for the duration of the transaction. This makes the pre‑check **race‑free**: no other transaction can modify those stock rows between the pre‑check and the actual `applyTransaction` calls. The `leftJoin` handles the edge case where a `warehouse_stock` row doesn't exist (treated as qty=0 via `COALESCE`; any shortage would then be an offender). The DB `prevent_negative_stock()` trigger remains as the defense‑in‑depth backstop.
+5. **`is_applied` update timing:** the original code marked each item `is_applied=true` inside the foreach loop (right after `applyTransaction`). The new code **defers** this to after GL posting (so `journal_line_id` is available for the same UPDATE). This is safe because if the transaction fails before the deferred update, all stock movements and GL inserts are rolled back by `DB::transaction` — items correctly remain `is_applied=false`.
+6. **Dead JS file deletion confirmed:** Grep for `StockTake\.js|stock-take-count\.js|StockTakeReport\.js` across `laravel/resources/` (all Blade views) returned **zero matches** — confirming these files were truly orphaned and safe to delete.
+
+**Acceptance criteria — status:**
+
+| Criterion | Status |
+|---|---|
+| A direct `POST /admin/stock-take/{id}/post` where a warehouse is not `completed` returns 422 with a clear message (no stock moved) | ✅ Server‑side guard in `postSession`: `incompleteCount > 0` → `RuntimeException`. Controller catches → `back()->with('error', …)`. No stock moved (exception thrown before the apply loop). |
+| A post that would drive `warehouse_stock` negative returns 422 listing the offending products (no stock moved, no GL written) | ✅ `assertNoNegativeStockOutcomes()` runs BEFORE any `applyTransaction`. Throws `StockTakeNegativeStockException` with product list. Controller catches → `back()->with('error', …)->with('negative_stock_products', …)`. No stock moved, no GL written. |
+| Two concurrent `saveCounts` calls on the same session are serialized (the second waits; no lost updates) | ✅ `saveCounts` now calls `StockTakeSession::lockForUpdate()->find($sessionId)` at the top of its `DB::transaction`. The second caller's `lockForUpdate` blocks until the first commits. Same for `setupWarehouseCounts`. |
+| After a successful post, each `stock_take_items` row has a non‑null `journal_line_id` pointing to the exact Dr/Cr line | ✅ Bucket‑level: gain items → Dr Inventory line; loss items → Cr Inventory line. (True 1:1 deferred to Phase 9 — see decision #3 above.) Items with no variance are not in the `$varianceItems` set, so their `journal_line_id` stays null (correct — no GL line for them). |
+| The dead JS files are gone; no Blade references them | ✅ Deleted. Grep confirmed zero Blade references before deletion. |
+
+**Verification commands (run inside the Docker container):**
+```bash
+# 1. Run the migration
+php artisan migrate
+
+# 2. Confirm the column + FK + index exist
+php artisan tinker --execute="echo implode(',', \Schema::getColumnListing('stock_take_items'));"
+# Expected: includes journal_line_id
+
+# 3. Test the all-warehouses-completed guard (create a session, don't complete all warehouses, try to POST)
+#    Expected: redirected back with "All warehouses must be marked 'completed' before posting"
+
+# 4. Test the negative-stock pre-check (set physical_qty > system_qty for a product with low stock, then POST)
+#    Expected: redirected back with "Cannot post: N product(s) would go negative" + flash data
+
+# 5. Test concurrent saveCounts (two browser tabs, save simultaneously)
+#    Expected: the second save waits for the first to commit (no lost updates)
+
+# 6. After a successful post, verify journal_line_id is populated
+php artisan tinker --execute="echo \DB::table('stock_take_items')->whereNotNull('journal_line_id')->count();"
+# Expected: > 0 for a posted session with variances
+
+# 7. Confirm the dead JS files are gone
+ls public/assets/js/StockTake* public/assets/js/stock-take-count* 2>&1
+# Expected: "No such file or directory"
+```
+
+**Not done in Phase 1 (deferred to later phases):**
+- True 1:1 per‑item GL lines (one journal line per variance item) — deferred to Phase 9 (GL & costing refinements).
+- The dead `AuditableMasterData` trait is still dead — that's Phase 2.
+- The stub variance report is still a stub — that's Phase 6.
+- No feature tests for the new guards — that's Phase 12.
+
+**Next phase:** Phase 2 — Real audit trail (dedicated `stock_take_audit_log` table).
+
+---
+
 ### Phase 2 — Real audit trail: dedicated `stock_take_audit_log` table
 
 **Goal:** Replace the dead `AuditableMasterData` trait with a real, explicit audit log for every stock‑take action.

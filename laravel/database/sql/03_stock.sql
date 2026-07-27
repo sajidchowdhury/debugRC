@@ -173,11 +173,17 @@ CREATE TABLE stock_take_items (
     rate numeric(12,2) DEFAULT 0,
     reason text,
     is_applied boolean NOT NULL DEFAULT false,
+    -- Phase 1 (Stock Take plan): per-line GL traceability. Populated during
+    -- postSession — links each variance item to the exact journal_lines row
+    -- that recorded its GL impact. Nullable (null = no variance or not yet posted).
+    journal_line_id integer REFERENCES journal_lines(id) ON DELETE SET NULL,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uk_sti_session_wh_product UNIQUE (stock_take_session_id, warehouse_id, product_id)
 );
 CREATE INDEX idx_sti_session ON stock_take_items(stock_take_session_id);
 CREATE INDEX idx_sti_warehouse_product ON stock_take_items(warehouse_id, product_id);
+-- Partial index: only posted variance items (for fast drill-down queries).
+CREATE INDEX idx_sti_journal_line ON stock_take_items(journal_line_id) WHERE journal_line_id IS NOT NULL;
 
 CREATE TABLE warehouse_transfers (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

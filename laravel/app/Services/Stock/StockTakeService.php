@@ -2,6 +2,7 @@
 
 namespace App\Services\Stock;
 
+use App\Exceptions\StockTakeNegativeStockException;
 use App\Models\StockTakeSession;
 use App\Models\StockTakeItem;
 use App\Services\Accounting\DocumentSequenceService;
@@ -101,6 +102,14 @@ class StockTakeService
     public function setupWarehouseCounts(int $sessionId, int $warehouseId): int
     {
         return DB::transaction(function () use ($sessionId, $warehouseId) {
+            // Phase 1: Lock the session row to serialize concurrent counters.
+            // Prevents two users from simultaneously setting up counts for the
+            // same session (which would cause a delete+insert race on items).
+            $session = StockTakeSession::lockForUpdate()->find($sessionId);
+            if (!$session) {
+                throw new \RuntimeException("Session {$sessionId} not found.");
+            }
+
             // Verify the warehouse belongs to this session.
             $stw = DB::table('stock_take_warehouses')
                 ->where('stock_take_session_id', $sessionId)
@@ -178,6 +187,13 @@ class StockTakeService
     public function saveCounts(int $sessionId, int $warehouseId, array $counts): int
     {
         return DB::transaction(function () use ($sessionId, $warehouseId, $counts) {
+            // Phase 1: Lock the session row to serialize concurrent counters.
+            // Prevents lost-update when two users save counts simultaneously.
+            $session = StockTakeSession::lockForUpdate()->find($sessionId);
+            if (!$session) {
+                throw new \RuntimeException("Session {$sessionId} not found.");
+            }
+
             $updated = 0;
             foreach ($counts as $productId => $physicalQty) {
                 $productId = (int) $productId;
@@ -229,6 +245,19 @@ class StockTakeService
                 throw new \RuntimeException("Only counting/draft sessions can be posted (current: {$session->status}).");
             }
 
+            // Phase 1: Guard — all warehouses must be 'completed' before posting.
+            // The UI hides the Post button until all warehouses are completed, but
+            // this server-side guard closes the "direct POST bypasses UI" hole.
+            $incompleteCount = DB::table('stock_take_warehouses')
+                ->where('stock_take_session_id', $sessionId)
+                ->where('status', '<>', 'completed')
+                ->count();
+            if ($incompleteCount > 0) {
+                throw new \RuntimeException(
+                    "All warehouses must be marked 'completed' before posting ({$incompleteCount} warehouse(s) still pending/counting)."
+                );
+            }
+
             // Get all items with variance that haven't been applied yet.
             $varianceItems = DB::table('stock_take_items')
                 ->where('stock_take_session_id', $sessionId)
@@ -236,8 +265,18 @@ class StockTakeService
                 ->whereRaw('physical_qty <> system_qty')
                 ->get();
 
+            // Phase 1: Negative-stock pre-check.
+            // For each shortage (difference < 0), verify current warehouse_stock.qty
+            // is sufficient. Locks the warehouse_stock rows (FOR UPDATE via the join)
+            // so no other transaction can change them between this check and the
+            // actual applyTransaction calls below. Throws a friendly exception with
+            // the product list instead of letting the DB trigger raise a generic
+            // check_violation error partway through the post.
+            $this->assertNoNegativeStockOutcomes($sessionId);
+
             $totalGain = 0.0;
             $totalLoss = 0.0;
+            $resolvedRates = []; // item_id => rate (for the deferred is_applied update)
 
             foreach ($varianceItems as $item) {
                 $variance = (float) $item->physical_qty - (float) $item->system_qty;
@@ -272,16 +311,52 @@ class StockTakeService
                     $totalLoss += $value;
                 }
 
-                // Mark item as applied.
-                DB::table('stock_take_items')
-                    ->where('id', $item->id)
-                    ->update(['is_applied' => true, 'rate' => $rate, 'updated_at' => now()]);
+                $resolvedRates[$item->id] = $rate;
             }
 
             // Post GL journal (single entry for the net gain/loss).
             $journalEntryId = null;
+            $gainInventoryLineId = null;
+            $lossInventoryLineId = null;
             if ($totalGain >= 0.01 || $totalLoss >= 0.01) {
                 $journalEntryId = $this->postStockTakeGL($session, $totalGain, $totalLoss, $postedBy);
+
+                // Phase 1: Capture per-line journal_line_id for traceability.
+                // Query back the journal lines and identify the Inventory-side lines
+                // (gain → Dr Inventory; loss → Cr Inventory). Each variance item is
+                // linked to the Inventory line of its bucket. This provides basic
+                // traceability; full 1:1 per-item lines are deferred to Phase 9.
+                $inventoryLedgerId = $this->journalPosting->lookupLedgerByNature('inventory');
+                if ($inventoryLedgerId) {
+                    $journalLines = DB::table('journal_lines')
+                        ->where('journal_entry_id', $journalEntryId)
+                        ->get();
+                    $gainLine = $journalLines->first(
+                        fn($l) => $l->ledger_id == $inventoryLedgerId && $l->debit > 0
+                    );
+                    $lossLine = $journalLines->first(
+                        fn($l) => $l->ledger_id == $inventoryLedgerId && $l->credit > 0
+                    );
+                    $gainInventoryLineId = $gainLine?->id;
+                    $lossInventoryLineId = $lossLine?->id;
+                }
+            }
+
+            // Phase 1: Mark all variance items as applied + back-link journal_line_id.
+            // (Deferred to here — after GL posting — so journal_line_id is available.
+            // If the transaction fails before this point, all stock movements and GL
+            // inserts are rolled back, so items correctly remain is_applied=false.)
+            foreach ($varianceItems as $item) {
+                $variance = (float) $item->physical_qty - (float) $item->system_qty;
+                $lineId = $variance > 0 ? $gainInventoryLineId : $lossInventoryLineId;
+                DB::table('stock_take_items')
+                    ->where('id', $item->id)
+                    ->update([
+                        'is_applied' => true,
+                        'rate' => $resolvedRates[$item->id],
+                        'journal_line_id' => $lineId,
+                        'updated_at' => now(),
+                    ]);
             }
 
             // Mark session as posted.
@@ -296,6 +371,65 @@ class StockTakeService
             return StockTakeSession::with(['warehouses.warehouse', 'branch', 'items.product', 'journalEntry.lines.ledger'])
                 ->find($sessionId);
         });
+    }
+
+    /**
+     * Phase 1: Pre-check that no shortage variance would drive warehouse_stock
+     * below zero. Locks the relevant warehouse_stock rows (FOR UPDATE via the
+     * join) for the duration of the transaction so the check is race-free.
+     *
+     * For each shortage item (physical_qty < system_qty), compares the current
+     * warehouse_stock.qty against the shortage magnitude. If any would result in
+     * a negative qty, throws StockTakeNegativeStockException with the full
+     * product list — BEFORE any stock movement is applied.
+     *
+     * @throws StockTakeNegativeStockException
+     */
+    private function assertNoNegativeStockOutcomes(int $sessionId): void
+    {
+        $shortages = DB::table('stock_take_items as sti')
+            ->leftJoin('warehouse_stock as ws', function ($join) {
+                $join->on('ws.warehouse_id', '=', 'sti.warehouse_id')
+                     ->on('ws.product_id', '=', 'sti.product_id');
+            })
+            ->join('products as p', 'p.id', '=', 'sti.product_id')
+            ->where('sti.stock_take_session_id', $sessionId)
+            ->where('sti.is_applied', false)
+            ->whereRaw('sti.physical_qty < sti.system_qty')
+            ->select(
+                'sti.product_id',
+                'sti.warehouse_id',
+                'sti.system_qty',
+                'sti.physical_qty',
+                DB::raw('COALESCE(ws.qty, 0) as current_qty'),
+                'p.product_code',
+                'p.product_name'
+            )
+            ->lockForUpdate()
+            ->get();
+
+        $offending = [];
+        foreach ($shortages as $s) {
+            $variance = (float) $s->physical_qty - (float) $s->system_qty;
+            $resultingQty = (float) $s->current_qty + $variance;
+            if ($resultingQty < -0.0001) {
+                $offending[] = [
+                    'product_id' => $s->product_id,
+                    'product_code' => $s->product_code,
+                    'product_name' => $s->product_name,
+                    'warehouse_id' => $s->warehouse_id,
+                    'system_qty' => (float) $s->system_qty,
+                    'physical_qty' => (float) $s->physical_qty,
+                    'current_stock' => (float) $s->current_qty,
+                    'shortage' => abs($variance),
+                    'resulting_qty' => $resultingQty,
+                ];
+            }
+        }
+
+        if (!empty($offending)) {
+            throw new StockTakeNegativeStockException($offending);
+        }
     }
 
     /**

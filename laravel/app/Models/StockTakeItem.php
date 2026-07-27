@@ -19,6 +19,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $rate  avg_cost at time of posting (for GL valuation)
  * @property string|null $reason  per-line reason (e.g. "damaged", "lost", "found")
  * @property bool $is_applied  true after postSession applies the variance
+ * @property int|null $journal_line_id  Phase 1: per-line GL traceability (links to journal_lines.id)
  */
 class StockTakeItem extends Model
 {
@@ -35,6 +36,7 @@ class StockTakeItem extends Model
         'rate',
         'reason',
         'is_applied',
+        'journal_line_id',
         'updated_at',
     ];
 
@@ -47,6 +49,7 @@ class StockTakeItem extends Model
         'difference' => 'decimal:4',
         'rate' => 'decimal:2',
         'is_applied' => 'boolean',
+        'journal_line_id' => 'integer',
     ];
 
     public function session(): \Illuminate\Database\Eloquent\Relations\BelongsTo
