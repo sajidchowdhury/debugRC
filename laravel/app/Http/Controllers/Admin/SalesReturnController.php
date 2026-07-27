@@ -10,6 +10,7 @@ use App\Http\Requests\SalesReturn\StoreSalesReturnRequest;
 use App\Models\SalesReturn;
 use App\Services\Sales\SalesReturnService;
 use App\Services\Sales\SalesReturnableQty;
+use App\Services\Sales\SalesReturnReversalGuard;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -214,6 +215,34 @@ class SalesReturnController extends Controller
             }
             return back()->with('error', $e->getMessage());
         }
+    }
+
+    /**
+     * Phase 6.2 — AJAX reverse-preview endpoint.
+     *
+     * Called by the show page's reverse button BEFORE opening the reason
+     * dialog. Returns {can_reverse, block_reasons, block_messages, preview}
+     * so the JS can either show a friendly "Insufficient stock…" error Swal
+     * (when blocked) or proceed to the normal reason-textarea Swal (when
+     * clear). Mirrors legacy's getStockReversalBlockReason + buildStockReversalPreview.
+     */
+    public function reversePreview(int $id, SalesReturnReversalGuard $guard)
+    {
+        // findOrFail (404) for a wrong-branch / missing return — branch.isolation
+        // middleware already 404'd cross-branch access, so this is defense-in-depth.
+        SalesReturn::findOrFail($id);
+
+        $blockReasons  = $guard->getBlockReasons($id);
+        $blockMessages = $guard->getBlockMessages($id);
+        $canReverse    = empty($blockReasons) && $guard->getStatusBlock($id) === null;
+
+        return response()->json([
+            'status'         => 'success',
+            'can_reverse'    => $canReverse,
+            'block_reasons'  => $blockReasons,   // structured tuples (plan 6.1)
+            'block_messages' => $blockMessages,  // formatted strings (for Swal body)
+            'preview'        => $guard->getPreview($id),
+        ]);
     }
 
     /**

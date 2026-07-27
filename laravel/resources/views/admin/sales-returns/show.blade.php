@@ -674,7 +674,8 @@
                               id="reverseForm">
                             @csrf
                             <input type="hidden" name="reverse_reason" id="reverseReasonField" value="">
-                            <button type="button" class="btn btn-outline-danger w-100" id="reverseBtn">
+                            <button type="button" class="btn btn-outline-danger w-100" id="reverseBtn"
+                                    data-reverse-preview-url="{{ route('admin.sales-returns.reverse-preview', $r) }}">
                                 <i class="fas fa-rotate-left me-1"></i> Reverse Return
                             </button>
                         </form>
@@ -852,36 +853,107 @@ $(function () {
         });
     });
 
-    // ====== Reverse (confirmed → reversed) ======
+    // ====== Reverse (confirmed → reversed) — Phase 6.2 pre-check UX ======
+    // Before opening the reason dialog, AJAX-fetch the reverse-preview. If
+    // blocked (insufficient stock), show a friendly error Swal listing every
+    // shortage instead of a mid-transaction RuntimeException. If clear,
+    // proceed to the normal reason-textarea Swal with a compact preview.
     $('#reverseBtn').on('click', function () {
+        var previewUrl = $(this).data('reverse-preview-url');
+        if (!previewUrl) {
+            Swal.fire('Error', 'Reverse-preview URL missing.', 'error');
+            return;
+        }
+
+        // 1. Loading state while we fetch the pre-check.
         Swal.fire({
-            icon: 'warning',
-            title: 'Reverse this confirmed return?',
-            html: '<p class="text-start">This will <strong>reverse stock movements</strong> (stock OUT at original cost), ' +
-                  '<strong>reverse both GL journal entries</strong> (revenue + COGS), and ' +
-                  '<strong>reverse customer ledger entries</strong>. A reason is required.</p>',
-            input: 'textarea',
-            inputLabel: 'Reverse reason (required)',
-            inputPlaceholder: 'Why is this return being reversed?',
-            showCancelButton: true,
-            confirmButtonText: '<i class="fas fa-rotate-left"></i> Reverse Return',
-            confirmButtonColor: '#dc3545',
-            cancelButtonText: 'Keep',
-            reverseButtons: true,
-            inputValidator: function (value) {
-                if (!value || !value.trim()) {
-                    return 'A reverse reason is required.';
+            title: 'Checking stock availability…',
+            allowOutsideClick: false,
+            didOpen: function () { Swal.showLoading(); }
+        });
+
+        $.ajax({
+            url: previewUrl,
+            method: 'GET',
+            dataType: 'json'
+        }).done(function (resp) {
+            Swal.close();
+
+            // 2. Blocked — show every shortage, no confirm button.
+            if (!resp || resp.can_reverse === false) {
+                var msgs = (resp && resp.block_messages && resp.block_messages.length)
+                    ? resp.block_messages
+                    : ['This return cannot be reversed right now.'];
+                var listHtml = '<ul class="text-start mb-0 ps-3">' +
+                    msgs.map(function (m) {
+                        return '<li class="small mb-1">' + $('<div>').text(m).html() + '</li>';
+                    }).join('') +
+                    '</ul>';
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Cannot reverse — stock shortage',
+                    html: '<p class="text-start mb-2">The following stock movements cannot be reversed because the warehouse no longer has enough on hand:</p>' +
+                          listHtml +
+                          '<p class="text-start text-muted small mt-2 mb-0">Adjust stock (e.g. via a stock transfer in) or remove the blocking sale, then try again.</p>',
+                    confirmButtonText: 'Close',
+                    confirmButtonColor: '#dc3545'
+                });
+                return;
+            }
+
+            // 3. Clear — build a compact preview summary for the reason dialog.
+            var p = (resp && resp.preview) || {};
+            var stockCount = (p.stock_movements && p.stock_movements.length) || 0;
+            var ledgerCount = (p.customer_ledger && p.customer_ledger.length) || 0;
+            var glCount = (p.gl_journals && p.gl_journals.length) || 0;
+            var dmgCount = (p.linked_damage_invoices && p.linked_damage_invoices.length) || 0;
+            var previewHtml =
+                '<p class="text-start">This will <strong>reverse stock movements</strong> (stock OUT at original cost), ' +
+                '<strong>reverse both GL journal entries</strong> (revenue + COGS), and ' +
+                '<strong>reverse customer ledger entries</strong>. A reason is required.</p>' +
+                '<div class="text-start small text-muted border-top pt-2 mb-2">' +
+                '<i class="fas fa-list-check me-1"></i>Will reverse: ' +
+                stockCount + ' stock movement' + (stockCount === 1 ? '' : 's') +
+                (glCount ? ', ' + glCount + ' GL journal' + (glCount === 1 ? '' : 's') : '') +
+                (ledgerCount ? ', ' + ledgerCount + ' ledger entr' + (ledgerCount === 1 ? 'y' : 'ies') : '') +
+                (dmgCount ? ', ' + dmgCount + ' linked damage write-off' + (dmgCount === 1 ? '' : 's') : '') +
+                '.</div>';
+
+            Swal.fire({
+                icon: 'warning',
+                title: 'Reverse this confirmed return?',
+                html: previewHtml,
+                input: 'textarea',
+                inputLabel: 'Reverse reason (required)',
+                inputPlaceholder: 'Why is this return being reversed?',
+                showCancelButton: true,
+                confirmButtonText: '<i class="fas fa-rotate-left"></i> Reverse Return',
+                confirmButtonColor: '#dc3545',
+                cancelButtonText: 'Keep',
+                reverseButtons: true,
+                inputValidator: function (value) {
+                    if (!value || !value.trim()) {
+                        return 'A reverse reason is required.';
+                    }
+                    return null;
                 }
-                return null;
-            }
-        }).then(function (result) {
-            if (result.isConfirmed) {
-                $('#reverseReasonField').val(result.value.trim());
-                var $btn = $('#reverseBtn');
-                $btn.prop('disabled', true)
-                    .html('<i class="fas fa-spinner fa-spin me-1"></i> Reversing…');
-                $('#reverseForm').submit();
-            }
+            }).then(function (result) {
+                if (result.isConfirmed) {
+                    $('#reverseReasonField').val(result.value.trim());
+                    var $btn = $('#reverseBtn');
+                    $btn.prop('disabled', true)
+                        .html('<i class="fas fa-spinner fa-spin me-1"></i> Reversing…');
+                    $('#reverseForm').submit();
+                }
+            });
+        }).fail(function (xhr) {
+            var msg = 'Could not load the reverse preview.';
+            if (xhr.responseJSON && xhr.responseJSON.message) msg = xhr.responseJSON.message;
+            Swal.fire({
+                icon: 'error',
+                title: 'Preview failed',
+                text: msg
+            });
         });
     });
 });

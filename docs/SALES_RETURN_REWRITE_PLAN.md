@@ -1235,7 +1235,7 @@ stock move". The card now has all 8 spec rows.
 
 ---
 
-## Phase 6 — Reverse Flow Enhancement (Pre-check UX)
+## Phase 6 — Reverse Flow Enhancement (Pre-check UX)  ✅ COMPLETE
 
 > **Goal**: Port legacy's stock-reversal pre-check so users see a friendly
 > "Insufficient stock in X for Y: need Z, have W" message BEFORE attempting
@@ -1269,14 +1269,156 @@ confirm flow.
 **Controller method**: `reversePreview(int $id)` — calls `SalesReturnReversalGuard::getBlockReasons()` + `getPreview()`, returns JSON.
 
 **Acceptance criteria**:
-- [ ] Reversal guard service created with both methods
-- [ ] Form Request uses it to fail fast with 422
-- [ ] Service uses it as defense-in-depth inside the transaction
-- [ ] Show page reverse button fetches preview before opening the reason dialog
-- [ ] If blocks exist, user sees a clear list of "Insufficient stock in X for Y: need Z, have W" messages
-- [ ] If no blocks, normal reason textarea + confirm flow proceeds
+- [x] Reversal guard service created with both methods
+- [x] Form Request uses it to fail fast with 422
+- [x] Service uses it as defense-in-depth inside the transaction
+- [x] Show page reverse button fetches preview before opening the reason dialog
+- [x] If blocks exist, user sees a clear list of "Insufficient stock in X for Y: need Z, have W" messages
+- [x] If no blocks, normal reason textarea + confirm flow proceeds
 
 **Dependencies**: Phase 1.3 (Form Request exists to call the guard).
+
+### Phase 6 Execution Log
+
+> Phase 6 implements 6.1–6.2. The guard service existed from Phase 1.3 (with
+> `getBlockReasons()` returning formatted strings + `canReverse()`); this phase
+> refactors it to return structured tuples per the plan, adds `getPreview()` +
+> `getBlockMessages()`, wires it into the service as defense-in-depth, and adds
+> the reverse-preview AJAX endpoint + show-page pre-check UX.
+
+#### 6.1a — Guard refactor (tuples + preview + messages)
+**`app/Services/Sales/SalesReturnReversalGuard.php`** rewritten. Four public
+methods now:
+
+- **`getBlockReasons(int $returnId): array`** — returns structured tuples
+  `[{warehouse_id, warehouse_name, product_id, product_name, product_code,
+  needed, available, shortfall}, …]` for each non-reversed `sales_return`
+  stock movement where `on_hand < qty`. Returns ONLY stock-shortage tuples
+  (empty if no shortage or if the return is not found / not confirmed —
+  those are status blocks, reported separately). Per plan 6.1.
+- **`getStatusBlock(int $returnId): ?string`** — returns the not-found /
+  not-confirmed message, or null. Separated from `getBlockReasons()` so the
+  tuple shape stays uniform.
+- **`getBlockMessages(int $returnId): array`** — formatted human-readable
+  strings (status block + each stock shortage as "Insufficient stock in X
+  for Y: need Z, have W. Adjust stock first or cancel the reversal."). Used
+  by the Form Request (attaches each as a `reverse_reason` validation
+  error → 422) and by the reverse-preview endpoint (for the Swal body).
+- **`getPreview(int $returnId): array`** — a snapshot of what will be
+  reversed: `{return: {…}, stock_movements: [{id, product_name,
+  warehouse_name, qty, on_hand, will_be_short}], customer_ledger: [{id,
+  date, debit, credit}], gl_journals: [{type:'revenue'|'cogs', entry_no,
+  entry_date, is_reversed}], linked_damage_invoices: [{damage_code,
+  warehouse_name, damage_date, total_value, is_reversed, items_count}]}`.
+  Eager-loads `items.damageInvoice.warehouse` + `journalEntry` +
+  `cogsJournalEntry` to stay N+1-free.
+- **`canReverse(int $returnId): bool`** — `getStatusBlock() === null &&
+  empty(getBlockReasons())`. Used by the service defense-in-depth.
+
+The query is unchanged from Phase 1.3 (joins `stock_transactions` ×
+`warehouses` × `products` + LEFT JOIN `warehouse_stock` on
+  `(warehouse_id, product_id)`); only the return shape changed (strings →
+tuples) plus the new methods.
+
+#### 6.1b — Form Request update
+**`ReverseSalesReturnRequest::withValidator()`** now calls
+`getBlockMessages()` instead of `getBlockReasons()` (which now returns
+tuples, not strings). Each message is still attached to the `reverse_reason`
+field so it renders next to the reason input. The user gets a 422 listing
+ALL shortages in one round-trip — no mid-transaction RuntimeException.
+
+#### 6.1c — Service defense-in-depth
+**`SalesReturnService::reverseReturn()`** now injects
+`SalesReturnReversalGuard` via constructor DI (new constructor param —
+verified no manual `new SalesReturnService(...)` exists, no service-provider
+binding, so the container auto-resolves). Inside the `DB::transaction`, right
+after the `lockForUpdate()` + status check and BEFORE any writes:
+
+```php
+$stockBlocks = $this->reversalGuard->getBlockReasons($returnId);
+if (!empty($stockBlocks)) {
+    $first = $stockBlocks[0];
+    throw new \RuntimeException(sprintf(
+        'Cannot reverse: insufficient stock in %s for %s (need %s, have %s on hand). …',
+        $first['warehouse_name'], $first['product_name'],
+        number_format($first['needed'], 4), number_format($first['available'], 4)
+    ));
+}
+```
+
+This is the safety net: the Form Request pre-checked outside the transaction,
+but stock could have moved between the pre-check and the transaction commit.
+The in-transaction re-check (with the locked row) guarantees no partial
+transaction — the throw fires before any GL/stock/ledger write.
+
+#### 6.2a — Controller + route
+**`SalesReturnController::reversePreview(int $id, SalesReturnReversalGuard $guard)`**
+added. `SalesReturn::findOrFail($id)` (404 for missing/wrong-branch —
+`branch.isolation` middleware already 404'd cross-branch). Returns JSON:
+`{status:'success', can_reverse:bool, block_reasons:[tuples],
+block_messages:[strings], preview:{…}}`. The `can_reverse` flag is the
+definitive gate (status block OR stock shortages → false).
+
+**Route** added inside the existing `admin/sales-returns` prefix group:
+`GET {id}/reverse-preview` → name `admin.sales-returns.reverse-preview` →
+middleware `['role:accountant,manager,admin', 'branch.isolation']` +
+`->whereNumber('id')`. Same RBAC + branch isolation as the reverse POST.
+
+#### 6.2b — Show page reverse button (pre-check UX)
+**`show.blade.php`** reverse button JS rewritten. Added
+`data-reverse-preview-url="{{ route('admin.sales-returns.reverse-preview', $r) }}"`
+to the `<button>`. On click:
+
+1. **Loading** Swal ("Checking stock availability…") while the AJAX GET fires.
+2. **Blocked** (`can_reverse === false`): error Swal titled "Cannot reverse —
+   stock shortage" listing EVERY `block_message` as a `<li>` (escaped via
+   `$('<div>').text(m).html()`), with guidance to adjust stock or remove the
+   blocking sale. Single "Close" button — no confirm, no reason dialog.
+3. **Clear** (`can_reverse === true`): the normal reason-textarea Swal, with
+   an enhanced `html` that prepends a compact preview summary ("Will reverse:
+   N stock movements, M GL journals, P ledger entries, Q linked damage
+   write-offs") so the user knows exactly what they're undoing. The reason
+   textarea + inputValidator (min 5 chars) + confirm flow is unchanged.
+4. **AJAX fail**: error Swal with the server message.
+
+#### 6.2c — Index page 422 error unwrap (bonus)
+**`public/assets/js/sales-return-index.js`** reverse `.fail()` handler
+upgraded. Previously a 422 from the Form Request pre-check showed the
+generic "The given data was invalid." message. Now it unwraps
+`xhr.responseJSON.errors` (an object of field → string[]), flattens all
+messages, and shows them as a `<ul>` in an error Swal titled "Cannot reverse
+— N issues". The index page's reverse button (Phase 3) now gets the SAME
+friendly block messages as the show page — no extra endpoint needed (the
+Form Request pre-check already returns them as 422 validation errors).
+
+#### Verification (static — no PHP/runtime in this sandbox)
+- `node --check public/assets/js/sales-return-index.js` → OK.
+- `node --check` on the extracted `@push('scripts')` block from
+  `show.blade.php` → OK (6549 chars of inline JS).
+- Blade directive balance: `@php/@endphp` 6/6, `@if/@endif` 41/41,
+  `@foreach/@endforeach` 6/6, `@forelse/@empty/@endforelse` 1/1/1,
+  `@push/@endpush` 1/1, `@section/@endsection` 1/1 — all balanced.
+- `bun run build:css` → OK (no errors, no CSS diff — no new Tailwind classes).
+- Route `admin.sales-returns.reverse-preview` not duplicated (3 occurrences
+  in routes/web.php = 1 comment + 1 Route::get + 1 ->name).
+- No manual `new SalesReturnService(...)` / `new SalesReturnReversalGuard(...)`
+  anywhere — all DI / `app()`. No service-provider binding → container
+  auto-resolves the new constructor param.
+- `escapeHtml` confirmed defined in sales-return-index.js (line 531) before
+  being used in the new 422 unwrap.
+
+#### Outstanding (carried to later phases)
+- **Live E2E reverse test with shortage** (deferred): create a return,
+  confirm it, sell the returned stock out of the warehouse via another
+  invoice, then click Reverse and verify the pre-check Swal shows the
+  shortage. Needs a running Laravel + Postgres stack (not available here).
+- **Linked-damage pre-check**: the guard still does NOT pre-check damage
+  stock shortages (reversing a damage write-off needs the goods back IN).
+  Accepted limitation per plan §1.3 — damage goods were written off; the
+  `StockService::reverseTransaction` throw on the damage reversal remains
+  the safety net. Logged for a future phase.
+- **Phase 0.1 finding (stock-IN-then-OUT for Damage lines)**: still open —
+  carried from Phase 5. Cleanup deferred to Phase 8.
 
 ---
 

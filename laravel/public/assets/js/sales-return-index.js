@@ -416,7 +416,27 @@
                 });
                 persistAndReload(true);
             }).fail((xhr) => {
+                // Phase 6 — unwrap Laravel 422 validation errors so the user
+                // sees the friendly SalesReturnReversalGuard block messages
+                // (e.g. "Insufficient stock in X for Y: need Z, have W")
+                // instead of the generic "The given data was invalid." text.
+                let title = 'Error';
                 let msg = 'Server error';
+                if (xhr.status === 422 && xhr.responseJSON && xhr.responseJSON.errors) {
+                    const errs = xhr.responseJSON.errors;
+                    const lines = [];
+                    Object.keys(errs).forEach((k) => {
+                        if (Array.isArray(errs[k])) lines.push(...errs[k]);
+                    });
+                    if (lines.length) {
+                        title = lines.length > 1 ? 'Cannot reverse — ' + lines.length + ' issues' : 'Cannot reverse';
+                        msg = '<ul class="text-start mb-0 ps-3">' +
+                            lines.map((l) => '<li class="small mb-1">' + escapeHtml(l) + '</li>').join('') +
+                            '</ul>';
+                        Swal.fire({ icon: 'error', title: title, html: msg });
+                        return;
+                    }
+                }
                 if (xhr.responseJSON && xhr.responseJSON.message) msg = xhr.responseJSON.message;
                 else if (xhr.responseText) msg = xhr.responseText.slice(0, 200);
                 Swal.fire('Error', msg, 'error');

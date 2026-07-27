@@ -24,11 +24,11 @@ use Illuminate\Validation\Validator;
  *   reasons — instead of a mid-transaction RuntimeException with a
  *   less-helpful message and a risk of partial-transaction.
  *
- * The actual pre-check logic lives in SalesReturnReversalGuard so the
- * service can call it as a final defense-in-depth inside the transaction
- * (planned for a later phase — currently the service relies on
- * StockService::reverseTransaction throwing on insufficient stock, which
- * is correct but produces a worse error message).
+ * Phase 6.1: the guard now exposes getBlockMessages() (formatted strings,
+ * status + stock shortages) for this Form Request, getBlockReasons()
+ * (structured tuples) for the reverse-preview endpoint, and getPreview()
+ * (full snapshot). The service also calls the guard inside the transaction
+ * as defense-in-depth (SalesReturnService::reverseReturn).
  */
 class ReverseSalesReturnRequest extends FormRequest
 {
@@ -74,12 +74,14 @@ class ReverseSalesReturnRequest extends FormRequest
             }
 
             $guard = app(SalesReturnReversalGuard::class);
-            $reasons = $guard->getBlockReasons($returnId);
+            // Phase 6.1 — getBlockMessages() returns formatted strings (status +
+            // stock shortages), ready to attach as validation errors.
+            $messages = $guard->getBlockMessages($returnId);
 
-            foreach ($reasons as $reason) {
+            foreach ($messages as $message) {
                 // Attach to reverse_reason so the error renders next to the
                 // reason field in the modal (not as a generic form error).
-                $validator->errors()->add('reverse_reason', $reason);
+                $validator->errors()->add('reverse_reason', $message);
             }
         });
     }

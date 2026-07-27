@@ -45,7 +45,8 @@ class SalesReturnService
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger,
         private DamageService $damageService,
-        private NotificationService $notifications
+        private NotificationService $notifications,
+        private SalesReturnReversalGuard $reversalGuard
     ) {}
 
     /**
@@ -304,6 +305,23 @@ class SalesReturnService
             }
             if (!$return->isConfirmed()) {
                 throw new \RuntimeException("Only confirmed returns can be reversed (current: {$return->status}).");
+            }
+
+            // Phase 6.1 — defense-in-depth stock pre-check inside the transaction.
+            // The Form Request already pre-checked via SalesReturnReversalGuard, but
+            // re-check here with the locked row as a safety net (the Form Request's
+            // check ran outside the transaction; stock could have moved since). If a
+            // block exists, throw BEFORE any writes — no partial-transaction risk.
+            $stockBlocks = $this->reversalGuard->getBlockReasons($returnId);
+            if (!empty($stockBlocks)) {
+                $first = $stockBlocks[0];
+                throw new \RuntimeException(sprintf(
+                    'Cannot reverse: insufficient stock in %s for %s (need %s, have %s on hand). Adjust stock first or cancel the reversal.',
+                    $first['warehouse_name'],
+                    $first['product_name'],
+                    number_format($first['needed'], 4),
+                    number_format($first['available'], 4)
+                ));
             }
 
             // Reverse both GL journals + linked customer_ledger via JournalReversalService (cascade).

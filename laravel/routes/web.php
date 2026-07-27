@@ -880,6 +880,12 @@ Route::middleware('auth')->group(function () {
         Route::post('{id}/reverse', [SalesReturnController::class, 'reverse'])
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation'])
             ->whereNumber('id');
+        // Phase 6.2 — reverse-preview AJAX (pre-check UX): shows friendly
+        // "Insufficient stock in X for Y: need Z, have W" BEFORE the user
+        // commits. Same RBAC + branch.isolation as the reverse POST.
+        Route::get('{id}/reverse-preview', [SalesReturnController::class, 'reversePreview'])
+            ->name('reverse-preview')->middleware(['role:accountant,manager,admin', 'branch.isolation'])
+            ->whereNumber('id');
         // P1-6: Print return slip
         Route::get('{id}/print-slip', [SalesReturnController::class, 'printSlip'])
             ->name('print-slip')->middleware('role:salesman,accountant,warehouse_manager,manager,admin')

@@ -2172,3 +2172,61 @@ Stage Summary:
 - PHASE 3 & 4 PUSH STATUS: confirmed both already on origin/main (commits 2808722 + e15f4c3). The user-provided PAT lacks `workflow` scope so the CI-workflow commit (3c4c4ba) remains local — same as prior sessions. Phase 5 commit was pushed via the temp-branch + cherry-pick + rebase technique.
 - USER ACTION NEEDED: (1) `git pull` on their server. (2) Navigate to a confirmed sales return with at least one Damage line — the show page should now show: a Condition column (Good=green / Damage=red pills) on every item, a "Linked damage write-offs" card (between Stock movements and Revenue Reversal GL) with the damage_code link + warehouse + date + items table + write-off total, and a Good/Damage breakdown in the Quick facts card. (3) For a Good-only return, the damage card should be absent and the Quick facts breakdown should be absent (only shown when damageCount>0).
 - NO test code written (per project rules). PHP is not installed in this sandbox so the Laravel app cannot be booted here; the changes were verified by manual Blade directive-balance count + CSS build succeeding + route/model/policy existence checks.
+
+---
+Task ID: 7-sales-return-phase6
+Agent: Main
+Task: Phase 6 — Reverse Flow Enhancement (Pre-check UX) for the Sales Return rewrite. Two sub-tasks: 6.1 SalesReturnReversalGuard service (getBlockReasons tuples + getPreview + wire into Form Request + service defense-in-depth); 6.2 reverse-preview AJAX endpoint + route + show.blade.php reverse button pre-check UX.
+
+Work Log:
+- Read docs/SALES_RETURN_REWRITE_PLAN.md Phase 6 section (lines 1238-1279): goal = port legacy's stock-reversal pre-check so users see friendly "Insufficient stock in X for Y: need Z, have W" BEFORE reversal, not a mid-transaction RuntimeException. 6 acceptance criteria.
+- READ current state:
+  * app/Services/Sales/SalesReturnReversalGuard.php — ALREADY EXISTS from Phase 1.3 with getBlockReasons() returning FORMATTED STRINGS + canReverse(). Missing getPreview(). Plan 6.1 wants getBlockReasons() to return structured tuples.
+  * app/Http/Requests/SalesReturn/ReverseSalesReturnRequest.php — withValidator() ALREADY calls $guard->getBlockReasons() and adds each as a reverse_reason validation error (criterion #2 already satisfied from Phase 1.3). Needs update to call getBlockMessages() instead (since getBlockReasons() now returns tuples).
+  * app/Services/Sales/SalesReturnService.php reverseReturn() (line 297) — DB::transaction with lockForUpdate + status check, then reverses GL + linked damage + stock txs + marks reversed. NO guard call inside the transaction (criterion #3 NOT yet done — deferred from Phase 1.3). Constructor has 8 DI params, no guard.
+  * routes/web.php sales-returns group (lines 858-887) — has confirm + reverse + print-slip routes. No reverse-preview route.
+  * show.blade.php reverse button JS (lines 856-886) — opens SweetAlert2 reason textarea directly on click, no pre-check.
+  * sales-return-index.js reverse .fail() handler (lines 418-423) — shows generic xhr.responseJSON.message on error; a 422 from the Form Request pre-check would show "The given data was invalid." instead of the friendly block messages.
+
+- 6.1a GUARD REFACTOR (app/Services/Sales/SalesReturnReversalGuard.php — full rewrite):
+  * getBlockReasons(int $returnId): array — now returns structured tuples [{warehouse_id, warehouse_name, product_id, product_name, product_code, needed, available, shortfall}, ...] for each non-reversed sales_return stock movement where on_hand < qty. Returns ONLY stock-shortage tuples (empty if no shortage OR if return not found / not confirmed — status blocks are separate). Query unchanged from Phase 1.3 (joins stock_transactions × warehouses × products + LEFT JOIN warehouse_stock); only the return shape changed.
+  * getStatusBlock(int $returnId): ?string — NEW. Returns not-found / not-confirmed message or null. Separated so getBlockReasons() tuple shape stays uniform.
+  * getBlockMessages(int $returnId): array — NEW. Formatted strings (status block + each stock shortage as "Insufficient stock in X for Y: need Z, have W. Adjust stock first or cancel the reversal."). Used by Form Request + AJAX endpoint.
+  * getPreview(int $returnId): array — NEW. Snapshot of what will be reversed: {return:{id,return_code,status,total_amount,cogs_amount,is_reversed}, stock_movements:[{id,product_name,warehouse_name,qty,on_hand,will_be_short}], customer_ledger:[{id,transaction_date,debit,credit,is_reversed}], gl_journals:[{type:'revenue'|'cogs',entry_no,entry_date,description,is_reversed}], linked_damage_invoices:[{id,damage_code,warehouse_name,damage_date,total_value,is_reversed,items_count}]}. Eager-loads items.damageInvoice.warehouse + journalEntry + cogsJournalEntry (N+1-free).
+  * canReverse(int $returnId): bool — getStatusBlock()===null && empty(getBlockReasons()).
+
+- 6.1b FORM REQUEST UPDATE (ReverseSalesReturnRequest.php): withValidator() now calls getBlockMessages() instead of getBlockReasons() (which now returns tuples). Each message still attached to reverse_reason field → 422. Updated the PHPDoc block to document the Phase 6.1 changes.
+
+- 6.1c SERVICE DEFENSE-IN-DEPTH (SalesReturnService.php):
+  * Constructor: added `private SalesReturnReversalGuard $reversalGuard` as 9th DI param. Verified no manual `new SalesReturnService(...)` anywhere, no service-provider binding → container auto-resolves.
+  * reverseReturn(): inside DB::transaction, after lockForUpdate + status check + BEFORE any writes, added: $stockBlocks = $this->reversalGuard->getBlockReasons($returnId); if non-empty, throw RuntimeException with the first block's warehouse/product/needed/available. This is the safety net — Form Request pre-checked outside the transaction, but stock could have moved since; the in-transaction re-check (with locked row) guarantees no partial transaction.
+
+- 6.2a CONTROLLER + ROUTE:
+  * SalesReturnController: added `use App\Services\Sales\SalesReturnReversalGuard;` import. Added reversePreview(int $id, SalesReturnReversalGuard $guard) method: findOrFail (404 for missing/wrong-branch — branch.isolation already 404'd cross-branch), calls getBlockReasons + getBlockMessages + getPreview, returns JSON {status:'success', can_reverse:bool, block_reasons:[tuples], block_messages:[strings], preview:{...}}. can_reverse = empty(block_reasons) && getStatusBlock()===null.
+  * routes/web.php: added GET {id}/reverse-preview → name admin.sales-returns.reverse-preview → middleware ['role:accountant,manager,admin', 'branch.isolation'] + whereNumber('id'). Same RBAC + branch isolation as the reverse POST.
+
+- 6.2b SHOW PAGE REVERSE BUTTON (show.blade.php):
+  * Added data-reverse-preview-url="{{ route('admin.sales-returns.reverse-preview', $r) }}" to the #reverseBtn.
+  * Rewrote the #reverseBtn click handler: (1) Loading Swal "Checking stock availability…" while AJAX GET fires. (2) Blocked (can_reverse===false): error Swal "Cannot reverse — stock shortage" listing EVERY block_message as a <li> (escaped via $('<div>').text(m).html()), with guidance text. Single "Close" button — no confirm, no reason dialog. (3) Clear (can_reverse===true): normal reason-textarea Swal with enhanced html prepended with a compact preview summary ("Will reverse: N stock movements, M GL journals, P ledger entries, Q linked damage write-offs"). Reason textarea + inputValidator (min 5 chars) + confirm flow unchanged. (4) AJAX fail: error Swal with server message.
+
+- 6.2c INDEX PAGE 422 UNWRAP (bonus — sales-return-index.js): upgraded the reverse .fail() handler. Previously a 422 showed generic "The given data was invalid.". Now unwraps xhr.responseJSON.errors (object of field→string[]), flattens all messages, shows them as a <ul> in an error Swal titled "Cannot reverse — N issues". The index page reverse button (Phase 3) now gets the SAME friendly block messages as the show page — no extra endpoint needed (Form Request pre-check already returns them as 422 validation errors).
+
+- VERIFICATION (static — no PHP runtime in this sandbox):
+  * node --check public/assets/js/sales-return-index.js → OK.
+  * node --check on extracted @push('scripts') block from show.blade.php (6549 chars) → OK.
+  * Blade directive balance: @php/@endphp 6/6, @if/@endif 41/41, @foreach/@endforeach 6/6, @forelse/@empty/@endforelse 1/1/1, @push/@endpush 1/1, @section/@endsection 1/1 — all balanced.
+  * bun run build:css → OK (no errors, no CSS diff — no new Tailwind classes).
+  * Route admin.sales-returns.reverse-preview not duplicated (3 occurrences = 1 comment + 1 Route::get + 1 ->name).
+  * No manual new SalesReturnService(...) / new SalesReturnReversalGuard(...) anywhere — all DI / app(). No service-provider binding → container auto-resolves the new constructor param.
+  * escapeHtml confirmed defined in sales-return-index.js (line 531) before use in the new 422 unwrap.
+
+- PLAN DOC UPDATE: marked Phase 6 header ✅ COMPLETE, checked off all 6 acceptance criteria, added full "Phase 6 Execution Log" (6.1a guard refactor + 6.1b Form Request + 6.1c service defense-in-depth + 6.2a controller+route + 6.2b show page + 6.2c index bonus + Verification + Outstanding). Mirrors Phase 4/5 log style.
+
+- COMMIT + PUSH: staged 6 Phase-6 files (SalesReturnReversalGuard.php, ReverseSalesReturnRequest.php, SalesReturnService.php, SalesReturnController.php, routes/web.php, show.blade.php, sales-return-index.js, SALES_RETURN_REWRITE_PLAN.md, worklog.md). Pre-commit CSS guard passed (no Blade CSS-source change). Pushed via temp-branch cherry-pick + rebase technique (CI-workflow commit d165e84 stays local — PAT lacks workflow scope).
+
+Stage Summary:
+- PHASE 6 COMPLETE: all 6 acceptance criteria met. The sales-return reverse flow now has a 3-layer defense: (1) Form Request withValidator pre-check → 422 with friendly block messages; (2) Service in-transaction re-check with locked row → throw before any writes (no partial transaction); (3) Show-page reverse button AJAX pre-check → friendly error Swal listing ALL shortages BEFORE the reason dialog opens (no wasted reason-typing on a blocked reversal). The index page reverse button also gets the friendly messages via the 422 unwrap bonus.
+- GUARD API: getBlockReasons() returns tuples (plan 6.1), getBlockMessages() returns formatted strings (Form Request + Swal), getPreview() returns the full reversal snapshot, canReverse() is the convenience bool. getStatusBlock() separates status blocks from stock tuples so the tuple shape stays uniform.
+- PREVIEW ENDPOINT: GET admin/sales-returns/{id}/reverse-preview → {can_reverse, block_reasons:[tuples], block_messages:[strings], preview:{return, stock_movements, customer_ledger, gl_journals, linked_damage_invoices}}. Same RBAC + branch.isolation as the reverse POST.
+- USER ACTION NEEDED: (1) git pull on their server. (2) On a confirmed sales return show page, click "Reverse Return" — you'll see a brief "Checking stock availability…" loader, then either: (a) if stock is sufficient → the normal reason dialog with a "Will reverse: N stock movements, M GL journals…" preview summary; (b) if any warehouse is short → an error dialog listing every shortage ("Insufficient stock in X for Y: need Z, have W") with no confirm button. (3) The index page reverse button now also shows friendly shortage messages (via the 422 unwrap) instead of "The given data was invalid."
+- NO test code written (per project rules). PHP not installed in sandbox; verified by node --check (JS), blade directive balance, CSS build, route dedup, DI-injection safety review.
