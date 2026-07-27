@@ -125,17 +125,43 @@ class SalesReturnController extends Controller
 
     /**
      * P1-6: Print return slip.
+     *
+     * Phase 7 polish:
+     *  - Eager-loads items.damageInvoice.warehouse so the slip can show the
+     *    linked damage write-off section (7.2) without an N+1.
+     *  - Pulls confirmation meta (confirmed_at + confirmer name) from
+     *    user_audit_log for confirmed returns (7.3). sales_returns has no
+     *    confirmed_at/confirmed_by columns, so the audit trail is the source
+     *    of truth. Wrapped in try-catch so an audit-log hiccup never breaks
+     *    the slip print.
      */
     public function printSlip(int $id)
     {
         $return = SalesReturn::with([
-            'items.product', 'items.warehouse',
+            'items.product', 'items.warehouse', 'items.damageInvoice.warehouse',
             'salesInvoice.customer', 'branch',
         ])->findOrFail($id);
+
+        $confirmedMeta = null;
+        if ($return->isConfirmed()) {
+            try {
+                $confirmedMeta = DB::table('user_audit_log as ual')
+                    ->leftJoin('users as u', 'u.id', '=', 'ual.user_id')
+                    ->leftJoin('employees as e', 'e.id', '=', 'u.employee_id')
+                    ->where('ual.action', 'return_confirmed')
+                    ->where('ual.details->>return_id', (string) $return->id)
+                    ->orderBy('ual.created_at', 'desc')
+                    ->select('ual.created_at as confirmed_at', 'u.username', 'e.name as employee_name')
+                    ->first();
+            } catch (\Throwable $e) {
+                $confirmedMeta = null;
+            }
+        }
 
         return view('admin.sales-returns.print_slip', [
             'title' => 'Return Slip ' . $return->return_code,
             'salesReturn' => $return,
+            'confirmedMeta' => $confirmedMeta,
         ]);
     }
 
