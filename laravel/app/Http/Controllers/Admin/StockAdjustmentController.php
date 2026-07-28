@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\StockAdjustment;
+use App\Models\Warehouse;
 use App\Services\Stock\StockAdjustmentService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
@@ -21,6 +22,18 @@ use Illuminate\Support\Facades\DB;
  *   - index(): searchable/filterable list
  *   - show(): single adjustment detail with items + stock movements + GL journal
  *   - audit(): health-check report
+ *
+ * Phase 1 (Stock Adjustment plan — Authorization & Role Enforcement):
+ *   - Role gating is enforced by `role:` middleware on the route groups
+ *     (read: admin/manager/accountant; write: admin/accountant).
+ *   - This controller adds defense-in-depth via $this->authorize() against
+ *     StockAdjustmentPolicy on show/confirm/cancel.
+ *   - getProductRate() validates the requested warehouse belongs to the
+ *     caller's session branch (G16 fix — warehouse_stock has no RLS because
+ *     it has no branch_id column, so the endpoint itself must guard).
+ *   - branch.isolation middleware on POST {id}/confirm|cancel resolves {id}
+ *     → stock_adjustments.branch_id (EnforceBranchIsolation::inferTableFromUri).
+ *   - PostgreSQL RLS on stock_adjustments is the DB-level backstop.
  */
 class StockAdjustmentController extends Controller
 {
@@ -99,6 +112,10 @@ class StockAdjustmentController extends Controller
             'items.*.reason' => 'nullable|string|max:500',
         ]);
 
+        // Phase 1: defense-in-depth — role check for creating a draft.
+        // (No model yet, so the Policy's create(User) method is used.)
+        $this->authorize('create', StockAdjustment::class);
+
         try {
             $adjustment = $this->adjustmentService->createAdjustment([
                 'warehouse_id' => $validated['warehouse_id'],
@@ -125,6 +142,12 @@ class StockAdjustmentController extends Controller
             'items.product', 'warehouse.branch', 'branch', 'journalEntry.lines.ledger'
         ])->findOrFail($id);
 
+        // Phase 1: defense-in-depth — role + branch check via Policy.
+        // (role: middleware already gated the route; RLS already filtered the
+        // row. This re-confirms the same rule at the controller layer so the
+        // intent is explicit and survives any future route loosening.)
+        $this->authorize('view', $adjustment);
+
         // Get the stock transactions created by this adjustment.
         $stockTransactions = DB::table('stock_transactions as st')
             ->join('products as p', 'p.id', '=', 'st.product_id')
@@ -150,6 +173,10 @@ class StockAdjustmentController extends Controller
             'confirm_reason' => 'nullable|string|max:500',
         ]);
 
+        // Phase 1: load first so the Policy can check role + branch.
+        $adjustment = StockAdjustment::findOrFail($id);
+        $this->authorize('confirm', $adjustment);
+
         try {
             $adjustment = $this->adjustmentService->confirmAdjustment($id, auth()->id());
 
@@ -169,6 +196,10 @@ class StockAdjustmentController extends Controller
             'cancel_reason' => 'required|string|max:500',
         ]);
 
+        // Phase 1: load first so the Policy can check role + branch.
+        $adjustment = StockAdjustment::findOrFail($id);
+        $this->authorize('cancel', $adjustment);
+
         try {
             $adjustment = $this->adjustmentService->cancelAdjustment(
                 $id,
@@ -185,6 +216,13 @@ class StockAdjustmentController extends Controller
 
     /**
      * AJAX: get product avg cost for a warehouse (for the create form).
+     *
+     * Phase 1 (G16 fix): warehouse_stock has NO branch_id column and therefore
+     * NO RLS policy. A non-admin could otherwise query any warehouse's stock
+     * by passing an arbitrary warehouse_id. Here we explicitly assert the
+     * requested warehouse belongs to the caller's session branch before
+     * returning data. Admins bypass (their cross-branch access is logged by
+     * EnforceBranchIsolation on the surrounding request context).
      */
     public function getProductRate(Request $request)
     {
@@ -193,15 +231,22 @@ class StockAdjustmentController extends Controller
             'warehouse_id' => 'required|integer|exists:warehouses,id',
         ]);
 
-        $rate = $this->stockService->getWarehouseAvgCost(
-            (int) $request->input('warehouse_id'),
-            (int) $request->input('product_id')
-        );
+        $warehouseId = (int) $request->input('warehouse_id');
+        $productId = (int) $request->input('product_id');
 
-        $qty = $this->stockService->getWarehouseQty(
-            (int) $request->input('warehouse_id'),
-            (int) $request->input('product_id')
-        );
+        // Phase 1 (G16): branch-validate the warehouse for non-admin users.
+        $user = $request->user();
+        if ($user && !$user->isAdmin()) {
+            $sessionBranchId = (int) (session('branch_id') ?? $user->getBranchId() ?? 0);
+            $warehouseBranchId = (int) (Warehouse::find($warehouseId)?->branch_id ?? 0);
+            if ($sessionBranchId <= 0 || $warehouseBranchId !== $sessionBranchId) {
+                abort(403, 'You do not have access to stock for a warehouse outside your branch.');
+            }
+        }
+
+        $rate = $this->stockService->getWarehouseAvgCost($warehouseId, $productId);
+
+        $qty = $this->stockService->getWarehouseQty($warehouseId, $productId);
 
         return response()->json([
             'rate' => round($rate, 2),
@@ -214,6 +259,11 @@ class StockAdjustmentController extends Controller
      */
     public function audit()
     {
+        // Phase 1: defense-in-depth role check (route already gated by
+        // role:admin,manager,accountant). The Policy's audit() method is a
+        // plain role check (no model binding).
+        $this->authorize('audit', StockAdjustment::class);
+
         $checks = $this->computeAuditChecks();
 
         return view('admin.stock-adjustments.audit', [

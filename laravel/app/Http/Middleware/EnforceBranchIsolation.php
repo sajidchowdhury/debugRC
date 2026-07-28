@@ -193,6 +193,14 @@ class EnforceBranchIsolation
         if (str_contains($path, 'stock-take')) {
             return 'stock_take_sessions';
         }
+        // --- Phase 1 (Stock Adjustment plan): POST {id}/confirm and
+        // POST {id}/cancel must resolve {id} → stock_adjustments.branch_id
+        // so a non-admin cannot confirm/cancel another branch's adjustment
+        // by guessing its URL id. (RLS is the DB-level backstop; this is the
+        // request-level guard that produces a friendly 403 instead of a 404.)
+        if (str_contains($path, 'stock-adjustments')) {
+            return 'stock_adjustments';
+        }
         return null;
     }
 

@@ -378,17 +378,60 @@ Route::middleware('auth')->group(function () {
 
     // ============================================================
     // Phase 6.3: Stock Adjustments (two-phase: draft → confirm → cancel)
+    // ------------------------------------------------------------
+    // Phase 1 (Stock Adjustment plan — Authorization & Role Enforcement):
+    // Stock Adjustment is a BOOKKEEPING CORRECTION TOOL (opening balances,
+    // data migration, UOM fixes, post-conversion fixes, legacy cleanup),
+    // used infrequently by an Accountant / system administrator. It posts
+    // directly to stock + GL, so it must NOT be reachable by operational
+    // roles (salesman, dispatcher, hr, warehouse_manager).
+    //
+    // RBAC matrix (mirrors legacy route_roles.php StockAdjustmentController,
+    // tightened to the accountant/admin bookkeeping identity):
+    //   index / show / audit (read)        : admin, manager, accountant
+    //   create / store / product-rate       : admin, accountant          (write — draft)
+    //   {id}/confirm                        : admin, accountant          (posts stock + GL)
+    //   {id}/cancel                         : admin, accountant          (reversal)
+    //
+    // Legacy allowed warehouse_manager on create/store; this plan narrows
+    // the tool to accountant/admin only (the task explicitly states
+    // "Accountant / system administrator, infrequently"). If warehouse_manager
+    // access is later required, add the role back to the write group.
+    //
+    // Defense-in-depth layers:
+    //   1. role: middleware (primary gate)
+    //   2. StockAdjustmentPolicy via $this->authorize() in the controller
+    //   3. branch.isolation middleware on POST writes (prevents cross-branch
+    //      confirm/cancel by guessing URL id — resolves {id} to
+    //      stock_adjustments.branch_id via EnforceBranchIsolation::inferTableFromUri)
+    //   4. PostgreSQL RLS on stock_adjustments (DB-enforced; set by
+    //      SetAppBranchId middleware via SET app.branch_id GUC)
     // ============================================================
-    Route::prefix('admin/stock-adjustments')->name('admin.stock-adjustments.')->group(function () {
-        Route::get('audit', [StockAdjustmentController::class, 'audit'])->name('audit');
-        Route::get('product-rate', [StockAdjustmentController::class, 'getProductRate'])->name('product-rate');
-        Route::get('{id}/confirm', fn() => redirect()->route('admin.stock-adjustments.index'))->name('confirm-form');
-        Route::post('{id}/confirm', [StockAdjustmentController::class, 'confirm'])->name('confirm');
-        Route::post('{id}/cancel', [StockAdjustmentController::class, 'cancel'])->name('cancel');
+
+    // --- Read access: admin, manager, accountant ---
+    Route::middleware('role:admin,manager,accountant')->group(function () {
+        Route::get('admin/stock-adjustments', [StockAdjustmentController::class, 'index'])->name('admin.stock-adjustments.index');
+        Route::get('admin/stock-adjustments/audit', [StockAdjustmentController::class, 'audit'])->name('admin.stock-adjustments.audit');
+        Route::get('admin/stock-adjustments/{id}', [StockAdjustmentController::class, 'show'])->name('admin.stock-adjustments.show')
+            ->where(['id' => '[0-9]+']);
     });
-    Route::resource('admin/stock-adjustments', StockAdjustmentController::class)
-        ->only(['index', 'create', 'store', 'show'])
-        ->names('admin.stock-adjustments');
+
+    // --- Write access (create draft, fetch rate, confirm, cancel): admin, accountant only ---
+    // branch.isolation on POST routes resolves {id} → stock_adjustments.branch_id
+    // and rejects non-admin users operating on another branch's adjustment.
+    Route::middleware('role:admin,accountant')->group(function () {
+        Route::get('admin/stock-adjustments/create', [StockAdjustmentController::class, 'create'])->name('admin.stock-adjustments.create');
+        Route::post('admin/stock-adjustments', [StockAdjustmentController::class, 'store'])->name('admin.stock-adjustments.store');
+        Route::get('admin/stock-adjustments/product-rate', [StockAdjustmentController::class, 'getProductRate'])->name('admin.stock-adjustments.product-rate');
+        Route::get('admin/stock-adjustments/{id}/confirm', fn() => redirect()->route('admin.stock-adjustments.index'))->name('admin.stock-adjustments.confirm-form')
+            ->where(['id' => '[0-9]+']);
+        Route::post('admin/stock-adjustments/{id}/confirm', [StockAdjustmentController::class, 'confirm'])->name('admin.stock-adjustments.confirm')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
+        Route::post('admin/stock-adjustments/{id}/cancel', [StockAdjustmentController::class, 'cancel'])->name('admin.stock-adjustments.cancel')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
+    });
 
     // ============================================================
     // Phase 6.4: Stock Take (sessions + per-warehouse counts + variance posting)

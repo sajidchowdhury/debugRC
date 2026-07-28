@@ -78,5 +78,12 @@ class AppServiceProvider extends ServiceProvider
             \App\Models\CustomerPayment::class,
             \App\Policies\CustomerPaymentPolicy::class
         );
+        // Phase 1 (Stock Adjustment plan): StockAdjustment policy — defense-in-depth
+        // behind the role: middleware on admin/stock-adjustments routes. Mirrors
+        // the role matrix exactly (admin/accountant write; manager read-only).
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\StockAdjustment::class,
+            \App\Policies\StockAdjustmentPolicy::class
+        );
     }
 }

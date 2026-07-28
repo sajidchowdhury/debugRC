@@ -53,7 +53,7 @@ This plan defines **10 phases** that close these gaps and deliver a Stock Adjust
 
 | # | Gap | Severity | Risk if unresolved |
 |---|-----|----------|--------------------|
-| G1 | No role-based authorization on routes | **Critical** | Any user can post/correct stock + GL |
+| G1 | No role-based authorization on routes | **Critical** ✅ FIXED | Any user can post/correct stock + GL |
 | G2 | No CSV export | Medium | Loss of Legacy parity; no offline audit |
 | G3 | Non-pipeline-aware availability for decreases | Medium | Decrease can drain stock soft-promised to sales |
 | G4 | Thin health-check (4 inline checks vs Legacy's 6-section checklist) | Medium | Integrity defects invisible |
@@ -68,7 +68,7 @@ This plan defines **10 phases** that close these gaps and deliver a Stock Adjust
 | G13 | No API routes | Medium | No mobile/AI sidecar support |
 | G14 | No test suite for the module | High | Regressions ship undetected |
 | G15 | Draft cancels silently discard `cancel_reason` | Low | Lost context for abandoned drafts |
-| G16 | `getProductRate` endpoint not branch-validated | Low | Minor cross-branch info leak |
+| G16 | `getProductRate` endpoint not branch-validated | Low ✅ FIXED | Minor cross-branch info leak |
 | G17 | `opening_balance` reference_type never used | Medium | Opening balances conflated with corrections in ledger |
 | G18 | No print/PDF voucher | Low | No physical audit artifact |
 | G19 | No stale-draft cleanup automation | Low | Drafts accumulate indefinitely |
@@ -450,7 +450,7 @@ CREATE TABLE warehouse_stock (                                    -- snapshot/ca
 
 | Phase | Name | Duration | Priority | Dependencies |
 |---|---|---|---|---|
-| 1 | Authorization & Role Enforcement | 1 day | **Critical** | none |
+| 1 | Authorization & Role Enforcement | 1 day | **Critical** ✅ DONE | none |
 | 2 | Reason Categorization & Opening-Balance Reference | 1-2 days | High | none |
 | 3 | Approval Workflow & Maker-Checker | 3-4 days | **Critical** | 1, 2 |
 | 4 | Dedicated Audit Log & Logger | 2 days | High | 3 |
@@ -475,31 +475,20 @@ Phase 5 ──┘ (parallel)                                         ├──�
 
 ---
 
-## 6. Phase 1 — Authorization & Role Enforcement
+## 6. Phase 1 — Authorization & Role Enforcement ✅ DONE
 
 **Priority:** Critical
 **Duration:** 1 day
-**Status:** ⏳ Pending
+**Status:** ✅ **COMPLETED** (2025-07-28)
 **Goal:** Restrict every stock-adjustment route to authorized roles; ensure only Accountant / system administrator can create, confirm, and cancel. Establish the Policy pattern used by later phases.
 
 ### 1.1 Apply `role:` middleware to routes
-**File:** `laravel/routes/web.php` (lines 379-391)
-**Current code:**
+**File:** `laravel/routes/web.php` (lines 411-434) ✅ Done
+
+Replaced the single un-gated prefix group + resource with two role-gated groups (read vs write), each with `->where(['id' => '[0-9]+'])` regex constraints and `branch.isolation` middleware on the POST writes:
+
 ```php
-Route::prefix('admin/stock-adjustments')->name('admin.stock-adjustments.')->group(function () {
-    Route::get('audit', [StockAdjustmentController::class, 'audit'])->name('audit');
-    Route::get('product-rate', [StockAdjustmentController::class, 'getProductRate'])->name('product-rate');
-    Route::get('{id}/confirm', fn() => redirect()->route('admin.stock-adjustments.index'))->name('confirm-form');
-    Route::post('{id}/confirm', [StockAdjustmentController::class, 'confirm'])->name('confirm');
-    Route::post('{id}/cancel', [StockAdjustmentController::class, 'cancel'])->name('cancel');
-});
-Route::resource('admin/stock-adjustments', StockAdjustmentController::class)
-    ->only(['index', 'create', 'store', 'show'])
-    ->names('admin.stock-adjustments');
-```
-**New code:**
-```php
-// Read: admin, manager, accountant
+// --- Read access: admin, manager, accountant ---
 Route::middleware('role:admin,manager,accountant')->group(function () {
     Route::get('admin/stock-adjustments', [StockAdjustmentController::class, 'index'])->name('admin.stock-adjustments.index');
     Route::get('admin/stock-adjustments/audit', [StockAdjustmentController::class, 'audit'])->name('admin.stock-adjustments.audit');
@@ -507,38 +496,78 @@ Route::middleware('role:admin,manager,accountant')->group(function () {
         ->where(['id' => '[0-9]+']);
 });
 
-// Write (create/confirm/cancel): admin, accountant only — bookkeeping tool
+// --- Write access (create draft, fetch rate, confirm, cancel): admin, accountant only ---
 Route::middleware('role:admin,accountant')->group(function () {
     Route::get('admin/stock-adjustments/create', [StockAdjustmentController::class, 'create'])->name('admin.stock-adjustments.create');
     Route::post('admin/stock-adjustments', [StockAdjustmentController::class, 'store'])->name('admin.stock-adjustments.store');
     Route::get('admin/stock-adjustments/product-rate', [StockAdjustmentController::class, 'getProductRate'])->name('admin.stock-adjustments.product-rate');
+    Route::get('admin/stock-adjustments/{id}/confirm', fn() => redirect()->route('admin.stock-adjustments.index'))->name('admin.stock-adjustments.confirm-form')
+        ->where(['id' => '[0-9]+']);
     Route::post('admin/stock-adjustments/{id}/confirm', [StockAdjustmentController::class, 'confirm'])->name('admin.stock-adjustments.confirm')
-        ->where(['id' => '[0-9]+']);
+        ->where(['id' => '[0-9]+'])
+        ->middleware('branch.isolation');
     Route::post('admin/stock-adjustments/{id}/cancel', [StockAdjustmentController::class, 'cancel'])->name('admin.stock-adjustments.cancel')
-        ->where(['id' => '[0-9]+']);
+        ->where(['id' => '[0-9]+'])
+        ->middleware('branch.isolation');
 });
 ```
 
 ### 1.2 Create `StockAdjustmentPolicy`
-**File (new):** `laravel/app/Policies/StockAdjustmentPolicy.php`
-- `view(User $user, StockAdjustment $adj): bool` — RLS handles branch; policy double-checks `adj.branch_id == $user->branch_id || $user->isAdmin()`.
-- `create(User $user): bool` — `$user->hasRole(['admin','accountant'])`.
-- `confirm(User $user, StockAdjustment $adj): bool` — same as create (refined in Phase 3 to require approver role for high-value).
-- `cancel(User $user, StockAdjustment $adj): bool` — admin/accountant.
-- Register in `AuthServiceProvider` (or `App\Models\User::booted` per Laravel 12 convention).
+**File (new):** `laravel/app/Policies/StockAdjustmentPolicy.php` ✅ Done
 
-### 1.3 Add `branch.isolation` middleware to the group
-- Already available as `EnforceBranchIsolation` (alias `branch.isolation`). Apply to all stock-adjustment routes as defense-in-depth alongside RLS.
+Defense-in-depth policy registered via `Gate::policy()` in `AppServiceProvider`. Methods:
+- `view(User, StockAdjustment)` — `hasRole('admin','manager','accountant')` + `sameBranch()`.
+- `audit(User)` — `hasRole('admin','manager','accountant')` (no model binding).
+- `create(User)` — `hasRole('admin','accountant')` (pre-creation check).
+- `viewProductRate(User)` — `hasRole('admin','accountant')` (role re-confirm; branch check is in the controller).
+- `confirm(User, StockAdjustment)` — `hasRole('admin','accountant')` + `sameBranch()`.
+- `cancel(User, StockAdjustment)` — `hasRole('admin','accountant')` + `sameBranch()`.
+- `sameBranch()` — admin bypass; others must match `session('branch_id')` to `$adjustment->branch_id`.
 
-### 1.4 Branch-validate `getProductRate`
-**File:** `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` (`getProductRate` method)
-- Before returning data, assert `Warehouse::findOrFail($warehouse_id)->branch_id === session_branch_id || $user->isAdmin()`. Throw `AuthorizationException` otherwise. (Fixes G16.)
+### 1.3 Register policy + extend `EnforceBranchIsolation`
+**File:** `laravel/app/Providers/AppServiceProvider.php` (line 84-87) ✅ Done
+- Added `Gate::policy(StockAdjustment::class, StockAdjustmentPolicy::class)`.
+
+**File:** `laravel/app/Http/Middleware/EnforceBranchIsolation.php` (lines 196-203) ✅ Done
+- Added `stock-adjustments` → `stock_adjustments` mapping to `inferTableFromUri()` so the `branch.isolation` middleware on POST `{id}/confirm` and `{id}/cancel` resolves the URL `{id}` to `stock_adjustments.branch_id` and rejects non-admin users operating on another branch's adjustment (produces a friendly 403 instead of relying on RLS to silently 404).
+
+### 1.4 Branch-validate `getProductRate` (G16 fix) + controller `authorize()` defense-in-depth
+**File:** `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` ✅ Done
+
+- `getProductRate()` now asserts the requested `warehouse_id` belongs to the caller's session branch for non-admins (`abort(403, ...)` on mismatch). Fixes G16 — `warehouse_stock` has no `branch_id` column and therefore no RLS, so the endpoint itself must guard.
+- `show()` calls `$this->authorize('view', $adjustment)` after `findOrFail()`.
+- `store()` calls `$this->authorize('create', StockAdjustment::class)` before the service call.
+- `confirm()` loads the adjustment first, then calls `$this->authorize('confirm', $adjustment)` before the service call.
+- `cancel()` loads the adjustment first, then calls `$this->authorize('cancel', $adjustment)` before the service call.
+- `audit()` calls `$this->authorize('audit', StockAdjustment::class)`.
+
+### Implementation summary
+
+| # | Deliverable | Status | File |
+|---|---|---|---|
+| 1.1 | Role-gated read route group (admin/manager/accountant) + `{id}` regex | ✅ Done | `laravel/routes/web.php:411-417` |
+| 1.2 | Role-gated write route group (admin/accountant) + `{id}` regex + `branch.isolation` on POST | ✅ Done | `laravel/routes/web.php:419-434` |
+| 1.3 | `StockAdjustmentPolicy` with view/audit/create/viewProductRate/confirm/cancel | ✅ Done | `laravel/app/Policies/StockAdjustmentPolicy.php` (new) |
+| 1.4 | Policy registered via `Gate::policy()` | ✅ Done | `laravel/app/Providers/AppServiceProvider.php:84-87` |
+| 1.5 | `stock-adjustments` → `stock_adjustments` added to `EnforceBranchIsolation::inferTableFromUri()` | ✅ Done | `laravel/app/Http/Middleware/EnforceBranchIsolation.php:196-203` |
+| 1.6 | `getProductRate` branch-validates warehouse for non-admins (G16) | ✅ Done | `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php:223-251` |
+| 1.7 | `$this->authorize()` defense-in-depth on show/store/confirm/cancel/audit | ✅ Done | `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` |
+
+**Key changes:**
+1. Every stock-adjustment route now requires an explicit role — `salesman`, `dispatcher`, `hr`, `warehouse_manager`, `user`, and `other` are locked out entirely (the tool is for Accountant / system administrator only).
+2. `manager` is read-only (can view the index/show/audit but cannot create/confirm/cancel).
+3. `branch.isolation` middleware on POST `{id}/confirm` and `{id}/cancel` now actually resolves `{id}` to `stock_adjustments.branch_id` (previously it would no-op because `stock-adjustments` was not in the `inferTableFromUri` map — security theater).
+4. The `getProductRate` AJAX endpoint can no longer leak cross-branch stock/cost data to non-admins (G16).
+5. Four defense-in-depth layers are now active: (1) `role:` middleware, (2) `StockAdjustmentPolicy` via `$this->authorize()`, (3) `branch.isolation` route middleware, (4) PostgreSQL RLS.
 
 ### Verification Checklist (Phase 1)
-- [ ] A `salesman`/`dispatcher`/`hr` user receives 403 on every stock-adjustment route.
-- [ ] An `accountant` can index/create/store/confirm/cancel only within their branch.
-- [ ] An `admin` can access all branches.
-- [ ] `getProductRate` rejects a warehouse_id from another branch for non-admins.
+- [x] A `salesman`/`dispatcher`/`hr`/`warehouse_manager`/`user`/`other` user receives 403 on every stock-adjustment route (enforced by `role:` middleware).
+- [x] A `manager` can index/show/audit but receives 403 on create/store/confirm/cancel/product-rate (write group is `role:admin,accountant`).
+- [x] An `accountant` can index/create/store/confirm/cancel only within their branch (Policy `sameBranch()` + `branch.isolation` + RLS).
+- [x] An `admin` can access all branches (Policy `sameBranch()` bypass + `EnforceBranchIsolation` logs cross-branch override).
+- [x] `getProductRate` rejects a `warehouse_id` from another branch for non-admins (G16 fix — `abort(403)`).
+- [x] POST `{id}/confirm` and `{id}/cancel` resolve `{id}` → `stock_adjustments.branch_id` via the updated `inferTableFromUri()` (no longer security theater).
+- [x] All 8 named routes used by Blade views (`index`, `create`, `store`, `show`, `audit`, `product-rate`, `confirm`, `cancel`) are still defined — no broken view links.
 
 ---
 

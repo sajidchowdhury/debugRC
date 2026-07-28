@@ -168,3 +168,45 @@ Stage Summary:
 - 10-phase plan: P1 Authorization, P2 Categorization+opening_balance ref, P3 Approval maker-checker, P4 Dedicated audit log+logger, P5 UOM handling, P6 Pipeline availability+reversal safety+date integrity, P7 Reconciliation+drift, P8 UI parity (CSV/checklist/print/audit timeline), P9 API routes, P10 Tests+shadow mode
 - Includes full schema diff (Appendix A), business rule matrix (R/S/A/L/E rules, Appendix B), file inventory modify+create (Appendix C), post-implementation state (13 outcomes)
 - Plan mirrors the proven WAREHOUSE_TRANSFER_INNER_BRANCH_PLAN.md template (gap-numbered G1..Gn, phase-overview table, sub-step N.M structure, 3 appendices)
+
+---
+Task ID: SA-P1
+Agent: Main Agent (Stock Adjustment Phase 1 implementation)
+Task: Phase 1 — Authorization & Role Enforcement. Restrict every stock-adjustment route to authorized roles (admin/accountant write, manager read-only); establish the StockAdjustmentPolicy pattern; fix G16 (getProductRate cross-branch leak); make branch.isolation actually resolve {id} for stock-adjustments.
+
+Work Log:
+- Read /home/z/debugRC/worklog.md to understand prior work (SA-1 plan written; Warehouse Transfer phases 1-8 complete)
+- Reviewed current routes/web.php stock-adjustment block (lines 379-391, single un-gated prefix group + resource)
+- Reviewed StockAdjustmentController.php (no authorize() calls, getProductRate not branch-validated)
+- Reviewed EnsureRole middleware (alias 'role'), EnforceBranchIsolation (alias 'branch.isolation', inferTableFromUri method)
+- Reviewed SalesInvoicePolicy as the reference pattern, User model (getRole/hasRole/isAdmin/getBranchId)
+- Confirmed base Controller uses AuthorizesRequests trait (authorize() available)
+- Implemented 1.1: Replaced routes/web.php stock-adjustment block with two role-gated groups:
+  - Read group (role:admin,manager,accountant): index, audit, show (with {id} regex)
+  - Write group (role:admin,accountant): create, store, product-rate, confirm-form, confirm (+branch.isolation), cancel (+branch.isolation)
+  - All {id} routes constrained with ->where(['id' => '[0-9]+'])
+- Implemented 1.2: Created app/Policies/StockAdjustmentPolicy.php with view/audit/create/viewProductRate/confirm/cancel methods + sameBranch() helper
+- Implemented 1.3: Registered policy via Gate::policy() in AppServiceProvider.php; added 'stock-adjustments' -> 'stock_adjustments' mapping to EnforceBranchIsolation::inferTableFromUri() so branch.isolation actually resolves {id} on POST confirm/cancel
+- Implemented 1.4: Added $this->authorize() calls to controller (show/store/confirm/cancel/audit); added branch validation to getProductRate (G16 fix — abort(403) if warehouse_id belongs to another branch for non-admins)
+- Verified all 8 named routes used by Blade views still defined (index/create/store/show/audit/product-rate/confirm/cancel)
+- Updated STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md: marked Phase 1 DONE, G1+G16 FIXED, Phase Overview table updated, full implementation summary + checked verification checklist added
+
+Stage Summary:
+Files modified:
+- laravel/routes/web.php (stock-adjustment block rewritten with role: middleware + {id} regex + branch.isolation)
+- laravel/app/Http/Controllers/Admin/StockAdjustmentController.php (authorize() defense-in-depth on 5 methods + getProductRate branch validation + Warehouse import)
+- laravel/app/Http/Middleware/EnforceBranchIsolation.php (added stock-adjustments -> stock_adjustments to inferTableFromUri)
+- laravel/app/Providers/AppServiceProvider.php (registered StockAdjustmentPolicy via Gate::policy)
+- STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md (Phase 1 marked DONE with implementation details)
+
+Files created:
+- laravel/app/Policies/StockAdjustmentPolicy.php (view/audit/create/viewProductRate/confirm/cancel + sameBranch helper)
+
+Defense-in-depth layers now active for Stock Adjustment:
+1. role: middleware (primary gate) — salesman/dispatcher/hr/warehouse_manager/user/other fully locked out; manager read-only; admin/accountant write
+2. StockAdjustmentPolicy via $this->authorize() (controller defense-in-depth)
+3. branch.isolation middleware on POST confirm/cancel (now actually resolves {id} -> stock_adjustments.branch_id)
+4. PostgreSQL RLS on stock_adjustments (DB-enforced backstop)
+
+Gaps closed: G1 (no role authorization -> FIXED), G16 (getProductRate cross-branch leak -> FIXED)
+Note: PHP not installed in this sandbox (Node/Next.js env), so syntax verified by careful manual review + route-name cross-check against Blade views. Recommend running `php artisan route:list` and `php artisan test` in the Laravel env to confirm.
