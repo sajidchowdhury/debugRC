@@ -322,7 +322,7 @@
                     <div class="row g-3">
                         @foreach ($branches as $b)
                             @php($branchWhs = $warehousesByBranch->get($b->id, collect()))
-                            @if ($branchWhs->isEmpty()) @continue @endif
+                            @continue($branchWhs->isEmpty())
                             <div class="col-md-6">
                                 <div class="border rounded-3 p-3 h-100" data-branch-card="{{ $b->id }}">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
