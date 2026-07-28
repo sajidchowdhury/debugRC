@@ -47,9 +47,9 @@ CREATE TABLE stock_transactions (
 
 -- Monthly partitions (pg_partman auto-creates future months)
 -- Example: CREATE TABLE stock_transactions_2025_01 PARTITION OF stock_transactions
---   FOR VALUES FROM ('2025-01-01') TO ('2025-02-01');
+--   FOR VALUES FROM ('2025-01-01') TO ('2025-02-01')
 -- Default partition catches out-of-range dates:
---   CREATE TABLE stock_transactions_default PARTITION OF stock_transactions DEFAULT;
+--   CREATE TABLE stock_transactions_default PARTITION OF stock_transactions DEFAULT
 
 -- Indexes (include transaction_date for partition pruning)
 CREATE INDEX idx_st_date_warehouse ON stock_transactions(transaction_date, warehouse_id);
@@ -147,7 +147,7 @@ CREATE TABLE stock_take_sessions (
     reversed_by integer,
     reverse_reason text,
     -- Phase 3 (Stock Take plan): stock integrity. freeze_outbound=true locks
-    -- the source warehouses against outbound movements during the count;
+    -- the source warehouses against outbound movements during the count
     -- frozen_at records when the lock took effect; count_snapshot jsonb
     -- captures the product list at setup time (see StockTakeService::
     -- setupWarehouseCounts) so the count can be reconstructed later.
@@ -468,7 +468,7 @@ CREATE INDEX mv_product_abc_classification_product_idx
     ON mv_product_abc_classification (product_id);
 -- Nightly refresh job scheduled by the Phase 5 migration:
 --   SELECT cron.schedule('refresh-abc-classification', '30 1 * * *',
---       $$REFRESH MATERIALIZED VIEW CONCURRENTLY mv_product_abc_classification$$);
+--       $$REFRESH MATERIALIZED VIEW CONCURRENTLY mv_product_abc_classification$$)
 
 CREATE TABLE warehouse_transfers (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

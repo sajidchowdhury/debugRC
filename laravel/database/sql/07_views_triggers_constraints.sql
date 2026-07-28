@@ -46,7 +46,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Apply the trigger to every table with an updated_at column.
--- Each table gets: CREATE TRIGGER trg_<table>_updated_at BEFORE UPDATE ON <table> FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- Each table gets: CREATE TRIGGER trg_<table>_updated_at BEFORE UPDATE ON <table> FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()
 
 DO $$
 DECLARE
@@ -112,7 +112,7 @@ ALTER TABLE money_transfers
 -- NOTE: only add if no parent_id=0 rows exist (0 is not a valid id).
 -- This is commented out because the legacy data uses 0 as "no parent".
 -- In Phase 3 (Laravel), we will migrate parent_id=0 → parent_id=NULL and add the FK.
--- ALTER TABLE ledgers ADD CONSTRAINT fk_ledger_parent FOREIGN KEY (parent_id) REFERENCES ledgers(id);
+-- ALTER TABLE ledgers ADD CONSTRAINT fk_ledger_parent FOREIGN KEY (parent_id) REFERENCES ledgers(id)
 
 -- ===================== SEED: DOCUMENT SEQUENCE TYPES =====================
 -- Ensure document_sequences has rows for all needed types per branch.
@@ -491,8 +491,8 @@ CREATE INDEX IF NOT EXISTS idx_customers_search
 -- Custom GUC defaults (deny-by-default for direct SQL sessions).
 -- These require database owner privilege; if they fail, RLS still works
 -- because current_setting(name, true) returns NULL → not admin → no access.
--- ALTER DATABASE <dbname> SET app.branch_id = 0;
--- ALTER DATABASE <dbname> SET app.is_admin = false;
+-- ALTER DATABASE <dbname> SET app.branch_id = 0
+-- ALTER DATABASE <dbname> SET app.is_admin = false
 
 -- ============================================================
 -- SINGLE branch_id tables (31 tables)

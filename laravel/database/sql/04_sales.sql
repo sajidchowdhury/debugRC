@@ -68,9 +68,9 @@ CREATE TABLE sales_invoices (
 
 -- Monthly partitions (pg_partman auto-creates future months)
 -- Example: CREATE TABLE sales_invoices_2025_01 PARTITION OF sales_invoices
---   FOR VALUES FROM ('2025-01-01') TO ('2025-02-01');
+--   FOR VALUES FROM ('2025-01-01') TO ('2025-02-01')
 -- Default partition catches out-of-range dates:
---   CREATE TABLE sales_invoices_default PARTITION OF sales_invoices DEFAULT;
+--   CREATE TABLE sales_invoices_default PARTITION OF sales_invoices DEFAULT
 
 -- Indexes (include invoice_date for partition pruning)
 CREATE INDEX idx_si_customer ON sales_invoices(customer_id, invoice_date);

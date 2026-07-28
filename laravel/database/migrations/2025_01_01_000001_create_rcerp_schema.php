@@ -53,20 +53,44 @@ return new class extends Migration
     }
 
     /**
-     * Split SQL into individual statements, respecting $$ ... $$ dollar-quoted blocks.
+     * Split SQL into individual statements, respecting $$ ... $$ dollar-quoted
+     * blocks AND -- line comments.
+     *
+     * The previous version only tracked $$ blocks and split on any line ending
+     * with ; . That broke when a -- comment contained a ; (e.g. "-- ... during
+     * the count;") — the splitter treated the comment's ; as a terminator and
+     * sent a truncated CREATE TABLE to PostgreSQL, which rejected it with
+     * SQLSTATE[42601] "syntax error at end of input".
+     *
+     * Fix: before checking for $$ or ; , strip -- comments from the line (but
+     * only when NOT inside a $$ block — inside a function body, -- is literal
+     * text, not a comment). The comment is preserved in $current (sent to PG,
+     * which handles -- natively); we only use the stripped version for parsing.
+     *
+     * Limitation: this simple regex doesn't handle -- inside single-quoted
+     * string literals (e.g. DEFAULT '--foo;'). DDL rarely uses -- inside
+     * strings, and the previous version didn't handle string literals either,
+     * so this is not a regression.
      */
     private function splitSql(string $sql): array
     {
         $statements = [];
         $current = '';
         $inDollarQuote = false;
-        $dollarTag = '';
         $lines = preg_split('/\r\n|\r|\n/', $sql);
 
         foreach ($lines as $line) {
-            // Track dollar-quoted strings (function bodies)
+            // When NOT inside a $$ block, strip -- line comments for parsing.
+            // The comment is still appended to $current below (PG handles --
+            // natively); we just don't let comment contents affect $$ tracking
+            // or ; terminator detection. When inside $$, -- is part of the
+            // function body, so we don't strip.
+            $codeOnly = $inDollarQuote ? $line : preg_replace('/--[^\n]*$/', '', $line);
+
+            // Track dollar-quoted strings (function bodies) — use $codeOnly so
+            // a $$ inside a -- comment doesn't flip dollar-quote state.
             if (!$inDollarQuote) {
-                if (preg_match('/\$\$(.*)$/', $line, $m)) {
+                if (preg_match('/\$\$(.*)$/', $codeOnly, $m)) {
                     $inDollarQuote = true;
                     // Check if the $$ is closed on the same line
                     $afterTag = $m[1];
@@ -75,6 +99,7 @@ return new class extends Migration
                     }
                 }
             } else {
+                // Inside $$ — look for closing $$ in the original line
                 if (str_contains($line, '$$')) {
                     $inDollarQuote = false;
                 }
@@ -82,8 +107,9 @@ return new class extends Migration
 
             $current .= $line . "\n";
 
-            // End of statement: line ends with ; and we're not inside a dollar-quoted block
-            if (!$inDollarQuote && preg_match('/;\s*$/', $line)) {
+            // End of statement: code (comments stripped) ends with ; and we're
+            // not inside a dollar-quoted block.
+            if (!$inDollarQuote && preg_match('/;\s*$/', $codeOnly)) {
                 $statements[] = $current;
                 $current = '';
             }
