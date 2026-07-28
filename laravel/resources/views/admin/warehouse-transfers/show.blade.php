@@ -67,6 +67,11 @@
             <a href="{{ route('admin.warehouse-transfers.audit', $t->id) }}" class="btn btn-outline-light btn-sm ms-1">
                 <i class="fas fa-magnifying-glass-chart me-1"></i> Audit
             </a>
+            @if ($t->isConfirmed() || $t->isCancelled())
+                <a href="{{ route('admin.warehouse-transfers.print', $t->id) }}" class="btn btn-outline-light btn-sm ms-1" target="_blank">
+                    <i class="fas fa-print me-1"></i> Print
+                </a>
+            @endif
         </div>
     </header>
 
@@ -85,6 +90,16 @@
                 @if ($t->reverse_reason)
                     · Reason: <em>{{ $t->reverse_reason }}</em>
                 @endif
+            </div>
+        </div>
+    @endif
+
+    @if (!$t->is_interbranch && $t->fromBranch)
+        <div class="alert alert-success d-flex align-items-center mb-3" role="alert">
+            <i class="fas fa-warehouse me-2 fa-lg"></i>
+            <div>
+                <strong>Same-branch transfer.</strong>
+                Stock is reallocated within <strong>{{ $t->fromBranch->branch_name }}</strong> — no intercompany GL posted.
             </div>
         </div>
     @endif
@@ -137,12 +152,16 @@
                             @endif
                         </dd>
 
-                        <dt class="col-sm-3 text-muted">Interbranch?</dt>
+                        <dt class="col-sm-3 text-muted">Branch route</dt>
                         <dd class="col-sm-9">
                             {!! $interbranchBadge() !!}
-                            @if ($t->is_interbranch && $t->fromBranch && $t->toBranch)
+                            @if ($t->fromBranch && $t->toBranch)
                                 <span class="small text-muted ms-1">
-                                    ({{ $t->fromBranch->branch_name }} → {{ $t->toBranch->branch_name }})
+                                    @if ($t->is_interbranch)
+                                        ({{ $t->fromBranch->branch_name }} → {{ $t->toBranch->branch_name }})
+                                    @else
+                                        ({{ $t->fromBranch->branch_name }})
+                                    @endif
                                 </span>
                             @endif
                         </dd>
@@ -600,11 +619,11 @@
                         <strong>Tk {{ number_format((float) $t->total_amount, 2) }}</strong>
                     </div>
                     <div class="d-flex justify-content-between py-1 border-bottom">
-                        <span class="text-muted">Interbranch</span>
+                        <span class="text-muted">Branch route</span>
                         @if ($t->is_interbranch)
-                            <span class="badge bg-info-subtle text-info">Yes</span>
+                            <span class="badge bg-info-subtle text-info">Interbranch</span>
                         @else
-                            <span class="text-muted">No</span>
+                            <span class="badge bg-secondary-subtle text-secondary">Same branch</span>
                         @endif
                     </div>
                     <div class="d-flex justify-content-between py-1 border-bottom">

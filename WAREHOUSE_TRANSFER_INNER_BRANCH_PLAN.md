@@ -1,11 +1,11 @@
 # Warehouse Transfer — Inner-Branch Implementation Plan
 
-**Document version:** 1.4
+**Document version:** 1.5
 **Date:** 2025-07-28  
 **Scope:** Warehouse-to-Warehouse Transfer (inner-branch / intra-branch only)  
 **Context:** Branch-A has 10 warehouses, Branch-B has 5 warehouses. Transfers are only allowed between warehouses that belong to the **same branch**. Cross-branch transfers are handled by the separate **Branch Demand** module, not by this module.  
 **Target stack:** Laravel 11 + PostgreSQL 16  
-**Current state:** Phase 6.5 + **Phase 1 COMPLETE** + **Phase 2 COMPLETE** + **Phase 3 COMPLETE** + **Phase 4 COMPLETE** (audit trail & data integrity)
+**Current state:** Phase 6.5 + **Phase 1 COMPLETE** + **Phase 2 COMPLETE** + **Phase 3 COMPLETE** + **Phase 4 COMPLETE** + **Phase 5 COMPLETE** (UI parity & UX improvements)
 
 ---
 
@@ -935,7 +935,7 @@ This can be run as a scheduled job or on-demand.
 
 ---
 
-## 10. Phase 5 — UI Parity & UX Improvements
+## 10. Phase 5 — UI Parity & UX Improvements ✅ DONE
 
 **Priority:** Medium  
 **Duration:** 2-3 days  
@@ -1002,24 +1002,24 @@ Add a printable transfer document (similar to the legacy's challan/godown copy c
 
 ### Deliverables
 
-| # | Deliverable | File |
-|---|-------------|------|
-| 5.1 | Same-branch guard in create form | `create.blade.php` |
-| 5.2 | Pipeline-aware stock info | `create.blade.php` |
-| 5.3 | Index filters | `index.blade.php` |
-| 5.4 | Reversal info in show view | `show.blade.php` |
-| 5.5 | Warehouse + branch in dropdowns | `create.blade.php` |
-| 5.6 | Confirm/cancel button UX | `show.blade.php` |
-| 5.7 | Print view | New blade file |
+| # | Deliverable | File | Status |
+|---|-------------|------|--------|
+| 5.1 | Same-branch guard in create form | `create.blade.php` | ✅ Done |
+| 5.2 | Pipeline-aware stock info | `create.blade.php` | ✅ Done |
+| 5.3 | Index filters | `index.blade.php` | ✅ Done |
+| 5.4 | Reversal info in show view | `show.blade.php` | ✅ Done |
+| 5.5 | Warehouse + branch in dropdowns | `create.blade.php` | ✅ Done |
+| 5.6 | Confirm/cancel button UX | `show.blade.php` | ✅ Done |
+| 5.7 | Print view | New blade file | ✅ Done |
 
 ### Verification
 
-- [ ] Create form only shows same-branch warehouses
-- [ ] Cross-branch selection blocked with clear error message
-- [ ] Stock info shows available (pipeline-aware) qty
-- [ ] Index page has all filters
-- [ ] Show page has reversal info
-- [ ] Print view generates correctly
+- [x] Create form only shows same-branch warehouses
+- [x] Cross-branch selection blocked with clear error message
+- [x] Stock info shows available (pipeline-aware) qty
+- [x] Index page has all filters
+- [x] Show page has reversal info
+- [x] Print view generates correctly
 
 ---
 
@@ -1414,8 +1414,8 @@ CREATE INDEX idx_audit_log_user ON audit_log(user_id);
 | `app/Http/Controllers/Admin/WarehouseTransferController.php` | 1, 2, 5, 6 | Branch guard, validation rules, warehouse filtering, pipeline-aware API, export |
 | `app/Models/WarehouseTransfer.php` | 1, 3 | BranchScope, branch_demand_id to fillable/casts, branchDemand() relationship |
 | `resources/views/admin/warehouse-transfers/create.blade.php` | 1, 5 | Same-branch guard, pipeline info, warehouse dropdown |
-| `resources/views/admin/warehouse-transfers/index.blade.php` | 5 | Filters, remove interbranch |
-| `resources/views/admin/warehouse-transfers/show.blade.php` | 3, 5 | Demand-linked reversal info, reversal info, same-branch badge |
+| `resources/views/admin/warehouse-transfers/index.blade.php` | 5 | Filters, remove interbranch, Reversed stat |
+| `resources/views/admin/warehouse-transfers/show.blade.php` | 3, 4, 5 | Demand-linked reversal info, reversal info, same-branch badge |
 | `routes/web.php` | 4 ✅, 6 | Audit checklist routes, reconcile routes, export route |
 | `routes/api.php` | 8 | API routes |
 

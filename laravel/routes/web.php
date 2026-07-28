@@ -519,6 +519,7 @@ Route::middleware('auth')->group(function () {
     // ============================================================
     Route::prefix('admin/warehouse-transfers')->name('admin.warehouse-transfers.')->group(function () {
         Route::get('product-stock', [WarehouseTransferController::class, 'getProductStock'])->name('product-stock');
+        Route::get('{id}/print', [WarehouseTransferController::class, 'print'])->name('print');
         Route::post('{id}/confirm', [WarehouseTransferController::class, 'confirm'])->name('confirm');
         Route::post('{id}/cancel', [WarehouseTransferController::class, 'cancel'])->name('cancel');
         // Phase 4 — Audit Trail & Data Integrity routes

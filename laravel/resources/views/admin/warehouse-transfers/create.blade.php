@@ -13,7 +13,7 @@
         <div>
             <h1 class="h4 mb-1"><i class="fas fa-plus me-2"></i>{{ $title }}</h1>
             <p class="mb-0 small opacity-75">
-                Create a same-branch draft transfer — no stock moves or GL posting until you confirm.
+                Create a same-branch draft transfer — stock only moves when you confirm. Cross-branch transfers must use the Branch Demand module.
                 @if ($branchName) <strong>Branch: {{ $branchName }}</strong> @endif
             </p>
         </div>

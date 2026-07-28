@@ -17,7 +17,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Warehouse Transfer Controller — Phase 6.5 + Phase 1 + Phase 2 + Phase 4.
+ * Warehouse Transfer Controller — Phase 6.5 + Phase 1 + Phase 2 + Phase 4 + Phase 5.
  *
  * Two-phase flow:
  *   - create / store: create a draft transfer (no stock, no GL)
@@ -42,6 +42,11 @@ use Illuminate\Support\Facades\Log;
  *   - runChecks(): AJAX endpoint to run health checks
  *   - audit(): per-transfer audit detail view
  *   - reconcile(): stock reconciliation page
+ *
+ * Phase 5 — UI Parity & UX Improvements:
+ *   - Print view for transfer documents
+ *   - Same-branch-only UI (interbranch filters removed, route labels updated)
+ *   - Same-branch info banner on show page
  */
 class WarehouseTransferController extends Controller
 {
@@ -333,6 +338,21 @@ class WarehouseTransferController extends Controller
             'physical_qty' => round($physicalQty, 4),
             'available_qty' => round($availableQty, 4),
             'pipeline_qty' => round($pipelineQty, 4),
+        ]);
+    }
+
+    /**
+     * Phase 5: Print transfer document.
+     */
+    public function print(int $id)
+    {
+        $transfer = WarehouseTransfer::with([
+            'items.product', 'fromWarehouse.branch', 'toWarehouse.branch',
+            'fromBranch', 'toBranch',
+        ])->findOrFail($id);
+
+        return view('admin.warehouse-transfers.print', [
+            'transfer' => $transfer,
         ]);
     }
 

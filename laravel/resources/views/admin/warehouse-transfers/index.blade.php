@@ -9,7 +9,6 @@
         'from_warehouse_id' => '',
         'to_warehouse_id'   => '',
         'status'            => '',
-        'interbranch'       => '',
         'search'            => '',
     ], is_array($filters ?? null) ? $filters : []);
 
@@ -18,7 +17,7 @@
         'draft'       => 0,
         'confirmed'   => 0,
         'cancelled'   => 0,
-        'interbranch' => 0,
+        'reversed'    => 0,
         'total_value' => 0,
     ], $stats ?? []);
 
@@ -30,7 +29,7 @@
         ][$status] ?? '<span class="badge bg-light text-dark">' . e($status) . '</span>';
     };
 
-    $interbranchBadge = function (bool $isInterbranch): string {
+    $branchRouteBadge = function (bool $isInterbranch): string {
         return $isInterbranch
             ? '<span class="badge bg-info-subtle text-info"><i class="fas fa-arrow-right-arrow-left me-1"></i>Interbranch</span>'
             : '<span class="badge bg-secondary-subtle text-secondary"><i class="fas fa-warehouse me-1"></i>Same branch</span>';
@@ -44,7 +43,7 @@
         <div>
             <h1 class="h4 mb-1"><i class="fas fa-right-left me-2"></i>{{ $title }}</h1>
             <p class="mb-0 small opacity-75">
-                Cross-warehouse transfers — same-branch reallocates stock; cross-branch posts intercompany GL.
+                Same-branch warehouse transfers — stock reallocation within a branch. Cross-branch transfers use the Branch Demand module.
             </p>
         </div>
         <div class="d-flex gap-2 flex-wrap">
@@ -122,12 +121,12 @@
             <div class="card border-0 shadow-sm h-100">
                 <div class="card-body d-flex align-items-center">
                     <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
-                         style="width:48px;height:48px;background:#0ea5e9;">
-                        <i class="fas fa-arrow-right-arrow-left"></i>
+                         style="width:48px;height:48px;background:#dc2626;">
+                        <i class="fas fa-rotate-left"></i>
                     </div>
                     <div>
-                        <div class="h4 mb-0">{{ number_format((int) $stats['interbranch']) }}</div>
-                        <div class="text-muted small">Interbranch</div>
+                        <div class="h4 mb-0">{{ number_format((int) $stats['reversed']) }}</div>
+                        <div class="text-muted small">Reversed</div>
                     </div>
                 </div>
             </div>
@@ -199,14 +198,7 @@
                         <option value="cancelled" {{ $filters['status'] === 'cancelled' ? 'selected' : '' }}>Cancelled</option>
                     </select>
                 </div>
-                <div class="col-md-2">
-                    <label class="form-label small text-muted mb-1" for="interbranch">Interbranch</label>
-                    <select id="interbranch" name="interbranch" class="form-select form-select-sm">
-                        <option value="">All</option>
-                        <option value="yes" {{ $filters['interbranch'] === 'yes' ? 'selected' : '' }}>Yes (cross-branch)</option>
-                        <option value="no"  {{ $filters['interbranch'] === 'no'  ? 'selected' : '' }}>No (same branch)</option>
-                    </select>
-                </div>
+
                 <div class="col-md-4">
                     <label class="form-label small text-muted mb-1" for="search">Search transfer code</label>
                     <input type="text" id="search" name="search" class="form-control form-control-sm"
@@ -236,7 +228,7 @@
                             <th>Date</th>
                             <th>From warehouse</th>
                             <th>To warehouse</th>
-                            <th class="text-center">Interbranch?</th>
+                            <th class="text-center">Route</th>
                             <th class="text-end">Items</th>
                             <th class="text-end">Total (Tk)</th>
                             <th>Status</th>
@@ -280,7 +272,7 @@
                                         <span class="text-muted">—</span>
                                     @endif
                                 </td>
-                                <td class="text-center">{!! $interbranchBadge((bool) $t->is_interbranch) !!}</td>
+                                <td class="text-center">{!! $branchRouteBadge((bool) $t->is_interbranch) !!}</td>
                                 <td class="text-end">{{ number_format($t->items->count()) }}</td>
                                 <td class="text-end">{{ number_format((float) $t->total_amount, 2) }}</td>
                                 <td>{!! $statusBadge($t->status) !!}</td>
@@ -302,7 +294,7 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="10" class="text-center text-muted py-5">
+                                <td colspan="9" class="text-center text-muted py-5">
                                     <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
                                     No warehouse transfers found. Try adjusting filters or
                                     <a href="{{ route('admin.warehouse-transfers.create') }}">create a new one</a>.
