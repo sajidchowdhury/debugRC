@@ -583,3 +583,18 @@
             from { transform: translateX(120%); opacity: 0; }
             to { transform: translateX(0); opacity: 1; }
         }
+
+        /* ===== SELECT2 FIX: hide the original <select> when select2 is active =====
+           Select2 adds .select2-hidden-accessible to the original <select> and
+           relies on position:absolute + width:1px + clip to visually hide it.
+           However, Bootstrap's .form-select (display:block) and our own
+           .card-body .form-select rule (higher specificity) can prevent the
+           hiding from working, causing the original <select> to appear
+           ALONGSIDE the select2 widget — the "dropdown showing twice" bug.
+           This rule uses display:none !important with high specificity to
+           guarantee the original is always hidden once select2 takes over. */
+        select.select2-hidden-accessible,
+        .card-body select.select2-hidden-accessible,
+        .form-select.select2-hidden-accessible {
+            display: none !important;
+        }

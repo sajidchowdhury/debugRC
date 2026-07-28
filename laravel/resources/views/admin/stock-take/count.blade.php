@@ -222,7 +222,19 @@
                                 <tr>
                                     <td colspan="9" class="text-center text-muted py-5">
                                         <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
-                                        No products loaded for this warehouse. Click <strong>Setup Counts</strong> first.
+                                        <p class="mb-2">No products loaded for this warehouse yet.</p>
+                                        <p class="small text-muted mb-3">
+            Products are loaded when you click <strong>Setup Counts</strong> on the session page.
+            If you added a new product after setup, re-run <strong>Setup Counts</strong> to include it.
+                                        </p>
+                                        <a href="{{ route('admin.stock-take.setup', [$session->id, $warehouse->id]) }}"
+                                           class="btn btn-sm btn-primary">
+                                            <i class="fas fa-wand-magic-sparkles me-1"></i> Setup Counts Now
+                                        </a>
+                                        <a href="{{ route('admin.stock-take.show', $session->id) }}"
+                                           class="btn btn-sm btn-outline-secondary ms-1">
+                                            <i class="fas fa-arrow-left me-1"></i> Back to Session
+                                        </a>
                                     </td>
                                 </tr>
                             @endforelse

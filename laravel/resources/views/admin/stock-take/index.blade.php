@@ -341,7 +341,11 @@
                                 </td>
                             </tr>
                         @empty
-                            <tr>
+                            {{-- NOTE: This row is hidden when DataTables is active (it can't
+                                handle colspan in tbody — triggers tn/18 'Incorrect column
+                                count'). DataTables shows its own empty message via
+                                language.emptyTable. The row below only shows if JS is disabled. --}}
+                            <tr class="d-none no-js-row">
                                 <td colspan="9" class="text-center text-muted py-5">
                                     <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
                                     No stock take sessions found. Try adjusting filters or
@@ -365,12 +369,19 @@ $(function () {
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
 
     // DataTables on visible rows only (server-side pagination handles page size).
+    // Note: the @empty colspan row is hidden via .d-none so DataTables never
+    // sees a colspan cell (which triggers tn/18 'Incorrect column count').
+    // DataTables shows its own empty message via language.emptyTable.
     $('#dataTable').DataTable({
         paging: false,
         info: false,
         ordering: true,
         dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
-        language: { search: 'Filter rows:', emptyTable: 'No stock take sessions on this page.' }
+        language: {
+            search: 'Filter rows:',
+            emptyTable: 'No stock take sessions found. Try adjusting filters or ' +
+                '<a href="{{ route('admin.stock-take.create') }}">create a new one</a>.'
+        }
     });
 });
 </script>
