@@ -51,7 +51,13 @@ class WarehouseTransferController extends Controller
             'confirmed' => WarehouseTransfer::where('status', 'confirmed')->count(),
             'cancelled' => WarehouseTransfer::where('status', 'cancelled')->count(),
             'interbranch' => WarehouseTransfer::where('is_interbranch', true)->count(),
-            'total_value' => WarehouseTransfer::where('status', 'confirmed')->sum('total_amount'),
+            // No total_amount column on warehouse_transfers — derive from
+            // warehouse_transfer_items.qty * rate for confirmed transfers.
+            'total_value' => (float) DB::table('warehouse_transfers')
+                ->join('warehouse_transfer_items', 'warehouse_transfer_items.warehouse_transfer_id', '=', 'warehouse_transfers.id')
+                ->where('warehouse_transfers.status', 'confirmed')
+                ->whereNull('warehouse_transfers.deleted_at')
+                ->sum(DB::raw('warehouse_transfer_items.qty * warehouse_transfer_items.rate')),
         ];
 
         return view('admin.warehouse-transfers.index', [

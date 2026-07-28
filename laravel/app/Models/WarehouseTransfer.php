@@ -29,7 +29,7 @@ use App\Traits\AuditableMasterData;
  * @property int $from_branch_id
  * @property int $to_branch_id
  * @property bool $is_interbranch
- * @property string $total_amount
+ * @property float $total_amount Computed: sum(items.qty * items.rate) — no DB column.
  * @property string $status draft|confirmed|cancelled
  * @property int|null $journal_entry_id From-branch (creditor) journal
  * @property int|null $journal_entry_id_debtor To-branch (debtor) journal
@@ -58,7 +58,8 @@ class WarehouseTransfer extends Model
         'from_branch_id',
         'to_branch_id',
         'is_interbranch',
-        'total_amount',
+        // 'total_amount' is intentionally absent — it is a computed accessor
+        // (sum of items.qty * items.rate), not a persisted column.
         'status',
         'journal_entry_id',
         'journal_entry_id_debtor',
@@ -75,7 +76,7 @@ class WarehouseTransfer extends Model
         'is_interbranch' => 'boolean',
         'is_reversed' => 'boolean',
         'reversed_at' => 'datetime',
-        'total_amount' => 'decimal:2',
+        // 'total_amount' has no cast — it is a computed accessor (see below).
         'from_warehouse_id' => 'integer',
         'to_warehouse_id' => 'integer',
         'from_branch_id' => 'integer',
@@ -124,4 +125,19 @@ class WarehouseTransfer extends Model
     public function isDraft(): bool { return $this->status === 'draft'; }
     public function isConfirmed(): bool { return $this->status === 'confirmed'; }
     public function isCancelled(): bool { return $this->status === 'cancelled'; }
+
+    /**
+     * Computed total = sum(qty * rate) over loaded line items.
+     *
+     * The warehouse_transfers table has NO total_amount column by design —
+     * line items (warehouse_transfer_items.qty * rate) are the source of
+     * truth. Callers must eager-load 'items' to avoid an N+1. All current
+     * callers (index controller, create/confirm services) already do.
+     *
+     * @return float
+     */
+    public function getTotalAmountAttribute(): float
+    {
+        return (float) $this->items->sum(fn ($item) => (float) $item->qty * (float) $item->rate);
+    }
 }

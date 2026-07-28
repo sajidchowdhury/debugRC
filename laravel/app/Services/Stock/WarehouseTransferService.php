@@ -115,7 +115,7 @@ class WarehouseTransferService
 
         return DB::transaction(function () use (
             $transferCode, $data, $fromWarehouseId, $toWarehouseId,
-            $fromBranchId, $toBranchId, $isInterbranch, $totalAmount, $validatedItems
+            $fromBranchId, $toBranchId, $isInterbranch, $validatedItems
         ) {
             $transferId = DB::table('warehouse_transfers')->insertGetId([
                 'transfer_code' => $transferCode,
@@ -125,7 +125,8 @@ class WarehouseTransferService
                 'from_branch_id' => $fromBranchId,
                 'to_branch_id' => $toBranchId,
                 'is_interbranch' => $isInterbranch,
-                'total_amount' => round($totalAmount, 2),
+                // No total_amount column — derived from items.qty * rate via
+                // the WarehouseTransfer::getTotalAmountAttribute() accessor.
                 'status' => 'draft',
                 'is_reversed' => false,
                 'notes' => $data['notes'] ?? null,
