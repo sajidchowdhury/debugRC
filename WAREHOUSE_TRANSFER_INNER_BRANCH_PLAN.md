@@ -5,7 +5,7 @@
 **Scope:** Warehouse-to-Warehouse Transfer (inner-branch / intra-branch only)  
 **Context:** Branch-A has 10 warehouses, Branch-B has 5 warehouses. Transfers are only allowed between warehouses that belong to the **same branch**. Cross-branch transfers are handled by the separate **Branch Demand** module, not by this module.  
 **Target stack:** Laravel 11 + PostgreSQL 16  
-**Current state:** Phase 6.5 + **Phase 1 COMPLETE** + **Phase 2 COMPLETE** + **Phase 3 COMPLETE** + **Phase 4 COMPLETE** + **Phase 5 COMPLETE** (UI parity & UX improvements)
+**Current state:** Phase 6.5 + **Phase 1 COMPLETE** + **Phase 2 COMPLETE** + **Phase 3 COMPLETE** + **Phase 4 COMPLETE** + **Phase 5 COMPLETE** (UI parity & UX improvements) + **Phase 6 COMPLETE** (Export, Reporting & Branch Ledger Settlement)
 
 ---
 
@@ -42,8 +42,8 @@ The current Laravel implementation (Phase 6.5) introduced a **two-phase draft �
 | G2 | No pipeline-aware stock availability check — uses simple `getWarehouseQty` instead of `StockAvailabilityService` | **High → ✅ FIXED** | Over-commitment of stock (transfers + sales competing for same qty) |
 | G3 | No reversal ordering — dest IN and source OUT reversed in arbitrary order | **High → ✅ FIXED** | Insufficient stock at receiver warehouse during reversal |
 | G4 | No dedicated audit trail — service uses `DB::table()` bypassing Eloquent events | **Medium → ✅ FIXED** | No audit log for who did what when |
-| G5 | No CSV export — legacy has it, Laravel doesn't | **Medium** | Operational gap |
-| G6 | No branch ledger settlement mechanism visible | **Medium** | Intercompany balances remain unsettled |
+| G5 | No CSV export — legacy has it, Laravel doesn't | **Medium → ✅ FIXED** | Operational gap |
+| G6 | No branch ledger settlement mechanism visible | **Medium → ✅ FIXED (by Phase 1)** | Same-branch enforcement = no intercompany GL needed |
 | G7 | No test coverage for WarehouseTransfer workflow | **High** | Regressions undetected |
 | G8 | No API routes for warehouse transfers | **Low** | Mobile/API users cannot create/confirm transfers |
 | G9 | `WarehouseTransfer` model doesn't apply `BranchScope` global scope | **Medium → ✅ FIXED** | Branch isolation relies solely on RLS (single-layer defense) |
@@ -1112,10 +1112,10 @@ Add a summary report showing:
 
 ### Verification
 
-- [ ] CSV export generates correct file with all columns
-- [ ] CSV respects current filters
-- [ ] BOM character present for Excel compatibility
-- [ ] Summary report shows correct aggregates
+- [x] CSV export generates correct file with all columns
+- [x] CSV respects current filters
+- [x] BOM character present for Excel compatibility
+- [x] Summary report shows correct aggregates
 
 ---
 

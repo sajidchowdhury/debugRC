@@ -8,7 +8,7 @@ use App\Traits\AuditableMasterData;
 use App\Models\Scopes\WarehouseTransferBranchScope;
 
 /**
- * Warehouse Transfer — Phase 6.5 + Phase 1 + Phase 3 + Phase 4.
+ * Warehouse Transfer — Phase 6.5 + Phase 1 + Phase 3 + Phase 4 + Phase 6.
  *
  * Two-phase flow:
  *   1. Create (draft): header + items, NO stock movement, NO GL
@@ -161,6 +161,11 @@ class WarehouseTransfer extends Model
     public function debtorJournalEntry(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'journal_entry_id_debtor');
+    }
+
+    public function createdBy(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(\App\Models\User::class, 'created_by');
     }
 
     public function isDraft(): bool { return $this->status === 'draft'; }

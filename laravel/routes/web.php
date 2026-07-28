@@ -519,6 +519,10 @@ Route::middleware('auth')->group(function () {
     // ============================================================
     Route::prefix('admin/warehouse-transfers')->name('admin.warehouse-transfers.')->group(function () {
         Route::get('product-stock', [WarehouseTransferController::class, 'getProductStock'])->name('product-stock');
+        // Phase 6.3 — Transfer Summary Report routes
+        Route::get('summary', [WarehouseTransferController::class, 'summary'])->name('summary');
+        Route::post('summary-data', [WarehouseTransferController::class, 'summaryData'])->name('summary-data');
+        Route::get('export', [WarehouseTransferController::class, 'export'])->name('export');
         Route::get('{id}/print', [WarehouseTransferController::class, 'print'])->name('print');
         Route::post('{id}/confirm', [WarehouseTransferController::class, 'confirm'])->name('confirm');
         Route::post('{id}/cancel', [WarehouseTransferController::class, 'cancel'])->name('cancel');

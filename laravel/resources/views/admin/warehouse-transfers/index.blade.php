@@ -56,6 +56,12 @@
             <a href="{{ route('admin.warehouse-transfers.reconcile') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-balance-scale me-1"></i> Reconcile
             </a>
+            <a href="{{ route('admin.warehouse-transfers.summary') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-chart-bar me-1"></i> Summary
+            </a>
+            <a href="{{ route('admin.warehouse-transfers.export') }}" class="btn btn-outline-light btn-sm" id="exportCsvBtn">
+                <i class="fas fa-file-csv me-1"></i> Export CSV
+            </a>
         </div>
     </header>
 
@@ -323,6 +329,12 @@ $(function () {
         ordering: true,
         dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
         language: { search: 'Filter rows:', emptyTable: 'No warehouse transfers on this page.' }
+    });
+
+    // Update CSV export link with current filter params
+    $('#exportCsvBtn').on('click', function(e) {
+        var params = $('#dataTable').closest('.container-fluid').find('form').first().serialize();
+        this.href = this.href.split('?')[0] + '?' + params;
     });
 });
 </script>

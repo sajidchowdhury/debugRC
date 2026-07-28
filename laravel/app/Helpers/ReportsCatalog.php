@@ -53,6 +53,7 @@ class ReportsCatalog
                 'reports' => [
                     self::r('product_stock_analysis', 'Product Stock Analysis', 'In/out movement with opening & closing', 'admin.reports.productStockAnalysis', 'fa-microscope', ['movement'], 30),
                     self::r('product_movement', 'Product Movement', 'Chronological ledger for one SKU', 'admin.reports.productMovement', 'fa-route', ['movement'], 30),
+                    self::r('warehouse_transfer_summary', 'Warehouse Transfer Summary', 'Period aggregates, top products, warehouse pairs, and trends', 'admin.warehouse-transfers.summary', 'fa-right-left', ['transfer', 'warehouse', 'export'], 30, false, 'range'),
                 ],
             ],
             [

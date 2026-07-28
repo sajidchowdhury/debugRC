@@ -10,14 +10,16 @@ use App\Rules\WarehouseTransferItemHasAvailableStock;
 use App\Services\Stock\WarehouseTransferService;
 use App\Services\Stock\WarehouseTransferAuditService;
 use App\Services\Stock\WarehouseTransferAuditLogger;
+use App\Services\Stock\WarehouseTransferSummaryReport;
 use App\Services\Stock\StockService;
 use App\Services\Stock\StockAvailabilityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Response;
 
 /**
- * Warehouse Transfer Controller — Phase 6.5 + Phase 1 + Phase 2 + Phase 4 + Phase 5.
+ * Warehouse Transfer Controller — Phase 6.5 + Phase 1 + Phase 2 + Phase 4 + Phase 5 + Phase 6.
  *
  * Two-phase flow:
  *   - create / store: create a draft transfer (no stock, no GL)
@@ -47,6 +49,12 @@ use Illuminate\Support\Facades\Log;
  *   - Print view for transfer documents
  *   - Same-branch-only UI (interbranch filters removed, route labels updated)
  *   - Same-branch info banner on show page
+ *
+ * Phase 6 — Export, Reporting & Branch Ledger Settlement:
+ *   - export(): CSV export with filters + BOM for Excel compatibility
+ *   - summary(): Transfer Summary Report page (branch aggregates, top products, pairs, trends)
+ *   - summaryData(): AJAX endpoint for summary report data
+ *   - Branch ledger settlement gap closed by Phase 1: same-branch = no intercompany GL
  */
 class WarehouseTransferController extends Controller
 {
@@ -55,7 +63,8 @@ class WarehouseTransferController extends Controller
         private StockService $stockService,
         private StockAvailabilityService $stockAvailabilityService,
         private WarehouseTransferAuditService $auditService,
-        private WarehouseTransferAuditLogger $auditLogger
+        private WarehouseTransferAuditLogger $auditLogger,
+        private WarehouseTransferSummaryReport $summaryReport
     ) {}
 
     /**
@@ -356,6 +365,97 @@ class WarehouseTransferController extends Controller
         ]);
     }
 
+    /**
+     * Phase 6.1: Export filtered warehouse transfers as CSV.
+     *
+     * Takes the same filter parameters as index() and streams a CSV
+     * with BOM for Excel compatibility. Uses cursor() for memory-efficient
+     * iteration, following the pattern in CsvExportController::exportInvoices().
+     *
+     * Columns: Date, Code, From WH, To WH, Branch, Items, Amount, Demand,
+     *          Reversed, Status, Created By
+     */
+    public function export(Request $request)
+    {
+        $userBranchId = $this->getUserBranchId();
+
+        $query = WarehouseTransfer::with(['fromWarehouse.branch', 'toWarehouse.branch', 'items', 'createdBy'])
+            ->when($userBranchId, function ($q) use ($userBranchId) {
+                $q->where(function ($subQ) use ($userBranchId) {
+                    $subQ->where('from_branch_id', $userBranchId)
+                         ->orWhere('to_branch_id', $userBranchId);
+                });
+            })
+            ->when($request->input('from_date'), fn($q, $d) => $q->where('transfer_date', '>=', $d))
+            ->when($request->input('to_date'), fn($q, $d) => $q->where('transfer_date', '<=', $d))
+            ->when($request->input('from_warehouse_id'), fn($q, $wid) => $q->where('from_warehouse_id', $wid))
+            ->when($request->input('to_warehouse_id'), fn($q, $wid) => $q->where('to_warehouse_id', $wid))
+            ->when($request->input('status'), fn($q, $s) => $q->where('status', $s))
+            ->when($request->input('search'), function ($q, $search) {
+                $q->where('transfer_code', 'ILIKE', "%{$search}%");
+            })
+            ->orderBy('transfer_date', 'desc')
+            ->orderBy('id', 'desc');
+
+        $transfers = $query->cursor();
+
+        $filename = 'WarehouseTransfers_' . now()->format('Y-m-d_His') . '.csv';
+
+        $headers = [
+            'Content-Type'        => 'text/csv; charset=utf-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Pragma'              => 'no-cache',
+            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
+            'Expires'             => '0',
+        ];
+
+        $callback = function () use ($transfers) {
+            $output = fopen('php://output', 'w');
+
+            // BOM for Excel UTF-8 compatibility
+            fprintf($output, chr(0xEF) . chr(0xBB) . chr(0xBF));
+
+            // Header row
+            fputcsv($output, [
+                'Date',
+                'Code',
+                'From WH',
+                'To WH',
+                'Branch',
+                'Items',
+                'Amount',
+                'Demand',
+                'Reversed',
+                'Status',
+                'Created By',
+            ]);
+
+            foreach ($transfers as $t) {
+                $branchName = $t->fromWarehouse?->branch?->branch_name
+                    ?? $t->toWarehouse?->branch?->branch_name
+                    ?? '';
+
+                fputcsv($output, [
+                    $t->transfer_date ? \Carbon\Carbon::parse($t->transfer_date)->format('d-m-Y') : '',
+                    $t->transfer_code,
+                    $t->fromWarehouse?->warehouse_name ?? '',
+                    $t->toWarehouse?->warehouse_name ?? '',
+                    $branchName,
+                    $t->items->count(),
+                    number_format((float) $t->items->sum(fn ($item) => (float) $item->qty * (float) $item->rate), 2, '.', ''),
+                    $t->branch_demand_id ? 'Yes' : 'No',
+                    $t->is_reversed ? 'Yes' : 'No',
+                    $t->status,
+                    $t->createdBy?->name ?? '',
+                ]);
+            }
+
+            fclose($output);
+        };
+
+        return Response::stream($callback, 200, $headers);
+    }
+
     // ========================================================================
     // Phase 4 — Audit Trail & Data Integrity
     // ========================================================================
@@ -450,6 +550,68 @@ class WarehouseTransferController extends Controller
             ]);
             return response()->json([
                 'error' => 'Failed to run reconciliation: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    // ========================================================================
+    // Phase 6.3 — Transfer Summary Report
+    // ========================================================================
+
+    /**
+     * Summary report page — date range filter + branch dropdown.
+     * Renders the summary view; data is fetched via AJAX by the view.
+     */
+    public function summary()
+    {
+        $userBranchId = $this->getUserBranchId();
+
+        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
+
+        return view('admin.warehouse-transfers.summary', [
+            'title'        => 'Transfer Summary Report',
+            'userBranchId' => $userBranchId,
+            'branches'     => $branches,
+        ]);
+    }
+
+    /**
+     * AJAX: run summary report and return JSON.
+     * Accepts date_from, date_to, and optional branch_id (for admin).
+     */
+    public function summaryData(Request $request)
+    {
+        $validated = $request->validate([
+            'date_from' => 'required|date',
+            'date_to'   => 'required|date|after_or_equal:date_from',
+            'branch_id' => 'nullable|integer|exists:branches,id',
+        ]);
+
+        // Determine effective branch: admin can pick any; non-admin uses their own
+        $userBranchId = $this->getUserBranchId();
+        $effectiveBranchId = $userBranchId; // default: user's branch scope
+
+        // Admin can override to see a specific branch or all (null)
+        if ($userBranchId === null) {
+            $effectiveBranchId = $validated['branch_id'] ?? null;
+        }
+
+        try {
+            $results = $this->summaryReport->getSummary(
+                $effectiveBranchId,
+                $validated['date_from'],
+                $validated['date_to']
+            );
+            return response()->json($results);
+        } catch (\Throwable $e) {
+            Log::error('WarehouseTransferSummaryReport getSummary failed', [
+                'error'     => $e->getMessage(),
+                'branch_id' => $effectiveBranchId,
+                'date_from' => $validated['date_from'],
+                'date_to'   => $validated['date_to'],
+            ]);
+            return response()->json([
+                'error' => 'Failed to run summary report: ' . $e->getMessage(),
             ], 500);
         }
     }
