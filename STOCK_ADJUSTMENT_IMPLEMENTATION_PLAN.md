@@ -58,9 +58,9 @@ This plan defines **10 phases** that close these gaps and deliver a Stock Adjust
 | G3 | Non-pipeline-aware availability for decreases | Medium | Decrease can drain stock soft-promised to sales |
 | G4 | Thin health-check (4 inline checks vs Legacy's 6-section checklist) | Medium | Integrity defects invisible |
 | G5 | No approval workflow / no maker-checker | **Critical** ✅ FIXED | No segregation of duties for a financial-correction tool |
-| G6 | No reason categorization (opening/migration/UOM/legacy) | High | Cannot report or filter by correction type |
+| G6 | No reason categorization (opening/migration/UOM/legacy) | High ✅ FIXED | Cannot report or filter by correction type |
 | G7 | No UOM handling on line items | High | Carton/Pcs confusion → 10x stock errors |
-| G8 | `AuditableMasterData` dead code; no audit log table/logger | High | No "who did what when" for financial corrections |
+| G8 | `AuditableMasterData` dead code; no audit log table/logger | High ✅ FIXED | No "who did what when" for financial corrections |
 | G9 | No `confirmed_by`/`confirmed_at`; `confirm_reason` discarded | High ✅ FIXED | Cannot attribute the posting action |
 | G10 | Reversal `transaction_date` = today, not original date | Medium | Back-dated reversal distorts historical reports |
 | G11 | Duplicate product per adjustment (no UNIQUE); reversal `.first()` | Medium | Partial reversal leaves orphaned stock_transaction |
@@ -69,7 +69,7 @@ This plan defines **10 phases** that close these gaps and deliver a Stock Adjust
 | G14 | No test suite for the module | High | Regressions ship undetected |
 | G15 | Draft cancels silently discard `cancel_reason` | Low ✅ FIXED | Lost context for abandoned drafts |
 | G16 | `getProductRate` endpoint not branch-validated | Low ✅ FIXED | Minor cross-branch info leak |
-| G17 | `opening_balance` reference_type never used | Medium | Opening balances conflated with corrections in ledger |
+| G17 | `opening_balance` reference_type never used | Medium ✅ FIXED | Opening balances conflated with corrections in ledger |
 | G18 | No print/PDF voucher | Low | No physical audit artifact |
 | G19 | No stale-draft cleanup automation | Low | Drafts accumulate indefinitely |
 
@@ -453,7 +453,7 @@ CREATE TABLE warehouse_stock (                                    -- snapshot/ca
 | 1 | Authorization & Role Enforcement | 1 day | **Critical** ✅ DONE | none |
 | 2 | Reason Categorization & Opening-Balance Reference | 1-2 days | High ✅ DONE | none |
 | 3 | Approval Workflow & Maker-Checker | 3-4 days | **Critical** ✅ DONE | 1, 2 |
-| 4 | Dedicated Audit Log & Logger | 2 days | High | 3 |
+| 4 | Dedicated Audit Log & Logger | 2 days | High ✅ DONE | 3 |
 | 5 | Unit-of-Measure (UOM) Handling | 3 days | High | none (parallel with 1-4) |
 | 6 | Pipeline-Aware Availability, Reversal Safety & Date Integrity | 2-3 days | High | 2 |
 | 7 | Reconciliation, Drift Detection & Data-Hygiene Fixes | 2 days | Medium | 4, 6 |
@@ -765,7 +765,7 @@ Note: PHP not installed in this sandbox (Node/Next.js env), so syntax verified b
 
 **Priority:** High
 **Duration:** 2 days
-**Status:** ⏳ Pending
+**Status:** ✅ COMPLETED (2025-07-30)
 **Goal:** Replace the dead `AuditableMasterData` trait with a purpose-built `stock_adjustment_audit_log` table and `StockAdjustmentAuditLogger` that captures every lifecycle action with actor, timestamp, before/after snapshot, and IP.
 
 ### 4.1 Schema
@@ -823,10 +823,34 @@ class StockAdjustmentAuditLogger
 - Render a chronological timeline of audit entries (actor, role, action badge, timestamp, payload diff, IP). Mirror the Warehouse Transfer show-page audit section.
 
 ### Verification Checklist (Phase 4)
-- [ ] Every lifecycle action (create/submit/approve/reject/confirm/cancel) writes exactly one `stock_adjustment_audit_log` row.
-- [ ] The actor, role, IP, and payload are captured.
-- [ ] The show page renders the timeline in chronological order.
-- [ ] Branch isolation: a non-admin cannot see another branch's audit rows.
+- [x] Every lifecycle action (create/submit/approve/reject/confirm/cancel) writes exactly one `stock_adjustment_audit_log` row. ✅ (all 6 lifecycle methods call `$this->audit->log()` inside their DB::transaction; verified by grep — 6 call sites).
+- [x] The actor, role, IP, and payload are captured. ✅ (actor_id from `auth()->id()`, actor_role from `User::getRole()`, ip_address + user_agent from `request()`, payload as jsonb).
+- [x] The show page renders the timeline in chronological order. ✅ (`auditLogs` relation `orderBy('id')` — monotonic with created_at; timeline card rendered on show.blade.php).
+- [x] Branch isolation: a non-admin cannot see another branch's audit rows. ✅ (PostgreSQL RLS on `stock_adjustment_audit_log` scoped by branch_id + admin bypass; branch_id denormalized at insert time; the adjustment itself is already branch-gated via `findOrFail` + `authorize('view')`).
+
+### Implementation Summary (Phase 4)
+
+**Files created:**
+- `laravel/database/migrations/2025_07_30_000001_create_stock_adjustment_audit_log.php` — append-only `stock_adjustment_audit_log` table (bigserial PK, FK → stock_adjustments ON DELETE CASCADE, `branch_id` NOT NULL for RLS, 13-value action CHECK constraint, jsonb payload, ip_address + user_agent) + 4 indexes (timeline `idx_saal_adjustment`, partial-critical `idx_saal_critical`, branch `idx_saal_branch`, actor `idx_saal_actor`) + full RLS policy set (select/insert/update/delete/admin with admin bypass). Idempotent (`Schema::hasTable` + `DROP POLICY IF EXISTS`). Mirrors the proven `stock_take_audit_log` migration.
+- `laravel/app/Services/Stock/StockAdjustmentAuditLogger.php` — thin, side-effect-free writer. `log(StockAdjustment $adj, string $action, array $payload, ?int $actorId)` resolves actor_id / actor_role / ip / user_agent from request context. No-op (returns, does NOT throw) on missing identity — a logging failure can never break a stock-adjustment transition. Does NOT start its own transaction (caller's transaction is the unit of work, so a rolled-back confirm also rolls back its audit row).
+- `laravel/app/Models/StockAdjustmentAuditLog.php` — Eloquent model. `payload` cast to array, `UPDATED_AT = null` (append-only), `actor()` belongsTo relationship, `actionLabel()` / `actionBadge()` / `isCritical()` helpers + `ACTIONS` / `ACTION_LABELS` / `ACTION_BADGES` constants powering the timeline UI.
+
+**Files modified:**
+- `laravel/database/sql/03_stock.sql` — fresh-install parity (inline CREATE TABLE + 4 indexes + CHECK constraint, after the `stock_take_audit_log` block).
+- `laravel/app/Services/Stock/StockAdjustmentService.php` — constructor injects `StockAdjustmentAuditLogger` (4th param); all 6 lifecycle methods (create / submit / approve / reject / confirm / cancel) now write exactly one audit row inside their `DB::transaction`. Cancel captures `prior_status` + `reversed` flag; submit captures `auto_approved` flag; confirm captures `journal_entry_id` + `reference_type`.
+- `laravel/app/Models/StockAdjustment.php` — `auditLogs()` HasMany relationship (`orderBy('id')`); comment on the `AuditableMasterData` trait explaining it is dead (service writes via `DB::table()`, bypassing Eloquent events) but left in place for safety, superseded by the dedicated logger.
+- `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` — `show()` eager-loads `auditLogs.actor` + passes `$auditLogs` to the view.
+- `laravel/resources/views/admin/stock-adjustments/show.blade.php` — audit-timeline card (action badge, actor username + role badge, timestamp, payload key/value badges, IP + user-agent), rendered chronologically. Mirrors the Warehouse Transfer audit event-history UI.
+
+**Key design decisions:**
+1. `branch_id` is NOT NULL (deviation from the plan's nullable suggestion) to match the proven `stock_take_audit_log` pattern and ensure RLS always has a value to compare — the logger always populates it from `$adj->branch_id`, which is always set (resolved from the warehouse at create time).
+2. `actor_id` is a plain bigint with no FK (mirrors the sibling `confirmed_by` / `reversed_by` convention) so a deleted user does not orphan the audit row.
+3. `actor_role` is snapshotted at action time — roles can change later (a manager is demoted), but the audit row must keep the role held when the action was performed.
+4. Auto-approval (submit below threshold) writes ONE `submit` row with `auto_approved: true` in the payload — NOT a separate `approve` row, because no human approver acted (the system mediated the auto-approval).
+5. The `reverse` action vocab is reserved for a future explicit un-cancel/reverse flow (Phase 6); a confirmed-cancel writes ONE `cancel` row with `reversed: true` in the payload.
+6. The logger resolves `ip_address` + `user_agent` from `request()` (null-safe via `request()?->ip()` / `?->userAgent()`), so console/queue/tinker calls without an HTTP request store null rather than throwing. `user_agent` is clamped to varchar(255).
+
+**Gap closed:** G8 (`AuditableMasterData` dead code; no audit log table/logger → FIXED). Also retrospectively marked G6 + G17 as ✅ FIXED (Phase 2 omissions in the gap table).
 
 ---
 

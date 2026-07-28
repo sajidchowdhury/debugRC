@@ -11,7 +11,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Stock Adjustment Service — Phase 6.3 + Phase 3 (approval workflow).
+ * Stock Adjustment Service — Phase 6.3 + Phase 3 (approval workflow)
+ *                            + Phase 4 (dedicated audit log).
  *
  * Phase 3 lifecycle (maker-checker):
  *   1. createAdjustment(): creates header + items (status=draft). NO stock movement. NO GL.
@@ -31,13 +32,21 @@ use Illuminate\Support\Facades\Log;
  *
  * All operations are wrapped in DB::transaction() — if GL posting fails,
  * the stock movement rolls back too (atomicity contract from avg_cost_rule.md §4).
+ *
+ * Phase 4 (audit log): every lifecycle method writes exactly one
+ * stock_adjustment_audit_log row via StockAdjustmentAuditLogger, inside the
+ * same DB::transaction as the data change — so a rolled-back confirm also
+ * rolls back its audit row. This replaces the dead AuditableMasterData
+ * trait on the model (which never fired because this service writes via
+ * DB::table(), bypassing Eloquent model events).
  */
 class StockAdjustmentService
 {
     public function __construct(
         private StockService $stockService,
         private JournalPostingService $journalPosting,
-        private StockAdjustmentPolicyService $policy
+        private StockAdjustmentPolicyService $policy,
+        private StockAdjustmentAuditLogger $audit
     ) {}
 
     /**
@@ -155,7 +164,20 @@ class StockAdjustmentService
             }
             DB::table('stock_adjustment_items')->insert($itemRows);
 
-            return StockAdjustment::with('items.product', 'warehouse.branch')->find($adjustmentId);
+            $adjustment = StockAdjustment::with('items.product', 'warehouse.branch')->find($adjustmentId);
+
+            // Phase 4 — write one audit row for the create action, inside
+            // this transaction so it commits/rolls back with the data change.
+            $this->audit->log($adjustment, 'create', [
+                'adjustment_code'    => $adjustmentCode,
+                'adjustment_type'    => $adjustmentType,
+                'adjustment_category'=> $adjustmentCategory,
+                'warehouse_id'       => $warehouseId,
+                'total_amount'       => round($totalAmount, 2),
+                'items_count'        => count($validatedItems),
+            ]);
+
+            return $adjustment;
         });
     }
 
@@ -228,7 +250,20 @@ class StockAdjustmentService
                     ]);
             }
 
-            return StockAdjustment::with('items.product', 'warehouse.branch')->find($adjustmentId);
+            $adjustment = StockAdjustment::with('items.product', 'warehouse.branch')->find($adjustmentId);
+
+            // Phase 4 — one audit row for the submit action. When the policy
+            // auto-advanced to 'approved' (below threshold), record that in
+            // the payload so the timeline shows the auto-approval — we do
+            // NOT write a separate 'approve' row because no human approver
+            // acted (the system mediated the auto-approval).
+            $this->audit->log($adjustment, 'submit', [
+                'comment'            => $comment,
+                'auto_approved'      => !$requiresApproval,
+                'requires_approval'  => $requiresApproval,
+            ]);
+
+            return $adjustment;
         });
     }
 
@@ -290,7 +325,14 @@ class StockAdjustmentService
                     'updated_at'         => now(),
                 ]);
 
-            return StockAdjustment::with('items.product', 'warehouse.branch')->find($adjustmentId);
+            $adjustment = StockAdjustment::with('items.product', 'warehouse.branch')->find($adjustmentId);
+
+            // Phase 4 — one audit row for the approve action.
+            $this->audit->log($adjustment, 'approve', [
+                'comment' => $comment,
+            ]);
+
+            return $adjustment;
         });
     }
 
@@ -349,7 +391,14 @@ class StockAdjustmentService
                     'updated_at'         => now(),
                 ]);
 
-            return StockAdjustment::with('items.product', 'warehouse.branch')->find($adjustmentId);
+            $adjustment = StockAdjustment::with('items.product', 'warehouse.branch')->find($adjustmentId);
+
+            // Phase 4 — one audit row for the reject action.
+            $this->audit->log($adjustment, 'reject', [
+                'comment' => $comment,
+            ]);
+
+            return $adjustment;
         });
     }
 
@@ -436,8 +485,22 @@ class StockAdjustmentService
                     'updated_at'      => now(),
                 ]);
 
-            return StockAdjustment::with('items.product', 'warehouse.branch', 'journalEntry')
+            $adjustment = StockAdjustment::with('items.product', 'warehouse.branch', 'journalEntry')
                 ->find($adjustmentId);
+
+            // Phase 4 — one audit row for the confirm action (the high-impact
+            // transition: stock moved + GL posted). Captures the journal
+            // entry id + stock-ledger reference_type so the audit row is
+            // self-contained for forensic review.
+            $this->audit->log($adjustment, 'confirm', [
+                'confirm_reason'   => $confirmReason ? trim($confirmReason) : null,
+                'journal_entry_id' => $journalEntryId,
+                'total_amount'     => (float) $adjustment->total_amount,
+                'items_count'      => $adjustment->items->count(),
+                'reference_type'   => $referenceType,
+            ]);
+
+            return $adjustment;
         });
     }
 
@@ -479,7 +542,13 @@ class StockAdjustmentService
             // submitted / approved adjustments can be cancelled (abandoned).
             // No other terminal states exist.
 
-            if ($adjustment->isConfirmed()) {
+            // Phase 4 — capture the pre-cancel status so the audit payload
+            // records whether stock+GL was reversed (confirmed-cancel) or the
+            // adjustment was simply abandoned (draft/submitted/approved).
+            $priorStatus  = $adjustment->status;
+            $wasConfirmed = $adjustment->isConfirmed();
+
+            if ($wasConfirmed) {
                 // Reverse the GL journal entry.
                 if ($adjustment->journal_entry_id) {
                     $this->journalPosting->reverseJournalEntry(
@@ -536,8 +605,21 @@ class StockAdjustmentService
                     'updated_at'    => now(),
                 ]);
 
-            return StockAdjustment::with('items.product', 'warehouse.branch')
+            $adjustment = StockAdjustment::with('items.product', 'warehouse.branch')
                 ->find($adjustmentId);
+
+            // Phase 4 — one audit row for the cancel action. 'reversed' in
+            // the payload records whether stock+GL was rolled back (a
+            // confirmed-cancel). We do NOT write a separate 'reverse' row;
+            // the 'reverse' action vocab is reserved for a future explicit
+            // un-cancel/reverse flow (Phase 6).
+            $this->audit->log($adjustment, 'cancel', [
+                'cancel_reason' => $reason,
+                'reversed'      => $wasConfirmed,
+                'prior_status'  => $priorStatus,
+            ]);
+
+            return $adjustment;
         });
     }
 

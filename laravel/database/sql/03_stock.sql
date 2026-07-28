@@ -359,6 +359,40 @@ CREATE INDEX idx_stal_branch ON stock_take_audit_log(branch_id, created_at);
 -- "Actions by user" report.
 CREATE INDEX idx_stal_actor ON stock_take_audit_log(actor_id, created_at);
 
+-- Phase 4 (Stock Adjustment plan): dedicated audit log.
+-- Replaces the dead AuditableMasterData trait (which never fires because
+-- StockAdjustmentService writes header/items via DB::table(), bypassing
+-- Eloquent events). Every lifecycle transition (create/submit/approve/reject/
+-- confirm/cancel) writes exactly one row, inside the same DB::transaction as
+-- the data change. branch_id is denormalized from stock_adjustments.branch_id
+-- so RLS can scope reads by branch without a join. RLS policies are created in
+-- the migration; see 2025_07_30_000001_create_stock_adjustment_audit_log.php.
+CREATE TABLE stock_adjustment_audit_log (
+    id bigserial PRIMARY KEY,
+    stock_adjustment_id integer NOT NULL REFERENCES stock_adjustments(id) ON DELETE CASCADE,
+    branch_id integer NOT NULL REFERENCES branches(id),
+    action varchar(40) NOT NULL CHECK (
+        action IN ('create','update','submit','approve','reject','confirm',
+                   'cancel','reverse','force_confirm','reopen','delete','export','print')
+    ),
+    actor_id bigint,
+    actor_role varchar(40),
+    payload jsonb,
+    ip_address varchar(45),
+    user_agent varchar(255),
+    created_at timestamp(0) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+-- Timeline query: ordered list of audit rows for one adjustment (show page).
+CREATE INDEX idx_saal_adjustment ON stock_adjustment_audit_log(stock_adjustment_id, created_at);
+-- Partial index: only the "critical" transitions (confirm/cancel/reverse/
+-- force_confirm). Powers the high-impact-events filter.
+CREATE INDEX idx_saal_critical ON stock_adjustment_audit_log(stock_adjustment_id)
+    WHERE action IN ('confirm','cancel','reverse','force_confirm');
+-- Branch filter for the global audit screen.
+CREATE INDEX idx_saal_branch ON stock_adjustment_audit_log(branch_id, created_at);
+-- "Actions by user" report.
+CREATE INDEX idx_saal_actor ON stock_adjustment_audit_log(actor_id, created_at);
+
 -- Phase 4 (Stock Take plan): approval-workflow configuration knobs.
 -- Lightweight key/value table: one row per policy key. The value is jsonb
 -- so a single column can carry bool / numeric / string / array (approver_roles

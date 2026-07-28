@@ -186,6 +186,7 @@ class StockAdjustmentController extends Controller
         $adjustment = StockAdjustment::with([
             'items.product', 'warehouse.branch', 'branch', 'journalEntry.lines.ledger',
             'submittedBy', 'approvedBy', 'confirmedBy',
+            'auditLogs.actor',  // Phase 4 — audit timeline (RLS-scoped by branch)
         ])->findOrFail($id);
 
         // Phase 1: defense-in-depth — role + branch check via Policy.
@@ -219,6 +220,8 @@ class StockAdjustmentController extends Controller
             'title' => 'Adjustment ' . $adjustment->adjustment_code,
             'adjustment' => $adjustment,
             'stockTransactions' => $stockTransactions,
+            // Phase 4 — the audit timeline (chronological, RLS-scoped by branch).
+            'auditLogs' => $adjustment->auditLogs,
             // Policy flags for the action buttons.
             'requiresApproval' => $requiresApproval,
             'canSubmit'  => $user ? $this->policy->canSubmit($user) : false,

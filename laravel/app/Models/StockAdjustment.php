@@ -51,6 +51,15 @@ use App\Traits\AuditableMasterData;
  */
 class StockAdjustment extends Model
 {
+    // Phase 4 — AuditableMasterData is DEAD for this model: the service
+    // writes header/items via DB::table(), bypassing the Eloquent model
+    // events the trait hooks into (so its created/updated/saved listeners
+    // never fire). It is left in place for safety (removing it could affect
+    // other code paths that touch the model directly) but the source of
+    // truth for the audit trail is now the dedicated stock_adjustment_audit_log
+    // table, written explicitly by StockAdjustmentAuditLogger inside the
+    // same DB::transaction as each lifecycle transition. See
+    // app/Models/StockAdjustmentAuditLog and the auditLogs() relation below.
     use SoftDeletes, AuditableMasterData;
 
     protected $table = 'stock_adjustments';
@@ -228,6 +237,19 @@ class StockAdjustment extends Model
     public function confirmedBy(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(User::class, 'confirmed_by');
+    }
+
+    /**
+     * Phase 4 — the dedicated audit-log rows for this adjustment (the real
+     * audit trail; supersedes the dead AuditableMasterData trait). Ordered
+     * chronologically by id (monotonic with created_at) for the show-page
+     * timeline. Written explicitly by StockAdjustmentAuditLogger inside the
+     * same DB::transaction as each lifecycle transition.
+     */
+    public function auditLogs(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(StockAdjustmentAuditLog::class, 'stock_adjustment_id')
+            ->orderBy('id');
     }
 
     /**

@@ -460,6 +460,61 @@
                     </div>
                 </div>
             @endif
+
+            {{-- Audit timeline (Phase 4) --}}
+            @if (isset($auditLogs) && $auditLogs->isNotEmpty())
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-clock-rotate-left me-1 text-secondary"></i> Audit timeline
+                        </h2>
+                        <span class="badge bg-secondary-subtle text-secondary">{{ $auditLogs->count() }} event(s)</span>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="list-group list-group-flush">
+                            @foreach ($auditLogs as $log)
+                                <div class="list-group-item px-3 py-2">
+                                    <div class="d-flex align-items-start">
+                                        <div class="me-3">
+                                            {!! \App\Models\StockAdjustmentAuditLog::actionBadge($log->action) !!}
+                                        </div>
+                                        <div class="flex-grow-1">
+                                            <div class="small">
+                                                @if ($log->actor)
+                                                    <strong>{{ $log->actor->username ?? ('User #' . $log->actor_id) }}</strong>
+                                                @elseif ($log->actor_id)
+                                                    <strong>User #{{ $log->actor_id }}</strong>
+                                                @else
+                                                    <strong>System</strong>
+                                                @endif
+                                                @if ($log->actor_role)
+                                                    <span class="badge bg-light text-muted ms-1">{{ $log->actor_role }}</span>
+                                                @endif
+                                                &mdash; <span class="text-muted">{{ \Carbon\Carbon::parse($log->created_at)->format('d M Y, H:i') }}</span>
+                                            </div>
+                                            @if (!empty($log->payload))
+                                                <div class="small text-muted mt-1">
+                                                    @foreach ($log->payload as $k => $v)
+                                                        <span class="badge bg-light text-dark me-1 mb-1">{{ $k }}: {{ is_array($v) ? json_encode($v) : (is_bool($v) ? ($v ? 'true' : 'false') : $v) }}</span>
+                                                    @endforeach
+                                                </div>
+                                            @endif
+                                            <div class="small text-muted">
+                                                @if ($log->ip_address)
+                                                    <i class="fas fa-network-wired me-1"></i>{{ $log->ip_address }}
+                                                @endif
+                                                @if ($log->user_agent)
+                                                    <span class="ms-2" title="{{ e($log->user_agent) }}"><i class="fas fa-globe me-1"></i>{{ \Illuminate\Support\Str::limit($log->user_agent, 40) }}</span>
+                                                @endif
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            @endforeach
+                        </div>
+                    </div>
+                </div>
+            @endif
         </div>
 
         {{-- Right: actions aside --}}
