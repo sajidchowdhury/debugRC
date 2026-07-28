@@ -134,11 +134,21 @@ return new class extends Migration
         // this dependency. We drop the MV here (with CASCADE to also drop its
         // indexes) and recreate it in Step 13 against the new partitioned table.
         //
+        // mv_product_abc_classification (created by the base schema 03_stock.sql,
+        // also recreated by migration 2025_07_29_000001 Phase 5) ALSO depends on
+        // stock_transactions. We drop it here but do NOT recreate it in Step 13 —
+        // the Phase 5 migration (which runs later) will CREATE it fresh against
+        // the new partitioned stock_transactions table. Without this drop, Step 11
+        // fails with SQLSTATE[2BP01] "cannot drop table stock_transactions_unpartitioned
+        // because other objects depend on it: materialized view
+        // mv_product_abc_classification depends on table stock_transactions_unpartitioned".
+        //
         // trg_notify_stock_transactions (created by migration 2025_01_21_000001)
         // does NOT need to be dropped explicitly — triggers follow their table
         // through RENAME, and are dropped together with the renamed table at
         // Step 11. We recreate the trigger in Step 14.
         DB::statement('DROP MATERIALIZED VIEW IF EXISTS mv_product_movement_summary CASCADE');
+        DB::statement('DROP MATERIALIZED VIEW IF EXISTS mv_product_abc_classification CASCADE');
 
         // ── Step 3: Rename old table ──
         DB::statement('ALTER TABLE stock_transactions RENAME TO stock_transactions_unpartitioned');
