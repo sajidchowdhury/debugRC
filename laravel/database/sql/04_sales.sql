@@ -120,8 +120,11 @@ CREATE TABLE sales_invoice_dispatches (
 );
 CREATE INDEX idx_sdis_invoice ON sales_invoice_dispatches(sales_invoice_id);
 CREATE INDEX idx_sdis_warehouse ON sales_invoice_dispatches(warehouse_id);
-CREATE INDEX idx_sdis_product_warehouse ON sales_invoice_dispatches(product_id, warehouse_id)
-    INCLUDE (ordered_qty, dispatched_qty, sales_invoice_id);
+-- NOTE: idx_sdis_product_warehouse (with INCLUDE covering clause) is created
+-- by migration 2025_01_28_000001_add_product_warehouse_index_to_sales_invoice_dispatches
+-- AFTER migrations 2025_01_08_000002 adds the ordered_qty/dispatched_qty
+-- columns. Defining it here would fail with SQLSTATE[42703] because those
+-- columns don't exist in the base table definition.
 
 CREATE TABLE sales_challans (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
