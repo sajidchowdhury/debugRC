@@ -118,6 +118,18 @@
                         <dt class="col-sm-3 text-muted">Type</dt>
                         <dd class="col-sm-9">{!! $typeBadge() !!}</dd>
 
+                        {{-- Phase 2 — adjustment category badge + reference_type hint --}}
+                        <dt class="col-sm-3 text-muted">Category</dt>
+                        <dd class="col-sm-9">
+                            {!! $adj->categoryBadge() !!}
+                            @if ($adj->isOpenBalance())
+                                <div class="small text-muted mt-1">
+                                    <i class="fas fa-circle-info me-1"></i>
+                                    Opening-balance ledger reference: <code>reference_type = opening_balance</code>
+                                </div>
+                            @endif
+                        </dd>
+
                         <dt class="col-sm-3 text-muted">Status</dt>
                         <dd class="col-sm-9">{!! $statusBadge() !!}</dd>
 

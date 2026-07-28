@@ -24,6 +24,7 @@ use App\Traits\AuditableMasterData;
  * @property int $warehouse_id
  * @property int $branch_id
  * @property string $adjustment_type increase|decrease
+ * @property string $adjustment_category Phase 2: structured reason category
  * @property string $total_amount
  * @property string $reason
  * @property string $status draft|confirmed|cancelled
@@ -44,12 +45,59 @@ class StockAdjustment extends Model
 
     protected $dates = ['deleted_at'];
 
+    /**
+     * Phase 2 — structured adjustment categories.
+     * Mirrors the DB-level CHECK constraint `sa_category_check` (see
+     * migration 2025_07_28_000020_add_category_to_stock_adjustments.php).
+     * Kept here so the service, controller, and blade views all read from
+     * a single source of truth.
+     */
+    public const ADJUSTMENT_CATEGORIES = [
+        'opening_balance',
+        'data_migration',
+        'uom_correction',
+        'post_conversion_fix',
+        'legacy_cleanup',
+        'reconciliation_variance',
+        'other',
+    ];
+
+    /**
+     * Human-readable labels for each category — used by the create-form
+     * dropdown, the index badge, and the show-page detail row.
+     */
+    public const CATEGORY_LABELS = [
+        'opening_balance'       => 'Opening Balance',
+        'data_migration'        => 'Data Migration',
+        'uom_correction'        => 'UOM / Unit-of-Measure Correction',
+        'post_conversion_fix'   => 'Post-Conversion Fix',
+        'legacy_cleanup'        => 'Legacy Cleanup',
+        'reconciliation_variance' => 'Reconciliation Variance',
+        'other'                 => 'Other',
+    ];
+
+    /**
+     * Bootstrap-icons + badge classes for each category — used by the index
+     * and show views to render a consistent coloured badge. Centralised here
+     * so a future category addition only needs to touch this map.
+     */
+    public const CATEGORY_BADGES = [
+        'opening_balance'       => ['cls' => 'bg-info-subtle text-info',           'icon' => 'fa-flag'],
+        'data_migration'        => ['cls' => 'bg-primary-subtle text-primary',      'icon' => 'fa-database'],
+        'uom_correction'        => ['cls' => 'bg-warning-subtle text-warning',      'icon' => 'fa-ruler-combined'],
+        'post_conversion_fix'   => ['cls' => 'bg-secondary-subtle text-secondary',  'icon' => 'fa-screwdriver-wrench'],
+        'legacy_cleanup'        => ['cls' => 'bg-secondary-subtle text-secondary',  'icon' => 'fa-broom'],
+        'reconciliation_variance' => ['cls' => 'bg-danger-subtle text-danger',      'icon' => 'fa-scale-balanced'],
+        'other'                 => ['cls' => 'bg-light text-muted',                 'icon' => 'fa-ellipsis'],
+    ];
+
     protected $fillable = [
         'adjustment_code',
         'adjustment_date',
         'warehouse_id',
         'branch_id',
         'adjustment_type',
+        'adjustment_category',
         'total_amount',
         'reason',
         'status',
@@ -139,5 +187,61 @@ class StockAdjustment extends Model
     public function isDecrease(): bool
     {
         return $this->adjustment_type === 'decrease';
+    }
+
+    /**
+     * Phase 2 — is this an opening-balance adjustment?
+     *
+     * Opening-balance adjustments route to `stock_transactions.reference_type
+     * = 'opening_balance'` (not 'stock_adjustment') when confirmed, so the
+     * immutable ledger can distinguish initial-onboarding stock from later
+     * operational corrections. See StockAdjustmentService::confirmAdjustment.
+     */
+    public function isOpenBalance(): bool
+    {
+        return $this->adjustment_category === 'opening_balance';
+    }
+
+    /**
+     * Phase 2 — human-readable label for the adjustment category.
+     * Falls back to a prettified version of the raw value if the category
+     * is somehow not in the canonical map (defensive — should never happen
+     * because the DB CHECK constraint rejects unknown values).
+     */
+    public function categoryLabel(): string
+    {
+        return self::CATEGORY_LABELS[$this->adjustment_category]
+            ?? ucfirst(str_replace('_', ' ', $this->adjustment_category ?? 'other'));
+    }
+
+    /**
+     * Phase 2 — rendered HTML badge for the adjustment category.
+     * Used by the index and show views so the badge style is consistent
+     * everywhere and driven by the central CATEGORY_BADGES map.
+     */
+    public function categoryBadge(): string
+    {
+        $cat = $this->adjustment_category ?? 'other';
+        $meta = self::CATEGORY_BADGES[$cat]
+            ?? ['cls' => 'bg-light text-muted', 'icon' => 'fa-ellipsis'];
+        $label = e($this->categoryLabel());
+        $cls = e($meta['cls']);
+        $icon = e($meta['icon']);
+        return '<span class="badge ' . $cls . '">'
+            . '<i class="fas ' . $icon . ' me-1"></i>' . $label
+            . '</span>';
+    }
+
+    /**
+     * Phase 2 — the reference_type that should be written to
+     * stock_transactions when this adjustment is confirmed.
+     *
+     * Opening-balance adjustments use 'opening_balance' so the ledger can
+     * distinguish them; all other categories use the generic
+     * 'stock_adjustment' reference_type.
+     */
+    public function ledgerReferenceType(): string
+    {
+        return $this->isOpenBalance() ? 'opening_balance' : 'stock_adjustment';
     }
 }

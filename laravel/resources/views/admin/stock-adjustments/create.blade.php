@@ -5,6 +5,12 @@
     $today = now()->format('Y-m-d');
     $oldType = old('adjustment_type', 'increase');
     $oldDate = old('adjustment_date', $today);
+    // Phase 2 — default to 'other' so the form is valid without explicit choice,
+    // but the dropdown is rendered with all 7 categories so the user is nudged
+    // to pick the most accurate one.
+    $oldCategory = old('adjustment_category', 'other');
+    $categoryLabels = $categoryLabels ?? \App\Models\StockAdjustment::CATEGORY_LABELS;
+    $categories     = $categories     ?? \App\Models\StockAdjustment::ADJUSTMENT_CATEGORIES;
 @endphp
 
 <div class="container-fluid py-2">
@@ -34,7 +40,7 @@
             </div>
             <div class="card-body">
                 <div class="row g-3">
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <label class="form-label" for="warehouse_id">
                             Warehouse <span class="text-danger">*</span>
                         </label>
@@ -56,25 +62,25 @@
                         </div>
                     </div>
 
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <label class="form-label d-block">Adjustment type <span class="text-danger">*</span></label>
                         <div class="btn-group w-100" role="group" id="typeGroup">
                             <input type="radio" class="btn-check" name="adjustment_type" id="type_increase"
                                    value="increase" autocomplete="off" {{ $oldType === 'increase' ? 'checked' : '' }}>
                             <label class="btn btn-outline-success" for="type_increase">
-                                <i class="fas fa-arrow-up me-1"></i> Increase (stock up)
+                                <i class="fas fa-arrow-up me-1"></i> Increase
                             </label>
 
                             <input type="radio" class="btn-check" name="adjustment_type" id="type_decrease"
                                    value="decrease" autocomplete="off" {{ $oldType === 'decrease' ? 'checked' : '' }}>
                             <label class="btn btn-outline-danger" for="type_decrease">
-                                <i class="fas fa-arrow-down me-1"></i> Decrease (stock down)
+                                <i class="fas fa-arrow-down me-1"></i> Decrease
                             </label>
                         </div>
                         @error('adjustment_type') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
                     </div>
 
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <label class="form-label" for="adjustment_date">
                             Adjustment date <span class="text-danger">*</span>
                         </label>
@@ -82,6 +88,26 @@
                                class="form-control @error('adjustment_date') is-invalid @enderror"
                                required value="{{ $oldDate }}">
                         @error('adjustment_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
+
+                    {{-- Phase 2 — Adjustment category dropdown --}}
+                    <div class="col-md-3">
+                        <label class="form-label" for="adjustment_category">
+                            Category <span class="text-danger">*</span>
+                        </label>
+                        <select id="adjustment_category" name="adjustment_category"
+                                class="form-select select2 @error('adjustment_category') is-invalid @enderror" required>
+                            @foreach ($categories as $cat)
+                                <option value="{{ $cat }}" {{ $oldCategory === $cat ? 'selected' : '' }}>
+                                    {{ $categoryLabels[$cat] ?? ucfirst(str_replace('_', ' ', $cat)) }}
+                                </option>
+                            @endforeach
+                        </select>
+                        @error('adjustment_category') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                        <div class="form-text small">
+                            <i class="fas fa-tag me-1"></i>
+                            Opening-balance rows are tagged <code>reference_type=opening_balance</code> in the ledger.
+                        </div>
                     </div>
 
                     <div class="col-12">

@@ -451,7 +451,7 @@ CREATE TABLE warehouse_stock (                                    -- snapshot/ca
 | Phase | Name | Duration | Priority | Dependencies |
 |---|---|---|---|---|
 | 1 | Authorization & Role Enforcement | 1 day | **Critical** ✅ DONE | none |
-| 2 | Reason Categorization & Opening-Balance Reference | 1-2 days | High | none |
+| 2 | Reason Categorization & Opening-Balance Reference | 1-2 days | High ✅ DONE | none |
 | 3 | Approval Workflow & Maker-Checker | 3-4 days | **Critical** | 1, 2 |
 | 4 | Dedicated Audit Log & Logger | 2 days | High | 3 |
 | 5 | Unit-of-Measure (UOM) Handling | 3 days | High | none (parallel with 1-4) |
@@ -571,59 +571,98 @@ Defense-in-depth policy registered via `Gate::policy()` in `AppServiceProvider`.
 
 ---
 
-## 7. Phase 2 — Reason Categorization & Opening-Balance Reference
+## 7. Phase 2 — Reason Categorization & Opening-Balance Reference ✅ DONE
 
 **Priority:** High
 **Duration:** 1-2 days
-**Status:** ⏳ Pending
+**Status:** ✅ **COMPLETED** (2025-07-28)
 **Goal:** Give each adjustment a structured *category* so opening balances, migrations, UOM fixes, and legacy cleanups are distinguishable and reportable. Route opening-balance entries to the dedicated `reference_type='opening_balance'` ledger value.
 
-### 2.1 Add `adjustment_category` column
-**File (new migration):** `laravel/database/migrations/2025_07_28_000001_add_category_to_stock_adjustments.php`
-```php
-Schema::table('stock_adjustments', function (Blueprint $table) {
-    $table->string('adjustment_category', 40)->after('adjustment_type')
-          ->default('other');
-});
-DB::statement("ALTER TABLE stock_adjustments ADD CONSTRAINT sa_category_check
-    CHECK (adjustment_category IN (
-        'opening_balance','data_migration','uom_correction',
-        'post_conversion_fix','legacy_cleanup','reconciliation_variance','other'
-    ))");
-// backfill existing rows to 'other'
-```
+### 2.1 Add `adjustment_category` column ✅ Done
+**File (new migration):** `laravel/database/migrations/2025_07_28_000020_add_category_to_stock_adjustments.php`
+- Adds `adjustment_category varchar(40) NOT NULL DEFAULT 'other'` after `adjustment_type`.
+- Adds DB-level CHECK constraint `sa_category_check` enforcing the 7-value enum:
+  `opening_balance, data_migration, uom_correction, post_conversion_fix, legacy_cleanup, reconciliation_variance, other`.
+- Backfills existing rows (defensive `UPDATE ... WHERE NULL OR NOT IN (...)` even though DEFAULT covers it).
+- Creates index `idx_sa_category` for the index-page filter.
+- Idempotent (guarded by `Schema::hasColumn` + `pg_constraint` checks); clean `down()` drops index, CHECK, and column.
+- Also updated `database/sql/03_stock.sql` for fresh-install parity (inline CHECK + index in the `CREATE TABLE`).
 
-### 2.2 Make category required in the service
+### 2.2 Make category required in the service ✅ Done
 **File:** `laravel/app/Services/Stock/StockAdjustmentService.php`
-- `validateCreateInput()`: add `'adjustment_category' => 'required|in:opening_balance,data_migration,uom_correction,post_conversion_fix,legacy_cleanup,reconciliation_variance,other'`.
-- `createAdjustment()`: persist `adjustment_category`.
+- `validateCreateInput()`: added mandatory check `in_array($category, StockAdjustment::ADJUSTMENT_CATEGORIES, true)` with a clean `InvalidArgumentException` listing all valid values (front-line check before any DB write; the CHECK constraint is the backstop).
+- `createAdjustment()`: reads `$data['adjustment_category']` and persists it in the `insertGetId` header row.
 
-### 2.3 Route opening-balance to its own reference_type
+### 2.3 Route opening-balance to its own reference_type ✅ Done (G17 fix)
 **File:** `laravel/app/Services/Stock/StockAdjustmentService.php` (`confirmAdjustment`)
-- When `$adjustment->adjustment_category === 'opening_balance'`, pass `reference_type: 'opening_balance'` to `StockService::applyTransaction()` instead of `'stock_adjustment'`. (Fixes G17.)
-- Add `'opening_balance'` to the `applyTransaction` whitelist if not present.
+- Computes `$referenceType = $adjustment->ledgerReferenceType()` (model helper: returns `'opening_balance'` for opening-balance adjustments, `'stock_adjustment'` otherwise).
+- Passes that `$referenceType` to `StockService::applyTransaction()` so the immutable ledger row is tagged correctly.
+- `'opening_balance'` was already in `StockTransaction::REFERENCE_TYPES` and the DB CHECK constraint (migration `2025_07_26_000002_add_reversal_to_stock_transactions_reference_type_check`), so **no whitelist change was needed**.
+- **Critical follow-on fix**: updated the three places that look up stock_transactions by `reference_type` so they match BOTH values:
+  - `cancelAdjustment()` reversal lookup → `whereIn('reference_type', ['stock_adjustment', 'opening_balance'])` (otherwise opening-balance adjustments could not be cancelled — the reversal would find no original row to reverse).
+  - `StockAdjustmentController::show()` stock-movements query → same `whereIn` (otherwise the show page would show an empty stock-movements table for opening-balance adjustments).
+  - `StockAdjustmentController::audit()` "missing stock transactions" health check → same `whereIn` (otherwise every opening-balance adjustment would false-positive as "missing stock transactions").
+- Note: the **GL journal_entries.reference_type stays `'stock_adjustment'`** for all categories — opening_balance is a *stock-ledger* distinction (physical onboarding vs correction), not a *GL* distinction. The GL always posts to Inventory/Surplus or Shrinkage regardless.
 
-### 2.4 UI: category dropdown
+### 2.4 UI: category dropdown ✅ Done
 **File:** `laravel/resources/views/admin/stock-adjustments/create.blade.php`
-- Add a `<select name="adjustment_category">` with the 7 options + human labels:
-  - `opening_balance` — "Opening Balance"
-  - `data_migration` — "Data Migration"
-  - `uom_correction` — "UOM / Unit-of-Measure Correction"
-  - `post_conversion_fix` — "Post-Conversion Fix"
-  - `legacy_cleanup` — "Legacy Cleanup"
-  - `reconciliation_variance` — "Reconciliation Variance"
-  - `other` — "Other"
-- Add to index filter form and as a column/badge on the index table.
+- Restructured the header row from 3 columns (warehouse / type / date) to 4 (warehouse / type / date / **category**) so all fields fit on one row at `col-md-3` each.
+- Added `<select name="adjustment_category">` populated from `StockAdjustment::ADJUSTMENT_CATEGORIES` with human labels from `CATEGORY_LABELS`. Defaults to `'other'` (so the form is valid without an explicit choice, but the user is nudged to pick the most accurate one).
+- Helper text under the dropdown: *"Opening-balance rows are tagged `reference_type=opening_balance` in the ledger."*
+- Re-fetches `old('adjustment_category')` on validation error so the user's selection is preserved.
 
-### 2.5 Index/report filter by category
+**File:** `laravel/resources/views/admin/stock-adjustments/index.blade.php`
+- Added a **Category** column to the table (between Type and Items) rendering a coloured badge via the central `CATEGORY_BADGES` map.
+- Added a **Category** filter dropdown to the filter form (`col-md-2`) with all 7 options + "All categories" default.
+- Added a `$categoryBadge` closure helper in the `@php` block that delegates to `StockAdjustment::CATEGORY_BADGES` so badge styles stay consistent across index / show / future audit views.
+- Updated the empty-state `colspan` from 9 → 10 to match the new column count.
+
+**File:** `laravel/resources/views/admin/stock-adjustments/show.blade.php`
+- Added a **Category** row to the detail `<dl>` (between Type and Status) rendering `$adj->categoryBadge()`.
+- When the adjustment is an opening-balance, shows an extra hint: *"Opening-balance ledger reference: `reference_type = opening_balance`"*.
+
+### 2.5 Index/report filter by category ✅ Done
 **File:** `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` (`index`)
-- Accept `adjustment_category` filter param; pass to query.
+- Added `->when($request->input('adjustment_category'), ...)` clause that only applies the WHERE if the value is a known category (defensive — never lets an arbitrary string reach the query).
+- Passes `categories` + `categoryLabels` to the index view (from the model constants — single source of truth).
+- Includes `adjustment_category` in the `$filters` array passed back to the view so the filter form preserves the selection.
+
+**File:** `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` (`store`)
+- Added `'adjustment_category' => 'required|in:' . implode(',', StockAdjustment::ADJUSTMENT_CATEGORIES)` to the `$request->validate()` rules.
+- Forwards `$validated['adjustment_category']` to `createAdjustment()`.
+
+### Model: StockAdjustment constants + helpers ✅ Done
+**File:** `laravel/app/Models/StockAdjustment.php`
+- Added `ADJUSTMENT_CATEGORIES` constant (the 7-value enum, mirrors the DB CHECK).
+- Added `CATEGORY_LABELS` constant (human-readable labels for dropdowns/badges).
+- Added `CATEGORY_BADGES` constant (Bootstrap badge class + FontAwesome icon per category).
+- Added `adjustment_category` to `$fillable`.
+- Added `isOpenBalance(): bool` helper.
+- Added `categoryLabel(): string` helper (with prettified fallback).
+- Added `categoryBadge(): string` helper (renders the HTML badge from the central map).
+- Added `ledgerReferenceType(): string` helper (returns `'opening_balance'` or `'stock_adjustment'` — the single place the routing decision lives, so future phases don't scatter conditionals).
 
 ### Verification Checklist (Phase 2)
-- [ ] Creating an adjustment without a category fails validation.
-- [ ] An `opening_balance` adjustment writes `stock_transactions.reference_type = 'opening_balance'`.
-- [ ] Index filter by category returns only matching rows.
-- [ ] Existing rows backfilled to `other` still confirm/edit.
+- [x] Creating an adjustment without a category fails validation. ✅ (`validateCreateInput` throws `InvalidArgumentException`; `store()` request-validate rule `required|in:...`).
+- [x] An `opening_balance` adjustment writes `stock_transactions.reference_type = 'opening_balance'`. ✅ (`confirmAdjustment` uses `ledgerReferenceType()`; cancellation/show/audit all match both reference_types).
+- [x] Index filter by category returns only matching rows. ✅ (controller `index` + defensive `in_array` guard; index.blade filter dropdown).
+- [x] Existing rows backfilled to `other` still confirm/edit. ✅ (migration DEFAULT 'other' + explicit backfill UPDATE; `categoryBadge()` falls back gracefully).
+
+### Implementation summary
+**Files created:**
+- `laravel/database/migrations/2025_07_28_000020_add_category_to_stock_adjustments.php` (column + CHECK + index + backfill, idempotent, clean down)
+
+**Files modified:**
+- `laravel/database/sql/03_stock.sql` (inline column + CHECK + index for fresh installs)
+- `laravel/app/Models/StockAdjustment.php` (3 constants, $fillable, 4 helper methods)
+- `laravel/app/Services/Stock/StockAdjustmentService.php` (validateCreateInput, createAdjustment, confirmAdjustment routing, cancelAdjustment whereIn lookup)
+- `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` (index filter, create/store category, show whereIn, audit whereIn)
+- `laravel/resources/views/admin/stock-adjustments/create.blade.php` (4-col header + category dropdown)
+- `laravel/resources/views/admin/stock-adjustments/index.blade.php` (category filter + category column + badge helper)
+- `laravel/resources/views/admin/stock-adjustments/show.blade.php` (category detail row + opening-balance hint)
+
+**Gaps closed:** G6 (no reason categorization → FIXED), G17 (`opening_balance` reference_type never used → FIXED).
+**Note:** PHP not installed in this sandbox (Node/Next.js env), so syntax verified by careful manual review + cross-check of the 3 stock_transactions lookups against the new reference_type routing. Recommend running `php artisan migrate` and `php artisan test` in the Laravel env to confirm.
 
 ---
 

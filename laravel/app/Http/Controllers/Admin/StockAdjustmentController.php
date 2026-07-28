@@ -44,6 +44,10 @@ class StockAdjustmentController extends Controller
 
     /**
      * List stock adjustments with filters.
+     *
+     * Phase 2: also accepts an `adjustment_category` filter (one of the
+     * seven canonical categories) so the index page can be sliced by
+     * opening_balance / data_migration / uom_correction / etc.
      */
     public function index(Request $request)
     {
@@ -52,6 +56,13 @@ class StockAdjustmentController extends Controller
             ->when($request->input('to_date'), fn($q, $d) => $q->where('adjustment_date', '<=', $d))
             ->when($request->input('warehouse_id'), fn($q, $wid) => $q->where('warehouse_id', $wid))
             ->when($request->input('adjustment_type'), fn($q, $t) => $q->where('adjustment_type', $t))
+            ->when($request->input('adjustment_category'), function ($q, $c) {
+                // Only apply if the value is a known category (defensive —
+                // never let an arbitrary string reach the WHERE clause).
+                if (in_array($c, StockAdjustment::ADJUSTMENT_CATEGORIES, true)) {
+                    $q->where('adjustment_category', $c);
+                }
+            })
             ->when($request->input('status'), fn($q, $s) => $q->where('status', $s))
             ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
             ->orderBy('adjustment_date', 'desc')
@@ -76,7 +87,12 @@ class StockAdjustmentController extends Controller
             'warehouses' => $warehouses,
             'branches' => $branches,
             'stats' => $stats,
-            'filters' => $request->only(['from_date', 'to_date', 'warehouse_id', 'adjustment_type', 'status', 'branch_id']),
+            'categories' => StockAdjustment::ADJUSTMENT_CATEGORIES,
+            'categoryLabels' => StockAdjustment::CATEGORY_LABELS,
+            'filters' => $request->only([
+                'from_date', 'to_date', 'warehouse_id', 'adjustment_type',
+                'adjustment_category', 'status', 'branch_id',
+            ]),
         ]);
     }
 
@@ -92,6 +108,8 @@ class StockAdjustmentController extends Controller
             'title' => 'New Stock Adjustment',
             'warehouses' => $warehouses,
             'products' => $products,
+            'categories' => StockAdjustment::ADJUSTMENT_CATEGORIES,
+            'categoryLabels' => StockAdjustment::CATEGORY_LABELS,
         ]);
     }
 
@@ -103,6 +121,8 @@ class StockAdjustmentController extends Controller
         $validated = $request->validate([
             'warehouse_id' => 'required|integer|exists:warehouses,id',
             'adjustment_type' => 'required|in:increase,decrease',
+            // Phase 2 — category is mandatory and must be a known value.
+            'adjustment_category' => 'required|in:' . implode(',', StockAdjustment::ADJUSTMENT_CATEGORIES),
             'adjustment_date' => 'required|date',
             'reason' => 'nullable|string|max:1000',
             'items' => 'required|array|min:1',
@@ -120,6 +140,7 @@ class StockAdjustmentController extends Controller
             $adjustment = $this->adjustmentService->createAdjustment([
                 'warehouse_id' => $validated['warehouse_id'],
                 'adjustment_type' => $validated['adjustment_type'],
+                'adjustment_category' => $validated['adjustment_category'], // Phase 2
                 'adjustment_date' => $validated['adjustment_date'],
                 'reason' => $validated['reason'] ?? '',
                 'items' => $validated['items'],
@@ -149,9 +170,15 @@ class StockAdjustmentController extends Controller
         $this->authorize('view', $adjustment);
 
         // Get the stock transactions created by this adjustment.
+        //
+        // Phase 2 (G17 fix): opening-balance adjustments write their stock
+        // movements with reference_type='opening_balance' rather than
+        // 'stock_adjustment' (see StockAdjustmentService::confirmAdjustment).
+        // Match both reference_types so the show page lists every movement
+        // regardless of the adjustment's category.
         $stockTransactions = DB::table('stock_transactions as st')
             ->join('products as p', 'p.id', '=', 'st.product_id')
-            ->where('st.reference_type', 'stock_adjustment')
+            ->whereIn('st.reference_type', ['stock_adjustment', 'opening_balance'])
             ->where('st.reference_id', $id)
             ->select('st.*', 'p.product_code', 'p.product_name')
             ->orderBy('st.id')
@@ -308,12 +335,18 @@ SQL);
         ];
 
         // 3. Confirmed adjustments without stock transactions.
+        //
+        // Phase 2 (G17 fix): opening-balance adjustments write their stock
+        // movements with reference_type='opening_balance'. A confirmed
+        // adjustment is healthy if it has AT LEAST ONE stock_transactions row
+        // under EITHER reference_type.
         $missingStock = DB::selectOne(<<<SQL
 SELECT COUNT(*) AS cnt FROM stock_adjustments sa
 WHERE sa.status = 'confirmed'
   AND NOT EXISTS (
     SELECT 1 FROM stock_transactions st
-    WHERE st.reference_type = 'stock_adjustment' AND st.reference_id = sa.id
+    WHERE st.reference_id = sa.id
+      AND st.reference_type IN ('stock_adjustment','opening_balance')
   )
 SQL);
         $checks[] = [

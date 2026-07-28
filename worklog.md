@@ -210,3 +210,61 @@ Defense-in-depth layers now active for Stock Adjustment:
 
 Gaps closed: G1 (no role authorization -> FIXED), G16 (getProductRate cross-branch leak -> FIXED)
 Note: PHP not installed in this sandbox (Node/Next.js env), so syntax verified by careful manual review + route-name cross-check against Blade views. Recommend running `php artisan route:list` and `php artisan test` in the Laravel env to confirm.
+
+---
+Task ID: SA-P2
+Agent: Main Agent (Stock Adjustment Phase 2 implementation)
+Task: Phase 2 — Reason Categorization & Opening-Balance Reference. Add a structured adjustment_category enum (7 values) to stock_adjustments; make it required in the service; route opening_balance adjustments to stock_transactions.reference_type='opening_balance' (G17 fix); UI dropdown on create, badge column + filter on index, detail row on show.
+
+Work Log:
+- Read /home/z/debugRC/worklog.md to confirm Phase 1 (SA-P1) was complete and Phase 2 was pending
+- Read the Phase 2 spec in STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md (§7, lines 574-626)
+- Read current state of all touch-points in parallel:
+  - StockAdjustmentService.php (createAdjustment, confirmAdjustment, cancelAdjustment, validateCreateInput)
+  - StockAdjustmentController.php (index, create, store, show, audit + computeAuditChecks)
+  - StockAdjustment.php model ($fillable, helpers)
+  - StockService::applyTransaction (reference_type whitelist)
+  - StockTransaction::REFERENCE_TYPES (confirmed 'opening_balance' already present)
+  - create.blade.php, index.blade.php, show.blade.php, audit.blade.php
+  - database/sql/03_stock.sql (stock_adjustments CREATE TABLE)
+  - Two reference migrations for patterns: 2025_07_28_000001_add_approval_workflow_to_stock_take_sessions.php (CHECK constraint drop/add pattern) + 2025_07_26_000002_add_reversal_to_stock_transactions_reference_type_check.php (replaceConstraint pattern)
+- Implemented 2.1: Created migration 2025_07_28_000020_add_category_to_stock_adjustments.php
+  - Adds adjustment_category varchar(40) NOT NULL DEFAULT 'other' after adjustment_type
+  - DB CHECK constraint sa_category_check enforcing the 7-value enum
+  - Defensive backfill UPDATE for any NULL/invalid existing rows
+  - Index idx_sa_category for the index-page filter
+  - Idempotent (Schema::hasColumn + pg_constraint guards); clean down()
+- Implemented 2.1b: Updated database/sql/03_stock.sql for fresh-install parity (inline column + CHECK + index in CREATE TABLE)
+- Implemented 2.2: Updated StockAdjustmentService::validateCreateInput to require category + createAdjustment to persist it
+- Implemented 2.3 (G17 fix): confirmAdjustment now uses $adjustment->ledgerReferenceType() to pick 'opening_balance' vs 'stock_adjustment' for the stock_transactions.reference_type
+  - CRITICAL follow-on: updated 3 stock_transactions lookups to whereIn(['stock_adjustment','opening_balance']) so opening-balance adjustments can be cancelled, shown, and audited correctly:
+    1. cancelAdjustment reversal lookup
+    2. Controller show() stock-movements query
+    3. Controller audit() "missing stock transactions" health check
+  - Note: GL journal_entries.reference_type stays 'stock_adjustment' for all categories (opening_balance is a stock-ledger distinction, not a GL distinction)
+- Implemented 2.4: 
+  - create.blade.php: restructured header from 3 to 4 columns (warehouse/type/date/category), added category dropdown populated from model constants
+  - index.blade.php: added Category column with coloured badge + Category filter dropdown + $categoryBadge closure helper
+  - show.blade.php: added Category detail row with badge + opening-balance reference_type hint
+- Implemented 2.5: Controller index() accepts adjustment_category filter (defensive in_array guard) + store() validates required|in:...
+- Updated StockAdjustment model: added ADJUSTMENT_CATEGORIES, CATEGORY_LABELS, CATEGORY_BADGES constants; adjustment_category to $fillable; isOpenBalance/categoryLabel/categoryBadge/ledgerReferenceType helper methods
+- Updated STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md: marked Phase 2 DONE in overview table + section header; replaced pending section with full implementation summary + checked verification checklist
+- Cross-checked all 5 stock_transactions reference_type lookups in app/ to confirm the 3 stock-ledger ones are updated and the 2 GL-ledger ones correctly stay as 'stock_adjustment'
+
+Stage Summary:
+Files created:
+- laravel/database/migrations/2025_07_28_000020_add_category_to_stock_adjustments.php
+
+Files modified:
+- laravel/database/sql/03_stock.sql (fresh-install parity)
+- laravel/app/Models/StockAdjustment.php (3 constants + $fillable + 4 helpers)
+- laravel/app/Services/Stock/StockAdjustmentService.php (validateCreateInput + createAdjustment + confirmAdjustment routing + cancelAdjustment whereIn)
+- laravel/app/Http/Controllers/Admin/StockAdjustmentController.php (index filter + create/store category + show whereIn + audit whereIn)
+- laravel/resources/views/admin/stock-adjustments/create.blade.php (4-col header + category dropdown)
+- laravel/resources/views/admin/stock-adjustments/index.blade.php (category filter + category column + badge helper)
+- laravel/resources/views/admin/stock-adjustments/show.blade.php (category detail row + opening-balance hint)
+- STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md (Phase 2 marked DONE with full implementation details)
+
+Gaps closed: G6 (no reason categorization -> FIXED), G17 (opening_balance reference_type never used -> FIXED)
+Key design decision: opening_balance is a stock-ledger distinction only. The GL journal_entries.reference_type stays 'stock_adjustment' for all categories because the GL always posts to Inventory/Surplus/Shrinkage regardless of the stock-movement category. This isolates the routing change to the stock_transactions layer.
+Note: PHP not installed in this sandbox (Node/Next.js env), so syntax verified by careful manual review + cross-check of all 5 stock_transactions/journal_entries reference_type lookups. Recommend running `php artisan migrate` and `php artisan test` in the Laravel env to confirm.

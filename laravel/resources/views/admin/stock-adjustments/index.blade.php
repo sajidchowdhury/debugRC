@@ -8,6 +8,7 @@
         'to_date' => '',
         'warehouse_id' => '',
         'adjustment_type' => '',
+        'adjustment_category' => '',
         'status' => '',
         'branch_id' => '',
     ], is_array($filters ?? null) ? $filters : []);
@@ -36,6 +37,19 @@
             return '<span class="badge bg-danger-subtle text-danger"><i class="fas fa-arrow-down me-1"></i>Decrease</span>';
         }
         return '<span class="badge bg-light text-dark">' . e($type) . '</span>';
+    };
+
+    // Phase 2 — category badge helper. Delegates to the model's central map so
+    // badge styles stay consistent across index / show / future audit views.
+    $categoryLabels = $categoryLabels ?? \App\Models\StockAdjustment::CATEGORY_LABELS;
+    $categories     = $categories     ?? \App\Models\StockAdjustment::ADJUSTMENT_CATEGORIES;
+    $categoryBadge  = function (string $cat) use ($categoryLabels): string {
+        $meta = \App\Models\StockAdjustment::CATEGORY_BADGES[$cat]
+            ?? ['cls' => 'bg-light text-muted', 'icon' => 'fa-ellipsis'];
+        $label = e($categoryLabels[$cat] ?? ucfirst(str_replace('_', ' ', $cat)));
+        return '<span class="badge ' . e($meta['cls']) . '">'
+            . '<i class="fas ' . e($meta['icon']) . ' me-1"></i>' . $label
+            . '</span>';
     };
 @endphp
 
@@ -159,10 +173,10 @@
                         @endforeach
                     </select>
                 </div>
-                <div class="col-md-2">
+                <div class="col-md-1">
                     <label class="form-label small text-muted mb-1" for="branch_id">Branch</label>
                     <select id="branch_id" name="branch_id" class="form-select form-select-sm select2">
-                        <option value="">All branches</option>
+                        <option value="">All</option>
                         @foreach ($branches as $b)
                             <option value="{{ $b->id }}"
                                 {{ (string) $filters['branch_id'] === (string) $b->id ? 'selected' : '' }}>
@@ -171,18 +185,30 @@
                         @endforeach
                     </select>
                 </div>
-                <div class="col-md-2">
+                <div class="col-md-1">
                     <label class="form-label small text-muted mb-1" for="adjustment_type">Type</label>
                     <select id="adjustment_type" name="adjustment_type" class="form-select form-select-sm">
-                        <option value="">All types</option>
+                        <option value="">All</option>
                         <option value="increase" {{ $filters['adjustment_type'] === 'increase' ? 'selected' : '' }}>Increase</option>
                         <option value="decrease" {{ $filters['adjustment_type'] === 'decrease' ? 'selected' : '' }}>Decrease</option>
                     </select>
                 </div>
+                {{-- Phase 2 — category filter --}}
                 <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1" for="adjustment_category">Category</label>
+                    <select id="adjustment_category" name="adjustment_category" class="form-select form-select-sm select2">
+                        <option value="">All categories</option>
+                        @foreach ($categories as $cat)
+                            <option value="{{ $cat }}" {{ $filters['adjustment_category'] === $cat ? 'selected' : '' }}>
+                                {{ $categoryLabels[$cat] ?? ucfirst(str_replace('_', ' ', $cat)) }}
+                            </option>
+                        @endforeach
+                    </select>
+                </div>
+                <div class="col-md-1">
                     <label class="form-label small text-muted mb-1" for="status">Status</label>
                     <select id="status" name="status" class="form-select form-select-sm">
-                        <option value="">All statuses</option>
+                        <option value="">All</option>
                         <option value="draft"     {{ $filters['status'] === 'draft' ? 'selected' : '' }}>Draft</option>
                         <option value="confirmed" {{ $filters['status'] === 'confirmed' ? 'selected' : '' }}>Confirmed</option>
                         <option value="cancelled" {{ $filters['status'] === 'cancelled' ? 'selected' : '' }}>Cancelled</option>
@@ -211,6 +237,7 @@
                             <th>Date</th>
                             <th>Warehouse</th>
                             <th>Type</th>
+                            <th>Category</th>
                             <th class="text-end">Items</th>
                             <th class="text-end">Total (Tk)</th>
                             <th>Status</th>
@@ -243,6 +270,8 @@
                                     @endif
                                 </td>
                                 <td>{!! $typeBadge($adj->adjustment_type) !!}</td>
+                                {{-- Phase 2 — category badge --}}
+                                <td>{!! $categoryBadge($adj->adjustment_category ?? 'other') !!}</td>
                                 <td class="text-end">{{ number_format($adj->items->count()) }}</td>
                                 <td class="text-end">{{ number_format((float) $adj->total_amount, 2) }}</td>
                                 <td>{!! $statusBadge($adj->status) !!}</td>
@@ -264,7 +293,7 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="9" class="text-center text-muted py-5">
+                                <td colspan="10" class="text-center text-muted py-5">
                                     <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
                                     No stock adjustments found. Try adjusting filters or
                                     <a href="{{ route('admin.stock-adjustments.create') }}">create a new one</a>.

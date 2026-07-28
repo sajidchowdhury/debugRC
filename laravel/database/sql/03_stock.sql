@@ -103,6 +103,14 @@ CREATE TABLE stock_adjustments (
     warehouse_id integer NOT NULL REFERENCES warehouses(id),
     branch_id integer NOT NULL REFERENCES branches(id),
     adjustment_type varchar(20) NOT NULL CHECK (adjustment_type IN ('increase','decrease')),
+    -- Phase 2 (Stock Adjustment plan): structured reason categorization.
+    -- opening_balance rows also route to reference_type='opening_balance' in
+    -- stock_transactions (see StockAdjustmentService::confirmAdjustment).
+    adjustment_category varchar(40) NOT NULL DEFAULT 'other'
+        CONSTRAINT sa_category_check CHECK (adjustment_category IN (
+            'opening_balance','data_migration','uom_correction',
+            'post_conversion_fix','legacy_cleanup','reconciliation_variance','other'
+        )),
     reason text,
     status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','cancelled')),
     journal_entry_id integer REFERENCES journal_entries(id),
@@ -117,6 +125,7 @@ CREATE TABLE stock_adjustments (
 );
 CREATE INDEX idx_sa_warehouse ON stock_adjustments(warehouse_id);
 CREATE INDEX idx_sa_journal ON stock_adjustments(journal_entry_id);
+CREATE INDEX idx_sa_category ON stock_adjustments(adjustment_category);
 
 CREATE TABLE stock_adjustment_items (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

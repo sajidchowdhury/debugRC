@@ -37,6 +37,7 @@ class StockAdjustmentService
      * @param array $data {
      *     warehouse_id: int,
      *     adjustment_type: 'increase'|'decrease',
+     *     adjustment_category: string (Phase 2 — one of StockAdjustment::ADJUSTMENT_CATEGORIES),
      *     adjustment_date: string (Y-m-d),
      *     reason: string,
      *     created_by: int,
@@ -51,6 +52,7 @@ class StockAdjustmentService
 
         $warehouseId = (int) $data['warehouse_id'];
         $adjustmentType = $data['adjustment_type'];
+        $adjustmentCategory = $data['adjustment_category']; // Phase 2 — validated above
         $items = $data['items'];
 
         // Look up the branch from the warehouse.
@@ -104,7 +106,7 @@ class StockAdjustmentService
 
         return DB::transaction(function () use (
             $adjustmentCode, $warehouseId, $branchId, $adjustmentType,
-            $totalAmount, $data, $validatedItems
+            $adjustmentCategory, $totalAmount, $data, $validatedItems
         ) {
             // Create the adjustment header.
             $adjustmentId = DB::table('stock_adjustments')->insertGetId([
@@ -113,6 +115,7 @@ class StockAdjustmentService
                 'warehouse_id' => $warehouseId,
                 'branch_id' => $branchId,
                 'adjustment_type' => $adjustmentType,
+                'adjustment_category' => $adjustmentCategory, // Phase 2
                 'total_amount' => round($totalAmount, 2),
                 'reason' => trim((string) ($data['reason'] ?? '')),
                 'status' => 'draft',
@@ -162,6 +165,20 @@ class StockAdjustmentService
             $warehouseId = $adjustment->warehouse_id;
             $sign = $adjustment->isIncrease() ? 1 : -1;
 
+            // Phase 2 (G17 fix): opening-balance adjustments write their
+            // stock_transactions rows with reference_type='opening_balance'
+            // instead of the generic 'stock_adjustment'. This lets the
+            // immutable ledger distinguish initial-onboarding stock from
+            // later operational corrections (and powers opening-balance
+            // reports / reconciliation queries). All other categories keep
+            // reference_type='stock_adjustment'.
+            //
+            // 'opening_balance' is already in StockTransaction::REFERENCE_TYPES
+            // (and the DB CHECK constraint — see migration
+            // 2025_07_26_000002_add_reversal_to_stock_transactions_reference_type_check),
+            // so no whitelist change is needed.
+            $referenceType = $adjustment->ledgerReferenceType();
+
             // Apply stock movement for each item via StockService.
             foreach ($adjustment->items as $item) {
                 $qtyChange = $sign * (float) $item->qty;
@@ -171,7 +188,7 @@ class StockAdjustmentService
                     'product_id' => $item->product_id,
                     'qty' => $qtyChange,
                     'rate' => (float) $item->rate,
-                    'reference_type' => 'stock_adjustment',
+                    'reference_type' => $referenceType,
                     'reference_id' => $adjustment->id,
                     'notes' => 'Stock Adjustment #' . $adjustment->adjustment_code
                         . ($item->reason ? ' — ' . $item->reason : ''),
@@ -231,9 +248,15 @@ class StockAdjustmentService
                 }
 
                 // Reverse each stock movement.
+                //
+                // Phase 2 (G17 fix): an opening-balance adjustment's stock
+                // movements were written with reference_type='opening_balance',
+                // not 'stock_adjustment'. Look up by reference_id alone (and
+                // restrict to the two reference_types this module can produce)
+                // so cancellations work regardless of category.
                 foreach ($adjustment->items as $item) {
                     $stockTx = DB::table('stock_transactions')
-                        ->where('reference_type', 'stock_adjustment')
+                        ->whereIn('reference_type', ['stock_adjustment', 'opening_balance'])
                         ->where('reference_id', $adjustment->id)
                         ->where('product_id', $item->product_id)
                         ->where('is_reversed', false)
@@ -367,6 +390,11 @@ class StockAdjustmentService
 
     /**
      * Validate the createAdjustment input.
+     *
+     * Phase 2: adjustment_category is now REQUIRED and must be one of the
+     * seven canonical categories (StockAdjustment::ADJUSTMENT_CATEGORIES).
+     * The DB CHECK constraint (sa_category_check) is the backstop; this
+     * front-line check gives a clean error message before any DB write.
      */
     private function validateCreateInput(array $data): void
     {
@@ -375,6 +403,14 @@ class StockAdjustmentService
         }
         if (!in_array($data['adjustment_type'] ?? '', ['increase', 'decrease'], true)) {
             throw new \InvalidArgumentException('adjustment_type must be "increase" or "decrease".');
+        }
+        // Phase 2 — category is mandatory.
+        $category = $data['adjustment_category'] ?? '';
+        if (!in_array($category, StockAdjustment::ADJUSTMENT_CATEGORIES, true)) {
+            throw new \InvalidArgumentException(
+                'adjustment_category is required and must be one of: '
+                . implode(', ', StockAdjustment::ADJUSTMENT_CATEGORIES) . '.'
+            );
         }
         if (empty($data['items']) || !is_array($data['items'])) {
             throw new \InvalidArgumentException('At least one item is required.');
