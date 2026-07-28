@@ -6,14 +6,16 @@ use App\Http\Controllers\Controller;
 use App\Models\Warehouse;
 use App\Models\WarehouseTransfer;
 use App\Rules\WarehouseBelongsToBranch;
+use App\Rules\WarehouseTransferItemHasAvailableStock;
 use App\Services\Stock\WarehouseTransferService;
 use App\Services\Stock\StockService;
+use App\Services\Stock\StockAvailabilityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Warehouse Transfer Controller — Phase 6.5 + Phase 1 same-branch enforcement.
+ * Warehouse Transfer Controller — Phase 6.5 + Phase 1 + Phase 2.
  *
  * Two-phase flow:
  *   - create / store: create a draft transfer (no stock, no GL)
@@ -27,12 +29,18 @@ use Illuminate\Support\Facades\Log;
  *   - Warehouse dropdown filtered by user's branch
  *   - WarehouseBelongsToBranch validation rule applied
  *   - Defense-in-depth: controller check + service check + DB trigger
+ *
+ * Phase 2 — Pipeline-aware stock availability:
+ *   - WarehouseTransferItemHasAvailableStock rule on items.*.qty
+ *   - getProductStock() returns pipeline-aware availability + physical + pipeline breakdown
+ *   - UI shows both physical and available quantities
  */
 class WarehouseTransferController extends Controller
 {
     public function __construct(
         private WarehouseTransferService $transferService,
-        private StockService $stockService
+        private StockService $stockService,
+        private StockAvailabilityService $stockAvailabilityService
     ) {}
 
     /**
@@ -178,7 +186,10 @@ class WarehouseTransferController extends Controller
             'notes' => 'nullable|string|max:1000',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.qty' => 'required|numeric|min:0.001',
+            'items.*.qty' => [
+                'required', 'numeric', 'min:0.001',
+                new WarehouseTransferItemHasAvailableStock((int) $request->input('from_warehouse_id')),
+            ],
             'items.*.rate' => 'nullable|numeric|min:0',
         ]);
 
@@ -290,6 +301,7 @@ class WarehouseTransferController extends Controller
 
     /**
      * AJAX: get product stock + rate for a warehouse (for the create form).
+     * Phase 2: Returns pipeline-aware availability, physical qty, and pipeline qty.
      */
     public function getProductStock(Request $request)
     {
@@ -298,18 +310,19 @@ class WarehouseTransferController extends Controller
             'warehouse_id' => 'required|integer|exists:warehouses,id',
         ]);
 
-        $rate = $this->stockService->getWarehouseAvgCost(
-            (int) $request->input('warehouse_id'),
-            (int) $request->input('product_id')
-        );
-        $qty = $this->stockService->getWarehouseQty(
-            (int) $request->input('warehouse_id'),
-            (int) $request->input('product_id')
-        );
+        $warehouseId = (int) $request->input('warehouse_id');
+        $productId   = (int) $request->input('product_id');
+
+        $rate = $this->stockService->getWarehouseAvgCost($warehouseId, $productId);
+        $physicalQty = $this->stockService->getWarehouseQty($warehouseId, $productId);
+        $availableQty = $this->stockAvailabilityService->getWarehouseAvailableQty($productId, $warehouseId);
+        $pipelineQty = max(0.0, $physicalQty - $availableQty);
 
         return response()->json([
             'rate' => round($rate, 2),
-            'available_qty' => round($qty, 4),
+            'physical_qty' => round($physicalQty, 4),
+            'available_qty' => round($availableQty, 4),
+            'pipeline_qty' => round($pipelineQty, 4),
         ]);
     }
 }

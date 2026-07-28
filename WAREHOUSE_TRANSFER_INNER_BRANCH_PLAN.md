@@ -1,11 +1,11 @@
 # Warehouse Transfer — Inner-Branch Implementation Plan
 
-**Document version:** 1.1  
+**Document version:** 1.2
 **Date:** 2025-07-28  
 **Scope:** Warehouse-to-Warehouse Transfer (inner-branch / intra-branch only)  
 **Context:** Branch-A has 10 warehouses, Branch-B has 5 warehouses. Transfers are only allowed between warehouses that belong to the **same branch**. Cross-branch transfers are handled by the separate **Branch Demand** module, not by this module.  
 **Target stack:** Laravel 11 + PostgreSQL 16  
-**Current state:** Phase 6.5 + **Phase 1 COMPLETE** (same-branch enforcement at every layer)
+**Current state:** Phase 6.5 + **Phase 1 COMPLETE** + **Phase 2 COMPLETE** (pipeline-aware stock availability)
 
 ---
 
@@ -39,7 +39,7 @@ The current Laravel implementation (Phase 6.5) introduced a **two-phase draft �
 | # | Gap | Severity | Risk |
 |---|-----|----------|------|
 | G1 | No server-side same-branch enforcement — Laravel allows cross-branch transfers via WarehouseTransfer | **Critical → ✅ FIXED** | Wrong module for cross-branch; GL posted incorrectly; bypasses Branch Demand |
-| G2 | No pipeline-aware stock availability check — uses simple `getWarehouseQty` instead of `StockAvailabilityService` | **High** | Over-commitment of stock (transfers + sales competing for same qty) |
+| G2 | No pipeline-aware stock availability check — uses simple `getWarehouseQty` instead of `StockAvailabilityService` | **High → ✅ FIXED** | Over-commitment of stock (transfers + sales competing for same qty) |
 | G3 | No reversal ordering — dest IN and source OUT reversed in arbitrary order | **High** | Insufficient stock at receiver warehouse during reversal |
 | G4 | No dedicated audit trail — service uses `DB::table()` bypassing Eloquent events | **Medium** | No audit log for who did what when |
 | G5 | No CSV export — legacy has it, Laravel doesn't | **Medium** | Operational gap |
@@ -425,7 +425,7 @@ Example of the problem:
 | Phase | Name | Duration | Priority | Dependencies |
 |-------|------|----------|----------|-------------|
 | 1 | Same-Branch Enforcement & Server-Side Guards | 2-3 days | **Critical** ✅ DONE | None |
-| 2 | Pipeline-Aware Stock Availability | 1-2 days | **High** | Phase 1 |
+| 2 | Pipeline-Aware Stock Availability | 1-2 days | **High** ✅ DONE | Phase 1 |
 | 3 | Reversal Safety & Ordering | 1-2 days | **High** | Phase 1 |
 | 4 | Audit Trail & Data Integrity | 2-3 days | **Medium** | Phase 1, 2, 3 |
 | 5 | UI Parity & UX Improvements | 2-3 days | **Medium** | Phase 1 |
@@ -491,10 +491,11 @@ Phase 1 ──→ Phase 2 ──→ Phase 4 ──→ Phase 6 ──→ Phase 7 
 
 ---
 
-## 7. Phase 2 — Pipeline-Aware Stock Availability
+## 7. Phase 2 — Pipeline-Aware Stock Availability ✅ DONE
 
 **Priority:** High  
 **Duration:** 1-2 days  
+**Status:** ✅ **COMPLETED** (2025-07-28)  
 **Goal:** Prevent over-commitment of stock by using pipeline-aware availability checks in both draft creation and confirm.
 
 ### 2.1 Use StockAvailabilityService in createTransfer
@@ -605,13 +606,23 @@ This helps users understand why they can't transfer more than the available amou
 
 ### Deliverables
 
-| # | Deliverable | File |
-|---|-------------|------|
-| 2.1 | StockAvailabilityService in createTransfer | `WarehouseTransferService.php` |
-| 2.2 | StockAvailabilityService in confirmTransfer | `WarehouseTransferService.php` |
-| 2.3 | WarehouseHasStock rule integration | `WarehouseTransferController.php` |
-| 2.4 | Pipeline-aware getProductStock API | `WarehouseTransferController.php` |
-| 2.5 | Pipeline info in UI | `create.blade.php` |
+| # | Deliverable | Status | File |
+|---|-------------|--------|------|
+| 2.1 | StockAvailabilityService in createTransfer | ✅ Done | `WarehouseTransferService.php` |
+| 2.2 | StockAvailabilityService in confirmTransfer (defense-in-depth) | ✅ Done | `WarehouseTransferService.php` |
+| 2.3 | WarehouseTransferItemHasAvailableStock rule integration | ✅ Done | New `WarehouseTransferItemHasAvailableStock.php` + `WarehouseTransferController.php` |
+| 2.4 | Pipeline-aware getProductStock API (returns physical + pipeline breakdown) | ✅ Done | `WarehouseTransferController.php` |
+| 2.5 | Pipeline info in UI (available / physical / pipeline breakdown + qty warning) | ✅ Done | `create.blade.php` |
+
+**Key changes:**
+
+1. **Service level (2.1 + 2.2):** `WarehouseTransferService` now injects `StockAvailabilityService` via constructor. Both `createTransfer()` and `confirmTransfer()` use `getWarehouseAvailableQty()` instead of `getWarehouseQty()` for availability checks. Error messages now show the breakdown (available, physical, pipeline). The `confirmTransfer()` check is defense-in-depth — stock may change between draft creation and confirm time.
+
+2. **Validation rule (2.3):** New `WarehouseTransferItemHasAvailableStock` rule created (different from existing `WarehouseHasStock` which is tied to `SalesInvoice` items). This rule takes `from_warehouse_id`, resolves the corresponding `product_id` from the request array path, and validates that the qty doesn't exceed pipeline-aware available qty. Integrated into `WarehouseTransferController::store()` validation on `items.*.qty`.
+
+3. **Controller (2.4):** `getProductStock()` now injects `StockAvailabilityService` and returns `physical_qty`, `available_qty`, and `pipeline_qty` instead of just `available_qty`. This enables the frontend to show the pipeline breakdown.
+
+4. **UI (2.5):** `create.blade.php` item table now has an "Available (physical / pipeline)" column showing a breakdown like `70.00 (100.00 physical, 30.00 pipeline)`. Real-time qty-vs-available warning highlights the qty input and available cell in red when over-committed. A SweetAlert submit guard blocks form submission if any row requests more than available. An info banner explains the pipeline concept.
 
 ### Verification
 
@@ -1391,7 +1402,7 @@ CREATE INDEX idx_audit_log_user ON audit_log(user_id);
 | File | Phase | Changes |
 |------|-------|---------|
 | `app/Services/Stock/WarehouseTransferService.php` | 1, 2, 3, 4 | Same-branch enforcement, pipeline-aware availability, reversal ordering, audit logging |
-| `app/Http/Controllers/Admin/WarehouseTransferController.php` | 1, 2, 5, 6 | Branch guard, validation rules, warehouse filtering, export |
+| `app/Http/Controllers/Admin/WarehouseTransferController.php` | 1, 2, 5, 6 | Branch guard, validation rules, warehouse filtering, pipeline-aware API, export |
 | `app/Models/WarehouseTransfer.php` | 1 | BranchScope, branch_demand_id to fillable |
 | `resources/views/admin/warehouse-transfers/create.blade.php` | 1, 5 | Same-branch guard, pipeline info, warehouse dropdown |
 | `resources/views/admin/warehouse-transfers/index.blade.php` | 5 | Filters, remove interbranch |
@@ -1404,7 +1415,9 @@ CREATE INDEX idx_audit_log_user ON audit_log(user_id);
 | File | Phase | Purpose |
 |------|-------|---------|
 | `database/migrations/2025_XX_XX_add_branch_demand_id_to_warehouse_transfers.php` | 4 | branch_demand_id column |
-| `database/migrations/2025_XX_XX_add_same_branch_trigger.php` | 1 | Same-branch enforcement trigger |
+| `database/migrations/2025_07_28_000010_add_same_branch_trigger_to_warehouse_transfers.php` | 1 ✅ | Same-branch enforcement trigger |
+| `app/Models/Scopes/WarehouseTransferBranchScope.php` | 1 ✅ | Branch scope for WarehouseTransfer model |
+| `app/Rules/WarehouseTransferItemHasAvailableStock.php` | 2 ✅ | Pipeline-aware stock availability validation rule for transfer items |
 | `database/migrations/2025_XX_XX_create_audit_log_table.php` | 4 | Audit log table |
 | `app/Services/Stock/WarehouseTransferAuditService.php` | 4 | Health checks |
 | `app/Http/Controllers/Api/WarehouseTransferApiController.php` | 8 | API controller |
@@ -1430,7 +1443,7 @@ After all 8 phases are complete, the Warehouse Transfer module will have:
 
 1. ✅ **Strict same-branch enforcement** at every layer (service, controller, DB, client)
 2. ✅ **Two-phase flow** (draft → confirm → cancel) with proper stock movement
-3. ✅ **Pipeline-aware stock availability** preventing over-commitment
+3. ✅ **Pipeline-aware stock availability** preventing over-commitment (Phase 2 complete)
 4. ✅ **Correct reversal ordering** (dest IN before source OUT)
 5. ✅ **Complete audit trail** for every operation
 6. ✅ **Data integrity checks** via WarehouseTransferAuditService

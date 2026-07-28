@@ -5,11 +5,12 @@ namespace App\Services\Stock;
 use App\Models\WarehouseTransfer;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Stock\StockAvailabilityService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Warehouse Transfer Service — Phase 6.5.
+ * Warehouse Transfer Service — Phase 6.5 + Phase 1 + Phase 2.
  *
  * Two-phase flow:
  *   1. createTransfer(): creates draft (header + items, no stock/GL)
@@ -18,9 +19,15 @@ use Illuminate\Support\Facades\Log;
  *
  * SAME-BRANCH ONLY — Phase 1 enforcement:
  *   This module ONLY handles same-branch (inner-branch) transfers.
- *   Cross-branch transfers MUST go through the Branch Demand module,
- *   which has its own workflow (create → send → receive), approval chain,
- *   and intercompany settlement tracking.
+ *   Cross-branch transfers MUST go through the Branch Demand module.
+ *
+ * PIPELINE-AWARE AVAILABILITY — Phase 2 enforcement:
+ *   Both create and confirm use StockAvailabilityService which subtracts
+ *   the sales pipeline (open invoice dispatches) from physical qty.
+ *   This prevents over-commitment: if 100 units are physical but 30 are
+ *   already reserved by pending sales invoices, only 70 are available
+ *   for transfer. Without this, transfers + sales could compete for
+ *   the same physical stock, causing shortages on challan delivery.
  *
  * GL posting rules (same-branch only):
  *   - Stock moves: source OUT at avg_cost, dest IN at same avg_cost
@@ -41,6 +48,7 @@ class WarehouseTransferService
 {
     public function __construct(
         private StockService $stockService,
+        private StockAvailabilityService $stockAvailabilityService,
         private JournalPostingService $journalPosting
     ) {}
 
@@ -120,13 +128,24 @@ class WarehouseTransferService
             throw new \InvalidArgumentException('At least one valid item is required.');
         }
 
-        // Pre-check availability at source (will be re-checked on confirm).
+        // ★ Phase 2 — Pipeline-aware availability check at source.
+        // Uses StockAvailabilityService which subtracts the sales pipeline
+        // (open invoice dispatches not yet challan-completed) from physical qty.
+        // This prevents over-commitment when transfers + sales compete for the
+        // same physical stock.
+        // Availability is re-checked at confirm time (stock may change between
+        // draft creation and confirm).
         foreach ($validatedItems as $item) {
-            $available = $this->stockService->getWarehouseQty($fromWarehouseId, $item['product_id']);
+            $available = $this->stockAvailabilityService->getWarehouseAvailableQty(
+                $item['product_id'], $fromWarehouseId
+            );
             if ($item['qty'] > $available + 0.0001) {
+                $physical = $this->stockService->getWarehouseQty($fromWarehouseId, $item['product_id']);
+                $pipeline = $physical - $available;
                 throw new \RuntimeException(
-                    "Insufficient stock at source for product {$item['product_id']}: "
-                    . "available {$available}, requested {$item['qty']}"
+                    "Insufficient available stock at source for product {$item['product_id']}: "
+                    . "available {$available} (physical {$physical}, pipeline {$pipeline}), "
+                    . "requested {$item['qty']}"
                 );
             }
         }
@@ -222,6 +241,26 @@ class WarehouseTransferService
             $fromWh = $transfer->from_warehouse_id;
             $toWh = $transfer->to_warehouse_id;
             $transferDate = $transfer->transfer_date->format('Y-m-d');
+
+            // ★ Phase 2 — Final pipeline-aware availability check at confirm time.
+            // Stock may have changed between draft creation and confirm.
+            // This is the definitive check: if stock is insufficient (including
+            // pipeline deductions for other sales), the confirm is rejected.
+            foreach ($transfer->items as $item) {
+                $available = $this->stockAvailabilityService->getWarehouseAvailableQty(
+                    (int) $item->product_id, (int) $fromWh
+                );
+                if ((float) $item->qty > $available + 0.0001) {
+                    $physical = $this->stockService->getWarehouseQty((int) $fromWh, (int) $item->product_id);
+                    $pipeline = $physical - $available;
+                    throw new \RuntimeException(
+                        "Insufficient available stock for product {$item->product_id}: "
+                        . "available {$available} (physical {$physical}, pipeline {$pipeline}), "
+                        . "requested {$item->qty}. "
+                        . "Stock may have changed since the draft was created."
+                    );
+                }
+            }
 
             // Apply stock movements for each item.
             foreach ($transfer->items as $item) {

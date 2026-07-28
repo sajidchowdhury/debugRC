@@ -132,6 +132,12 @@
                 </button>
             </div>
             <div class="card-body p-0">
+                {{-- Phase 2: Pipeline-aware availability info --}}
+                <div class="px-3 pt-2 pb-1 small text-muted border-bottom">
+                    <i class="fas fa-info-circle me-1"></i>
+                    <strong>Available</strong> = physical qty minus pipeline (qty reserved by open sales invoices not yet challan-completed).
+                    Transfers are limited to available qty to prevent over-commitment.
+                </div>
                 <div class="table-responsive">
                     <table class="table table-sm table-hover align-middle mb-0" id="itemsTable">
                         <thead class="table-light">
@@ -139,7 +145,7 @@
                                 <th style="width:38%;">Product</th>
                                 <th class="text-end" style="width:12%;">Qty</th>
                                 <th class="text-end" style="width:12%;">Rate (Tk)</th>
-                                <th class="text-end" style="width:13%;">Available</th>
+                                <th class="text-end" style="width:18%;">Available (physical / pipeline)</th>
                                 <th class="text-end" style="width:15%;">Amount (Tk)</th>
                                 <th class="text-center" style="width:10%;"></th>
                             </tr>
@@ -242,13 +248,13 @@ $(function () {
             placeholder: '0.00'
         });
 
-        // Available (display only)
-        var $avail = $('<input>').attr({
-            type: 'text',
-            class: 'form-control form-control-sm text-end available-input bg-light',
-            readonly: true,
-            placeholder: '—'
+        // Available (display only — Phase 2: shows pipeline-aware breakdown)
+        var $avail = $('<div>').attr({
+            class: 'available-cell small text-end'
         });
+        var $availAvailable = $('<span>').attr({ class: 'fw-semibold text-primary available-value' }).text('—');
+        var $availBreakdown = $('<span>').attr({ class: 'text-muted available-breakdown' });
+        $avail.append($availAvailable).append(' ').append($availBreakdown);
 
         // Amount (display only)
         var $amt = $('<input>').attr({
@@ -294,15 +300,19 @@ $(function () {
         var pid = parseInt($tr.find('.product-select').val(), 10);
         var wid = parseInt($fromWh.val(), 10);
         var $rate  = $tr.find('.rate-input');
-        var $avail = $tr.find('.available-input');
+        var $availCell = $tr.find('.available-cell');
+        var $availValue  = $tr.find('.available-value');
+        var $availBreak  = $tr.find('.available-breakdown');
         var $amt   = $tr.find('.amount-input');
 
         $rate.prop('disabled', true);
-        $avail.val('loading…');
+        $availValue.text('loading…');
+        $availBreak.text('');
 
         if (!pid || !wid) {
             $rate.val('').prop('disabled', false);
-            $avail.val('—');
+            $tr.find('.available-value').text('—');
+            $tr.find('.available-breakdown').text('');
             $amt.val('0.00');
             recomputeTotal();
             return;
@@ -315,11 +325,27 @@ $(function () {
             dataType: 'json'
         }).done(function (data) {
             $rate.val(Number(data.rate).toFixed(2)).prop('disabled', false);
-            $avail.val(Number(data.available_qty).toFixed(4));
+            // Phase 2: Show pipeline-aware breakdown
+            var avail = Number(data.available_qty).toFixed(2);
+            var phys  = Number(data.physical_qty).toFixed(2);
+            var pipe  = Number(data.pipeline_qty).toFixed(2);
+            $tr.find('.available-value').text(avail);
+            $tr.find('.available-breakdown').text('(' + phys + ' physical, ' + pipe + ' pipeline)');
+            // Qty warning: highlight if qty > available
+            var qtyVal = parseFloat($tr.find('.qty-input').val()) || 0;
+            var availNum = parseFloat(data.available_qty);
+            if (qtyVal > availNum + 0.0001) {
+                $tr.find('.qty-input').addClass('is-invalid');
+                $tr.find('.available-cell').addClass('text-danger');
+            } else {
+                $tr.find('.qty-input').removeClass('is-invalid');
+                $tr.find('.available-cell').removeClass('text-danger');
+            }
             recomputeRow($tr);
         }).fail(function () {
             $rate.val('').prop('disabled', false);
-            $avail.val('error');
+            $tr.find('.available-value').text('error');
+            $tr.find('.available-breakdown').text('');
             $amt.val('0.00');
             recomputeTotal();
         });
@@ -330,6 +356,16 @@ $(function () {
         var rate = parseFloat($tr.find('.rate-input').val()) || 0;
         var amt  = qty * rate;
         $tr.find('.amount-input').val(amt.toFixed(2));
+        // Phase 2: Qty vs available warning
+        var availText = $tr.find('.available-value').text();
+        var availNum  = parseFloat(availText) || 0;
+        if (qty > availNum + 0.0001 && availNum > 0) {
+            $tr.find('.qty-input').addClass('is-invalid');
+            $tr.find('.available-cell').addClass('text-danger');
+        } else {
+            $tr.find('.qty-input').removeClass('is-invalid');
+            $tr.find('.available-cell').removeClass('text-danger');
+        }
         recomputeTotal();
     }
 
@@ -361,7 +397,8 @@ $(function () {
             } else {
                 // No product yet — clear rate/available
                 $tr.find('.rate-input').val('');
-                $tr.find('.available-input').val('—');
+                $tr.find('.available-value').text('—');
+                $tr.find('.available-breakdown').text('');
                 $tr.find('.amount-input').val('0.00');
             }
         });
@@ -492,10 +529,20 @@ $(function () {
 
         // 3. Each row has product + qty > 0
         var invalid = 0;
+        var overCommited = 0;
+        var overCommitDetails = [];
         $tbody.find('tr').each(function () {
             var pid = $(this).find('.product-select').val();
             var qty = parseFloat($(this).find('.qty-input').val());
             if (!pid || !qty || qty <= 0) invalid++;
+            // ★ Phase 2 — Check qty vs pipeline-aware available
+            var availNum = parseFloat($(this).find('.available-value').text()) || 0;
+            if (qty > availNum + 0.0001 && availNum > 0) {
+                overCommited++;
+                overCommitDetails.push(
+                    'Row requesting ' + qty + ' but only ' + availNum.toFixed(2) + ' available'
+                );
+            }
         });
         if (invalid > 0) {
             e.preventDefault();
@@ -503,6 +550,20 @@ $(function () {
                 icon: 'error',
                 title: 'Incomplete items',
                 text: invalid + ' row(s) are missing a product or have qty ≤ 0. Please fix or remove them.',
+                confirmButtonText: 'OK'
+            });
+            return false;
+        }
+
+        // ★ Phase 2 — Over-commitment check: qty exceeds pipeline-aware available
+        if (overCommited > 0) {
+            e.preventDefault();
+            Swal.fire({
+                icon: 'warning',
+                title: 'Insufficient available stock',
+                html: overCommited + ' row(s) request more than the available qty (physical minus pipeline).<br><br>' +
+                      overCommitDetails.join('<br>') +
+                      '<br><br>Reduce the qty or wait for pending sales to complete.',
                 confirmButtonText: 'OK'
             });
             return false;
