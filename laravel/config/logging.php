@@ -22,5 +22,13 @@ return [
             'driver' => 'errorlog',
             'level' => env('LOG_LEVEL', 'debug'),
         ],
+        // Phase 7.3 — Shadow mode comparison log channel.
+        // Logs all shadow mode diffs and alerts to a dedicated file.
+        'shadow' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/shadow_mode.log'),
+            'level' => 'debug',
+            'days' => 30,
+        ],
     ],
 ];

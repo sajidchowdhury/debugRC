@@ -43,6 +43,7 @@ use App\Http\Controllers\Admin\SystemPolicyController;
 use App\Http\Controllers\Admin\ArchiveController;
 use App\Http\Controllers\Admin\GlobalAuditController;
 use App\Http\Controllers\Admin\SystemHealthController;
+use App\Http\Controllers\Admin\ShadowModeController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -536,6 +537,20 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/warehouse-transfers', WarehouseTransferController::class)
         ->only(['index', 'create', 'store', 'show'])
         ->names('admin.warehouse-transfers');
+
+    // ============================================================
+    // Phase 7.3: Shadow Mode Dashboard (Warehouse Transfer comparison)
+    // Admin-only: compare Laravel vs legacy transfer data, track cutover readiness
+    // ============================================================
+    Route::prefix('admin/shadow-mode')->name('admin.shadow-mode.')->group(function () {
+        Route::get('/', [ShadowModeController::class, 'index'])->name('index');
+        Route::get('comparisons', [ShadowModeController::class, 'comparisons'])->name('comparisons');
+        Route::get('comparisons/{id}', [ShadowModeController::class, 'comparisonDetail'])->name('detail');
+        Route::get('cutover', [ShadowModeController::class, 'cutover'])->name('cutover');
+        Route::post('run-comparison', [ShadowModeController::class, 'runComparison'])->name('run-comparison');
+        Route::post('purge', [ShadowModeController::class, 'purge'])->name('purge');
+        Route::post('toggle-mode', [ShadowModeController::class, 'toggleMode'])->name('toggle-mode');
+    });
 
     // ============================================================
     // Phase 6.6: Damages (stock OUT + GL Dr Damage Loss / Cr Inventory)
