@@ -284,8 +284,16 @@ return new class extends Migration
         // branch-scoped select/insert/update/delete + an admin-bypass FOR ALL
         // policy. The GUC names app.is_admin + app.branch_id are the canonical
         // ones (set by SetAppBranchId middleware on every request).
+        //
+        // Idempotency: the base SQL (07_views_triggers_constraints.sql) already
+        // creates these exact policies on a fresh install. DROP POLICY IF EXISTS
+        // first so re-runs (and fresh installs where the base SQL ran first)
+        // don't fail with SQLSTATE[42710] Duplicate object.
         DB::statement('ALTER TABLE stock_take_warehouses ENABLE ROW LEVEL SECURITY');
         DB::statement('ALTER TABLE stock_take_warehouses FORCE ROW LEVEL SECURITY');
+        foreach (['select', 'insert', 'update', 'delete', 'admin'] as $verb) {
+            DB::statement("DROP POLICY IF EXISTS rls_stock_take_warehouses_{$verb} ON stock_take_warehouses");
+        }
 
         DB::statement(<<<'SQL'
             CREATE POLICY rls_stock_take_warehouses_select ON stock_take_warehouses
@@ -327,8 +335,12 @@ return new class extends Migration
         SQL);
 
         // Same five-policy set on stock_take_items.
+        // Idempotency: DROP POLICY IF EXISTS first (base SQL creates these too).
         DB::statement('ALTER TABLE stock_take_items ENABLE ROW LEVEL SECURITY');
         DB::statement('ALTER TABLE stock_take_items FORCE ROW LEVEL SECURITY');
+        foreach (['select', 'insert', 'update', 'delete', 'admin'] as $verb) {
+            DB::statement("DROP POLICY IF EXISTS rls_stock_take_items_{$verb} ON stock_take_items");
+        }
 
         DB::statement(<<<'SQL'
             CREATE POLICY rls_stock_take_items_select ON stock_take_items
