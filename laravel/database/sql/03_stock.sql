@@ -111,6 +111,13 @@ CREATE TABLE stock_adjustments (
             'opening_balance','data_migration','uom_correction',
             'post_conversion_fix','legacy_cleanup','reconciliation_variance','other'
         )),
+    -- Denormalized cache of SUM(qty * rate) over stock_adjustment_items,
+    -- computed once at create time by StockAdjustmentService::createAdjustment.
+    -- numeric(14,2) matches the model's `decimal:2` cast. Added by migration
+    -- 2025_08_05_000001_add_total_amount_to_stock_adjustments.php (hotfix for
+    -- the missing column that broke the index page's sum() and the create
+    -- flow's INSERT).
+    total_amount numeric(14,2) NOT NULL DEFAULT 0,
     reason text,
     -- Phase 3 (Stock Adjustment plan): status now includes the maker-checker
     -- approval states. draft → submitted → approved → confirmed (or
