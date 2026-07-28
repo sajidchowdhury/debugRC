@@ -22,7 +22,14 @@ use Illuminate\Database\Eloquent\Model;
  * backward compat with existing code that reads $item->qty (it equals
  * qty_base for new rows and for backfilled old rows).
  *
+ * Phase 6.2 (duplicate-product reversal fix): each item now carries the
+ * exact `stock_transaction_id` of the stock_transactions row created for it
+ * on confirm. cancelAdjustment() reverses by this id (exact row) instead of
+ * the old product+reference `.first()` lookup — so two items with the same
+ * product_id can no longer corrupt the reversal.
+ *
  * @property int $id
+ * @property int|null $stock_transaction_id  Phase 6.2 — exact stock_tx row (set on confirm).
  * @property int $stock_adjustment_id
  * @property int $product_id
  * @property string $qty           Base qty (legacy alias of qty_base).
@@ -49,6 +56,7 @@ class StockAdjustmentItem extends Model
         'uom_factor',    // Phase 5
         'rate',
         'reason',
+        'stock_transaction_id', // Phase 6.2
     ];
 
     protected $casts = [
@@ -58,6 +66,7 @@ class StockAdjustmentItem extends Model
         'qty_base'    => 'decimal:4',
         'uom_factor'  => 'decimal:6',
         'rate'        => 'decimal:2',
+        'stock_transaction_id' => 'integer', // Phase 6.2
     ];
 
     public function adjustment(): \Illuminate\Database\Eloquent\Relations\BelongsTo
@@ -68,6 +77,18 @@ class StockAdjustmentItem extends Model
     public function product(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(Product::class, 'product_id');
+    }
+
+    /**
+     * Phase 6.2 — the exact stock_transactions row created for this item on
+     * confirm. Used by cancelAdjustment() to reverse the precise row (not
+     * a product+reference `.first()` lookup, which was ambiguous when two
+     * items shared a product_id). Null for pre-Phase-6.2 rows (cancel falls
+     * back to the legacy lookup for those).
+     */
+    public function stockTransaction(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(StockTransaction::class, 'stock_transaction_id');
     }
 
     /**

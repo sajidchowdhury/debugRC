@@ -119,6 +119,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Force-confirmer roles (Phase 6.1)
+    |--------------------------------------------------------------------------
+    |
+    | Roles permitted to FORCE-confirm a DECREASE adjustment past the
+    | pipeline-availability check (physical − open sales-invoice dispatches).
+    | The force path is the legitimate escape hatch for legacy-cleanup /
+    | data-migration corrections that must post a decrease below the
+    | pipeline-reserved qty. Every force-confirm is logged as a distinct
+    | 'force_confirm' audit action (Phase 4 vocab) + requires a mandatory
+    | force_reason, so the bypass is always visible in the audit timeline.
+    |
+    | Default: admin only. A tenant may add 'manager' if their governance
+    | model allows manager-level overrides (the force_reason is still
+    | mandatory + the action is still audited).
+    */
+
+    'force_confirmer_roles' => ['admin'],
+
+    /*
+    |--------------------------------------------------------------------------
     | Block closed period
     |--------------------------------------------------------------------------
     |

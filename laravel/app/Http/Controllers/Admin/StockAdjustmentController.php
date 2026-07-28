@@ -233,6 +233,10 @@ class StockAdjustmentController extends Controller
             'canSubmit'  => $user ? $this->policy->canSubmit($user) : false,
             'canApprove' => $user ? $this->policy->canApprove($user) : false,
             'canConfirm' => $user ? $this->policy->canConfirm($user) : false,
+            // Phase 6.1 — can the viewer force-confirm a decrease past the
+            // pipeline-availability check? (admin only; surfaces the force
+            // checkbox + force_reason textarea in the confirm Swal.)
+            'canForceConfirm' => $user ? $this->policy->canForceConfirm($user) : false,
             'isSubmitter' => $user ? $this->policy->isSubmitter($user, $adjustment) : false,
         ]);
     }
@@ -243,26 +247,53 @@ class StockAdjustmentController extends Controller
      * Phase 3: now passes confirm_reason to the service (G9 — was discarded).
      * The service enforces the approved-state requirement (or draft when
      * !requiresApproval).
+     *
+     * Phase 6.1: accepts an optional `force` flag + `force_reason` for
+     * decrease adjustments that would dip below pipeline-available stock.
+     * The service re-validates admin role + requires a non-empty reason
+     * (defense-in-depth — the Policy is checked here, the service re-checks).
      */
     public function confirm(Request $request, int $id)
     {
         $request->validate([
             'confirm_reason' => 'nullable|string|max:500',
+            // Phase 6.1 — force bypass of the pipeline-availability check.
+            'force' => 'nullable|boolean',
+            'force_reason' => 'nullable|string|max:1000',
         ]);
 
         // Phase 1: load first so the Policy can check role + branch.
         $adjustment = StockAdjustment::findOrFail($id);
         $this->authorize('confirm', $adjustment);
 
+        $force = (bool) $request->input('force', false);
+        $forceReason = $request->input('force_reason');
+
+        // Phase 6.1 — defense-in-depth: if force is requested, the caller
+        // must be an admin (the service re-checks, but surfacing the error
+        // here gives a cleaner 403 than the service's RuntimeException).
+        if ($force) {
+            $user = $request->user();
+            if (!$user || !$this->policy->canForceConfirm($user)) {
+                return back()->with('error', 'Only an admin can force-confirm a decrease past the pipeline-availability check.');
+            }
+        }
+
         try {
             $adjustment = $this->adjustmentService->confirmAdjustment(
                 $id,
                 auth()->id(),
-                $request->input('confirm_reason')
+                $request->input('confirm_reason'),
+                $force,
+                $forceReason
             );
 
+            $msg = $force
+                ? "Adjustment {$adjustment->adjustment_code} force-confirmed (pipeline check bypassed). Stock updated + GL posted."
+                : "Adjustment {$adjustment->adjustment_code} confirmed. Stock updated + GL posted.";
+
             return redirect()->route('admin.stock-adjustments.show', $adjustment)
-                ->with('success', "Adjustment {$adjustment->adjustment_code} confirmed. Stock updated + GL posted.");
+                ->with('success', $msg);
         } catch (\Throwable $e) {
             return back()->with('error', $e->getMessage());
         }

@@ -568,6 +568,8 @@
                         <form method="POST" action="{{ route('admin.stock-adjustments.confirm', $adj) }}" id="confirmForm">
                             @csrf
                             <input type="hidden" name="confirm_reason" id="confirmReasonField" value="">
+                            <input type="hidden" name="force" id="forceField" value="">
+                            <input type="hidden" name="force_reason" id="forceReasonField" value="">
                             <button type="button" class="btn btn-success w-100 mb-2" id="confirmBtn">
                                 <i class="fas fa-circle-check me-1"></i> Confirm &amp; post (one step)
                             </button>
@@ -621,6 +623,8 @@
                         <form method="POST" action="{{ route('admin.stock-adjustments.confirm', $adj) }}" id="confirmForm">
                             @csrf
                             <input type="hidden" name="confirm_reason" id="confirmReasonField" value="">
+                            <input type="hidden" name="force" id="forceField" value="">
+                            <input type="hidden" name="force_reason" id="forceReasonField" value="">
                             <button type="button" class="btn btn-success w-100 mb-2" id="confirmBtn">
                                 <i class="fas fa-circle-check me-1"></i> Confirm &amp; post
                             </button>
@@ -804,22 +808,80 @@ $(function () {
     });
 
     // ====== Confirm (approved → confirmed, or draft → confirmed when below threshold) ======
+    // Phase 6.1 — when the viewer can force-confirm (admin) AND the adjustment
+    // is a decrease, the Swal shows an optional "force past pipeline" checkbox
+    // + a force_reason textarea (required when the checkbox is checked). The
+    // force path bypasses the pipeline-availability check + is logged as a
+    // distinct 'force_confirm' audit action.
     $('#confirmBtn').on('click', function () {
+        var canForce   = @json($canForceConfirm ?? false);
+        var isDecrease = @json($adj->isDecrease());
+        var showForce  = canForce && isDecrease;
+
+        var html =
+            '<p class="text-start">This will <strong>apply stock movements</strong> and <strong>post the GL journal entry</strong>.</p>' +
+            '<div class="text-start mt-2">' +
+              '<label class="form-label small fw-semibold">Optional confirm reason</label>' +
+              '<textarea id="swalConfirmReason" class="form-control form-control-sm" rows="2" placeholder="e.g. Approved by manager after physical count."></textarea>' +
+            '</div>';
+
+        if (showForce) {
+            html +=
+                '<div class="alert alert-warning small mt-3 mb-2 text-start">' +
+                  '<i class="fas fa-triangle-exclamation me-1"></i>' +
+                  'This is a <strong>decrease</strong>. Stock is normally blocked from dropping below the ' +
+                  'sales-pipeline-reserved qty. You can <strong>force</strong> past that check with a reason ' +
+                  '(logged as a distinct audit action).' +
+                '</div>' +
+                '<div class="form-check text-start ms-1">' +
+                  '<input class="form-check-input" type="checkbox" id="swalForce">' +
+                  '<label class="form-check-label small fw-semibold" for="swalForce">' +
+                    'Force — bypass pipeline-availability check' +
+                  '</label>' +
+                '</div>' +
+                '<div class="text-start mt-2" id="swalForceReasonWrap" style="display:none;">' +
+                  '<label class="form-label small fw-semibold">Force reason <span class="text-danger">*</span></label>' +
+                  '<textarea id="swalForceReason" class="form-control form-control-sm" rows="2" placeholder="Why is this decrease being forced past the pipeline check?"></textarea>' +
+                '</div>';
+        }
+
         Swal.fire({
             icon: 'question',
             title: 'Confirm this adjustment?',
-            html: '<p class="text-start">This will <strong>apply stock movements</strong> and <strong>post the GL journal entry</strong>.</p>',
-            input: 'textarea',
-            inputLabel: 'Optional confirm reason',
-            inputPlaceholder: 'e.g. Approved by manager after physical count.',
+            html: html,
             showCancelButton: true,
             confirmButtonText: '<i class="fas fa-check"></i> Confirm',
             confirmButtonColor: '#198754',
             cancelButtonText: 'Cancel',
-            reverseButtons: true
+            reverseButtons: true,
+            didOpen: function (el) {
+                // Toggle the force_reason textarea visibility when the
+                // checkbox state changes.
+                var $cb = $('#swalForce', el);
+                $cb.on('change', function () {
+                    $('#swalForceReasonWrap').toggle(this.checked);
+                });
+            },
+            preConfirm: function () {
+                var reason = $('#swalConfirmReason').val() || '';
+                var force = false;
+                var forceReason = '';
+                if (showForce) {
+                    force = $('#swalForce').is(':checked');
+                    forceReason = ($('#swalForceReason').val() || '').trim();
+                    if (force && forceReason === '') {
+                        Swal.showValidationMessage('A force reason is required to bypass the pipeline-availability check.');
+                        return false;
+                    }
+                }
+                return { reason: reason, force: force, forceReason: forceReason };
+            }
         }).then(function (result) {
             if (result.isConfirmed) {
-                $('#confirmReasonField').val(result.value || '');
+                var v = result.value || { reason: '', force: false, forceReason: '' };
+                $('#confirmReasonField').val(v.reason);
+                $('#forceField').val(v.force ? '1' : '');
+                $('#forceReasonField').val(v.forceReason);
                 var $btn = $('#confirmBtn');
                 $btn.prop('disabled', true)
                     .html('<i class="fas fa-spinner fa-spin me-1"></i> Confirming…');

@@ -503,3 +503,48 @@ Work Log:
 Stage Summary:
 Files modified: laravel/app/Services/Stock/StockAdjustmentService.php (postAdjustmentGL return type ?int, zero-amount branch returns null, doc-block explains the FK rationale).
 Gap closed: confirm of a zero-amount / zero-rate adjustment no longer 500s with a FK violation. journal_entry_id is now correctly NULL for no-GL postings.
+
+---
+Task ID: SA-P6
+Agent: Main Agent (Stock Adjustment Phase 6 implementation)
+Task: Phase 6 — Pipeline-Aware Availability, Reversal Safety & Date Integrity. Close G3 (non-pipeline-aware availability for decreases), G10 (back-dated reversal transaction_date = today), G11 (duplicate-product-per-adjustment + ambiguous .first() reversal lookup).
+
+Work Log:
+- Read STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md §Phase 6 for the detailed spec (6.1 pipeline-aware availability + admin force, 6.2 stock_transaction_id + UNIQUE, 6.3 back-dated reversal date, 6.4 dedup guard).
+- Investigated existing infrastructure: StockAvailabilityService::getWarehouseAvailableQty (physical − open sales-invoice dispatches, 5-min cache, already wired into SalesInvoice/SalesChallan invalidation); StockService::applyTransaction already returns a StockTransaction model (id available — just wasn't being captured); reverseTransaction + reverseJournalEntry both hardcoded now() for the reversal date; stock_adjustment_items has no stock_transaction_id + no UNIQUE(stock_adjustment_id, product_id).
+- Created migration 2025_08_07_000001_add_stock_transaction_id_to_stock_adjustment_items.php:
+  - ADD COLUMN stock_transaction_id (nullable bigint, FK → stock_transactions ON DELETE SET NULL).
+  - CREATE INDEX idx_sai_stock_tx (partial, WHERE NOT NULL).
+  - ADD CONSTRAINT sai_adj_product_unique UNIQUE (stock_adjustment_id, product_id) — DEFENSIVE: counts existing duplicate groups first; SKIPS with Log::warning when dupes exist (rather than failing the migration). Idempotent (Schema::hasColumn + pg_constraint/pg_indexes introspection). Safe up/down.
+- Updated StockAdjustmentService:
+  - Constructor injects StockAvailabilityService (6th param).
+  - createAdjustment decrease pre-check uses pipeline-aware getWarehouseAvailableQty (was getWarehouseQty); error message names the pipeline + the admin force path.
+  - confirmAdjustment signature: +bool $force=false, +?string $forceReason=null. Inside lockForUpdate: re-checks pipeline availability for decreases (throws with product/available/requested on failure); force=true requires policy->canForceConfirm($user) (admin) + non-empty force_reason. Captures applyTransaction's returned StockTransaction->id and UPDATEs stock_adjustment_items.stock_transaction_id (6.2). Audit action = force_confirm (distinct from confirm) when force used, with forced + force_reason in payload.
+  - cancelAdjustment passes $adjustment->adjustment_date into reverseJournalEntry + reverseTransaction (6.3). Reverses by stock_transaction_id (exact row) with legacy product+reference fallback for pre-Phase-6.2 rows (6.2).
+  - validateCreateInput rejects duplicate product_id in payload (6.4) — names both row indices.
+- Updated StockService: reverseTransaction accepts ?string $reversalDate=null; new private resolveReversalDate(warehouseId, requestedDate) looks up warehouse's branch + accounting_periods.closed_through_date, falls back to today() + Log::warning when requested date is frozen (reversals never blocked outright).
+- Updated JournalPostingService: reverseJournalEntry accepts ?string $entryDate=null; defaults to original JE's entry_date (was hardcoded now()). skip_period_check stays true (reversals can post to closed periods — corrective).
+- Updated StockAdjustmentItem model: stock_transaction_id in $fillable + $casts; new stockTransaction() BelongsTo relation.
+- Updated StockAdjustmentPolicyService: new canForceConfirm(User) helper (reads force_confirmer_roles config, default ['admin']).
+- Updated config/stock_adjustment.php: new force_confirmer_roles knob (default ['admin']) with full doc-block.
+- Updated StockAdjustmentController: confirm() validates + threads force + force_reason (defense-in-depth admin check before service re-check); show() passes canForceConfirm flag to view.
+- Updated show.blade.php: both confirm forms (draft one-step + approved) carry hidden force + force_reason fields; confirm Swal now renders custom HTML with optional confirm_reason textarea + (when canForceConfirm && isDecrease) a force checkbox + force_reason textarea (required when checked, validated via preConfirm + didOpen toggle).
+- Updated canonical SQL schema (03_stock.sql): stock_adjustment_items gains stock_transaction_id column + sai_adj_product_unique UNIQUE constraint + idx_sai_stock_tx partial index.
+- Updated STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md: Phase 6 → ✅ DONE; G3/G10/G11 → ✅ FIXED in gap table; verification checklist checked + full Implementation Summary appended (files created/modified, 7 key design decisions, gaps closed).
+- NOTE: PHP not installed in this sandbox — syntax verified by careful manual review (consistent with Phases 1-5). User must run `docker compose exec rcerp_app php artisan migrate` to apply migration 2025_08_07_000001.
+
+Stage Summary:
+Files created:
+- laravel/database/migrations/2025_08_07_000001_add_stock_transaction_id_to_stock_adjustment_items.php (stock_transaction_id column + FK + partial index + UNIQUE constraint, defensive dupe-check, idempotent)
+
+Files modified:
+- laravel/app/Services/Stock/StockAdjustmentService.php (StockAvailabilityService injection, pipeline-aware pre-check + confirm re-check, force/force_reason params, stock_transaction_id capture on confirm, exact-row reversal on cancel, adjustment_date passed to reversals, dedup guard in validateCreateInput)
+- laravel/app/Services/Stock/StockService.php (reverseTransaction accepts reversalDate; new resolveReversalDate helper with closed-period → today + warning fallback)
+- laravel/app/Services/Accounting/JournalPostingService.php (reverseJournalEntry accepts entryDate; defaults to original JE entry_date)
+- laravel/app/Models/StockAdjustmentItem.php (stock_transaction_id fillable/cast + stockTransaction() relation)
+- laravel/app/Services/Stock/StockAdjustmentPolicyService.php (canForceConfirm helper)
+- laravel/config/stock_adjustment.php (force_confirmer_roles knob)
+- laravel/app/Http/Controllers/Admin/StockAdjustmentController.php (confirm threads force/force_reason; show passes canForceConfirm)
+- laravel/resources/views/admin/stock-adjustments/show.blade.php (hidden force fields + force-aware confirm Swal)
+- laravel/database/sql/03_stock.sql (stock_adjustment_items: stock_transaction_id + UNIQUE + partial index)
+- STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md (Phase 6 DONE + gap table G3/G10/G11 FIXED + Implementation Summary)

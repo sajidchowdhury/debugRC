@@ -129,6 +129,27 @@ class StockAdjustmentPolicyService
     }
 
     /**
+     * Phase 6.1 — can the given user FORCE-confirm a decrease adjustment
+     * past the pipeline-availability check?
+     *
+     * Force-confirm is the legitimate escape hatch for legacy-cleanup /
+     * data-migration corrections that must post a decrease below the
+     * sales-pipeline-reserved qty (e.g. writing off stock that was
+     * invoiced-but-never-dispatched and is being reconciled out).
+     *
+     * Restricted to admin only — the override is logged as a distinct
+     * 'force_confirm' audit action (Phase 4 vocab) so the bypass is
+     * always visible in the audit timeline. Configurable via
+     * `force_confirmer_roles` (default: ['admin']) so a tenant can add
+     * 'manager' if their governance model allows it.
+     */
+    public function canForceConfirm(User $user): bool
+    {
+        $roles = config('stock_adjustment.force_confirmer_roles', ['admin']);
+        return $user->hasRole(...$roles);
+    }
+
+    /**
      * Segregation of duties: the user who submitted an adjustment CANNOT
      * approve their own submission. Enforced by StockAdjustmentService::
      * approveAdjustment. Exposed here so the UI can hide the Approve button

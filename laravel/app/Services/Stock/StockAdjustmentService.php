@@ -47,7 +47,8 @@ class StockAdjustmentService
         private JournalPostingService $journalPosting,
         private StockAdjustmentPolicyService $policy,
         private StockAdjustmentAuditLogger $audit,
-        private UomConversionService $uom  // Phase 5 — UOM conversion
+        private UomConversionService $uom,  // Phase 5 — UOM conversion
+        private StockAvailabilityService $availability // Phase 6.1 — pipeline-aware
     ) {}
 
     /**
@@ -154,14 +155,28 @@ class StockAdjustmentService
         // Phase 5: the availability check uses qty_base (the converted base
         // qty that will actually leave the warehouse) — not the entered qty.
         // A 2-Carton decrease (factor 12) must check against 24 Pcs of stock.
+        //
+        // Phase 6.1 (G3 fix): the pre-check now uses PIPELINE-AWARE
+        // availability (StockAvailabilityService::getWarehouseAvailableQty
+        // = physical − open sales-invoice dispatches) — not bare
+        // warehouse_stock.qty. This prevents a decrease adjustment from
+        // draining stock that is soft-promised to a sales invoice. The
+        // confirm-time re-check (inside lockForUpdate) uses the same call.
+        // A confirmed draft can still be created when pipeline-blocked (the
+        // drafter may intend to force it via an admin override on confirm).
         if ($adjustmentType === 'decrease') {
             foreach ($validatedItems as $item) {
-                $available = $this->stockService->getWarehouseQty($warehouseId, $item['product_id']);
+                $available = $this->availability->getWarehouseAvailableQty(
+                    $item['product_id'],
+                    $warehouseId
+                );
                 if ($item['qty_base'] > $available + 0.0001) {
                     throw new \RuntimeException(
-                        "Insufficient stock for product {$item['product_id']}: "
+                        "Insufficient available stock for product {$item['product_id']}: "
                         . "available {$available}, requested {$item['qty_base']}"
                         . ($item['uom_id'] ? " (base qty from {$item['qty_entered']} entered)" : '')
+                        . ". Stock is soft-promised to open sales invoices."
+                        . " An admin can force-confirm with a reason on the confirm step."
                     );
                 }
             }
@@ -456,15 +471,39 @@ class StockAdjustmentService
      * confirmed_by/at + confirm_reason (G9 fix — the posting action is now
      * attributed and the previously-discarded confirm_reason is persisted).
      *
+     * Phase 6.1 (G3 fix — pipeline-aware availability): for decrease
+     * adjustments, re-checks PIPELINE-AWARE availability (physical − open
+     * sales-invoice dispatches) inside the lockForUpdate window — so a
+     * decrease cannot drain stock soft-promised to a sales invoice. An
+     * admin can bypass this with $force=true + a mandatory $forceReason
+     * (logged as a 'force_confirm' audit action — the legitimate path for
+     * legacy-cleanup corrections that must go below pipeline).
+     *
+     * Phase 6.2 (G11 fix — duplicate-product reversal): captures the
+     * stock_transactions.id returned by applyTransaction and writes it to
+     * stock_adjustment_items.stock_transaction_id, so cancelAdjustment can
+     * reverse the EXACT row (not a product+reference `.first()` lookup that
+     * was ambiguous when two items shared a product_id).
+     *
      * @param int         $adjustmentId
      * @param int         $confirmedBy
      * @param string|null $confirmReason  Optional note from the confirmer.
+     * @param bool        $force          Phase 6.1 — admin override: bypass
+     *     the pipeline-aware availability check for a decrease. Requires
+     *     $forceReason + the confirmer must be an admin (policy-gated).
+     * @param string|null $forceReason    Required when $force=true.
      * @return StockAdjustment
-     * @throws \RuntimeException  If not confirmable, or stock/GL posting fails.
+     * @throws \RuntimeException  If not confirmable, stock/GL posting fails,
+     *     or $force is used without admin role + a force reason.
      */
-    public function confirmAdjustment(int $adjustmentId, int $confirmedBy, ?string $confirmReason = null): StockAdjustment
-    {
-        return DB::transaction(function () use ($adjustmentId, $confirmedBy, $confirmReason) {
+    public function confirmAdjustment(
+        int $adjustmentId,
+        int $confirmedBy,
+        ?string $confirmReason = null,
+        bool $force = false,
+        ?string $forceReason = null
+    ): StockAdjustment {
+        return DB::transaction(function () use ($adjustmentId, $confirmedBy, $confirmReason, $force, $forceReason) {
             $adjustment = StockAdjustment::with('items')->lockForUpdate()->find($adjustmentId);
 
             if (!$adjustment) {
@@ -483,6 +522,50 @@ class StockAdjustmentService
 
             $warehouseId = $adjustment->warehouse_id;
             $sign = $adjustment->isIncrease() ? 1 : -1;
+
+            // Phase 6.1 — pipeline-aware availability re-check for decreases.
+            // Done INSIDE the lockForUpdate window so the check sees the
+            // committed state (no phantom-read race with a concurrent sales
+            // finalize). The create-time pre-check is advisory; this is the
+            // authoritative gate. $force (admin only) bypasses it.
+            if ($adjustment->isDecrease()) {
+                $forceReason = $forceReason !== null ? trim($forceReason) : null;
+
+                if ($force) {
+                    $confirmer = User::find($confirmedBy);
+                    if (!$confirmer || !$this->policy->canForceConfirm($confirmer)) {
+                        throw new \RuntimeException(
+                            'Only an admin can force-confirm a decrease past the pipeline-availability check.'
+                        );
+                    }
+                    if ($forceReason === '') {
+                        throw new \RuntimeException(
+                            'A force reason is required to bypass the pipeline-availability check.'
+                        );
+                    }
+                } else {
+                    foreach ($adjustment->items as $item) {
+                        $available = $this->availability->getWarehouseAvailableQty(
+                            $item->product_id,
+                            $warehouseId
+                        );
+                        $needed = $item->baseQty();
+                        if ($needed > $available + 0.0001) {
+                            throw new \RuntimeException(
+                                "Insufficient available stock for product {$item->product_id}: "
+                                . "available {$available}, requested {$needed}. "
+                                . "Stock is soft-promised to open sales invoices. "
+                                . "An admin can force-confirm with a reason."
+                            );
+                        }
+                    }
+                }
+            } else {
+                // Force is meaningless for increase adjustments — silently
+                // ignored (don't reject; the UI may post force=false always).
+                $force = false;
+                $forceReason = null;
+            }
 
             // Phase 2 (G17 fix): opening-balance adjustments write their
             // stock_transactions rows with reference_type='opening_balance'
@@ -505,10 +588,15 @@ class StockAdjustmentService
             // increase (factor 12) posts +24 Pcs to warehouse_stock.
             // StockAdjustmentItem::baseQty() returns qty_base when set, falling
             // back to the legacy `qty` column for pre-Phase-5 rows.
+            //
+            // Phase 6.2 (G11 fix): applyTransaction returns the created
+            // StockTransaction model — capture its id and write it to
+            // stock_adjustment_items.stock_transaction_id so cancelAdjustment
+            // can reverse the EXACT row (not a product+reference lookup).
             foreach ($adjustment->items as $item) {
                 $qtyChange = $sign * $item->baseQty();
 
-                $this->stockService->applyTransaction([
+                $stockTx = $this->stockService->applyTransaction([
                     'warehouse_id' => $warehouseId,
                     'product_id' => $item->product_id,
                     'qty' => $qtyChange,
@@ -520,6 +608,13 @@ class StockAdjustmentService
                     'transaction_date' => $adjustment->adjustment_date->format('Y-m-d'),
                     'created_by' => $confirmedBy,
                 ]);
+
+                // Persist the exact stock_transaction id on the item row.
+                // (Idempotent: if the item already has this id, the UPDATE
+                // is a no-op; safe under re-confirm / retry.)
+                DB::table('stock_adjustment_items')
+                    ->where('id', $item->id)
+                    ->update(['stock_transaction_id' => $stockTx->id]);
             }
 
             // Post the GL journal entry.
@@ -544,12 +639,20 @@ class StockAdjustmentService
             // transition: stock moved + GL posted). Captures the journal
             // entry id + stock-ledger reference_type so the audit row is
             // self-contained for forensic review.
-            $this->audit->log($adjustment, 'confirm', [
+            //
+            // Phase 6.1: when $force was used, log 'force_confirm' instead
+            // of 'confirm' so the audit timeline surfaces the override
+            // distinctly (a force-confirm is a flagged, admin-mediated
+            // exception — auditors want to see it stand out).
+            $auditAction = $force ? 'force_confirm' : 'confirm';
+            $this->audit->log($adjustment, $auditAction, [
                 'confirm_reason'   => $confirmReason ? trim($confirmReason) : null,
                 'journal_entry_id' => $journalEntryId,
                 'total_amount'     => (float) $adjustment->total_amount,
                 'items_count'      => $adjustment->items->count(),
                 'reference_type'   => $referenceType,
+                'forced'           => $force,
+                'force_reason'     => $force ? $forceReason : null,
             ]);
 
             return $adjustment;
@@ -601,35 +704,59 @@ class StockAdjustmentService
             $wasConfirmed = $adjustment->isConfirmed();
 
             if ($wasConfirmed) {
+                // Phase 6.3 (G10 fix — back-dated reversal date): pass the
+                // adjustment's adjustment_date into both the GL + stock
+                // reversals so the reversal lines up with the ORIGINAL posting
+                // (not "today"). reverseJournalEntry + reverseTransaction both
+                // now accept a date param and apply a closed-period fallback
+                // to today() when the requested date is frozen.
+                $reversalDate = $adjustment->adjustment_date->format('Y-m-d');
+
                 // Reverse the GL journal entry.
                 if ($adjustment->journal_entry_id) {
                     $this->journalPosting->reverseJournalEntry(
                         $adjustment->journal_entry_id,
                         $cancelledBy,
-                        "Stock adjustment cancelled: {$reason}"
+                        "Stock adjustment cancelled: {$reason}",
+                        $reversalDate
                     );
                 }
 
                 // Reverse each stock movement.
                 //
-                // Phase 2 (G17 fix): an opening-balance adjustment's stock
-                // movements were written with reference_type='opening_balance',
-                // not 'stock_adjustment'. Look up by reference_id alone (and
-                // restrict to the two reference_types this module can produce)
-                // so cancellations work regardless of category.
+                // Phase 6.2 (G11 fix — duplicate-product reversal): reverse
+                // by the EXACT stock_transaction_id captured on the item row
+                // at confirm time (not a product+reference `.first()` lookup,
+                // which was ambiguous when two items shared a product_id).
+                // Fall back to the legacy product+reference lookup ONLY for
+                // pre-Phase-6.2 rows whose stock_transaction_id is NULL
+                // (adjustments confirmed before this migration shipped).
+                //
+                // Phase 2 (G17 fix) preserved: the legacy fallback restricts
+                // to reference_type IN ('stock_adjustment','opening_balance')
+                // so opening-balance adjustments cancel correctly.
                 foreach ($adjustment->items as $item) {
-                    $stockTx = DB::table('stock_transactions')
-                        ->whereIn('reference_type', ['stock_adjustment', 'opening_balance'])
-                        ->where('reference_id', $adjustment->id)
-                        ->where('product_id', $item->product_id)
-                        ->where('is_reversed', false)
-                        ->first();
+                    $stockTxId = $item->stock_transaction_id
+                        ? (int) $item->stock_transaction_id
+                        : null;
 
-                    if ($stockTx) {
+                    if ($stockTxId === null) {
+                        // Legacy fallback for pre-Phase-6.2 rows.
+                        $stockTx = DB::table('stock_transactions')
+                            ->whereIn('reference_type', ['stock_adjustment', 'opening_balance'])
+                            ->where('reference_id', $adjustment->id)
+                            ->where('product_id', $item->product_id)
+                            ->where('is_reversed', false)
+                            ->first();
+                        $stockTxId = $stockTx ? (int) $stockTx->id : null;
+                    }
+
+                    if ($stockTxId !== null) {
                         $this->stockService->reverseTransaction(
-                            $stockTx->id,
+                            $stockTxId,
                             $cancelledBy,
-                            "Stock adjustment cancelled: {$reason}"
+                            "Stock adjustment cancelled: {$reason}",
+                            $reversalDate
                         );
                     }
                 }
@@ -804,6 +931,28 @@ class StockAdjustmentService
         }
         if (empty($data['items']) || !is_array($data['items'])) {
             throw new \InvalidArgumentException('At least one item is required.');
+        }
+
+        // Phase 6.4 (G11 fix — application-layer dedup guard).
+        // Reject duplicate product_id within the same adjustment payload.
+        // The DB-level UNIQUE(stock_adjustment_id, product_id) constraint
+        // (migration 2025_08_07_000001) is the backstop, but this front-line
+        // check gives a clean, field-specific error message before any DB
+        // write — and survives on databases where the UNIQUE could not be
+        // added (historical duplicates blocked the constraint add).
+        $seenProductIds = [];
+        foreach ($data['items'] as $idx => $item) {
+            $pid = (int) ($item['product_id'] ?? 0);
+            if ($pid <= 0) {
+                continue; // missing product_id is a different validation error
+            }
+            if (isset($seenProductIds[$pid])) {
+                throw new \InvalidArgumentException(
+                    "Duplicate product_id {$pid} in items (rows {$seenProductIds[$pid]} and {$idx}). "
+                    . 'Each product may appear only once per adjustment — combine the quantities into one row.'
+                );
+            }
+            $seenProductIds[$pid] = $idx;
         }
     }
 

@@ -149,14 +149,28 @@ class JournalPostingService
      * Reverse a journal entry (swap debits/credits, mark original is_reversed).
      * Append-only: the original is never mutated (except the is_reversed flag).
      *
+     * Phase 6.3 (Stock Adjustment plan — back-dated reversal date, G10):
+     *   The reversal JE's `entry_date` is now taken from $entryDate (defaults
+     *   to the ORIGINAL JE's entry_date so the reversal lines up with the
+     *   posting it undoes — not "today", which used to distort historical
+     *   P&L). skip_period_check stays true (reversals can post to closed
+     *   periods — they're corrective, not new postings); the caller is
+     *   responsible for choosing a sensible date.
+     *
      * @param int $journalEntryId
      * @param int $reversedBy
      * @param string $reason
+     * @param string|null $entryDate  Y-m-d. Defaults to the original JE's
+     *     entry_date (so a back-dated Jan-1 posting reverses on Jan-1).
      * @return int The reversal journal_entry_id.
      */
-    public function reverseJournalEntry(int $journalEntryId, int $reversedBy, string $reason = ''): int
-    {
-        return DB::transaction(function () use ($journalEntryId, $reversedBy, $reason) {
+    public function reverseJournalEntry(
+        int $journalEntryId,
+        int $reversedBy,
+        string $reason = '',
+        ?string $entryDate = null
+    ): int {
+        return DB::transaction(function () use ($journalEntryId, $reversedBy, $reason, $entryDate) {
             $original = DB::table('journal_entries')
                 ->where('id', $journalEntryId)
                 ->lockForUpdate()
@@ -185,9 +199,16 @@ class JournalPostingService
                 ];
             })->toArray();
 
+            // Phase 6.3 — reversal entry_date defaults to the ORIGINAL entry's
+            // date (not today), so the reversal lines up with the posting it
+            // undoes. The caller (e.g. StockAdjustmentService::cancelAdjustment)
+            // passes the adjustment's adjustment_date. skip_period_check stays
+            // true — reversals are corrective and may post into closed periods.
+            $resolvedEntryDate = $entryDate ?? ($original->entry_date ?? now()->format('Y-m-d'));
+
             // Create the reversal entry (skip period check — reversals can post to closed periods).
             $reversalId = $this->createJournalEntry([
-                'entry_date' => now()->format('Y-m-d'),
+                'entry_date' => $resolvedEntryDate,
                 'reference_type' => 'reversal',
                 'reference_id' => $original->id,
                 'branch_id' => $original->branch_id,

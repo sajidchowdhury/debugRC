@@ -157,6 +157,13 @@ CREATE INDEX idx_sa_submitted ON stock_adjustments(branch_id, submitted_at) WHER
 
 CREATE TABLE stock_adjustment_items (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    -- Phase 6.2 (Stock Adjustment plan): the exact stock_transactions row
+    -- created for this item on confirm. Captured from applyTransaction's
+    -- return value so cancelAdjustment can reverse the EXACT row (not a
+    -- product+reference `.first()` lookup that was ambiguous when two
+    -- items shared a product_id). Added by migration
+    -- 2025_08_07_000001_add_stock_transaction_id_to_stock_adjustment_items.php.
+    stock_transaction_id bigint REFERENCES stock_transactions(id) ON DELETE SET NULL,
     stock_adjustment_id integer NOT NULL REFERENCES stock_adjustments(id) ON DELETE CASCADE,
     product_id integer NOT NULL REFERENCES products(id),
     qty numeric(14,4) NOT NULL,
@@ -173,10 +180,17 @@ CREATE TABLE stock_adjustment_items (
     qty_base numeric(14,4),
     uom_factor numeric(14,6),
     rate numeric(12,2) DEFAULT 0,
-    reason text
+    reason text,
+    -- Phase 6.2 (G11 fix): one product per adjustment — the DB-level backstop
+    -- for the duplicate-product-per-adjustment bug. The application-layer
+    -- dedup guard (StockAdjustmentService::validateCreateInput) is the
+    -- runtime gate; this is the invariant.
+    CONSTRAINT sai_adj_product_unique UNIQUE (stock_adjustment_id, product_id)
 );
 CREATE INDEX idx_sai_adjustment ON stock_adjustment_items(stock_adjustment_id);
 CREATE INDEX idx_sai_product ON stock_adjustment_items(product_id);
+-- Phase 6.2 — powers the cancel-time reverse-by-item lookup.
+CREATE INDEX idx_sai_stock_tx ON stock_adjustment_items(stock_transaction_id) WHERE stock_transaction_id IS NOT NULL;
 
 CREATE TABLE stock_take_sessions (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -175,15 +175,29 @@ class StockService
      * Reversals are append-only — the original is never mutated except for
      * the is_reversed flag.
      *
+     * Phase 6.3 (Stock Adjustment plan — back-dated reversal date, G10):
+     *   The reversal stock_transaction's `transaction_date` is now taken from
+     *   the $reversalDate param (defaults to the ORIGINAL transaction_date so
+     *   the reversal lines up with the posting it undoes — not "today", which
+     *   used to distort historical reports). When the requested date falls in
+     *   a closed accounting period, the method falls back to today() and logs
+     *   a warning (reversals can't be blocked outright — they're corrective).
+     *
      * @param int $originalTransactionId
      * @param int $reversedBy
      * @param string $reason
+     * @param string|null $reversalDate  Y-m-d. Defaults to the original
+     *     transaction's transaction_date. Closed-period → today() + warning.
      * @return StockTransaction The reversal transaction.
      * @throws \RuntimeException If original not found, already reversed, or qty is zero.
      */
-    public function reverseTransaction(int $originalTransactionId, int $reversedBy, string $reason = ''): StockTransaction
-    {
-        return DB::transaction(function () use ($originalTransactionId, $reversedBy, $reason) {
+    public function reverseTransaction(
+        int $originalTransactionId,
+        int $reversedBy,
+        string $reason = '',
+        ?string $reversalDate = null
+    ): StockTransaction {
+        return DB::transaction(function () use ($originalTransactionId, $reversedBy, $reason, $reversalDate) {
             $original = DB::table('stock_transactions')
                 ->where('id', $originalTransactionId)
                 ->lockForUpdate()
@@ -211,6 +225,18 @@ class StockService
                 );
             }
 
+            // Phase 6.3 — resolve the reversal date.
+            //   1. Use $reversalDate if the caller passed one (stock-adjustment
+            //      cancel passes the adjustment's adjustment_date so the
+            //      reversal lines up with the original posting).
+            //   2. Else default to the original transaction's transaction_date
+            //      (so a back-dated Jan-1 posting reverses on Jan-1, not today).
+            //   3. If that date falls in a closed accounting period, fall back
+            //      to today() (reversals can't be blocked — they're corrective)
+            //      and log a warning so the operator can investigate.
+            $resolvedDate = $reversalDate ?? ($original->transaction_date ?? now()->format('Y-m-d'));
+            $resolvedDate = $this->resolveReversalDate((int) $original->warehouse_id, $resolvedDate);
+
             $reversal = $this->applyTransaction([
                 'warehouse_id' => (int) $original->warehouse_id,
                 'product_id' => (int) $original->product_id,
@@ -219,7 +245,7 @@ class StockService
                 'reference_type' => 'reversal',
                 'reference_id' => $originalTransactionId,
                 'notes' => "Reversal of transaction #{$originalTransactionId}" . ($reason ? ": {$reason}" : ''),
-                'transaction_date' => now()->format('Y-m-d'),
+                'transaction_date' => $resolvedDate,
                 'created_by' => $reversedBy,
             ]);
 
@@ -234,6 +260,59 @@ class StockService
 
             return $reversal;
         });
+    }
+
+    /**
+     * Phase 6.3 — resolve the effective reversal date for a stock_transaction.
+     *
+     * The caller asks for $requestedDate (typically the original posting's
+     * transaction_date, or the adjustment's adjustment_date). If that date
+     * falls inside a CLOSED accounting period for the warehouse's branch,
+     * the reversal cannot be back-dated there (it would post into a frozen
+     * period) — so we fall back to today() and log a warning. Reversals are
+     * corrective and can never be blocked outright; this fallback keeps them
+     * working while making the date drift visible.
+     *
+     * Returns the resolved Y-m-d string.
+     */
+    private function resolveReversalDate(int $warehouseId, string $requestedDate): string
+    {
+        $today = now()->format('Y-m-d');
+
+        // Normalize + validate the requested date (defensive — a malformed
+        // string should not crash the reversal).
+        try {
+            $normalized = \Illuminate\Support\Carbon::parse($requestedDate)->format('Y-m-d');
+        } catch (\Throwable $e) {
+            Log::warning("StockService::resolveReversalDate — unparseable date '{$requestedDate}' for warehouse {$warehouseId}; falling back to today.");
+            return $today;
+        }
+
+        // Look up the warehouse's branch (reversals are scoped by branch period).
+        $branchId = DB::table('warehouses')->where('id', $warehouseId)->value('branch_id');
+        if (!$branchId) {
+            // No branch → no period close config → use the requested date as-is.
+            return $normalized;
+        }
+
+        $closedThrough = DB::table('accounting_periods')
+            ->where('branch_id', $branchId)
+            ->value('closed_through_date');
+
+        if (!$closedThrough) {
+            // No period closed for this branch → unrestricted.
+            return $normalized;
+        }
+
+        if ($normalized <= $closedThrough) {
+            Log::warning(
+                "StockService::resolveReversalDate — requested reversal date {$normalized} falls in a closed "
+                . "period (closed_through {$closedThrough}) for branch {$branchId}; falling back to today ({$today})."
+            );
+            return $today;
+        }
+
+        return $normalized;
     }
 
     /**

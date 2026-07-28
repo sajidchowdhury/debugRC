@@ -55,15 +55,15 @@ This plan defines **10 phases** that close these gaps and deliver a Stock Adjust
 |---|-----|----------|--------------------|
 | G1 | No role-based authorization on routes | **Critical** ✅ FIXED | Any user can post/correct stock + GL |
 | G2 | No CSV export | Medium | Loss of Legacy parity; no offline audit |
-| G3 | Non-pipeline-aware availability for decreases | Medium | Decrease can drain stock soft-promised to sales |
+| G3 | Non-pipeline-aware availability for decreases | Medium ✅ FIXED | Decrease can drain stock soft-promised to sales |
 | G4 | Thin health-check (4 inline checks vs Legacy's 6-section checklist) | Medium | Integrity defects invisible |
 | G5 | No approval workflow / no maker-checker | **Critical** ✅ FIXED | No segregation of duties for a financial-correction tool |
 | G6 | No reason categorization (opening/migration/UOM/legacy) | High ✅ FIXED | Cannot report or filter by correction type |
 | G7 | No UOM handling on line items | High ✅ FIXED | Carton/Pcs confusion → 10x stock errors |
 | G8 | `AuditableMasterData` dead code; no audit log table/logger | High ✅ FIXED | No "who did what when" for financial corrections |
 | G9 | No `confirmed_by`/`confirmed_at`; `confirm_reason` discarded | High ✅ FIXED | Cannot attribute the posting action |
-| G10 | Reversal `transaction_date` = today, not original date | Medium | Back-dated reversal distorts historical reports |
-| G11 | Duplicate product per adjustment (no UNIQUE); reversal `.first()` | Medium | Partial reversal leaves orphaned stock_transaction |
+| G10 | Reversal `transaction_date` = today, not original date | Medium ✅ FIXED | Back-dated reversal distorts historical reports |
+| G11 | Duplicate product per adjustment (no UNIQUE); reversal `.first()` | Medium ✅ FIXED | Partial reversal leaves orphaned stock_transaction |
 | G12 | No warehouse_stock ↔ ledger drift reconciliation check | Medium | Silent snapshot/ledger divergence |
 | G13 | No API routes | Medium | No mobile/AI sidecar support |
 | G14 | No test suite for the module | High | Regressions ship undetected |
@@ -952,7 +952,7 @@ Schema::table('stock_adjustment_items', function (Blueprint $table) {
 
 **Priority:** High
 **Duration:** 2-3 days
-**Status:** ⏳ Pending
+**Status:** ✅ DONE
 **Goal:** Restore Legacy's pipeline-aware availability check for decreases (G3), fix the duplicate-product reversal bug (G11), and fix the back-dated reversal date (G10).
 
 ### 6.1 Pipeline-aware availability
@@ -962,7 +962,7 @@ Schema::table('stock_adjustment_items', function (Blueprint $table) {
 - Add an admin `force` parameter: when `force=true` (admin only), bypass the pipeline check for legitimate legacy-cleanup corrections below pipeline. Log `force_confirm` to the audit log (Phase 4). Require a mandatory `force_reason`.
 
 ### 6.2 Fix duplicate-product reversal (G11)
-**File (new migration):** `2025_08_01_000001_add_stock_transaction_id_to_items.php`
+**File (new migration):** `2025_08_07_000001_add_stock_transaction_id_to_stock_adjustment_items.php`
 ```php
 Schema::table('stock_adjustment_items', function (Blueprint $table) {
     $table->unsignedBigInteger('stock_transaction_id')->nullable()->after('id');
@@ -990,10 +990,42 @@ DB::statement("ALTER TABLE stock_adjustment_items ADD CONSTRAINT sai_adj_product
 - Reject duplicate `product_id` within the same payload (the UNIQUE constraint is the DB-level backstop).
 
 ### Verification Checklist (Phase 6)
-- [ ] A decrease that would dip below pipeline-available stock is blocked unless `force=true` (admin).
-- [ ] A duplicate `product_id` in one adjustment is rejected at validation.
-- [ ] Reversing a back-dated (Jan 1) adjustment posts the reversal stock_transaction dated Jan 1 (or today if Jan 1 is closed, with a warning).
-- [ ] `stock_adjustment_items.stock_transaction_id` is populated on confirm and used on cancel.
+- [x] A decrease that would dip below pipeline-available stock is blocked unless `force=true` (admin). ✅ (`confirmAdjustment` re-checks `StockAvailabilityService::getWarehouseAvailableQty` inside `lockForUpdate`; throws with a message naming the product + available + requested + the admin force path. `force=true` bypasses when `policy->canForceConfirm($user)` (admin) + a non-empty `force_reason`.)
+- [x] A duplicate `product_id` in one adjustment is rejected at validation. ✅ (`validateCreateInput` scans `items` for duplicate product_id and throws `InvalidArgumentException` naming both row indices. DB-level `UNIQUE(stock_adjustment_id, product_id)` is the backstop — added by migration `2025_08_07_000001`.)
+- [x] Reversing a back-dated (Jan 1) adjustment posts the reversal stock_transaction dated Jan 1 (or today if Jan 1 is closed, with a warning). ✅ (`cancelAdjustment` passes `$adjustment->adjustment_date` into `reverseTransaction` + `reverseJournalEntry`; `StockService::resolveReversalDate` checks `accounting_periods.closed_through_date` for the warehouse's branch and falls back to `today()` + `Log::warning` when the requested date is frozen.)
+- [x] `stock_adjustment_items.stock_transaction_id` is populated on confirm and used on cancel. ✅ (`confirmAdjustment` captures `applyTransaction`'s returned `StockTransaction->id` and UPDATEs the item row; `cancelAdjustment` reverses by that id directly, with a legacy `product+reference` fallback for pre-Phase-6.2 rows.)
+
+### Implementation Summary (Phase 6)
+
+**Files created:**
+- `laravel/database/migrations/2025_08_07_000001_add_stock_transaction_id_to_stock_adjustment_items.php` — adds `stock_transaction_id` (nullable bigint, FK → stock_transactions ON DELETE SET NULL) + partial index `idx_sai_stock_tx` + `UNIQUE(stock_adjustment_id, product_id)` constraint `sai_adj_product_unique`. The UNIQUE add is DEFENSIVE: it counts existing duplicate groups first and SKIPS the constraint with a `Log::warning` (rather than failing the migration) when dupes exist — the application-layer dedup guard (6.4) is the runtime gate; an operator can clean historical dupes and re-run the DDL. Idempotent (`Schema::hasColumn` + `pg_constraint`/`pg_indexes` introspection). Safe up/down.
+
+**Files modified:**
+- `laravel/app/Services/Stock/StockAdjustmentService.php` —
+  - Constructor injects `StockAvailabilityService` (6th param).
+  - `createAdjustment` decrease pre-check now uses pipeline-aware `getWarehouseAvailableQty` (was `getWarehouseQty`); error message names the pipeline + the admin force path.
+  - `confirmAdjustment` signature extended: `bool $force = false, ?string $forceReason = null`. Inside `lockForUpdate`: re-checks pipeline availability for decreases (throws with product/available/requested on failure); `force=true` requires `policy->canForceConfirm($user)` (admin) + a non-empty `force_reason`. Captures `applyTransaction`'s returned `StockTransaction->id` and UPDATEs `stock_adjustment_items.stock_transaction_id` (6.2). Audit action is `force_confirm` (distinct from `confirm`) when force was used, with `forced` + `force_reason` in the payload.
+  - `cancelAdjustment` passes `$adjustment->adjustment_date` into both `reverseJournalEntry` + `reverseTransaction` (6.3). Reverses by `stock_transaction_id` (exact row) with a legacy `product+reference` fallback for pre-Phase-6.2 rows (6.2).
+  - `validateCreateInput` rejects duplicate `product_id` in the payload (6.4) — names both row indices, suggests combining the quantities.
+- `laravel/app/Services/Stock/StockService.php` — `reverseTransaction` accepts `?string $reversalDate = null`; new private `resolveReversalDate(warehouseId, requestedDate)` looks up the warehouse's branch + `accounting_periods.closed_through_date` and falls back to `today()` + `Log::warning` when the requested date is frozen (reversals are corrective — never blocked outright).
+- `laravel/app/Services/Accounting/JournalPostingService.php` — `reverseJournalEntry` accepts `?string $entryDate = null`; defaults to the original JE's `entry_date` (was hardcoded `now()`). `skip_period_check` stays true (reversals can post to closed periods — they're corrective, not new postings).
+- `laravel/app/Models/StockAdjustmentItem.php` — `stock_transaction_id` in `$fillable` + `$casts`; new `stockTransaction()` BelongsTo relation; doc-block updated.
+- `laravel/app/Services/Stock/StockAdjustmentPolicyService.php` — new `canForceConfirm(User)` helper (reads `force_confirmer_roles` config, default `['admin']`).
+- `laravel/config/stock_adjustment.php` — new `force_confirmer_roles` knob (default `['admin']`) with full doc-block explaining the force path semantics.
+- `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` — `confirm()` validates + threads `force` + `force_reason` (defense-in-depth admin check before the service re-check); `show()` passes `canForceConfirm` flag to the view.
+- `laravel/resources/views/admin/stock-adjustments/show.blade.php` — both confirm forms (draft one-step + approved) carry hidden `force` + `force_reason` fields; the confirm Swal now renders a custom HTML with the optional confirm_reason textarea + (when `canForceConfirm && isDecrease`) a force checkbox + force_reason textarea (required when checked, validated via `preConfirm`).
+- `laravel/database/sql/03_stock.sql` — fresh-install parity: `stock_adjustment_items` gains `stock_transaction_id` column + `sai_adj_product_unique` UNIQUE constraint + `idx_sai_stock_tx` partial index.
+
+**Key design decisions:**
+1. `StockAvailabilityService` was chosen over a new bespoke "adjustment availability" method because it already implements the exact Legacy formula (physical − open sales-invoice dispatches) with 5-min pipeline caching + invalidation hooks wired into SalesInvoice/SalesChallan services. Re-using it keeps one source of truth for "available qty".
+2. The force path is admin-only by default (`force_confirmer_roles = ['admin']`) and logs a DISTINCT `force_confirm` audit action (not `confirm`) so auditors can filter the timeline for overrides. The `force_reason` is mandatory + stored in the audit payload.
+3. The `UNIQUE(stock_adjustment_id, product_id)` constraint is added DEFENSIVELY — the migration counts existing duplicate groups and skips the constraint with a warning when dupes exist, rather than failing. The application-layer dedup guard (6.4) is the runtime gate; the constraint is the invariant for new rows.
+4. `stock_transaction_id` is captured from `applyTransaction`'s return value (which already returned the `StockTransaction` model — we just weren't using the id). No change to `StockService::applyTransaction` was needed (the plan suggested making it return the id; it already does, as a model).
+5. The reversal-date fallback (closed-period → today + warning) is in a private `resolveReversalDate` helper so the logic is centralized + the warning is always logged. Reversals are never blocked outright — they're corrective; blocking them would leave an inconsistent ledger.
+6. `reverseJournalEntry`'s `skip_period_check` stays `true` even with the new `entry_date` — reversals posting into closed periods is intentional (the reversal undoes a posting that was already there). The closed-period check is only for the STOCK reversal (where back-dating into a frozen period would distort the warehouse_stock snapshot history).
+7. The cancel-time reversal uses `stock_transaction_id` when present (Phase 6.2+ rows) and falls back to the legacy `product+reference` lookup ONLY for pre-Phase-6.2 rows — fully backward compatible with adjustments confirmed before this migration shipped.
+
+**Gaps closed:** G3 (non-pipeline-aware availability → FIXED), G10 (back-dated reversal date → FIXED), G11 (duplicate-product reversal → FIXED).
 
 ---
 
