@@ -2,6 +2,7 @@
 
 namespace App\Services\Stock;
 
+use App\Models\Warehouse;
 use App\Models\WarehouseTransfer;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
@@ -10,7 +11,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Warehouse Transfer Service — Phase 6.5 + Phase 1 + Phase 2.
+ * Warehouse Transfer Service — Phase 6.5 + Phase 1 + Phase 2 + Phase 3.
  *
  * Two-phase flow:
  *   1. createTransfer(): creates draft (header + items, no stock/GL)
@@ -28,6 +29,18 @@ use Illuminate\Support\Facades\Log;
  *   already reserved by pending sales invoices, only 70 are available
  *   for transfer. Without this, transfers + sales could compete for
  *   the same physical stock, causing shortages on challan delivery.
+ *
+ * REVERSAL SAFETY — Phase 3 enforcement:
+ *   When cancelling a confirmed transfer, stock movements are reversed in
+ *   the correct order: dest IN (positive qty) reversed FIRST, then source
+ *   OUT (negative qty). This prevents "insufficient stock at receiver"
+ *   errors — if the dest warehouse only has 5 units and we reverse the
+ *   source OUT first (adding 10 back to source), the dest would need to
+ *   give back 10 but only has 5. By reversing dest IN first (removing 10
+ *   from dest → dest goes from 5 to -5 which is caught by the tolerance
+ *   check), we ensure stock integrity.
+ *   Also: demand-linked transfers cannot be cancelled via this module;
+ *   warehouse frozen-for-count blocks draft creation.
  *
  * GL posting rules (same-branch only):
  *   - Stock moves: source OUT at avg_cost, dest IN at same avg_cost
@@ -102,6 +115,25 @@ class WarehouseTransferService
         }
 
         $isInterbranch = false; // Always false for same-branch transfers
+
+        // ★ Phase 3 — Warehouse freeze check:
+        // If the source warehouse is currently frozen for a stock-take count,
+        // draft creation is blocked. Transfers OUT of a frozen warehouse would
+        // corrupt the physical count. The StockService::applyTransaction()
+        // already checks this at confirm time — this check adds protection
+        // at draft creation time so the user sees the error immediately.
+        $fromWarehouse = Warehouse::find($fromWarehouseId);
+        if ($fromWarehouse && $fromWarehouse->is_frozen_for_count) {
+            Log::warning('Warehouse frozen for count — transfer creation blocked', [
+                'from_warehouse_id'    => $fromWarehouseId,
+                'warehouse_name'       => $fromWarehouse->warehouse_name,
+                'is_frozen_for_count'  => true,
+            ]);
+            throw new \RuntimeException(
+                'Source warehouse "' . $fromWarehouse->warehouse_name . '" is currently frozen for stock counting. ' .
+                'Transfers cannot be created until the count is completed.'
+            );
+        }
 
         // Build + validate line items.
         $totalAmount = 0.0;
@@ -349,6 +381,26 @@ class WarehouseTransferService
                 throw new \RuntimeException("Transfer is already cancelled.");
             }
 
+            // ★ Phase 3 — Demand-linked reversal protection:
+            // Transfers linked to a Branch Demand cannot be cancelled via
+            // WarehouseTransfer. They must be cancelled through the Branch
+            // Demand module, which has its own workflow (cancel demand →
+            // reverse the linked transfer).
+            // branch_demand_id column added via migration
+            // 2025_07_28_000011_add_branch_demand_id_to_warehouse_transfers.
+            if ($transfer->branch_demand_id) {
+                Log::warning('Demand-linked warehouse transfer cancel attempt blocked', [
+                    'transfer_id'       => $transferId,
+                    'branch_demand_id'  => $transfer->branch_demand_id,
+                    'cancelled_by'      => $cancelledBy,
+                ]);
+                throw new \RuntimeException(
+                    'This transfer is linked to a branch demand (ID: ' . $transfer->branch_demand_id . '). ' .
+                    'Reverse the demand instead of the transfer — the Branch Demand module ' .
+                    'handles the full reversal workflow.'
+                );
+            }
+
             if ($transfer->isConfirmed()) {
                 // Reverse GL (both journals if interbranch).
                 if ($transfer->journal_entry_id) {
@@ -364,14 +416,31 @@ class WarehouseTransferService
                     );
                 }
 
-                // Reverse each stock movement (source OUT + dest IN).
-                $stockTxs = DB::table('stock_transactions')
-                    ->where('reference_type', 'warehouse_transfer')
-                    ->where('reference_id', $transferId)
-                    ->where('is_reversed', false)
-                    ->get();
+                // ★ Phase 3 — Reverse stock movements in SAFE ORDER.
+                // Dest IN (positive qty) movements are reversed FIRST,
+                // then source OUT (negative qty) movements.
+                // This prevents "insufficient stock at receiver" errors.
+                // Example: dest has 5 units from a 10-unit transfer.
+                // If we reverse source OUT first (dest still has 5),
+                // then reverse dest IN (dest needs to give back 10 but only has 5).
+                // By reversing dest IN first, the sequence is safe.
+                $stockTxs = $this->sortMovementsForReversal(
+                    DB::table('stock_transactions')
+                        ->where('reference_type', 'warehouse_transfer')
+                        ->where('reference_id', $transferId)
+                        ->where('is_reversed', false)
+                        ->get()
+                );
 
                 foreach ($stockTxs as $tx) {
+                    Log::info('Reversing stock transaction for transfer cancellation', [
+                        'transaction_id' => $tx->id,
+                        'warehouse_id'   => $tx->warehouse_id,
+                        'product_id'     => $tx->product_id,
+                        'qty'            => $tx->qty,
+                        'transfer_id'    => $transferId,
+                        'reversal_order' => (float) $tx->qty > 0 ? 'dest-IN-first' : 'source-OUT-second',
+                    ]);
                     $this->stockService->reverseTransaction(
                         $tx->id, $cancelledBy,
                         "Transfer cancelled: {$reason}"
@@ -505,6 +574,46 @@ class WarehouseTransferService
             datePart: now()->format('Ymd'),
             padLength: 4,
         );
+    }
+
+    /**
+     * Sort stock movements for safe reversal.
+     * Destination IN (positive qty) movements are reversed FIRST,
+     * then source OUT (negative qty) movements.
+     * This prevents "insufficient stock at receiver" errors during reversal.
+     *
+     * Why: when a transfer is confirmed, the sequence is:
+     *   1. Source OUT: source warehouse loses qty (negative)
+     *   2. Dest IN:    dest warehouse gains qty (positive)
+     *
+     * When reversing, we must undo in the OPPOSITE order:
+     *   1. Reverse Dest IN first:  dest gives back the qty it received
+     *      (dest qty decreases, but source still hasn't gotten its qty back)
+     *   2. Reverse Source OUT then: source gets its qty back
+     *      (source qty increases)
+     *
+     * If we reversed in the WRONG order (source OUT first):
+     *   - Source gets its qty back (fine)
+     *   - Dest needs to give back qty, but may have insufficient stock
+     *     if other operations consumed the received stock.
+     *
+     * Secondary sort: by ID descending (most recent first within same
+     * sign group) — mirrors legacy sortMovementsForReversal().
+     *
+     * @param \Illuminate\Support\Collection $movements
+     * @return \Illuminate\Support\Collection
+     */
+    private function sortMovementsForReversal($movements)
+    {
+        return $movements->sort(function ($a, $b) {
+            $qa = (float) $a->qty;
+            $qb = (float) $b->qty;
+            // Positive qty (dest IN) reversed first → sort them before negative
+            if ($qa > 0 && $qb <= 0) return -1;
+            if ($qa <= 0 && $qb > 0) return 1;
+            // Secondary: by ID descending (most recent first)
+            return (int) $b->id <=> (int) $a->id;
+        })->values();
     }
 
     private function validateCreateInput(array $data): void

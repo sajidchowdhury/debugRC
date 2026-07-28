@@ -540,7 +540,14 @@
                     @endif
 
                     {{-- CANCEL (draft or confirmed) --}}
-                    @if ($t->isDraft() || $t->isConfirmed())
+                    @if ($t->branch_demand_id)
+                        {{-- Phase 3: Demand-linked transfer cannot be cancelled via WarehouseTransfer --}}
+                        <div class="alert alert-info small mb-2">
+                            <i class="fas fa-link me-1"></i>
+                            This transfer is linked to <strong>Branch Demand #{{ $t->branch_demand_id }}</strong>.
+                            It cannot be cancelled here — reverse the demand instead via the Branch Demand module.
+                        </div>
+                    @elseif ($t->isDraft() || $t->isConfirmed())
                         <form method="POST" action="{{ route('admin.warehouse-transfers.cancel', $t) }}"
                               id="cancelForm">
                             @csrf

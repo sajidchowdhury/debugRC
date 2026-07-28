@@ -8,7 +8,7 @@ use App\Traits\AuditableMasterData;
 use App\Models\Scopes\WarehouseTransferBranchScope;
 
 /**
- * Warehouse Transfer — Phase 6.5 + Phase 1 same-branch enforcement.
+ * Warehouse Transfer — Phase 6.5 + Phase 1 + Phase 3.
  *
  * Two-phase flow:
  *   1. Create (draft): header + items, NO stock movement, NO GL
@@ -24,6 +24,11 @@ use App\Models\Scopes\WarehouseTransferBranchScope;
  *   - Service-level enforcement: throws InvalidArgumentException if branches differ
  *   - PostgreSQL trigger: DB-level enforcement (enforce_same_branch_transfer)
  *
+ * Phase 3 — Reversal safety & ordering:
+ *   - sortMovementsForReversal: dest IN reversed before source OUT
+ *   - Demand-linked reversal protection: branch_demand_id check
+ *   - Warehouse freeze check: source warehouse frozen blocks draft creation
+ *
  * NOTE: Cross-branch intercompany GL is handled by Branch Demand module,
  * not by WarehouseTransfer. The postIntercompanyGL() method is retained
  * for potential Branch Demand use but is NEVER called from WarehouseTransfer.
@@ -36,6 +41,7 @@ use App\Models\Scopes\WarehouseTransferBranchScope;
  * @property int $from_branch_id
  * @property int $to_branch_id
  * @property bool $is_interbranch
+ * @property int|null $branch_demand_id FK to branch_demands (if linked to a demand)
  * @property float $total_amount Computed: sum(items.qty * items.rate) — no DB column.
  * @property string $status draft|confirmed|cancelled
  * @property int|null $journal_entry_id From-branch (creditor) journal
@@ -71,6 +77,7 @@ class WarehouseTransfer extends Model
         'from_branch_id',
         'to_branch_id',
         'is_interbranch',
+        'branch_demand_id', // Phase 3: FK to branch_demands — demand-linked reversal protection
         // 'total_amount' is intentionally absent — it is a computed accessor
         // (sum of items.qty * items.rate), not a persisted column.
         'status',
@@ -94,6 +101,7 @@ class WarehouseTransfer extends Model
         'to_warehouse_id' => 'integer',
         'from_branch_id' => 'integer',
         'to_branch_id' => 'integer',
+        'branch_demand_id' => 'integer',
         'journal_entry_id' => 'integer',
         'journal_entry_id_debtor' => 'integer',
         'created_by' => 'integer',
@@ -123,6 +131,17 @@ class WarehouseTransfer extends Model
     public function toBranch(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(Branch::class, 'to_branch_id');
+    }
+
+    /**
+     * Phase 3: The Branch Demand that this transfer is linked to (if any).
+     * Transfers linked to a Branch Demand cannot be cancelled via
+     * WarehouseTransfer — they must be cancelled through the Branch
+     * Demand module which handles the full reversal workflow.
+     */
+    public function branchDemand(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(BranchDemand::class, 'branch_demand_id');
     }
 
     public function journalEntry(): \Illuminate\Database\Eloquent\Relations\BelongsTo

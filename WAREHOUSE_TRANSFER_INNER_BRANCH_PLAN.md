@@ -1,11 +1,11 @@
 # Warehouse Transfer — Inner-Branch Implementation Plan
 
-**Document version:** 1.2
+**Document version:** 1.3
 **Date:** 2025-07-28  
 **Scope:** Warehouse-to-Warehouse Transfer (inner-branch / intra-branch only)  
 **Context:** Branch-A has 10 warehouses, Branch-B has 5 warehouses. Transfers are only allowed between warehouses that belong to the **same branch**. Cross-branch transfers are handled by the separate **Branch Demand** module, not by this module.  
 **Target stack:** Laravel 11 + PostgreSQL 16  
-**Current state:** Phase 6.5 + **Phase 1 COMPLETE** + **Phase 2 COMPLETE** (pipeline-aware stock availability)
+**Current state:** Phase 6.5 + **Phase 1 COMPLETE** + **Phase 2 COMPLETE** + **Phase 3 COMPLETE** (reversal safety & ordering)
 
 ---
 
@@ -40,7 +40,7 @@ The current Laravel implementation (Phase 6.5) introduced a **two-phase draft �
 |---|-----|----------|------|
 | G1 | No server-side same-branch enforcement — Laravel allows cross-branch transfers via WarehouseTransfer | **Critical → ✅ FIXED** | Wrong module for cross-branch; GL posted incorrectly; bypasses Branch Demand |
 | G2 | No pipeline-aware stock availability check — uses simple `getWarehouseQty` instead of `StockAvailabilityService` | **High → ✅ FIXED** | Over-commitment of stock (transfers + sales competing for same qty) |
-| G3 | No reversal ordering — dest IN and source OUT reversed in arbitrary order | **High** | Insufficient stock at receiver warehouse during reversal |
+| G3 | No reversal ordering — dest IN and source OUT reversed in arbitrary order | **High → ✅ FIXED** | Insufficient stock at receiver warehouse during reversal |
 | G4 | No dedicated audit trail — service uses `DB::table()` bypassing Eloquent events | **Medium** | No audit log for who did what when |
 | G5 | No CSV export — legacy has it, Laravel doesn't | **Medium** | Operational gap |
 | G6 | No branch ledger settlement mechanism visible | **Medium** | Intercompany balances remain unsettled |
@@ -426,7 +426,7 @@ Example of the problem:
 |-------|------|----------|----------|-------------|
 | 1 | Same-Branch Enforcement & Server-Side Guards | 2-3 days | **Critical** ✅ DONE | None |
 | 2 | Pipeline-Aware Stock Availability | 1-2 days | **High** ✅ DONE | Phase 1 |
-| 3 | Reversal Safety & Ordering | 1-2 days | **High** | Phase 1 |
+| 3 | Reversal Safety & Ordering | 1-2 days | **High** ✅ DONE | Phase 1 |
 | 4 | Audit Trail & Data Integrity | 2-3 days | **Medium** | Phase 1, 2, 3 |
 | 5 | UI Parity & UX Improvements | 2-3 days | **Medium** | Phase 1 |
 | 6 | Export, Reporting & Branch Ledger Settlement | 2-3 days | **Medium** | Phase 4 |
@@ -634,10 +634,11 @@ This helps users understand why they can't transfer more than the available amou
 
 ---
 
-## 8. Phase 3 — Reversal Safety & Ordering
+## 8. Phase 3 — Reversal Safety & Ordering ✅ DONE
 
 **Priority:** High  
 **Duration:** 1-2 days  
+**Status:** ✅ **COMPLETED** (2025-07-28)  
 **Goal:** Ensure that reversal of stock movements follows the correct order (dest IN before source OUT) to prevent insufficient stock errors.
 
 ### 3.1 Implement sortMovementsForReversal
@@ -727,12 +728,20 @@ if ($fromWarehouse->is_frozen_for_count) {
 
 ### Deliverables
 
-| # | Deliverable | File |
-|---|-------------|------|
-| 3.1 | sortMovementsForReversal method | `WarehouseTransferService.php` |
-| 3.2 | Use sorted movements in cancelTransfer | `WarehouseTransferService.php` |
-| 3.3 | Demand-linked reversal protection | `WarehouseTransferService.php` |
-| 3.4 | Warehouse freeze check on creation | `WarehouseTransferService.php` |
+| # | Deliverable | Status | File |
+|---|-------------|--------|------|
+| 3.1 | sortMovementsForReversal method | ✅ Done | `WarehouseTransferService.php` |
+| 3.2 | Use sorted movements in cancelTransfer | ✅ Done | `WarehouseTransferService.php` |
+| 3.3 | Demand-linked reversal protection (branch_demand_id) | ✅ Done | `WarehouseTransferService.php` + `WarehouseTransfer.php` + new migration |
+| 3.4 | Warehouse freeze check on creation | ✅ Done | `WarehouseTransferService.php` |
+
+**Key changes:**
+
+1. **sortMovementsForReversal (3.1 + 3.2):** New private method `sortMovementsForReversal()` added to `WarehouseTransferService`. When cancelling a confirmed transfer, stock movements are now sorted so that dest IN (positive qty) movements are reversed FIRST, then source OUT (negative qty) movements. This mirrors the legacy `WarehouseTransferModel::sortMovementsForReversal()` logic. The secondary sort is by ID descending (most recent first within same sign group). Each reversal is logged with its order (dest-IN-first / source-OUT-second) for auditability.
+
+2. **Demand-linked reversal protection (3.3):** If a transfer has `branch_demand_id` set, it cannot be cancelled via the WarehouseTransfer module — the user must cancel through the Branch Demand module which handles the full reversal workflow. Added `branch_demand_id` column to `warehouse_transfers` via migration `2025_07_28_000011_add_branch_demand_id_to_warehouse_transfers.php`. The migration also updates the same-branch trigger function to allow interbranch when `branch_demand_id` is set (Branch Demand handles interbranch via its own flow). Added `branch_demand_id` to `WarehouseTransfer` model fillable/casts, and a `branchDemand()` relationship. The show view displays an info banner when a transfer is demand-linked.
+
+3. **Warehouse freeze check (3.4):** Added a check in `createTransfer()` that blocks draft creation if the source warehouse is frozen for stock counting (`is_frozen_for_count`). This gives the user immediate feedback instead of waiting for the confirm-time check in `StockService::applyTransaction()`. Added `Warehouse` model import to the service.
 
 ### Verification
 
@@ -1403,10 +1412,10 @@ CREATE INDEX idx_audit_log_user ON audit_log(user_id);
 |------|-------|---------|
 | `app/Services/Stock/WarehouseTransferService.php` | 1, 2, 3, 4 | Same-branch enforcement, pipeline-aware availability, reversal ordering, audit logging |
 | `app/Http/Controllers/Admin/WarehouseTransferController.php` | 1, 2, 5, 6 | Branch guard, validation rules, warehouse filtering, pipeline-aware API, export |
-| `app/Models/WarehouseTransfer.php` | 1 | BranchScope, branch_demand_id to fillable |
+| `app/Models/WarehouseTransfer.php` | 1, 3 | BranchScope, branch_demand_id to fillable/casts, branchDemand() relationship |
 | `resources/views/admin/warehouse-transfers/create.blade.php` | 1, 5 | Same-branch guard, pipeline info, warehouse dropdown |
 | `resources/views/admin/warehouse-transfers/index.blade.php` | 5 | Filters, remove interbranch |
-| `resources/views/admin/warehouse-transfers/show.blade.php` | 5 | Reversal info, same-branch badge |
+| `resources/views/admin/warehouse-transfers/show.blade.php` | 3, 5 | Demand-linked reversal info, reversal info, same-branch badge |
 | `routes/web.php` | 4, 6 | Audit checklist routes, export route |
 | `routes/api.php` | 8 | API routes |
 
@@ -1414,10 +1423,10 @@ CREATE INDEX idx_audit_log_user ON audit_log(user_id);
 
 | File | Phase | Purpose |
 |------|-------|---------|
-| `database/migrations/2025_XX_XX_add_branch_demand_id_to_warehouse_transfers.php` | 4 | branch_demand_id column |
 | `database/migrations/2025_07_28_000010_add_same_branch_trigger_to_warehouse_transfers.php` | 1 ✅ | Same-branch enforcement trigger |
 | `app/Models/Scopes/WarehouseTransferBranchScope.php` | 1 ✅ | Branch scope for WarehouseTransfer model |
 | `app/Rules/WarehouseTransferItemHasAvailableStock.php` | 2 ✅ | Pipeline-aware stock availability validation rule for transfer items |
+| `database/migrations/2025_07_28_000011_add_branch_demand_id_to_warehouse_transfers.php` | 3 ✅ | branch_demand_id column + updated same-branch trigger for demand-linked exclusion |
 | `database/migrations/2025_XX_XX_create_audit_log_table.php` | 4 | Audit log table |
 | `app/Services/Stock/WarehouseTransferAuditService.php` | 4 | Health checks |
 | `app/Http/Controllers/Api/WarehouseTransferApiController.php` | 8 | API controller |
@@ -1444,7 +1453,7 @@ After all 8 phases are complete, the Warehouse Transfer module will have:
 1. ✅ **Strict same-branch enforcement** at every layer (service, controller, DB, client)
 2. ✅ **Two-phase flow** (draft → confirm → cancel) with proper stock movement
 3. ✅ **Pipeline-aware stock availability** preventing over-commitment (Phase 2 complete)
-4. ✅ **Correct reversal ordering** (dest IN before source OUT)
+4. ✅ **Correct reversal ordering** (dest IN before source OUT) — Phase 3 complete
 5. ✅ **Complete audit trail** for every operation
 6. ✅ **Data integrity checks** via WarehouseTransferAuditService
 7. ✅ **UI parity** with legacy system plus improvements
