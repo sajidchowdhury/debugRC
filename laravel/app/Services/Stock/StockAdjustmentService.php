@@ -682,18 +682,28 @@ class StockAdjustmentService
      *   - Increase (gain): Dr Inventory / Cr Inventory Surplus
      *   - Decrease (loss): Dr Inventory Shrinkage / Cr Inventory
      *
+     * Returns the journal_entries.id of the created entry, or NULL when no
+     * GL posting is performed (zero-amount adjustment). Returning null —
+     * rather than 0 — is critical: stock_adjustments.journal_entry_id has a
+     * FK → journal_entries(id), so writing 0 violates the constraint (there
+     * is no journal_entries row with id=0). The DB column is nullable for
+     * exactly this case (adjustments that move qty but post no GL value,
+     * e.g. a zero-rate opening-balance correction).
+     *
      * @param StockAdjustment $adjustment
      * @param int $createdBy
-     * @return int journal_entry_id
+     * @return int|null journal_entry_id, or null when no GL is posted.
      * @throws \RuntimeException If required ledgers not found.
      */
-    private function postAdjustmentGL(StockAdjustment $adjustment, int $createdBy): int
+    private function postAdjustmentGL(StockAdjustment $adjustment, int $createdBy): ?int
     {
         $totalAmount = (float) $adjustment->total_amount;
 
         if ($totalAmount < 0.01) {
-            // No GL posting for zero-amount adjustments.
-            return 0;
+            // No GL posting for zero-amount adjustments — return null so the
+            // caller stores NULL in journal_entry_id (the FK constraint
+            // rejects 0). The adjustment still moves stock (qty > 0, rate = 0).
+            return null;
         }
 
         $inventoryLedgerId = $this->journalPosting->lookupLedgerByNature('inventory');

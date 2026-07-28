@@ -488,3 +488,18 @@ Key design decisions:
 5. UomConversionService caches base-unit + factor lookups for 5 min (conversion rows are write-once config) so the hot path stays off the DB.
 6. UOM management UI (add/edit conversions) is out of scope for Phase 5 — infrastructure + adjustment flow is the deliverable. clearCacheForProduct() is ready for a future management screen.
 Note: PHP not installed in this sandbox, so syntax verified by careful manual review + grep verification of the $this->uom call sites. User must run `docker compose exec rcerp_app php artisan migrate` (applies both the hotfix migration 2025_08_05 and the UOM migration 2025_08_06) to apply the schema changes, then test the create flow (select a product → UOM dropdown populates → enter qty in Carton → base qty recomputes → submit → confirm posts the converted base qty to stock).
+
+---
+Task ID: SA-HOTFIX-journal_entry_id_fk
+Agent: Main Agent (Stock Adjustment hotfix)
+Task: Fix the FK violation on confirm — SQLSTATE[23503]: Foreign key violation: 7 ERROR: insert or update on table "stock_adjustments" violates foreign key constraint "stock_adjustments_journal_entry_id_fkey" DETAIL: Key (journal_entry_id)=(0) is not present in table "journal_entries". A confirm of a zero-amount adjustment (qty>0 but rate=0, e.g. a zero-cost opening balance) hit this because postAdjustmentGL() returned 0 for the "no GL posting" case, and confirmAdjustment() then wrote journal_entry_id=0 — but the column has a FK → journal_entries(id) and there is no row with id=0.
+
+Work Log:
+- Diagnosed: StockAdjustmentService::postAdjustmentGL() returned int 0 when total_amount < 0.01 (no GL posting). confirmAdjustment() then wrote journal_entry_id = 0 to stock_adjustments. The schema (database/sql/03_stock.sql line 128) declares `journal_entry_id integer REFERENCES journal_entries(id)` — nullable, but 0 is not null, so the FK constraint rejected it. The column is nullable specifically for this case (qty moves but no GL value).
+- Fix: changed postAdjustmentGL() return type int → ?int, and the zero-amount branch returns null instead of 0. confirmAdjustment() already passes the value straight into the UPDATE (null is accepted by the nullable column). The audit-log payload (jsonb) accepts null too. cancelAdjustment()'s `if ($adjustment->journal_entry_id)` truthy check already skips reversal for both 0 and null — no change needed there.
+- Added a doc-block explaining WHY null (not 0): the FK constraint is the reason; future readers must not "fix" this back to 0.
+- Committed + pushed.
+
+Stage Summary:
+Files modified: laravel/app/Services/Stock/StockAdjustmentService.php (postAdjustmentGL return type ?int, zero-amount branch returns null, doc-block explains the FK rationale).
+Gap closed: confirm of a zero-amount / zero-rate adjustment no longer 500s with a FK violation. journal_entry_id is now correctly NULL for no-GL postings.
