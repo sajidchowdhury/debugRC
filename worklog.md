@@ -145,3 +145,26 @@ Stage Summary:
 - routes/api.php updated with 6 warehouse-transfers API routes
 - Phase 8 marked COMPLETE in plan document
 - All Phase 1 (same-branch), Phase 2 (pipeline-aware), Phase 3 (reversal safety), Phase 4 (audit) protections in force via shared WarehouseTransferService
+
+---
+Task ID: SA-1
+Agent: Main Agent (Stock Adjustment analysis)
+Task: Analyze Legacy + Laravel Stock Adjustment implementations, identify the GAP between them, and create a phase-by-phase implementation plan for a better Stock Adjustment for the Laravel ERP (bookkeeping tool, accountant/admin only, warehouse-wise, opening-balance/migration/UOM-fix/legacy-cleanup use cases)
+
+Work Log:
+- Read /home/z/debugRC/worklog.md to understand prior work (Warehouse Transfer phases 1-8 complete; Stock Adjustment never analyzed)
+- Dispatched 3 parallel Explore agents:
+  - Task 2-a: deep analysis of Legacy Stock Adjustment (controller, model, audit model, stock transaction model, warehouse model, Stock service, views, JS, MySQL schema inferred from SQL, route roles)
+  - Task 2-b: deep analysis of Laravel Stock Adjustment (controller, StockAdjustmentService, StockService, JournalPostingService, models, routes, blade views, PostgreSQL migrations/sql, RLS, traits, Damage/StockTake comparison)
+  - Task 2-c: review of MIGRATION_PLAN.md, README, SETUP_GUIDE, WAREHOUSE_TRANSFER_INNER_BRANCH_PLAN.md (to extract the phase-plan template), phase6_3_complete.md, schema_mapping.md, journal_posting_rules.md
+- Synthesized the three reports into a gap analysis (G1-G19) and a 10-phase implementation plan
+- Wrote the deliverable to /home/z/debugRC/STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md
+
+Stage Summary:
+- Deliverable: /home/z/debugRC/STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md (~1,000 lines, 19 sections)
+- Legacy analysis: single-phase immediate-post; MySQL; 2 types (increase/decrease); hybrid stock (warehouse_stock snapshot + stock_transactions ledger, moving avg); pipeline-aware availability for decreases; 6-section StockAdjustmentAuditModel checklist; CSV export; role matrix (admin/manager/warehouse_manager create, admin/manager reverse); gaps: no draft, random codes (collision-prone), no branch_id/status columns, transaction_date=CURRENT_DATE bug, read-only rate, no UOM
+- Laravel analysis: two-phase draft->confirm->cancel; PostgreSQL 16; atomic code via pg_advisory_xact_lock; denormalized branch_id; status enum; partitioned immutable ledger; RLS; soft deletes; editable rate; CRITICAL gaps: NO role middleware on routes (any authed user can post), NO approval workflow, AuditableMasterData trait is DEAD code (service uses DB::table bypassing Eloquent), NO audit log table/logger, NO reason categorization, NO UOM handling, NON-pipeline-aware availability (regression), NO CSV export/checklist parity/print/API/tests, confirm_reason discarded, no confirmed_by/at, back-dated reversal date bug, duplicate-product reversal .first() bug
+- 19 gaps identified (G1-G19), 2 Critical (G1 authorization, G5 approval), several High (G6 category, G7 UOM, G8 audit, G9 confirm attribution, G14 tests)
+- 10-phase plan: P1 Authorization, P2 Categorization+opening_balance ref, P3 Approval maker-checker, P4 Dedicated audit log+logger, P5 UOM handling, P6 Pipeline availability+reversal safety+date integrity, P7 Reconciliation+drift, P8 UI parity (CSV/checklist/print/audit timeline), P9 API routes, P10 Tests+shadow mode
+- Includes full schema diff (Appendix A), business rule matrix (R/S/A/L/E rules, Appendix B), file inventory modify+create (Appendix C), post-implementation state (13 outcomes)
+- Plan mirrors the proven WAREHOUSE_TRANSFER_INNER_BRANCH_PLAN.md template (gap-numbered G1..Gn, phase-overview table, sub-step N.M structure, 3 appendices)
