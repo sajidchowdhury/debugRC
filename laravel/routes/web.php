@@ -514,12 +514,19 @@ Route::middleware('auth')->group(function () {
         ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
 
     // ============================================================
-    // Phase 6.5: Warehouse Transfers (same-branch = no GL, cross-branch = intercompany GL)
+    // Phase 6.5 + Phase 4: Warehouse Transfers (same-branch = no GL, cross-branch = intercompany GL)
+    // Phase 4: Audit trail routes (checklist, run-checks, audit, reconcile)
     // ============================================================
     Route::prefix('admin/warehouse-transfers')->name('admin.warehouse-transfers.')->group(function () {
         Route::get('product-stock', [WarehouseTransferController::class, 'getProductStock'])->name('product-stock');
         Route::post('{id}/confirm', [WarehouseTransferController::class, 'confirm'])->name('confirm');
         Route::post('{id}/cancel', [WarehouseTransferController::class, 'cancel'])->name('cancel');
+        // Phase 4 — Audit Trail & Data Integrity routes
+        Route::get('checklist', [WarehouseTransferController::class, 'checklist'])->name('checklist');
+        Route::post('run-checks', [WarehouseTransferController::class, 'runChecks'])->name('run-checks');
+        Route::get('{id}/audit', [WarehouseTransferController::class, 'audit'])->name('audit');
+        Route::get('reconcile', [WarehouseTransferController::class, 'reconcile'])->name('reconcile');
+        Route::post('run-reconcile', [WarehouseTransferController::class, 'runReconcile'])->name('run-reconcile');
     });
     Route::resource('admin/warehouse-transfers', WarehouseTransferController::class)
         ->only(['index', 'create', 'store', 'show'])

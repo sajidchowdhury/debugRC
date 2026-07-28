@@ -64,6 +64,9 @@
             <a href="{{ route('admin.warehouse-transfers.index') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-arrow-left me-1"></i> Back to list
             </a>
+            <a href="{{ route('admin.warehouse-transfers.audit', $t->id) }}" class="btn btn-outline-light btn-sm ms-1">
+                <i class="fas fa-magnifying-glass-chart me-1"></i> Audit
+            </a>
         </div>
     </header>
 

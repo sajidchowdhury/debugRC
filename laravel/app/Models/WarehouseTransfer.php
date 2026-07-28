@@ -8,7 +8,7 @@ use App\Traits\AuditableMasterData;
 use App\Models\Scopes\WarehouseTransferBranchScope;
 
 /**
- * Warehouse Transfer — Phase 6.5 + Phase 1 + Phase 3.
+ * Warehouse Transfer — Phase 6.5 + Phase 1 + Phase 3 + Phase 4.
  *
  * Two-phase flow:
  *   1. Create (draft): header + items, NO stock movement, NO GL
@@ -28,6 +28,15 @@ use App\Models\Scopes\WarehouseTransferBranchScope;
  *   - sortMovementsForReversal: dest IN reversed before source OUT
  *   - Demand-linked reversal protection: branch_demand_id check
  *   - Warehouse freeze check: source warehouse frozen blocks draft creation
+ *
+ * Phase 4 — Audit Trail & Data Integrity:
+ *   - WarehouseTransferAuditLogger: logs create/confirm/cancel events
+ *     to user_audit_log (dual-write: DB + file)
+ *   - WarehouseTransferAuditService: health checks (same-branch, stock
+ *     movements, data quality, GL integrity) + stock reconciliation
+ *   - Audit checklist route: /admin/warehouse-transfers/checklist
+ *   - Per-transfer audit route: /admin/warehouse-transfers/{id}/audit
+ *   - Stock reconciliation route: /admin/warehouse-transfers/reconcile
  *
  * NOTE: Cross-branch intercompany GL is handled by Branch Demand module,
  * not by WarehouseTransfer. The postIntercompanyGL() method is retained

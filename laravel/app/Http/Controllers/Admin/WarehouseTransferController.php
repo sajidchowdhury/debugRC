@@ -8,6 +8,8 @@ use App\Models\WarehouseTransfer;
 use App\Rules\WarehouseBelongsToBranch;
 use App\Rules\WarehouseTransferItemHasAvailableStock;
 use App\Services\Stock\WarehouseTransferService;
+use App\Services\Stock\WarehouseTransferAuditService;
+use App\Services\Stock\WarehouseTransferAuditLogger;
 use App\Services\Stock\StockService;
 use App\Services\Stock\StockAvailabilityService;
 use Illuminate\Http\Request;
@@ -15,7 +17,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Warehouse Transfer Controller — Phase 6.5 + Phase 1 + Phase 2.
+ * Warehouse Transfer Controller — Phase 6.5 + Phase 1 + Phase 2 + Phase 4.
  *
  * Two-phase flow:
  *   - create / store: create a draft transfer (no stock, no GL)
@@ -34,13 +36,21 @@ use Illuminate\Support\Facades\Log;
  *   - WarehouseTransferItemHasAvailableStock rule on items.*.qty
  *   - getProductStock() returns pipeline-aware availability + physical + pipeline breakdown
  *   - UI shows both physical and available quantities
+ *
+ * Phase 4 — Audit Trail & Data Integrity:
+ *   - checklist(): audit health-check dashboard (same-branch, stock, data quality, GL)
+ *   - runChecks(): AJAX endpoint to run health checks
+ *   - audit(): per-transfer audit detail view
+ *   - reconcile(): stock reconciliation page
  */
 class WarehouseTransferController extends Controller
 {
     public function __construct(
         private WarehouseTransferService $transferService,
         private StockService $stockService,
-        private StockAvailabilityService $stockAvailabilityService
+        private StockAvailabilityService $stockAvailabilityService,
+        private WarehouseTransferAuditService $auditService,
+        private WarehouseTransferAuditLogger $auditLogger
     ) {}
 
     /**
@@ -324,5 +334,103 @@ class WarehouseTransferController extends Controller
             'available_qty' => round($availableQty, 4),
             'pipeline_qty' => round($pipelineQty, 4),
         ]);
+    }
+
+    // ========================================================================
+    // Phase 4 — Audit Trail & Data Integrity
+    // ========================================================================
+
+    /**
+     * Audit health-check dashboard.
+     * Shows same-branch, stock, data quality, and GL integrity checks.
+     */
+    public function checklist()
+    {
+        $userBranchId = $this->getUserBranchId();
+
+        return view('admin.warehouse-transfers.checklist', [
+            'title'        => 'Transfer Audit Checklist',
+            'userBranchId' => $userBranchId,
+        ]);
+    }
+
+    /**
+     * AJAX: run health checks and return JSON.
+     */
+    public function runChecks(Request $request)
+    {
+        $userBranchId = $this->getUserBranchId();
+
+        try {
+            $results = $this->auditService->runHealthChecks($userBranchId);
+            return response()->json($results);
+        } catch (\Throwable $e) {
+            Log::error('WarehouseTransferAuditService runHealthChecks failed', [
+                'error' => $e->getMessage(),
+                'branch_id' => $userBranchId,
+            ]);
+            return response()->json([
+                'error' => 'Failed to run health checks: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Per-transfer audit detail view.
+     * Shows same-branch, stock movements, reversal, demand link, GL checks.
+     */
+    public function audit(int $id)
+    {
+        $transfer = WarehouseTransfer::findOrFail($id);
+        $checks = $this->auditService->runTransferChecks($id);
+
+        // Also get the audit history for this transfer from user_audit_log.
+        $auditEvents = $this->auditLogger->recentTransferEvents(100, $this->getUserBranchId())
+            ->filter(function ($event) {
+                $details = json_decode($event->details, true);
+                return isset($details['transfer_id']) && (int) $details['transfer_id'] === $id;
+            });
+
+        return view('admin.warehouse-transfers.audit', [
+            'title'        => 'Transfer Audit: ' . $transfer->transfer_code,
+            'transfer'     => $transfer,
+            'checks'       => $checks,
+            'auditEvents'  => $auditEvents,
+        ]);
+    }
+
+    /**
+     * Stock reconciliation page.
+     * Verifies the fundamental invariant: SUM(stock_transactions.qty) = warehouse_stock.qty.
+     */
+    public function reconcile()
+    {
+        $userBranchId = $this->getUserBranchId();
+
+        return view('admin.warehouse-transfers.reconcile', [
+            'title'        => 'Stock Reconciliation',
+            'userBranchId' => $userBranchId,
+        ]);
+    }
+
+    /**
+     * AJAX: run stock reconciliation and return JSON.
+     */
+    public function runReconcile(Request $request)
+    {
+        $userBranchId = $this->getUserBranchId();
+
+        try {
+            $results = $this->auditService->reconcileStock($userBranchId);
+            return response()->json($results);
+        } catch (\Throwable $e) {
+            Log::error('WarehouseTransferAuditService reconcileStock failed', [
+                'error' => $e->getMessage(),
+                'branch_id' => $userBranchId,
+            ]);
+            return response()->json([
+                'error' => 'Failed to run reconciliation: ' . $e->getMessage(),
+            ], 500);
+        }
     }
 }

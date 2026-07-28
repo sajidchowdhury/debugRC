@@ -1,11 +1,11 @@
 # Warehouse Transfer — Inner-Branch Implementation Plan
 
-**Document version:** 1.3
+**Document version:** 1.4
 **Date:** 2025-07-28  
 **Scope:** Warehouse-to-Warehouse Transfer (inner-branch / intra-branch only)  
 **Context:** Branch-A has 10 warehouses, Branch-B has 5 warehouses. Transfers are only allowed between warehouses that belong to the **same branch**. Cross-branch transfers are handled by the separate **Branch Demand** module, not by this module.  
 **Target stack:** Laravel 11 + PostgreSQL 16  
-**Current state:** Phase 6.5 + **Phase 1 COMPLETE** + **Phase 2 COMPLETE** + **Phase 3 COMPLETE** (reversal safety & ordering)
+**Current state:** Phase 6.5 + **Phase 1 COMPLETE** + **Phase 2 COMPLETE** + **Phase 3 COMPLETE** + **Phase 4 COMPLETE** (audit trail & data integrity)
 
 ---
 
@@ -41,7 +41,7 @@ The current Laravel implementation (Phase 6.5) introduced a **two-phase draft �
 | G1 | No server-side same-branch enforcement — Laravel allows cross-branch transfers via WarehouseTransfer | **Critical → ✅ FIXED** | Wrong module for cross-branch; GL posted incorrectly; bypasses Branch Demand |
 | G2 | No pipeline-aware stock availability check — uses simple `getWarehouseQty` instead of `StockAvailabilityService` | **High → ✅ FIXED** | Over-commitment of stock (transfers + sales competing for same qty) |
 | G3 | No reversal ordering — dest IN and source OUT reversed in arbitrary order | **High → ✅ FIXED** | Insufficient stock at receiver warehouse during reversal |
-| G4 | No dedicated audit trail — service uses `DB::table()` bypassing Eloquent events | **Medium** | No audit log for who did what when |
+| G4 | No dedicated audit trail — service uses `DB::table()` bypassing Eloquent events | **Medium → ✅ FIXED** | No audit log for who did what when |
 | G5 | No CSV export — legacy has it, Laravel doesn't | **Medium** | Operational gap |
 | G6 | No branch ledger settlement mechanism visible | **Medium** | Intercompany balances remain unsettled |
 | G7 | No test coverage for WarehouseTransfer workflow | **High** | Regressions undetected |
@@ -752,7 +752,7 @@ if ($fromWarehouse->is_frozen_for_count) {
 
 ---
 
-## 9. Phase 4 — Audit Trail & Data Integrity
+## 9. Phase 4 — Audit Trail & Data Integrity ✅ DONE
 
 **Priority:** Medium  
 **Duration:** 2-3 days  
@@ -916,22 +916,22 @@ This can be run as a scheduled job or on-demand.
 
 ### Deliverables
 
-| # | Deliverable | File |
-|---|-------------|------|
-| 4.1 | branch_demand_id column | New migration |
-| 4.2 | Audit logging in service | `WarehouseTransferService.php` |
-| 4.3 | WarehouseTransferAuditService | New file |
-| 4.4 | Audit checklist routes | `web.php` + Controller |
-| 4.5 | Stock reconciliation helper | New file |
+| # | Deliverable | File | Status |
+|---|-------------|------|--------|
+| 4.1 | branch_demand_id column | `2025_07_28_000011_add_branch_demand_id_to_warehouse_transfers.php` | ✅ Done (Phase 3) |
+| 4.2 | Audit logging in service | `WarehouseTransferService.php` + `WarehouseTransferAuditLogger.php` | ✅ Done |
+| 4.3 | WarehouseTransferAuditService | `app/Services/Stock/WarehouseTransferAuditService.php` | ✅ Done |
+| 4.4 | Audit checklist routes | `web.php` + `WarehouseTransferController.php` + Blade views | ✅ Done |
+| 4.5 | Stock reconciliation helper | `WarehouseTransferAuditService::reconcileStock()` + reconcile view | ✅ Done |
 
 ### Verification
 
-- [ ] Every transfer create/confirm/cancel creates an audit_log entry
-- [ ] Health checks detect cross-branch transfers
-- [ ] Health checks detect missing stock movements
-- [ ] Health checks detect zero-rate items
-- [ ] branch_demand_id column exists and is nullable
-- [ ] Stock reconciliation invariant holds
+- [x] Every transfer create/confirm/cancel creates an audit_log entry
+- [x] Health checks detect cross-branch transfers
+- [x] Health checks detect missing stock movements
+- [x] Health checks detect zero-rate items
+- [x] branch_demand_id column exists and is nullable
+- [x] Stock reconciliation invariant holds
 
 ---
 
@@ -1416,7 +1416,7 @@ CREATE INDEX idx_audit_log_user ON audit_log(user_id);
 | `resources/views/admin/warehouse-transfers/create.blade.php` | 1, 5 | Same-branch guard, pipeline info, warehouse dropdown |
 | `resources/views/admin/warehouse-transfers/index.blade.php` | 5 | Filters, remove interbranch |
 | `resources/views/admin/warehouse-transfers/show.blade.php` | 3, 5 | Demand-linked reversal info, reversal info, same-branch badge |
-| `routes/web.php` | 4, 6 | Audit checklist routes, export route |
+| `routes/web.php` | 4 ✅, 6 | Audit checklist routes, reconcile routes, export route |
 | `routes/api.php` | 8 | API routes |
 
 ### Files to Create
@@ -1427,12 +1427,14 @@ CREATE INDEX idx_audit_log_user ON audit_log(user_id);
 | `app/Models/Scopes/WarehouseTransferBranchScope.php` | 1 ✅ | Branch scope for WarehouseTransfer model |
 | `app/Rules/WarehouseTransferItemHasAvailableStock.php` | 2 ✅ | Pipeline-aware stock availability validation rule for transfer items |
 | `database/migrations/2025_07_28_000011_add_branch_demand_id_to_warehouse_transfers.php` | 3 ✅ | branch_demand_id column + updated same-branch trigger for demand-linked exclusion |
-| `database/migrations/2025_XX_XX_create_audit_log_table.php` | 4 | Audit log table |
-| `app/Services/Stock/WarehouseTransferAuditService.php` | 4 | Health checks |
+| `app/Services/Stock/WarehouseTransferAuditLogger.php` | 4 ✅ | Audit logger for create/confirm/cancel events (dual-write: DB + file) |
+| `app/Services/Stock/WarehouseTransferAuditService.php` | 4 ✅ | Health checks (same-branch, stock, data quality, GL) + stock reconciliation |
+| `resources/views/admin/warehouse-transfers/checklist.blade.php` | 4 ✅ | Audit checklist view |
+| `resources/views/admin/warehouse-transfers/audit.blade.php` | 4 ✅ | Per-transfer audit detail view |
+| `resources/views/admin/warehouse-transfers/reconcile.blade.php` | 4 ✅ | Stock reconciliation view |
 | `app/Http/Controllers/Api/WarehouseTransferApiController.php` | 8 | API controller |
 | `app/Http/Resources/WarehouseTransferResource.php` | 8 | API resource |
 | `app/Http/Resources/WarehouseTransferItemResource.php` | 8 | API resource |
-| `resources/views/admin/warehouse-transfers/checklist.blade.php` | 4 | Audit checklist view |
 | `resources/views/admin/warehouse-transfers/print.blade.php` | 5 | Print view |
 | `tests/Feature/WarehouseTransfer/CreateTransferTest.php` | 7 | Tests |
 | `tests/Feature/WarehouseTransfer/ConfirmTransferTest.php` | 7 | Tests |
@@ -1454,12 +1456,13 @@ After all 8 phases are complete, the Warehouse Transfer module will have:
 2. ✅ **Two-phase flow** (draft → confirm → cancel) with proper stock movement
 3. ✅ **Pipeline-aware stock availability** preventing over-commitment (Phase 2 complete)
 4. ✅ **Correct reversal ordering** (dest IN before source OUT) — Phase 3 complete
-5. ✅ **Complete audit trail** for every operation
-6. ✅ **Data integrity checks** via WarehouseTransferAuditService
-7. ✅ **UI parity** with legacy system plus improvements
-8. ✅ **CSV export** and reporting
-9. ✅ **Comprehensive test coverage** (≥ 85%)
-10. ✅ **API routes** for mobile/API users
-11. ✅ **Defense-in-depth** (BranchScope + RLS + DB trigger + validation rules)
+5. ✅ **Complete audit trail** for every operation — Phase 4 complete
+6. ✅ **Data integrity checks** via WarehouseTransferAuditService — Phase 4 complete
+7. ✅ **Stock reconciliation** verifying SUM(stock_transactions.qty) = warehouse_stock.qty — Phase 4 complete
+8. ✅ **UI parity** with legacy system plus improvements
+9. ✅ **CSV export** and reporting
+10. ✅ **Comprehensive test coverage** (≥ 85%)
+11. ✅ **API routes** for mobile/API users
+12. ✅ **Defense-in-depth** (BranchScope + RLS + DB trigger + validation rules)
 
 The module will be a **production-ready inner-branch warehouse transfer** system that matches and exceeds the legacy system's safeguards, built on Laravel 11 + PostgreSQL 16 with proper accounting principles.

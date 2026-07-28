@@ -7,11 +7,12 @@ use App\Models\WarehouseTransfer;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Stock\StockAvailabilityService;
+use App\Services\Stock\WarehouseTransferAuditLogger;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Warehouse Transfer Service — Phase 6.5 + Phase 1 + Phase 2 + Phase 3.
+ * Warehouse Transfer Service — Phase 6.5 + Phase 1 + Phase 2 + Phase 3 + Phase 4.
  *
  * Two-phase flow:
  *   1. createTransfer(): creates draft (header + items, no stock/GL)
@@ -42,6 +43,15 @@ use Illuminate\Support\Facades\Log;
  *   Also: demand-linked transfers cannot be cancelled via this module;
  *   warehouse frozen-for-count blocks draft creation.
  *
+ * AUDIT TRAIL — Phase 4 enforcement:
+ *   Every transfer create/confirm/cancel logs a user_audit_log entry via
+ *   WarehouseTransferAuditLogger (dual-write: DB + file). This closes
+ *   gap G4 ("No dedicated audit trail — service uses DB::table()
+ *   bypassing Eloquent events"). The AuditableMasterData trait on the
+ *   WarehouseTransfer model only catches Eloquent-model-level changes;
+ *   since the service uses DB::table() for efficiency, explicit audit
+ *   logging is required.
+ *
  * GL posting rules (same-branch only):
  *   - Stock moves: source OUT at avg_cost, dest IN at same avg_cost
  *   - NO GL journal (inventory is just reallocated within the same branch;
@@ -62,7 +72,8 @@ class WarehouseTransferService
     public function __construct(
         private StockService $stockService,
         private StockAvailabilityService $stockAvailabilityService,
-        private JournalPostingService $journalPosting
+        private JournalPostingService $journalPosting,
+        private WarehouseTransferAuditLogger $auditLogger
     ) {}
 
     /**
@@ -217,6 +228,18 @@ class WarehouseTransferService
             }
             DB::table('warehouse_transfer_items')->insert($itemRows);
 
+            // ★ Phase 4 — Audit: log transfer creation.
+            $this->auditLogger->transferCreated(
+                (int) ($data['created_by'] ?? 0),
+                $transferId,
+                $transferCode,
+                $fromWarehouseId,
+                $toWarehouseId,
+                $fromBranchId,
+                count($validatedItems),
+                $totalAmount
+            );
+
             return WarehouseTransfer::with(['items.product', 'fromWarehouse.branch', 'toWarehouse.branch'])
                 ->find($transferId);
         });
@@ -352,6 +375,18 @@ class WarehouseTransferService
                     'updated_at' => now(),
                 ]);
 
+            // ★ Phase 4 — Audit: log transfer confirmation.
+            $this->auditLogger->transferConfirmed(
+                $confirmedBy,
+                $transferId,
+                $transfer->transfer_code,
+                (int) $fromWh,
+                (int) $toWh,
+                (int) $transfer->from_branch_id,
+                $transfer->items->count(),
+                (float) $transfer->total_amount
+            );
+
             return WarehouseTransfer::with([
                 'items.product', 'fromWarehouse.branch', 'toWarehouse.branch',
                 'journalEntry.lines.ledger', 'debtorJournalEntry.lines.ledger'
@@ -460,6 +495,17 @@ class WarehouseTransferService
             DB::table('warehouse_transfers')
                 ->where('id', $transferId)
                 ->update(['status' => 'cancelled', 'updated_at' => now()]);
+
+            // ★ Phase 4 — Audit: log transfer cancellation.
+            $this->auditLogger->transferCancelled(
+                $cancelledBy,
+                $transferId,
+                $transfer->transfer_code,
+                (int) $transfer->from_branch_id,
+                $transfer->status, // previous status (before cancel update)
+                $transfer->isConfirmed(), // was it reversed?
+                $reason
+            );
 
             return WarehouseTransfer::find($transferId);
         });

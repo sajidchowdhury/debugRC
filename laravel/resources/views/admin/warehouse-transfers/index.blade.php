@@ -51,6 +51,12 @@
             <a href="{{ route('admin.warehouse-transfers.create') }}" class="btn btn-light btn-sm">
                 <i class="fas fa-plus me-1"></i> New Transfer
             </a>
+            <a href="{{ route('admin.warehouse-transfers.checklist') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-clipboard-check me-1"></i> Audit Checklist
+            </a>
+            <a href="{{ route('admin.warehouse-transfers.reconcile') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-balance-scale me-1"></i> Reconcile
+            </a>
         </div>
     </header>
 
