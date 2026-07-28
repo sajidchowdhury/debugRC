@@ -416,6 +416,14 @@ class WarehouseTransferService
                 throw new \RuntimeException("Transfer is already cancelled.");
             }
 
+            // ★ Phase 3 — Reason required for confirmed-transfer cancellation:
+            // Drafts can be cancelled without a reason (no stock/GL impact),
+            // but confirmed transfers MUST have a reason because reversal
+            // creates audit trail entries that reference it.
+            if ($transfer->isConfirmed() && trim($reason) === '') {
+                throw new \RuntimeException('A cancellation reason is required');
+            }
+
             // ★ Phase 3 — Demand-linked reversal protection:
             // Transfers linked to a Branch Demand cannot be cancelled via
             // WarehouseTransfer. They must be cancelled through the Branch
