@@ -1697,11 +1697,13 @@ class StockTakeService
 
             // Phase 1: Negative-stock pre-check.
             // For each shortage (difference < 0), verify current warehouse_stock.qty
-            // is sufficient. Locks the warehouse_stock rows (FOR UPDATE via the join)
-            // so no other transaction can change them between this check and the
-            // actual applyTransaction calls below. Throws a friendly exception with
-            // the product list instead of letting the DB trigger raise a generic
-            // check_violation error partway through the post.
+            // is sufficient. Locks the warehouse_stock rows (FOR UPDATE via a
+            // separate query — PG does not allow FOR UPDATE on the nullable side
+            // of a LEFT JOIN) so no other transaction can change them between
+            // this check and the actual applyTransaction calls below. Throws a
+            // friendly exception with the product list instead of letting the
+            // DB trigger raise a generic check_violation error partway through
+            // the post.
             $this->assertNoNegativeStockOutcomes($sessionId);
 
             // Phase 3: Reconcile the setup-time snapshot (system_qty) against
@@ -1986,23 +1988,39 @@ class StockTakeService
 
     /**
      * Phase 1: Pre-check that no shortage variance would drive warehouse_stock
-     * below zero. Locks the relevant warehouse_stock rows (FOR UPDATE via the
-     * join) for the duration of the transaction so the check is race-free.
+     * below zero. Locks the relevant warehouse_stock rows (FOR UPDATE) for the
+     * duration of the transaction so the check is race-free.
      *
      * For each shortage item (physical_qty < system_qty), compares the current
      * warehouse_stock.qty against the shortage magnitude. If any would result in
      * a negative qty, throws StockTakeNegativeStockException with the full
      * product list — BEFORE any stock movement is applied.
      *
+     * NOTE on the two-step query split: PostgreSQL does NOT allow FOR UPDATE
+     * on the nullable side of an outer join (SQLSTATE[0A000] "Feature not
+     * supported: FOR UPDATE cannot be applied to the nullable side of an
+     * outer join"). The original implementation did a single LEFT JOIN
+     * warehouse_stock ... FOR UPDATE, which crashed at post time. The fix
+     * splits into two queries:
+     *   1. Read the shortage items + product info (no lock — sti rows are
+     *      session-owned; no concurrent writer can touch them).
+     *   2. Lock+read the warehouse_stock rows for the affected (warehouse_id,
+     *      product_id) pairs in a separate query (INNER semantics — only
+     *      rows that exist can be locked). The lock is held until the
+     *      enclosing transaction commits/rolls back, preventing concurrent
+     *      writers from changing qty between this pre-check and the
+     *      applyTransaction calls below.
+     *
      * @throws StockTakeNegativeStockException
      */
     private function assertNoNegativeStockOutcomes(int $sessionId): void
     {
+        // Step 1: Get the shortage items + product info. sti rows are
+        // session-owned (no concurrent writer can touch them), so no lock
+        // is needed on this query. We only need the (warehouse_id,
+        // product_id) pairs + the system/physical qty + product names for
+        // the error message.
         $shortages = DB::table('stock_take_items as sti')
-            ->leftJoin('warehouse_stock as ws', function ($join) {
-                $join->on('ws.warehouse_id', '=', 'sti.warehouse_id')
-                     ->on('ws.product_id', '=', 'sti.product_id');
-            })
             ->join('products as p', 'p.id', '=', 'sti.product_id')
             ->where('sti.stock_take_session_id', $sessionId)
             ->where('sti.is_applied', false)
@@ -2012,17 +2030,40 @@ class StockTakeService
                 'sti.warehouse_id',
                 'sti.system_qty',
                 'sti.physical_qty',
-                DB::raw('COALESCE(ws.qty, 0) as current_qty'),
                 'p.product_code',
                 'p.product_name'
             )
-            ->lockForUpdate()
             ->get();
 
+        if ($shortages->isEmpty()) {
+            return;
+        }
+
+        // Step 2: Lock+read the warehouse_stock rows for the affected pairs.
+        // PostgreSQL does NOT allow FOR UPDATE on the nullable side of a
+        // LEFT JOIN (SQLSTATE[0A000]), so we lock ws in a separate query.
+        // Rows that don't exist can't be locked (and current_qty=0 for them
+        // — any shortage is offending). The lock is held until the enclosing
+        // transaction commits/rolls back.
+        //
+        // The (warehouse_id, product_id) values come from the database
+        // (sti rows), not user input, so the tuple-IN is SQL-injection-safe.
+        $pairs = $shortages
+            ->map(fn ($s) => '(' . (int) $s->warehouse_id . ',' . (int) $s->product_id . ')')
+            ->implode(',');
+        $liveStock = DB::table('warehouse_stock')
+            ->whereRaw("(warehouse_id, product_id) IN ({$pairs})")
+            ->lockForUpdate()
+            ->get()
+            ->keyBy(fn ($r) => $r->warehouse_id . ':' . $r->product_id);
+
+        // Step 3: Check each shortage against the LOCKED current qty.
         $offending = [];
         foreach ($shortages as $s) {
+            $key = $s->warehouse_id . ':' . $s->product_id;
+            $currentQty = isset($liveStock[$key]) ? (float) $liveStock[$key]->qty : 0.0;
             $variance = (float) $s->physical_qty - (float) $s->system_qty;
-            $resultingQty = (float) $s->current_qty + $variance;
+            $resultingQty = $currentQty + $variance;
             if ($resultingQty < -0.0001) {
                 $offending[] = [
                     'product_id' => $s->product_id,
@@ -2031,7 +2072,7 @@ class StockTakeService
                     'warehouse_id' => $s->warehouse_id,
                     'system_qty' => (float) $s->system_qty,
                     'physical_qty' => (float) $s->physical_qty,
-                    'current_stock' => (float) $s->current_qty,
+                    'current_stock' => $currentQty,
                     'shortage' => abs($variance),
                     'resulting_qty' => $resultingQty,
                 ];
