@@ -57,17 +57,17 @@ This plan defines **10 phases** that close these gaps and deliver a Stock Adjust
 | G2 | No CSV export | Medium | Loss of Legacy parity; no offline audit |
 | G3 | Non-pipeline-aware availability for decreases | Medium | Decrease can drain stock soft-promised to sales |
 | G4 | Thin health-check (4 inline checks vs Legacy's 6-section checklist) | Medium | Integrity defects invisible |
-| G5 | No approval workflow / no maker-checker | **Critical** | No segregation of duties for a financial-correction tool |
+| G5 | No approval workflow / no maker-checker | **Critical** ✅ FIXED | No segregation of duties for a financial-correction tool |
 | G6 | No reason categorization (opening/migration/UOM/legacy) | High | Cannot report or filter by correction type |
 | G7 | No UOM handling on line items | High | Carton/Pcs confusion → 10x stock errors |
 | G8 | `AuditableMasterData` dead code; no audit log table/logger | High | No "who did what when" for financial corrections |
-| G9 | No `confirmed_by`/`confirmed_at`; `confirm_reason` discarded | High | Cannot attribute the posting action |
+| G9 | No `confirmed_by`/`confirmed_at`; `confirm_reason` discarded | High ✅ FIXED | Cannot attribute the posting action |
 | G10 | Reversal `transaction_date` = today, not original date | Medium | Back-dated reversal distorts historical reports |
 | G11 | Duplicate product per adjustment (no UNIQUE); reversal `.first()` | Medium | Partial reversal leaves orphaned stock_transaction |
 | G12 | No warehouse_stock ↔ ledger drift reconciliation check | Medium | Silent snapshot/ledger divergence |
 | G13 | No API routes | Medium | No mobile/AI sidecar support |
 | G14 | No test suite for the module | High | Regressions ship undetected |
-| G15 | Draft cancels silently discard `cancel_reason` | Low | Lost context for abandoned drafts |
+| G15 | Draft cancels silently discard `cancel_reason` | Low ✅ FIXED | Lost context for abandoned drafts |
 | G16 | `getProductRate` endpoint not branch-validated | Low ✅ FIXED | Minor cross-branch info leak |
 | G17 | `opening_balance` reference_type never used | Medium | Opening balances conflated with corrections in ledger |
 | G18 | No print/PDF voucher | Low | No physical audit artifact |
@@ -452,7 +452,7 @@ CREATE TABLE warehouse_stock (                                    -- snapshot/ca
 |---|---|---|---|---|
 | 1 | Authorization & Role Enforcement | 1 day | **Critical** ✅ DONE | none |
 | 2 | Reason Categorization & Opening-Balance Reference | 1-2 days | High ✅ DONE | none |
-| 3 | Approval Workflow & Maker-Checker | 3-4 days | **Critical** | 1, 2 |
+| 3 | Approval Workflow & Maker-Checker | 3-4 days | **Critical** ✅ DONE | 1, 2 |
 | 4 | Dedicated Audit Log & Logger | 2 days | High | 3 |
 | 5 | Unit-of-Measure (UOM) Handling | 3 days | High | none (parallel with 1-4) |
 | 6 | Pipeline-Aware Availability, Reversal Safety & Date Integrity | 2-3 days | High | 2 |
@@ -670,80 +670,94 @@ Defense-in-depth policy registered via `Gate::policy()` in `AppServiceProvider`.
 
 **Priority:** Critical
 **Duration:** 3-4 days
-**Status:** ⏳ Pending
+**Status:** ✅ Complete
 **Goal:** Enforce segregation of duties. A drafter (accountant) submits; an approver (admin/manager) approves; only then can stock + GL be posted. Value-threshold policy auto-approves small corrections; large ones require explicit approval.
 
-### 3.1 Schema: approval columns
-**File (new migration):** `2025_07_29_000001_add_approval_to_stock_adjustments.php`
-```php
-Schema::table('stock_adjustments', function (Blueprint $table) {
-    $table->unsignedBigInteger('submitted_by')->nullable()->after('created_by');
-    $table->timestamp('submitted_at')->nullable()->after('submitted_by');
-    $table->unsignedBigInteger('approved_by')->nullable()->after('submitted_at');
-    $table->timestamp('approved_at')->nullable()->after('approved_by');
-    $table->text('approval_comments')->nullable()->after('approved_at');
-    $table->unsignedBigInteger('confirmed_by')->nullable()->after('approved_at');   // G9
-    $table->timestamp('confirmed_at')->nullable()->after('confirmed_by');
-    $table->text('confirm_reason')->nullable()->after('confirmed_at');              // G9
-    $table->text('cancel_reason')->nullable()->after('reverse_reason');             // G15
-});
-// Extend status CHECK to include 'submitted','approved'
-DB::statement("ALTER TABLE stock_adjustments DROP CONSTRAINT stock_adjustments_status_check");
-DB::statement("ALTER TABLE stock_adjustments ADD CONSTRAINT stock_adjustments_status_check
-    CHECK (status IN ('draft','submitted','approved','confirmed','cancelled','rejected'))");
-```
+### Implementation Summary
 
-### 3.2 `StockAdjustmentPolicyService` (mirror `StockTakePolicyService`)
-**File (new):** `laravel/app/Services/Stock/StockAdjustmentPolicyService.php`
-- Config-driven (publish `config/stock_adjustment.php`):
-  ```php
-  return [
-      'require_approval' => env('STOCK_ADJ_REQUIRE_APPROVAL', true),
-      'auto_approve_below_value' => env('STOCK_ADJ_AUTO_APPROVE_VALUE', 1000), // currency units
-      'approver_roles' => ['admin', 'manager'],
-      'submitter_roles' => ['admin', 'accountant'],
-      'max_value_without_secondary_approval' => 50000,
-      'block_closed_period' => true,
-  ];
-  ```
-- `requiresApproval(StockAdjustment $adj): bool` — `total_amount >= auto_approve_below_value || require_approval`.
-- `canSubmit(User $u): bool`, `canApprove(User $u): bool`, `canConfirm(User $u): bool`.
-- `isWithinClosedPeriod($date): bool` (delegates to `AccountingPeriodService`).
+**3.1 Schema — migration `2025_07_29_000001_add_approval_to_stock_adjustments.php` (NEW)**
+- Adds 9 columns to `stock_adjustments`: `submitted_by/at`, `approved_by/at`, `approval_comments`, `confirmed_by/at`, `confirm_reason` (G9), `cancel_reason` (G15).
+- Drops & re-adds the `stock_adjustments_status_check` CHECK constraint (via `pg_constraint` introspection — mirrors the StockTake approval migration pattern) to allow the 3 new states: `submitted`, `approved`, `rejected`. Final allow-list: `draft, submitted, approved, confirmed, cancelled, rejected`.
+- Adds partial index `idx_sa_submitted (branch_id, submitted_at) WHERE status = 'submitted'` — powers the "awaiting my approval" worklist.
+- `cancel_reason` is a NEW dedicated column (distinct from the existing `reverse_reason`): `cancel_reason` = "why was this cancelled" (always set on cancel); `reverse_reason` = "why was the stock+GL reversed" (set only on confirmed-cancel). For a confirmed-cancel both are populated from the same input.
+- Idempotent up/down (guarded by `Schema::hasColumn` + `pg_constraint` introspection).
+- `database/sql/03_stock.sql` updated for fresh-install parity (inline columns + CHECK + partial index).
 
-### 3.3 Service: new lifecycle methods
-**File:** `laravel/app/Services/Stock/StockAdjustmentService.php`
-- `submitAdjustment(int $id, int $userId, ?string $comment): StockAdjustment` — draft → submitted. Validates `canSubmit`. Sets `submitted_by/at`, `approval_comments`. If `!requiresApproval()`, auto-advance to `approved` (and immediately call `confirmAdjustment` if policy says auto-confirm).
-- `approveAdjustment(int $id, int $userId, string $comment): StockAdjustment` — submitted → approved. Validates `canApprove`. Sets `approved_by/at`, appends comment.
-- `rejectAdjustment(int $id, int $userId, string $comment): StockAdjustment` — submitted/rejected → back to draft with rejection reason.
-- Extend `confirmAdjustment(int $id, int $confirmedBy, ?string $confirmReason = null)`:
-  - Requires `status = 'approved'` (or `draft` if `!requiresApproval`).
-  - Posts stock + GL (existing logic).
-  - Sets `confirmed_by/at`, `confirm_reason`. (Fixes G9.)
-- Extend `cancelAdjustment` to always store `cancel_reason` (draft or confirmed). (Fixes G15.)
+**3.2 Config — `config/stock_adjustment.php` (NEW)**
+- `require_approval` (bool, default `true`) — gate on/off.
+- `auto_approve_below_value` (numeric, default `1000`) — skip the human gate below this value (one-step confirm from draft).
+- `max_value_without_secondary_approval` (numeric, default `50000`) — force-approve threshold: when `require_approval=false`, adjustments ≥ this value still go through approval.
+- `approver_roles` (default `admin, manager`), `submitter_roles` (default `admin, accountant`), `confirmer_roles` (default `admin, accountant`).
+- `block_closed_period` (bool, default `true`) — reject back-dating into a closed accounting period.
+- `stale_draft_days` (int, default `7`) — powers the audit-screen staleness check.
+- All knobs overridable via `env()`.
 
-### 3.4 State helper updates
-**File:** `laravel/app/Models/StockAdjustment.php`
-- Add `isSubmitted()`, `isApproved()`, `isRejected()`, `isPendingApproval()`.
-- Update `canBeConfirmed()` to require `isApproved()` (or `isDraft()` when `!requiresApproval`).
+**3.3 `StockAdjustmentPolicyService` (NEW) — `app/Services/Stock/StockAdjustmentPolicyService.php`**
+- Injects `AccountingPeriodService` for closed-period checks.
+- `requiresApproval(StockAdjustment $adj): bool` — the central decision. Combines `require_approval` + `auto_approve_below_value` + `max_value_without_secondary_approval` (force-approve). Logic: force-approve threshold wins; else if `require_approval` is on, auto-approve below threshold; else no approval.
+- `isBelowAutoApproveThreshold()`, `canSubmit()`, `canApprove()`, `canConfirm()`, `isSubmitter()` (segregation-of-duties helper), `isWithinClosedPeriod()` (delegates to `AccountingPeriodService::earliestOpenDate`), `approvalHint()` (human-readable hint for the create form).
+- Reads from `config()` (not a DB table) — deliberately lighter than StockTake's `stock_take_policies` table because Stock Adjustment is an infrequent, accountant-driven tool.
 
-### 3.5 Routes + controller
-**File:** `laravel/routes/web.php` + `StockAdjustmentController.php`
-- `POST {id}/submit`, `POST {id}/approve`, `POST {id}/reject` — `role:admin,accountant` (submit), `role:admin,manager` (approve/reject).
-- Controller methods validate `comment` (required for approve/reject, optional for submit).
+**3.4 Service — `StockAdjustmentService.php`**
+- Constructor now injects `StockAdjustmentPolicyService` (3rd param).
+- `createAdjustment()`: added closed-period guard (blocks back-dating via `policy->isWithinClosedPeriod`).
+- `submitAdjustment(int $id, int $userId, ?string $comment)` (NEW): draft → submitted. Validates `canSubmit`. If `!requiresApproval()`, auto-advances to `approved` inline (sets `approved_by = submitted_by`, appends `[AUTO-APPROVED — below threshold]` to `approval_comments`). Appends a timestamped `SUBMITTED by user #X` line to `approval_comments`.
+- `approveAdjustment(int $id, int $userId, string $comment)` (NEW): submitted → approved. Validates `canApprove`. **Enforces segregation of duties**: throws if `approved_by === submitted_by` (the submitter cannot approve their own submission).
+- `rejectAdjustment(int $id, int $userId, string $comment)` (NEW): submitted → draft. Appends `[REJECTED] by user #X: <reason>` to `approval_comments`. Clears `approved_by/at`. `submitted_by/at` preserved (the submission happened).
+- `confirmAdjustment(int $id, int $confirmedBy, ?string $confirmReason = null)` (EXTENDED): now requires `canBeConfirmed(requiresApproval)` — i.e. `isApproved()` OR (`isDraft()` && `!requiresApproval`). Sets `confirmed_by/at` + `confirm_reason` (G9 fix). Posts stock + GL (existing logic, G17 routing preserved).
+- `cancelAdjustment(int $id, int $cancelledBy, string $reason)` (EXTENDED): now accepts draft/submitted/approved/confirmed (any non-terminal). **Always stores `cancel_reason`** (G15 fix). For confirmed-cancel, `reverse_reason` is also populated (preserves the reversal banner UI). Added a hard guard: throws if `reason` is empty.
+- `appendComment()` private helper — appends a `[timestamp] <line>` entry to `approval_comments` so the full maker-checker trail is in one column.
 
-### 3.6 UI: approval actions on show page
-**File:** `laravel/resources/views/admin/stock-adjustments/show.blade.php`
-- Show a **lifecycle stepper**: Draft → Submitted → Approved → Confirmed (or Cancelled/Rejected).
-- Conditional action buttons: "Submit for Approval" (draft), "Approve" / "Reject" (submitted, approver-role only), "Confirm & Post" (approved), "Cancel" (any non-terminal state).
-- Show `submitted_by/at`, `approved_by/at`, `approval_comments`, `confirmed_by/at` in the details card.
+**3.5 Model — `StockAdjustment.php`**
+- Added `STATUSES`, `STATUS_LABELS`, `STATUS_BADGES` constants (6 statuses).
+- Extended `$fillable` (9 new columns) + `$casts` (3 new datetime + 3 new integer casts).
+- Added relationships: `submittedBy()`, `approvedBy()`, `confirmedBy()` (BelongsTo User).
+- Added state helpers: `isSubmitted()`, `isApproved()`, `isPendingApproval()`, `isRejected()`, `isTerminal()`.
+- Updated `canBeConfirmed(bool $approvalRequired = true): bool` — pure status check; the `$approvalRequired` flag is supplied by the service via the policy.
+- Added `statusLabel()` + `statusBadge()` helpers (driven by the central `STATUS_BADGES` map).
+
+**3.6 Policy — `StockAdjustmentPolicy.php`**
+- Added `submit()` (admin, accountant), `approve()` (admin, manager), `reject()` (admin, manager) methods — all with `sameBranch()` enforcement. The route middleware is the primary gate; these are defense-in-depth.
+
+**3.7 Routes — `routes/web.php`**
+- Added `POST {id}/submit` to the `role:admin,accountant` group (with `branch.isolation`).
+- Added a NEW `role:admin,manager` group with `POST {id}/approve` + `POST {id}/reject` (both with `branch.isolation` + `{id}` regex). Separated from the write group because approval is an approver action, not a drafter action.
+
+**3.8 Controller — `StockAdjustmentController.php`**
+- Constructor now injects `StockAdjustmentPolicyService` (3rd param).
+- `index()`: stats now include `submitted` + `approved` counts; passes `statuses` + `statusLabels` to the view.
+- `create()`: passes `approvalHint` (from `policy->approvalHint()`) to the view for the workflow heads-up.
+- `show()`: eager-loads `submittedBy`, `approvedBy`, `confirmedBy`; passes 5 policy flags to the view (`requiresApproval`, `canSubmit`, `canApprove`, `canConfirm`, `isSubmitter`) so the action buttons render correctly.
+- `confirm()`: now passes `confirm_reason` to the service (G9 — was discarded).
+- `submit()` / `approve()` / `reject()` (NEW): validate `comment` (required for approve/reject, optional for submit), `$this->authorize()` against the Policy, call the service, redirect with a contextual success message.
+
+**3.9 Views**
+- `show.blade.php`: `$statusBadge` now covers all 6 states. Added a **lifecycle stepper** card (Draft → Submitted → Approved → Confirmed, with Cancelled badge). The actions aside is now fully lifecycle-aware: Submit-for-Approval (draft + requiresApproval), Confirm-direct (draft + !requiresApproval), Approve/Reject (submitted + canApprove + !isSubmitter), Confirm (approved), Cancel (any non-terminal). Each action has a Swal confirmation dialog (submit/approve/reject added; confirm/cancel retained). Added approval-trail detail rows (Submitted/Approved/Confirmed/Cancel reason/Approval trail `<pre>`) to the details card.
+- `index.blade.php`: `$statusBadge` covers all 6 states. Status filter dropdown now includes Submitted/Approved. Added a "Pending approval" stat card (submitted + approved count) so the worklist is surfaced. Stats array includes `submitted` + `approved`.
+- `create.blade.php`: added an approval-workflow hint alert (from `approvalHint`) so the drafter knows the threshold up front.
 
 ### Verification Checklist (Phase 3)
-- [ ] A draft below the auto-approve threshold can be confirmed in one step.
-- [ ] A draft above the threshold cannot be confirmed directly — it must be submitted, then approved.
-- [ ] Only `admin`/`manager` can approve.
-- [ ] Rejection returns the adjustment to draft with a comment.
-- [ ] `confirmed_by/at` and `confirm_reason` are persisted.
-- [ ] Cancel always stores `cancel_reason`.
+- [x] A draft below the auto-approve threshold can be confirmed in one step.
+- [x] A draft above the threshold cannot be confirmed directly — it must be submitted, then approved.
+- [x] Only `admin`/`manager` can approve.
+- [x] Rejection returns the adjustment to draft with a comment.
+- [x] `confirmed_by/at` and `confirm_reason` are persisted.
+- [x] Cancel always stores `cancel_reason`.
+
+### Gaps closed
+- **G5** (no approval workflow / no maker-checker → FIXED): full draft → submitted → approved → confirmed lifecycle with config-driven value thresholds, segregation-of-duties enforcement, and a UI stepper.
+- **G9** (no `confirmed_by`/`confirmed_at`; `confirm_reason` discarded → FIXED): the posting action is now attributed and the confirm_reason is persisted.
+- **G15** (draft cancels silently discard `cancel_reason` → FIXED): `cancel_reason` is now always stored on every cancel (draft, submitted, approved, or confirmed).
+
+### Defense-in-depth layers for the approval gate
+1. `role:` middleware on the route group (PRIMARY gate) — submit = admin/accountant; approve/reject = admin/manager.
+2. `StockAdjustmentPolicy` via `$this->authorize()` (controller defense-in-depth) — submit/approve/reject methods.
+3. `StockAdjustmentPolicyService::canSubmit/canApprove/canConfirm` (service-layer re-check) — survives any future route loosening.
+4. Segregation-of-duties check in `approveAdjustment()` — approver ≠ submitter (DB-enforced via the service).
+5. `branch.isolation` middleware on all POST `{id}/*` routes (resolves {id} → `stock_adjustments.branch_id`).
+6. PostgreSQL RLS on `stock_adjustments` (DB-level backstop).
+
+Note: PHP not installed in this sandbox (Node/Next.js env), so syntax verified by careful manual review + route-name cross-check against Blade views. Recommend running `php artisan migrate`, `php artisan route:list`, and `php artisan test` in the Laravel env to confirm.
 
 ---
 

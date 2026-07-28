@@ -9,10 +9,15 @@ use App\Traits\AuditableMasterData;
 /**
  * Stock Adjustment — Phase 6.3.
  *
- * Two-phase flow (better than legacy immediate-post):
+ * Phase 3 lifecycle (maker-checker approval workflow):
  *   1. Create (status=draft): header + items, NO stock movement, NO GL
- *   2. Confirm (status=confirmed): applies stock via StockService + posts GL journal
- *   3. Cancel (status=cancelled): if confirmed, reverses stock + GL; if draft, just marks cancelled
+ *   2. Submit (draft→submitted): accountant submits for approval. If below
+ *      the auto-approve threshold, the service auto-advances to 'approved'.
+ *   3. Approve (submitted→approved): admin/manager approves. Reject returns to draft.
+ *   4. Confirm (approved→confirmed): applies stock via StockService + posts GL.
+ *      When !requiresApproval, can be confirmed directly from draft.
+ *   5. Cancel (any non-terminal→cancelled): if confirmed, reverses stock + GL;
+ *      always stores cancel_reason (G15).
  *
  * Adjustment types:
  *   - increase: stock goes UP (Dr Inventory / Cr Surplus)
@@ -27,12 +32,21 @@ use App\Traits\AuditableMasterData;
  * @property string $adjustment_category Phase 2: structured reason category
  * @property string $total_amount
  * @property string $reason
- * @property string $status draft|confirmed|cancelled
+ * @property string $status draft|submitted|approved|confirmed|cancelled|rejected
  * @property int|null $journal_entry_id GL journal entry (set on confirm)
  * @property bool $is_reversed
  * @property string|null $reversed_at
  * @property int|null $reversed_by
- * @property string|null $reverse_reason
+ * @property string|null $reverse_reason  why the stock+GL was reversed (confirmed-cancel)
+ * @property string|null $cancel_reason  why the adjustment was cancelled (G15 — always set on cancel)
+ * @property int|null $submitted_by   Phase 3 — who submitted for approval
+ * @property string|null $submitted_at
+ * @property int|null $approved_by    Phase 3 — who approved
+ * @property string|null $approved_at
+ * @property string|null $approval_comments  Phase 3 — submit/approve/reject comments trail
+ * @property int|null $confirmed_by   Phase 3 (G9) — who posted stock+GL
+ * @property string|null $confirmed_at
+ * @property string|null $confirm_reason  Phase 3 (G9) — why the posting was done
  * @property int|null $created_by
  */
 class StockAdjustment extends Model
@@ -91,6 +105,41 @@ class StockAdjustment extends Model
         'other'                 => ['cls' => 'bg-light text-muted',                 'icon' => 'fa-ellipsis'],
     ];
 
+    /**
+     * Phase 3 — canonical status values. Mirrors the DB-level CHECK
+     * constraint `stock_adjustments_status_check` (see migration
+     * 2025_07_29_000001_add_approval_to_stock_adjustments.php).
+     */
+    public const STATUSES = [
+        'draft', 'submitted', 'approved', 'confirmed', 'cancelled', 'rejected',
+    ];
+
+    /**
+     * Phase 3 — human-readable status labels.
+     */
+    public const STATUS_LABELS = [
+        'draft'     => 'Draft',
+        'submitted' => 'Submitted',
+        'approved'  => 'Approved',
+        'confirmed' => 'Confirmed',
+        'cancelled' => 'Cancelled',
+        'rejected'  => 'Rejected',
+    ];
+
+    /**
+     * Phase 3 — Bootstrap badge classes + FontAwesome icons for each status.
+     * Centralised so the index table, the show-page header, and the
+     * lifecycle stepper all render consistent badges.
+     */
+    public const STATUS_BADGES = [
+        'draft'     => ['cls' => 'bg-warning-subtle text-warning',  'icon' => 'fa-pen-to-square'],
+        'submitted' => ['cls' => 'bg-info-subtle text-info',        'icon' => 'fa-paper-plane'],
+        'approved'  => ['cls' => 'bg-primary-subtle text-primary',  'icon' => 'fa-circle-check'],
+        'confirmed' => ['cls' => 'bg-success-subtle text-success',  'icon' => 'fa-circle-check'],
+        'cancelled' => ['cls' => 'bg-secondary-subtle text-secondary', 'icon' => 'fa-ban'],
+        'rejected'  => ['cls' => 'bg-danger-subtle text-danger',    'icon' => 'fa-circle-xmark'],
+    ];
+
     protected $fillable = [
         'adjustment_code',
         'adjustment_date',
@@ -106,6 +155,15 @@ class StockAdjustment extends Model
         'reversed_at',
         'reversed_by',
         'reverse_reason',
+        'cancel_reason',          // Phase 3 (G15)
+        'submitted_by',           // Phase 3
+        'submitted_at',
+        'approved_by',
+        'approved_at',
+        'approval_comments',
+        'confirmed_by',           // Phase 3 (G9)
+        'confirmed_at',
+        'confirm_reason',
         'created_by',
     ];
 
@@ -119,6 +177,13 @@ class StockAdjustment extends Model
         'journal_entry_id' => 'integer',
         'created_by' => 'integer',
         'reversed_by' => 'integer',
+        // Phase 3 — approval-workflow timestamps + attribution ids.
+        'submitted_at' => 'datetime',
+        'approved_at' => 'datetime',
+        'confirmed_at' => 'datetime',
+        'submitted_by' => 'integer',
+        'approved_by' => 'integer',
+        'confirmed_by' => 'integer',
     ];
 
     public function items(): \Illuminate\Database\Eloquent\Relations\HasMany
@@ -142,6 +207,30 @@ class StockAdjustment extends Model
     }
 
     /**
+     * Phase 3 — the user who submitted this adjustment for approval.
+     */
+    public function submittedBy(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(User::class, 'submitted_by');
+    }
+
+    /**
+     * Phase 3 — the user who approved this adjustment.
+     */
+    public function approvedBy(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(User::class, 'approved_by');
+    }
+
+    /**
+     * Phase 3 (G9) — the user who confirmed (posted stock+GL) this adjustment.
+     */
+    public function confirmedBy(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(User::class, 'confirmed_by');
+    }
+
+    /**
      * Scope: adjustments for a specific branch.
      */
     public function scopeForBranch(\Illuminate\Database\Eloquent\Builder $query, int $branchId): \Illuminate\Database\Eloquent\Builder
@@ -150,11 +239,55 @@ class StockAdjustment extends Model
     }
 
     /**
-     * Is this adjustment a draft (not yet confirmed)?
+     * Is this adjustment a draft (not yet submitted/approved/confirmed)?
      */
     public function isDraft(): bool
     {
         return $this->status === 'draft';
+    }
+
+    /**
+     * Phase 3 — has this adjustment been submitted for approval (awaiting
+     * an approver's decision)?
+     */
+    public function isSubmitted(): bool
+    {
+        return $this->status === 'submitted';
+    }
+
+    /**
+     * Phase 3 — has this adjustment been approved (ready to confirm/post)?
+     */
+    public function isApproved(): bool
+    {
+        return $this->status === 'approved';
+    }
+
+    /**
+     * Phase 3 — is this adjustment pending approval (in the submitted state,
+     * waiting on an approver)? Convenience alias for the UI.
+     */
+    public function isPendingApproval(): bool
+    {
+        return $this->isSubmitted();
+    }
+
+    /**
+     * Phase 3 — was this adjustment rejected by an approver?
+     * (Rejected is a transient flag — rejectAdjustment returns the row to
+     * 'draft' so the drafter can revise — so this is mostly historical /
+     * used when reading rejection comments from approval_comments.)
+     */
+    public function isRejected(): bool
+    {
+        // After rejectAdjustment runs, status returns to 'draft'. This helper
+        // is kept for forward-compat if a future phase introduces a persistent
+        // 'rejected' terminal state. For now it inspects the approval_comments
+        // trail for a rejection marker.
+        return $this->status === 'rejected'
+            || ($this->isDraft()
+                && $this->approval_comments
+                && str_contains($this->approval_comments, '[REJECTED]'));
     }
 
     /**
@@ -171,6 +304,41 @@ class StockAdjustment extends Model
     public function isCancelled(): bool
     {
         return $this->status === 'cancelled';
+    }
+
+    /**
+     * Phase 3 — is the adjustment in a terminal state (no further lifecycle
+     * transitions possible)? Confirmed is NOT terminal (it can be cancelled
+     * / reversed); only cancelled is terminal.
+     */
+    public function isTerminal(): bool
+    {
+        return $this->isCancelled();
+    }
+
+    /**
+     * Phase 3 — can this adjustment be confirmed (posted to stock+GL) right
+     * now, given the current approval-policy knob?
+     *
+     * - If approval is required for this adjustment: only 'approved' rows
+     *   can be confirmed.
+     * - If approval is NOT required (below auto-approve threshold, or the
+     *   gate is off and below the force-approve threshold): 'draft' rows
+     *   can be confirmed directly (one-step confirm).
+     *
+     * The $approvalRequired flag is supplied by the caller (the service)
+     * via StockAdjustmentPolicyService::requiresApproval() — the model
+     * cannot resolve the policy itself (no DI in model methods).
+     */
+    public function canBeConfirmed(bool $approvalRequired = true): bool
+    {
+        if ($this->isApproved()) {
+            return true;
+        }
+        if ($this->isDraft() && !$approvalRequired) {
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -243,5 +411,31 @@ class StockAdjustment extends Model
     public function ledgerReferenceType(): string
     {
         return $this->isOpenBalance() ? 'opening_balance' : 'stock_adjustment';
+    }
+
+    /**
+     * Phase 3 — human-readable label for the status.
+     */
+    public function statusLabel(): string
+    {
+        return self::STATUS_LABELS[$this->status]
+            ?? ucfirst(str_replace('_', ' ', $this->status ?? 'draft'));
+    }
+
+    /**
+     * Phase 3 — rendered HTML badge for the status. Driven by the central
+     * STATUS_BADGES map so the index table, the show-page header, and the
+     * lifecycle stepper all stay consistent.
+     */
+    public function statusBadge(): string
+    {
+        $meta = self::STATUS_BADGES[$this->status]
+            ?? ['cls' => 'bg-light text-dark', 'icon' => 'fa-circle-question'];
+        $label = e($this->statusLabel());
+        $cls = e($meta['cls']);
+        $icon = e($meta['icon']);
+        return '<span class="badge ' . $cls . '">'
+            . '<i class="fas ' . $icon . ' me-1"></i>' . $label
+            . '</span>';
     }
 }

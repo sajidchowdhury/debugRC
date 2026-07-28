@@ -16,16 +16,22 @@
     $stats = array_merge([
         'total' => 0,
         'draft' => 0,
+        'submitted' => 0,
+        'approved' => 0,
         'confirmed' => 0,
         'cancelled' => 0,
         'total_value' => 0,
     ], $stats ?? []);
 
+    // Phase 3 — status badge now covers all six lifecycle states.
     $statusBadge = function (string $status): string {
         return [
             'draft'     => '<span class="badge bg-warning-subtle text-warning"><i class="fas fa-pen-to-square me-1"></i>Draft</span>',
+            'submitted' => '<span class="badge bg-info-subtle text-info"><i class="fas fa-paper-plane me-1"></i>Submitted</span>',
+            'approved'  => '<span class="badge bg-primary-subtle text-primary"><i class="fas fa-circle-check me-1"></i>Approved</span>',
             'confirmed' => '<span class="badge bg-success-subtle text-success"><i class="fas fa-circle-check me-1"></i>Confirmed</span>',
             'cancelled' => '<span class="badge bg-secondary-subtle text-secondary"><i class="fas fa-ban me-1"></i>Cancelled</span>',
+            'rejected'  => '<span class="badge bg-danger-subtle text-danger"><i class="fas fa-circle-xmark me-1"></i>Rejected</span>',
         ][$status] ?? '<span class="badge bg-light text-dark">' . e($status) . '</span>';
     };
 
@@ -99,6 +105,21 @@
                     <div>
                         <div class="h4 mb-0">{{ number_format((int) $stats['draft']) }}</div>
                         <div class="text-muted small">Draft</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {{-- Phase 3 — Pending Approval (submitted + approved) worklist card --}}
+        <div class="col-sm-6 col-lg">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#0ea5e9;">
+                        <i class="fas fa-clock"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">{{ number_format((int) ($stats['submitted'] + $stats['approved'])) }}</div>
+                        <div class="text-muted small">Pending approval</div>
                     </div>
                 </div>
             </div>
@@ -210,6 +231,8 @@
                     <select id="status" name="status" class="form-select form-select-sm">
                         <option value="">All</option>
                         <option value="draft"     {{ $filters['status'] === 'draft' ? 'selected' : '' }}>Draft</option>
+                        <option value="submitted" {{ $filters['status'] === 'submitted' ? 'selected' : '' }}>Submitted</option>
+                        <option value="approved"  {{ $filters['status'] === 'approved' ? 'selected' : '' }}>Approved</option>
                         <option value="confirmed" {{ $filters['status'] === 'confirmed' ? 'selected' : '' }}>Confirmed</option>
                         <option value="cancelled" {{ $filters['status'] === 'cancelled' ? 'selected' : '' }}>Cancelled</option>
                     </select>

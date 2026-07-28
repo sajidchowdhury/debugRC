@@ -4,11 +4,17 @@
 @php
     $adj = $adjustment;
 
+    // Phase 3 — status badge now covers all six lifecycle states.
+    // Delegates to the model's central STATUS_BADGES map so the index,
+    // show header, and lifecycle stepper stay consistent.
     $statusBadge = function () use ($adj): string {
         return [
             'draft'     => '<span class="badge bg-warning-subtle text-warning fs-6"><i class="fas fa-pen-to-square me-1"></i>Draft</span>',
+            'submitted' => '<span class="badge bg-info-subtle text-info fs-6"><i class="fas fa-paper-plane me-1"></i>Submitted</span>',
+            'approved'  => '<span class="badge bg-primary-subtle text-primary fs-6"><i class="fas fa-circle-check me-1"></i>Approved</span>',
             'confirmed' => '<span class="badge bg-success-subtle text-success fs-6"><i class="fas fa-circle-check me-1"></i>Confirmed</span>',
             'cancelled' => '<span class="badge bg-secondary-subtle text-secondary fs-6"><i class="fas fa-ban me-1"></i>Cancelled</span>',
+            'rejected'  => '<span class="badge bg-danger-subtle text-danger fs-6"><i class="fas fa-circle-xmark me-1"></i>Rejected</span>',
         ][$adj->status] ?? '<span class="badge bg-light text-dark fs-6">' . e($adj->status) . '</span>';
     };
 
@@ -26,6 +32,42 @@
     $jeLines      = $je ? $je->lines : collect();
     $debitTotal   = $jeLines->sum(fn ($l) => (float) $l->debit);
     $creditTotal  = $jeLines->sum(fn ($l) => (float) $l->credit);
+
+    // Phase 3 — policy flags from the controller.
+    $requiresApproval = $requiresApproval ?? false;
+    $canSubmit  = $canSubmit  ?? false;
+    $canApprove = $canApprove ?? false;
+    $canConfirm = $canConfirm ?? false;
+    $isSubmitter = $isSubmitter ?? false;
+
+    // Lifecycle stepper state — which steps are done / current / pending.
+    $stepState = [
+        'draft'     => $adj->isDraft() ? 'current' : ($adj->status === 'cancelled' ? 'skipped' : 'done'),
+        'submitted' => $adj->isSubmitted() ? 'current' : ($adj->isApproved() || $adj->isConfirmed() ? 'done' : ($adj->isDraft() && $requiresApproval ? 'pending' : 'skipped')),
+        'approved'  => $adj->isApproved() ? 'current' : ($adj->isConfirmed() ? 'done' : ($adj->isSubmitted() ? 'pending' : 'skipped')),
+        'confirmed' => $adj->isConfirmed() ? 'current' : ($adj->isApproved() ? 'pending' : ($adj->isDraft() && !$requiresApproval ? 'pending' : 'skipped')),
+    ];
+    $stepLabels = [
+        'draft'     => ['Draft',     'fa-pen-to-square'],
+        'submitted' => ['Submitted', 'fa-paper-plane'],
+        'approved'  => ['Approved',  'fa-circle-check'],
+        'confirmed' => ['Confirmed', 'fa-circle-check'],
+    ];
+    $stepCls = [
+        'done'    => 'bg-success-subtle text-success border-success-subtle',
+        'current' => 'bg-primary text-white border-primary',
+        'pending' => 'bg-light text-muted border-light',
+        'skipped' => 'bg-light text-muted border-light opacity-50',
+    ];
+
+    // Helper: format a timestamp + user-id attribution line.
+    $fmtAttribution = function ($at, $by): string {
+        if (!$at && !$by) return '<span class="text-muted">—</span>';
+        $parts = [];
+        if ($at) $parts[] = \Carbon\Carbon::parse($at)->format('d M Y H:i');
+        if ($by) $parts[] = 'user #' . e($by);
+        return implode(' · ', $parts);
+    };
 @endphp
 
 <div class="container-fluid py-2">
@@ -72,6 +114,49 @@
             </div>
         </div>
     @endif
+
+    {{-- Phase 3 — lifecycle stepper (Draft → Submitted → Approved → Confirmed) --}}
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body py-3">
+            <div class="d-flex align-items-center flex-wrap gap-1">
+                @foreach (['draft','submitted','approved','confirmed'] as $i => $step)
+                    @php
+                        $state = $stepState[$step];
+                        [$label, $icon] = $stepLabels[$step];
+                        $cls = $stepCls[$state];
+                    @endphp
+                    <div class="d-flex align-items-center flex-shrink-0">
+                        <div class="badge rounded-pill border px-3 py-2 {{ $cls }}">
+                            <i class="fas {{ $icon }} me-1"></i>{{ $label }}
+                            @if ($state === 'current')
+                                <span class="ms-1 small opacity-75">(current)</span>
+                            @endif
+                        </div>
+                        @if ($i < 3)
+                            <i class="fas fa-chevron-right mx-1 text-muted small"></i>
+                        @endif
+                    </div>
+                @endforeach
+                @if ($adj->isCancelled())
+                    <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle rounded-pill px-3 py-2 ms-2">
+                        <i class="fas fa-ban me-1"></i>Cancelled
+                    </span>
+                @endif
+            </div>
+            @if ($requiresApproval && $adj->isDraft())
+                <div class="small text-muted mt-2 mb-0">
+                    <i class="fas fa-circle-info me-1"></i>
+                    This adjustment requires approval before posting (value ≥ auto-approve threshold).
+                    Submit it for an admin/manager to review.
+                </div>
+            @elseif (!$requiresApproval && $adj->isDraft())
+                <div class="small text-muted mt-2 mb-0">
+                    <i class="fas fa-circle-info me-1"></i>
+                    This adjustment is below the approval threshold — you can confirm it directly in one step.
+                </div>
+            @endif
+        </div>
+    </div>
 
     <div class="row g-3">
         {{-- Left: main details --}}
@@ -132,6 +217,40 @@
 
                         <dt class="col-sm-3 text-muted">Status</dt>
                         <dd class="col-sm-9">{!! $statusBadge() !!}</dd>
+
+                        {{-- Phase 3 — approval-workflow attribution trail (G9) --}}
+                        @if ($adj->submitted_by || $adj->submitted_at)
+                            <dt class="col-sm-3 text-muted">Submitted</dt>
+                            <dd class="col-sm-9 small">{!! $fmtAttribution($adj->submitted_at, $adj->submitted_by) !!}</dd>
+                        @endif
+                        @if ($adj->approved_by || $adj->approved_at)
+                            <dt class="col-sm-3 text-muted">Approved</dt>
+                            <dd class="col-sm-9 small">{!! $fmtAttribution($adj->approved_at, $adj->approved_by) !!}</dd>
+                        @endif
+                        @if ($adj->confirmed_by || $adj->confirmed_at)
+                            <dt class="col-sm-3 text-muted">Confirmed</dt>
+                            <dd class="col-sm-9 small">
+                                {!! $fmtAttribution($adj->confirmed_at, $adj->confirmed_by) !!}
+                                @if ($adj->confirm_reason)
+                                    <div class="small text-muted mt-1">
+                                        <i class="fas fa-comment me-1"></i>{{ $adj->confirm_reason }}
+                                    </div>
+                                @endif
+                            </dd>
+                        @endif
+                        @if ($adj->cancel_reason)
+                            <dt class="col-sm-3 text-muted">Cancel reason</dt>
+                            <dd class="col-sm-9 small">
+                                <span class="badge bg-secondary-subtle text-secondary me-1"><i class="fas fa-ban"></i></span>
+                                {{ $adj->cancel_reason }}
+                            </dd>
+                        @endif
+                        @if ($adj->approval_comments)
+                            <dt class="col-sm-3 text-muted">Approval trail</dt>
+                            <dd class="col-sm-9">
+                                <pre class="small text-muted bg-light rounded p-2 mb-0" style="white-space:pre-wrap;word-break:break-word;">{{ $adj->approval_comments }}</pre>
+                            </dd>
+                        @endif
 
                         <dt class="col-sm-3 text-muted">Reason</dt>
                         <dd class="col-sm-9">{!! nl2br(e($adj->reason ?: '—')) !!}</dd>
@@ -358,26 +477,98 @@
                         </div>
                     </div>
 
-                    {{-- CONFIRM (draft only) --}}
-                    @if ($adj->isDraft())
-                        <form method="POST" action="{{ route('admin.stock-adjustments.confirm', $adj) }}"
-                              id="confirmForm">
+                    {{-- ============================================================ --}}
+                    {{-- Phase 3 — lifecycle-aware action buttons                    --}}
+                    {{-- ============================================================ --}}
+
+                    {{-- DRAFT: either Submit-for-Approval (needs approval) or Confirm-direct (below threshold) --}}
+                    @if ($adj->isDraft() && $requiresApproval && $canSubmit)
+                        <form method="POST" action="{{ route('admin.stock-adjustments.submit', $adj) }}" id="submitForm">
+                            @csrf
+                            <input type="hidden" name="comment" id="submitCommentField" value="">
+                            <button type="button" class="btn btn-primary w-100 mb-2" id="submitBtn">
+                                <i class="fas fa-paper-plane me-1"></i> Submit for approval
+                            </button>
+                        </form>
+                        <div class="alert alert-info small mb-3">
+                            <i class="fas fa-circle-info me-1"></i>
+                            Submitting routes this to an <strong>admin/manager</strong> for approval before stock + GL are posted.
+                        </div>
+                    @elseif ($adj->isDraft() && !$requiresApproval && $canConfirm)
+                        <form method="POST" action="{{ route('admin.stock-adjustments.confirm', $adj) }}" id="confirmForm">
                             @csrf
                             <input type="hidden" name="confirm_reason" id="confirmReasonField" value="">
                             <button type="button" class="btn btn-success w-100 mb-2" id="confirmBtn">
-                                <i class="fas fa-circle-check me-1"></i> Confirm adjustment
+                                <i class="fas fa-circle-check me-1"></i> Confirm &amp; post (one step)
+                            </button>
+                        </form>
+                        <div class="alert alert-success small mb-3">
+                            <i class="fas fa-circle-check me-1"></i>
+                            Below the approval threshold — confirming posts <strong>stock movements + GL</strong> immediately.
+                        </div>
+                    @elseif ($adj->isDraft() && $requiresApproval && !$canSubmit)
+                        <div class="alert alert-warning small mb-3">
+                            <i class="fas fa-triangle-exclamation me-1"></i>
+                            This adjustment requires approval, but you don't have the submit permission. Contact an admin/accountant.
+                        </div>
+                    @endif
+
+                    {{-- SUBMITTED: Approve / Reject (approver only, not the submitter) --}}
+                    @if ($adj->isSubmitted() && $canApprove && !$isSubmitter)
+                        <form method="POST" action="{{ route('admin.stock-adjustments.approve', $adj) }}" id="approveForm" class="d-inline-block w-100 mb-2">
+                            @csrf
+                            <input type="hidden" name="comment" id="approveCommentField" value="">
+                            <button type="button" class="btn btn-success w-100" id="approveBtn">
+                                <i class="fas fa-circle-check me-1"></i> Approve
+                            </button>
+                        </form>
+                        <form method="POST" action="{{ route('admin.stock-adjustments.reject', $adj) }}" id="rejectForm" class="d-inline-block w-100 mb-2">
+                            @csrf
+                            <input type="hidden" name="comment" id="rejectCommentField" value="">
+                            <button type="button" class="btn btn-outline-danger w-100" id="rejectBtn">
+                                <i class="fas fa-circle-xmark me-1"></i> Reject
+                            </button>
+                        </form>
+                        <div class="alert alert-info small mb-3">
+                            <i class="fas fa-circle-info me-1"></i>
+                            Approving lets the drafter confirm + post. Rejecting returns it to draft with your comment.
+                        </div>
+                    @elseif ($adj->isSubmitted() && $isSubmitter)
+                        <div class="alert alert-secondary small mb-3">
+                            <i class="fas fa-clock me-1"></i>
+                            <strong>Awaiting approval.</strong>
+                            You submitted this adjustment — you cannot approve your own submission (segregation of duties).
+                        </div>
+                    @elseif ($adj->isSubmitted() && !$canApprove)
+                        <div class="alert alert-secondary small mb-3">
+                            <i class="fas fa-clock me-1"></i>
+                            <strong>Awaiting approval</strong> by an admin/manager.
+                        </div>
+                    @endif
+
+                    {{-- APPROVED: Confirm & Post --}}
+                    @if ($adj->isApproved() && $canConfirm)
+                        <form method="POST" action="{{ route('admin.stock-adjustments.confirm', $adj) }}" id="confirmForm">
+                            @csrf
+                            <input type="hidden" name="confirm_reason" id="confirmReasonField" value="">
+                            <button type="button" class="btn btn-success w-100 mb-2" id="confirmBtn">
+                                <i class="fas fa-circle-check me-1"></i> Confirm &amp; post
                             </button>
                         </form>
                         <div class="alert alert-info small mb-3">
                             <i class="fas fa-circle-info me-1"></i>
                             Confirming will <strong>apply stock movements</strong> and <strong>post the GL journal entry</strong>.
                         </div>
+                    @elseif ($adj->isApproved() && !$canConfirm)
+                        <div class="alert alert-warning small mb-3">
+                            <i class="fas fa-triangle-exclamation me-1"></i>
+                            Approved, but you don't have the confirm permission. Contact an admin/accountant to post it.
+                        </div>
                     @endif
 
-                    {{-- CANCEL (draft or confirmed) --}}
-                    @if ($adj->isDraft() || $adj->isConfirmed())
-                        <form method="POST" action="{{ route('admin.stock-adjustments.cancel', $adj) }}"
-                              id="cancelForm">
+                    {{-- CANCEL (any non-terminal state: draft / submitted / approved / confirmed) --}}
+                    @if (!$adj->isCancelled())
+                        <form method="POST" action="{{ route('admin.stock-adjustments.cancel', $adj) }}" id="cancelForm">
                             @csrf
                             <input type="hidden" name="cancel_reason" id="cancelReasonField" value="">
                             <button type="button" class="btn btn-outline-danger w-100" id="cancelBtn">
@@ -385,7 +576,7 @@
                                 @if ($adj->isConfirmed())
                                     Cancel &amp; reverse
                                 @else
-                                    Cancel draft
+                                    Cancel adjustment
                                 @endif
                             </button>
                         </form>
@@ -394,6 +585,11 @@
                                 <i class="fas fa-triangle-exclamation me-1"></i>
                                 Cancelling a confirmed adjustment <strong>reverses the stock movements and the GL entry</strong>.
                                 A reason is required.
+                            </div>
+                        @else
+                            <div class="alert alert-secondary small mt-2 mb-0">
+                                <i class="fas fa-circle-info me-1"></i>
+                                A cancel reason is required and will be recorded.
                             </div>
                         @endif
                     @endif
@@ -450,7 +646,94 @@
 @push('scripts')
 <script>
 $(function () {
-    // ====== Confirm (draft → confirmed) ======
+    // ====== Phase 3 — Submit for approval (draft → submitted/approved) ======
+    $('#submitBtn').on('click', function () {
+        Swal.fire({
+            icon: 'question',
+            title: 'Submit this adjustment for approval?',
+            html: '<p class="text-start">An <strong>admin/manager</strong> will review and approve before stock + GL are posted.</p>',
+            input: 'textarea',
+            inputLabel: 'Optional note for the approver',
+            inputPlaceholder: 'e.g. Opening-balance upload for WH-01, verified against physical count.',
+            showCancelButton: true,
+            confirmButtonText: '<i class="fas fa-paper-plane"></i> Submit',
+            confirmButtonColor: '#0d6efd',
+            cancelButtonText: 'Cancel',
+            reverseButtons: true
+        }).then(function (result) {
+            if (result.isConfirmed) {
+                $('#submitCommentField').val(result.value || '');
+                var $btn = $('#submitBtn');
+                $btn.prop('disabled', true)
+                    .html('<i class="fas fa-spinner fa-spin me-1"></i> Submitting…');
+                $('#submitForm').submit();
+            }
+        });
+    });
+
+    // ====== Phase 3 — Approve (submitted → approved) ======
+    $('#approveBtn').on('click', function () {
+        Swal.fire({
+            icon: 'question',
+            title: 'Approve this adjustment?',
+            html: '<p class="text-start">Once approved, the drafter can confirm and post stock + GL.</p>',
+            input: 'textarea',
+            inputLabel: 'Approval comment (required)',
+            inputPlaceholder: 'e.g. Verified against the physical count sheet — approved.',
+            showCancelButton: true,
+            confirmButtonText: '<i class="fas fa-check"></i> Approve',
+            confirmButtonColor: '#198754',
+            cancelButtonText: 'Cancel',
+            reverseButtons: true,
+            inputValidator: function (value) {
+                if (!value || !value.trim()) {
+                    return 'An approval comment is required.';
+                }
+                return null;
+            }
+        }).then(function (result) {
+            if (result.isConfirmed) {
+                $('#approveCommentField').val(result.value.trim());
+                var $btn = $('#approveBtn');
+                $btn.prop('disabled', true)
+                    .html('<i class="fas fa-spinner fa-spin me-1"></i> Approving…');
+                $('#approveForm').submit();
+            }
+        });
+    });
+
+    // ====== Phase 3 — Reject (submitted → draft) ======
+    $('#rejectBtn').on('click', function () {
+        Swal.fire({
+            icon: 'warning',
+            title: 'Reject this adjustment?',
+            html: '<p class="text-start">The adjustment returns to <strong>draft</strong> so the drafter can revise and re-submit.</p>',
+            input: 'textarea',
+            inputLabel: 'Rejection reason (required)',
+            inputPlaceholder: 'e.g. Qty mismatch on line 2 — please re-verify against the count sheet.',
+            showCancelButton: true,
+            confirmButtonText: '<i class="fas fa-circle-xmark"></i> Reject',
+            confirmButtonColor: '#dc3545',
+            cancelButtonText: 'Keep',
+            reverseButtons: true,
+            inputValidator: function (value) {
+                if (!value || !value.trim()) {
+                    return 'A rejection reason is required.';
+                }
+                return null;
+            }
+        }).then(function (result) {
+            if (result.isConfirmed) {
+                $('#rejectCommentField').val(result.value.trim());
+                var $btn = $('#rejectBtn');
+                $btn.prop('disabled', true)
+                    .html('<i class="fas fa-spinner fa-spin me-1"></i> Rejecting…');
+                $('#rejectForm').submit();
+            }
+        });
+    });
+
+    // ====== Confirm (approved → confirmed, or draft → confirmed when below threshold) ======
     $('#confirmBtn').on('click', function () {
         Swal.fire({
             icon: 'question',
@@ -475,13 +758,13 @@ $(function () {
         });
     });
 
-    // ====== Cancel (draft or confirmed) ======
+    // ====== Cancel (any non-terminal state) ======
     $('#cancelBtn').on('click', function () {
         var isConfirmed = @json($adj->isConfirmed());
-        var title = isConfirmed ? 'Cancel & reverse this adjustment?' : 'Cancel this draft?';
+        var title = isConfirmed ? 'Cancel & reverse this adjustment?' : 'Cancel this adjustment?';
         var html  = isConfirmed
             ? '<p class="text-start">This will <strong>reverse the stock movements and the GL journal entry</strong>. A reason is required.</p>'
-            : '<p class="text-start">The draft will be marked cancelled. A reason is required.</p>';
+            : '<p class="text-start">The adjustment will be marked cancelled. A reason is required and will be recorded.</p>';
 
         Swal.fire({
             icon: 'warning',

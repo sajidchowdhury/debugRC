@@ -116,6 +116,16 @@
                                   placeholder="Why this adjustment? e.g. Annual stocktake variance, damaged goods.">{{ old('reason') }}</textarea>
                         @error('reason') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
                     </div>
+
+                    {{-- Phase 3 — approval-policy hint so the drafter knows the workflow up front --}}
+                    @if (!empty($approvalHint))
+                        <div class="col-12">
+                            <div class="alert alert-info small mb-0 py-2">
+                                <i class="fas fa-circle-info me-1"></i>
+                                <strong>Approval workflow:</strong> {{ $approvalHint }}
+                            </div>
+                        </div>
+                    @endif
                 </div>
             </div>
         </div>

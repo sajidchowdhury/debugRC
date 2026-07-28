@@ -4,18 +4,26 @@ namespace App\Services\Stock;
 
 use App\Models\StockAdjustment;
 use App\Models\StockAdjustmentItem;
+use App\Models\User;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Stock Adjustment Service — Phase 6.3.
+ * Stock Adjustment Service — Phase 6.3 + Phase 3 (approval workflow).
  *
- * Two-phase flow (better than legacy immediate-post):
+ * Phase 3 lifecycle (maker-checker):
  *   1. createAdjustment(): creates header + items (status=draft). NO stock movement. NO GL.
- *   2. confirmAdjustment(): applies stock via StockService + posts GL journal. status → confirmed.
- *   3. cancelAdjustment(): if confirmed, reverses stock + GL; if draft, just marks cancelled.
+ *   2. submitAdjustment(): draft → submitted (accountant submits for approval).
+ *      If !requiresApproval(), auto-advances to 'approved' inline.
+ *   3. approveAdjustment(): submitted → approved (admin/manager approves).
+ *      Segregation of duties: approved_by !== submitted_by.
+ *   4. rejectAdjustment(): submitted → draft (rejected with a comment).
+ *   5. confirmAdjustment(): approved (or draft when !requiresApproval) → confirmed.
+ *      Applies stock via StockService + posts GL journal. Sets confirmed_by/at/confirm_reason (G9).
+ *   6. cancelAdjustment(): any non-terminal → cancelled. If confirmed, reverses
+ *      stock + GL. ALWAYS stores cancel_reason (G15).
  *
  * GL posting rules (re-derived from double-entry principles):
  *   - Increase (stock goes UP): Dr Inventory / Cr Inventory Surplus (gain)
@@ -28,7 +36,8 @@ class StockAdjustmentService
 {
     public function __construct(
         private StockService $stockService,
-        private JournalPostingService $journalPosting
+        private JournalPostingService $journalPosting,
+        private StockAdjustmentPolicyService $policy
     ) {}
 
     /**
@@ -61,6 +70,14 @@ class StockAdjustmentService
             throw new \InvalidArgumentException("Warehouse {$warehouseId} not found.");
         }
         $branchId = (int) $warehouse->branch_id;
+
+        // Phase 3 — block back-dating into a closed accounting period.
+        $adjustmentDate = $data['adjustment_date'] ?? now()->format('Y-m-d');
+        if ($this->policy->isWithinClosedPeriod($branchId, $adjustmentDate)) {
+            throw new \InvalidArgumentException(
+                "Adjustment date {$adjustmentDate} falls inside a closed accounting period for this branch."
+            );
+        }
 
         // Generate adjustment code: ADJ-YYYYMMDD-NNNN.
         $adjustmentCode = $this->generateAdjustmentCode();
@@ -106,12 +123,12 @@ class StockAdjustmentService
 
         return DB::transaction(function () use (
             $adjustmentCode, $warehouseId, $branchId, $adjustmentType,
-            $adjustmentCategory, $totalAmount, $data, $validatedItems
+            $adjustmentCategory, $adjustmentDate, $totalAmount, $data, $validatedItems
         ) {
             // Create the adjustment header.
             $adjustmentId = DB::table('stock_adjustments')->insertGetId([
                 'adjustment_code' => $adjustmentCode,
-                'adjustment_date' => $data['adjustment_date'] ?? now()->format('Y-m-d'),
+                'adjustment_date' => $adjustmentDate,
                 'warehouse_id' => $warehouseId,
                 'branch_id' => $branchId,
                 'adjustment_type' => $adjustmentType,
@@ -143,23 +160,230 @@ class StockAdjustmentService
     }
 
     /**
-     * Phase 2: Confirm a draft adjustment — apply stock movements + post GL journal.
+     * Phase 3: Submit a draft adjustment for approval (draft → submitted).
      *
-     * @param int $adjustmentId
-     * @param int $confirmedBy
+     * Validates the caller's role via the policy. Sets submitted_by/at and
+     * appends the optional comment to approval_comments. If the policy says
+     * this adjustment does NOT require approval (below auto-approve threshold,
+     * or gate off and below force-approve threshold), the adjustment is
+     * auto-advanced to 'approved' inline so the drafter can confirm next.
+     *
+     * @param int         $adjustmentId
+     * @param int         $userId   The submitting user's id.
+     * @param string|null $comment  Optional submit note.
      * @return StockAdjustment
-     * @throws \RuntimeException If not draft, or stock/GL posting fails.
+     * @throws \RuntimeException  If not draft, or the user lacks the submit role.
      */
-    public function confirmAdjustment(int $adjustmentId, int $confirmedBy): StockAdjustment
+    public function submitAdjustment(int $adjustmentId, int $userId, ?string $comment = null): StockAdjustment
     {
-        return DB::transaction(function () use ($adjustmentId, $confirmedBy) {
+        return DB::transaction(function () use ($adjustmentId, $userId, $comment) {
+            $adjustment = StockAdjustment::lockForUpdate()->find($adjustmentId);
+            if (!$adjustment) {
+                throw new \RuntimeException("Stock adjustment {$adjustmentId} not found.");
+            }
+            if (!$adjustment->isDraft()) {
+                throw new \RuntimeException(
+                    "Only draft adjustments can be submitted (current status: {$adjustment->status})."
+                );
+            }
+
+            $user = User::find($userId);
+            if (!$user || !$this->policy->canSubmit($user)) {
+                throw new \RuntimeException('You do not have permission to submit stock adjustments for approval.');
+            }
+
+            $now = now();
+            $commentLine = $this->appendComment(
+                $adjustment->approval_comments,
+                'SUBMITTED by user #' . $userId . ($comment ? ': ' . trim($comment) : '')
+            );
+
+            // Decide whether to auto-advance to 'approved'.
+            $requiresApproval = $this->policy->requiresApproval($adjustment);
+
+            if (!$requiresApproval) {
+                // Auto-approve inline — below threshold / gate off. The
+                // submitter IS the approver here (system-mediated), so the
+                // segregation-of-duties check is bypassed by design.
+                DB::table('stock_adjustments')
+                    ->where('id', $adjustmentId)
+                    ->update([
+                        'status'             => 'approved',
+                        'submitted_by'       => $userId,
+                        'submitted_at'       => $now,
+                        'approved_by'        => $userId,
+                        'approved_at'        => $now,
+                        'approval_comments'  => $commentLine . "\n[AUTO-APPROVED — below threshold]",
+                        'updated_at'         => $now,
+                    ]);
+            } else {
+                DB::table('stock_adjustments')
+                    ->where('id', $adjustmentId)
+                    ->update([
+                        'status'             => 'submitted',
+                        'submitted_by'       => $userId,
+                        'submitted_at'       => $now,
+                        'approval_comments'  => $commentLine,
+                        'updated_at'         => $now,
+                    ]);
+            }
+
+            return StockAdjustment::with('items.product', 'warehouse.branch')->find($adjustmentId);
+        });
+    }
+
+    /**
+     * Phase 3: Approve a submitted adjustment (submitted → approved).
+     *
+     * Validates the caller's role via the policy. Enforces segregation of
+     * duties: the approver CANNOT be the same user who submitted. Sets
+     * approved_by/at and appends the (required) comment to approval_comments.
+     *
+     * @param int    $adjustmentId
+     * @param int    $userId   The approving user's id.
+     * @param string $comment  Required approval note.
+     * @return StockAdjustment
+     * @throws \RuntimeException  If not submitted, lacks approve role, or self-approves.
+     */
+    public function approveAdjustment(int $adjustmentId, int $userId, string $comment): StockAdjustment
+    {
+        return DB::transaction(function () use ($adjustmentId, $userId, $comment) {
+            $adjustment = StockAdjustment::lockForUpdate()->find($adjustmentId);
+            if (!$adjustment) {
+                throw new \RuntimeException("Stock adjustment {$adjustmentId} not found.");
+            }
+            if (!$adjustment->isSubmitted()) {
+                throw new \RuntimeException(
+                    "Only submitted adjustments can be approved (current status: {$adjustment->status})."
+                );
+            }
+
+            $user = User::find($userId);
+            if (!$user || !$this->policy->canApprove($user)) {
+                throw new \RuntimeException('You do not have permission to approve stock adjustments.');
+            }
+
+            // Segregation of duties: the submitter cannot approve their own submission.
+            if ($this->policy->isSubmitter($user, $adjustment)) {
+                throw new \RuntimeException(
+                    'Segregation of duties: you cannot approve an adjustment you submitted.'
+                );
+            }
+
+            $comment = trim($comment);
+            if ($comment === '') {
+                throw new \RuntimeException('An approval comment is required.');
+            }
+
+            $commentLine = $this->appendComment(
+                $adjustment->approval_comments,
+                'APPROVED by user #' . $userId . ': ' . $comment
+            );
+
+            DB::table('stock_adjustments')
+                ->where('id', $adjustmentId)
+                ->update([
+                    'status'             => 'approved',
+                    'approved_by'        => $userId,
+                    'approved_at'        => now(),
+                    'approval_comments'  => $commentLine,
+                    'updated_at'         => now(),
+                ]);
+
+            return StockAdjustment::with('items.product', 'warehouse.branch')->find($adjustmentId);
+        });
+    }
+
+    /**
+     * Phase 3: Reject a submitted adjustment (submitted → draft).
+     *
+     * The adjustment returns to 'draft' so the drafter can revise and
+     * re-submit. The (required) rejection reason is appended to
+     * approval_comments with a [REJECTED] marker so it is visible in the
+     * audit trail and the show page. submitted_by/at are preserved (the
+     * submission happened); approved_by/at are cleared.
+     *
+     * @param int    $adjustmentId
+     * @param int    $userId   The rejecting user's id (must be an approver).
+     * @param string $comment  Required rejection reason.
+     * @return StockAdjustment
+     * @throws \RuntimeException  If not submitted, or lacks approve role.
+     */
+    public function rejectAdjustment(int $adjustmentId, int $userId, string $comment): StockAdjustment
+    {
+        return DB::transaction(function () use ($adjustmentId, $userId, $comment) {
+            $adjustment = StockAdjustment::lockForUpdate()->find($adjustmentId);
+            if (!$adjustment) {
+                throw new \RuntimeException("Stock adjustment {$adjustmentId} not found.");
+            }
+            if (!$adjustment->isSubmitted()) {
+                throw new \RuntimeException(
+                    "Only submitted adjustments can be rejected (current status: {$adjustment->status})."
+                );
+            }
+
+            $user = User::find($userId);
+            if (!$user || !$this->policy->canApprove($user)) {
+                throw new \RuntimeException('You do not have permission to reject stock adjustments.');
+            }
+
+            $comment = trim($comment);
+            if ($comment === '') {
+                throw new \RuntimeException('A rejection reason is required.');
+            }
+
+            $commentLine = $this->appendComment(
+                $adjustment->approval_comments,
+                '[REJECTED] by user #' . $userId . ': ' . $comment
+            );
+
+            DB::table('stock_adjustments')
+                ->where('id', $adjustmentId)
+                ->update([
+                    'status'             => 'draft',
+                    // Clear any prior approved_by/at (there shouldn't be any on
+                    // a submitted row, but defensive).
+                    'approved_by'        => null,
+                    'approved_at'        => null,
+                    'approval_comments'  => $commentLine,
+                    'updated_at'         => now(),
+                ]);
+
+            return StockAdjustment::with('items.product', 'warehouse.branch')->find($adjustmentId);
+        });
+    }
+
+    /**
+     * Phase 3: Confirm an adjustment — apply stock movements + post GL journal.
+     *
+     * Requires status = 'approved' (or 'draft' when the policy says this
+     * adjustment does not need approval — one-step confirm). Sets
+     * confirmed_by/at + confirm_reason (G9 fix — the posting action is now
+     * attributed and the previously-discarded confirm_reason is persisted).
+     *
+     * @param int         $adjustmentId
+     * @param int         $confirmedBy
+     * @param string|null $confirmReason  Optional note from the confirmer.
+     * @return StockAdjustment
+     * @throws \RuntimeException  If not confirmable, or stock/GL posting fails.
+     */
+    public function confirmAdjustment(int $adjustmentId, int $confirmedBy, ?string $confirmReason = null): StockAdjustment
+    {
+        return DB::transaction(function () use ($adjustmentId, $confirmedBy, $confirmReason) {
             $adjustment = StockAdjustment::with('items')->lockForUpdate()->find($adjustmentId);
 
             if (!$adjustment) {
                 throw new \RuntimeException("Stock adjustment {$adjustmentId} not found.");
             }
-            if (!$adjustment->isDraft()) {
-                throw new \RuntimeException("Only draft adjustments can be confirmed (current status: {$adjustment->status}).");
+
+            $requiresApproval = $this->policy->requiresApproval($adjustment);
+            if (!$adjustment->canBeConfirmed($requiresApproval)) {
+                throw new \RuntimeException(
+                    "Adjustment cannot be confirmed from status '{$adjustment->status}'."
+                    . ($requiresApproval
+                        ? ' It must be submitted and approved first.'
+                        : '')
+                );
             }
 
             $warehouseId = $adjustment->warehouse_id;
@@ -200,13 +424,16 @@ class StockAdjustmentService
             // Post the GL journal entry.
             $journalEntryId = $this->postAdjustmentGL($adjustment, $confirmedBy);
 
-            // Update the adjustment status + journal_entry_id.
+            // Update the adjustment status + journal_entry_id + Phase 3 attribution.
             DB::table('stock_adjustments')
                 ->where('id', $adjustmentId)
                 ->update([
-                    'status' => 'confirmed',
+                    'status'          => 'confirmed',
                     'journal_entry_id' => $journalEntryId,
-                    'updated_at' => now(),
+                    'confirmed_by'    => $confirmedBy,   // G9
+                    'confirmed_at'    => now(),           // G9
+                    'confirm_reason'  => $confirmReason ? trim($confirmReason) : null, // G9
+                    'updated_at'      => now(),
                 ]);
 
             return StockAdjustment::with('items.product', 'warehouse.branch', 'journalEntry')
@@ -217,16 +444,28 @@ class StockAdjustmentService
     /**
      * Phase 3: Cancel an adjustment.
      * - If confirmed: reverse stock movements + reverse GL journal. status → cancelled.
-     * - If draft: just mark as cancelled (no stock/GL to reverse).
+     * - If draft/submitted/approved: just mark as cancelled (no stock/GL to reverse).
      *
-     * @param int $adjustmentId
-     * @param int $cancelledBy
-     * @param string $reason
+     * G15 fix: cancel_reason is ALWAYS persisted, regardless of the prior
+     * status. (Previously only confirmed cancels stored the reason — in
+     * reverse_reason — and draft cancels silently discarded it.) For a
+     * confirmed-cancel, reverse_reason is ALSO populated (it records why
+     * the stock+GL reversal happened); for a non-confirmed cancel, only
+     * cancel_reason is set.
+     *
+     * @param int    $adjustmentId
+     * @param int    $cancelledBy
+     * @param string $reason  Required cancel reason.
      * @return StockAdjustment
-     * @throws \RuntimeException If already cancelled.
+     * @throws \RuntimeException If already cancelled, or reason is empty.
      */
     public function cancelAdjustment(int $adjustmentId, int $cancelledBy, string $reason = ''): StockAdjustment
     {
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('A cancel reason is required.');
+        }
+
         return DB::transaction(function () use ($adjustmentId, $cancelledBy, $reason) {
             $adjustment = StockAdjustment::with('items')->lockForUpdate()->find($adjustmentId);
 
@@ -236,6 +475,9 @@ class StockAdjustmentService
             if ($adjustment->isCancelled()) {
                 throw new \RuntimeException("Adjustment is already cancelled.");
             }
+            // Confirmed adjustments can be cancelled (reversed). Draft /
+            // submitted / approved adjustments can be cancelled (abandoned).
+            // No other terminal states exist.
 
             if ($adjustment->isConfirmed()) {
                 // Reverse the GL journal entry.
@@ -282,12 +524,16 @@ class StockAdjustmentService
                     ]);
             }
 
-            // Set status to cancelled.
+            // Set status to cancelled + ALWAYS store cancel_reason (G15).
+            // For a confirmed-cancel, reverse_reason was already set above;
+            // cancel_reason carries the same text (dedicated column for the
+            // "why was this cancelled" question, populated on EVERY cancel).
             DB::table('stock_adjustments')
                 ->where('id', $adjustmentId)
                 ->update([
-                    'status' => 'cancelled',
-                    'updated_at' => now(),
+                    'status'        => 'cancelled',
+                    'cancel_reason' => $reason, // G15 — always populated
+                    'updated_at'    => now(),
                 ]);
 
             return StockAdjustment::with('items.product', 'warehouse.branch')
@@ -415,5 +661,23 @@ class StockAdjustmentService
         if (empty($data['items']) || !is_array($data['items'])) {
             throw new \InvalidArgumentException('At least one item is required.');
         }
+    }
+
+    /**
+     * Phase 3 — append a timestamped line to the approval_comments trail.
+     *
+     * Each submit / approve / reject / auto-approve event appends one line
+     * so the full maker-checker history is visible in a single column.
+     * Kept as a private helper so the format is consistent across the
+     * three lifecycle methods.
+     */
+    private function appendComment(?string $existing, string $line): string
+    {
+        $ts = now()->format('Y-m-d H:i');
+        $newLine = '[' . $ts . '] ' . $line;
+        if ($existing && trim($existing) !== '') {
+            return $existing . "\n" . $newLine;
+        }
+        return $newLine;
     }
 }

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\StockAdjustment;
 use App\Models\Warehouse;
+use App\Services\Stock\StockAdjustmentPolicyService;
 use App\Services\Stock\StockAdjustmentService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
@@ -27,19 +28,27 @@ use Illuminate\Support\Facades\DB;
  *   - Role gating is enforced by `role:` middleware on the route groups
  *     (read: admin/manager/accountant; write: admin/accountant).
  *   - This controller adds defense-in-depth via $this->authorize() against
- *     StockAdjustmentPolicy on show/confirm/cancel.
+ *     StockAdjustmentPolicy on show/confirm/cancel/submit/approve/reject.
  *   - getProductRate() validates the requested warehouse belongs to the
  *     caller's session branch (G16 fix — warehouse_stock has no RLS because
  *     it has no branch_id column, so the endpoint itself must guard).
- *   - branch.isolation middleware on POST {id}/confirm|cancel resolves {id}
- *     → stock_adjustments.branch_id (EnforceBranchIsolation::inferTableFromUri).
+ *   - branch.isolation middleware on POST {id}/confirm|cancel|submit|approve|reject
+ *     resolves {id} → stock_adjustments.branch_id (EnforceBranchIsolation::inferTableFromUri).
  *   - PostgreSQL RLS on stock_adjustments is the DB-level backstop.
+ *
+ * Phase 3 (Stock Adjustment plan — Approval Workflow & Maker-Checker):
+ *   - submit/approve/reject endpoints added; the service enforces the
+ *     lifecycle transitions and segregation of duties (approver ≠ submitter).
+ *   - confirm() now passes confirm_reason to the service (G9 — was discarded).
+ *   - The show view receives a `canApprove` / `requiresApproval` / `isSubmitter`
+ *     flag set from the policy so the action buttons render correctly.
  */
 class StockAdjustmentController extends Controller
 {
     public function __construct(
         private StockAdjustmentService $adjustmentService,
-        private StockService $stockService
+        private StockService $stockService,
+        private StockAdjustmentPolicyService $policy
     ) {}
 
     /**
@@ -48,6 +57,8 @@ class StockAdjustmentController extends Controller
      * Phase 2: also accepts an `adjustment_category` filter (one of the
      * seven canonical categories) so the index page can be sliced by
      * opening_balance / data_migration / uom_correction / etc.
+     * Phase 3: stats now include submitted + approved counts for the new
+     * approval-workflow states.
      */
     public function index(Request $request)
     {
@@ -73,9 +84,12 @@ class StockAdjustmentController extends Controller
         $warehouses = \App\Models\Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
+        // Phase 3 — include the new approval-workflow states in the stats.
         $stats = [
-            'total' => StockAdjustment::count(),
-            'draft' => StockAdjustment::where('status', 'draft')->count(),
+            'total'     => StockAdjustment::count(),
+            'draft'     => StockAdjustment::where('status', 'draft')->count(),
+            'submitted' => StockAdjustment::where('status', 'submitted')->count(),
+            'approved'  => StockAdjustment::where('status', 'approved')->count(),
             'confirmed' => StockAdjustment::where('status', 'confirmed')->count(),
             'cancelled' => StockAdjustment::where('status', 'cancelled')->count(),
             'total_value' => StockAdjustment::where('status', 'confirmed')->sum('total_amount'),
@@ -89,6 +103,8 @@ class StockAdjustmentController extends Controller
             'stats' => $stats,
             'categories' => StockAdjustment::ADJUSTMENT_CATEGORIES,
             'categoryLabels' => StockAdjustment::CATEGORY_LABELS,
+            'statuses' => StockAdjustment::STATUSES,
+            'statusLabels' => StockAdjustment::STATUS_LABELS,
             'filters' => $request->only([
                 'from_date', 'to_date', 'warehouse_id', 'adjustment_type',
                 'adjustment_category', 'status', 'branch_id',
@@ -98,6 +114,9 @@ class StockAdjustmentController extends Controller
 
     /**
      * Show the create form.
+     *
+     * Phase 3: passes an approval-policy hint so the form can show the
+     * "below Tk X can be confirmed in one step" guidance.
      */
     public function create()
     {
@@ -110,6 +129,7 @@ class StockAdjustmentController extends Controller
             'products' => $products,
             'categories' => StockAdjustment::ADJUSTMENT_CATEGORIES,
             'categoryLabels' => StockAdjustment::CATEGORY_LABELS,
+            'approvalHint' => $this->policy->approvalHint(),
         ]);
     }
 
@@ -156,11 +176,16 @@ class StockAdjustmentController extends Controller
 
     /**
      * Show adjustment details.
+     *
+     * Phase 3: passes approval-policy flags to the view so the action
+     * buttons (Submit / Approve / Reject / Confirm) render correctly for
+     * the current user and the adjustment's lifecycle state.
      */
     public function show(int $id)
     {
         $adjustment = StockAdjustment::with([
-            'items.product', 'warehouse.branch', 'branch', 'journalEntry.lines.ledger'
+            'items.product', 'warehouse.branch', 'branch', 'journalEntry.lines.ledger',
+            'submittedBy', 'approvedBy', 'confirmedBy',
         ])->findOrFail($id);
 
         // Phase 1: defense-in-depth — role + branch check via Policy.
@@ -184,15 +209,31 @@ class StockAdjustmentController extends Controller
             ->orderBy('st.id')
             ->get();
 
+        // Phase 3 — policy flags for the action aside. show() has no
+        // Request binding (the method signature is show(int $id)), so the
+        // current user is resolved via the auth helper.
+        $user = auth()->user();
+        $requiresApproval = $this->policy->requiresApproval($adjustment);
+
         return view('admin.stock-adjustments.show', [
             'title' => 'Adjustment ' . $adjustment->adjustment_code,
             'adjustment' => $adjustment,
             'stockTransactions' => $stockTransactions,
+            // Policy flags for the action buttons.
+            'requiresApproval' => $requiresApproval,
+            'canSubmit'  => $user ? $this->policy->canSubmit($user) : false,
+            'canApprove' => $user ? $this->policy->canApprove($user) : false,
+            'canConfirm' => $user ? $this->policy->canConfirm($user) : false,
+            'isSubmitter' => $user ? $this->policy->isSubmitter($user, $adjustment) : false,
         ]);
     }
 
     /**
-     * Confirm a draft adjustment (apply stock + post GL).
+     * Confirm an adjustment (apply stock + post GL).
+     *
+     * Phase 3: now passes confirm_reason to the service (G9 — was discarded).
+     * The service enforces the approved-state requirement (or draft when
+     * !requiresApproval).
      */
     public function confirm(Request $request, int $id)
     {
@@ -205,10 +246,102 @@ class StockAdjustmentController extends Controller
         $this->authorize('confirm', $adjustment);
 
         try {
-            $adjustment = $this->adjustmentService->confirmAdjustment($id, auth()->id());
+            $adjustment = $this->adjustmentService->confirmAdjustment(
+                $id,
+                auth()->id(),
+                $request->input('confirm_reason')
+            );
 
             return redirect()->route('admin.stock-adjustments.show', $adjustment)
                 ->with('success', "Adjustment {$adjustment->adjustment_code} confirmed. Stock updated + GL posted.");
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Phase 3 — Submit a draft adjustment for approval (draft → submitted).
+     * If the adjustment does not require approval (below auto-approve
+     * threshold), the service auto-advances it to 'approved' inline.
+     */
+    public function submit(Request $request, int $id)
+    {
+        $request->validate([
+            'comment' => 'nullable|string|max:1000',
+        ]);
+
+        $adjustment = StockAdjustment::findOrFail($id);
+        $this->authorize('submit', $adjustment);
+
+        try {
+            $adjustment = $this->adjustmentService->submitAdjustment(
+                $id,
+                auth()->id(),
+                $request->input('comment')
+            );
+
+            $msg = $adjustment->isApproved()
+                ? "Adjustment {$adjustment->adjustment_code} auto-approved (below threshold) — ready to confirm."
+                : "Adjustment {$adjustment->adjustment_code} submitted for approval.";
+
+            return redirect()->route('admin.stock-adjustments.show', $adjustment)
+                ->with('success', $msg);
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Phase 3 — Approve a submitted adjustment (submitted → approved).
+     * Only admin/manager (route middleware + Policy). The service enforces
+     * segregation of duties (approver ≠ submitter).
+     */
+    public function approve(Request $request, int $id)
+    {
+        $request->validate([
+            'comment' => 'required|string|max:1000',
+        ]);
+
+        $adjustment = StockAdjustment::findOrFail($id);
+        $this->authorize('approve', $adjustment);
+
+        try {
+            $adjustment = $this->adjustmentService->approveAdjustment(
+                $id,
+                auth()->id(),
+                $request->input('comment')
+            );
+
+            return redirect()->route('admin.stock-adjustments.show', $adjustment)
+                ->with('success', "Adjustment {$adjustment->adjustment_code} approved — ready to confirm.");
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Phase 3 — Reject a submitted adjustment (submitted → draft).
+     * Only admin/manager (route middleware + Policy). The adjustment returns
+     * to draft with the rejection reason appended to approval_comments.
+     */
+    public function reject(Request $request, int $id)
+    {
+        $request->validate([
+            'comment' => 'required|string|max:1000',
+        ]);
+
+        $adjustment = StockAdjustment::findOrFail($id);
+        $this->authorize('reject', $adjustment);
+
+        try {
+            $adjustment = $this->adjustmentService->rejectAdjustment(
+                $id,
+                auth()->id(),
+                $request->input('comment')
+            );
+
+            return redirect()->route('admin.stock-adjustments.show', $adjustment)
+                ->with('success', "Adjustment {$adjustment->adjustment_code} rejected — returned to draft.");
         } catch (\Throwable $e) {
             return back()->with('error', $e->getMessage());
         }

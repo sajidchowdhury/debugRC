@@ -268,3 +268,60 @@ Files modified:
 Gaps closed: G6 (no reason categorization -> FIXED), G17 (opening_balance reference_type never used -> FIXED)
 Key design decision: opening_balance is a stock-ledger distinction only. The GL journal_entries.reference_type stays 'stock_adjustment' for all categories because the GL always posts to Inventory/Surplus/Shrinkage regardless of the stock-movement category. This isolates the routing change to the stock_transactions layer.
 Note: PHP not installed in this sandbox (Node/Next.js env), so syntax verified by careful manual review + cross-check of all 5 stock_transactions/journal_entries reference_type lookups. Recommend running `php artisan migrate` and `php artisan test` in the Laravel env to confirm.
+
+---
+Task ID: SA-P3
+Agent: Main Agent (Stock Adjustment Phase 3 implementation)
+Task: Phase 3 — Approval Workflow & Maker-Checker. Enforce segregation of duties: accountant drafts/submits, admin/manager approves, then accountant confirms (posts stock+GL). Config-driven value-threshold policy auto-approves small corrections; large ones require explicit approval. Persist confirmed_by/at + confirm_reason (G9); always store cancel_reason (G15).
+
+Work Log:
+- Read /home/z/debugRC/worklog.md to confirm Phase 2 (SA-P2) was complete and committed; verified clean working tree (commit 9eb3521 = Phase 2)
+- Read the Phase 3 spec in STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md (§8, lines 669-748)
+- Read all touch-points in parallel: StockAdjustment model, StockAdjustmentService, StockAdjustmentController, routes/web.php stock-adjustment block, show/index/create blade views, StockAdjustmentPolicy, the existing stock_adjustments schema in 03_stock.sql, the StockTake approval migration (2025_07_28_000001) for the CHECK-constraint drop/re-add pattern, StockTakePolicyService for the policy-service pattern, AccountingPeriodService for the closed-period API (earliestOpenDate), User model for role methods
+- Implemented 3.1: Created migration 2025_07_29_000001_add_approval_to_stock_adjustments.php
+  - Adds 9 columns: submitted_by/at, approved_by/at, approval_comments, confirmed_by/at, confirm_reason (G9), cancel_reason (G15)
+  - cancel_reason is a NEW dedicated column (distinct from reverse_reason): cancel_reason = "why cancelled" (always set on cancel); reverse_reason = "why stock+GL reversed" (only confirmed-cancel). For confirmed-cancel both are populated.
+  - Drops & re-adds stock_adjustments_status_check via pg_constraint introspection (mirrors StockTake pattern) to allow submitted/approved/rejected. Final allow-list: draft, submitted, approved, confirmed, cancelled, rejected
+  - Partial index idx_sa_submitted (branch_id, submitted_at) WHERE status='submitted' — powers the approval worklist
+  - Idempotent up/down (Schema::hasColumn + pg_constraint guards)
+- Implemented 3.1b: Updated database/sql/03_stock.sql for fresh-install parity (inline columns + expanded CHECK + partial index)
+- Implemented 3.2: Created config/stock_adjustment.php — require_approval (true), auto_approve_below_value (1000), max_value_without_secondary_approval (50000), approver_roles (admin,manager), submitter_roles (admin,accountant), confirmer_roles (admin,accountant), block_closed_period (true), stale_draft_days (7). All overridable via env()
+- Implemented 3.3: Created StockAdjustmentPolicyService — injects AccountingPeriodService. requiresApproval() is the central decision (force-approve threshold wins; else require_approval + auto-approve-below). Also canSubmit/canApprove/canConfirm/isSubmitter (segregation-of-duties helper)/isWithinClosedPeriod (delegates to earliestOpenDate)/approvalHint. Reads from config() (lighter than StockTake's DB-table approach — Stock Adjustment is infrequent)
+- Implemented 3.4: Updated StockAdjustmentService — constructor injects StockAdjustmentPolicyService (3rd param). Added submitAdjustment (draft→submitted, auto-advances to approved if !requiresApproval), approveAdjustment (submitted→approved, enforces approver≠submitter segregation), rejectAdjustment (submitted→draft, appends [REJECTED] marker). Extended confirmAdjustment (now requires canBeConfirmed(requiresApproval); sets confirmed_by/at/confirm_reason — G9). Extended cancelAdjustment (accepts any non-terminal; always stores cancel_reason — G15; hard-guards empty reason). Added closed-period guard to createAdjustment. Added appendComment() helper for the timestamped approval_comments trail
+- Implemented 3.5: Updated StockAdjustment model — STATUSES/STATUS_LABELS/STATUS_BADGES constants (6 statuses); $fillable +9 columns; $casts +6 (3 datetime + 3 integer); submittedBy/approvedBy/confirmedBy relationships; isSubmitted/isApproved/isPendingApproval/isRejected/isTerminal helpers; canBeConfirmed(bool $approvalRequired) updated; statusLabel/statusBadge helpers
+- Implemented 3.6: Updated StockAdjustmentPolicy — added submit() (admin,accountant), approve() (admin,manager), reject() (admin,manager) methods, all with sameBranch() enforcement
+- Implemented 3.7: Updated routes/web.php — added POST {id}/submit to the admin,accountant group; added a NEW role:admin,manager group with POST {id}/approve + POST {id}/reject (both with branch.isolation + {id} regex)
+- Implemented 3.8: Updated StockAdjustmentController — constructor injects StockAdjustmentPolicyService (3rd param). index() stats now include submitted+approved; passes statuses+statusLabels. create() passes approvalHint. show() eager-loads submittedBy/approvedBy/confirmedBy + passes 5 policy flags (requiresApproval, canSubmit, canApprove, canConfirm, isSubmitter). confirm() now passes confirm_reason (G9). submit/approve/reject (NEW) methods validate comment + authorize + call service
+- Implemented 3.9: Updated 3 views:
+  - show.blade.php: $statusBadge covers 6 states; added lifecycle stepper card (Draft→Submitted→Approved→Confirmed + Cancelled badge); actions aside is fully lifecycle-aware (Submit-for-Approval / Confirm-direct / Approve+Reject / Confirm / Cancel); added 4 Swal handlers (submit/approve/reject + retained confirm/cancel); added approval-trail detail rows (Submitted/Approved/Confirmed/Cancel reason/Approval trail <pre>)
+  - index.blade.php: $statusBadge covers 6 states; status filter dropdown includes Submitted/Approved; added "Pending approval" stat card (submitted+approved)
+  - create.blade.php: added approval-workflow hint alert from approvalHint
+- Updated STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md: marked Phase 3 DONE in overview table; G5/G9/G15 → ✅ FIXED in gap table; replaced pending §8 with full implementation summary + checked verification checklist + gaps-closed + defense-in-depth layers
+- Caught + fixed a bug during review: show() used $request->user but show(int $id) has no Request binding — replaced with auth()->user()
+
+Stage Summary:
+Files created:
+- laravel/database/migrations/2025_07_29_000001_add_approval_to_stock_adjustments.php
+- laravel/config/stock_adjustment.php
+- laravel/app/Services/Stock/StockAdjustmentPolicyService.php
+
+Files modified:
+- laravel/database/sql/03_stock.sql (fresh-install parity)
+- laravel/app/Models/StockAdjustment.php (3 status constants + $fillable +9 + $casts +6 + 3 relationships + 5 state helpers + canBeConfirmed update + statusLabel/statusBadge)
+- laravel/app/Services/Stock/StockAdjustmentService.php (policy injection + 3 new lifecycle methods + confirm/cancel extensions + closed-period guard + appendComment helper)
+- laravel/app/Http/Controllers/Admin/StockAdjustmentController.php (policy injection + submit/approve/reject methods + show policy flags + confirm passes reason)
+- laravel/app/Policies/StockAdjustmentPolicy.php (submit/approve/reject methods)
+- laravel/routes/web.php (submit route + new admin,manager group for approve/reject)
+- laravel/resources/views/admin/stock-adjustments/show.blade.php (lifecycle stepper + lifecycle-aware actions + 4 Swal handlers + approval-trail detail rows)
+- laravel/resources/views/admin/stock-adjustments/index.blade.php (6-state badges + Pending-approval stat card + expanded status filter)
+- laravel/resources/views/admin/stock-adjustments/create.blade.php (approval-hint alert)
+- STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md (Phase 3 marked DONE with full implementation details)
+
+Gaps closed: G5 (no approval workflow → FIXED), G9 (no confirmed_by/at + confirm_reason discarded → FIXED), G15 (draft cancels discard cancel_reason → FIXED)
+Key design decisions:
+1. cancel_reason is a NEW column distinct from reverse_reason — cancel_reason = "why cancelled" (always set), reverse_reason = "why stock+GL reversed" (only confirmed-cancel). Both populated on confirmed-cancel from the same input.
+2. Policy reads from config() not a DB table — Stock Adjustment is infrequent so a deploy-time config file is sufficient (lighter than StockTake's stock_take_policies table).
+3. requiresApproval() logic deviates slightly from the plan's pseudocode to match the verification checklist: force-approve threshold wins; else require_approval with auto-approve-below bypass; else no approval. This makes "below threshold → one-step confirm" work correctly.
+4. submitAdjustment auto-advances to 'approved' when !requiresApproval (not auto-confirms) — the user still clicks Confirm to post stock+GL, preserving the explicit posting action.
+5. Segregation of duties: approveAdjustment throws if approved_by === submitted_by (the submitter cannot approve their own submission).
+Note: PHP not installed in this sandbox (Node/Next.js env), so syntax verified by careful manual review + route-name cross-check against Blade views. Recommend running `php artisan migrate`, `php artisan route:list`, and `php artisan test` in the Laravel env to confirm.

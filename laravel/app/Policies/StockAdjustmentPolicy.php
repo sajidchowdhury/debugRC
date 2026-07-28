@@ -108,12 +108,65 @@ class StockAdjustmentPolicy
      * + branch.isolation.
      *
      * This is the most sensitive action — it posts to stock and GL. Only
-     * admin + accountant may perform it. Phase 3 (Approval Workflow) will
-     * further require an approved state before confirm can run.
+     * admin + accountant may perform it. Phase 3 (Approval Workflow)
+     * further requires the adjustment to be in the 'approved' state (or
+     * 'draft' when the policy says approval is not required) before confirm
+     * can run — enforced inside StockAdjustmentService::confirmAdjustment.
      */
     public function confirm(User $user, StockAdjustment $adjustment): bool
     {
         if (!$user->hasRole('admin', 'accountant')) {
+            return false;
+        }
+
+        return $this->sameBranch($user, $adjustment);
+    }
+
+    /**
+     * Phase 3 — Submit a draft adjustment for approval (draft → submitted).
+     * Route: admin.stock-adjustments.{id}.submit — role:admin,accountant
+     * + branch.isolation.
+     *
+     * The submitter is the drafter (or any admin/accountant in the same
+     * branch). The submitter_roles config is the final arbiter inside
+     * StockAdjustmentService::submitAdjustment.
+     */
+    public function submit(User $user, StockAdjustment $adjustment): bool
+    {
+        if (!$user->hasRole('admin', 'accountant')) {
+            return false;
+        }
+
+        return $this->sameBranch($user, $adjustment);
+    }
+
+    /**
+     * Phase 3 — Approve a submitted adjustment (submitted → approved).
+     * Route: admin.stock-adjustments.{id}.approve — role:admin,manager
+     * + branch.isolation.
+     *
+     * Only admin/manager may approve. The segregation-of-duties check
+     * (approver !== submitter) is enforced inside the service.
+     */
+    public function approve(User $user, StockAdjustment $adjustment): bool
+    {
+        if (!$user->hasRole('admin', 'manager')) {
+            return false;
+        }
+
+        return $this->sameBranch($user, $adjustment);
+    }
+
+    /**
+     * Phase 3 — Reject a submitted adjustment (submitted → draft).
+     * Route: admin.stock-adjustments.{id}.reject — role:admin,manager
+     * + branch.isolation.
+     *
+     * Same role gate as approve (rejecting is an approver action).
+     */
+    public function reject(User $user, StockAdjustment $adjustment): bool
+    {
+        if (!$user->hasRole('admin', 'manager')) {
             return false;
         }
 

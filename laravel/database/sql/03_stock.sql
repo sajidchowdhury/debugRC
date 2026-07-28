@@ -112,12 +112,31 @@ CREATE TABLE stock_adjustments (
             'post_conversion_fix','legacy_cleanup','reconciliation_variance','other'
         )),
     reason text,
-    status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','cancelled')),
+    -- Phase 3 (Stock Adjustment plan): status now includes the maker-checker
+    -- approval states. draft → submitted → approved → confirmed (or
+    -- cancelled / rejected). See migration
+    -- 2025_07_29_000001_add_approval_to_stock_adjustments.php.
+    status varchar(20) NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft','submitted','approved','confirmed','cancelled','rejected')),
     journal_entry_id integer REFERENCES journal_entries(id),
     is_reversed boolean NOT NULL DEFAULT false,
     reversed_at timestamp(0),
     reversed_by integer,
     reverse_reason text,
+    -- G15: every cancel (draft OR confirmed) stores a reason here. For a
+    -- confirmed-cancel, reverse_reason is ALSO populated (it records why the
+    -- stock+GL reversal happened); for a draft-cancel only cancel_reason is set.
+    cancel_reason text,
+    -- Phase 3: maker-checker approval trail.
+    submitted_by integer,
+    submitted_at timestamp(0),
+    approved_by integer,
+    approved_at timestamp(0),
+    approval_comments text,
+    -- G9: attribute the posting (confirm) action + persist confirm_reason.
+    confirmed_by integer,
+    confirmed_at timestamp(0),
+    confirm_reason text,
     created_by integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -126,6 +145,8 @@ CREATE TABLE stock_adjustments (
 CREATE INDEX idx_sa_warehouse ON stock_adjustments(warehouse_id);
 CREATE INDEX idx_sa_journal ON stock_adjustments(journal_entry_id);
 CREATE INDEX idx_sa_category ON stock_adjustments(adjustment_category);
+-- Phase 3: partial index powering the "awaiting my approval" worklist.
+CREATE INDEX idx_sa_submitted ON stock_adjustments(branch_id, submitted_at) WHERE status = 'submitted';
 
 CREATE TABLE stock_adjustment_items (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

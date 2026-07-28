@@ -416,7 +416,7 @@ Route::middleware('auth')->group(function () {
             ->where(['id' => '[0-9]+']);
     });
 
-    // --- Write access (create draft, fetch rate, confirm, cancel): admin, accountant only ---
+    // --- Write access (create draft, fetch rate, submit, confirm, cancel): admin, accountant only ---
     // branch.isolation on POST routes resolves {id} → stock_adjustments.branch_id
     // and rejects non-admin users operating on another branch's adjustment.
     Route::middleware('role:admin,accountant')->group(function () {
@@ -425,10 +425,28 @@ Route::middleware('auth')->group(function () {
         Route::get('admin/stock-adjustments/product-rate', [StockAdjustmentController::class, 'getProductRate'])->name('admin.stock-adjustments.product-rate');
         Route::get('admin/stock-adjustments/{id}/confirm', fn() => redirect()->route('admin.stock-adjustments.index'))->name('admin.stock-adjustments.confirm-form')
             ->where(['id' => '[0-9]+']);
+        // Phase 3 — submit a draft for approval (draft → submitted, or
+        // auto-advance to approved when below the auto-approve threshold).
+        Route::post('admin/stock-adjustments/{id}/submit', [StockAdjustmentController::class, 'submit'])->name('admin.stock-adjustments.submit')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
         Route::post('admin/stock-adjustments/{id}/confirm', [StockAdjustmentController::class, 'confirm'])->name('admin.stock-adjustments.confirm')
             ->where(['id' => '[0-9]+'])
             ->middleware('branch.isolation');
         Route::post('admin/stock-adjustments/{id}/cancel', [StockAdjustmentController::class, 'cancel'])->name('admin.stock-adjustments.cancel')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
+    });
+
+    // --- Phase 3: Approve / Reject (maker-checker): admin, manager only ---
+    // Separated from the write group because approval is an approver action,
+    // not a drafter action. The service enforces segregation of duties
+    // (approver !== submitter) on top of this role gate.
+    Route::middleware('role:admin,manager')->group(function () {
+        Route::post('admin/stock-adjustments/{id}/approve', [StockAdjustmentController::class, 'approve'])->name('admin.stock-adjustments.approve')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
+        Route::post('admin/stock-adjustments/{id}/reject', [StockAdjustmentController::class, 'reject'])->name('admin.stock-adjustments.reject')
             ->where(['id' => '[0-9]+'])
             ->middleware('branch.isolation');
     });
