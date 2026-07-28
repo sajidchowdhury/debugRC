@@ -3,20 +3,30 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Warehouse;
 use App\Models\WarehouseTransfer;
+use App\Rules\WarehouseBelongsToBranch;
 use App\Services\Stock\WarehouseTransferService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
- * Warehouse Transfer Controller — Phase 6.5.
+ * Warehouse Transfer Controller — Phase 6.5 + Phase 1 same-branch enforcement.
  *
  * Two-phase flow:
  *   - create / store: create a draft transfer (no stock, no GL)
  *   - show: detail with items + stock movements + GL journals
- *   - confirm: apply stock (source OUT + dest IN) + post GL (if cross-branch)
+ *   - confirm: apply stock (source OUT + dest IN) — same-branch only, NO GL
  *   - cancel: reverse if confirmed, or mark draft as cancelled
+ *
+ * Phase 1 enforcement:
+ *   - Same-branch only: both warehouses must belong to the same branch
+ *   - Cross-branch transfers must go through Branch Demand module
+ *   - Warehouse dropdown filtered by user's branch
+ *   - WarehouseBelongsToBranch validation rule applied
+ *   - Defense-in-depth: controller check + service check + DB trigger
  */
 class WarehouseTransferController extends Controller
 {
@@ -25,16 +35,37 @@ class WarehouseTransferController extends Controller
         private StockService $stockService
     ) {}
 
+    /**
+     * Get the user's effective branch_id for filtering.
+     * Admins see all branches; non-admins see their own branch.
+     */
+    private function getUserBranchId(): ?int
+    {
+        /** @var \App\Models\User $user */
+        $user = auth()->user();
+        if ($user && $user->isAdmin()) {
+            return null; // Admin: no branch restriction (see all)
+        }
+        return $user ? (int) (session('branch_id') ?? $user->getBranchId() ?? 0) : 0;
+    }
+
     public function index(Request $request)
     {
+        $userBranchId = $this->getUserBranchId();
+
         $query = WarehouseTransfer::with(['fromWarehouse.branch', 'toWarehouse.branch', 'items'])
+            ->when($userBranchId, function ($q) use ($userBranchId) {
+                // Non-admin: only see transfers where their branch is involved
+                $q->where(function ($subQ) use ($userBranchId) {
+                    $subQ->where('from_branch_id', $userBranchId)
+                         ->orWhere('to_branch_id', $userBranchId);
+                });
+            })
             ->when($request->input('from_date'), fn($q, $d) => $q->where('transfer_date', '>=', $d))
             ->when($request->input('to_date'), fn($q, $d) => $q->where('transfer_date', '<=', $d))
             ->when($request->input('from_warehouse_id'), fn($q, $wid) => $q->where('from_warehouse_id', $wid))
             ->when($request->input('to_warehouse_id'), fn($q, $wid) => $q->where('to_warehouse_id', $wid))
             ->when($request->input('status'), fn($q, $s) => $q->where('status', $s))
-            ->when($request->input('interbranch') === 'yes', fn($q) => $q->where('is_interbranch', true))
-            ->when($request->input('interbranch') === 'no', fn($q) => $q->where('is_interbranch', false))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('transfer_code', 'ILIKE', "%{$search}%");
             })
@@ -43,20 +74,50 @@ class WarehouseTransferController extends Controller
 
         $transfers = $query->paginate(25);
 
-        $warehouses = \App\Models\Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
+        // Warehouse dropdown: filter by user's branch for non-admins
+        $warehouses = Warehouse::active()->with('branch')
+            ->when($userBranchId, fn($q) => $q->where('branch_id', $userBranchId))
+            ->orderBy('warehouse_name')
+            ->get();
 
         $stats = [
-            'total' => WarehouseTransfer::count(),
-            'draft' => WarehouseTransfer::where('status', 'draft')->count(),
-            'confirmed' => WarehouseTransfer::where('status', 'confirmed')->count(),
-            'cancelled' => WarehouseTransfer::where('status', 'cancelled')->count(),
-            'interbranch' => WarehouseTransfer::where('is_interbranch', true)->count(),
-            // No total_amount column on warehouse_transfers — derive from
-            // warehouse_transfer_items.qty * rate for confirmed transfers.
+            'total' => WarehouseTransfer::when($userBranchId, function ($q) use ($userBranchId) {
+                $q->where(function ($subQ) use ($userBranchId) {
+                    $subQ->where('from_branch_id', $userBranchId)
+                         ->orWhere('to_branch_id', $userBranchId);
+                });
+            })->count(),
+            'draft' => WarehouseTransfer::where('status', 'draft')
+                ->when($userBranchId, function ($q) use ($userBranchId) {
+                    $q->where(function ($subQ) use ($userBranchId) {
+                        $subQ->where('from_branch_id', $userBranchId)
+                             ->orWhere('to_branch_id', $userBranchId);
+                    });
+                })->count(),
+            'confirmed' => WarehouseTransfer::where('status', 'confirmed')
+                ->when($userBranchId, function ($q) use ($userBranchId) {
+                    $q->where(function ($subQ) use ($userBranchId) {
+                        $subQ->where('from_branch_id', $userBranchId)
+                             ->orWhere('to_branch_id', $userBranchId);
+                    });
+                })->count(),
+            'cancelled' => WarehouseTransfer::where('status', 'cancelled')
+                ->when($userBranchId, function ($q) use ($userBranchId) {
+                    $q->where(function ($subQ) use ($userBranchId) {
+                        $subQ->where('from_branch_id', $userBranchId)
+                             ->orWhere('to_branch_id', $userBranchId);
+                    });
+                })->count(),
             'total_value' => (float) DB::table('warehouse_transfers')
                 ->join('warehouse_transfer_items', 'warehouse_transfer_items.warehouse_transfer_id', '=', 'warehouse_transfers.id')
                 ->where('warehouse_transfers.status', 'confirmed')
                 ->whereNull('warehouse_transfers.deleted_at')
+                ->when($userBranchId, function ($q) use ($userBranchId) {
+                    $q->where(function ($subQ) use ($userBranchId) {
+                        $subQ->where('warehouse_transfers.from_branch_id', $userBranchId)
+                             ->orWhere('warehouse_transfers.to_branch_id', $userBranchId);
+                    });
+                })
                 ->sum(DB::raw('warehouse_transfer_items.qty * warehouse_transfer_items.rate')),
         ];
 
@@ -65,27 +126,54 @@ class WarehouseTransferController extends Controller
             'transfers' => $transfers,
             'warehouses' => $warehouses,
             'stats' => $stats,
-            'filters' => $request->only(['from_date', 'to_date', 'from_warehouse_id', 'to_warehouse_id', 'status', 'interbranch', 'search']),
+            'filters' => $request->only(['from_date', 'to_date', 'from_warehouse_id', 'to_warehouse_id', 'status', 'search']),
+            'userBranchId' => $userBranchId,
         ]);
     }
 
     public function create()
     {
-        $warehouses = \App\Models\Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
+        $userBranchId = $this->getUserBranchId();
+
+        // Phase 1: Only show warehouses belonging to user's branch (or all for admin)
+        $warehouses = Warehouse::active()->with('branch')
+            ->when($userBranchId, fn($q) => $q->where('branch_id', $userBranchId))
+            ->orderBy('warehouse_name')
+            ->get();
+
         $products = \App\Models\Product::active()->orderBy('product_name')->limit(500)->get();
+
+        // Determine branch name for the banner
+        $branchName = null;
+        if ($userBranchId) {
+            $branch = \App\Models\Branch::find($userBranchId);
+            $branchName = $branch ? $branch->branch_name : null;
+        }
 
         return view('admin.warehouse-transfers.create', [
             'title' => 'New Warehouse Transfer',
             'warehouses' => $warehouses,
             'products' => $products,
+            'userBranchId' => $userBranchId,
+            'branchName' => $branchName,
         ]);
     }
 
     public function store(Request $request)
     {
+        $userBranchId = $this->getUserBranchId();
+
+        // Phase 1: Add WarehouseBelongsToBranch validation rule for user's branch
         $validated = $request->validate([
-            'from_warehouse_id' => 'required|integer|exists:warehouses,id',
-            'to_warehouse_id' => 'required|integer|exists:warehouses,id|different:from_warehouse_id',
+            'from_warehouse_id' => [
+                'required', 'integer', 'exists:warehouses,id',
+                new WarehouseBelongsToBranch($userBranchId, 'branch'),
+            ],
+            'to_warehouse_id' => [
+                'required', 'integer', 'exists:warehouses,id',
+                'different:from_warehouse_id',
+                new WarehouseBelongsToBranch($userBranchId, 'branch'),
+            ],
             'transfer_date' => 'required|date',
             'notes' => 'nullable|string|max:1000',
             'items' => 'required|array|min:1',
@@ -93,6 +181,23 @@ class WarehouseTransferController extends Controller
             'items.*.qty' => 'required|numeric|min:0.001',
             'items.*.rate' => 'nullable|numeric|min:0',
         ]);
+
+        // Phase 1: Controller-level same-branch guard (defense-in-depth)
+        $fromWarehouse = Warehouse::findOrFail($validated['from_warehouse_id']);
+        $toWarehouse = Warehouse::findOrFail($validated['to_warehouse_id']);
+
+        if ((int) $fromWarehouse->branch_id !== (int) $toWarehouse->branch_id) {
+            Log::warning('Cross-branch warehouse transfer rejected at controller level', [
+                'from_warehouse_id' => $fromWarehouse->id,
+                'to_warehouse_id' => $toWarehouse->id,
+                'from_branch_id' => $fromWarehouse->branch_id,
+                'to_branch_id' => $toWarehouse->branch_id,
+                'user_id' => auth()->id(),
+            ]);
+            return back()->withInput()->withErrors([
+                'to_warehouse_id' => 'Both warehouses must belong to the same branch. Cross-branch transfers must go through Branch Demand.',
+            ]);
+        }
 
         try {
             $transfer = $this->transferService->createTransfer([
@@ -144,10 +249,23 @@ class WarehouseTransferController extends Controller
             'confirm_reason' => 'nullable|string|max:500',
         ]);
 
+        // Phase 1: Defense-in-depth — check branch before confirming
+        $transfer = WarehouseTransfer::findOrFail($id);
+        if ((int) $transfer->from_branch_id !== (int) $transfer->to_branch_id) {
+            Log::warning('Cross-branch warehouse transfer confirm rejected at controller level', [
+                'transfer_id' => $id,
+                'from_branch_id' => $transfer->from_branch_id,
+                'to_branch_id' => $transfer->to_branch_id,
+                'user_id' => auth()->id(),
+            ]);
+            return back()->withErrors([
+                'error' => 'Cross-branch transfers are not allowed. Use Branch Demand instead.',
+            ]);
+        }
+
         try {
             $transfer = $this->transferService->confirmTransfer($id, auth()->id());
-            $msg = "Transfer {$transfer->transfer_code} confirmed. Stock moved";
-            $msg .= $transfer->is_interbranch ? ' + intercompany GL posted.' : '.';
+            $msg = "Transfer {$transfer->transfer_code} confirmed. Stock moved (same-branch — no intercompany GL).";
             return redirect()->route('admin.warehouse-transfers.show', $transfer)
                 ->with('success', $msg);
         } catch (\Throwable $e) {

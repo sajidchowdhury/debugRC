@@ -16,22 +16,20 @@ use Illuminate\Support\Facades\Log;
  *   2. confirmTransfer(): applies stock (source OUT + dest IN) + posts GL
  *   3. cancelTransfer(): if confirmed, reverses; if draft, marks cancelled
  *
- * GL posting rules (re-derived from intercompany accounting principles):
+ * SAME-BRANCH ONLY — Phase 1 enforcement:
+ *   This module ONLY handles same-branch (inner-branch) transfers.
+ *   Cross-branch transfers MUST go through the Branch Demand module,
+ *   which has its own workflow (create → send → receive), approval chain,
+ *   and intercompany settlement tracking.
  *
- * SAME-BRANCH transfer (from_branch == to_branch):
+ * GL posting rules (same-branch only):
  *   - Stock moves: source OUT at avg_cost, dest IN at same avg_cost
  *   - NO GL journal (inventory is just reallocated within the same branch;
  *     the branch's total inventory doesn't change)
  *
- * CROSS-BRANCH transfer (from_branch != to_branch):
- *   - Stock moves: source OUT at avg_cost, dest IN at same avg_cost
- *   - TWO intercompany GL journals:
- *     a) From-branch (creditor): Dr Due-to-Branch / Cr Inventory
- *        (from-branch loses inventory, gains a receivable from to-branch)
- *     b) To-branch (debtor): Dr Inventory / Cr Due-from-Branch
- *        (to-branch gains inventory, owes from-branch)
- *   - This creates the intercompany settlement tracked via branch_ledger.
- *   - The Due-from/Due-to-Branch accounts must net to zero across all branches.
+ * NOTE: The postIntercompanyGL() method is retained for potential future
+ * use by the Branch Demand module, but it should NEVER be called from
+ * this WarehouseTransfer module due to same-branch enforcement.
  *
  * Rate semantics (per avg_cost_rule.md §3):
  *   - Source OUT: rate = current avg_cost (cost flows out at average)
@@ -71,9 +69,31 @@ class WarehouseTransferService
             ->whereIn('id', [$fromWarehouseId, $toWarehouseId])
             ->pluck('branch_id', 'id');
 
+        if (!isset($warehouses[$fromWarehouseId]) || !isset($warehouses[$toWarehouseId])) {
+            throw new \InvalidArgumentException('Invalid warehouse selection — one or both warehouses not found.');
+        }
+
         $fromBranchId = (int) $warehouses[$fromWarehouseId];
-        $toBranchId = (int) $warehouses[$toWarehouseId];
-        $isInterbranch = $fromBranchId !== $toBranchId;
+        $toBranchId   = (int) $warehouses[$toWarehouseId];
+
+        // ★ Phase 1 — Same-branch enforcement (CRITICAL):
+        // WarehouseTransfer module ONLY handles same-branch transfers.
+        // Cross-branch transfers must go through Branch Demand module.
+        if ($fromBranchId !== $toBranchId) {
+            Log::warning('Cross-branch warehouse transfer attempt blocked', [
+                'from_warehouse_id' => $fromWarehouseId,
+                'to_warehouse_id'   => $toWarehouseId,
+                'from_branch_id'    => $fromBranchId,
+                'to_branch_id'      => $toBranchId,
+                'created_by'        => $data['created_by'] ?? null,
+            ]);
+            throw new \InvalidArgumentException(
+                'Both warehouses must belong to the same branch. ' .
+                'Cross-branch transfers must go through the Branch Demand module.'
+            );
+        }
+
+        $isInterbranch = false; // Always false for same-branch transfers
 
         // Build + validate line items.
         $totalAmount = 0.0;
@@ -171,6 +191,34 @@ class WarehouseTransferService
                 throw new \RuntimeException("Only draft transfers can be confirmed (current: {$transfer->status}).");
             }
 
+            // ★ Phase 1 — Defense-in-depth: confirm should NEVER proceed on cross-branch
+            if ($transfer->from_branch_id !== $transfer->to_branch_id) {
+                Log::warning('Cross-branch warehouse transfer confirm attempt blocked', [
+                    'transfer_id'   => $transferId,
+                    'from_branch_id' => $transfer->from_branch_id,
+                    'to_branch_id'   => $transfer->to_branch_id,
+                    'confirmed_by'   => $confirmedBy,
+                ]);
+                throw new \RuntimeException(
+                    'Cannot confirm a cross-branch transfer. ' .
+                    'Use the Branch Demand module instead.'
+                );
+            }
+
+            // Since same-branch only, is_interbranch should always be false.
+            // If somehow true (data inconsistency), block it.
+            if ($transfer->is_interbranch) {
+                Log::warning('Interbranch flag on same-branch transfer detected', [
+                    'transfer_id' => $transferId,
+                    'from_branch_id' => $transfer->from_branch_id,
+                    'to_branch_id' => $transfer->to_branch_id,
+                ]);
+                throw new \RuntimeException(
+                    'Data inconsistency: transfer marked as interbranch but branches match. ' .
+                    'Contact administrator.'
+                );
+            }
+
             $fromWh = $transfer->from_warehouse_id;
             $toWh = $transfer->to_warehouse_id;
             $transferDate = $transfer->transfer_date->format('Y-m-d');
@@ -207,12 +255,20 @@ class WarehouseTransferService
                 ]);
             }
 
-            // Post GL (only if cross-branch).
+            // Same-branch transfer: NO GL posting.
+            // (interbranch GL is handled by the Branch Demand module, not here)
             $journalEntryId = null;
             $journalEntryIdDebtor = null;
 
+            // is_interbranch is always false due to same-branch enforcement,
+            // but we keep the conditional as a safety net.
             if ($transfer->is_interbranch) {
-                [$journalEntryId, $journalEntryIdDebtor] = $this->postIntercompanyGL($transfer, $confirmedBy);
+                // This should NEVER happen due to the defense-in-depth check above.
+                // If it does, something is very wrong — don't post GL.
+                Log::error('Interbranch GL posting blocked on warehouse transfer', [
+                    'transfer_id' => $transferId,
+                ]);
+                throw new \RuntimeException('Cross-branch GL posting is not allowed in this module.');
             }
 
             // Update transfer status.

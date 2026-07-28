@@ -13,7 +13,8 @@
         <div>
             <h1 class="h4 mb-1"><i class="fas fa-plus me-2"></i>{{ $title }}</h1>
             <p class="mb-0 small opacity-75">
-                Create a draft transfer — no stock moves or GL posting until you confirm.
+                Create a same-branch draft transfer — no stock moves or GL posting until you confirm.
+                @if ($branchName) <strong>Branch: {{ $branchName }}</strong> @endif
             </p>
         </div>
         <div>
@@ -99,21 +100,21 @@
                     </div>
                 </div>
 
-                {{-- Interbranch detection banner --}}
-                <div class="alert alert-info d-flex align-items-center mt-3 mb-0 d-none" id="interbranchBanner">
-                    <i class="fas fa-arrow-right-arrow-left me-2 fa-lg"></i>
+                {{-- Phase 1: Same-branch / cross-branch detection banner --}}
+                <div class="alert alert-danger d-flex align-items-center mt-3 mb-0 d-none" id="crossBranchBanner">
+                    <i class="fas fa-exclamation-triangle me-2 fa-lg"></i>
                     <div>
-                        <strong>This is an interbranch transfer.</strong>
-                        On confirm, intercompany GL will be posted
-                        (<span id="fromBranchName">—</span> → <span id="toBranchName">—</span>):
-                        <em>Due-to-Branch</em> / <em>Due-from-Branch</em> ledgers track the settlement.
+                        <strong>Cross-branch transfer — NOT ALLOWED.</strong>
+                        Both warehouses must belong to the same branch
+                        (<span id="fromBranchName">—</span> → <span id="toBranchName">—</span>).
+                        Cross-branch transfers must go through the <em>Branch Demand</em> module.
                     </div>
                 </div>
-                <div class="alert alert-secondary d-flex align-items-center mt-3 mb-0 d-none" id="sameBranchBanner">
+                <div class="alert alert-success d-flex align-items-center mt-3 mb-0 d-none" id="sameBranchBanner">
                     <i class="fas fa-warehouse me-2 fa-lg"></i>
                     <div>
                         <strong>Same-branch transfer.</strong>
-                        Stock is reallocated within the same branch — no intercompany GL will be posted.
+                        Stock is reallocated within <span id="branchLabel">—</span> — no intercompany GL will be posted.
                     </div>
                 </div>
             </div>
@@ -196,7 +197,7 @@ $(function () {
     var $totalAmount    = $('#totalAmount');
     var $itemCount      = $('#itemCount');
     var $itemsError     = $('#itemsError');
-    var $interBanner    = $('#interbranchBanner');
+    var $crossBanner    = $('#crossBranchBanner');
     var $sameBanner     = $('#sameBranchBanner');
     var $fromBranchName = $('#fromBranchName');
     var $toBranchName   = $('#toBranchName');
@@ -365,35 +366,46 @@ $(function () {
             }
         });
         recomputeTotal();
-        refreshInterbranchBanner();
+        refreshBranchBanner();
     });
 
-    // ====== When TO warehouse changes: just refresh the interbranch banner ======
+    // ====== When TO warehouse changes: refresh the branch banner ======
     $toWh.on('change', function () {
-        refreshInterbranchBanner();
+        refreshBranchBanner();
     });
 
-    // ====== Interbranch detection (compares branch_id data attribute) ======
-    function refreshInterbranchBanner() {
+    // ====== Phase 1: Same-branch / cross-branch detection ======
+    function refreshBranchBanner() {
         var $fromOpt = $fromWh.find('option:selected');
         var $toOpt   = $toWh.find('option:selected');
         var fromBranId = $fromOpt.attr('data-branch-id');
         var toBranId   = $toOpt.attr('data-branch-id');
+        var fromBranName = $fromOpt.attr('data-branch-name') || '—';
+        var toBranName   = $toOpt.attr('data-branch-name') || '—';
 
         // Hide both first
-        $interBanner.addClass('d-none');
+        $crossBanner.addClass('d-none');
         $sameBanner.addClass('d-none');
 
+        // Also disable/enable submit button based on branch match
+        var $submitBtn = $('#submitBtn');
+
         if (!fromBranId || !toBranId) {
+            $submitBtn.prop('disabled', false); // Will be checked on submit
             return; // One of the warehouses not selected yet
         }
 
         if (fromBranId !== toBranId) {
-            $fromBranchName.text($fromOpt.attr('data-branch-name') || 'from-branch');
-            $toBranchName.text($toOpt.attr('data-branch-name') || 'to-branch');
-            $interBanner.removeClass('d-none');
+            // ★ Phase 1 — Cross-branch transfer BLOCKED
+            $fromBranchName.text(fromBranName);
+            $toBranchName.text(toBranName);
+            $crossBanner.removeClass('d-none');
+            $submitBtn.prop('disabled', true).addClass('opacity-50');
         } else {
+            // Same-branch — allowed
+            $('#branchLabel').text(fromBranName);
             $sameBanner.removeClass('d-none');
+            $submitBtn.prop('disabled', false).removeClass('opacity-50');
         }
     }
 
@@ -420,7 +432,7 @@ $(function () {
     @endif
 
     // Initial banner state in case old() repopulates both warehouses
-    refreshInterbranchBanner();
+    refreshBranchBanner();
 
     // ====== Submit guard ======
     $form.on('submit', function (e) {
@@ -443,6 +455,22 @@ $(function () {
                 icon: 'error',
                 title: 'Same warehouse',
                 text: 'The source and destination warehouses must be different.',
+                confirmButtonText: 'OK'
+            });
+            return false;
+        }
+
+        // ★ Phase 1 — Cross-branch guard: both warehouses must be in the same branch
+        var $fromOpt = $fromWh.find('option:selected');
+        var $toOpt   = $toWh.find('option:selected');
+        var fromBranchId = parseInt($fromOpt.attr('data-branch-id'), 10);
+        var toBranchId   = parseInt($toOpt.attr('data-branch-id'), 10);
+        if (fromBranchId && toBranchId && fromBranchId !== toBranchId) {
+            e.preventDefault();
+            Swal.fire({
+                icon: 'error',
+                title: 'Cross-branch transfer not allowed',
+                text: 'Both warehouses must belong to the same branch. Cross-branch transfers must go through the Branch Demand module.',
                 confirmButtonText: 'OK'
             });
             return false;

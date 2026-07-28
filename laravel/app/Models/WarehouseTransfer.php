@@ -5,21 +5,28 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Traits\AuditableMasterData;
+use App\Models\Scopes\WarehouseTransferBranchScope;
 
 /**
- * Warehouse Transfer — Phase 6.5.
+ * Warehouse Transfer — Phase 6.5 + Phase 1 same-branch enforcement.
  *
  * Two-phase flow:
  *   1. Create (draft): header + items, NO stock movement, NO GL
- *   2. Confirm: applies stock (source OUT + dest IN via StockService) + posts GL
- *      - Same-branch: NO GL (just inventory reallocation within the branch)
- *      - Cross-branch: TWO intercompany GL journals (creditor + debtor)
- *   3. Cancel: if confirmed, reverses stock + GL; if draft, just marks cancelled
+ *   2. Confirm: applies stock (source OUT + dest IN via StockService)
+ *      - Same-branch ONLY: NO GL (just inventory reallocation within the branch)
+ *      - Cross-branch transfers are BLOCKED — must use Branch Demand module
+ *   3. Cancel: if confirmed, reverses stock; if draft, just marks cancelled
  *
- * Cross-branch intercompany GL:
- *   - From-branch (creditor): Dr Due-to-Branch / Cr Inventory
- *   - To-branch (debtor): Dr Inventory / Cr Due-from-Branch
- * This creates the intercompany settlement tracked via branch_ledger.
+ * Phase 1 — Same-branch enforcement (defense-in-depth):
+ *   - WarehouseTransferBranchScope: Eloquent global scope filtering by branch
+ *   - WarehouseBelongsToBranch: validation rule on create form
+ *   - Controller-level branch guard: checks before service call
+ *   - Service-level enforcement: throws InvalidArgumentException if branches differ
+ *   - PostgreSQL trigger: DB-level enforcement (enforce_same_branch_transfer)
+ *
+ * NOTE: Cross-branch intercompany GL is handled by Branch Demand module,
+ * not by WarehouseTransfer. The postIntercompanyGL() method is retained
+ * for potential Branch Demand use but is NEVER called from WarehouseTransfer.
  *
  * @property int $id
  * @property string $transfer_code
@@ -43,6 +50,12 @@ use App\Traits\AuditableMasterData;
 class WarehouseTransfer extends Model
 {
     use SoftDeletes, AuditableMasterData;
+
+    /** Phase 1: Apply WarehouseTransferBranchScope for branch isolation. */
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new WarehouseTransferBranchScope);
+    }
 
     protected $table = 'warehouse_transfers';
 
