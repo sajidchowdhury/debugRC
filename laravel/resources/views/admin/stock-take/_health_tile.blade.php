@@ -98,7 +98,7 @@
 @once
 <script>
 (function () {
-    // Defer until DOM is ready (this partial may be @included mid-page).
+    // Defer until DOM is ready (this partial may be included mid-page).
     function init() {
         var tile = document.getElementById('stkHealthTile');
         if (!tile) return;

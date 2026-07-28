@@ -369,8 +369,8 @@ $(function () {
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
 
     // DataTables on visible rows only (server-side pagination handles page size).
-    // Note: the @empty colspan row is hidden via .d-none so DataTables never
-    // sees a colspan cell (which triggers tn/18 'Incorrect column count').
+    // Note: the empty-state colspan row is hidden via d-none so DataTables never
+    // sees a colspan cell (which triggers tn/18 Incorrect column count).
     // DataTables shows its own empty message via language.emptyTable.
     $('#dataTable').DataTable({
         paging: false,
