@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\V1\Sales\CustomerPaymentApiController;
 use App\Http\Controllers\Api\V1\Sales\CommissionApiController;
 use App\Http\Controllers\Api\V1\StockTake\StockTakeItemApiController;
 use App\Http\Controllers\Api\V1\StockTake\StockTakeSessionApiController;
+use App\Http\Controllers\Api\V1\WarehouseTransfer\WarehouseTransferApiController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -68,6 +69,14 @@ use Illuminate\Support\Facades\Route;
  *     polled frequently by mobile clients).
  *   - /api/docs is intentionally NOT rate-limited so the docs themselves
  *     always remain reachable.
+ *
+ * WH Transfer Phase 8 — warehouse-transfer API (mobile stock transfers):
+ *   GET    /api/v1/warehouse-transfers                  list (paginated + filtered)
+ *   POST   /api/v1/warehouse-transfers                  create draft
+ *   GET    /api/v1/warehouse-transfers/{id}              show detail
+ *   POST   /api/v1/warehouse-transfers/{id}/confirm      confirm (manager/admin)
+ *   POST   /api/v1/warehouse-transfers/{id}/cancel        cancel/reverse (manager/admin)
+ *   GET    /api/v1/warehouse-transfers/product-stock      pipeline-aware availability
  */
 
 // Phase 18: Public API docs page (NOT behind api.auth or api.rate).
@@ -263,6 +272,47 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
     //   - Post + reverse + re-open + cancel: admin/manager (destructive —
     //     undoes books or marks terminal). Mirrors the web routes.
     // ======================================================================
+    // ======================================================================
+    // WH Transfer Phase 8 — Warehouse Transfer API (mobile stock transfers)
+    // ======================================================================
+    // All warehouse-transfer routes sit behind api.auth + set.api.branch
+    // (sets app.branch_id + app.is_admin GUC so RLS on warehouse_transfers
+    // filters by the authenticated user's branch).
+    //
+    // Same-branch enforcement: controller, service, and DB trigger all
+    // block cross-branch transfers. Warehouse dropdowns (via lookups API)
+    // already filter by user's branch.
+    //
+    // Rate limits:
+    //   - Reads (list/show/product-stock): 60 req/min
+    //   - Writes (store/confirm/cancel): 30 req/min (transactional — stricter)
+    //
+    // Role enforcement:
+    //   - Read + store draft: any authenticated user
+    //   - Confirm + cancel: manager/admin (destructive — applies/reverses stock)
+    // ======================================================================
+    Route::prefix('warehouse-transfers')->middleware('set.api.branch')->group(function (): void {
+
+        // ---------- Reads (60 req/min) ----------
+        Route::get('/', [WarehouseTransferApiController::class, 'index'])
+            ->middleware('api.rate:60');
+        Route::get('/product-stock', [WarehouseTransferApiController::class, 'productStock'])
+            ->middleware('api.rate:60');
+        Route::get('/{id}', [WarehouseTransferApiController::class, 'show'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.rate:60');
+
+        // ---------- Writes (30 req/min) ----------
+        Route::post('/', [WarehouseTransferApiController::class, 'store'])
+            ->middleware('api.rate:30');
+        Route::post('/{id}/confirm', [WarehouseTransferApiController::class, 'confirm'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:manager,admin', 'api.rate:30');
+        Route::post('/{id}/cancel', [WarehouseTransferApiController::class, 'cancel'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:manager,admin', 'api.rate:30');
+    });
+
     Route::prefix('stock-take')->middleware('set.api.branch')->group(function (): void {
 
         // ---------- Sessions — read (60 req/min) ----------

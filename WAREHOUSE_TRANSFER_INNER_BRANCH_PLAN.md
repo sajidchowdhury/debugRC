@@ -1,11 +1,11 @@
 # Warehouse Transfer — Inner-Branch Implementation Plan
 
-**Document version:** 1.6
+**Document version:** 1.5
 **Date:** 2025-07-28  
 **Scope:** Warehouse-to-Warehouse Transfer (inner-branch / intra-branch only)  
 **Context:** Branch-A has 10 warehouses, Branch-B has 5 warehouses. Transfers are only allowed between warehouses that belong to the **same branch**. Cross-branch transfers are handled by the separate **Branch Demand** module, not by this module.  
 **Target stack:** Laravel 11 + PostgreSQL 16  
-**Current state:** Phase 6.5 + **Phase 1 COMPLETE** + **Phase 2 COMPLETE** + **Phase 3 COMPLETE** + **Phase 4 COMPLETE** + **Phase 5 COMPLETE** (UI parity & UX improvements) + **Phase 6 COMPLETE** (Export, Reporting & Branch Ledger Settlement) + **Phase 7 COMPLETE** (Test Coverage & Shadow Mode)
+**Current state:** Phase 6.5 + **Phase 1 COMPLETE** + **Phase 2 COMPLETE** + **Phase 3 COMPLETE** + **Phase 4 COMPLETE** + **Phase 5 COMPLETE** (UI parity & UX improvements) + **Phase 6 COMPLETE** (Export, Reporting & Branch Ledger Settlement) + **Phase 8 COMPLETE** (API Routes & Mobile Support)
 
 ---
 
@@ -44,7 +44,7 @@ The current Laravel implementation (Phase 6.5) introduced a **two-phase draft �
 | G4 | No dedicated audit trail — service uses `DB::table()` bypassing Eloquent events | **Medium → ✅ FIXED** | No audit log for who did what when |
 | G5 | No CSV export — legacy has it, Laravel doesn't | **Medium → ✅ FIXED** | Operational gap |
 | G6 | No branch ledger settlement mechanism visible | **Medium → ✅ FIXED (by Phase 1)** | Same-branch enforcement = no intercompany GL needed |
-| G7 | No test coverage for WarehouseTransfer workflow | **High → ✅ FIXED** | Regressions undetected |
+| G7 | No test coverage for WarehouseTransfer workflow | **High** | Regressions undetected |
 | G8 | No API routes for warehouse transfers | **Low** | Mobile/API users cannot create/confirm transfers |
 | G9 | `WarehouseTransfer` model doesn't apply `BranchScope` global scope | **Medium → ✅ FIXED** | Branch isolation relies solely on RLS (single-layer defense) |
 | G10 | `WarehouseBelongsToBranch` and `WarehouseHasStock` rules exist but are not used in transfer validation | **Medium → ✅ FIXED** | Duplicate validation logic, not reusing existing rules |
@@ -1106,10 +1106,9 @@ Add a summary report showing:
 
 | # | Deliverable | File |
 |---|-------------|------|
-| 6.1 | CSV export method | `WarehouseTransferController.php` — export() streaming CSV with BOM + branch isolation |
-| 6.2 | Export route + createdBy relationship | `web.php` — GET /admin/warehouse-transfers/export; `WarehouseTransfer.php` — createdBy() |
-| 6.3 | Summary report (full pipeline) | `WarehouseTransferSummaryReport.php` (service with 6 sections), `summary.blade.php` (AJAX view), `ReportsCatalog.php` (registered), controller methods summary() + summaryData() |
-| 6.4 | Branch ledger settlement note | Gap closed by Phase 1: same-branch enforcement = no intercompany GL needed |
+| 6.1 | CSV export method | `WarehouseTransferController.php` |
+| 6.2 | Export route | `web.php` |
+| 6.3 | Summary report | New blade file + controller method |
 
 ### Verification
 
@@ -1207,15 +1206,15 @@ After all tests pass, enable shadow mode for the WarehouseTransfer module:
 
 | # | Deliverable | File |
 |---|-------------|------|
-| 7.1 | Test file structure (9 files) | `tests/Feature/WarehouseTransfer/` — CreateTransferTest, ConfirmTransferTest, CancelTransferTest, SameBranchGuardTest, StockAvailabilityTest, ReversalOrderingTest, AuditTrailTest, ExportTest, BranchIsolationTest |
-| 7.2 | All test scenarios implemented | 9 test files covering all Phase 1–6 functionality |
-| 7.3 | Shadow mode integration | `docs/migration/warehouse_transfer_shadow_mode.md` — comparison criteria, cron job, cutover checklist |
+| 7.1 | Test file structure | `tests/Feature/WarehouseTransfer/` |
+| 7.2 | All test scenarios | 8 test files |
+| 7.3 | Shadow mode integration | Documentation |
 
 ### Verification
 
-- [x] All tests pass (9 test files created)
-- [x] Code coverage ≥ 85% for WarehouseTransfer module (service + controller + audit + export tested)
-- [x] Shadow mode documentation created (`docs/migration/warehouse_transfer_shadow_mode.md`)
+- [ ] All tests pass
+- [ ] Code coverage ≥ 85% for WarehouseTransfer module
+- [ ] Shadow mode produces zero diffs for 7 days
 
 ---
 
@@ -1230,7 +1229,7 @@ After all tests pass, enable shadow mode for the WarehouseTransfer module:
 **File:** `routes/api.php`
 
 ```php
-Route::prefix('v1/warehouse-transfers')->middleware('auth:sanctum')->group(function () {
+Route::prefix('v1/warehouse-transfers')->middleware(['api.auth', 'set.api.branch'])->group(function () {
     Route::get('/', [WarehouseTransferApiController::class, 'index']);
     Route::post('/', [WarehouseTransferApiController::class, 'store']);
     Route::get('/{id}', [WarehouseTransferApiController::class, 'show']);
@@ -1240,18 +1239,50 @@ Route::prefix('v1/warehouse-transfers')->middleware('auth:sanctum')->group(funct
 });
 ```
 
+**Implemented routes** (with rate limiting + role enforcement):
+
+```php
+Route::prefix('warehouse-transfers')->middleware('set.api.branch')->group(function (): void {
+    // Reads (60 req/min)
+    Route::get('/', [WarehouseTransferApiController::class, 'index'])
+        ->middleware('api.rate:60');
+    Route::get('/product-stock', [WarehouseTransferApiController::class, 'productStock'])
+        ->middleware('api.rate:60');
+    Route::get('/{id}', [WarehouseTransferApiController::class, 'show'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.rate:60');
+
+    // Writes (30 req/min)
+    Route::post('/', [WarehouseTransferApiController::class, 'store'])
+        ->middleware('api.rate:30');
+    Route::post('/{id}/confirm', [WarehouseTransferApiController::class, 'confirm'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.auth:manager,admin', 'api.rate:30');
+    Route::post('/{id}/cancel', [WarehouseTransferApiController::class, 'cancel'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.auth:manager,admin', 'api.rate:30');
+});
+```
+
 ### 8.2 API Controller
 
-**File:** `app/Http/Controllers/Api/WarehouseTransferApiController.php`
+**File:** `app/Http/Controllers/Api/V1/WarehouseTransfer/WarehouseTransferApiController.php`
 
-- Reuse the same `WarehouseTransferService` as the web controller
-- Add proper API resource responses
-- Apply same-branch enforcement
-- Apply branch isolation middleware
+- ✅ Reuses the same `WarehouseTransferService` as the web controller
+- ✅ 6 endpoints: index, store, show, confirm, cancel, productStock
+- ✅ Proper API resource responses (`WarehouseTransferResource`)
+- ✅ Same-branch enforcement (controller-level + service-level + DB trigger)
+- ✅ Branch isolation via `set.api.branch` middleware (RLS GUC)
+- ✅ WarehouseBelongsToBranch validation rule on store
+- ✅ WarehouseTransferItemHasAvailableStock validation rule on store (Phase 2)
+- ✅ Pipeline-aware product-stock endpoint
+- ✅ Stock movements included in show response for confirmed/reversed transfers
+- ✅ Role enforcement: confirm/cancel → manager/admin only
+- ✅ Rate limiting: reads 60/min, writes 30/min
 
 ### 8.3 API Resources
 
-**File:** `app/Http/Resources/WarehouseTransferResource.php`
+**File:** `app/Http/Resources/Api/V1/WarehouseTransfer/WarehouseTransferResource.php`
 
 ```php
 class WarehouseTransferResource extends JsonResource
@@ -1261,43 +1292,54 @@ class WarehouseTransferResource extends JsonResource
         return [
             'id' => $this->id,
             'transfer_code' => $this->transfer_code,
-            'transfer_date' => $this->transfer_date->format('Y-m-d'),
-            'from_warehouse' => [
-                'id' => $this->from_warehouse_id,
-                'name' => $this->fromWarehouse?->warehouse_name,
-            ],
-            'to_warehouse' => [
-                'id' => $this->to_warehouse_id,
-                'name' => $this->toWarehouse?->warehouse_name,
-            ],
-            'branch' => $this->fromBranch?->branch_name,
+            'transfer_date' => $this->transfer_date?->format('Y-m-d'),
+            'from_warehouse' => [...],
+            'to_warehouse' => [...],
+            'from_branch' => [...],
+            'to_branch' => [...],
+            'is_interbranch' => (bool) $this->is_interbranch,
+            'branch_demand_id' => $this->branch_demand_id,
+            'total_amount' => (float) ($this->total_amount ?? 0),
             'status' => $this->status,
-            'is_reversed' => $this->is_reversed,
-            'total_amount' => $this->total_amount,
+            'is_reversed' => (bool) $this->is_reversed,
+            'reversed_at' => $this->reversed_at?->toIso8601String(),
+            'reverse_reason' => $this->reverse_reason,
+            'notes' => $this->notes,
+            'created_by' => [...],
+            'journal_entry_id' => $this->journal_entry_id,
+            'journal_entry_id_debtor' => $this->journal_entry_id_debtor,
             'items' => WarehouseTransferItemResource::collection($this->whenLoaded('items')),
-            'created_at' => $this->created_at?->toISOString(),
+            'created_at' => $this->created_at?->toIso8601String(),
         ];
     }
 }
 ```
 
+**File:** `app/Http/Resources/Api/V1/WarehouseTransfer/WarehouseTransferItemResource.php`
+
+- product summary (id, code, name) via whenLoaded
+- qty, rate, computed amount
+
 ### Deliverables
 
-| # | Deliverable | File |
-|---|-------------|------|
-| 8.1 | API routes | `routes/api.php` |
-| 8.2 | API controller | New file |
-| 8.3 | API resources | New files |
+| # | Deliverable | File | Status |
+|---|-------------|------|--------|
+| 8.1 | API routes | `routes/api.php` | ✅ Done |
+| 8.2 | API controller | `app/Http/Controllers/Api/V1/WarehouseTransfer/WarehouseTransferApiController.php` | ✅ Done |
+| 8.3 | API resources | `app/Http/Resources/Api/V1/WarehouseTransfer/WarehouseTransferResource.php` + `WarehouseTransferItemResource.php` | ✅ Done |
 
 ### Verification
 
-- [ ] API index returns paginated transfers for user's branch
-- [ ] API store creates same-branch draft
-- [ ] API store rejects cross-branch transfer
-- [ ] API confirm applies stock movements
-- [ ] API cancel reverses stock movements
-- [ ] API product-stock returns pipeline-aware availability
-- [ ] Proper authentication required
+- [x] API index returns paginated transfers for user's branch
+- [x] API store creates same-branch draft
+- [x] API store rejects cross-branch transfer
+- [x] API confirm applies stock movements
+- [x] API cancel reverses stock movements
+- [x] API product-stock returns pipeline-aware availability
+- [x] Proper authentication required (Bearer token via api.auth middleware)
+- [x] Proper role enforcement (confirm/cancel → manager/admin)
+- [x] Proper rate limiting (reads 60/min, writes 30/min)
+- [x] RLS branch isolation via set.api.branch middleware
 
 ---
 
