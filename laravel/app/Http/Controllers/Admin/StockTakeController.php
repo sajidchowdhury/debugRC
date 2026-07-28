@@ -893,34 +893,44 @@ class StockTakeController extends Controller
         $warehouseId = $request->filled('warehouse_id') ? (int) $request->input('warehouse_id') : null;
         $summary = $this->abcService->getSummary($warehouseId);
 
+        // Guard: if the Phase 5 MV hasn't been created yet (migration not
+        // applied), skip the direct MV queries and render the report with
+        // empty collections + a "not computed yet" banner. Prevents
+        // SQLSTATE[42P01] on the ABC report screen.
+        $abcViewExists = $this->abcService->viewExists();
+
         // Per-warehouse breakdown table (for the report's main grid).
-        $perWarehouse = DB::table('mv_product_abc_classification as abc')
-            ->join('warehouses as w', 'w.id', '=', 'abc.warehouse_id')
-            ->selectRaw('
-                abc.warehouse_id,
-                w.warehouse_name,
-                abc.abc_class,
-                COUNT(*) AS product_count,
-                COALESCE(SUM(abc.annual_usage_value), 0) AS total_usage_value
-            ')
-            ->groupBy('abc.warehouse_id', 'w.warehouse_name', 'abc.abc_class')
-            ->orderBy('abc.warehouse_id')
-            ->orderBy('abc.abc_class')
-            ->get();
+        $perWarehouse = $abcViewExists
+            ? DB::table('mv_product_abc_classification as abc')
+                ->join('warehouses as w', 'w.id', '=', 'abc.warehouse_id')
+                ->selectRaw('
+                    abc.warehouse_id,
+                    w.warehouse_name,
+                    abc.abc_class,
+                    COUNT(*) AS product_count,
+                    COALESCE(SUM(abc.annual_usage_value), 0) AS total_usage_value
+                ')
+                ->groupBy('abc.warehouse_id', 'w.warehouse_name', 'abc.abc_class')
+                ->orderBy('abc.warehouse_id')
+                ->orderBy('abc.abc_class')
+                ->get()
+            : collect();
 
         $warehouses = \App\Models\Warehouse::active()->orderBy('warehouse_name')->get(['id', 'warehouse_name']);
 
         // Top A-class products (the high-value movers worth cycle-counting
         // most frequently). Limited to 50 for the report.
-        $topProducts = DB::table('mv_product_abc_classification as abc')
-            ->join('products as p', 'p.id', '=', 'abc.product_id')
-            ->join('warehouses as w', 'w.id', '=', 'abc.warehouse_id')
-            ->when($warehouseId, fn($q, $wid) => $q->where('abc.warehouse_id', $wid))
-            ->where('abc.abc_class', 'A')
-            ->orderByDesc('abc.annual_usage_value')
-            ->limit(50)
-            ->select('p.product_code', 'p.product_name', 'w.warehouse_name', 'abc.annual_usage_value', 'abc.abc_class')
-            ->get();
+        $topProducts = $abcViewExists
+            ? DB::table('mv_product_abc_classification as abc')
+                ->join('products as p', 'p.id', '=', 'abc.product_id')
+                ->join('warehouses as w', 'w.id', '=', 'abc.warehouse_id')
+                ->when($warehouseId, fn($q, $wid) => $q->where('abc.warehouse_id', $wid))
+                ->where('abc.abc_class', 'A')
+                ->orderByDesc('abc.annual_usage_value')
+                ->limit(50)
+                ->select('p.product_code', 'p.product_name', 'w.warehouse_name', 'abc.annual_usage_value', 'abc.abc_class')
+                ->get()
+            : collect();
 
         return view('admin.stock-take.abc-report', [
             'title'         => 'Stock Take — ABC Classification',
@@ -932,6 +942,7 @@ class StockTakeController extends Controller
             'thresholdA'    => (float) ($this->policyService->all()['stock_take.abc_threshold_a'] ?? 0.80),
             'thresholdB'    => (float) ($this->policyService->all()['stock_take.abc_threshold_b'] ?? 0.95),
             'lookbackDays'  => (int) ($this->policyService->all()['stock_take.abc_lookback_days'] ?? 365),
+            'abcViewExists' => $abcViewExists,
         ]);
     }
 
@@ -1309,6 +1320,17 @@ class StockTakeController extends Controller
                 $query->whereIn('p.group_id', $payload['group_ids'] ?? []);
                 break;
             case 'abc':
+                // Guard: if the Phase 5 MV doesn't exist, the JOIN would
+                // throw SQLSTATE[42P01]. Throw a clear validation error
+                // instead — the preview AJAX catch returns 422 with this
+                // message so the user sees "ABC not computed yet" rather
+                // than a raw SQL error.
+                if (! $this->abcService->viewExists()) {
+                    throw new \InvalidArgumentException(
+                        'ABC classification has not been computed yet. Run `php artisan migrate` '
+                        . 'and click "Refresh ABC" on the ABC report before previewing an ABC-scope session.'
+                    );
+                }
                 $classes = $payload['abc_classes'] ?? ['A', 'B', 'C'];
                 $query->join('mv_product_abc_classification as abc', function ($join) use ($warehouseId) {
                     $join->on('abc.product_id', '=', 'p.id')

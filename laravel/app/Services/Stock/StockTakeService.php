@@ -524,6 +524,20 @@ class StockTakeService
                 break;
 
             case 'abc':
+                // Guard: if the Phase 5 MV doesn't exist, the INNER JOIN
+                // would throw SQLSTATE[42P01]. Fail with a clear, actionable
+                // message instead — the user needs to run the migration or
+                // refresh the ABC view before an ABC-scope session can be
+                // set up. (Silently returning 0 products would be worse:
+                // the user would post an empty count with no variance.)
+                if (! $this->abcService->viewExists()) {
+                    throw new \RuntimeException(
+                        'ABC classification has not been computed yet. '
+                        . 'Run `php artisan migrate` to create the materialized view, '
+                        . 'then click "Refresh ABC" on the ABC report (or wait for the '
+                        . 'nightly pg_cron job) before creating an ABC-scope stock take session.'
+                    );
+                }
                 $classes = $this->normalizeStringList($payload['abc_classes'] ?? ['A', 'B', 'C']);
                 // INNER JOIN → only products with an ABC classification row
                 // for THIS warehouse appear. The mv is keyed by (warehouse_id,

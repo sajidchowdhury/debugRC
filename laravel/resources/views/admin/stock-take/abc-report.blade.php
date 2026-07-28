@@ -35,6 +35,22 @@
         </div>
     </header>
 
+    @if (empty($abcViewExists))
+    <div class="alert alert-warning d-flex align-items-start gap-2 mb-3" role="alert">
+        <i class="fas fa-triangle-exclamation fs-4 mt-1"></i>
+        <div>
+            <strong>ABC classification has not been computed yet.</strong>
+            The <code>mv_product_abc_classification</code> materialized view does not exist in the
+            database — the Phase 5 migration
+            (<code>2025_07_29_000001_add_cycle_count_scope_and_abc_classification</code>) has not been
+            applied. Run <code>php artisan migrate</code> to create the view, then click
+            <strong>Refresh now</strong> (or wait for the nightly pg_cron job) to populate it. Until
+            then, ABC-scope cycle counts are unavailable; other scopes (full / category / group /
+            ad_hoc / negative_only / zero_only) work normally.
+        </div>
+    </div>
+    @endif
+
     {{-- Policy + freshness summary --}}
     <div class="row g-3 mb-3">
         <div class="col-md-3">

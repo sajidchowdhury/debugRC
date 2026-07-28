@@ -37,6 +37,47 @@ use Illuminate\Support\Facades\DB;
 class AbcClassificationService
 {
     /**
+     * Does the mv_product_abc_classification materialized view exist in the
+     * database?
+     *
+     * Guards every read path so that a missing view (e.g. the Phase 5
+     * migration hasn't been applied yet, or the view was dropped during a
+     * migration replay) degrades gracefully — the create-form ABC helper
+     * card shows "not computed yet" instead of crashing the whole page with
+     * a SQLSTATE[42P01] Undefined table error.
+     *
+     * Checked against pg_matviews (PostgreSQL's materialized-view catalog)
+     * rather than a DuckDB-style information_schema lookup, because MVs are
+     * not exposed in information_schema.views in PG.
+     */
+    public function viewExists(): bool
+    {
+        return (bool) DB::table('pg_matviews')
+            ->where('matviewname', 'mv_product_abc_classification')
+            ->exists();
+    }
+
+    /**
+     * Empty-summary shape returned when the view doesn't exist yet. Kept as
+     * a private helper so every guard returns the exact same structure the
+     * real query would return for an empty view — callers (Blade, JSON API)
+     * never need to branch on "view missing vs view empty".
+     */
+    private function emptySummary(): array
+    {
+        return [
+            'classes' => [
+                'A' => ['count' => 0, 'total_usage_value' => 0.0, 'share' => 0.0],
+                'B' => ['count' => 0, 'total_usage_value' => 0.0, 'share' => 0.0],
+                'C' => ['count' => 0, 'total_usage_value' => 0.0, 'share' => 0.0],
+            ],
+            'total_products'    => 0,
+            'total_usage_value' => 0.0,
+            'computed_at'       => null,
+        ];
+    }
+
+    /**
      * Refresh the materialized view. Uses CONCURRENTLY so readers (cycle-
      * count scope queries) are never blocked. Requires the UNIQUE index on
      * (warehouse_id, product_id), which the migration creates.
@@ -50,6 +91,21 @@ class AbcClassificationService
      */
     public function refresh(): array
     {
+        // Pre-check: if the MV doesn't exist, REFRESH CONCURRENTLY would
+        // throw SQLSTATE[42P01]. Return a clear, actionable error instead
+        // so the ABC report's "Refresh now" button shows a helpful message
+        // ("run php artisan migrate") rather than a raw PG error string.
+        if (! $this->viewExists()) {
+            return [
+                'refreshed'   => false,
+                'computed_at' => null,
+                'rows'        => 0,
+                'error'       => 'The materialized view mv_product_abc_classification does not exist. '
+                    . 'Run `php artisan migrate` to apply the Phase 5 migration '
+                    . '(2025_07_29_000001_add_cycle_count_scope_and_abc_classification) first.',
+            ];
+        }
+
         try {
             DB::statement('REFRESH MATERIALIZED VIEW CONCURRENTLY mv_product_abc_classification');
         } catch (\Throwable $e) {
@@ -84,6 +140,14 @@ class AbcClassificationService
      */
     public function getSummary(?int $warehouseId = null): array
     {
+        // Guard: if the Phase 5 migration hasn't been applied (or the view
+        // was dropped), return an empty summary instead of throwing
+        // SQLSTATE[42P01]. The create-form ABC card renders "not computed
+        // yet"; the ABC report shows an empty table with a banner.
+        if (! $this->viewExists()) {
+            return $this->emptySummary();
+        }
+
         $query = DB::table('mv_product_abc_classification')
             ->selectRaw('
                 abc_class,
@@ -137,6 +201,9 @@ class AbcClassificationService
         if (empty($productIds)) {
             return $out;
         }
+        if (! $this->viewExists()) {
+            return $out;
+        }
 
         $rows = DB::table('mv_product_abc_classification')
             ->where('warehouse_id', $warehouseId)
@@ -156,6 +223,9 @@ class AbcClassificationService
      */
     public function getLastComputedAt(): ?string
     {
+        if (! $this->viewExists()) {
+            return null;
+        }
         $value = DB::table('mv_product_abc_classification')->max('computed_at');
         return $value ?: null;
     }
@@ -165,6 +235,9 @@ class AbcClassificationService
      */
     public function rowCount(): int
     {
+        if (! $this->viewExists()) {
+            return 0;
+        }
         return (int) DB::table('mv_product_abc_classification')->count();
     }
 }
