@@ -248,10 +248,66 @@ SQL);
         // ── 6. pg_cron job: nightly refresh at 01:30 ────────────────────
         // Runs BEFORE the 02:00 stale-draft job and the 03:00 purge so the
         // ABC data is fresh for the next business day's cycle-count planning.
-        // Wrapped in try/catch: pg_cron may not be installed (the migration
-        // 2025_01_20_000009 enables it but on some hosted PG it's absent).
-        // The AbcClassificationService::refresh() method is the Laravel-
-        // scheduler fallback (artisan command or manual call).
+        //
+        // *** CRITICAL — transaction-safety fix (SQLSTATE[0A000] class bug) ***
+        // pg_cron may NOT be installed (it requires shared_preload_libraries
+        // in postgresql.conf, which is not set on all hosted PG instances).
+        // The previous version called `SELECT cron.schedule(...)` directly in
+        // a bare try/catch — but that is a FALSE SAFETY NET. Here is why:
+        //
+        //   1. Laravel wraps this entire up() in a single DB transaction
+        //      (PG supports DDL transactions).
+        //   2. All DDL above (columns, functions, MV, indexes, policy seeds)
+        //      executes successfully and is staged in the transaction.
+        //   3. `SELECT cron.schedule(...)` fails with "schema 'cron' does not
+        //      exist" because the pg_cron extension is absent.
+        //   4. This failure POISONS the PostgreSQL transaction — it enters
+        //      the 'aborted' state. EVERY subsequent statement in the
+        //      transaction fails with "current transaction is aborted".
+        //   5. The PHP try/catch catches the PDOException, so up() returns
+        //      normally — Laravel never sees a failure.
+        //   6. Laravel calls COMMIT. PG detects the aborted state and executes
+        //      ROLLBACK instead. **ALL DDL is rolled back** — the columns,
+        //      the 3 helper functions, the mv_product_abc_classification
+        //      materialized view, the 3 indexes, and the 3 policy rows.
+        //   7. PDO's commit() returns TRUE (PG's ROLLBACK-on-aborted-COMMIT
+        //      returns PGRES_COMMAND_OK, not an error), so Laravel thinks
+        //      the migration committed successfully.
+        //   8. Laravel inserts the migration record (in a new autocommit
+        //      transaction) → migration marked as "Ran".
+        //
+        //   RESULT: `php artisan migrate:status` shows this migration as
+        //   "Ran", but `SELECT * FROM pg_matviews` shows NO
+        //   mv_product_abc_classification. Every DDL statement was silently
+        //   rolled back. This is exactly the bug reported by the user.
+        //
+        // FIX (two layers of protection):
+        //   (a) PRE-CHECK: query pg_extension for 'pg_cron' BEFORE calling
+        //       cron.schedule. If the extension is absent, skip the
+        //       cron.schedule entirely — never let it throw inside the
+        //       migration transaction.
+        //   (b) SAVEPOINT: even when pg_cron IS installed, wrap the
+        //       cron.schedule in a SAVEPOINT so that if it fails for any
+        //       unexpected reason (permission error, duplicate job, etc.),
+        //       only the savepoint rolls back — the outer migration
+        //       transaction stays healthy and all DDL is preserved.
+        //
+        // The AbcClassificationService::refresh() method (Laravel-scheduler
+        // fallback) handles refreshes when pg_cron is absent, so skipping
+        // the cron.schedule here does NOT break the feature.
+        $pgCronInstalled = DB::table('pg_extension')
+            ->where('extname', 'pg_cron')
+            ->exists();
+
+        if (! $pgCronInstalled) {
+            logger()->warning('Phase 5: pg_cron extension is not installed — ABC nightly refresh job NOT scheduled. Use AbcClassificationService::refresh() via the Laravel scheduler (or the manual "Refresh ABC" button on /admin/stock-take/abc-report) as the fallback. All DDL (materialized view + indexes + helper functions + policy seeds) was applied successfully.');
+            return;
+        }
+
+        // pg_cron IS installed — schedule the nightly refresh. Wrapped in a
+        // SAVEPOINT so an unexpected cron.schedule failure cannot poison the
+        // outer migration transaction (which would roll back all DDL).
+        DB::statement('SAVEPOINT abc_cron_schedule');
         try {
             DB::statement(<<<'SQL'
 SELECT cron.schedule(
@@ -260,8 +316,13 @@ SELECT cron.schedule(
     $$REFRESH MATERIALIZED VIEW CONCURRENTLY mv_product_abc_classification$$
 )
 SQL);
+            DB::statement('RELEASE SAVEPOINT abc_cron_schedule');
         } catch (\Throwable $e) {
-            logger()->warning('Phase 5: pg_cron ABC refresh job not scheduled — use AbcClassificationService::refresh() via Laravel scheduler', [
+            // Roll back to the savepoint — this restores the transaction to
+            // a healthy state so the outer COMMIT (issued by Laravel after
+            // up() returns) commits ALL the DDL above, not roll it back.
+            DB::statement('ROLLBACK TO SAVEPOINT abc_cron_schedule');
+            logger()->warning('Phase 5: pg_cron ABC refresh job not scheduled (cron.schedule failed) — use AbcClassificationService::refresh() via Laravel scheduler. All DDL was applied successfully.', [
                 'error' => $e->getMessage(),
             ]);
         }
@@ -291,12 +352,21 @@ SQL);
         ])->delete();
 
         // Drop the count_scope CHECK + columns.
+        // Uses DROP COLUMN IF EXISTS (raw SQL) instead of Blueprint's
+        // dropColumn() because down() may run on a database where the
+        // columns were NEVER created (the transaction-poisoning bug in the
+        // original up() rolled back the columns along with the MV).
+        // Blueprint's dropColumn() emits a plain DROP COLUMN which throws
+        // SQLSTATE[42703] if the column is absent; IF EXISTS makes it a
+        // safe no-op so rollback always succeeds.
         DB::statement(
             "ALTER TABLE stock_take_sessions "
             . "DROP CONSTRAINT IF EXISTS stock_take_sessions_count_scope_check"
         );
-        Schema::table('stock_take_sessions', function (Blueprint $table) {
-            $table->dropColumn(['count_scope', 'count_scope_payload']);
-        });
+        DB::statement(
+            'ALTER TABLE stock_take_sessions '
+            . 'DROP COLUMN IF EXISTS count_scope, '
+            . 'DROP COLUMN IF EXISTS count_scope_payload'
+        );
     }
 };
