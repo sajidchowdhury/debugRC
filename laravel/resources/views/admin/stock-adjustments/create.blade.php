@@ -146,12 +146,14 @@
                     <table class="table table-sm table-hover align-middle mb-0" id="itemsTable">
                         <thead class="table-light">
                             <tr>
-                                <th style="width:38%;">Product</th>
-                                <th class="text-end" style="width:10%;">Qty</th>
-                                <th class="text-end" style="width:11%;">Rate (Tk)</th>
-                                <th class="text-end" style="width:11%;">Available</th>
-                                <th class="text-end" style="width:13%;">Amount (Tk)</th>
-                                <th style="width:15%;">Reason</th>
+                                <th style="width:26%;">Product</th>
+                                <th class="text-end" style="width:8%;">Qty</th>
+                                <th style="width:11%;">UOM</th>
+                                <th class="text-end" style="width:10%;">Base qty</th>
+                                <th class="text-end" style="width:9%;">Rate (Tk)</th>
+                                <th class="text-end" style="width:9%;">Available</th>
+                                <th class="text-end" style="width:11%;">Amount (Tk)</th>
+                                <th style="width:14%;">Reason</th>
                                 <th class="text-center" style="width:2%;"></th>
                             </tr>
                         </thead>
@@ -160,7 +162,7 @@
                         </tbody>
                         <tfoot>
                             <tr class="table-light fw-bold">
-                                <td colspan="4" class="text-end">Total</td>
+                                <td colspan="6" class="text-end">Total</td>
                                 <td class="text-end" id="totalAmount">0.00</td>
                                 <td colspan="2"></td>
                             </tr>
@@ -201,6 +203,7 @@
 <script>
 $(function () {
     var productRateUrl = '{{ route("admin.stock-adjustments.product-rate") }}';
+    var productUomsUrl = '{{ route("admin.stock-adjustments.product-uoms") }}';
     var $form        = $('#adjustmentForm');
     var $warehouse   = $('#warehouse_id');
     var $tbody       = $('#itemsBody');
@@ -227,7 +230,7 @@ $(function () {
 
         var $tdProduct = $('<td>').append($sel);
 
-        // Qty input
+        // Qty input (the qty ENTERED in the selected UOM)
         var $qty = $('<input>').attr({
             type: 'number',
             name: 'items[' + idx + '][qty]',
@@ -238,7 +241,23 @@ $(function () {
             placeholder: '0.000'
         });
 
-        // Rate input
+        // Phase 5 — UOM dropdown (populated via AJAX on product select).
+        // Holds the available UOMs for the selected product + their factors.
+        var $uom = $('<select>').attr({
+            name: 'items[' + idx + '][uom_id]',
+            class: 'form-select form-select-sm uom-select',
+            'data-factor': '1'
+        }).append($('<option>').val('').text('— unit —'));
+
+        // Phase 5 — Base qty (read-only display = qty × factor)
+        var $baseQty = $('<input>').attr({
+            type: 'text',
+            class: 'form-control form-control-sm text-end base-qty-input bg-light',
+            readonly: true,
+            placeholder: '0.000'
+        });
+
+        // Rate input (per BASE unit)
         var $rate = $('<input>').attr({
             type: 'number',
             name: 'items[' + idx + '][rate]',
@@ -256,7 +275,7 @@ $(function () {
             placeholder: '—'
         });
 
-        // Amount (display only)
+        // Amount (display only) = qty_base × rate
         var $amt = $('<input>').attr({
             type: 'text',
             class: 'form-control form-control-sm text-end amount-input bg-light',
@@ -282,6 +301,8 @@ $(function () {
 
         $tr.append($tdProduct)
            .append($('<td class="text-end">').append($qty))
+           .append($('<td>').append($uom))
+           .append($('<td class="text-end">').append($baseQty))
            .append($('<td class="text-end">').append($rate))
            .append($('<td class="text-end">').append($avail))
            .append($('<td class="text-end">').append($amt))
@@ -297,6 +318,7 @@ $(function () {
         $sel.on('select2:select', function () { onProductChange($tr); });
         $qty.on('input',  function () { recomputeRow($tr); });
         $rate.on('input', function () { recomputeRow($tr); });
+        $uom.on('change', function () { onUomChange($tr); });
         $rm.on('click',   function () {
             $tr.remove();
             recomputeTotal();
@@ -306,12 +328,71 @@ $(function () {
         return $tr;
     }
 
+    // Phase 5 — populate the UOM dropdown for a product + default to base.
+    function loadUoms($tr, pid, selectedUomId) {
+        var $uom = $tr.find('.uom-select');
+        $uom.prop('disabled', true);
+        if (!pid) {
+            $uom.empty().append($('<option>').val('').text('— unit —'))
+                .attr('data-factor', '1').prop('disabled', false);
+            recomputeRow($tr);
+            return;
+        }
+        $.ajax({
+            url: productUomsUrl,
+            type: 'GET',
+            data: { product_id: pid },
+            dataType: 'json'
+        }).done(function (data) {
+            $uom.empty();
+            if (!data.uoms || data.uoms.length === 0) {
+                // No base unit found (product.unit not in units_of_measure).
+                // Fall back to a single "base" option so the form still submits.
+                $uom.append($('<option>').val('').text('base'));
+                $uom.attr('data-factor', '1');
+            } else {
+                data.uoms.forEach(function (u) {
+                    var $opt = $('<option>')
+                        .val(u.uom_id)
+                        .text(u.code + (u.is_base ? ' (base)' : ''))
+                        .attr('data-factor', u.factor);
+                    if (selectedUomId && String(selectedUomId) === String(u.uom_id)) {
+                        $opt.attr('selected', 'selected');
+                    } else if (u.is_base && !selectedUomId) {
+                        $opt.attr('selected', 'selected');
+                    }
+                    $uom.append($opt);
+                });
+                // Sync the row-level factor from the selected option.
+                var $selOpt = $uom.find('option:selected');
+                $uom.attr('data-factor', $selOpt.attr('data-factor') || '1');
+            }
+            $uom.prop('disabled', false);
+            recomputeRow($tr);
+        }).fail(function () {
+            $uom.empty().append($('<option>').val('').text('error'));
+            $uom.attr('data-factor', '1').prop('disabled', false);
+            recomputeRow($tr);
+        });
+    }
+
+    // Phase 5 — when the UOM dropdown changes, sync the factor + recompute.
+    function onUomChange($tr) {
+        var $uom = $tr.find('.uom-select');
+        var factor = parseFloat($uom.find('option:selected').attr('data-factor')) || 1;
+        $uom.attr('data-factor', factor);
+        recomputeRow($tr);
+    }
+
     function onProductChange($tr) {
         var pid = parseInt($tr.find('.product-select').val(), 10);
         var wid = parseInt($warehouse.val(), 10);
         var $rate  = $tr.find('.rate-input');
         var $avail = $tr.find('.available-input');
         var $amt   = $tr.find('.amount-input');
+
+        // Phase 5 — always (re)load the UOM dropdown for this product.
+        loadUoms($tr, pid, null);
 
         $rate.prop('disabled', true);
         $avail.val('loading…');
@@ -342,9 +423,13 @@ $(function () {
     }
 
     function recomputeRow($tr) {
-        var qty  = parseFloat($tr.find('.qty-input').val())  || 0;
-        var rate = parseFloat($tr.find('.rate-input').val()) || 0;
-        var amt  = qty * rate;
+        var qty   = parseFloat($tr.find('.qty-input').val())  || 0;
+        var factor = parseFloat($tr.find('.uom-select').attr('data-factor')) || 1;
+        var rate  = parseFloat($tr.find('.rate-input').val()) || 0;
+        // Phase 5 — base qty = entered qty × factor. Amount = base qty × rate.
+        var baseQty = qty * factor;
+        var amt = baseQty * rate;
+        $tr.find('.base-qty-input').val(baseQty.toFixed(4));
         $tr.find('.amount-input').val(amt.toFixed(2));
         recomputeTotal();
     }
@@ -375,10 +460,11 @@ $(function () {
             if ($tr.find('.product-select').val()) {
                 onProductChange($tr);
             } else {
-                // No product yet — clear rate/available
+                // No product yet — clear rate/available/base-qty
                 $tr.find('.rate-input').val('');
                 $tr.find('.available-input').val('—');
                 $tr.find('.amount-input').val('0.00');
+                $tr.find('.base-qty-input').val('');
             }
         });
         recomputeTotal();
@@ -395,9 +481,19 @@ $(function () {
             if (item.qty)  $tr.find('.qty-input').val(item.qty);
             if (item.rate) $tr.find('.rate-input').val(item.rate);
             if (item.reason) $tr.find('.reason-input').val(item.reason);
-            // Re-fetch rate/available if both product & warehouse are set
+            // Re-fetch rate/available + UOMs if product is set.
             if (item.product_id && $warehouse.val()) {
                 onProductChange($tr);
+                // After the AJAX UOM load, re-apply the old uom_id selection.
+                if (item.uom_id) {
+                    // loadUoms is async; wait for it via a small timeout.
+                    setTimeout(function () {
+                        $tr.find('.uom-select').val(item.uom_id).trigger('change');
+                    }, 400);
+                }
+            } else if (item.product_id) {
+                loadUoms($tr, item.product_id, item.uom_id || null);
+                recomputeRow($tr);
             } else {
                 recomputeRow($tr);
             }

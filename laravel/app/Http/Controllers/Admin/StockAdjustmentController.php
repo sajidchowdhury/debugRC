@@ -8,6 +8,7 @@ use App\Models\Warehouse;
 use App\Services\Stock\StockAdjustmentPolicyService;
 use App\Services\Stock\StockAdjustmentService;
 use App\Services\Stock\StockService;
+use App\Services\Stock\UomConversionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -48,7 +49,8 @@ class StockAdjustmentController extends Controller
     public function __construct(
         private StockAdjustmentService $adjustmentService,
         private StockService $stockService,
-        private StockAdjustmentPolicyService $policy
+        private StockAdjustmentPolicyService $policy,
+        private UomConversionService $uom  // Phase 5 — UOM dropdown data
     ) {}
 
     /**
@@ -148,6 +150,9 @@ class StockAdjustmentController extends Controller
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
             'items.*.qty' => 'required|numeric|min:0.001',
+            // Phase 5 — optional UOM the qty was entered in. When absent,
+            // the service treats the qty as already in the base unit.
+            'items.*.uom_id' => 'nullable|integer|exists:units_of_measure,id',
             'items.*.rate' => 'nullable|numeric|min:0',
             'items.*.reason' => 'nullable|string|max:500',
         ]);
@@ -184,7 +189,8 @@ class StockAdjustmentController extends Controller
     public function show(int $id)
     {
         $adjustment = StockAdjustment::with([
-            'items.product', 'warehouse.branch', 'branch', 'journalEntry.lines.ledger',
+            'items.product', 'items.uom',  // Phase 5 — eager-load UOM for the items table
+            'warehouse.branch', 'branch', 'journalEntry.lines.ledger',
             'submittedBy', 'approvedBy', 'confirmedBy',
             'auditLogs.actor',  // Phase 4 — audit timeline (RLS-scoped by branch)
         ])->findOrFail($id);
@@ -414,6 +420,35 @@ class StockAdjustmentController extends Controller
         return response()->json([
             'rate' => round($rate, 2),
             'available_qty' => round($qty, 4),
+        ]);
+    }
+
+    /**
+     * Phase 5 (UOM) — AJAX: get the available UOMs + conversion factors for a
+     * product, for the create-form per-row UOM dropdown.
+     *
+     * Returns the base unit (factor 1, is_base=true) plus any
+     * product_uom_conversions rows whose to_uom = the product's base unit.
+     * The JS on the create form uses the `factor` to recompute the live
+     * "Base qty" read-only display = qty_entered × factor.
+     *
+     * Same branch-validation as getProductRate is NOT needed here (this
+     * endpoint returns no stock/financial data — only UOM metadata which is
+     * global config). The product_id existence is validated by the rule below.
+     */
+    public function getProductUoms(Request $request)
+    {
+        $request->validate([
+            'product_id' => 'required|integer|exists:products,id',
+        ]);
+
+        $productId = (int) $request->input('product_id');
+
+        $uoms = $this->uom->getProductUoms($productId);
+
+        return response()->json([
+            'product_id' => $productId,
+            'uoms' => $uoms,
         ]);
     }
 

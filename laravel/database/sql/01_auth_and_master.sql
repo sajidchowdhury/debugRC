@@ -154,6 +154,33 @@ CREATE TABLE products (
 CREATE INDEX idx_products_category ON products(category_id);
 CREATE INDEX idx_products_group ON products(group_id);
 
+-- Phase 5 (Stock Adjustment plan): Unit-of-Measure master data.
+-- units_of_measure is seeded from the products.unit CHECK enum (Pcs, Carton,
+-- KG, Bag, Dobe, Set) by migration 2025_08_06_000001_create_uom_tables.php.
+-- A product's BASE UNIT is the UOM whose code matches products.unit; it has
+-- an implicit factor of 1 (no product_uom_conversions row needed for the
+-- self-conversion).
+CREATE TABLE units_of_measure (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    code varchar(20) NOT NULL UNIQUE,   -- Pcs, Carton, KG, Bag, Dobe, Set
+    name varchar(60) NOT NULL,
+    type varchar(20) NOT NULL,          -- count, weight, volume
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE product_uom_conversions (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    product_id integer NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    from_uom_id integer NOT NULL REFERENCES units_of_measure(id),
+    to_uom_id integer NOT NULL REFERENCES units_of_measure(id),  -- usually the base
+    factor numeric(14,6) NOT NULL,   -- 1 from_uom = factor to_uom
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT puc_product_from_to_unique UNIQUE (product_id, from_uom_id, to_uom_id)
+);
+CREATE INDEX idx_puc_product ON product_uom_conversions(product_id);
+
 CREATE TABLE product_price_history (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     product_id integer NOT NULL REFERENCES products(id) ON DELETE CASCADE,

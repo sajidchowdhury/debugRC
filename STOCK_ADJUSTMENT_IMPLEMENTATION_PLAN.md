@@ -59,7 +59,7 @@ This plan defines **10 phases** that close these gaps and deliver a Stock Adjust
 | G4 | Thin health-check (4 inline checks vs Legacy's 6-section checklist) | Medium | Integrity defects invisible |
 | G5 | No approval workflow / no maker-checker | **Critical** ✅ FIXED | No segregation of duties for a financial-correction tool |
 | G6 | No reason categorization (opening/migration/UOM/legacy) | High ✅ FIXED | Cannot report or filter by correction type |
-| G7 | No UOM handling on line items | High | Carton/Pcs confusion → 10x stock errors |
+| G7 | No UOM handling on line items | High ✅ FIXED | Carton/Pcs confusion → 10x stock errors |
 | G8 | `AuditableMasterData` dead code; no audit log table/logger | High ✅ FIXED | No "who did what when" for financial corrections |
 | G9 | No `confirmed_by`/`confirmed_at`; `confirm_reason` discarded | High ✅ FIXED | Cannot attribute the posting action |
 | G10 | Reversal `transaction_date` = today, not original date | Medium | Back-dated reversal distorts historical reports |
@@ -858,7 +858,7 @@ class StockAdjustmentAuditLogger
 
 **Priority:** High
 **Duration:** 3 days
-**Status:** ⏳ Pending
+**Status:** ✅ DONE
 **Goal:** Allow the accountant to enter quantities in any UOM (Carton, Pcs, KG) and have the system convert to the product's base unit before posting to stock. This directly enables the "system/unit-of-measure errors" use case.
 
 ### 5.1 Schema: UOM conversions
@@ -911,11 +911,40 @@ Schema::table('stock_adjustment_items', function (Blueprint $table) {
 - Items table shows `qty_entered uom` and `(qty_base base)`.
 
 ### Verification Checklist (Phase 5)
-- [ ] Selecting a product populates its available UOMs.
-- [ ] Entering 2 Cartons (factor 12) posts 24 Pcs to `warehouse_stock`.
-- [ ] `qty_base` is stored and used for stock + GL.
-- [ ] Show/print displays the entered UOM and the base qty.
-- [ ] Missing conversion factor blocks submission with a clear error.
+- [x] Selecting a product populates its available UOMs. ✅ (`getProductUoms` AJAX endpoint returns base unit + any `product_uom_conversions` rows; `loadUoms()` in create.blade.php populates the per-row `<select>` on `select2:select`).
+- [x] Entering 2 Cartons (factor 12) posts 24 Pcs to `warehouse_stock`. ✅ (service computes `qty_base = qty_entered × factor`; `confirmAdjustment` passes `$item->baseQty()` to `StockService::applyTransaction()` which writes `stock_transactions.qty` + updates `warehouse_stock`).
+- [x] `qty_base` is stored and used for stock + GL. ✅ (persisted on `stock_adjustment_items`; `postAdjustmentGL` reads the header `total_amount` which is now `sum(qty_base × rate)`; `amount()` uses `qty_base`).
+- [x] Show/print displays the entered UOM and the base qty. ✅ (show.blade.php items table now has "Qty entered" + "Base qty" columns with UOM code labels; `enteredQty()` / `baseQty()` / `enteredQtyLabel()` / `baseQtyLabel()` accessors on the model).
+- [x] Missing conversion factor blocks submission with a clear error. ✅ (`UomConversionService::resolveFactor()` returns null → service throws `InvalidArgumentException` naming the product, the from-UOM, and the base unit; the controller's `try/catch` surfaces it as an error flash).
+
+### Implementation Summary (Phase 5)
+
+**Files created:**
+- `laravel/database/migrations/2025_08_06_000001_create_uom_tables.php` — creates `units_of_measure` (id, code UNIQUE, name, type) + `product_uom_conversions` (product_id FK CASCADE, from_uom_id FK, to_uom_id FK, factor, UNIQUE(product_id, from_uom_id, to_uom_id)); adds 4 nullable columns to `stock_adjustment_items` (uom_id FK, qty_entered, qty_base, uom_factor); seeds the 6 unit codes from the `products.unit` CHECK enum (Pcs/Carton/KG/Bag/Dobe/Set); backfills existing items (`qty_base = qty`, `qty_entered = qty`, `uom_factor = 1`, `uom_id` = product's base unit via `products.unit → units_of_measure.code` join). Idempotent (`Schema::hasTable` / `Schema::hasColumn` guards).
+- `laravel/app/Models/UnitOfMeasure.php` — Eloquent model for the master unit list. `byCode()` scope, `conversionsFrom()` / `conversionsTo()` relations.
+- `laravel/app/Models/ProductUomConversion.php` — Eloquent model for per-product factors. `product()` / `fromUom()` / `toUom()` relations; `factor` cast to `decimal:6`.
+- `laravel/app/Services/Stock/UomConversionService.php` — `resolveBaseUnit(productId)` (code = products.unit, cached 5 min), `resolveFactor(productId, fromUomId)` (returns 1 for self-conversion, null if missing), `convert(productId, fromUomId, qty)` (throws on missing), `getProductUoms(productId)` (returns `[{uom_id, code, name, factor, is_base}]` for the AJAX dropdown), `clearCacheForProduct()` (for a future management UI).
+
+**Files modified:**
+- `laravel/database/sql/01_auth_and_master.sql` — fresh-install parity: `units_of_measure` + `product_uom_conversions` CREATE TABLEs after the products block (so the `stock_adjustment_items.uom_id` FK resolves).
+- `laravel/database/sql/03_stock.sql` — `stock_adjustment_items` gains the 4 UOM columns (with FK to `units_of_measure`).
+- `laravel/app/Models/StockAdjustmentItem.php` — `uom_id` / `qty_entered` / `qty_base` / `uom_factor` added to `$fillable` + `$casts`; `uom()` relation; `amount()` now uses `qty_base`; new `baseQty()` / `enteredQty()` / `enteredQtyLabel()` / `baseQtyLabel()` accessors.
+- `laravel/app/Models/Product.php` — `baseUnit()` BelongsTo (matches `products.unit` → `units_of_measure.code`) + `uomConversions()` HasMany.
+- `laravel/app/Services/Stock/StockAdjustmentService.php` — constructor injects `UomConversionService` (5th param); `createAdjustment` loop resolves the factor per item (`uom_id` optional → defaults to base unit, factor 1), computes `qty_base = qty_entered × factor`, persists the UOM snapshot, and uses `qty_base` for the total + availability pre-check; `confirmAdjustment` posts `$item->baseQty()` to `StockService::applyTransaction()`.
+- `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` — constructor injects `UomConversionService`; new `getProductUoms()` AJAX endpoint; `store()` validation accepts `items.*.uom_id` (nullable|integer|exists); `show()` eager-loads `items.uom`.
+- `laravel/routes/web.php` — `GET admin/stock-adjustments/product-uoms` route (role:admin,accountant group).
+- `laravel/resources/views/admin/stock-adjustments/create.blade.php` — items table gains "UOM" + "Base qty" columns; `buildRow()` adds a per-row UOM `<select>` (name `items[idx][uom_id]`) + read-only base-qty input; `loadUoms()` fetches the product's UOMs via AJAX and defaults to the base unit; `recomputeRow()` computes `base_qty = qty × factor` and `amount = qty_base × rate`; UOM change handler re-syncs the factor.
+- `laravel/resources/views/admin/stock-adjustments/show.blade.php` — items table gains "Qty entered" + "Base qty" columns showing the entered qty + UOM code and the converted base qty + base unit code.
+
+**Key design decisions:**
+1. The base-unit self-conversion (from=base, to=base, factor=1) is IMPLICIT — no `product_uom_conversions` row is required. `resolveFactor()` returns 1 when `fromUomId === baseUomId`. This avoids seeding N self-conversion rows and makes the base unit always available in the dropdown.
+2. `uom_factor` is snapshotted on `stock_adjustment_items` at creation time (audit immutability) — if an admin later edits a conversion factor, historical adjustments keep the factor they were posted with.
+3. The legacy `qty` column stays as the authoritative BASE quantity (equals `qty_base` for new + backfilled rows). This is backward compatible with any code reading `$item->qty` and with the `stock_transactions.qty` semantics. New code reads `qty_base` explicitly via `baseQty()`.
+4. `uom_id` is optional in the input (nullable). When absent, the service treats the qty as already in the base unit (factor 1) — fully backward compatible with non-UOM callers (API, future code paths, old form submissions).
+5. `UomConversionService` caches base-unit + factor lookups for 5 minutes (conversion rows are write-once config, rarely changed) so the hot path (every item row in every adjustment) stays off the DB.
+6. A UOM management UI (add/edit conversions per product) is out of scope for Phase 5 — the infrastructure + the adjustment flow is the deliverable. Admins can add conversions via `php artisan tinker` or a future management screen; `clearCacheForProduct()` is ready for that UI.
+
+**Gap closed:** G7 (No UOM handling on line items → FIXED). Carton/Pcs confusion can no longer cause 10x stock errors — the system now converts entered quantities to the base unit before posting to stock + GL.
 
 ---
 

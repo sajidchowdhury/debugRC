@@ -46,7 +46,8 @@ class StockAdjustmentService
         private StockService $stockService,
         private JournalPostingService $journalPosting,
         private StockAdjustmentPolicyService $policy,
-        private StockAdjustmentAuditLogger $audit
+        private StockAdjustmentAuditLogger $audit,
+        private UomConversionService $uom  // Phase 5 — UOM conversion
     ) {}
 
     /**
@@ -92,25 +93,56 @@ class StockAdjustmentService
         $adjustmentCode = $this->generateAdjustmentCode();
 
         // Calculate total amount from items.
+        //
+        // Phase 5 (UOM): each item may carry an optional `uom_id` (the unit
+        // the qty was entered in). When present, resolve the conversion factor
+        // to the product's base unit and compute qty_base = qty_entered × factor.
+        // When absent (or uom_id = base unit), qty_base = qty (the pre-Phase-5
+        // behaviour — backward compatible with non-UOM callers).
         $totalAmount = 0.0;
         $validatedItems = [];
         foreach ($items as $item) {
-            $qty = (float) ($item['qty'] ?? 0);
+            $qtyEntered = (float) ($item['qty'] ?? 0);
             $productId = (int) ($item['product_id'] ?? 0);
-            if ($qty <= 0 || $productId <= 0) {
+            if ($qtyEntered <= 0 || $productId <= 0) {
                 continue;
             }
             $rate = (float) ($item['rate'] ?? 0);
             if ($rate <= 0) {
                 $rate = $this->stockService->getWarehouseAvgCost($warehouseId, $productId);
             }
+
+            // Phase 5 — resolve UOM + factor + base qty.
+            $uomId    = isset($item['uom_id']) ? (int) $item['uom_id'] : null;
+            $uomFactor = 1.0;
+            $qtyBase  = $qtyEntered;
+            if ($uomId !== null && $uomId > 0) {
+                $factor = $this->uom->resolveFactor($productId, $uomId);
+                if ($factor === null) {
+                    $base = $this->uom->resolveBaseUnit($productId);
+                    $baseCode = $base ? $base->code : 'base';
+                    throw new \InvalidArgumentException(
+                        "No UOM conversion found for product {$productId} from UOM {$uomId}"
+                        . " to base unit '{$baseCode}'. Add a conversion in"
+                        . " product_uom_conversions or select the base unit."
+                    );
+                }
+                $uomFactor = $factor;
+                $qtyBase   = $qtyEntered * $factor;
+            }
+
             $validatedItems[] = [
-                'product_id' => $productId,
-                'qty' => $qty,
-                'rate' => $rate,
-                'reason' => trim((string) ($item['reason'] ?? '')),
+                'product_id'  => $productId,
+                'qty'         => $qtyBase,   // base qty (legacy column = authoritative stock qty)
+                'uom_id'      => $uomId,     // Phase 5
+                'qty_entered' => $qtyEntered, // Phase 5
+                'qty_base'    => $qtyBase,    // Phase 5
+                'uom_factor'  => $uomFactor,  // Phase 5
+                'rate'        => $rate,
+                'reason'      => trim((string) ($item['reason'] ?? '')),
             ];
-            $totalAmount += $qty * $rate;
+            // Total uses the BASE qty × rate (rate is per base unit).
+            $totalAmount += $qtyBase * $rate;
         }
 
         if (empty($validatedItems)) {
@@ -118,13 +150,18 @@ class StockAdjustmentService
         }
 
         // For decrease adjustments, pre-check availability (will be re-checked on confirm).
+        //
+        // Phase 5: the availability check uses qty_base (the converted base
+        // qty that will actually leave the warehouse) — not the entered qty.
+        // A 2-Carton decrease (factor 12) must check against 24 Pcs of stock.
         if ($adjustmentType === 'decrease') {
             foreach ($validatedItems as $item) {
                 $available = $this->stockService->getWarehouseQty($warehouseId, $item['product_id']);
-                if ($item['qty'] > $available + 0.0001) {
+                if ($item['qty_base'] > $available + 0.0001) {
                     throw new \RuntimeException(
                         "Insufficient stock for product {$item['product_id']}: "
-                        . "available {$available}, requested {$item['qty']}"
+                        . "available {$available}, requested {$item['qty_base']}"
+                        . ($item['uom_id'] ? " (base qty from {$item['qty_entered']} entered)" : '')
                     );
                 }
             }
@@ -152,14 +189,23 @@ class StockAdjustmentService
             ]);
 
             // Create the adjustment items.
+            //
+            // Phase 5: persist the UOM snapshot (uom_id, qty_entered,
+            // qty_base, uom_factor) so the adjustment is self-contained for
+            // audit — even if the conversion factor changes later, this row
+            // records the factor it was posted with.
             $itemRows = [];
             foreach ($validatedItems as $item) {
                 $itemRows[] = [
                     'stock_adjustment_id' => $adjustmentId,
-                    'product_id' => $item['product_id'],
-                    'qty' => $item['qty'],
-                    'rate' => $item['rate'],
-                    'reason' => $item['reason'],
+                    'product_id'  => $item['product_id'],
+                    'qty'         => $item['qty_base'],   // base qty (legacy authoritative column)
+                    'uom_id'      => $item['uom_id'],     // Phase 5
+                    'qty_entered' => $item['qty_entered'], // Phase 5
+                    'qty_base'    => $item['qty_base'],    // Phase 5
+                    'uom_factor'  => $item['uom_factor'],  // Phase 5
+                    'rate'        => $item['rate'],
+                    'reason'      => $item['reason'],
                 ];
             }
             DB::table('stock_adjustment_items')->insert($itemRows);
@@ -453,8 +499,14 @@ class StockAdjustmentService
             $referenceType = $adjustment->ledgerReferenceType();
 
             // Apply stock movement for each item via StockService.
+            //
+            // Phase 5 (UOM): post the BASE qty (qty_base, the converted
+            // quantity) to the stock ledger — not the entered qty. A 2-Carton
+            // increase (factor 12) posts +24 Pcs to warehouse_stock.
+            // StockAdjustmentItem::baseQty() returns qty_base when set, falling
+            // back to the legacy `qty` column for pre-Phase-5 rows.
             foreach ($adjustment->items as $item) {
-                $qtyChange = $sign * (float) $item->qty;
+                $qtyChange = $sign * $item->baseQty();
 
                 $this->stockService->applyTransaction([
                     'warehouse_id' => $warehouseId,

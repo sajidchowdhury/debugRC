@@ -128,6 +128,30 @@ class Product extends Model
     }
 
     /**
+     * Phase 5 (Stock Adjustment plan) — the product's BASE unit of measure.
+     *
+     * The base unit is the UOM whose code matches this product's `unit` column
+     * (e.g. a product with unit='Pcs' has base unit = the Pcs row in
+     * units_of_measure). The base unit always has an implicit factor of 1 —
+     * no product_uom_conversions row is required for the self-conversion.
+     *
+     * Resolved via UomConversionService::resolveBaseUnit() in the hot path
+     * (cached). This relation is for eager-loading when needed.
+     */
+    public function baseUnit(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(UnitOfMeasure::class, 'unit', 'code');
+    }
+
+    /**
+     * Phase 5 — per-product UOM conversion factors (Carton→Pcs etc.).
+     */
+    public function uomConversions(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(ProductUomConversion::class, 'product_id');
+    }
+
+    /**
      * Get the current-effective price record (effective_from <= today, effective_to IS NULL or >= today).
      */
     public function currentPrice(): ?ProductPriceHistory

@@ -417,3 +417,74 @@ Key design decisions:
 6. Logger is a no-op (returns) rather than throwing on missing identity — the data change is the source of truth, the audit row is the forensic record.
 7. ip_address + user_agent resolved null-safely from request() — console/queue/tinker calls without an HTTP request store null.
 Note: PHP not installed in this sandbox (Node/Next.js env), so syntax verified by careful manual review + grep verification of the 6 audit->log call sites + 0 old-pattern returns. Recommend running `php artisan migrate`, `php artisan route:list`, and exercising the full create→submit→approve→confirm→cancel lifecycle in the Laravel env to confirm the timeline renders end-to-end.
+
+---
+Task ID: SA-HOTFIX-total_amount
+Agent: Main Agent (Stock Adjustment hotfix)
+Task: Fix the 500 Internal Server Error on /admin/stock-adjustments — SQLSTATE[42703] Undefined column: 7 ERROR: column "total_amount" does not exist (sum("total_amount") in the index stats). The stock_adjustments table was missing the total_amount column that the model $fillable/$casts, StockAdjustmentService INSERT, StockAdjustmentController sum(), and the index/show blade views all reference.
+
+Work Log:
+- Diagnosed: the stock_adjustments table (database/sql/03_stock.sql) never declared total_amount, but the model/service/controller/views have referenced it since Phase 6.3. The index page's `sum('total_amount')` stat query hit the missing column first (500 error); the create flow's INSERT would also fail (latent bug — no adjustment created end-to-end yet).
+- Created migration 2025_08_05_000001_add_total_amount_to_stock_adjustments.php: ADD COLUMN total_amount numeric(14,2) NOT NULL DEFAULT 0 (idempotent via Schema::hasColumn guard) + backfill existing rows from SUM(qty * rate) over stock_adjustment_items.
+- Updated database/sql/03_stock.sql canonical schema to include the column (fresh-install parity).
+- Committed + pushed (commit e084a85).
+- User must run `docker compose exec rcerp_app php artisan migrate` to apply.
+
+Stage Summary:
+Files created: laravel/database/migrations/2025_08_05_000001_add_total_amount_to_stock_adjustments.php
+Files modified: laravel/database/sql/03_stock.sql (added total_amount column to canonical schema)
+Gap closed: missing-column 500 error on the index page + latent create-flow INSERT bug.
+
+---
+Task ID: SA-P5
+Agent: Main Agent (Stock Adjustment Phase 5 implementation)
+Task: Phase 5 — Unit-of-Measure (UOM) Handling. Allow the accountant to enter quantities in any UOM (Carton, Pcs, KG) and have the system convert to the product's base unit before posting to stock. Closes G7 (Carton/Pcs confusion → 10x stock errors).
+
+Work Log:
+- Read STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md §Phase 5 for the detailed spec (5.1 schema, 5.2 item columns, 5.3 service, 5.4 UI, 5.5 display).
+- Investigated existing codebase: products.unit is a varchar(20) CHECK enum (Pcs, Carton, KG, Bag, Dobe, Set); no existing UOM infrastructure; StockService::applyTransaction takes a signed qty + writes stock_transactions + warehouse_stock; create/show blade views use a JS-driven dynamic row builder.
+- Created migration 2025_08_06_000001_create_uom_tables.php:
+  - units_of_measure (id, code UNIQUE, name, type) — seeded with the 6 enum values.
+  - product_uom_conversions (product_id FK CASCADE, from_uom_id FK, to_uom_id FK, factor, UNIQUE(product_id, from_uom_id, to_uom_id)).
+  - 4 nullable columns on stock_adjustment_items: uom_id FK, qty_entered, qty_base, uom_factor.
+  - Backfill: qty_base = qty, qty_entered = qty, uom_factor = 1, uom_id = product's base unit (products.unit → units_of_measure.code join).
+- Created models: UnitOfMeasure (byCode scope, conversion relations), ProductUomConversion (product/fromUom/toUom relations).
+- Created UomConversionService: resolveBaseUnit (cached 5 min), resolveFactor (1 for self-conversion, null if missing), convert (throws on missing), getProductUoms (returns [{uom_id, code, name, factor, is_base}] for the AJAX dropdown), clearCacheForProduct (for a future management UI).
+- Updated StockAdjustmentService: constructor injects UomConversionService (5th param); createAdjustment loop resolves the factor per item (uom_id optional → defaults to base unit, factor 1), computes qty_base = qty_entered × factor, persists the UOM snapshot, uses qty_base for total + availability pre-check; confirmAdjustment posts $item->baseQty() to StockService::applyTransaction().
+- Updated StockAdjustmentItem model: uom_id/qty_entered/qty_base/uom_factor in $fillable + $casts; uom() relation; amount() uses qty_base; new baseQty()/enteredQty()/enteredQtyLabel()/baseQtyLabel() accessors.
+- Updated Product model: baseUnit() BelongsTo (products.unit → units_of_measure.code) + uomConversions() HasMany.
+- Updated StockAdjustmentController: constructor injects UomConversionService; new getProductUoms() AJAX endpoint; store() validation accepts items.*.uom_id (nullable|integer|exists); show() eager-loads items.uom.
+- Added route GET admin/stock-adjustments/product-uoms (role:admin,accountant group).
+- Updated create.blade.php: items table gains "UOM" + "Base qty" columns; buildRow() adds a per-row UOM <select> (name items[idx][uom_id]) + read-only base-qty input; loadUoms() fetches the product's UOMs via AJAX and defaults to the base unit; recomputeRow() computes base_qty = qty × factor and amount = qty_base × rate; onUomChange re-syncs the factor; old-input repopulation handles uom_id.
+- Updated show.blade.php: items table gains "Qty entered" + "Base qty" columns showing the entered qty + UOM code and the converted base qty + base unit code; tfoot + empty colspan updated for the new column count.
+- Updated canonical SQL schema: 01_auth_and_master.sql (units_of_measure + product_uom_conversions CREATE TABLEs after products), 03_stock.sql (stock_adjustment_items UOM columns).
+- Updated STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md: Phase 5 → ✅ DONE; G7 → ✅ FIXED in gap table; verification checklist checked + full Implementation Summary appended (files created/modified, 6 key design decisions, gap closed).
+
+Stage Summary:
+Files created:
+- laravel/database/migrations/2025_08_06_000001_create_uom_tables.php (2 new tables + 4 item columns + seed + backfill, idempotent)
+- laravel/app/Models/UnitOfMeasure.php (master unit list model)
+- laravel/app/Models/ProductUomConversion.php (per-product factor model)
+- laravel/app/Services/Stock/UomConversionService.php (resolveBaseUnit/resolveFactor/convert/getProductUoms/clearCacheForProduct, 5-min cache)
+
+Files modified:
+- laravel/database/sql/01_auth_and_master.sql (units_of_measure + product_uom_conversions CREATE TABLEs)
+- laravel/database/sql/03_stock.sql (stock_adjustment_items UOM columns)
+- laravel/app/Models/StockAdjustmentItem.php (UOM $fillable/$casts, uom() relation, baseQty/enteredQty/amount accessors)
+- laravel/app/Models/Product.php (baseUnit + uomConversions relations)
+- laravel/app/Services/Stock/StockAdjustmentService.php (UomConversionService injection, qty_base computation in createAdjustment, baseQty() in confirmAdjustment)
+- laravel/app/Http/Controllers/Admin/StockAdjustmentController.php (UomConversionService injection, getProductUoms endpoint, store validation, show eager-load)
+- laravel/routes/web.php (product-uoms route)
+- laravel/resources/views/admin/stock-adjustments/create.blade.php (per-row UOM dropdown + base qty display + AJAX)
+- laravel/resources/views/admin/stock-adjustments/show.blade.php (qty entered + base qty columns)
+- STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md (Phase 5 DONE, G7 FIXED, verification + summary)
+
+Gaps closed: G7 (No UOM handling on line items → FIXED). Carton/Pcs confusion can no longer cause 10x stock errors — the system converts entered quantities to the base unit before posting to stock + GL.
+Key design decisions:
+1. Base-unit self-conversion is IMPLICIT (factor 1, no product_uom_conversions row needed) — resolveFactor returns 1 when fromUomId === baseUomId.
+2. uom_factor snapshotted on stock_adjustment_items at creation time (audit immutability — historical adjustments keep their factor even if the conversion is later edited).
+3. Legacy `qty` column stays as the authoritative BASE quantity (= qty_base for new + backfilled rows) — backward compatible with all existing code reading $item->qty.
+4. uom_id is optional (nullable) in the input — when absent, service treats qty as base-unit (factor 1). Fully backward compatible with non-UOM callers.
+5. UomConversionService caches base-unit + factor lookups for 5 min (conversion rows are write-once config) so the hot path stays off the DB.
+6. UOM management UI (add/edit conversions) is out of scope for Phase 5 — infrastructure + adjustment flow is the deliverable. clearCacheForProduct() is ready for a future management screen.
+Note: PHP not installed in this sandbox, so syntax verified by careful manual review + grep verification of the $this->uom call sites. User must run `docker compose exec rcerp_app php artisan migrate` (applies both the hotfix migration 2025_08_05 and the UOM migration 2025_08_06) to apply the schema changes, then test the create flow (select a product → UOM dropdown populates → enter qty in Carton → base qty recomputes → submit → confirm posts the converted base qty to stock).

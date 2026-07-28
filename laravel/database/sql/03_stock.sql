@@ -160,6 +160,18 @@ CREATE TABLE stock_adjustment_items (
     stock_adjustment_id integer NOT NULL REFERENCES stock_adjustments(id) ON DELETE CASCADE,
     product_id integer NOT NULL REFERENCES products(id),
     qty numeric(14,4) NOT NULL,
+    -- Phase 5 (Stock Adjustment plan): UOM columns. All nullable so old rows
+    -- and non-UOM callers keep working. qty_entered = what the user typed (in
+    -- the selected UOM); qty_base = converted to the product's base unit
+    -- (= qty_entered × uom_factor, what posts to stock); uom_factor = snapshot
+    -- of the factor at creation time (audit immutability). The legacy `qty`
+    -- column stays as the authoritative BASE quantity (equals qty_base for
+    -- new + backfilled rows). Added by migration
+    -- 2025_08_06_000001_create_uom_tables.php.
+    uom_id integer REFERENCES units_of_measure(id) ON DELETE SET NULL,
+    qty_entered numeric(14,4),
+    qty_base numeric(14,4),
+    uom_factor numeric(14,6),
     rate numeric(12,2) DEFAULT 0,
     reason text
 );

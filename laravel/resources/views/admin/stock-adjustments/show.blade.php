@@ -281,7 +281,8 @@
                             <thead class="table-light">
                                 <tr>
                                     <th>Product</th>
-                                    <th class="text-end">Qty</th>
+                                    <th class="text-end">Qty entered</th>
+                                    <th class="text-end">Base qty</th>
                                     <th class="text-end">Rate (Tk)</th>
                                     <th class="text-end">Amount (Tk)</th>
                                     <th>Reason</th>
@@ -298,20 +299,34 @@
                                                 <span class="text-muted">Product #{{ $item->product_id }}</span>
                                             @endif
                                         </td>
-                                        <td class="text-end">{{ number_format((float) $item->qty, 4) }}</td>
+                                        {{-- Phase 5 — show the entered qty + its UOM, and the converted base qty. --}}
+                                        <td class="text-end">
+                                            {{ number_format($item->enteredQty(), 4) }}
+                                            @if ($item->uom)
+                                                <span class="small text-muted">{{ $item->uom->code }}</span>
+                                            @elseif ($item->product)
+                                                <span class="small text-muted">{{ $item->product->unit }}</span>
+                                            @endif
+                                        </td>
+                                        <td class="text-end">
+                                            {{ number_format($item->baseQty(), 4) }}
+                                            @if ($item->product)
+                                                <span class="small text-muted">{{ $item->product->unit }}</span>
+                                            @endif
+                                        </td>
                                         <td class="text-end">{{ number_format((float) $item->rate, 2) }}</td>
                                         <td class="text-end">{{ number_format($item->amount(), 2) }}</td>
                                         <td class="small">{{ $item->reason ?: '—' }}</td>
                                     </tr>
                                 @empty
                                     <tr>
-                                        <td colspan="5" class="text-center text-muted py-4">No items.</td>
+                                        <td colspan="6" class="text-center text-muted py-4">No items.</td>
                                     </tr>
                                 @endforelse
                             </tbody>
                             <tfoot>
                                 <tr class="table-light fw-bold">
-                                    <td colspan="3" class="text-end">Total</td>
+                                    <td colspan="4" class="text-end">Total</td>
                                     <td class="text-end">Tk {{ number_format((float) $adj->total_amount, 2) }}</td>
                                     <td></td>
                                 </tr>

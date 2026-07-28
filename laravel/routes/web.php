@@ -423,6 +423,9 @@ Route::middleware('auth')->group(function () {
         Route::get('admin/stock-adjustments/create', [StockAdjustmentController::class, 'create'])->name('admin.stock-adjustments.create');
         Route::post('admin/stock-adjustments', [StockAdjustmentController::class, 'store'])->name('admin.stock-adjustments.store');
         Route::get('admin/stock-adjustments/product-rate', [StockAdjustmentController::class, 'getProductRate'])->name('admin.stock-adjustments.product-rate');
+        // Phase 5 — AJAX: available UOMs + conversion factors for a product
+        // (powers the per-row UOM dropdown on the create form).
+        Route::get('admin/stock-adjustments/product-uoms', [StockAdjustmentController::class, 'getProductUoms'])->name('admin.stock-adjustments.product-uoms');
         Route::get('admin/stock-adjustments/{id}/confirm', fn() => redirect()->route('admin.stock-adjustments.index'))->name('admin.stock-adjustments.confirm-form')
             ->where(['id' => '[0-9]+']);
         // Phase 3 — submit a draft for approval (draft → submitted, or
