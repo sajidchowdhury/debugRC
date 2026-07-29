@@ -58,6 +58,11 @@ class ListenNotifyService
         'rcerp_journal_entry',
         'rcerp_system',
         'rcerp_notification_dispatched',
+        // Phase 2 (Damage plan) — closes the real-time parity gap: every
+        // other transactional table had a NOTIFY trigger except damage_invoices.
+        // The worker now LISTENs so damage index/detail pages auto-refresh
+        // via SSE when another user creates/confirms/cancels a damage.
+        'rcerp_damage_change',
     ];
 
     /**

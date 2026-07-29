@@ -50,6 +50,12 @@
 
       try {
           eventSource = new EventSource(BASE_URL + 'sse/events');
+          // Phase 2 (Damage plan): expose the live EventSource so individual
+          // pages can attach their own channel listeners (e.g. the damage
+          // index listens for 'rcerp_damage_change' to auto-refresh) WITHOUT
+          // opening a duplicate /sse/events connection (which would waste a
+          // PHP-FPM worker per tab). Pages should guard for readyState.
+          window.rcerpEventSource = eventSource;
 
           eventSource.addEventListener('connected', function(e) {
               console.log('[SSE] Connected:', JSON.parse(e.data));
@@ -185,6 +191,7 @@
           eventSource.close();
           eventSource = null;
       }
+      window.rcerpEventSource = null;
   }
 
   // ============================================================
@@ -307,3 +314,6 @@
   window.lightCheckNotifications = lightCheckNotifications;
   window.initSSE = initSSE;
   window.startPolling = startPolling;
+  // window.rcerpEventSource is assigned inside initSSE() once the
+  // EventSource is created (kept null until then so pages can detect
+  // 'not yet ready' and retry-attach their listeners).

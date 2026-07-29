@@ -233,6 +233,20 @@
     </div>
 
     {{-- Damages table --}}
+    {{-- Phase 2 — SSE auto-refresh banner. Hidden by default; shown when a
+         rcerp_damage_change NOTIFY arrives for this branch (another user
+         created/confirmed/cancelled a damage). Non-blocking — user clicks
+         "Reload" to refresh, or dismisses. --}}
+    <div id="dmgRefreshBanner" class="alert alert-info d-none align-items-center mb-2" role="alert">
+        <i class="fas fa-arrows-rotate me-2 fa-spin"></i>
+        <span class="flex-grow-1"><strong>Damage list changed.</strong>
+            Another user just updated a damage in your branch.</span>
+        <button type="button" class="btn btn-sm btn-primary ms-2" id="dmgReloadBtn">
+            <i class="fas fa-rotate me-1"></i> Reload
+        </button>
+        <button type="button" class="btn-close ms-2" id="dmgDismissBtn" aria-label="Dismiss"></button>
+    </div>
+
     <div class="card border-0 shadow-sm">
         <div class="card-body">
             <div class="table-responsive">
@@ -327,6 +341,74 @@ $(function () {
         dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
         language: { search: 'Filter rows:', emptyTable: 'No damage invoices on this page.' }
     });
+
+    // ============================================================
+    // Phase 2 — SSE auto-refresh for the damage list.
+    //
+    // The app-wide notification.js opens ONE EventSource to /sse/events and
+    // (as of Phase 2) exposes it on window.rcerpEventSource. We attach a
+    // listener for the 'rcerp_damage_change' channel (fired by the DB trigger
+    // added in migration 2026_01_02_000001) so this page refreshes when
+    // another user creates/confirms/cancels a damage in the same branch.
+    //
+    // Why not open our own EventSource? That would consume a second PHP-FPM
+    // worker for up to 5 min per open tab — under load that exhausts the pool.
+    // Reusing the shared connection is correct.
+    //
+    // The listener is non-blocking: it reveals a banner offering "Reload"
+    // rather than yanking the page out from under the user.
+    // ============================================================
+    (function () {
+        var $banner = $('#dmgRefreshBanner');
+        var attached = false;
+
+        function showBanner() {
+            $banner.removeClass('d-none').addClass('d-flex');
+        }
+        function hideBanner() {
+            $banner.addClass('d-none').removeClass('d-flex');
+        }
+
+        $('#dmgReloadBtn').on('click', function () {
+            window.location.reload();
+        });
+        $('#dmgDismissBtn').on('click', hideBanner);
+
+        function onDamageChange(e) {
+            try {
+                var data = JSON.parse(e.data);
+                // Ignore our own session's writes? We can't reliably tell —
+                // the trigger fires for ALL changes in the branch. Showing
+                // the banner even for self-triggered changes is harmless
+                // (user already saw the effect on the detail page redirect).
+                console.log('[Damage SSE] change:', data.action, 'id #' + (data.id || '?'));
+            } catch (_) { /* ignore parse errors */ }
+            showBanner();
+        }
+
+        // notification.js creates the EventSource asynchronously (after
+        // /sse/status resolves), so window.rcerpEventSource may be null on
+        // first try. Retry until it's ready, then attach once.
+        function attachWhenReady() {
+            if (attached) return;
+            var es = window.rcerpEventSource;
+            if (es && typeof es.addEventListener === 'function'
+                && es.readyState !== EventSource.CLOSED) {
+                es.addEventListener('rcerp_damage_change', onDamageChange);
+                attached = true;
+                console.log('[Damage SSE] listening on rcerp_damage_change');
+                return;
+            }
+            // Keep retrying for up to ~15s; after that the worker likely
+            // chose polling fallback (no EventSource) — give up quietly.
+            if ((attachWhenReady.attempts = (attachWhenReady.attempts || 0) + 1) > 30) {
+                console.log('[Damage SSE] shared EventSource unavailable — auto-refresh disabled');
+                return;
+            }
+            setTimeout(attachWhenReady, 500);
+        }
+        attachWhenReady();
+    })();
 });
 </script>
 @endpush

@@ -8,6 +8,7 @@ use App\Models\DamageReason;
 use App\Models\Warehouse;
 use App\Models\Product;
 use App\Models\Branch;
+use App\Services\Stock\DamageIntegrityService;
 use App\Services\Stock\DamageService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
@@ -27,7 +28,8 @@ class DamageController extends Controller
 {
     public function __construct(
         private DamageService $damageService,
-        private StockService $stockService
+        private StockService $stockService,
+        private DamageIntegrityService $integrityService
     ) {}
 
     public function index(Request $request)
@@ -170,10 +172,20 @@ class DamageController extends Controller
                 ->get();
         }
 
+        // Phase 2 — live-computed integrity panel (ports legacy
+        // DamageAuditModel::runDamageChecks). Read-only, indexed lookups,
+        // safe to run on every detail-page render. Surfaces drift between
+        // the damage header, its items, stock_transactions and GL journal
+        // so reconciliation issues are visible at a glance instead of
+        // silently accumulating. Passes the already-eager-loaded $damage
+        // model so the service doesn't re-query the header.
+        $integrity = $this->integrityService->runChecks($damage);
+
         return view('admin.damages.show', [
             'title' => 'Damage ' . $damage->damage_code,
             'damage' => $damage,
             'stockMovements' => $stockMovements,
+            'integrity' => $integrity,
         ]);
     }
 

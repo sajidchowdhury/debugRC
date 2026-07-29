@@ -814,6 +814,46 @@ The plan is organized so that each phase is **independently shippable**, **non-b
 
 **Risks:** LISTEN/NOTIFY payload size — keep it minimal (id + action + branch_id). The integrity service must be read-only and fast (indexed lookups).
 
+#### Phase 2 — Implementation Status ✅ COMPLETED
+
+> **Commit:** `feat(damage): Phase 2 — per-damage integrity audit panel & LISTEN/NOTIFY` (see git log)
+> **Status:** ✅ Implemented. LISTEN/NOTIFY trigger + `DamageIntegrityService` (5 checks, state-aware) + integrity panel UI + SSE auto-refresh on the index. Live-computed (no `damage_audit_log` table) — mirrors legacy `DamageAuditModel` exactly.
+
+**Files changed (5) + created (2):**
+
+| # | File | Change |
+|---|---|---|
+| 1 | `laravel/database/migrations/2026_01_02_000001_damage_listen_notify_and_audit.php` | **NEW** — adds the `rcerp_notify_damage()` trigger function + `trg_notify_damage_invoices` AFTER INSERT/UPDATE/DELETE on `damage_invoices`. Uses the shared `rcerp_notify()` helper (from migration `2025_01_21_000001`) so the payload shape matches every other channel. Channel: `rcerp_damage_change`. UPDATE only fires on meaningful column changes (status, is_reversed, total_value, damage_type, journal_entry_id, branch_id, warehouse_id) — skips `updated_at` noise. DELETE always notifies (uses OLD row for id + branch_id). Nullable `journal_entry_id` handled with `COALESCE(to_jsonb(...), 'null'::jsonb)` so `jsonb_set` can't nullify the payload. No new table (live-computed, per spec). |
+| 2 | `laravel/app/Services/Notification/ListenNotifyService.php` | Added `'rcerp_damage_change'` to `PG_CHANNELS` so the `ListenNotifyWorker` LISTENs on it and forwards to Redis (SSE). NOT added to `CHANNEL_EVENT_MAP` — the `damage_invoice_created` notification is already dispatched directly in `DamageService::createDamage`, so a mapping here would double-dispatch. The trigger's purpose is real-time UI auto-refresh only. |
+| 3 | `laravel/app/Services/Stock/DamageIntegrityService.php` | **NEW** — `runChecks(DamageInvoice $damage): array`. Ports legacy `DamageAuditModel::runDamageChecks`'s 5 checks, adapted to the two-phase (draft/confirmed/cancelled) state machine: (1) `branch_wh` — verifies `damage.branch_id == warehouse.branch_id` (legacy only displayed; we verify). (2) `total_value` — header vs `SUM(qty*rate)`, tolerance 0.02. (3) `stock` — state-aware: draft→info, confirmed→fail if no active movements, cancelled→warn if any active remain. (4) `gl` — state-aware: draft→info, confirmed→pass/warn/info-by-total, cancelled→pass/warn on JE reversal. (5) `reversed` — only when `is_reversed`: pass if `reverse_reason` non-empty. Read-only, indexed lookups, never throws (errors surface as `fail` with the message in `detail`). Accepts the already-eager-loaded model (no re-query). |
+| 4 | `laravel/app/Http/Controllers/Admin/DamageController.php` | Constructor injects `DamageIntegrityService`. `show()` calls `runChecks($damage)` (passes the eager-loaded model) and passes `$integrity` to the view. |
+| 5 | `laravel/resources/views/admin/damages/show.blade.php` | New **Integrity checks** card (col-lg-8, after the GL Journal Entry card). Headline badge (red/yellow/green by worst status) + summary tally strip (pass/warn/fail/info counts) + per-check list with status icons, expected-behaviour help text, detail evidence, and a "Reconcile" hint on `fail` items for `total_value`/`stock`/`gl`. Footer notes checks are live-computed. |
+| 6 | `laravel/resources/views/admin/damages/index.blade.php` | SSE auto-refresh: a hidden `#dmgRefreshBanner` alert revealed when a `rcerp_damage_change` event arrives (non-blocking — user clicks "Reload" or dismisses). Listener attaches to the shared `window.rcerpEventSource` (exposed by `notification.js` in this phase) with a retry-until-ready guard, so no duplicate `/sse/events` connection is opened. |
+| 7 | `laravel/public/assets/js/notification.js` | Exposed `window.rcerpEventSource` inside `initSSE()` (and nulled in `closeSSE()`) so page-level JS can attach channel listeners to the single shared EventSource instead of opening a per-page duplicate (which would burn a PHP-FPM worker per tab). 2-line change, fully backward-compatible. |
+
+**Acceptance criteria verification:**
+
+| Criterion | Status | How |
+|---|---|---|
+| The integrity panel shows on every damage detail page | ✅ Met | `DamageController::show` always calls `runChecks()` and passes `$integrity` to `show.blade.php`, which renders the card unconditionally (null-safe via `?? []`). |
+| A damage with a missing journal entry shows `warn: GL — Missing (re-post?)` | ✅ Met | `DamageIntegrityService::checkGlJournal` returns `warn` with detail `"Missing (re-post?) — confirmed damage has no active journal entry."` when a confirmed damage (total ≥ 0.01) has no active JE. |
+| A damage where `total_value != SUM(qty*rate)` shows `fail: total_value` | ✅ Met | `checkTotalValue` returns `fail` when `abs(lineSum - headerTotal) >= 0.02`, with detail showing header/lines/Δ. The UI adds a "Reconcile" hint. |
+| `pg_notify('damage_changed', ...)` fires on insert/update/delete | ✅ Met (channel renamed) | The trigger fires `pg_notify('rcerp_damage_change', ...)` (not bare `'damage_changed'`) to follow the established `rcerp_*` channel convention so the `ListenNotifyWorker` (which LISTENs on `PG_CHANNELS`) and the SSE forwarder work without special-casing. Verifiable via `LISTEN rcerp_damage_change` in psql. |
+
+**Design decisions (deviations from spec, with rationale):**
+
+- **Channel name `rcerp_damage_change` (not `damage_changed`):** Every other channel uses the `rcerp_` prefix (`rcerp_sales_invoice`, `rcerp_stock_change`, …). The `ListenNotifyWorker` only LISTENs on channels in `PG_CHANNELS`, and the SSE controller forwards the PG channel name as the SSE event name. Following the convention means zero special-casing and the existing `notification.js` EventSource receives the event on a consistently-named channel.
+- **No `CHANNEL_EVENT_MAP` entry:** The `damage_invoice_created` notification is already dispatched directly in `DamageService::createDamage` (Phase 6.6 / F-18c). Adding a mapping here would cause a SECOND dispatch on INSERT (trigger → worker → `forwardToNotificationService`). The trigger is for real-time UI auto-refresh only; the worker still `publishToRedis` so SSE clients get it.
+- **`runChecks(DamageInvoice $damage)` (not `int $damageId`):** The controller already eager-loads `warehouse.branch`, `items`, `journalEntry` for the view. Passing the model avoids a redundant header re-query. The only extra queries are indexed `COUNT`/`SUM` on `stock_transactions` + `damage_invoice_items`.
+- **`branch_wh` upgraded from display-only to verify:** Legacy only showed the warehouse/branch names. We actually compare `damage.branch_id` vs `warehouse.branch_id` and `fail` on mismatch — a mismatch would break RLS (the damage invisible to the warehouse's branch users) and indicates a write-path bug worth surfacing.
+- **Shared EventSource (not per-page):** The damage index reuses `window.rcerpEventSource` (exposed by `notification.js`) rather than opening its own `new EventSource('/sse/events')`. A second connection would consume a PHP-FPM worker for up to 5 min per open tab — under load that exhausts the pool. The retry-until-ready guard handles the async init timing (notification.js creates the EventSource after `/sse/status` resolves).
+
+**Notes for subsequent phases:**
+
+- Phase 3 (photos) will add an **Evidence** card to `show.blade.php` — place it below the Integrity checks card in col-lg-8.
+- Phase 5 (approval workflow) will need to add `submitted`/`approved`/`rejected` awareness to `DamageIntegrityService::checkStockMovements` + `checkGlJournal` (a `submitted` damage, like `draft`, has no stock/GL yet).
+- The `rcerp_damage_change` channel is now available for the Phase 6 dashboard widget to subscribe to (for a live "damage today" counter).
+
 ---
 
 ### Phase 3 — Photo / Evidence Attachments
@@ -1094,8 +1134,8 @@ return [
 | Phase | Goal | Schema? | Severity addressed | Dependencies | Status |
 |---|---|---|---|---|---|
 | **0** | Stabilize & close critical regressions (RBAC, P&L, audit, rate) | No | 🔴 Critical regressions | None | ✅ **COMPLETED** |
-| **1** | Damage category + reason taxonomy | Yes | 🔴 Shared #24, #25 | Phase 0 | ⬜ Pending |
-| **2** | Integrity audit panel + LISTEN/NOTIFY | Yes (trigger) | 🟠 Regression #10, #17 | Phase 0 | ⬜ Pending |
+| **1** | Damage category + reason taxonomy | Yes | 🔴 Shared #24, #25 | Phase 0 | ✅ **COMPLETED** |
+| **2** | Integrity audit panel + LISTEN/NOTIFY | Yes (trigger) | 🟠 Regression #10, #17 | Phase 0 | ✅ **COMPLETED** |
 | **3** | Photo / evidence attachments | Yes | 🔴 Shared #22 | Phase 1 (type-aware required-ness) | ⬜ Pending |
 | **4** | Witness + accountable employee + recovery | Yes | 🔴 Shared #23 | Phase 1 | ⬜ Pending |
 | **5** | Approval workflow + threshold escalation | Yes | 🔴 Shared #26, #27 | Phases 0, 1, 3, 4 | ⬜ Pending |

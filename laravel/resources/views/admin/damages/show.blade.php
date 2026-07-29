@@ -362,6 +362,101 @@
                     </div>
                 </div>
             @endif
+
+            {{-- Phase 2 — Integrity checks panel (ports legacy DamageAuditModel).
+                 Live-computed by DamageIntegrityService on every render. Shows
+                 whether the damage header, its items, stock_transactions and GL
+                 journal all reconcile. A red `fail` surfaces drift that should
+                 be reconciled; a yellow `warn` is a soft flag (e.g. missing GL
+                 that can be re-posted); blue `info` = expected for this state. --}}
+            @php
+                $intgItems   = $integrity['items'] ?? [];
+                $intgSummary = $integrity['summary'] ?? ['pass' => 0, 'warn' => 0, 'fail' => 0, 'info' => 0];
+
+                // Headline colour: red if any fail, else yellow if any warn, else green.
+                $intgHasFail = ($intgSummary['fail'] ?? 0) > 0;
+                $intgHasWarn = ($intgSummary['warn'] ?? 0) > 0;
+                $intgHeadlineClass = $intgHasFail
+                    ? 'bg-danger-subtle text-danger'
+                    : ($intgHasWarn ? 'bg-warning-subtle text-warning' : 'bg-success-subtle text-success');
+                $intgHeadlineIcon = $intgHasFail
+                    ? 'fa-circle-xmark'
+                    : ($intgHasWarn ? 'fa-triangle-exclamation' : 'fa-circle-check');
+
+                $intgStatusMap = [
+                    'pass' => ['icon' => 'fa-circle-check',      'cls' => 'text-success', 'bg' => 'bg-success-subtle', 'lbl' => 'Pass'],
+                    'warn' => ['icon' => 'fa-triangle-exclamation', 'cls' => 'text-warning', 'bg' => 'bg-warning-subtle', 'lbl' => 'Warn'],
+                    'fail' => ['icon' => 'fa-circle-xmark',      'cls' => 'text-danger',  'bg' => 'bg-danger-subtle',  'lbl' => 'Fail'],
+                    'info' => ['icon' => 'fa-circle-info',       'cls' => 'text-info',    'bg' => 'bg-info-subtle',    'lbl' => 'Info'],
+                ];
+            @endphp
+            <div class="card border-0 shadow-sm mb-3">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <h2 class="h6 mb-0">
+                        <i class="fas fa-shield-halved me-1 text-danger"></i> Integrity checks
+                    </h2>
+                    <span class="badge {{ $intgHeadlineClass }} fs-6">
+                        <i class="fas {{ $intgHeadlineIcon }} me-1"></i>
+                        @if ($intgHasFail)
+                            {{ $intgSummary['fail'] }} failing
+                        @elseif ($intgHasWarn)
+                            {{ $intgSummary['warn'] }} warning(s)
+                        @else
+                            All checks passed
+                        @endif
+                    </span>
+                </div>
+                <div class="card-body p-0">
+                    {{-- Summary tally strip --}}
+                    <div class="d-flex flex-wrap gap-2 px-3 pt-3 pb-2 border-bottom">
+                        @foreach (['pass','warn','fail','info'] as $st)
+                            @php $n = $intgSummary[$st] ?? 0; $m = $intgStatusMap[$st]; @endphp
+                            <span class="badge {{ $m['bg'] }} {{ $m['cls'] }}">
+                                <i class="fas {{ $m['icon'] }} me-1"></i>{{ $m['lbl'] }}: {{ $n }}
+                            </span>
+                        @endforeach
+                    </div>
+
+                    {{-- Per-check list --}}
+                    <ul class="list-group list-group-flush mb-0">
+                        @foreach ($intgItems as $check)
+                            @php
+                                $m = $intgStatusMap[$check['status']] ?? $intgStatusMap['info'];
+                                $showReconcile = $check['status'] === 'fail'
+                                    && in_array($check['id'], ['total_value','stock','gl'], true);
+                            @endphp
+                            <li class="list-group-item d-flex align-items-start gap-3 py-2">
+                                <i class="fas {{ $m['icon'] }} {{ $m['cls'] }} fa-lg mt-1"
+                                   title="{{ $m['lbl'] }}"></i>
+                                <div class="flex-grow-1">
+                                    <div class="d-flex justify-content-between align-items-baseline gap-2">
+                                        <span class="fw-semibold">{{ $check['title'] }}</span>
+                                        <span class="badge {{ $m['bg'] }} {{ $m['cls'] }} small">{{ $m['lbl'] }}</span>
+                                    </div>
+                                    <div class="small text-muted">{{ $check['expected'] }}</div>
+                                    @if (!empty($check['detail']))
+                                        <div class="small text-body mt-1">
+                                            <i class="fas fa-chevron-right me-1 text-muted small"></i>{{ $check['detail'] }}
+                                        </div>
+                                    @endif
+                                    @if ($showReconcile)
+                                        <div class="small mt-1">
+                                            <span class="text-danger">
+                                                <i class="fas fa-wrench me-1"></i>Reconcile
+                                            </span>
+                                            — verify stock + GL match this damage header.
+                                        </div>
+                                    @endif
+                                </div>
+                            </li>
+                        @endforeach
+                    </ul>
+                    <div class="px-3 py-2 small text-muted border-top">
+                        <i class="fas fa-clock-rotate-left me-1"></i>
+                        Checks are live-computed from current DB state on every page load.
+                    </div>
+                </div>
+            </div>
         </div>
 
         {{-- Right: actions aside --}}
