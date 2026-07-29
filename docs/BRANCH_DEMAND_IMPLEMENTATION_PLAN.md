@@ -1,7 +1,8 @@
 # Branch Demand — Complete Implementation Plan for Laravel ERP
 
-**Document version:** 1.0  
+**Document version:** 1.1  
 **Date:** 2026-07-29  
+**Last updated:** 2026-07-29 — Phase 1 completed  
 **Scope:** Cross-Branch Demand / Supply Transfer System with Accountability, Audit, and Price Range Handling  
 **Target stack:** Laravel 11 + PostgreSQL 16  
 **Source of truth:** Legacy PHP/MySQL system (fully functional) + User-provided Excel audit sheet ("MAIN BILL SHIT1.xlsx")  
@@ -522,13 +523,16 @@ CREATE TABLE branch_demand_repricing (
 
 ## 8. Implementation Phases
 
-### Phase 1 — Schema Alignment & Foundation
+### Phase 1 — Schema Alignment & Foundation ✅ COMPLETED
 
 **Goal:** Fix all schema discrepancies so the database is ready for the business logic.
 
+**Status:** ✅ **COMPLETED** — Commit `f9eb062` on 2026-07-29
+
 **Tasks:**
 
-1. **Create migration to align `branch_demands` table:**
+1. ✅ **Create migration to align `branch_demands` table:**
+   - Migration: `2026_07_29_000010_align_branch_demands_table.php`
    - Add `total_value` numeric(12,2) DEFAULT NULL
    - Add `settlement_amount` numeric(12,2) DEFAULT 0
    - Add `warehouse_transfer_id` integer REFERENCES warehouse_transfers(id) ON DELETE SET NULL
@@ -539,46 +543,75 @@ CREATE TABLE branch_demand_repricing (
    - Change status CHECK from `('pending','approved','rejected','fulfilled','cancelled')` to `('pending','received','rejected','reversed')` — align with legacy
    - Add `received_at` timestamp(0) DEFAULT NULL (for warehouse manager confirmation)
    - Add `received_by` integer DEFAULT NULL (for warehouse manager confirmation)
+   - Indexes: `idx_bd_status`, `idx_bd_warehouse_transfer`
 
-2. **Create migration to align `branch_demand_items` table:**
-   - Rename `warehouse_id` to `to_warehouse_id` (or add `to_warehouse_id` and drop `warehouse_id`)
+2. ✅ **Create migration to align `branch_demand_items` table:**
+   - Migration: `2026_07_29_000011_align_branch_demand_items_table.php`
    - Add `from_warehouse_id` integer REFERENCES warehouses(id)
-   - Rename `rate` to `cost_rate` and change type to numeric(12,4)
-   - Drop `fulfilled_qty` (not needed — single send, no partial fulfillment)
+   - Add `to_warehouse_id` integer REFERENCES warehouses(id)
+   - Add `cost_rate` numeric(12,4) DEFAULT 0 (replaces legacy `rate` numeric(12,2))
    - Add `price_min` numeric(12,2) DEFAULT 0
    - Add `price_max` numeric(12,2) DEFAULT 0
    - Add `price_default` numeric(12,2) DEFAULT 0
+   - Drop `warehouse_id` (replaced by `from_warehouse_id` + `to_warehouse_id`)
+   - Drop `fulfilled_qty` (not needed — single send, no partial fulfillment)
+   - Drop `rate` (replaced by `cost_rate` with higher precision)
+   - Indexes: `idx_bdi_product`, `idx_bdi_from_warehouse`, `idx_bdi_to_warehouse`
 
-3. **Create migration to update `stock_transactions.reference_type` CHECK:**
+3. ✅ **Create migration to update `stock_transactions.reference_type` CHECK:**
+   - Migration: `2026_07_29_000012_add_demand_reference_types_to_stock_transactions.php`
    - Add `demand_send`, `demand_receive`, `demand_reversal` to the CHECK constraint
    - Keep `branch_demand` as a fallback for any generic usage
+   - Handles partitioned tables: drops old constraints from all partitions and the default partition, then adds the new unified constraint on the parent table
 
-4. **Create `branch_ledger` table:**
-   - `id`, `transaction_date`, `from_branch_id`, `to_branch_id`, `reference_type`, `reference_id`, `journal_entry_id`, `debit`, `credit`, `running_balance`, `remarks`, `is_reversed`, `created_by`, `created_at`
+4. ✅ **Create `branch_ledger` table:**
+   - Migration: `2026_07_29_000013_create_branch_ledger_table.php`
+   - Columns: `id`, `transaction_date`, `from_branch_id`, `to_branch_id`, `reference_type`, `reference_id`, `journal_entry_id`, `debit`, `credit`, `running_balance`, `remarks`, `is_reversed`, `created_by`, `created_at`
+   - Indexes: `idx_bl_branches`, `idx_bl_reference`, `idx_bl_date`
 
-5. **Create `money_transfer_settlements` table:**
-   - `id`, `transfer_id`, `demand_id`, `settled_amount`, `created_at`
+5. ✅ **Create `money_transfer_settlements` table:**
+   - Migration: `2026_07_29_000014_create_branch_demand_money_transfer_settlements_table.php`
+   - Table name: `branch_demand_money_transfer_settlements` (prefixed to avoid collision with existing `customer_payment_settlements`)
+   - Columns: `id`, `transfer_id` (FK → money_transfers), `demand_id` (FK → branch_demands), `settled_amount`, `created_at`
+   - Indexes: `idx_bdmts_demand`, `idx_bdmts_transfer`
 
-6. **Create `customer_payment_settlements` table:**
-   - `id`, `payment_id`, `demand_id`, `settled_amount`, `created_at`
+6. ✅ **Create `customer_payment_settlements` table:**
+   - Migration: `2026_07_29_000015_create_branch_demand_customer_payment_settlements_table.php`
+   - Table name: `branch_demand_customer_payment_settlements` (prefixed to avoid collision)
+   - Columns: `id`, `payment_id` (FK → customer_payments), `demand_id` (FK → branch_demands), `settled_amount`, `created_at`
+   - Indexes: `idx_bdcps_demand`, `idx_bdcps_payment`
 
-7. **Create `branch_demand_repricing` table:**
-   - `id`, `branch_demand_id`, `original_total_value`, `new_total_value`, `adjustment_amount`, `reason`, `approved_by`, `journal_entry_id`, `created_by`, `created_at`
+7. ✅ **Create `branch_demand_repricing` table:**
+   - Migration: `2026_07_29_000016_create_branch_demand_repricing_table.php`
+   - Columns: `id`, `branch_demand_id` (FK → branch_demands), `original_total_value`, `new_total_value`, `adjustment_amount`, `reason`, `approved_by`, `journal_entry_id` (FK → journal_entries), `created_by`, `created_at`
+   - Index: `idx_bdr_demand`
 
-8. **Create `BranchDemand` model:**
-   - Fillable, casts, relationships (items, fromBranch, toBranch, warehouseTransfer, journalEntry, debtorJournalEntry, createdBy, receivedBy)
-   - Scopes: `pending()`, `received()`, `forBranch()`, `byBranch()`
+8. ✅ **Create `BranchDemand` model:**
+   - File: `app/Models/BranchDemand.php`
+   - Uses `AuditableMasterData` trait
+   - Fillable: `demand_code`, `demand_date`, `from_branch_id`, `to_branch_id`, `status`, `total_value`, `settlement_amount`, `warehouse_transfer_id`, `journal_entry_id`, `journal_entry_id_debtor`, `is_reversed`, `reversed_at`, `reversed_by`, `reverse_reason`, `received_at`, `received_by`, `notes`, `created_by`
+   - Relationships: `items()`, `fromBranch()`, `toBranch()`, `warehouseTransfer()`, `journalEntry()`, `debtorJournalEntry()`, `createdBy()`, `receivedBy()`, `reversedBy()`, `repricingAdjustments()`, `moneyTransferSettlements()`, `customerPaymentSettlements()`
+   - Scopes: `scopePending()`, `scopeReceived()`, `scopeNotReversed()`, `scopeMyDemands()`, `scopeDemandsForMe()`, `scopeForBranch()`, `scopeWithOutstanding()`
+   - Helpers: `isPending()`, `isReceived()`, `isRejected()`, `isReversed()`, `isReceiptConfirmed()`, `outstanding()`, `settlementProgress()`
 
-9. **Create `BranchDemandItem` model:**
-   - Fillable, casts, relationships (demand, product, fromWarehouse, toWarehouse)
+9. ✅ **Create `BranchDemandItem` model:**
+   - File: `app/Models/BranchDemandItem.php`
+   - Fillable: `branch_demand_id`, `product_id`, `qty`, `cost_rate`, `from_warehouse_id`, `to_warehouse_id`, `price_min`, `price_max`, `price_default`
+   - Relationships: `demand()`, `product()`, `fromWarehouse()`, `toWarehouse()`
 
-10. **Fix `WarehouseTransfer::branchDemand()` — ensure it references the new `BranchDemand` model.**
+10. ✅ **Fix `WarehouseTransfer::branchDemand()` — now references `BranchDemand::class`**
+    - The relationship was already fixed in a prior commit; it correctly returns `$this->belongsTo(BranchDemand::class, 'branch_demand_id')`
 
-**Exit criteria:**
-- All migrations run without error
-- `BranchDemand` and `BranchDemandItem` models exist with all relationships
-- `php artisan tinker` → `BranchDemand::first()` works without error
-- `WarehouseTransfer::first()->branchDemand` does not throw
+**Additional models created:**
+- `BranchDemandRepricing` (`app/Models/BranchDemandRepricing.php`) — with `demand()`, `approvedBy()`, `journalEntry()`, `createdBy()` relationships
+- `BranchDemandMoneyTransferSettlement` (`app/Models/BranchDemandMoneyTransferSettlement.php`) — with `transfer()`, `demand()` relationships
+- `BranchDemandCustomerPaymentSettlement` (`app/Models/BranchDemandCustomerPaymentSettlement.php`) — with `payment()`, `demand()` relationships
+
+**Exit criteria status:**
+- ✅ All migrations run without error
+- ✅ `BranchDemand` and `BranchDemandItem` models exist with all relationships
+- ✅ `php artisan tinker` → `BranchDemand::first()` works without error
+- ✅ `WarehouseTransfer::first()->branchDemand` does not throw
 
 ---
 
