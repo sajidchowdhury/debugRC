@@ -140,40 +140,38 @@ return new class extends Migration
      * Replace the reference_type CHECK across the partitioned
      * stock_transactions table and ALL its partitions.
      *
-     * PostgreSQL partitioning rule (the bug we hit on the first attempt):
+     * PostgreSQL partitioning rule:
      *   When a CHECK is added to a partitioned parent, each partition gets an
      *   INHERITED copy (pg_constraint.conislocal = false). PostgreSQL FORBIDS
      *   dropping an inherited constraint directly on a partition —
      *   `ALTER TABLE <partition> DROP CONSTRAINT <inherited>` fails with
      *   SQLSTATE[42P16]: "cannot drop inherited constraint ... of relation
-     *   <partition>". Inherited constraints can ONLY be dropped via the
-     *   parent, which cascades.
+     *   <partition>" — but ONLY when the parent constraint it links to
+     *   (conparentid) STILL EXISTS. Once the parent's constraint is dropped,
+     *   the partition's inherited copy becomes ORPHANED and CAN be dropped
+     *   directly.
      *
      *   A partition MAY also carry a LOCAL constraint (conislocal = true)
-     *   with the same / a suffixed name (e.g. `_check1` created by PG's
-     *   name-collision avoidance when the parent's ADD ran while the
-     *   partition already had a local same-named copy). Local copies are
-     *   NOT removed by dropping the parent — they must be dropped directly
-     *   on the partition (which IS allowed for conislocal=true).
+     *   with the same / a suffixed name (e.g. `_check1` from PG's name-
+     *   collision avoidance). Local copies are NOT removed by dropping the
+     *   parent — they must be dropped directly on the partition.
      *
-     * Correct 3-step algorithm:
-     *   1. Drop the constraint on the PARENT (IF EXISTS). PG cascades this
-     *      to every partition, removing all INHERITED copies (any name).
-     *   2. Drop any REMAINING LOCAL copies on partitions matching the
-     *      pattern `^stock_transactions_reference_type_check`. After step 1
-     *      these are the only ones left, and because conislocal=true they
-     *      CAN be dropped directly on the partition. The `conislocal = true`
-     *      filter is defense-in-depth — it guarantees we never attempt to
-     *      drop an inherited copy (which would error even if step 1 somehow
-     *      didn't fully cascade).
-     *   3. Add a single fresh constraint on the PARENT. PG propagates
-     *      inherited copies (all loose, with 'reversal') to every partition.
-     *
-     * Because the constraint is being LOOSENED (adding 'reversal' to the
-     * IN-list), no existing row can violate the new constraint — every row
-     * that satisfied the old stricter set also satisfies the new looser one.
-     * So ADD CONSTRAINT is instant (no full table scan), even on large
-     * partitions.
+     * 3-step algorithm (corrected — the original had a conislocal=true
+     * filter on step 2 that caused orphaned inherited copies like
+     * `_check1` to be SKIPPED, leaving strict copies that blocked
+     * 'reversal'. See 2026_07_29_000002 for the follow-up that actually
+     * cleaned them up on existing DBs):
+     *   1. DO block: drop EVERY CHECK matching `^stock_transactions_reference_type_check`
+     *      on the PARENT (exact name + suffixed). Cascade removes all
+     *      properly-linked inherited copies on partitions.
+     *   2. DO block: drop EVERY remaining matching CHECK on ALL partitions,
+     *      with NO conislocal filter. After step 1, every remaining copy
+     *      is LOCAL (conislocal=true) or ORPHANED INHERITED (conislocal=
+     *      false, conparentid=0). BOTH are droppable directly — PG only
+     *      forbids dropping inherited copies whose parent STILL EXISTS,
+     *      and step 1 ensured no parent match remains.
+     *   3. Add a single fresh constraint on the PARENT → PG propagates
+     *      inherited copies to every partition.
      */
     private function replaceConstraintOnAllPartitions(array $allowed): void
     {
@@ -182,22 +180,36 @@ return new class extends Migration
             $allowed,
         ));
 
-        // Step 1 — drop the constraint on the PARENT. PG cascades this to
-        // every partition, removing ALL inherited copies (conislocal=false)
-        // regardless of their name (base name OR suffixed _check1 / _check2).
-        // IF EXISTS makes this safe when the parent has no such constraint
-        // (e.g. a previous partial run already dropped it).
-        DB::statement(
-            'ALTER TABLE stock_transactions '
-            . 'DROP CONSTRAINT IF EXISTS stock_transactions_reference_type_check'
-        );
+        // Step 1 — drop EVERY matching CHECK on the PARENT (exact name AND
+        // suffixed). Cascade removes properly-linked inherited copies on
+        // partitions.
+        DB::statement(<<<SQL
+            DO $$
+            DECLARE
+                r RECORD;
+            BEGIN
+                FOR r IN
+                    SELECT con.conname
+                    FROM pg_constraint con
+                    JOIN pg_class c ON c.oid = con.conrelid
+                    WHERE con.contype = 'c'
+                      AND con.conname ~ '^stock_transactions_reference_type_check'
+                      AND c.relname = 'stock_transactions'
+                LOOP
+                    EXECUTE format(
+                        'ALTER TABLE stock_transactions DROP CONSTRAINT IF EXISTS %I',
+                        r.conname
+                    );
+                END LOOP;
+            END;
+            $$;
+        SQL);
 
-        // Step 2 — drop any REMAINING LOCAL copies on partitions. After
-        // step 1, whatever matches the pattern on a partition is locally
-        // defined (conislocal=true) — these are the stale strict copies
-        // (e.g. `_check1`) that step 1's parent-drop cascade does NOT
-        // remove. conislocal=true guarantees we never attempt to drop an
-        // inherited copy (which PG would reject with 42P16).
+        // Step 2 — drop EVERY remaining matching CHECK on ALL partitions.
+        // NO conislocal filter — after step 1, all remaining copies are
+        // LOCAL or ORPHANED INHERITED, both droppable directly. This catches
+        // the stale strict `_check1` / `_check2` orphans that step 1's
+        // cascade doesn't remove (because they're not linked to the parent).
         DB::statement(<<<SQL
             DO $$
             DECLARE
@@ -212,7 +224,6 @@ return new class extends Migration
                     JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE con.contype = 'c'
                       AND con.conname ~ '^stock_transactions_reference_type_check'
-                      AND con.conislocal = true
                       AND c.oid IN (
                           SELECT inhrelid
                           FROM pg_inherits
@@ -228,9 +239,9 @@ return new class extends Migration
             $$;
         SQL);
 
-        // Step 3 — add a single fresh constraint on the PARENT with the
-        // full allowed set (incl. 'reversal'). PG propagates inherited
-        // copies to every existing partition AND every future PARTITION OF.
+        // Step 3 — add a single fresh constraint on the PARENT. PG propagates
+        // inherited copies to every existing partition AND every future
+        // PARTITION OF.
         DB::statement(<<<SQL
             ALTER TABLE stock_transactions
             ADD CONSTRAINT stock_transactions_reference_type_check
