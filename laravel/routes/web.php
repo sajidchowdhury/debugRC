@@ -412,10 +412,20 @@ Route::middleware('auth')->group(function () {
     Route::middleware('role:admin,manager,accountant')->group(function () {
         Route::get('admin/stock-adjustments', [StockAdjustmentController::class, 'index'])->name('admin.stock-adjustments.index');
         Route::get('admin/stock-adjustments/audit', [StockAdjustmentController::class, 'audit'])->name('admin.stock-adjustments.audit');
+        // Phase 8 — 7-section integrity checklist (supersedes the flat audit()
+        // route; audit() above redirects here for backward compat).
+        Route::get('admin/stock-adjustments/checklist', [StockAdjustmentController::class, 'checklist'])->name('admin.stock-adjustments.checklist');
+        // Phase 8.1 (G2) — CSV export of the filtered list. Same filters as
+        // index(); cursor()-streamed + BOM-prefixed for Excel. Read-only.
+        Route::get('admin/stock-adjustments/export', [StockAdjustmentController::class, 'export'])->name('admin.stock-adjustments.export');
         // Phase 7 — Reconciliation view (drift detection). GET only; the
         // drift computation runs via the POST run-reconcile AJAX below.
         Route::get('admin/stock-adjustments/reconcile', [StockAdjustmentController::class, 'reconcile'])->name('admin.stock-adjustments.reconcile');
         Route::get('admin/stock-adjustments/{id}', [StockAdjustmentController::class, 'show'])->name('admin.stock-adjustments.show')
+            ->where(['id' => '[0-9]+']);
+        // Phase 8.4 (G18) — Print voucher for a single adjustment. Read-only
+        // (logs a 'print' audit action for the forensic trail).
+        Route::get('admin/stock-adjustments/{id}/print', [StockAdjustmentController::class, 'print'])->name('admin.stock-adjustments.print')
             ->where(['id' => '[0-9]+']);
     });
 

@@ -734,3 +734,73 @@ docker compose exec rcerp_postgres psql -U rcerp_app -d rcerp -c "\d stock_adjus
 should show `stock_transaction_id integer` + `stock_transaction_date date` + FK `sai_stock_tx_fk` referencing `stock_transactions(id, transaction_date)`.
 
 **Stage Summary:** Migration failure root-caused to the PostgreSQL partitioned-table unique-constraint rule (PG docs §5.11.2). Properly fixed with a composite FK that preserves the partitioning design (long-term scalable for large data) instead of dropping/scaling-crippling workarounds. A second latent type-mismatch bug (bigint vs integer) was fixed in the same pass. Phase 7 reconciliation work is unaffected — it is pure read/recompute with no schema dependency on the FK shape.
+
+---
+
+## SA-P8 — Phase 8: UI Parity — CSV Export, 7-Section Checklist, Print Voucher & Reversing GL Block
+
+**Date:** 2025-08-08
+**Status:** ✅ COMPLETED, committed, pushed.
+**Gaps closed:** G2 (no CSV export), G4 (no integrity checklist), G18 (no print voucher).
+
+### 8.1 CSV Export (G2)
+- `StockAdjustmentController::export()` — mirrors `WarehouseTransferController::export()`: same filter params as `index()`, branch isolation (admin sees all; non-admin branch-locked via `getUserBranchId()`), `cursor()`-based streaming (memory-safe for large exports), BOM-prefixed UTF-8 for Excel. Columns: Date, Code, Warehouse, Branch, Category, Type, Items, Total, Status, Submitted/Approved/Confirmed by + at, Reversed?.
+- Route `GET admin/stock-adjustments/export` (role:admin,manager,accountant).
+- "Export CSV" button on the index hero; preserves current filters via the `$filters` array.
+- No audit-log row written (bulk export spans many adjustments; the audit log requires a single `stock_adjustment_id`; the `export` action vocab is reserved for a future per-record export — mirrors WarehouseTransfer).
+
+### 8.2 StockAdjustmentAuditService (G4) — 7-section checklist
+**New file:** `laravel/app/Services/Stock/StockAdjustmentAuditService.php`
+- Ports Legacy's 6 sections + adds a 7th (approval_workflow). Each section: `{id, title, icon, checks, pass, fail, warn}`. Each check: `{key, label, count, status, samples, meta?}`. Branch-scoped for non-admins. COUNT-first with lazy sample rows (max 10) — a green tenant pays no sample-row cost.
+- The 7 sections:
+  1. **workflow** — stale drafts, cancelled without cancel_reason, confirmed with future date.
+  2. **gl_journal_links** — confirmed without JE, dangling journal_entry_id, unbalanced JEs.
+  3. **ledger_nature** — confirmed without stock_transactions, double-reversals, orphan reversal rows.
+  4. **stock_gl** — warehouse_stock↔stock_transactions drift (delegates to Phase 7 `ReconcileService::computeDrift()` — one drift formula), negative warehouse_stock.qty.
+  5. **data_integrity** — duplicate product_id per adjustment (G11), NULL branch_id, orphan product FK.
+  6. **operations** — items with UOM but no uom_factor, qty>0 but qty_base NULL, stock_transaction_id set but stock_transaction_date NULL (Phase 6.2 fix completeness).
+  7. **approval_workflow** — drafts never submitted, approved-but-not-confirmed >3 days, self-approval (maker=checker).
+
+### 8.3 Checklist view (G4)
+**New file:** `laravel/resources/views/admin/stock-adjustments/checklist.blade.php`
+- Hero (Re-run/Export/Back + branch-scope badge) → summary banner (pass/warn/fail chips + "X of Y checks passed") → 7 section cards (per-section chips + check list with status badge + scrollable sample-row table linking to the offending adjustment) → footer (last-run + Re-run).
+- The old `audit()` route redirects to `checklist` (backward-compat alias — named route `admin.stock-adjustments.audit` still works). The flat `audit.blade.php` is superseded but left as an orphan (harmless).
+
+### 8.4 Print voucher (G18)
+**New file:** `laravel/resources/views/admin/stock-adjustments/print.blade.php`
+- Extends `layouts.print` (standalone print page: toolbar with Print/Close buttons, print-CSS, auto-print on load, branch-colored header). Voucher layout: company header + doc title → meta grid (Code, Date, Warehouse, Branch, Category, Type) → reason → items table (#, Product code+name, Qty Entered+UOM, Qty Base, Rate, Amount, Total) → GL summary (JE# + entry date + Dr/Cr lines with Balanced badge) → reversing JE block (if cancelled after confirm) → signatures (Prepared by / Approved by / Posted by) → footer note. Watermark "CANCELLED"/"REVERSED" for terminal states.
+- `StockAdjustmentController::print()` + route `GET admin/stock-adjustments/{id}/print` (role:admin,manager,accountant). Logs a `print` audit action via `StockAdjustmentAuditLogger->log()` (forensic trail), wrapped in try/catch so a logging failure never blocks the print.
+- Print button added to the show-page hero (`target="_blank"`).
+
+### 8.5 GL audit blocks on show page
+- `show.blade.php` — original JE block (Phase 6.3) unchanged; new **reversing JE block** rendered below it when `reversingJe` is non-empty (cancelled-after-confirm). Shows JE# + entry date + reverse_reason + Dr/Cr lines table with Balanced badge, grouped by JE id.
+- `show()` controller method eager-loads `reversingJe` via `journal_entries.reversal_of_entry_id` LEFT JOIN to `journal_lines` + `ledgers` (direct query — no Eloquent relation on the model, cleaner for a read-only display block).
+
+### Files created
+- `laravel/app/Services/Stock/StockAdjustmentAuditService.php` (7-section checklist service)
+- `laravel/resources/views/admin/stock-adjustments/checklist.blade.php` (checklist view)
+- `laravel/resources/views/admin/stock-adjustments/print.blade.php` (print voucher, extends layouts.print)
+
+### Files modified
+- `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` — constructor adds `StockAdjustmentAuditService` (6th) + `StockAdjustmentAuditLogger` (7th) deps; `audit()` redirects to `checklist`; new `checklist()`, `export()`, `print()` methods; `show()` eager-loads + passes `reversingJe`.
+- `laravel/app/Models/StockAdjustment.php` — new `createdBy()` BelongsTo relation (for the print voucher "Prepared by" signature).
+- `laravel/routes/web.php` — 3 new read-group routes: `GET .../checklist`, `GET .../export`, `GET .../{id}/print`.
+- `laravel/resources/views/admin/stock-adjustments/index.blade.php` — "Checklist" button (replaces "Audit") + "Export CSV" button (preserves filters).
+- `laravel/resources/views/admin/stock-adjustments/show.blade.php` — Print button in hero + reversing JE block after the original GL Journal block.
+
+### Key design decisions
+1. The checklist **delegates the drift check to `ReconcileService::computeDrift()`** — so the checklist and the reconcile page can NEVER disagree (one drift formula, one source of truth).
+2. The `audit()` route **redirects to `checklist`** (backward compat — old bookmarks/links keep working).
+3. The CSV export **writes no audit-log row** (bulk export spans many adjustments; the audit log requires a single `stock_adjustment_id`; mirrors WarehouseTransfer).
+4. The print voucher **does log a `print` action** — per-adjustment, maps to one `stock_adjustment_id`; forensic value justifies the audit row.
+5. The reversing JE block uses a **direct DB query** rather than adding an Eloquent relation — it's a read-only display block, cleaner than polluting the model.
+6. The checklist is **AJAX-free** — server-side on each request; all queries are COUNT-first with lazy sample rows.
+
+### Verification (user must run)
+```
+docker compose exec rcerp_app php artisan route:list --name=stock-adjustments
+docker compose exec rcerp_app php artisan config:clear
+```
+Then visit: `/admin/stock-adjustments` (Export CSV + Checklist buttons), `/admin/stock-adjustments/checklist` (7-section report), `/admin/stock-adjustments/{id}` (Print button + reversing JE block), `/admin/stock-adjustments/{id}/print` (print voucher).
+
+**Stage Summary:** Phase 8 delivers Legacy-parity UX — CSV export (G2), a 7-section integrity checklist (G4) backed by a dedicated `StockAdjustmentAuditService`, a print voucher (G18) with items + GL summary + signatures, and a reversing GL audit block on the show page. The module is now role-gated, audit-logged, categorized, UOM-aware, reversal-safe, drift-monitored, AND Legacy-parity on UX. 8 of 10 phases complete; Phases 9-10 (API routes, test coverage) remain.

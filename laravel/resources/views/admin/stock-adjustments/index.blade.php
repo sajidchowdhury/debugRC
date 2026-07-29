@@ -73,8 +73,15 @@
             <a href="{{ route('admin.stock-adjustments.reconcile') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-scale-balanced me-1"></i> Reconciliation
             </a>
-            <a href="{{ route('admin.stock-adjustments.audit') }}" class="btn btn-outline-light btn-sm">
-                <i class="fas fa-clipboard-check me-1"></i> Audit
+            {{-- Phase 8 — Checklist (supersedes the flat Audit screen; the
+                 audit route still redirects here for backward compat). --}}
+            <a href="{{ route('admin.stock-adjustments.checklist') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-clipboard-check me-1"></i> Checklist
+            </a>
+            {{-- Phase 8.1 (G2) — CSV export with the current filters. The
+                 export route reads the same query params as index(). --}}
+            <a href="{{ route('admin.stock-adjustments.export', $filters) }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-file-csv me-1"></i> Export CSV
             </a>
             <a href="{{ route('admin.stock-adjustments.create') }}" class="btn btn-light btn-sm">
                 <i class="fas fa-plus me-1"></i> New Adjustment

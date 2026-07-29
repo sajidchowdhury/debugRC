@@ -90,6 +90,10 @@
             </p>
         </div>
         <div>
+            <a href="{{ route('admin.stock-adjustments.print', $adj->id) }}"
+               target="_blank" class="btn btn-light btn-sm">
+                <i class="fas fa-print me-1"></i> Print
+            </a>
             <a href="{{ route('admin.stock-adjustments.index') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-arrow-left me-1"></i> Back to list
             </a>
@@ -472,6 +476,88 @@
                                 </tfoot>
                             </table>
                         </div>
+                    </div>
+                </div>
+            @endif
+
+            {{-- Phase 8.5 — Reversing GL Journal Entry (shown when a confirmed
+                adjustment was cancelled, rolling back the original JE). Mirrors
+                the original JE block above so an auditor sees both the posting
+                and its rollback side-by-side. --}}
+            @if (isset($reversingJe) && $reversingJe && $reversingJe->isNotEmpty())
+                @php
+                    $reversalGroups = $reversingJe->groupBy('id');
+                @endphp
+                <div class="card border-0 shadow-sm mb-3 border-start border-danger border-4">
+                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-rotate-left me-1 text-danger"></i> Reversing GL Journal Entry
+                        </h2>
+                        <span class="badge bg-danger-subtle text-danger">
+                            <i class="fas fa-rotate-left me-1"></i>Rollback of the original posting
+                        </span>
+                    </div>
+                    <div class="card-body">
+                        @foreach ($reversalGroups as $jeId => $rows)
+                            @php
+                                $first = $rows->first();
+                                $revDebit  = $rows->sum(fn ($r) => (float) $r->debit);
+                                $revCredit = $rows->sum(fn ($r) => (float) $r->credit);
+                            @endphp
+                            <dl class="row mb-3 small">
+                                <dt class="col-sm-2 text-muted">JE#</dt>
+                                <dd class="col-sm-4"><span class="badge bg-secondary-subtle text-secondary">{{ $first->entry_no }}</span></dd>
+                                <dt class="col-sm-2 text-muted">Entry date</dt>
+                                <dd class="col-sm-4">{{ \Carbon\Carbon::parse($first->entry_date)->format('d M Y') }}</dd>
+                                @if ($first->reverse_reason)
+                                    <dt class="col-sm-2 text-muted">Reason</dt>
+                                    <dd class="col-sm-10"><em>{{ $first->reverse_reason }}</em></dd>
+                                @endif
+                            </dl>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-striped table-hover align-middle mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Ledger</th>
+                                            <th class="text-end">Debit (Tk)</th>
+                                            <th class="text-end">Credit (Tk)</th>
+                                            <th>Memo</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach ($rows as $r)
+                                            <tr>
+                                                <td>
+                                                    @if ($r->ledger_name)
+                                                        <span class="fw-semibold">{{ $r->ledger_name }}</span>
+                                                        <div class="small text-muted">{{ $r->ledger_code }}</div>
+                                                    @else
+                                                        <span class="text-muted">Ledger #{{ $r->ledger_id }}</span>
+                                                    @endif
+                                                </td>
+                                                <td class="text-end">{{ (float) $r->debit > 0 ? number_format((float) $r->debit, 2) : '—' }}</td>
+                                                <td class="text-end">{{ (float) $r->credit > 0 ? number_format((float) $r->credit, 2) : '—' }}</td>
+                                                <td class="small">{{ $r->memo ?: '—' }}</td>
+                                            </tr>
+                                        @endforeach
+                                    </tbody>
+                                    <tfoot>
+                                        <tr class="table-light fw-bold">
+                                            <td class="text-end">Total</td>
+                                            <td class="text-end">{{ number_format($revDebit, 2) }}</td>
+                                            <td class="text-end">{{ number_format($revCredit, 2) }}</td>
+                                            <td>
+                                                @if (abs($revDebit - $revCredit) < 0.01)
+                                                    <span class="badge bg-success-subtle text-success"><i class="fas fa-check me-1"></i>Balanced</span>
+                                                @else
+                                                    <span class="badge bg-danger-subtle text-danger"><i class="fas fa-triangle-exclamation me-1"></i>Out by {{ number_format(abs($revDebit - $revCredit), 2) }}</span>
+                                                @endif
+                                            </td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                        @endforeach
                     </div>
                 </div>
             @endif

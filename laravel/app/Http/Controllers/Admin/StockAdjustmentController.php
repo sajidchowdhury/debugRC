@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\StockAdjustment;
 use App\Models\Warehouse;
+use App\Services\Stock\StockAdjustmentAuditLogger;
+use App\Services\Stock\StockAdjustmentAuditService;
 use App\Services\Stock\StockAdjustmentPolicyService;
 use App\Services\Stock\StockAdjustmentReconcileService;
 use App\Services\Stock\StockAdjustmentService;
@@ -13,6 +15,7 @@ use App\Services\Stock\UomConversionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Response;
 
 /**
  * Stock Adjustment Controller — Phase 6.3.
@@ -53,7 +56,9 @@ class StockAdjustmentController extends Controller
         private StockService $stockService,
         private StockAdjustmentPolicyService $policy,
         private UomConversionService $uom,  // Phase 5 — UOM dropdown data
-        private StockAdjustmentReconcileService $reconcile  // Phase 7 — drift detection
+        private StockAdjustmentReconcileService $reconcile,  // Phase 7 — drift detection
+        private StockAdjustmentAuditService $auditService,   // Phase 8 — 7-section checklist
+        private StockAdjustmentAuditLogger $auditLogger      // Phase 8 — logs 'print' action
     ) {}
 
     /**
@@ -219,6 +224,23 @@ class StockAdjustmentController extends Controller
             ->orderBy('st.id')
             ->get();
 
+        // Phase 8.5 — the reversing JE (if a confirmed adjustment was later
+        // cancelled). journal_entries.reversal_of_entry_id links the reversal
+        // to the original; we look it up directly (no Eloquent relation).
+        // Shown on the show page as a second GL audit block alongside the
+        // original, so an auditor sees both the posting and its rollback.
+        $reversingJe = null;
+        if ($adjustment->journal_entry_id) {
+            $reversingJe = DB::table('journal_entries as je')
+                ->leftJoin('journal_lines as jl', 'jl.journal_entry_id', '=', 'je.id')
+                ->leftJoin('ledgers as l', 'l.id', '=', 'jl.ledger_id')
+                ->where('je.reversal_of_entry_id', $adjustment->journal_entry_id)
+                ->select('je.*', 'jl.debit', 'jl.credit', 'jl.memo', 'l.ledger_name', 'l.ledger_code')
+                ->orderBy('je.id')
+                ->orderBy('jl.id')
+                ->get();
+        }
+
         // Phase 3 — policy flags for the action aside. show() has no
         // Request binding (the method signature is show(int $id)), so the
         // current user is resolved via the auth helper.
@@ -229,6 +251,9 @@ class StockAdjustmentController extends Controller
             'title' => 'Adjustment ' . $adjustment->adjustment_code,
             'adjustment' => $adjustment,
             'stockTransactions' => $stockTransactions,
+            // Phase 8.5 — reversing JE rows for the GL audit block (null when
+            // the adjustment was never confirmed, or never cancelled).
+            'reversingJe' => $reversingJe,
             // Phase 4 — the audit timeline (chronological, RLS-scoped by branch).
             'auditLogs' => $adjustment->auditLogs,
             // Policy flags for the action buttons.
@@ -487,91 +512,217 @@ class StockAdjustmentController extends Controller
     }
 
     /**
-     * Audit checklist — health checks for all adjustments.
+     * Audit checklist — Phase 8 alias. The flat 4-check `audit()` screen is
+     * superseded by the rich 7-section `checklist()` below; this route is
+     * kept (named `admin.stock-adjustments.audit`) for backward compat and
+     * redirects to the canonical checklist route. Any old bookmarks / links
+     * keep working.
      */
     public function audit()
     {
-        // Phase 1: defense-in-depth role check (route already gated by
-        // role:admin,manager,accountant). The Policy's audit() method is a
-        // plain role check (no model binding).
         $this->authorize('audit', StockAdjustment::class);
-
-        $checks = $this->computeAuditChecks();
-
-        return view('admin.stock-adjustments.audit', [
-            'title' => 'Stock Adjustment Audit',
-            'checks' => $checks,
-        ]);
+        return redirect()->route('admin.stock-adjustments.checklist');
     }
 
     /**
-     * Compute audit health checks.
+     * Phase 8 — 7-section integrity checklist (G4).
+     *
+     * Renders the sectioned health-check report backed by
+     * StockAdjustmentAuditService. Branch-scoped for non-admins (RLS already
+     * enforces this at the DB level; the service-level branch filter is
+     * defense-in-depth + lets the view show the scope). The view is AJAX-free
+     * — checks are computed server-side on each request (the "Re-run checks"
+     * button just hits the route again). This is fine because the checklist
+     * is an infrequent, accountant-driven tool and the queries are all
+     * COUNT-first with lazy sample rows.
      */
-    private function computeAuditChecks(): array
+    public function checklist()
     {
-        $checks = [];
+        $this->authorize('audit', StockAdjustment::class);
 
-        // 1. Confirmed adjustments without GL journal.
-        $missingGl = DB::selectOne(<<<SQL
-SELECT COUNT(*) AS cnt FROM stock_adjustments
-WHERE status = 'confirmed' AND journal_entry_id IS NULL
-SQL);
-        $checks[] = [
-            'label' => 'Confirmed adjustments without GL journal entry',
-            'count' => (int) $missingGl->cnt,
-            'status' => $missingGl->cnt == 0 ? 'pass' : 'fail',
+        $userBranchId = $this->getUserBranchId();
+        $report = $this->auditService->runChecks($userBranchId);
+
+        return view('admin.stock-adjustments.checklist', [
+            'title'       => 'Stock Adjustment Checklist',
+            'sections'    => $report['sections'],
+            'summary'     => $report['summary'],
+            'userBranchId' => $userBranchId,
+        ]);
+    }
+
+    // ========================================================================
+    // Phase 8 — UI Parity: CSV Export, Print Voucher
+    // ========================================================================
+
+    /**
+     * Phase 8.1 (G2) — CSV export of the filtered adjustment list.
+     *
+     * Mirrors WarehouseTransferController::export(): same filter params as
+     * index(), branch isolation (admin sees all; non-admin branch-locked),
+     * cursor()-based streaming (memory-safe for large exports), BOM-prefixed
+     * UTF-8 for Excel compatibility. No audit-log row is written — a bulk
+     * export spans many adjustments and the audit log requires a single
+     * stock_adjustment_id; the 'export' action vocab is reserved for a
+     * future per-record export.
+     *
+     * Columns: Date, Code, Warehouse, Branch, Category, Type, Items, Total,
+     * Status, Submitted/Approved/Confirmed by + at, Reversed?.
+     */
+    public function export(Request $request)
+    {
+        $this->authorize('audit', StockAdjustment::class);
+
+        $userBranchId = $this->getUserBranchId();
+
+        $query = StockAdjustment::with(['warehouse.branch', 'items', 'submittedBy', 'approvedBy', 'confirmedBy'])
+            ->when($userBranchId, fn ($q) => $q->where('branch_id', $userBranchId))
+            ->when($request->input('from_date'), fn ($q, $d) => $q->where('adjustment_date', '>=', $d))
+            ->when($request->input('to_date'), fn ($q, $d) => $q->where('adjustment_date', '<=', $d))
+            ->when($request->input('warehouse_id'), fn ($q, $wid) => $q->where('warehouse_id', $wid))
+            ->when($request->input('adjustment_type'), fn ($q, $t) => $q->where('adjustment_type', $t))
+            ->when($request->input('adjustment_category'), function ($q, $c) {
+                if (in_array($c, StockAdjustment::ADJUSTMENT_CATEGORIES, true)) {
+                    $q->where('adjustment_category', $c);
+                }
+            })
+            ->when($request->input('status'), fn ($q, $s) => $q->where('status', $s))
+            ->when($request->input('search'), fn ($q, $s) => $q->where('adjustment_code', 'ILIKE', "%{$s}%"))
+            ->orderBy('adjustment_date', 'desc')
+            ->orderBy('id', 'desc');
+
+        $adjustments = $query->cursor();
+
+        $filename = 'StockAdjustments_' . now()->format('Y-m-d_His') . '.csv';
+
+        $headers = [
+            'Content-Type'        => 'text/csv; charset=utf-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Pragma'              => 'no-cache',
+            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
+            'Expires'             => '0',
         ];
 
-        // 2. Confirmed adjustments with unbalanced GL (should be 0 — DB trigger enforces).
-        $unbalanced = DB::selectOne(<<<SQL
-SELECT COUNT(*) AS cnt FROM (
-    SELECT je.id, SUM(jl.debit) AS d, SUM(jl.credit) AS c
-    FROM journal_entries je
-    JOIN journal_lines jl ON jl.journal_entry_id = je.id
-    WHERE je.reference_type = 'stock_adjustment'
-    GROUP BY je.id
-    HAVING SUM(jl.debit) <> SUM(jl.credit)
-) x
-SQL);
-        $checks[] = [
-            'label' => 'Unbalanced stock-adjustment journal entries',
-            'count' => (int) $unbalanced->cnt,
-            'status' => $unbalanced->cnt == 0 ? 'pass' : 'fail',
-        ];
+        $categoryLabels = StockAdjustment::CATEGORY_LABELS;
+        $statusLabels   = StockAdjustment::STATUS_LABELS;
 
-        // 3. Confirmed adjustments without stock transactions.
-        //
-        // Phase 2 (G17 fix): opening-balance adjustments write their stock
-        // movements with reference_type='opening_balance'. A confirmed
-        // adjustment is healthy if it has AT LEAST ONE stock_transactions row
-        // under EITHER reference_type.
-        $missingStock = DB::selectOne(<<<SQL
-SELECT COUNT(*) AS cnt FROM stock_adjustments sa
-WHERE sa.status = 'confirmed'
-  AND NOT EXISTS (
-    SELECT 1 FROM stock_transactions st
-    WHERE st.reference_id = sa.id
-      AND st.reference_type IN ('stock_adjustment','opening_balance')
-  )
-SQL);
-        $checks[] = [
-            'label' => 'Confirmed adjustments without stock transactions',
-            'count' => (int) $missingStock->cnt,
-            'status' => $missingStock->cnt == 0 ? 'pass' : 'fail',
-        ];
+        $callback = function () use ($adjustments, $categoryLabels, $statusLabels) {
+            $output = fopen('php://output', 'w');
 
-        // 4. Stale drafts (>7 days old).
-        $staleDrafts = DB::selectOne(<<<SQL
-SELECT COUNT(*) AS cnt FROM stock_adjustments
-WHERE status = 'draft' AND adjustment_date < (CURRENT_DATE - INTERVAL '7 days')
-SQL);
-        $checks[] = [
-            'label' => 'Stale draft adjustments (>7 days old)',
-            'count' => (int) $staleDrafts->cnt,
-            'status' => $staleDrafts->cnt == 0 ? 'pass' : 'warn',
-        ];
+            // BOM for Excel UTF-8 compatibility.
+            fprintf($output, chr(0xEF) . chr(0xBB) . chr(0xBF));
 
-        return $checks;
+            fputcsv($output, [
+                'Date',
+                'Code',
+                'Warehouse',
+                'Branch',
+                'Category',
+                'Type',
+                'Items',
+                'Total',
+                'Status',
+                'Submitted By',
+                'Submitted At',
+                'Approved By',
+                'Approved At',
+                'Confirmed By',
+                'Confirmed At',
+                'Reversed',
+            ]);
+
+            foreach ($adjustments as $a) {
+                $fmtDate = function ($d): string {
+                    return $d ? \Carbon\Carbon::parse($d)->format('d-m-Y') : '';
+                };
+                $fmtUser = function ($u): string {
+                    return $u ? ($u->username ?? $u->name ?? ('user #' . $u->id)) : '';
+                };
+
+                fputcsv($output, [
+                    $fmtDate($a->adjustment_date),
+                    $a->adjustment_code,
+                    $a->warehouse?->warehouse_name ?? '',
+                    $a->warehouse?->branch?->branch_name ?? '',
+                    $categoryLabels[$a->adjustment_category] ?? $a->adjustment_category,
+                    $a->adjustment_type,
+                    $a->items->count(),
+                    number_format((float) $a->total_amount, 2, '.', ''),
+                    $statusLabels[$a->status] ?? $a->status,
+                    $fmtUser($a->submittedBy),
+                    $fmtDate($a->submitted_at),
+                    $fmtUser($a->approvedBy),
+                    $fmtDate($a->approved_at),
+                    $fmtUser($a->confirmedBy),
+                    $fmtDate($a->confirmed_at),
+                    $a->is_reversed ? 'Yes' : 'No',
+                ]);
+            }
+
+            fclose($output);
+        };
+
+        return Response::stream($callback, 200, $headers);
+    }
+
+    /**
+     * Phase 8.4 (G18) — Print voucher for a single adjustment.
+     *
+     * Renders a print-friendly voucher (print.blade.php) with: code, date,
+     * warehouse+branch, category, type, reason, items table (product,
+     * qty_entered+UOM, qty_base, rate, amount), totals, GL summary (JE# +
+     * Dr/Cr lines), and a lifecycle signatures line (Prepared by / Approved
+     * by / Posted by). A 'print' audit action is logged so the audit
+     * timeline shows every time a voucher was printed (G4 forensic trail).
+     *
+     * Also eager-loads the reversing JE (if the adjustment was cancelled
+     * after confirm) so the voucher can show both the original + reversing
+     * GL blocks.
+     */
+    public function print(int $id)
+    {
+        $adjustment = StockAdjustment::with([
+            'items.product', 'items.uom',
+            'warehouse.branch', 'branch',
+            'journalEntry.lines.ledger',
+            'submittedBy', 'approvedBy', 'confirmedBy', 'createdBy',
+        ])->findOrFail($id);
+
+        $this->authorize('view', $adjustment);
+
+        // The reversing JE (if the confirmed adjustment was later cancelled).
+        // journal_entries.reversal_of_entry_id links the reversal to the
+        // original; we look it up directly (no Eloquent relation on the model).
+        $reversingJe = null;
+        if ($adjustment->journal_entry_id) {
+            $reversingJe = DB::table('journal_entries as je')
+                ->leftJoin('journal_lines as jl', 'jl.journal_entry_id', '=', 'je.id')
+                ->leftJoin('ledgers as l', 'l.id', '=', 'jl.ledger_id')
+                ->where('je.reversal_of_entry_id', $adjustment->journal_entry_id)
+                ->select('je.*', 'jl.debit', 'jl.credit', 'jl.memo', 'l.ledger_name', 'l.ledger_code')
+                ->orderBy('je.id')
+                ->orderBy('jl.id')
+                ->get();
+        }
+
+        // Phase 8 — log the 'print' action (forensic: the audit timeline
+        // shows every voucher print, with the actor + timestamp). Wrapped in
+        // a try/catch so a logging failure never blocks the print (the data
+        // is the source of truth; the audit row is the forensic record).
+        try {
+            $this->auditLogger->log($adjustment, 'print');
+        } catch (\Throwable $e) {
+            Log::warning('StockAdjustment print audit-log failed', [
+                'adjustment_id' => $adjustment->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return view('admin.stock-adjustments.print', [
+            'title' => 'Print ' . $adjustment->adjustment_code,
+            'adjustment' => $adjustment,
+            'reversingJe' => $reversingJe,
+        ]);
     }
 
     // ========================================================================

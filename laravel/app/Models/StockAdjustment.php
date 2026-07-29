@@ -216,6 +216,16 @@ class StockAdjustment extends Model
     }
 
     /**
+     * Phase 8 — the user who created (drafted) this adjustment. Used by the
+     * print voucher's "Prepared by" signature line. Mirrors the existing
+     * submittedBy/approvedBy/confirmedBy relations.
+     */
+    public function createdBy(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /**
      * Phase 3 — the user who submitted this adjustment for approval.
      */
     public function submittedBy(): \Illuminate\Database\Eloquent\Relations\BelongsTo

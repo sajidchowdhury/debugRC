@@ -1,11 +1,11 @@
 # Stock Adjustment — Phased Implementation Plan (Legacy → Laravel ERP)
 
-**Document version:** 1.8
+**Document version:** 1.9
 **Date:** 2025-07-29
 **Scope:** A complete gap analysis and phase-by-phase implementation plan to transform the Laravel ERP's *Stock Adjustment* module into a robust, accountant-grade **bookkeeping correction tool**.
 **Context:** A generic, administrative quantity correction for cases that are **not** operational losses — opening balances, data migration, system/unit-of-measure errors, post-conversion fixes, legacy cleanup. It is a **bookkeeping tool, not a warehouse tool**. Triggered by an **Accountant / system administrator, infrequently**. The quantity correction (and its financial damage) is applied **warehouse-wise**.
 **Target stack:** Laravel 12 + PostgreSQL 16 (RLS-enabled, partitioned ledger, moving-average costing).
-**Current state:** **Phases 1-7 COMPLETE ✅** (authorization, categorization, maker-checker approval, dedicated audit log, UOM handling, pipeline-aware availability + reversal safety + date integrity, drift reconciliation + nightly alert) plus 3 post-launch hotfixes (total_amount column, journal_entry_id FK, partitioned-table composite-FK). The module is now role-gated, audit-logged, categorized, UOM-aware, reversal-safe, and drift-monitored. **Phases 8-10 remain** (UI parity/CSV/print, API routes, test coverage).
+**Current state:** **Phases 1-8 COMPLETE ✅** (authorization, categorization, maker-checker approval, dedicated audit log, UOM handling, pipeline-aware availability + reversal safety + date integrity, drift reconciliation + nightly alert, UI parity — CSV export + 7-section checklist + print voucher + reversing GL block) plus 3 post-launch hotfixes (total_amount column, journal_entry_id FK, partitioned-table composite-FK). The module is now role-gated, audit-logged, categorized, UOM-aware, reversal-safe, drift-monitored, and Legacy-parity on UX. **Phases 9-10 remain** (API routes, test coverage).
 
 ---
 
@@ -457,7 +457,7 @@ CREATE TABLE warehouse_stock (                                    -- snapshot/ca
 | 5 | Unit-of-Measure (UOM) Handling | 3 days | High ✅ DONE | none (parallel with 1-4) |
 | 6 | Pipeline-Aware Availability, Reversal Safety & Date Integrity | 2-3 days | High ✅ DONE | 2 |
 | 7 | Reconciliation, Drift Detection & Data-Hygiene Fixes | 2 days | Medium ✅ DONE | 4, 6 |
-| 8 | UI Parity: CSV Export, Checklist, Print & Audit Timeline | 3 days | Medium ⬜ PENDING | 4, 7 |
+| 8 | UI Parity: CSV Export, Checklist, Print & Audit Timeline | 3 days | Medium ✅ DONE | 4, 7 |
 | 9 | API Routes & Mobile Support | 1-2 days | Low ⬜ PENDING | 3, 5 |
 | 10 | Test Coverage & Shadow Mode | 4 days | High ⬜ PENDING | 1-9 |
 
@@ -473,7 +473,7 @@ Phase 5 ──┘ (parallel)                                         ├──�
 
 **Total estimated effort:** ~22-26 developer-days.
 
-**Progress (Phases 1-7):** ✅ **7 of 10 phases COMPLETE** (Phases 1-7 done + 2 post-launch hotfixes). Phases 8-10 remain (UI parity, API, tests). The core engine + drift observability — authorization, categorization, maker-checker approval, audit logging, UOM conversion, pipeline-aware availability, reversal safety, date integrity, and nightly drift reconciliation — are shipped. Remaining work is UX parity (export/print/checklist), mobile/API, and test coverage.
+**Progress (Phases 1-8):** ✅ **8 of 10 phases COMPLETE** (Phases 1-8 done + 3 post-launch hotfixes). Phases 9-10 remain (API, tests). The core engine + drift observability + Legacy-parity UX — authorization, categorization, maker-checker approval, audit logging, UOM conversion, pipeline-aware availability, reversal safety, date integrity, nightly drift reconciliation, CSV export, 7-section checklist, print voucher, reversing GL block — are shipped. Remaining work is mobile/API and test coverage.
 
 ---
 
@@ -1465,7 +1465,7 @@ After all 10 phases, the Laravel Stock Adjustment module will deliver:
 5. ✅ **UOM conversion** — quantities entered in any UOM (Carton/Pcs/KG) are converted to the product's base unit before posting; the "system/UOM error" use case is fully supported (Phase 5).
 6. ✅ **Accurate stock** — pipeline-aware availability for decreases, exact-row reversal (no duplicate-product orphan), and original-date reversal that respects closed periods (Phase 6).
 7. ✅ **Drift detection** — nightly reconciliation between `warehouse_stock` cache and the `stock_transactions` SSOT, with admin alerts + an interactive reconcile view + admin-only snapshot rebuild (Phase 7).
-8. ⬜ **Proper UI** — CSV export, a 7-section integrity checklist, a print voucher, GL audit blocks, a lifecycle stepper, and an audit timeline (Phase 8 — PENDING; the lifecycle stepper + audit timeline from Phases 3-4 are already live).
+8. ✅ **Proper UI** — CSV export, a 7-section integrity checklist, a print voucher, GL audit blocks (original + reversing), a lifecycle stepper, and an audit timeline (Phase 8 — DONE; CSV export + 7-section checklist + print voucher + reversing GL block shipped; lifecycle stepper + audit timeline from Phases 3-4 already live).
 9. ⬜ **API support** — REST endpoints for mobile/AI sidecars with the same policy enforcement (Phase 9 — PENDING).
 10. ⬜ **Test coverage** — a 12-file feature suite covering the golden path and edge cases, plus optional shadow-mode comparison against Legacy (Phase 10 — PENDING).
 11. ✅ **Proper PostgreSQL handling** — RLS for branch isolation, partitioned immutable ledger, `pg_advisory_xact_lock` for atomic code generation, CHECK constraints for enums, triggers for non-negative stock, and generated `total_value` columns.
