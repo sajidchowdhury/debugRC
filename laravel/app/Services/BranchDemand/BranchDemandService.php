@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Branch Demand Service — Phase 2 + Phase 3 + Phase 5.
+ * Branch Demand Service — Phase 2 + Phase 3 + Phase 5 + Phase 8.
  *
  * Full demand lifecycle: create, send, confirm receipt, reverse, delete, reject.
  *
@@ -54,6 +54,7 @@ class BranchDemandService
         private StockService $stockService,
         private StockAvailabilityService $stockAvailabilityService,
         private BranchIntercompanyService $intercompanyService,
+        private BranchDemandAuditLogger $auditLogger,
     ) {}
 
     // ===================== CREATE =====================
@@ -137,6 +138,15 @@ class BranchDemandService
                 'items_count' => count($items),
                 'created_by'  => $data['created_by'] ?? null,
             ]);
+
+            // ★ Phase 8 — Audit log
+            $this->auditLogger->log($demandId, 'create', $fromBranchId, [
+                'demand_code'   => $demandCode,
+                'from_branch_id' => $fromBranchId,
+                'to_branch_id'  => $toBranchId,
+                'items_count'   => count($items),
+                'demand_date'   => $data['demand_date'],
+            ], $data['created_by'] ?? null);
 
             return BranchDemand::find($demandId);
         });
@@ -301,6 +311,16 @@ class BranchDemandService
                 'sent_by'               => $sentBy,
             ]);
 
+            // ★ Phase 8 — Audit log
+            $this->auditLogger->log($demandId, 'send', (int) $demand->from_branch_id, [
+                'demand_code'           => $demand->demand_code,
+                'total_value'           => round($totalValue, 2),
+                'warehouse_transfer_id' => $warehouseTransferId,
+                'items_count'           => count($sendPlan),
+                'from_branch_id'        => (int) $demand->from_branch_id,
+                'to_branch_id'          => (int) $demand->to_branch_id,
+            ], $sentBy);
+
             return BranchDemand::find($demandId);
         });
     }
@@ -435,6 +455,16 @@ class BranchDemandService
                 'stock_reversed_count' => $receiveTransactions->count() + $sendTransactions->count(),
             ]);
 
+            // ★ Phase 8 — Audit log
+            $this->auditLogger->log($demandId, 'reverse', (int) $demand->from_branch_id, [
+                'demand_code'           => $demand->demand_code,
+                'reason'                => $reason,
+                'total_value'           => (float) $demand->total_value,
+                'stock_reversed_count'  => $receiveTransactions->count() + $sendTransactions->count(),
+                'from_branch_id'        => (int) $demand->from_branch_id,
+                'to_branch_id'          => (int) $demand->to_branch_id,
+            ], $reversedBy);
+
             return BranchDemand::find($demandId);
         });
     }
@@ -523,8 +553,15 @@ class BranchDemandService
                 'branch_id'    => $branchId,
             ]);
 
-            // Audit log via the model's AuditableMasterData trait
-            // (the model update will trigger the audit automatically)
+            // ★ Phase 8 — Audit log (replaces the dead AuditableMasterData trait)
+            $this->auditLogger->log($demandId, 'confirm_receipt', (int) $demand->from_branch_id, [
+                'demand_code'   => $demand->demand_code,
+                'confirmed_by'  => $confirmedBy,
+                'total_value'   => (float) $demand->total_value,
+                'from_branch_id' => (int) $demand->from_branch_id,
+                'to_branch_id'  => (int) $demand->to_branch_id,
+            ], $confirmedBy);
+
             return BranchDemand::find($demandId);
         });
     }
@@ -571,6 +608,14 @@ class BranchDemandService
             Log::info('BranchDemand deleted (draft)', [
                 'demand_id'   => $demandId,
                 'demand_code' => $demand->demand_code,
+            ]);
+
+            // ★ Phase 8 — Audit log (before the demand is deleted, we still have the ID)
+            $this->auditLogger->log($demandId, 'delete', (int) $demand->from_branch_id, [
+                'demand_code'   => $demand->demand_code,
+                'from_branch_id' => (int) $demand->from_branch_id,
+                'to_branch_id'  => (int) $demand->to_branch_id,
+                'demand_date'   => $demand->demand_date,
             ]);
         });
     }
@@ -621,6 +666,14 @@ class BranchDemandService
                 'rejected_by' => $rejectedBy,
                 'reason'      => $reason,
             ]);
+
+            // ★ Phase 8 — Audit log
+            $this->auditLogger->log($demandId, 'reject', (int) $demand->from_branch_id, [
+                'demand_code'   => $demand->demand_code,
+                'reason'        => $reason,
+                'from_branch_id' => (int) $demand->from_branch_id,
+                'to_branch_id'  => (int) $demand->to_branch_id,
+            ], $rejectedBy);
 
             return BranchDemand::find($demandId);
         });

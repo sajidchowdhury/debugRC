@@ -56,6 +56,7 @@ class BranchIntercompanyService
 {
     public function __construct(
         private JournalPostingService $journalPosting,
+        private BranchDemandAuditLogger $auditLogger,
     ) {}
 
     // ===================== DEMAND FULFILLMENT =====================
@@ -701,6 +702,23 @@ class BranchIntercompanyService
             'settlements_count' => count($allSettlements),
         ]);
 
+        // ★ Phase 8 — Audit log for each settled demand
+        foreach ($allSettlements as $settlement) {
+            $this->auditLogger->log(
+                (int) $settlement['demand_id'],
+                'settle',
+                $branchId,
+                [
+                    'source'            => 'customer_payment',
+                    'payment_id'        => $paymentId,
+                    'settled_amount'    => $settlement['settled_amount'],
+                    'outstanding_before' => $settlement['outstanding_before'],
+                    'outstanding_after' => $settlement['outstanding_after'],
+                ],
+                $postedBy
+            );
+        }
+
         return [
             'total_settled' => round($totalSettled, 2),
             'settlements'   => $allSettlements,
@@ -766,6 +784,23 @@ class BranchIntercompanyService
             'total_settled' => $result['total_settled'],
             'settlements_count' => count($result['settlements']),
         ]);
+
+        // ★ Phase 8 — Audit log for each settled demand
+        foreach ($result['settlements'] as $settlement) {
+            $this->auditLogger->log(
+                (int) $settlement['demand_id'],
+                'settle',
+                $fromBranchId,
+                [
+                    'source'            => 'money_transfer',
+                    'transfer_id'       => $transferId,
+                    'settled_amount'    => $settlement['settled_amount'],
+                    'outstanding_before' => $settlement['outstanding_before'],
+                    'outstanding_after' => $settlement['outstanding_after'],
+                ],
+                $postedBy
+            );
+        }
 
         return $result;
     }
@@ -1073,5 +1108,21 @@ class BranchIntercompanyService
             'settlements_count'  => $settlements->count(),
             'reversed_by'        => $reversedBy,
         ]);
+
+        // ★ Phase 8 — Audit log for each reversed settlement
+        foreach ($settlements as $settlement) {
+            $this->auditLogger->log(
+                (int) $settlement->demand_id,
+                'settlement_reverse',
+                null, // branch_id not available from settlement row
+                [
+                    'source'          => $referenceType,
+                    'reference_id'    => $referenceId,
+                    'reversed_amount' => (float) $settlement->settled_amount,
+                    'reason'          => $reason,
+                ],
+                $reversedBy
+            );
+        }
     }
 }

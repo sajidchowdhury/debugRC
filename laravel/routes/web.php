@@ -663,6 +663,11 @@ Route::middleware('auth')->group(function () {
         Route::get('weekly-report', [BranchDemandReportController::class, 'weekly'])->name('weekly-report');
         Route::get('weekly-report/export', [BranchDemandReportController::class, 'exportCsv'])->name('weekly-report.export');
         Route::get('weekly-report/drill-down', [BranchDemandReportController::class, 'drillDown'])->name('weekly-report.drill-down');
+
+        // Phase 8: Anti-Gaming & Accountability Controls
+        Route::get('checklist', [BranchDemandController::class, 'checklist'])->name('checklist');
+        Route::get('{id}/audit', [BranchDemandController::class, 'audit'])->name('audit');
+        Route::get('reconcile', [BranchDemandController::class, 'reconcile'])->name('reconcile');
     });
     Route::resource('admin/branch-demands', BranchDemandController::class)
         ->only(['index', 'create', 'store', 'show', 'destroy'])

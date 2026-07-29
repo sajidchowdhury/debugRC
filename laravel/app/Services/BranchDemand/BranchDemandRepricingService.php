@@ -50,6 +50,7 @@ class BranchDemandRepricingService
     public function __construct(
         private JournalPostingService $journalPosting,
         private BranchIntercompanyService $intercompanyService,
+        private BranchDemandAuditLogger $auditLogger,
     ) {}
 
     // ===================== REPRICING ADJUSTMENT =====================
@@ -193,6 +194,20 @@ class BranchDemandRepricingService
                 'created_by'          => $createdBy,
                 'approved_by'         => $approvedBy,
             ]);
+
+            // ★ Phase 8 — Audit log
+            $this->auditLogger->log($demandId, 'reprice', (int) $demand->from_branch_id, [
+                'demand_code'         => $demand->demand_code,
+                'original_total'      => round($originalTotalValue, 2),
+                'new_total'           => round($newTotalValue, 2),
+                'adjustment_amount'   => round($adjustmentAmount, 2),
+                'reason'              => $reason,
+                'approved_by'         => $approvedBy,
+                'repricing_id'        => $repricingId,
+                'journal_entry_id'    => $journalEntryId,
+                'from_branch_id'      => (int) $demand->from_branch_id,
+                'to_branch_id'        => (int) $demand->to_branch_id,
+            ], $createdBy);
 
             return BranchDemandRepricing::find($repricingId);
         });

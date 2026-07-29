@@ -13,6 +13,7 @@ use App\Models\BranchDemand;
 use App\Services\BranchDemand\BranchDemandService;
 use App\Services\BranchDemand\BranchIntercompanyService;
 use App\Services\BranchDemand\BranchDemandRepricingService;
+use App\Services\BranchDemand\BranchDemandAuditService;
 use App\Services\Stock\StockAvailabilityService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
@@ -21,7 +22,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Branch Demand Controller — Phase 2 + Phase 5 + Phase 7.
+ * Branch Demand Controller — Phase 2 + Phase 5 + Phase 7 + Phase 8.
  *
  * Web controller for the cross-branch demand lifecycle:
  *   - index:   Filtered list of demands (my demands + incoming)
@@ -34,6 +35,9 @@ use Illuminate\Support\Facades\Log;
  *   - confirmReceipt:  Confirm receipt of goods (Phase 5)
  *   - reprice:  Reprice a demand's total value (Phase 7)
  *   - priceRangeComparison:  Price range audit (Phase 7)
+ *   - checklist:  Audit checklist (Phase 8)
+ *   - audit:   Per-demand audit trail (Phase 8)
+ *   - reconcile:  Branch-level reconciliation (Phase 8)
  *   - reverse:  Reverse a sent/received demand
  *   - delete:   Delete a pending demand
  *   - reject:   Reject a pending demand
@@ -45,6 +49,7 @@ class BranchDemandController extends Controller
         private BranchDemandService $demandService,
         private BranchIntercompanyService $intercompanyService,
         private BranchDemandRepricingService $repricingService,
+        private BranchDemandAuditService $auditService,
         private StockService $stockService,
         private StockAvailabilityService $stockAvailabilityService,
     ) {}
@@ -556,6 +561,88 @@ class BranchDemandController extends Controller
         );
 
         return response()->json($result);
+    }
+
+    // ===================== AUDIT & ACCOUNTABILITY (Phase 8) =====================
+
+    /**
+     * Show the audit checklist view.
+     *
+     * Phase 8 — Anti-Gaming & Accountability Controls.
+     *
+     * Runs all health checks and displays the results:
+     *   - GL Journal Links: All received demands have both journal entries
+     *   - Ledger Nature: interbranch_receivable / interbranch_payable accounts exist
+     *   - Demand GL Alignment: No received demands have reversed journal entries
+     *   - Journal Balance: Each journal entry has balanced Dr/Cr
+     *   - Orphaned Settlements: No settlements reference reversed demands
+     *   - Reversed with Open Settlements: No reversed demands have open settlements
+     */
+    public function checklist()
+    {
+        $checklist = $this->auditService->getChecklist();
+
+        return view('admin.branch-demands.checklist', compact('checklist'));
+    }
+
+    /**
+     * Show the full audit trail for a specific demand.
+     *
+     * Phase 8 — Anti-Gaming & Accountability Controls.
+     *
+     * Returns:
+     *   - Stock trace, settlement trace, GL journal blocks
+     *   - Anti-gaming flags for this demand
+     *   - Chronological audit log
+     *   - Repricing history
+     */
+    public function audit(int $id)
+    {
+        try {
+            $auditData = $this->auditService->getDemandAudit($id);
+
+            return view('admin.branch-demands.audit', compact('auditData'));
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['error' => $e->getMessage()]);
+        } catch (\Throwable $e) {
+            Log::error('BranchDemand audit failed', ['demand_id' => $id, 'error' => $e->getMessage()]);
+            return back()->withErrors(['error' => 'Failed to load audit data. ' . $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Show the branch-level reconciliation view.
+     *
+     * Phase 8 — Anti-Gaming & Accountability Controls.
+     *
+     * Compares demand outstanding vs branch_ledger running balance
+     * for each branch pair. Any discrepancy indicates a data integrity issue.
+     */
+    public function reconcile(Request $request)
+    {
+        $branchId = $this->currentBranchId();
+        $dateFrom = $request->input('date_from');
+        $dateTo = $request->input('date_to');
+
+        $reconciliation = $this->auditService->getReconciliation(
+            $branchId,
+            $dateFrom,
+            $dateTo
+        );
+
+        // Get anti-gaming flags for the weekly report integration
+        $antiGamingFlags = $this->auditService->getDemandAntiGamingFlags(
+            $branchId,
+            $dateFrom,
+            $dateTo
+        );
+
+        return view('admin.branch-demands.reconcile', [
+            'reconciliation'   => $reconciliation,
+            'antiGamingFlags'  => $antiGamingFlags,
+            'dateFrom'         => $dateFrom,
+            'dateTo'           => $dateTo,
+        ]);
     }
 
     // ===================== INTERCOMPANY / BRANCH LEDGER =====================
