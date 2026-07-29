@@ -24,6 +24,7 @@ use App\Http\Controllers\Admin\StockTransactionController;
 use App\Http\Controllers\Admin\StockAdjustmentController;
 use App\Http\Controllers\Admin\StockTakeController;
 use App\Http\Controllers\Admin\WarehouseTransferController;
+use App\Http\Controllers\Admin\BranchDemandController;
 use App\Http\Controllers\Admin\DamageController;
 use App\Http\Controllers\Admin\PurchaseOrderController;
 use App\Http\Controllers\Admin\PurchaseReceiveController;
@@ -631,6 +632,24 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/warehouse-transfers', WarehouseTransferController::class)
         ->only(['index', 'create', 'store', 'show'])
         ->names('admin.warehouse-transfers');
+
+    // ============================================================
+    // Phase 2: Branch Demands (cross-branch product supply)
+    // Create → Send → Reverse/Delete/Reject
+    // ============================================================
+    Route::prefix('admin/branch-demands')->name('admin.branch-demands.')->group(function () {
+        Route::get('pending', [BranchDemandController::class, 'pending'])->name('pending');
+        Route::get('branches', [BranchDemandController::class, 'getBranches'])->name('branches');
+        Route::get('products', [BranchDemandController::class, 'getProducts'])->name('products');
+        Route::get('warehouses/{id}', [BranchDemandController::class, 'getWarehousesByBranch'])->name('warehouses');
+        Route::get('stock/{pid}/{bid}', [BranchDemandController::class, 'getWarehouseStock'])->name('stock');
+        Route::post('{id}/send', [BranchDemandController::class, 'send'])->name('send');
+        Route::post('{id}/reverse', [BranchDemandController::class, 'reverse'])->name('reverse');
+        Route::post('{id}/reject', [BranchDemandController::class, 'reject'])->name('reject');
+    });
+    Route::resource('admin/branch-demands', BranchDemandController::class)
+        ->only(['index', 'create', 'store', 'show', 'destroy'])
+        ->names('admin.branch-demands');
 
     // ============================================================
     // Phase 7.3: Shadow Mode Dashboard (Warehouse Transfer comparison)
