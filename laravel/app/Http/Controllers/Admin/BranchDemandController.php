@@ -9,6 +9,7 @@ use App\Http\Requests\BranchDemand\ReverseBranchDemandRequest;
 use App\Http\Requests\BranchDemand\RejectBranchDemandRequest;
 use App\Models\BranchDemand;
 use App\Services\BranchDemand\BranchDemandService;
+use App\Services\BranchDemand\BranchIntercompanyService;
 use App\Services\Stock\StockAvailabilityService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
@@ -35,6 +36,7 @@ class BranchDemandController extends Controller
 {
     public function __construct(
         private BranchDemandService $demandService,
+        private BranchIntercompanyService $intercompanyService,
         private StockService $stockService,
         private StockAvailabilityService $stockAvailabilityService,
     ) {}
@@ -379,5 +381,46 @@ class BranchDemandController extends Controller
         }
 
         return response()->json($result);
+    }
+
+    // ===================== INTERCOMPANY / BRANCH LEDGER =====================
+
+    /**
+     * JSON: Get outstanding amounts for my branch (intercompany balances).
+     */
+    public function getOutstanding()
+    {
+        $branchId = $this->currentBranchId();
+        $outstanding = $this->intercompanyService->getOutstandingByBranch($branchId);
+
+        return response()->json($outstanding);
+    }
+
+    /**
+     * JSON: Get branch ledger history between two branches.
+     */
+    public function getLedgerHistory(Request $request)
+    {
+        $request->validate([
+            'partner_branch_id' => 'required|integer|exists:branches,id',
+            'date_from' => 'nullable|date',
+            'date_to'   => 'nullable|date',
+        ]);
+
+        $branchId = $this->currentBranchId();
+        $partnerBranchId = (int) $request->partner_branch_id;
+
+        // Determine debtor/creditor ordering
+        $debtorBranchId = min($branchId, $partnerBranchId);
+        $creditorBranchId = max($branchId, $partnerBranchId);
+
+        $history = $this->intercompanyService->getLedgerHistory(
+            $debtorBranchId,
+            $creditorBranchId,
+            $request->date_from,
+            $request->date_to
+        );
+
+        return response()->json($history);
     }
 }

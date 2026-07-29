@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Branch Demand Service — Phase 2.
+ * Branch Demand Service — Phase 2 + Phase 3.
  *
  * Full demand lifecycle: create, send, reverse, delete, reject.
  *
@@ -22,7 +22,8 @@ use Illuminate\Support\Facades\Log;
  *      Status = 'pending'. No stock movement, no GL.
  *   2. SEND: Branch A's warehouse manager selects per-item FROM/TO warehouses and sends goods.
  *      Status = 'received'. Stock moves (OUT from supplier, IN to requester), WT created.
- *   3. REVERSE: Undo a sent/received demand (stock restored, GL reversed).
+ *      Phase 3: GL journals posted (creditor + debtor), branch ledger updated.
+ *   3. REVERSE: Undo a sent/received demand (stock restored, GL reversed, ledger reversed).
  *      Status = 'reversed'.
  *   4. DELETE: Remove a pending demand (only if status='pending').
  *   5. REJECT: Reject a pending demand (status='rejected').
@@ -50,6 +51,7 @@ class BranchDemandService
     public function __construct(
         private StockService $stockService,
         private StockAvailabilityService $stockAvailabilityService,
+        private BranchIntercompanyService $intercompanyService,
     ) {}
 
     // ===================== CREATE =====================
@@ -284,6 +286,10 @@ class BranchDemandService
                     'updated_at'            => now(),
                 ]);
 
+            // ★ Phase 3 — Post intercompany GL journals and branch ledger
+            $demandModel = BranchDemand::find($demandId);
+            $this->intercompanyService->postDemandFulfillmentJournals($demandModel, $sentBy);
+
             Log::info('BranchDemand goods sent', [
                 'demand_id'             => $demandId,
                 'demand_code'           => $demand->demand_code,
@@ -385,6 +391,17 @@ class BranchDemandService
                     (int) $demand->warehouse_transfer_id, $reversedBy, $reason
                 );
             }
+
+            // ★ Phase 3 — Reverse intercompany GL journals and branch ledger
+            $demandModel = BranchDemand::find($demandId);
+            $this->intercompanyService->reverseDemandJournals($demandModel, $reversedBy, $reason);
+            $this->intercompanyService->reverseLedgerByReference(
+                'demand_transfer',
+                $demandId,
+                $reversedBy,
+                $reason,
+                $demand->demand_date
+            );
 
             // Update the demand header
             DB::table('branch_demands')

@@ -1,8 +1,8 @@
 # Branch Demand — Complete Implementation Plan for Laravel ERP
 
-**Document version:** 1.2  
+**Document version:** 1.3  
 **Date:** 2026-07-29  
-**Last updated:** 2026-07-29 — Phase 1 & 2 completed  
+**Last updated:** 2026-07-29 — Phase 1, 2 & 3 completed  
 **Scope:** Cross-Branch Demand / Supply Transfer System with Accountability, Audit, and Price Range Handling  
 **Target stack:** Laravel 11 + PostgreSQL 16  
 **Source of truth:** Legacy PHP/MySQL system (fully functional) + User-provided Excel audit sheet ("MAIN BILL SHIT1.xlsx")  
@@ -702,41 +702,62 @@ CREATE TABLE branch_demand_repricing (
 
 ---
 
-### Phase 3 — Intercompany GL & Branch Ledger
+### Phase 3 — Intercompany GL & Branch Ledger ✅ COMPLETED
 
 **Goal:** Implement the full intercompany accounting: dual GL journals, branch ledger with running balance.
 
+**Status:** ✅ **COMPLETED** — Commit on 2026-07-29
+
 **Tasks:**
 
-1. **Create `BranchIntercompanyService`:**
-   - `postDemandFulfillmentJournals()` — Post two journal entries:
-     - **Creditor (supplier) journal:** Dr Due from Branches / Cr Inventory
-     - **Debtor (requester) journal:** Dr Inventory / Cr Due to Branches
-   - `recordDemandTransfer()` — Insert branch_ledger pair with running balance
-   - `recordDemandSettlement()` — Insert branch_ledger pair for settlement
-   - `reverseLedgerByReference()` — Mark ledger rows as reversed
-   - `reverseDemandJournals()` — Reverse both creditor and debtor journals
+1. ✅ **Create `BranchIntercompanyService`:**
+   - File: `app/Services/BranchDemand/BranchIntercompanyService.php`
+   - `postDemandFulfillmentJournals(BranchDemand $demand, int $postedBy)` — Post two journal entries:
+     - **Creditor (supplier) journal:** Dr Due from Branches (interbranch_receivable) / Cr Inventory — branch_id = to_branch_id
+     - **Debtor (requester) journal:** Dr Inventory / Cr Due to Branches (interbranch_payable) — branch_id = from_branch_id
+     - Updates `branch_demands` with `journal_entry_id` and `journal_entry_id_debtor`
+     - Calls `recordDemandTransfer()` to insert branch ledger pair
+   - `recordDemandTransfer(BranchDemand $demand, int $creditorJeId, int $debtorJeId, int $postedBy)` — Insert branch_ledger pair:
+     - Debtor row: debit = total_value (debtor owes more)
+     - Creditor row: credit = total_value (creditor is owed more)
+     - Running balance computed from previous latest entry
+   - `recordDemandSettlement(int $debtorBranchId, int $creditorBranchId, float $settledAmount, ...)` — Insert branch_ledger pair for settlement:
+     - Debtor row: credit = settled_amount (debtor paid, owes less)
+     - Creditor row: debit = settled_amount (creditor received, is owed less)
+     - Running balance decreases by settled_amount
+   - `reverseLedgerByReference(string $referenceType, int $referenceId, ...)` — Mark ledger rows as reversed, then insert reversal pair:
+     - Reversal pair mirrors the original: debit ↔ credit swapped
+     - Running balance reduced by the reversal amount
+   - `reverseDemandJournals(BranchDemand $demand, int $reversedBy, string $reason)` — Reverse both creditor and debtor journals:
+     - Uses `JournalPostingService::reverseJournalEntry()` (swap Dr/Cr, mark original is_reversed)
+     - Reversal entry_date defaults to the original demand's date
 
-2. **Ensure GL control accounts exist:**
-   - `L-0105` Due from Branches (interbranch_receivable) — Asset, normal balance = debit
-   - `L-0302` Due to Branches (interbranch_payable) — Liability, normal balance = credit
+2. ✅ **GL control accounts exist (already seeded):**
+   - `L-0105` Due from Branches (`interbranch_receivable`) — Asset, normal balance = debit
+   - `L-0303` Due to Branches (`interbranch_payable`) — Liability, normal balance = credit
+   - Both natures already defined in `LedgerNatureService::EXTENDED_NATURES`
 
-3. **Integrate with `JournalPostingService`:**
-   - `postBranchDemandFulfillment()` — Already exists in legacy
-   - `postBranchDemandSettlement()` — Already exists in legacy
-   - Port to Laravel's `JournalPostingService`
+3. ✅ **Integrate with `BranchDemandService`:**
+   - `sendGoodsWithWarehouses()` — After stock movements and WT creation, calls `$this->intercompanyService->postDemandFulfillmentJournals()`
+   - `reverseDemand()` — After stock reversal and WT cancellation, calls:
+     - `$this->intercompanyService->reverseDemandJournals()` — reverses both GL journals
+     - `$this->intercompanyService->reverseLedgerByReference('demand_transfer', ...)` — reverses ledger entries
 
-4. **Add `branch_ledger` query methods to `BranchIntercompanyService`:**
-   - `getRunningBalance(debtorBranchId, creditorBranchId)` — Get current running balance
-   - `getLedgerHistory(debtorBranchId, creditorBranchId, dateFrom, dateTo)` — Get ledger entries for a period
-   - `getOutstandingByBranch(branchId)` — Get all outstanding amounts owed to/from a branch
+4. ✅ **Add `branch_ledger` query methods to `BranchIntercompanyService`:**
+   - `getRunningBalance(int $debtorBranchId, int $creditorBranchId): float` — Get current running balance from latest non-reversed ledger entry (positive = debtor owes creditor)
+   - `getLedgerHistory(int $debtorBranchId, int $creditorBranchId, ?string $dateFrom, ?string $dateTo): Collection` — Get all non-reversed ledger entries for a period, with branch names
+   - `getOutstandingByBranch(int $branchId): Collection` — Get all outstanding amounts owed to/from a branch, with partner branch name, total demand value, total settled, total outstanding
 
-**Exit criteria:**
-- Sending goods posts two GL journal entries (creditor + debtor)
-- Branch ledger records the transfer with running balance
-- Both branches can see the financial impact in their respective GL
-- Running balance is accurate after multiple transfers
-- Reversing a demand reverses both GL journals and ledger entries
+5. ✅ **Controller endpoints added:**
+   - `GET /admin/branch-demands/outstanding` → JSON: outstanding amounts for my branch
+   - `GET /admin/branch-demands/ledger-history` → JSON: ledger history between two branches (with partner_branch_id, date_from, date_to params)
+
+**Exit criteria status:**
+- ✅ Sending goods posts two GL journal entries (creditor + debtor)
+- ✅ Branch ledger records the transfer with running balance
+- ✅ Both branches can see the financial impact in their respective GL
+- ✅ Running balance is accurate after multiple transfers
+- ✅ Reversing a demand reverses both GL journals and ledger entries
 
 ---
 
