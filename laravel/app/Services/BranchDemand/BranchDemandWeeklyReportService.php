@@ -252,8 +252,7 @@ class BranchDemandWeeklyReportService
     {
         return (float) DB::table('sales_invoice_items as sii')
             ->join('sales_invoices as si', function ($join) {
-                $join->on('si.id', '=', 'sii.sales_invoice_id')
-                     ->on('si.invoice_date', '=', DB::raw("'{$date}'"));
+                $join->on('si.id', '=', 'sii.sales_invoice_id');
             })
             ->join('warehouses as w', 'w.id', '=', 'sii.warehouse_id')
             ->where('si.branch_id', $branchId)
@@ -386,8 +385,7 @@ class BranchDemandWeeklyReportService
     {
         return (float) DB::table('sales_invoice_items as sii')
             ->join('sales_invoices as si', function ($join) {
-                $join->on('si.id', '=', 'sii.sales_invoice_id')
-                     ->on('si.invoice_date', '=', DB::raw("'{$date}'"));
+                $join->on('si.id', '=', 'sii.sales_invoice_id');
             })
             ->where('si.branch_id', $branchId)
             ->where('si.invoice_date', $date)
@@ -764,8 +762,7 @@ class BranchDemandWeeklyReportService
     {
         return DB::table('sales_invoice_items as sii')
             ->join('sales_invoices as si', function ($join) {
-                $join->on('si.id', '=', 'sii.sales_invoice_id')
-                     ->on('si.invoice_date', '=', DB::raw("'{$date}'"));
+                $join->on('si.id', '=', 'sii.sales_invoice_id');
             })
             ->where('si.branch_id', $branchId)
             ->where('si.invoice_date', $date)
