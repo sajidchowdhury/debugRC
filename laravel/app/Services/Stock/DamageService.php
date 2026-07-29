@@ -287,14 +287,16 @@ class DamageService
                 ]);
             }
 
-            // Post GL journal.
+            // Post GL journal. May return null for a zero-value damage
+            // (stock OUT still applied; GL skipped) — journal_entry_id is
+            // nullable, so passing null is FK-safe. Never 0.
             $journalEntryId = $this->postDamageGL($damage, $confirmedBy);
 
             // Phase 0 (Damage plan): use Eloquent update() so the
             // AuditableMasterData trait's `updated` event fires and writes
             // a user_audit_log entry (status: draft → confirmed, plus the
-            // journal_entry_id). Previously raw DB::table()->update()
-            // bypassed the trait.
+            // journal_entry_id when one was posted). Previously raw
+            // DB::table()->update() bypassed the trait.
             $damage->update([
                 'status' => 'confirmed',
                 'journal_entry_id' => $journalEntryId,
@@ -411,14 +413,24 @@ class DamageService
      *
      * @param DamageInvoice $damage
      * @param int $createdBy
-     * @return int journal_entry_id
+     * @return int|null journal_entry_id — null when total_value < 0.01 (no GL
+     *         posted; the FK on journal_entry_id is nullable). Never returns 0.
      */
-    private function postDamageGL(DamageInvoice $damage, int $createdBy): int
+    private function postDamageGL(DamageInvoice $damage, int $createdBy): ?int
     {
         $totalValue = (float) $damage->total_value;
 
         if ($totalValue < 0.01) {
-            return 0; // No GL for zero-value damages
+            // No GL for zero-value damages — return NULL (not 0) so the
+            // nullable damage_invoices.journal_entry_id FK is satisfied.
+            // Previously this returned 0, which triggered
+            // SQLSTATE[23503]: damage_invoices_journal_entry_id_fkey violation
+            // because no journal_entries row has id=0. The stock OUT above
+            // still applies (qty is real); only the GL is skipped — a balanced
+            // 0.00/0.00 JE would be pointless clutter. cancelDamage already
+            // guards the reversal with `if ($damage->journal_entry_id)`, which
+            // is falsy for null, so the no-GL case reverses cleanly too.
+            return null;
         }
 
         $inventoryLedgerId = $this->journalPosting->lookupLedgerByNature('inventory');

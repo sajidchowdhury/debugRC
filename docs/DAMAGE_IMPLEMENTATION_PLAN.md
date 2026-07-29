@@ -930,6 +930,15 @@ The plan is organized so that each phase is **independently shippable**, **non-b
 > **Commit:** `feat(damage): Phase 4 — witness & accountable employee` (see git log)
 > **Status:** ✅ Implemented. 5 new columns on `damage_invoices` (witness + accountable employee FKs, recovery_amount, employee_ledger_entry_id, recovery_journal_entry_id) + type-conditional create-time gate (missing→accountable, theft→witness) + one-shot employee recovery (Dr employee_payable / Cr loss + employee_ledger deduction) with automatic reversal on cancel + 7th integrity check ("accountability") + Accountability card + Recover-from-employee action + index-page accountable filter/column/recoverable stat. Backward-compatible (all columns nullable; existing rows + the sales-return-linked auto-flow are unaffected).
 
+#### Phase 4 — Post-release hotfix: zero-value damage confirm FK violation 🔧
+
+> **Commit:** `fix(damage): postDamageGL returns null (not 0) for zero-value damage` (see git log)
+> **Symptom:** `SQLSTATE[23503]: Foreign key violation: 7 ERROR: insert or update on table "damage_invoices" violates foreign key constraint "damage_invoices_journal_entry_id_fkey" DETAIL: Key (journal_entry_id)=(0) is not present in table "journal_entries".`
+> **Root cause:** `DamageService::postDamageGL()` early-returned `0` (integer) when `total_value < 0.01` (e.g. a product whose `warehouse_stock.avg_cost` is 0, or a manually-entered rate of 0). `confirmDamage()` then wrote `journal_entry_id => 0` to `damage_invoices`. The column carries an FK to `journal_entries(id)`, and no JE row has `id = 0`, so PostgreSQL rejected the UPDATE. (The CREATE/draft path was never affected — `createDamage()` does not set `journal_entry_id`, so it stays NULL.)
+> **Fix:** `postDamageGL()` now returns `?int` and yields `null` (not `0`) in the zero-value branch. `journal_entry_id` is nullable, so `UPDATE … SET journal_entry_id = NULL` satisfies the FK. The stock OUT still applies (qty is real); only the GL is skipped — a balanced 0.00/0.00 JE would be pointless clutter. `cancelDamage()` already guards reversal with `if ($damage->journal_entry_id)` (falsy for both `null` and `0`), so the no-GL case reverses cleanly. `postEmployeeRecovery()` is unreachable for zero-value damages (it requires `0 < amount ≤ total_value`), so the null JE never reaches the recovery ledger resolver.
+> **Files changed (1):** `laravel/app/Services/Stock/DamageService.php` — `postDamageGL()` signature `int → ?int`, `return 0 → return null`, updated docblock + the `confirmDamage()` inline comment to note the nullable return.
+> **Follow-up (deferred to Phase 5/7):** consider blocking zero-value damage creation/confirm at the validation layer — a zero-rate write-off removes stock with no financial trace, which is itself a control weakness (a `missing`-type write-off at rate 0 records no loss to recover from the accountable employee).
+
 **Files changed (6) + created (1):**
 
 | # | File | Change |
