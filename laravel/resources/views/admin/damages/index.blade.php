@@ -6,6 +6,7 @@
     $filters = array_merge([
         'from_date'     => '',
         'to_date'       => '',
+        'range'         => '',
         'warehouse_id'  => '',
         'status'        => '',
         'damage_type'   => '',
@@ -13,6 +14,39 @@
         'accountable_employee_id' => '',
         'search'        => '',
     ], is_array($filters ?? null) ? $filters : []);
+
+    // Phase 7 — last-12-months cost series for the summary-header bar chart.
+    $costLast12Months = $costLast12Months ?? [];
+
+    // Phase 7 — quick-filter URL builder. Preserves the active non-date
+    // filters (warehouse/status/type/branch/employee/search) while setting the
+    // `range` param and dropping any manual from_date/to_date (range takes
+    // precedence). Returns a ready-to-use query string (without the leading ?).
+    $quickFilterQuery = function (string $range) use ($filters): string {
+        $keep = array_merge(
+            array_intersect_key($filters, array_flip([
+                'warehouse_id', 'status', 'damage_type', 'branch_id',
+                'accountable_employee_id', 'search',
+            ])),
+            ['range' => $range]
+        );
+        // Drop empty values so the URL stays clean.
+        $keep = array_filter($keep, fn ($v) => $v !== '' && $v !== null);
+        return http_build_query($keep);
+    };
+    // The "all time" reset clears range + dates but keeps the other filters.
+    $allTimeQuery = function () use ($filters): string {
+        $keep = array_intersect_key($filters, array_flip([
+            'warehouse_id', 'status', 'damage_type', 'branch_id',
+            'accountable_employee_id', 'search',
+        ]));
+        $keep = array_filter($keep, fn ($v) => $v !== '' && $v !== null);
+        return $keep ? http_build_query($keep) : '';
+    };
+    // Active range for button highlighting: '' (empty) = the MTD default
+    // (highlight "This month" unless a custom from/to range is in use).
+    $activeRange = $filters['range'] ?? '';
+    $isCustomRange = $activeRange === '' && (!empty($filters['from_date']) || !empty($filters['to_date']));
 
     $stats = array_merge([
         'total'         => 0,
@@ -221,10 +255,64 @@
         @endif
     </div>
 
+    {{-- Phase 7 — "Damage cost last 12 months" bar chart in the summary --}}
+    {{-- header. Full-width card; data is the 12-point series passed from  --}}
+    {{-- DamageController::index (confirmed damages only, RLS-scoped).       --}}
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body py-3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-chart-column me-1 text-danger"></i>
+                    Damage cost — last 12 months
+                </h2>
+                <span class="text-muted small">
+                    Confirmed write-offs only
+                    @if (!empty($filters['branch_id'])) · single branch @endif
+                </span>
+            </div>
+            <div style="height:180px;">
+                <canvas id="damage12mChart"></canvas>
+            </div>
+        </div>
+    </div>
+
     {{-- Filter form --}}
     <div class="card border-0 shadow-sm mb-3">
         <div class="card-body">
             <form method="GET" action="{{ route('admin.damages.index') }}" class="row g-2 align-items-end">
+                {{-- Phase 7 — quick-filter buttons (Today / Week / Month / Year). --}}
+                {{-- Links (not submit) so the chosen range persists in the URL. --}}
+                {{-- Active button is solid; the MTD default highlights "This   --}}
+                {{-- month" unless a custom from/to range is in use.             --}}
+                <div class="col-12 mb-2">
+                    <div class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Quick date filters">
+                        @php
+                            $btn = function (string $key, string $label) use ($activeRange, $isCustomRange, $quickFilterQuery) {
+                                $active = $activeRange === $key
+                                    || ($key === 'month' && $activeRange === '' && !$isCustomRange);
+                                $href = route('admin.damages.index') . '?' . $quickFilterQuery($key);
+                                $cls = $active ? 'btn btn-danger' : 'btn btn-outline-secondary';
+                                return '<a href="' . $href . '" class="' . $cls . '">' . e($label) . '</a>';
+                            };
+                        @endphp
+                        {!! $btn('today', 'Today') !!}
+                        {!! $btn('week',  'This week') !!}
+                        {!! $btn('month', 'This month') !!}
+                        {!! $btn('year',  'This year') !!}
+                        <a href="{{ route('admin.damages.index') . ($allTimeQuery() ? '?' . $allTimeQuery() : '') }}"
+                           class="btn {{ $isCustomRange ? 'btn-danger' : 'btn-outline-secondary' }}">
+                            All time
+                        </a>
+                    </div>
+                    <span class="text-muted small ms-2 align-middle">
+                        @if ($activeRange === 'today') Showing today
+                        @elseif ($activeRange === 'week') Showing this week
+                        @elseif ($activeRange === 'year') Showing this year
+                        @elseif ($isCustomRange) Custom range
+                        @else Showing this month (MTD)
+                        @endif
+                    </span>
+                </div>
                 <div class="col-md-2">
                     <label class="form-label small text-muted mb-1" for="from_date">From date</label>
                     <input type="date" id="from_date" name="from_date" class="form-control form-control-sm"
@@ -304,12 +392,22 @@
                            placeholder="e.g. DMG-2024-001"
                            value="{{ $filters['search'] }}">
                 </div>
-                <div class="col-12 d-flex gap-2 justify-content-end">
+                <div class="col-12 d-flex gap-2 justify-content-end flex-wrap">
                     <button type="submit" class="btn btn-danger btn-sm">
                         <i class="fas fa-filter me-1"></i> Filter
                     </button>
                     <a href="{{ route('admin.damages.index') }}" class="btn btn-outline-secondary btn-sm">
                         <i class="fas fa-eraser me-1"></i> Clear
+                    </a>
+                    {{-- Phase 7 — CSV export of the current filter selection.
+                         Passes ALL current filters (incl. range/from/to) so the
+                         exported rows match what's on screen. --}}
+                    @php
+                        $exportParams = array_filter($filters, fn ($v) => $v !== '' && $v !== null);
+                    @endphp
+                    <a href="{{ route('admin.damages.export') . ($exportParams ? '?' . http_build_query($exportParams) : '') }}"
+                       class="btn btn-outline-success btn-sm" title="Export the current filter selection to CSV">
+                        <i class="fas fa-file-csv me-1"></i> Export CSV
                     </a>
                 </div>
             </form>
@@ -352,7 +450,19 @@
                     </thead>
                     <tbody>
                         @forelse ($damages as $dmg)
-                            <tr class="{{ in_array($dmg->damage_type, ['missing','theft'], true) ? 'table-warning' : '' }}">
+                            @php
+                                // Phase 7 — row highlight: submitted (awaiting
+                                // approval) takes precedence (info), then the
+                                // Phase 1 missing/theft accountability flag
+                                // (warning). Helps managers spot the worklist.
+                                $rowCls = '';
+                                if ($dmg->status === 'submitted') {
+                                    $rowCls = 'table-info';
+                                } elseif (in_array($dmg->damage_type, ['missing','theft'], true)) {
+                                    $rowCls = 'table-warning';
+                                }
+                            @endphp
+                            <tr class="{{ $rowCls }}">
                                 <td>
                                     <a href="{{ route('admin.damages.show', $dmg) }}"
                                        class="fw-semibold text-decoration-none">
@@ -434,9 +544,69 @@
 </div>
 
 @push('scripts')
+{{-- Phase 7 — Chart.js for the "last 12 months" summary bar chart. --}}
+{{-- Loaded only on this page (not in the admin layout globally). --}}
+<script src="/assets/js/bootstrep/chart.umd.min.js"></script>
 <script>
 $(function () {
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
+
+    // ============================================================
+    // Phase 7 — "Damage cost last 12 months" bar chart.
+    // Data is the 12-point series passed from DamageController::index
+    // (confirmed damages only, RLS-scoped). Renders compact (180px) so the
+    // summary header stays scannable.
+    // ============================================================
+    (function () {
+        var el = document.getElementById('damage12mChart');
+        if (!el || typeof Chart === 'undefined') return;
+        var data = @json($costLast12Months);
+        var labels = data.map(function (d) { return d.label; });
+        var values = data.map(function (d) { return d.value; });
+
+        new Chart(el.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Damage cost (Tk)',
+                    data: values,
+                    backgroundColor: 'rgba(220, 38, 38, 0.75)',
+                    borderColor: 'rgba(185, 28, 28, 1)',
+                    borderWidth: 1,
+                    borderRadius: 3,
+                    maxBarThickness: 36
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function (ctx) {
+                                return 'Tk ' + Number(ctx.parsed.y).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            font: { size: 10 },
+                            callback: function (v) {
+                                return v >= 1000 ? (v / 1000) + 'k' : v;
+                            }
+                        },
+                        grid: { color: 'rgba(0,0,0,0.05)' }
+                    }
+                }
+            }
+        });
+    })();
 
     // DataTables on visible rows only (server-side pagination handles page size).
     $('#dataTable').DataTable({

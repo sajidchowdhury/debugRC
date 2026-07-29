@@ -668,7 +668,25 @@ Route::middleware('auth')->group(function () {
     Route::middleware('role:admin,manager,warehouse_manager')->group(function () {
         Route::get('admin/damages', [DamageController::class, 'index'])->name('admin.damages.index');
         Route::get('admin/damages/product-stock', [DamageController::class, 'getProductStock'])->name('admin.damages.product-stock');
+
+        // Phase 7 — AJAX product search (Select2, replaces the 500-cap
+        // dropdown on the create form) + CSV export of the current index
+        // filter selection. Placed before the {id} show route so the literal
+        // paths win over the numeric wildcard.
+        Route::get('admin/damages/products/search', [DamageController::class, 'searchProducts'])
+            ->name('admin.damages.products.search');
+        Route::get('admin/damages/export', [DamageController::class, 'export'])
+            ->name('admin.damages.export');
+
         Route::get('admin/damages/{id}', [DamageController::class, 'show'])->name('admin.damages.show')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
+
+        // Phase 7 — printable damage slip (A5). Opens in a new tab; uses the
+        // layouts/print.blade.php chrome (branch-colored toolbar + auto-print).
+        // Same role + branch.isolation gate as show().
+        Route::get('admin/damages/{id}/print', [DamageController::class, 'print'])
+            ->name('admin.damages.print')
             ->where(['id' => '[0-9]+'])
             ->middleware('branch.isolation');
 

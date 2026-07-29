@@ -112,9 +112,15 @@
                 @endif
             </p>
         </div>
-        <div>
+        <div class="d-flex gap-2 flex-wrap">
             <a href="{{ route('admin.damages.index') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-arrow-left me-1"></i> Back to list
+            </a>
+            {{-- Phase 7 — printable damage slip (opens in a new tab; the print --}}
+            {{-- layout auto-triggers the browser print dialog).              --}}
+            <a href="{{ route('admin.damages.print', $dmg) }}" class="btn btn-light btn-sm"
+               target="_blank" rel="noopener">
+                <i class="fas fa-print me-1"></i> Print slip
             </a>
         </div>
     </header>

@@ -297,6 +297,7 @@ class DamageReportService
             ->leftJoin('branches as b', 'b.id', '=', 'di.branch_id')
             ->leftJoin('warehouses as w', 'w.id', '=', 'di.warehouse_id')
             ->leftJoin('employees as e_acc', 'e_acc.id', '=', 'di.accountable_employee_id')
+            ->leftJoin('employees as e_wit', 'e_wit.id', '=', 'di.witness_employee_id')
             ->leftJoin('users as u_app', 'u_app.id', '=', 'di.approved_by')
             ->leftJoin('employees as e_app', 'e_app.id', '=', 'u_app.employee_id')
             ->whereNull('di.deleted_at')
@@ -319,6 +320,8 @@ class DamageReportService
                 'w.warehouse_code',
                 DB::raw('e_acc.name AS accountable_name'),
                 DB::raw('e_acc.employee_code AS accountable_code'),
+                DB::raw('e_wit.name AS witness_name'),
+                DB::raw('e_wit.employee_code AS witness_code'),
                 DB::raw('COALESCE(e_app.name, u_app.username) AS approver_name')
             );
 
@@ -404,7 +407,7 @@ class DamageReportService
             fputcsv($out, [
                 'Damage Code', 'Date', 'Branch', 'Warehouse', 'Type', 'Status',
                 'Reason Code', 'Reason', 'Total Value', 'Recovered',
-                'Accountable', 'Approver', 'Submitted At', 'Approved At',
+                'Accountable', 'Witness', 'Approver', 'Submitted At', 'Approved At',
             ]);
             foreach ($rows as $r) {
                 fputcsv($out, [
@@ -419,6 +422,7 @@ class DamageReportService
                     $r->total_value ?? 0,
                     $r->recovery_amount ?? 0,
                     trim(($r->accountable_name ?? '') . ' ' . ($r->accountable_code ?? '')),
+                    trim(($r->witness_name ?? '') . ' ' . ($r->witness_code ?? '')),
                     $r->approver_name ?? '',
                     $r->submitted_at ?? '',
                     $r->approved_at ?? '',

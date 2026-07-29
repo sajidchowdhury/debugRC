@@ -10,10 +10,12 @@ use App\Models\Employee;
 use App\Models\Warehouse;
 use App\Models\Product;
 use App\Models\Branch;
+use App\Services\Reports\DamageReportService;
 use App\Services\Stock\DamageIntegrityService;
 use App\Services\Stock\DamageService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
@@ -32,7 +34,8 @@ class DamageController extends Controller
     public function __construct(
         private DamageService $damageService,
         private StockService $stockService,
-        private DamageIntegrityService $integrityService
+        private DamageIntegrityService $integrityService,
+        private DamageReportService $reportService
     ) {}
 
     public function index(Request $request)
@@ -41,9 +44,19 @@ class DamageController extends Controller
         // role:admin,manager,warehouse_manager route middleware.
         $this->authorize('viewAny', DamageInvoice::class);
 
+        // Phase 7 — quick-filter date range. ?range=today|week|month|year
+        // resolves to a concrete [from, to] window and takes precedence over
+        // explicit from_date/to_date (so the quick-filter buttons are
+        // deterministic). When NO range AND no from_date/to_date are supplied,
+        // default to month-to-date (the legacy "today only" default was too
+        // narrow — operators kept seeing an empty list on the 2nd of the
+        // month). Explicit from_date/to_date (the manual date pickers) still
+        // win when range is absent.
+        [$fromDate, $toDate, $range] = $this->resolveDateRange($request);
+
         $query = DamageInvoice::with(['warehouse.branch', 'items', 'accountableEmployee'])
-            ->when($request->input('from_date'), fn($q, $d) => $q->where('damage_date', '>=', $d))
-            ->when($request->input('to_date'), fn($q, $d) => $q->where('damage_date', '<=', $d))
+            ->when($fromDate, fn($q) => $q->where('damage_date', '>=', $fromDate))
+            ->when($toDate, fn($q) => $q->where('damage_date', '<=', $toDate))
             ->when($request->input('warehouse_id'), fn($q, $wid) => $q->where('warehouse_id', $wid))
             ->when($request->input('status'), fn($q, $s) => $q->where('status', $s))
             ->when($request->input('damage_type'), fn($q, $t) => $q->where('damage_type', $t))
@@ -100,6 +113,24 @@ class DamageController extends Controller
             'awaiting_value' => (float) DamageInvoice::where('status', 'submitted')->sum('total_value'),
         ];
 
+        // Phase 7 — "Damage cost last 12 months" bar chart for the summary
+        // header. One indexed grouped query over confirmed (posted) damages;
+        // RLS scopes non-admins to their branch, branch_id filter is applied
+        // as defense-in-depth when an admin selects a single branch. Zero-
+        // months are filled in PHP so the chart always shows 12 bars.
+        $costLast12Months = $this->costLast12Months($request->input('branch_id'));
+
+        // Reflect the resolved date window back into the filter inputs so the
+        // date pickers + quick-filter buttons stay in sync with what's shown.
+        $filters = array_merge(
+            $request->only(['warehouse_id', 'status', 'damage_type', 'branch_id', 'accountable_employee_id', 'search']),
+            [
+                'from_date' => $fromDate ?? '',
+                'to_date'   => $toDate ?? '',
+                'range'     => $range,
+            ]
+        );
+
         return view('admin.damages.index', [
             'title' => 'Damages',
             'damages' => $damages,
@@ -109,8 +140,109 @@ class DamageController extends Controller
             'damageTypes' => DamageInvoice::DAMAGE_TYPES,
             'damageTypeLabels' => DamageInvoice::DAMAGE_TYPE_LABELS,
             'stats' => $stats,
-            'filters' => $request->only(['from_date', 'to_date', 'warehouse_id', 'status', 'damage_type', 'branch_id', 'accountable_employee_id', 'search']),
+            'filters' => $filters,
+            'costLast12Months' => $costLast12Months,
         ]);
+    }
+
+    /**
+     * Phase 7 — resolve the index date window from ?range or from_date/to_date.
+     *
+     * Precedence: explicit `range` param → manual from_date/to_date → default
+     * month-to-date. Returns [from, to, range] where `range` is the active
+     * quick-filter key (or '' when using a custom/MTD window) so the view can
+     * highlight the correct button.
+     *
+     * @return array{0:?string,1:?string,2:string}
+     */
+    private function resolveDateRange(Request $request): array
+    {
+        $range = (string) $request->input('range', '');
+        $today = Carbon::today();
+
+        switch ($range) {
+            case 'today':
+                return [$today->toDateString(), $today->toDateString(), 'today'];
+            case 'week':
+                // ISO week (Mon–Sun) containing today.
+                return [
+                    $today->copy()->startOfWeek(Carbon::MONDAY)->toDateString(),
+                    $today->copy()->endOfWeek(Carbon::SUNDAY)->toDateString(),
+                    'week',
+                ];
+            case 'month':
+                return [
+                    $today->copy()->startOfMonth()->toDateString(),
+                    $today->copy()->endOfMonth()->toDateString(),
+                    'month',
+                ];
+            case 'year':
+                return [
+                    $today->copy()->startOfYear()->toDateString(),
+                    $today->copy()->endOfYear()->toDateString(),
+                    'year',
+                ];
+        }
+
+        $from = $request->input('from_date') ?: null;
+        $to   = $request->input('to_date') ?: null;
+
+        // No range, no manual dates → default to month-to-date. This is the
+        // Phase 7 fix for the legacy "today only" default that left the list
+        // empty on any day after the 1st.
+        if (!$from && !$to) {
+            return [
+                $today->copy()->startOfMonth()->toDateString(),
+                $today->toDateString(),
+                '',  // '' = "This month (MTD)" default — highlighted as active
+            ];
+        }
+
+        return [$from, $to, ''];
+    }
+
+    /**
+     * Phase 7 — confirmed-damage cost for the last 12 months (incl. current).
+     *
+     * Returns an array of 12 {label, value} pairs (oldest → newest) for the
+     * summary-header bar chart. Zero-months are filled so the chart is always
+     * 12 bars wide. RLS scopes non-admin users; $branchId is defense-in-depth
+     * for an admin's single-branch view.
+     *
+     * @return array<int, array{label:string, value:float}>
+     */
+    private function costLast12Months($branchId): array
+    {
+        $start = Carbon::today()->startOfMonth()->subMonths(11);
+        $end   = Carbon::today()->endOfMonth();
+
+        $q = DB::table('damage_invoices')
+            ->where('status', 'confirmed')
+            ->where('is_reversed', false)
+            ->whereNull('deleted_at')
+            ->whereBetween('damage_date', [$start->toDateString(), $end->toDateString()]);
+
+        if ($branchId) {
+            // An admin's single-branch filter is reflected in the chart too.
+            // (Non-admins are already scoped by RLS — no explicit filter needed.)
+            $q->where('branch_id', (int) $branchId);
+        }
+
+        $q = $q->selectRaw("TO_CHAR(damage_date, 'YYYY-MM') AS month, COALESCE(SUM(total_value), 0) AS total")
+            ->groupByRaw("TO_CHAR(damage_date, 'YYYY-MM')")
+            ->pluck('total', 'month');
+
+        $out = [];
+        for ($i = 11; $i >= 0; $i--) {
+            $m = Carbon::today()->startOfMonth()->subMonths($i);
+            $key = $m->format('Y-m');
+            $out[] = [
+                'label' => $m->format('M Y'),         // e.g. "Jan 2026"
+                'value' => round((float) ($q[$key] ?? 0), 2),
+            ];
+        }
+
+        return $out;
     }
 
     public function create()
@@ -474,6 +606,140 @@ class DamageController extends Controller
         return response()->json([
             'rate' => round($rate, 2),
             'available_qty' => round($qty, 4),
+        ]);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Phase 7 — UX Polish: AJAX product search, CSV export, printable slip
+    |--------------------------------------------------------------------------
+    */
+
+    /**
+     * AJAX: search products for the create-form Select2 (replaces the 500-cap
+     * server-rendered dropdown). Searches product_code + product_name (ILIKE).
+     *
+     * When `warehouse_id` is supplied, results are filtered to products that
+     * have stock (qty > 0) in that warehouse — you can only damage what's in
+     * stock — which also enforces branch scope indirectly (a warehouse belongs
+     * to one branch). Without a warehouse, all active products are searchable
+     * (master data is global; RLS on warehouse_stock is the backstop).
+     *
+     * Route: GET admin/damages/products/search — role:admin,manager,
+     * warehouse_manager (same gate as product-stock). Returns Select2-shaped
+     * JSON: { results: [{ id, text, product_code, product_name }] }.
+     */
+    public function searchProducts(Request $request)
+    {
+        $this->authorize('viewProductStock', DamageInvoice::class);
+
+        $request->validate([
+            'q'            => ['required', 'string', 'min:1', 'max:100'],
+            'warehouse_id' => ['nullable', 'integer', 'exists:warehouses,id'],
+        ]);
+
+        $term = trim((string) $request->input('q'));
+        $warehouseId = $request->input('warehouse_id');
+
+        $q = Product::active()
+            ->where(function ($qb) use ($term) {
+                $qb->where('product_name', 'ILIKE', "%{$term}%")
+                   ->orWhere('product_code', 'ILIKE', "%{$term}%");
+            });
+
+        if ($warehouseId) {
+            // Restrict to products with stock in the selected warehouse — the
+            // damage form is meaningless for out-of-stock products, and this
+            // ties results to the warehouse's branch.
+            $q->whereExists(function ($sub) use ($warehouseId) {
+                $sub->select(DB::raw(1))
+                    ->from('warehouse_stock')
+                    ->whereColumn('warehouse_stock.product_id', 'products.id')
+                    ->where('warehouse_stock.warehouse_id', (int) $warehouseId)
+                    ->where('warehouse_stock.qty', '>', 0);
+            });
+        }
+
+        $rows = $q->orderBy('product_name')
+            ->limit(30)
+            ->get(['id', 'product_code', 'product_name']);
+
+        $results = $rows->map(fn ($p) => [
+            'id'            => $p->id,
+            'text'          => $p->product_code . ' — ' . $p->product_name,
+            'product_code'  => $p->product_code,
+            'product_name'  => $p->product_name,
+        ])->values();
+
+        return response()->json(['results' => $results]);
+    }
+
+    /**
+     * CSV export of the current index filter selection.
+     *
+     * Reuses DamageReportService::getDetailLines + exportCsv so the exported
+     * columns stay in lock-step with the dedicated damage report (Phase 6).
+     * The date window is resolved the same way as index() (range param →
+     * manual dates → MTD default) so the CSV always matches what's on screen.
+     *
+     * Route: GET admin/damages/export — role:admin,manager,warehouse_manager.
+     */
+    public function export(Request $request)
+    {
+        $this->authorize('viewAny', DamageInvoice::class);
+
+        [$fromDate, $toDate] = $this->resolveDateRange($request);
+
+        $rows = $this->reportService->getDetailLines([
+            'from'                     => $fromDate,
+            'to'                       => $toDate,
+            'warehouse_id'             => $request->input('warehouse_id'),
+            'status'                   => $request->input('status'),
+            'damage_type'              => $request->input('damage_type'),
+            'branch_id'                => $request->input('branch_id'),
+            'accountable_employee_id'  => $request->input('accountable_employee_id'),
+        ]);
+
+        return $this->reportService->exportCsv($rows);
+    }
+
+    /**
+     * Printable damage slip (A5-ish) — opens in a new tab using the
+     * layouts/print.blade.php chrome (branch-colored toolbar + auto-print).
+     *
+     * Loads the same relations as show() so the slip can render items, the
+     * reason taxonomy, witness/accountable employees, the approval timeline,
+     * evidence thumbnails, and the GL journal summary. Authorization mirrors
+     * show() (view policy + branch.isolation middleware on the route).
+     *
+     * Route: GET admin/damages/{id}/print — role:admin,manager,
+     * warehouse_manager + branch.isolation.
+     */
+    public function print(int $id)
+    {
+        $damage = DamageInvoice::with([
+            'items.product', 'warehouse.branch', 'branch',
+            'journalEntry.lines.ledger',
+            'reasonTaxonomy',
+            'attachments.uploadedBy',
+            'witnessEmployee.branch',
+            'accountableEmployee.branch',
+            'submitter', 'approver', 'rejecter',
+        ])->findOrFail($id);
+
+        $this->authorize('view', $damage);
+
+        // Resolve a branch code for the print layout's color theme. Prefer the
+        // warehouse's branch (where the loss occurred); fall back to the
+        // damage's own branch; finally null (HO red default).
+        $branchCode = $damage->warehouse?->branch?->branch_code
+            ?? $damage->branch?->branch_code
+            ?? null;
+
+        return view('admin.damages.print', [
+            'title'      => 'Damage Slip ' . $damage->damage_code,
+            'damage'     => $damage,
+            'branchCode' => $branchCode,
         ]);
     }
 

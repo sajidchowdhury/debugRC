@@ -233,6 +233,26 @@
                 </button>
             </div>
             <div class="card-body p-0">
+                {{-- Phase 7 — barcode / product-code scan input. Type or scan a --}}
+                {{-- product code and press Enter: the matching product is looked --}}
+                {{-- up via the AJAX search endpoint and a row is added with qty  --}}
+                {{-- focused for fast entry. Manual fallback: click "Add item"   --}}
+                {{-- to search by name.                                          --}}
+                <div class="px-3 pt-3 pb-2 border-bottom bg-light-subtle">
+                    <div class="input-group input-group-sm" style="max-width:460px;">
+                        <span class="input-group-text"><i class="fas fa-barcode"></i></span>
+                        <input type="text" id="barcodeScan" class="form-control"
+                               placeholder="Scan / type product code, then Enter"
+                               autocomplete="off">
+                        <button class="btn btn-outline-danger" type="button" id="barcodeScanBtn" title="Look up this product code">
+                            <i class="fas fa-magnifying-glass"></i>
+                        </button>
+                    </div>
+                    <div class="small text-muted mt-1">
+                        <i class="fas fa-circle-info me-1"></i>
+                        Or click <em>Add item</em> to search products by name.
+                    </div>
+                </div>
                 <div class="table-responsive">
                     <table class="table table-sm table-hover align-middle mb-0" id="itemsTable">
                         <thead class="table-light">
@@ -279,7 +299,16 @@
     </form>
 </div>
 
-{{-- Hidden product options template (rendered server-side for select2 to use) --}}
+{{--
+  Phase 7 — product label map (hidden template).
+
+  No longer the dropdown source (the product picker is now AJAX-driven, with
+  no 500-row cap). This template survives ONLY to resolve the human-readable
+  label for a sticky row after a validation error (old('items') carries just
+  the product_id; we look up "code — name" here so the AJAX Select2 can render
+  the pre-selected option's text). The 500-row cap only affects this fallback
+  label resolution, not live search.
+--}}
 <template id="productOptionsTpl">
     <option value="">Select product</option>
     @foreach ($products as $p)
@@ -287,10 +316,66 @@
     @endforeach
 </template>
 
+@push('css')
+<style>
+    {{-- Phase 7 — mobile responsive item table. On small screens the table    --}}
+    {{-- collapses into stacked cards (one per row) using data-label attrs    --}}
+    {{-- set in buildRow(). The desktop table is untouched above the sm/md    --}}
+    {{-- breakpoint.                                                          --}}
+    @@media (max-width: 767.98px) {
+        #itemsTable thead { display: none; }
+        #itemsTable,
+        #itemsTable tbody,
+        #itemsTable tr,
+        #itemsTable td { display: block; width: 100%; }
+        #itemsTable tr {
+            margin-bottom: 12px;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 4px 8px;
+            background: #fff;
+        }
+        #itemsTable td {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            text-align: right;
+            border: 0;
+            border-bottom: 1px solid #f1f5f9;
+            padding: 8px 4px;
+            min-height: 40px;
+        }
+        #itemsTable td::before {
+            content: attr(data-label);
+            font-weight: 600;
+            color: #475569;
+            text-align: left;
+            flex: 0 0 38%;
+        }
+        #itemsTable td[data-label=""]::before { content: ""; }
+        #itemsTable td .form-control,
+        #itemsTable td .form-select,
+        #itemsTable td .select2-container { width: 100% !important; flex: 1 1 auto; }
+        #itemsTable tfoot { display: block; width: 100%; }
+        #itemsTable tfoot tr {
+            display: flex;
+            justify-content: space-between;
+            border: 0;
+            background: transparent;
+            padding: 4px 0;
+        }
+        #itemsTable tfoot td { border: 0; padding: 4px 0; min-height: 0; }
+    }
+</style>
+@endpush
+
 @push('scripts')
 <script>
 $(function () {
-    var productStockUrl = '{{ route("admin.damages.product-stock") }}';
+    var productStockUrl  = '{{ route("admin.damages.product-stock") }}';
+    // Phase 7 — AJAX product search endpoint (replaces the 500-cap dropdown).
+    var productsSearchUrl = '{{ route("admin.damages.products.search") }}';
     var $form        = $('#damageForm');
     var $warehouse   = $('#warehouse_id');
     var $tbody       = $('#itemsBody');
@@ -298,6 +383,23 @@ $(function () {
     var $itemCount   = $('#itemCount');
     var $itemsError  = $('#itemsError');
     var rowIndex     = 0;
+
+    // Phase 7 — product label map (id -> "code — name") for sticky rows.
+    // Populated from the hidden #productOptionsTpl template (server-rendered
+    // 500-cap list). Used ONLY to render the text of a pre-selected option on
+    // a validation-error reload; live search is AJAX (no cap).
+    var productLabelMap = {};
+    $('#productOptionsTpl option[value]').each(function () {
+        var v = $(this).val();
+        if (v) productLabelMap[v] = $(this).text();
+    });
+
+    // Minimal HTML escaper for Select2 templateResult/templateSelection.
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
 
     // Init select2 on header selects
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
@@ -452,18 +554,34 @@ $(function () {
 
     // ====== Item row helpers ======
 
-    function buildRow(idx) {
-        var productOpts = $($('#productOptionsTpl').html()).clone();
+    /**
+     * Build a new item row.
+     *
+     * Phase 7 — the product picker is now an AJAX Select2 (no 500-cap). The
+     * optional `preset` ({id, text}) pre-selects an option — used for barcode
+     * scan results and for sticky rows after a validation error (the label is
+     * resolved from #productOptionsTpl via productLabelMap).
+     *
+     * Each <td> carries a data-label so the responsive CSS (see @push('css'))
+     * can collapse the table into stacked cards on mobile.
+     */
+    function buildRow(idx, preset) {
+        preset = preset || null;
         var $tr = $('<tr>').attr('data-row', idx);
 
-        // Product select
+        // Product select — AJAX-driven.
         var $sel = $('<select>').attr({
             name: 'items[' + idx + '][product_id]',
             class: 'form-select form-select-sm select2-row product-select',
             required: true
-        }).append(productOpts);
+        });
+        if (preset && preset.id) {
+            $('<option>').val(preset.id).text(preset.text).prop('selected', true).appendTo($sel);
+        } else {
+            $('<option>').val('').text('Type to search product…').appendTo($sel);
+        }
 
-        var $tdProduct = $('<td>').append($sel);
+        var $tdProduct = $('<td>').attr('data-label', 'Product').append($sel);
 
         // Qty input
         var $qty = $('<input>').attr({
@@ -513,16 +631,43 @@ $(function () {
         }).html('<i class="fas fa-trash"></i>');
 
         $tr.append($tdProduct)
-           .append($('<td class="text-end">').append($qty))
-           .append($('<td class="text-end">').append($rate))
-           .append($('<td class="text-end">').append($avail))
-           .append($('<td class="text-end">').append($amt))
-           .append($('<td class="text-center">').append($rm));
+           .append($('<td class="text-end">').attr('data-label', 'Qty').append($qty))
+           .append($('<td class="text-end">').attr('data-label', 'Rate (Tk)').append($rate))
+           .append($('<td class="text-end">').attr('data-label', 'Available').append($avail))
+           .append($('<td class="text-end">').attr('data-label', 'Amount (Tk)').append($amt))
+           .append($('<td class="text-center">').attr('data-label', '').append($rm));
 
         $tbody.append($tr);
 
-        // Initialize select2 on the new product select
-        $sel.select2({ theme: 'bootstrap-5', width: '100%' });
+        // Initialize the AJAX Select2 on the new product select.
+        $sel.select2({
+            theme: 'bootstrap-5',
+            width: '100%',
+            minimumInputLength: 1,
+            placeholder: 'Type to search product…',
+            allowClear: true,
+            ajax: {
+                url: productsSearchUrl,
+                dataType: 'json',
+                delay: 250,
+                data: function (params) {
+                    return { q: params.term || '', warehouse_id: $warehouse.val() || '' };
+                },
+                processResults: function (data) {
+                    return { results: data.results || [] };
+                }
+            },
+            templateResult: function (r) {
+                if (!r.id) return r.text;
+                return $('<span><strong>' + escapeHtml(r.product_code || '') + '</strong> — '
+                    + escapeHtml(r.product_name || '') + '</span>');
+            },
+            templateSelection: function (r) {
+                if (!r.id) return r.text || 'Type to search product…';
+                // For a pre-selected option, r.text is already "code — name".
+                return r.text || (r.product_code + ' — ' + r.product_name);
+            }
+        });
 
         // Wire events
         $sel.on('select2:select', function () { onProductChange($tr); });
@@ -536,6 +681,57 @@ $(function () {
 
         recomputeTotal();
         return $tr;
+    }
+
+    /**
+     * Phase 7 — barcode / product-code scan. Looks up the scanned code via the
+     * AJAX search endpoint; prefers an exact product_code match, else takes a
+     * single-result match. Adds a row with the product pre-selected and qty
+     * focused for fast entry. Clears the scan input on success.
+     */
+    function scanBarcode(code) {
+        code = (code || '').trim();
+        if (!code) return;
+        $.ajax({
+            url: productsSearchUrl,
+            type: 'GET',
+            data: { q: code, warehouse_id: $warehouse.val() || '' },
+            dataType: 'json'
+        }).done(function (data) {
+            var results = data.results || [];
+            var match = null;
+            for (var i = 0; i < results.length; i++) {
+                if (results[i].product_code
+                    && results[i].product_code.toLowerCase() === code.toLowerCase()) {
+                    match = results[i];
+                    break;
+                }
+            }
+            if (!match && results.length === 1) match = results[0];
+
+            if (!match) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'No exact match',
+                    html: 'No product code exactly matches <strong>' + escapeHtml(code) + '</strong>.<br>Use the search box in a row to pick by name.',
+                    confirmButtonText: 'OK'
+                });
+                return;
+            }
+            var $tr = buildRow(rowIndex++, { id: match.id, text: match.text });
+            // Focus qty for fast entry after a scan.
+            $tr.find('.qty-input').focus();
+            // Fetch rate/available if a warehouse is selected.
+            if ($warehouse.val()) onProductChange($tr);
+            $('#barcodeScan').val('').focus();
+        }).fail(function () {
+            Swal.fire({
+                icon: 'error',
+                title: 'Search failed',
+                text: 'Could not search products. Check your connection and retry.',
+                confirmButtonText: 'OK'
+            });
+        });
     }
 
     function onProductChange($tr) {
@@ -600,6 +796,19 @@ $(function () {
         buildRow(rowIndex++);
     });
 
+    // ====== Phase 7 — barcode scan wiring ======
+    // Enter (or the barcode scanner's auto-Enter) triggers a lookup; the
+    // magnifier button does the same for manual entry.
+    $('#barcodeScan').on('keydown', function (e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            scanBarcode($(this).val());
+        }
+    });
+    $('#barcodeScanBtn').on('click', function () {
+        scanBarcode($('#barcodeScan').val());
+    });
+
     // ====== When warehouse changes: refresh rates for all rows ======
     $warehouse.on('change', function () {
         $tbody.find('tr').each(function () {
@@ -620,10 +829,14 @@ $(function () {
     @if (old('items'))
         var oldItems = @json(old('items'));
         oldItems.forEach(function (item) {
-            var $tr = buildRow(rowIndex++);
-            if (item.product_id) {
-                $tr.find('.product-select').val(item.product_id).trigger('change');
-            }
+            // Phase 7 — an AJAX Select2 can't render a pre-selected option
+            // without its text, so resolve the label from productLabelMap
+            // (the hidden #productOptionsTpl fallback). Falls back to
+            // "Product #id" if the product isn't in the 500-cap map.
+            var preset = item.product_id
+                ? { id: item.product_id, text: productLabelMap[item.product_id] || ('Product #' + item.product_id) }
+                : null;
+            var $tr = buildRow(rowIndex++, preset);
             if (item.qty)  $tr.find('.qty-input').val(item.qty);
             if (item.rate) $tr.find('.rate-input').val(item.rate);
             // Re-fetch rate/available if both product & warehouse are set

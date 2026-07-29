@@ -1280,6 +1280,48 @@ return [
 
 ---
 
+#### Phase 7 — Implementation Status ✅ COMPLETED
+
+**Files changed:** 1 new + 5 modified. **No schema changes** (as planned).
+
+| File | Change |
+|---|---|
+| `app/Http/Controllers/Admin/DamageController.php` | Constructor injects `DamageReportService` (4th DI param). `index()` now resolves a date window via new `resolveDateRange()` (range param → manual dates → MTD default — fixes the legacy "today only" empty-list problem). New `costLast12Months()` builds the 12-point confirmed-cost series for the summary chart (RLS-scoped, branch-filter as defense-in-depth). 3 new methods: `searchProducts()` (AJAX Select2 product search — ILIKE product_code/name, optional warehouse_id filters to in-stock products via `whereExists` on warehouse_stock, limit 30), `export()` (CSV of the current filter selection — reuses `DamageReportService::getDetailLines` + `exportCsv`), `print($id)` (renders the printable slip; loads the same relations as `show()`; resolves a branch code for the print layout's color theme). |
+| `app/Services/Reports/DamageReportService.php` | `getDetailLines()` joins `employees as e_wit` (witness) + selects `witness_name`/`witness_code`. `exportCsv()` adds a **Witness** column (Phase 7 spec: CSV now includes damage_type, reason_code, accountable_employee, witness, approved_by, recovery_amount). |
+| `routes/web.php` | 3 new routes in the read-access group: `GET admin/damages/products/search` (AJAX picker), `GET admin/damages/export` (CSV), `GET admin/damages/{id}/print` (slip — `branch.isolation` + numeric `where`). Placed before the `{id}` show route so the literal paths win over the numeric wildcard. |
+| `resources/views/admin/damages/print.blade.php` | **NEW** — A5-ish printable slip extending `layouts/print.blade.php`. Renders: branch-colored company header + "Damage Slip" title + meta grid (code/date/warehouse/status/type/total/reason/recovered) + items table (#/product/qty/rate/amount) with totals + net-loss footer when recovered + accountability row (witness/accountable) + remarks + GL journal summary table (ledger/debit/credit with totals) + evidence thumbnails (inline `<img>` for images, PDF icon otherwise) + compact approval timeline + 3 signature lines (Prepared / Approved / Received-Witnessed by) + generation timestamp. |
+| `resources/views/admin/damages/index.blade.php` | Quick-filter button bar (Today / This week / This month / This year / All time) above the filter form — links that preserve the active non-date filters and set `?range=`; active button highlighted (MTD default highlights "This month"). "Export CSV" button next to Filter/Clear (passes all current filters). NEW "Damage cost — last 12 months" bar chart card (Chart.js, loaded page-local; 180px compact; k-format y-axis ticks). Submitted-status rows now highlighted `table-info` (awaiting-approval worklist visibility — takes precedence over the missing/theft warning). |
+| `resources/views/admin/damages/show.blade.php` | "Print slip" button in the page header (next to "Back to list"); opens `admin.damages.print` in a new tab — the print layout auto-triggers the browser print dialog. |
+| `resources/views/admin/damages/create.blade.php` | Product picker switched from the 500-cap server-rendered `<template>` to an **AJAX Select2** (`admin.damages.products/search`, `minimumInputLength:1`, 250ms debounce, scoped to the selected warehouse's in-stock products; `templateResult` shows code+name). NEW barcode/product-code scan input above the items table (Enter or scanner auto-Enter → exact `product_code` match preferred, else single-result match → adds a row with qty focused). Mobile responsive: `@media (max-width:767.98px)` collapses the items table into stacked cards via `data-label` attrs on each `<td>` (one card per row, label/value layout). Sticky validation-error rows resolve their pre-selected label from the retained `#productOptionsTpl` map (`productLabelMap`). |
+
+**Acceptance criteria verification:**
+- ✅ Quick filters work and persist in the URL (`?range=today|week|month|year` — the buttons are `<a>` links, so the range is visible in the query string and survives a refresh/share; an "All time" reset clears range + dates).
+- ✅ Default date range changed from "today" to month-to-date (`resolveDateRange` returns MTD when no range and no manual dates — the legacy empty-list-after-the-1st problem is fixed).
+- ✅ Print slip is clean and one-page (`admin/damages/print.blade.php` — single `.print-page`, A5-ish, all sections compact; `@media print` in `layouts/print.blade.php` handles page breaks).
+- ✅ Product search is AJAX (no 500-cap) and supports barcode (AJAX Select2 with `minimumInputLength:1`; barcode scan input does an exact `product_code` lookup; results optionally scoped to in-stock products for the selected warehouse, which enforces branch scope indirectly).
+- ✅ Layout holds on mobile (responsive item-table cards via `data-label` + `@media`; quick-filter buttons wrap; header/hero are `flex-wrap`).
+- ✅ CSV export enhanced (now includes Witness in addition to damage_type, reason_code, accountable, approver, recovery_amount, submitted_at, approved_at).
+- ✅ Index has a "Damage cost last 12 months" bar chart in the summary header (Chart.js, RLS-scoped, 12 always-present bars).
+- ✅ Show page has a "Print slip" button; status badges remain color-coded; submitted (awaiting-approval) rows are highlighted for managers.
+
+**Key design decisions:**
+1. **Quick filters as `<a>` links, not form submits** — so the chosen range persists in the URL (shareable, refresh-safe) and the manual date pickers stay in sync (the controller reflects the resolved window back into `from_date`/`to_date`). The active button is highlighted server-side.
+2. **MTD default, not "today"** — the legacy "today only" default left the list empty on any day after the 1st (a common operator complaint). MTD is the natural "what happened recently" window and matches the dashboard widget's MTD card.
+3. **AJAX product search scoped to in-stock products when a warehouse is selected** — you can only damage what's in stock, and a warehouse belongs to one branch, so this enforces branch scope indirectly without needing a branch_id on products (products are global master data). Without a warehouse, all active products are searchable (the backstop is RLS on warehouse_stock).
+4. **Barcode = product_code exact match (no separate barcode column)** — this ERP's products have no dedicated `barcode` column; `product_code` is the scannable SKU. The scan prefers an exact case-insensitive `product_code` match, falls back to a single-result match, and shows a clear "no exact match" warning otherwise (manual fallback via the row search box).
+5. **Print slip reuses `layouts/print.blade.php`** (the Phase-10 rebuild used by challans/invoices) — branch-colored toolbar, auto-print, `@media print` page breaks. No new print CSS; the slip uses the layout's `.print-page`/`.items-table`/`.signature-section` classes.
+6. **CSV export reuses `DamageReportService`** (Phase 6) — one code path for both the dedicated report and the index "Export CSV" button, so the columns stay in lock-step. The date window is resolved identically to `index()` so the CSV matches what's on screen.
+7. **Mobile responsive via `data-label` cards (not a duplicate DOM)** — the table is one structure; CSS turns each `<td>` into a label/value pair below the `sm` breakpoint. JS-built rows carry `data-label` so dynamically-added rows are responsive too. Avoids maintaining two parallel renderers.
+8. **Sticky validation-error rows use a label map** — an AJAX Select2 can't render a pre-selected option without its text, so `productLabelMap` (built from the retained `#productOptionsTpl`) resolves "code — name" for the product_id. The 500-cap now affects ONLY this fallback label resolution, not live search.
+9. **`costLast12Months` is a separate private method** (not a `DamageReportService` call) — the index already runs many queries; a single indexed grouped query is cheaper than constructing a service call, and the 12-month series is index-specific (not reusable report logic). Zero-months are filled in PHP so the chart is always 12 bars.
+
+**Notes for subsequent phases:**
+- Phase 8 (tests) should add: `DamagePrintTest` (slip renders for each status; RLS scoping; GL section hidden for drafts), `DamageProductSearchTest` (ILIKE matching, warehouse in-stock filter, branch scoping), `DamageExportTest` (CSV columns incl. witness; range resolution parity with index), and `DamageQuickFilterTest` (range param precedence; MTD default).
+- A future enhancement could add `exportPdf($id)` via dompdf for a true PDF (currently the slip uses browser-print, which is sufficient and dependency-free). Left out per the spec's "optional" note.
+- The barcode scan is software-only (keyboard-wedge scanners work out of the box); a hardware test on the actual scanner model is the remaining real-world validation step flagged in the spec's Risks.
+
+---
+
 ### Phase 8 — Test Coverage, Reversal Window & Hardening
 
 **Goal:** Lock in the gains with tests and add the final controls (period-close guard on reversal, reversal reason taxonomy, employee-ledger reconciliation).
@@ -1327,7 +1369,7 @@ return [
 | **4** | Witness + accountable employee + recovery | Yes | 🔴 Shared #23 | Phase 1 | ✅ **COMPLETED** |
 | **5** | Approval workflow + threshold escalation | Yes | 🔴 Shared #26, #27 | Phases 0, 1, 3, 4 | ✅ **COMPLETED** |
 | **6** | Dedicated reports + dashboard widget | Yes (views) | 🔴 Shared #28, #9 | Phases 1, 4, 5 | ✅ **COMPLETED** |
-| **7** | UX polish, quick filters, print, barcode | No | 🟡 Shared #30 | Phase 6 | ⬜ Pending |
+| **7** | UX polish, quick filters, print, barcode | No | 🟡 Shared #30 | Phase 6 | ✅ **COMPLETED** |
 | **8** | Tests, reversal window, hardening | Yes (minor) | 🟠 #32, #33, #34 | All prior | ⬜ Pending |
 
 **Recommended sequencing:** 0 → 1 → 2 → (3 ∥ 4) → 5 → 6 → 7 → 8. Phases 3 and 4 can run in parallel since they touch different columns/tables.
