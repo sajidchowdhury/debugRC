@@ -18,6 +18,12 @@
     $debitTotal   = $jeLines->sum(fn ($l) => (float) $l->debit);
     $creditTotal  = $jeLines->sum(fn ($l) => (float) $l->credit);
     $hasMovements = is_iterable($stockMovements) && count($stockMovements) > 0;
+
+    // Phase 0 (Damage plan): only admin/manager may confirm or cancel a
+    // damage (they post/reverse stock + GL). warehouse_manager can create
+    // drafts and view, but cannot post — so hide the action buttons and
+    // show an explanatory note instead of letting them click into a 403.
+    $canPost = auth()->check() && auth()->user()->hasRole('admin', 'manager');
 @endphp
 
 <div class="container-fluid py-2">
@@ -330,8 +336,8 @@
                         </div>
                     </div>
 
-                    {{-- CONFIRM (draft only) --}}
-                    @if ($dmg->isDraft())
+                    {{-- CONFIRM (draft only) — admin/manager only --}}
+                    @if ($dmg->isDraft() && $canPost)
                         <form method="POST" action="{{ route('admin.damages.confirm', $dmg) }}"
                               id="confirmForm">
                             @csrf
@@ -347,8 +353,8 @@
                         </div>
                     @endif
 
-                    {{-- CANCEL (draft or confirmed) --}}
-                    @if ($dmg->isDraft() || $dmg->isConfirmed())
+                    {{-- CANCEL (draft or confirmed) — admin/manager only --}}
+                    @if (($dmg->isDraft() || $dmg->isConfirmed()) && $canPost)
                         <form method="POST" action="{{ route('admin.damages.cancel', $dmg) }}"
                               id="cancelForm">
                             @csrf
@@ -369,6 +375,21 @@
                                 A reason is required.
                             </div>
                         @endif
+                    @endif
+
+                    {{-- Phase 0 (Damage plan): warehouse_manager sees this note instead of
+                        the confirm/cancel buttons (which would 403). --}}
+                    @if (($dmg->isDraft() || $dmg->isConfirmed()) && !$canPost)
+                        <div class="alert alert-info small mb-0">
+                            <i class="fas fa-circle-info me-1"></i>
+                            @if ($dmg->isDraft())
+                                This draft damage must be <strong>confirmed</strong> by a manager or admin
+                                to write off stock and post the GL loss.
+                            @else
+                                This confirmed damage can only be <strong>cancelled/reversed</strong> by a
+                                manager or admin.
+                            @endif
+                        </div>
                     @endif
 
                     @if ($dmg->isCancelled())

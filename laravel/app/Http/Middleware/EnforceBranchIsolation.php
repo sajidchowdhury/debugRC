@@ -201,6 +201,15 @@ class EnforceBranchIsolation
         if (str_contains($path, 'stock-adjustments')) {
             return 'stock_adjustments';
         }
+        // --- Phase 0 (Damage plan): POST {id}/confirm and POST {id}/cancel
+        // must resolve {id} → damage_invoices.branch_id so a non-admin cannot
+        // confirm/cancel another branch's damage by guessing its URL id.
+        // GET admin/damages/{id} (show) also benefits — a non-admin viewing
+        // another branch's damage gets a clean 403 here instead of a 404 from
+        // RLS. (RLS on damage_invoices is the DB-level backstop.)
+        if (str_contains($path, 'damages')) {
+            return 'damage_invoices';
+        }
         return null;
     }
 

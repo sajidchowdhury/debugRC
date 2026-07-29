@@ -643,15 +643,48 @@ Route::middleware('auth')->group(function () {
 
     // ============================================================
     // Phase 6.6: Damages (stock OUT + GL Dr Damage Loss / Cr Inventory)
+    // ------------------------------------------------------------
+    // Phase 0 (Damage plan): RBAC + branch isolation — mirrors legacy
+    // route_roles.php DamageController matrix:
+    //   index/show/product-stock/export : admin, manager, warehouse_manager  (read)
+    //   create/store                    : admin, manager, warehouse_manager  (write — draft only)
+    //   confirm                         : admin, manager                     (posts stock + GL — tighter)
+    //   cancel                          : admin, manager                     (reverses stock + GL — tighter)
+    // salesman/dispatcher/hr/user/accountant have NO access to any damage route.
+    // All POST writes carry `branch.isolation` so a non-admin operating on
+    // another branch's damage (by guessing its URL id) gets a clean 403
+    // instead of a confusing RLS-induced 404. EnforceBranchIsolation resolves
+    // {id} → damage_invoices.branch_id via the 'damages' entry in
+    // inferTableFromUri(). Defense-in-depth: RLS on damage_invoices is the
+    // DB-level backstop.
     // ============================================================
-    Route::prefix('admin/damages')->name('admin.damages.')->group(function () {
-        Route::get('product-stock', [DamageController::class, 'getProductStock'])->name('product-stock');
-        Route::post('{id}/confirm', [DamageController::class, 'confirm'])->name('confirm');
-        Route::post('{id}/cancel', [DamageController::class, 'cancel'])->name('cancel');
+
+    // --- Read access: admin, manager, warehouse_manager ---
+    Route::middleware('role:admin,manager,warehouse_manager')->group(function () {
+        Route::get('admin/damages', [DamageController::class, 'index'])->name('admin.damages.index');
+        Route::get('admin/damages/product-stock', [DamageController::class, 'getProductStock'])->name('admin.damages.product-stock');
+        Route::get('admin/damages/{id}', [DamageController::class, 'show'])->name('admin.damages.show')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
     });
-    Route::resource('admin/damages', DamageController::class)
-        ->only(['index', 'create', 'store', 'show'])
-        ->names('admin.damages');
+
+    // --- Write access (create draft, fetch product-stock): admin, manager, warehouse_manager ---
+    Route::middleware('role:admin,manager,warehouse_manager')->group(function () {
+        Route::get('admin/damages/create', [DamageController::class, 'create'])->name('admin.damages.create');
+        Route::post('admin/damages', [DamageController::class, 'store'])->name('admin.damages.store');
+    });
+
+    // --- Destructive access (confirm posts stock+GL; cancel reverses): admin, manager only ---
+    // Tighter than the create/store group — only admin/manager may post or
+    // reverse a write-off (mirrors legacy route_roles.php reverse rule).
+    Route::middleware('role:admin,manager')->group(function () {
+        Route::post('admin/damages/{id}/confirm', [DamageController::class, 'confirm'])->name('admin.damages.confirm')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
+        Route::post('admin/damages/{id}/cancel', [DamageController::class, 'cancel'])->name('admin.damages.cancel')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
+    });
 
     // ============================================================
     // Phase 7.1: Purchase Orders (draft document, no stock/GL)

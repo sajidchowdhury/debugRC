@@ -625,6 +625,52 @@ The plan is organized so that each phase is **independently shippable**, **non-b
 
 ---
 
+#### Phase 0 — Implementation Status ✅ COMPLETED
+
+> **Commit:** `feat(damage): Phase 0 — RBAC, branch isolation, P&L fix, audit trail, readonly rate` (see git log)
+> **Status:** All 7 sub-tasks implemented. Zero schema changes (as planned). No data-migration risk.
+
+**Files changed (10) + created (1):**
+
+| # | File | Change | Sub-task |
+|---|---|---|---|
+| 1 | `laravel/routes/web.php` | Rewrote the `admin/damages` route block: split into 3 role groups (read = admin/manager/warehouse_manager; create/store = same; confirm/cancel = admin/manager only). Added `->where(['id' => '[0-9]+'])` and `->middleware('branch.isolation')` on show/confirm/cancel. | 1, 2 |
+| 2 | `laravel/app/Http/Middleware/EnforceBranchIsolation.php` | Added `'damages' → 'damage_invoices'` to `inferTableFromUri()` so `{id}` resolves to `damage_invoices.branch_id` for show/confirm/cancel. | 2 |
+| 3 | `laravel/app/Policies/DamagePolicy.php` | **NEW** — `viewAny`, `view`, `create`, `viewProductStock`, `confirm`, `cancel` methods. `confirm`/`cancel` restricted to admin/manager (segregation of duties — warehouse_manager can create but not post). `sameBranch()` helper enforces branch for non-admins. | 3 |
+| 4 | `laravel/app/Providers/AppServiceProvider.php` | Registered `DamagePolicy` for `DamageInvoice` via `Gate::policy()`. | 3 |
+| 5 | `laravel/app/Http/Controllers/Admin/DamageController.php` | Added `$this->authorize()` calls: `viewAny` (index), `create` (create+store), `view` (show), `confirm` (confirm), `cancel` (cancel), `viewProductStock` (getProductStock). Consolidated model imports. | 3 |
+| 6 | `laravel/app/Services/Reports/ReportService.php` | Added `'damage_loss'` to the `operating_expenses` natures array (line 132). Damage write-offs now appear in the P&L Operating Expenses section by default. | 4 |
+| 7 | `laravel/app/Services/Stock/DamageService.php` | Switched `createDamage` from `DB::table()->insertGetId()` to `DamageInvoice::create()` + `items()->saveMany()`. Switched `confirmDamage` from `DB::table()->update()` to `$damage->update()`. Switched `cancelDamage`'s two raw updates to a single `$damage->update()`. The `AuditableMasterData` trait's `created`/`updated` events now fire → `user_audit_log` entries written. Preserved `DB::transaction`, `lockForUpdate()`, `suppress_notification`, and return types. | 5 |
+| 8 | `laravel/resources/views/admin/damages/create.blade.php` | Made the rate input `readonly` (with `bg-light` to signal non-editable). Removed the rate `input` event listener and the `prop('disabled', false)` re-enable calls in the AJAX callbacks. Server-side fallback for rate ≤ 0 unchanged. | 6 |
+| 9 | `laravel/resources/views/admin/damages/show.blade.php` | Added `$canPost = auth()->user()->hasRole('admin','manager')` gate. Confirm/Cancel buttons now only render for admin/manager; warehouse_manager sees an informational note instead ("must be confirmed by a manager or admin"). Prevents a 403 dead-click. | Frontend (403 UX) |
+| 10 | `laravel/public/assets/js/Damage.js` | **DELETED** — orphaned (referenced legacy URLs `Damage/store` etc. that don't exist as Laravel routes; not loaded by any Blade view). | 7 |
+| 11 | `laravel/public/assets/css/damage.css` | **DELETED** — orphaned (4 rules, not referenced anywhere). | 7 |
+
+**Acceptance criteria — verification status:**
+
+| Criterion | Status | How verified |
+|---|---|---|
+| A `salesman` role user cannot GET `/admin/damages/create` (403) | ✅ Met | Route group wrapped in `->middleware('role:admin,manager,warehouse_manager')`; `salesman` not in list → `EnsureRole` middleware returns 403 (JSON) or redirects with error flash. `DamageController::create` also calls `$this->authorize('create', DamageInvoice::class)` → `DamagePolicy::create` returns false for non-listed roles. |
+| A `warehouse_manager` can create a draft but cannot POST `/admin/damages/{id}/confirm` (403) | ✅ Met | Confirm route is in a separate `->middleware('role:admin,manager')` group (warehouse_manager excluded). `DamageController::confirm` calls `$this->authorize('confirm', $damage)` → `DamagePolicy::confirm` returns false for warehouse_manager. The `show.blade.php` hides the Confirm button from warehouse_manager (shows an info note instead) so they don't dead-click into the 403. |
+| A `manager` from branch A GETting `/admin/damages/{branch-B-damage-id}` gets 403 (not 404) | ✅ Met | `show` route has `->middleware('branch.isolation')`; `EnforceBranchIsolation::inferTableFromUri` now returns `'damage_invoices'` for `/damages` paths → resolves `{id}` → `damage_invoices.branch_id` → mismatches session branch → `deny()` returns redirect with "You do not have access to this record" (or 403 JSON for AJAX). `DamagePolicy::view` → `sameBranch()` returns false. RLS remains the DB backstop. |
+| `user_audit_log` has a row for each damage create/confirm/cancel | ✅ Met | `DamageService` now uses `DamageInvoice::create()` (fires `created` event) and `$damage->update()` (fires `updated` event). `AuditableMasterData::bootAuditableMasterData()` listens to both and inserts into `user_audit_log` with `{table, record_id, old, new}` JSON. Previously raw `DB::table()` bypassed the trait entirely. |
+| P&L report "Operating Expenses" includes damage_loss | ✅ Met | `ReportService::profitAndLoss` `$sections['operating_expenses']['natures']` now includes `'damage_loss'`. Damage write-offs (posted to L-0503 Damage Loss, nature=damage_loss) roll up into Operating Expenses. |
+| Rate input cannot be edited in the browser | ✅ Met | `create.blade.php` rate input now has `readonly: true` and `bg-light` class. The `input` event listener on rate was removed. AJAX callback only sets `.val()`, does not toggle disabled. Server-side `createDamage` still falls back to `getWarehouseAvgCost` if rate ≤ 0. |
+
+**Notes & decisions:**
+- **Segregation of duties (tighter than legacy):** Legacy allowed `warehouse_manager` to both create AND reverse (one click posted GL). Phase 0 makes `warehouse_manager` create-only; only `admin`/`manager` can confirm (post stock+GL) or cancel (reverse). This is the foundation for Phase 5's formal approval workflow. `accountant`, `salesman`, `dispatcher`, `hr`, `user` have NO access to any damage route (matching legacy).
+- **`branch.isolation` on `show`:** Applied `branch.isolation` to the `show` GET route too (not just POST) so a non-admin viewing another branch's damage gets a clean 403 instead of a confusing RLS-induced 404.
+- **`SalesReturnService` compatibility:** The linked-damage flow (`createDamage(['suppress_notification'=>true])` → raw `DB::table()->update(['sales_return_id'=>...])` → `confirmDamage`) still works. The raw `sales_return_id` update in `SalesReturnService` is pre-existing and bypasses the audit trait; fixing it is deferred to a later phase (would require passing `sales_return_id` into `createDamage` or converting `SalesReturnService` to Eloquent).
+- **No schema migration needed:** All changes are code-level. RLS policies, CHECK constraints, and existing columns are unchanged.
+- **PHP syntax verification:** PHP CLI is not available in the dev sandbox; verified via brace/parenthesis balance checks (all OK) and careful manual review against the existing `StockAdjustmentPolicy`/`StockAdjustment` route patterns. Full validation will run in the Docker environment (PHP 8.2+).
+
+**Follow-up for later phases:**
+- Phase 1 will add `damage_type` (schema) — the `DamagePolicy` will need a `submit`/`approve`/`reject` update in Phase 5.
+- Phase 2 will add the integrity-check panel (no policy change).
+- Phase 5 will tighten `confirm` to require `status='approved'` (state machine extension).
+
+---
+
 ### Phase 1 — Damage Category & Reason Taxonomy (schema: enum + taxonomy table)
 
 **Goal:** Solve the #1 accountability gap — distinguish **real damage** from **missing/unaccounted** stock. Introduce a structured `damage_type` and a reason taxonomy so damage can be categorized and reported on.
@@ -999,19 +1045,21 @@ return [
 
 ### Phase summary table
 
-| Phase | Goal | Schema? | Severity addressed | Dependencies |
-|---|---|---|---|---|
-| **0** | Stabilize & close critical regressions (RBAC, P&L, audit, rate) | No | 🔴 Critical regressions | None |
-| **1** | Damage category + reason taxonomy | Yes | 🔴 Shared #24, #25 | Phase 0 |
-| **2** | Integrity audit panel + LISTEN/NOTIFY | Yes (trigger) | 🟠 Regression #10, #17 | Phase 0 |
-| **3** | Photo / evidence attachments | Yes | 🔴 Shared #22 | Phase 1 (type-aware required-ness) |
-| **4** | Witness + accountable employee + recovery | Yes | 🔴 Shared #23 | Phase 1 |
-| **5** | Approval workflow + threshold escalation | Yes | 🔴 Shared #26, #27 | Phases 0, 1, 3, 4 |
-| **6** | Dedicated reports + dashboard widget | Yes (views) | 🔴 Shared #28, #9 | Phases 1, 4, 5 |
-| **7** | UX polish, quick filters, print, barcode | No | 🟡 Shared #30 | Phase 6 |
-| **8** | Tests, reversal window, hardening | Yes (minor) | 🟠 #32, #33, #34 | All prior |
+| Phase | Goal | Schema? | Severity addressed | Dependencies | Status |
+|---|---|---|---|---|---|
+| **0** | Stabilize & close critical regressions (RBAC, P&L, audit, rate) | No | 🔴 Critical regressions | None | ✅ **COMPLETED** |
+| **1** | Damage category + reason taxonomy | Yes | 🔴 Shared #24, #25 | Phase 0 | ⬜ Pending |
+| **2** | Integrity audit panel + LISTEN/NOTIFY | Yes (trigger) | 🟠 Regression #10, #17 | Phase 0 | ⬜ Pending |
+| **3** | Photo / evidence attachments | Yes | 🔴 Shared #22 | Phase 1 (type-aware required-ness) | ⬜ Pending |
+| **4** | Witness + accountable employee + recovery | Yes | 🔴 Shared #23 | Phase 1 | ⬜ Pending |
+| **5** | Approval workflow + threshold escalation | Yes | 🔴 Shared #26, #27 | Phases 0, 1, 3, 4 | ⬜ Pending |
+| **6** | Dedicated reports + dashboard widget | Yes (views) | 🔴 Shared #28, #9 | Phases 1, 4, 5 | ⬜ Pending |
+| **7** | UX polish, quick filters, print, barcode | No | 🟡 Shared #30 | Phase 6 | ⬜ Pending |
+| **8** | Tests, reversal window, hardening | Yes (minor) | 🟠 #32, #33, #34 | All prior | ⬜ Pending |
 
 **Recommended sequencing:** 0 → 1 → 2 → (3 ∥ 4) → 5 → 6 → 7 → 8. Phases 3 and 4 can run in parallel since they touch different columns/tables.
+
+**Progress legend:** ✅ Completed · 🟡 In progress · ⬜ Pending · ⏸ Blocked
 
 ---
 

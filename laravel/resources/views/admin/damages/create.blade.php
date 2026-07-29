@@ -192,13 +192,16 @@ $(function () {
             placeholder: '0.000'
         });
 
-        // Rate input (auto-filled from AJAX; editable)
+        // Rate input (auto-filled from AJAX; READONLY — avg cost is the only
+        // valid rate for a damage write-off, matching legacy behavior. The
+        // server re-validates and falls back to avg cost if rate <= 0.)
         var $rate = $('<input>').attr({
             type: 'number',
             name: 'items[' + idx + '][rate]',
-            class: 'form-control form-control-sm text-end rate-input',
+            class: 'form-control form-control-sm text-end rate-input bg-light',
             min: '0',
             step: '0.01',
+            readonly: true,
             placeholder: '0.00'
         });
 
@@ -240,7 +243,8 @@ $(function () {
         // Wire events
         $sel.on('select2:select', function () { onProductChange($tr); });
         $qty.on('input',  function () { recomputeRow($tr); });
-        $rate.on('input', function () { recomputeRow($tr); });
+        // Note: rate input is readonly (auto-fetched avg cost) — no input
+        // listener needed.
         $rm.on('click',   function () {
             $tr.remove();
             recomputeTotal();
@@ -257,11 +261,10 @@ $(function () {
         var $avail = $tr.find('.available-input');
         var $amt   = $tr.find('.amount-input');
 
-        $rate.prop('disabled', true);
         $avail.val('loading…');
 
         if (!pid || !wid) {
-            $rate.val('').prop('disabled', false);
+            $rate.val('');
             $avail.val('—');
             $amt.val('0.00');
             recomputeTotal();
@@ -274,11 +277,12 @@ $(function () {
             data: { product_id: pid, warehouse_id: wid },
             dataType: 'json'
         }).done(function (data) {
-            $rate.val(Number(data.rate).toFixed(2)).prop('disabled', false);
+            // Rate is readonly — just set the value (avg cost).
+            $rate.val(Number(data.rate).toFixed(2));
             $avail.val(Number(data.available_qty).toFixed(4));
             recomputeRow($tr);
         }).fail(function () {
-            $rate.val('').prop('disabled', false);
+            $rate.val('');
             $avail.val('error');
             $amt.val('0.00');
             recomputeTotal();

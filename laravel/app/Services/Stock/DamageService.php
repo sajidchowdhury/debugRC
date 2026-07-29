@@ -3,6 +3,7 @@
 namespace App\Services\Stock;
 
 use App\Models\DamageInvoice;
+use App\Models\DamageInvoiceItem;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Notification\NotificationService;
@@ -96,7 +97,12 @@ class DamageService
         return DB::transaction(function () use (
             $damageCode, $data, $warehouseId, $branchId, $totalValue, $validatedItems
         ) {
-            $damageId = DB::table('damage_invoices')->insertGetId([
+            // Phase 0 (Damage plan): use Eloquent create() so the
+            // AuditableMasterData trait's `created` event fires and writes
+            // a user_audit_log entry. Previously this used raw
+            // DB::table()->insertGetId() which BYPASSED the trait entirely
+            // (no audit trail for damage creation — a regression vs legacy).
+            $damage = DamageInvoice::create([
                 'damage_code' => $damageCode,
                 'damage_date' => $data['damage_date'] ?? now()->format('Y-m-d'),
                 'warehouse_id' => $warehouseId,
@@ -106,20 +112,19 @@ class DamageService
                 'status' => 'draft',
                 'is_reversed' => false,
                 'created_by' => $data['created_by'] ?? null,
-                'created_at' => now(),
-                'updated_at' => now(),
             ]);
 
+            // Insert items via Eloquent (bulk insert via the model so the
+            // relation is consistent on the returned fresh model).
             $itemRows = [];
             foreach ($validatedItems as $item) {
-                $itemRows[] = [
-                    'damage_invoice_id' => $damageId,
+                $itemRows[] = new DamageInvoiceItem([
                     'product_id' => $item['product_id'],
                     'qty' => $item['qty'],
                     'rate' => $item['rate'],
-                ];
+                ]);
             }
-            DB::table('damage_invoice_items')->insert($itemRows);
+            $damage->items()->saveMany($itemRows);
 
             // F-18c: Notify configured recipients that a damage invoice was
             // created. Skipped when `suppress_notification` is set — the
@@ -134,7 +139,7 @@ class DamageService
                         . number_format((float) $totalValue, 2)
                         . " at warehouse #{$warehouseId} (branch #{$branchId}).",
                         'damage_invoice',
-                        $damageId,
+                        $damage->id,
                         [],
                         [
                             'branch_id'  => $branchId,
@@ -143,13 +148,13 @@ class DamageService
                     );
                 } catch (\Throwable $e) {
                     Log::warning('Notification dispatch failed (damage_invoice_created)', [
-                        'damage_id' => $damageId,
+                        'damage_id' => $damage->id,
                         'error'     => $e->getMessage(),
                     ]);
                 }
             }
 
-            return DamageInvoice::with(['items.product', 'warehouse.branch'])->find($damageId);
+            return $damage->fresh(['items.product', 'warehouse.branch']);
         });
     }
 
@@ -194,16 +199,17 @@ class DamageService
             // Post GL journal.
             $journalEntryId = $this->postDamageGL($damage, $confirmedBy);
 
-            DB::table('damage_invoices')
-                ->where('id', $damageId)
-                ->update([
-                    'status' => 'confirmed',
-                    'journal_entry_id' => $journalEntryId,
-                    'updated_at' => now(),
-                ]);
+            // Phase 0 (Damage plan): use Eloquent update() so the
+            // AuditableMasterData trait's `updated` event fires and writes
+            // a user_audit_log entry (status: draft → confirmed, plus the
+            // journal_entry_id). Previously raw DB::table()->update()
+            // bypassed the trait.
+            $damage->update([
+                'status' => 'confirmed',
+                'journal_entry_id' => $journalEntryId,
+            ]);
 
-            return DamageInvoice::with(['items.product', 'warehouse.branch', 'journalEntry.lines.ledger'])
-                ->find($damageId);
+            return $damage->fresh(['items.product', 'warehouse.branch', 'journalEntry.lines.ledger']);
         });
     }
 
@@ -252,21 +258,24 @@ class DamageService
                     );
                 }
 
-                DB::table('damage_invoices')
-                    ->where('id', $damageId)
-                    ->update([
-                        'is_reversed' => true,
-                        'reversed_at' => now(),
-                        'reversed_by' => $cancelledBy,
-                        'reverse_reason' => $reason,
-                    ]);
+                // Phase 0 (Damage plan): use Eloquent update() so the
+                // AuditableMasterData trait's `updated` event fires and
+                // writes a user_audit_log entry capturing the reversal
+                // metadata + status change in a single audit row.
+                $damage->update([
+                    'is_reversed' => true,
+                    'reversed_at' => now(),
+                    'reversed_by' => $cancelledBy,
+                    'reverse_reason' => $reason,
+                    'status' => 'cancelled',
+                ]);
+            } else {
+                // Draft → cancelled (no stock/GL to reverse). Still use
+                // Eloquent so the audit trait fires.
+                $damage->update(['status' => 'cancelled']);
             }
 
-            DB::table('damage_invoices')
-                ->where('id', $damageId)
-                ->update(['status' => 'cancelled', 'updated_at' => now()]);
-
-            return DamageInvoice::find($damageId);
+            return $damage->fresh();
         });
     }
 

@@ -129,7 +129,7 @@ SQL;
         $sections = [
             'revenue' => ['label' => 'Revenue', 'natures' => ['sales_revenue', 'other_income', 'inventory_surplus', 'sales_return', 'sales_discount'], 'sort' => 10],
             'cost_of_sales' => ['label' => 'Cost of Goods Sold', 'natures' => ['cogs'], 'sort' => 20],
-            'operating_expenses' => ['label' => 'Operating Expenses', 'natures' => ['operating_expense', 'inventory_shrinkage', 'manual_adjustment'], 'sort' => 30],
+            'operating_expenses' => ['label' => 'Operating Expenses', 'natures' => ['operating_expense', 'inventory_shrinkage', 'damage_loss', 'manual_adjustment'], 'sort' => 30],
             'payroll' => ['label' => 'Payroll & Salaries', 'natures' => ['payroll_expense'], 'sort' => 40],
             'depreciation' => ['label' => 'Depreciation & Amortization', 'natures' => ['depreciation'], 'sort' => 50],
             'finance' => ['label' => 'Finance Costs', 'natures' => ['finance_cost'], 'sort' => 60],

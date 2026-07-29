@@ -85,5 +85,14 @@ class AppServiceProvider extends ServiceProvider
             \App\Models\StockAdjustment::class,
             \App\Policies\StockAdjustmentPolicy::class
         );
+        // Phase 0 (Damage plan): DamageInvoice policy — defense-in-depth behind
+        // the role: middleware on admin/damages routes. Mirrors the legacy
+        // route_roles.php DamageController matrix (admin/manager/warehouse_manager
+        // read+create; admin/manager confirm+cancel). Enforces same-branch for
+        // non-admins on view/confirm/cancel.
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\DamageInvoice::class,
+            \App\Policies\DamagePolicy::class
+        );
     }
 }

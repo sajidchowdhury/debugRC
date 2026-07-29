@@ -4,6 +4,9 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\DamageInvoice;
+use App\Models\Warehouse;
+use App\Models\Product;
+use App\Models\Branch;
 use App\Services\Stock\DamageService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
@@ -27,6 +30,10 @@ class DamageController extends Controller
 
     public function index(Request $request)
     {
+        // Phase 0 (Damage plan): defense-in-depth policy check behind the
+        // role:admin,manager,warehouse_manager route middleware.
+        $this->authorize('viewAny', DamageInvoice::class);
+
         $query = DamageInvoice::with(['warehouse.branch', 'items'])
             ->when($request->input('from_date'), fn($q, $d) => $q->where('damage_date', '>=', $d))
             ->when($request->input('to_date'), fn($q, $d) => $q->where('damage_date', '<=', $d))
@@ -41,8 +48,8 @@ class DamageController extends Controller
 
         $damages = $query->paginate(25);
 
-        $warehouses = \App\Models\Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
-        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
+        $warehouses = Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
+        $branches = Branch::active()->orderBy('branch_name')->get();
 
         $stats = [
             'total' => DamageInvoice::count(),
@@ -64,8 +71,11 @@ class DamageController extends Controller
 
     public function create()
     {
-        $warehouses = \App\Models\Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
-        $products = \App\Models\Product::active()->orderBy('product_name')->limit(500)->get();
+        // Phase 0 (Damage plan): defense-in-depth policy check.
+        $this->authorize('create', DamageInvoice::class);
+
+        $warehouses = Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
+        $products = Product::active()->orderBy('product_name')->limit(500)->get();
 
         return view('admin.damages.create', [
             'title' => 'New Damage Invoice',
@@ -76,6 +86,9 @@ class DamageController extends Controller
 
     public function store(Request $request)
     {
+        // Phase 0 (Damage plan): defense-in-depth policy check.
+        $this->authorize('create', DamageInvoice::class);
+
         $validated = $request->validate([
             'warehouse_id' => 'required|integer|exists:warehouses,id',
             'damage_date' => 'required|date',
@@ -108,6 +121,11 @@ class DamageController extends Controller
             'items.product', 'warehouse.branch', 'branch', 'journalEntry.lines.ledger'
         ])->findOrFail($id);
 
+        // Phase 0 (Damage plan): defense-in-depth policy check (same-branch
+        // for non-admins). branch.isolation middleware already gated the
+        // request; this re-confirms on the loaded model.
+        $this->authorize('view', $damage);
+
         $stockMovements = [];
         if ($damage->isConfirmed() || $damage->is_reversed) {
             $stockMovements = DB::table('stock_transactions as st')
@@ -128,6 +146,11 @@ class DamageController extends Controller
 
     public function confirm(Request $request, int $id)
     {
+        // Phase 0 (Damage plan): defense-in-depth policy check. Loads the
+        // model first so the policy can verify same-branch for non-admins.
+        $damage = DamageInvoice::findOrFail($id);
+        $this->authorize('confirm', $damage);
+
         $request->validate([
             'confirm_reason' => 'nullable|string|max:500',
         ]);
@@ -143,6 +166,10 @@ class DamageController extends Controller
 
     public function cancel(Request $request, int $id)
     {
+        // Phase 0 (Damage plan): defense-in-depth policy check.
+        $damage = DamageInvoice::findOrFail($id);
+        $this->authorize('cancel', $damage);
+
         $request->validate([
             'cancel_reason' => 'required|string|max:500',
         ]);
@@ -161,6 +188,9 @@ class DamageController extends Controller
      */
     public function getProductStock(Request $request)
     {
+        // Phase 0 (Damage plan): defense-in-depth policy check.
+        $this->authorize('viewProductStock', DamageInvoice::class);
+
         $request->validate([
             'product_id' => 'required|integer|exists:products,id',
             'warehouse_id' => 'required|integer|exists:warehouses,id',
