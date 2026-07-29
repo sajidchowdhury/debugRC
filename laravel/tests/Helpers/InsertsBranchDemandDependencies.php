@@ -62,15 +62,17 @@ trait InsertsBranchDemandDependencies
         array $overrides = [],
     ): int {
         return DB::table('branch_ledger')->insertGetId(array_merge([
-            'debtor_branch_id'  => $debtorBranchId,
-            'creditor_branch_id' => $creditorBranchId,
-            'entry_type'        => $entryType,
-            'amount'            => $amount,
-            'running_balance'   => $amount,
-            'branch_demand_id'  => $demandId,
-            'journal_entry_id'  => $journalEntryId,
-            'is_reversed'       => $isReversed,
-            'created_at'        => now(),
+            'from_branch_id'   => $debtorBranchId,
+            'to_branch_id'     => $creditorBranchId,
+            'transaction_date' => now()->toDateString(),
+            'reference_type'   => $entryType,
+            'reference_id'     => $demandId,
+            'debit'            => $amount,
+            'credit'           => 0,
+            'running_balance'  => $amount,
+            'journal_entry_id' => $journalEntryId,
+            'is_reversed'      => $isReversed,
+            'created_at'       => now(),
         ], $overrides));
     }
 

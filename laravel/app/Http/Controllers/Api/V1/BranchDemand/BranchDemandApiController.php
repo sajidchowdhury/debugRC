@@ -80,7 +80,19 @@ class BranchDemandApiController extends Controller
      */
     private function currentBranchId(): int
     {
-        return (int) session('branch_id', 0);
+        // For API requests, the session may not be set (SetApiBranchContext
+        // sets the GUC instead). Fall back to the authenticated user's branch_id.
+        $fromSession = (int) session('branch_id', 0);
+        if ($fromSession > 0) {
+            return $fromSession;
+        }
+
+        $user = Auth::user();
+        if ($user && method_exists($user, 'getBranchId')) {
+            return (int) $user->getBranchId();
+        }
+
+        return 0;
     }
 
     // ===================== READS =====================

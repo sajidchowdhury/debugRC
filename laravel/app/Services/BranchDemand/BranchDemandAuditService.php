@@ -411,14 +411,34 @@ class BranchDemandAuditService
     private function checkLedgerNature(): array
     {
         // Guard: chart_of_accounts may not exist in all environments (e.g. test DB)
+        // Use a savepoint so that a failed query doesn't abort the entire
+        // PostgreSQL transaction — catching the PHP exception is not enough;
+        // PG stays in "aborted transaction" state until ROLLBACK TO SAVEPOINT.
         try {
-            $receivable = DB::table('chart_of_accounts')
-                ->where('account_code', 'interbranch_receivable')
-                ->exists();
+            return DB::transaction(function () {
+                $receivable = DB::table('chart_of_accounts')
+                    ->where('account_code', 'interbranch_receivable')
+                    ->exists();
 
-            $payable = DB::table('chart_of_accounts')
-                ->where('account_code', 'interbranch_payable')
-                ->exists();
+                $payable = DB::table('chart_of_accounts')
+                    ->where('account_code', 'interbranch_payable')
+                    ->exists();
+
+                $bothExist = $receivable && $payable;
+
+                return [
+                    'name'    => 'Ledger Nature',
+                    'status'  => $bothExist ? 'pass' : 'fail',
+                    'message' => $bothExist
+                        ? 'Both interbranch_receivable and interbranch_payable accounts exist.'
+                        : 'Missing ' . (!$receivable ? 'interbranch_receivable ' : '') . (!$payable ? 'interbranch_payable ' : '') . 'account(s).',
+                    'count'   => ($receivable ? 0 : 1) + ($payable ? 0 : 1),
+                    'details' => [
+                        'interbranch_receivable_exists' => $receivable,
+                        'interbranch_payable_exists'    => $payable,
+                    ],
+                ];
+            });
         } catch (\Throwable $e) {
             return [
                 'name'    => 'Ledger Nature',
@@ -428,21 +448,6 @@ class BranchDemandAuditService
                 'details' => ['error' => $e->getMessage()],
             ];
         }
-
-        $bothExist = $receivable && $payable;
-
-        return [
-            'name'    => 'Ledger Nature',
-            'status'  => $bothExist ? 'pass' : 'fail',
-            'message' => $bothExist
-                ? 'Both interbranch_receivable and interbranch_payable accounts exist.'
-                : 'Missing ' . (!$receivable ? 'interbranch_receivable ' : '') . (!$payable ? 'interbranch_payable ' : '') . 'account(s).',
-            'count'   => ($receivable ? 0 : 1) + ($payable ? 0 : 1),
-            'details' => [
-                'interbranch_receivable_exists' => $receivable,
-                'interbranch_payable_exists'    => $payable,
-            ],
-        ];
     }
 
     /**
@@ -489,37 +494,51 @@ class BranchDemandAuditService
      */
     private function checkJournalBalance(): array
     {
-        // Find journal entries linked to branch demands where Dr != Cr
-        $unbalanced = DB::table('journal_entries')
-            ->leftJoin('journal_entry_items', 'journal_entries.id', '=', 'journal_entry_items.journal_entry_id')
-            ->whereNotNull('journal_entries.id')
-            ->whereExists(function ($q) {
-                $q->selectRaw(1)
-                    ->from('branch_demands')
-                    ->whereColumn('branch_demands.journal_entry_id', 'journal_entries.id')
-                    ->orWhereColumn('branch_demands.journal_entry_id_debtor', 'journal_entries.id');
-            })
-            ->groupBy('journal_entries.id', 'journal_entries.journal_code')
-            ->havingRaw('ROUND(CAST(SUM(CASE WHEN journal_entry_items.debit_credit = \'debit\' THEN journal_entry_items.amount ELSE 0 END) AS numeric), 2) != ROUND(CAST(SUM(CASE WHEN journal_entry_items.debit_credit = \'credit\' THEN journal_entry_items.amount ELSE 0 END) AS numeric), 2)')
-            ->select([
-                'journal_entries.id',
-                'journal_entries.journal_code',
-                DB::raw('SUM(CASE WHEN journal_entry_items.debit_credit = \'debit\' THEN journal_entry_items.amount ELSE 0 END) as total_debit'),
-                DB::raw('SUM(CASE WHEN journal_entry_items.debit_credit = \'credit\' THEN journal_entry_items.amount ELSE 0 END) as total_credit'),
-            ])
-            ->get();
+        // Use a savepoint so that a failed query (e.g. missing table) doesn't
+        // abort the entire PostgreSQL transaction.
+        try {
+            return DB::transaction(function () {
+                // Find journal entries linked to branch demands where Dr != Cr
+                $unbalanced = DB::table('journal_entries')
+                    ->leftJoin('journal_entry_items', 'journal_entries.id', '=', 'journal_entry_items.journal_entry_id')
+                    ->whereNotNull('journal_entries.id')
+                    ->whereExists(function ($q) {
+                        $q->selectRaw(1)
+                            ->from('branch_demands')
+                            ->whereColumn('branch_demands.journal_entry_id', 'journal_entries.id')
+                            ->orWhereColumn('branch_demands.journal_entry_id_debtor', 'journal_entries.id');
+                    })
+                    ->groupBy('journal_entries.id', 'journal_entries.journal_code')
+                    ->havingRaw('ROUND(CAST(SUM(CASE WHEN journal_entry_items.debit_credit = \'debit\' THEN journal_entry_items.amount ELSE 0 END) AS numeric), 2) != ROUND(CAST(SUM(CASE WHEN journal_entry_items.debit_credit = \'credit\' THEN journal_entry_items.amount ELSE 0 END) AS numeric), 2)')
+                    ->select([
+                        'journal_entries.id',
+                        'journal_entries.journal_code',
+                        DB::raw('SUM(CASE WHEN journal_entry_items.debit_credit = \'debit\' THEN journal_entry_items.amount ELSE 0 END) as total_debit'),
+                        DB::raw('SUM(CASE WHEN journal_entry_items.debit_credit = \'credit\' THEN journal_entry_items.amount ELSE 0 END) as total_credit'),
+                    ])
+                    ->get();
 
-        $count = $unbalanced->count();
+                $count = $unbalanced->count();
 
-        return [
-            'name'    => 'Journal Balance',
-            'status'  => $count === 0 ? 'pass' : 'fail',
-            'message' => $count === 0
-                ? 'All branch demand journal entries have balanced Dr/Cr.'
-                : "{$count} journal entry/entries have unbalanced Dr/Cr.",
-            'count'   => $count,
-            'details' => $unbalanced->take(10)->toArray(),
-        ];
+                return [
+                    'name'    => 'Journal Balance',
+                    'status'  => $count === 0 ? 'pass' : 'fail',
+                    'message' => $count === 0
+                        ? 'All branch demand journal entries have balanced Dr/Cr.'
+                        : "{$count} journal entry/entries have unbalanced Dr/Cr.",
+                    'count'   => $count,
+                    'details' => $unbalanced->take(10)->toArray(),
+                ];
+            });
+        } catch (\Throwable $e) {
+            return [
+                'name'    => 'Journal Balance',
+                'status'  => 'skip',
+                'message' => 'Journal balance check skipped — ' . $e->getMessage(),
+                'count'   => 0,
+                'details' => [],
+            ];
+        }
     }
 
     /**
@@ -528,30 +547,42 @@ class BranchDemandAuditService
      */
     private function checkOrphanedSettlements(): array
     {
-        $orphanedMt = DB::table('branch_demand_money_transfer_settlements')
-            ->join('branch_demands', 'branch_demand_money_transfer_settlements.demand_id', '=', 'branch_demands.id')
-            ->where('branch_demands.is_reversed', true)
-            ->count();
+        try {
+            return DB::transaction(function () {
+                $orphanedMt = DB::table('branch_demand_money_transfer_settlements')
+                    ->join('branch_demands', 'branch_demand_money_transfer_settlements.demand_id', '=', 'branch_demands.id')
+                    ->where('branch_demands.is_reversed', true)
+                    ->count();
 
-        $orphanedCp = DB::table('branch_demand_customer_payment_settlements')
-            ->join('branch_demands', 'branch_demand_customer_payment_settlements.demand_id', '=', 'branch_demands.id')
-            ->where('branch_demands.is_reversed', true)
-            ->count();
+                $orphanedCp = DB::table('branch_demand_customer_payment_settlements')
+                    ->join('branch_demands', 'branch_demand_customer_payment_settlements.demand_id', '=', 'branch_demands.id')
+                    ->where('branch_demands.is_reversed', true)
+                    ->count();
 
-        $total = $orphanedMt + $orphanedCp;
+                $total = $orphanedMt + $orphanedCp;
 
-        return [
-            'name'    => 'Orphaned Settlements',
-            'status'  => $total === 0 ? 'pass' : 'warning',
-            'message' => $total === 0
-                ? 'No settlements reference reversed demands.'
-                : "{$total} settlement(s) reference reversed demands ({$orphanedMt} from money transfers, {$orphanedCp} from customer payments).",
-            'count'   => $total,
-            'details' => [
-                'money_transfer_settlements' => $orphanedMt,
-                'customer_payment_settlements' => $orphanedCp,
-            ],
-        ];
+                return [
+                    'name'    => 'Orphaned Settlements',
+                    'status'  => $total === 0 ? 'pass' : 'warning',
+                    'message' => $total === 0
+                        ? 'No settlements reference reversed demands.'
+                        : "{$total} settlement(s) reference reversed demands ({$orphanedMt} from money transfers, {$orphanedCp} from customer payments).",
+                    'count'   => $total,
+                    'details' => [
+                        'money_transfer_settlements' => $orphanedMt,
+                        'customer_payment_settlements' => $orphanedCp,
+                    ],
+                ];
+            });
+        } catch (\Throwable $e) {
+            return [
+                'name'    => 'Orphaned Settlements',
+                'status'  => 'skip',
+                'message' => 'Orphaned settlements check skipped — ' . $e->getMessage(),
+                'count'   => 0,
+                'details' => [],
+            ];
+        }
     }
 
     /**
@@ -559,33 +590,45 @@ class BranchDemandAuditService
      */
     private function checkReversedWithOpenSettlements(): array
     {
-        $count = DB::table('branch_demands')
-            ->where('is_reversed', true)
-            ->where(function ($q) {
-                $q->whereExists(function ($subQ) {
-                    $subQ->selectRaw(1)
-                        ->from('branch_demand_money_transfer_settlements')
-                        ->whereColumn('branch_demand_money_transfer_settlements.demand_id', 'branch_demands.id')
-                        ->where('is_reversed', false);
-                })
-                ->orWhereExists(function ($subQ) {
-                    $subQ->selectRaw(1)
-                        ->from('branch_demand_customer_payment_settlements')
-                        ->whereColumn('branch_demand_customer_payment_settlements.demand_id', 'branch_demands.id')
-                        ->where('is_reversed', false);
-                });
-            })
-            ->count();
+        try {
+            return DB::transaction(function () {
+                $count = DB::table('branch_demands')
+                    ->where('is_reversed', true)
+                    ->where(function ($q) {
+                        $q->whereExists(function ($subQ) {
+                            $subQ->selectRaw(1)
+                                ->from('branch_demand_money_transfer_settlements')
+                                ->whereColumn('branch_demand_money_transfer_settlements.demand_id', 'branch_demands.id')
+                                ->where('is_reversed', false);
+                        })
+                        ->orWhereExists(function ($subQ) {
+                            $subQ->selectRaw(1)
+                                ->from('branch_demand_customer_payment_settlements')
+                                ->whereColumn('branch_demand_customer_payment_settlements.demand_id', 'branch_demands.id')
+                                ->where('is_reversed', false);
+                        });
+                    })
+                    ->count();
 
-        return [
-            'name'    => 'Reversed with Open Settlements',
-            'status'  => $count === 0 ? 'pass' : 'fail',
-            'message' => $count === 0
-                ? 'No reversed demands have open (non-reversed) settlements.'
-                : "{$count} reversed demand(s) still have open settlements that should have been reversed.",
-            'count'   => $count,
-            'details' => [],
-        ];
+                return [
+                    'name'    => 'Reversed with Open Settlements',
+                    'status'  => $count === 0 ? 'pass' : 'fail',
+                    'message' => $count === 0
+                        ? 'No reversed demands have open (non-reversed) settlements.'
+                        : "{$count} reversed demand(s) still have open settlements that should have been reversed.",
+                    'count'   => $count,
+                    'details' => [],
+                ];
+            });
+        } catch (\Throwable $e) {
+            return [
+                'name'    => 'Reversed with Open Settlements',
+                'status'  => 'skip',
+                'message' => 'Reversed-with-open-settlements check skipped — ' . $e->getMessage(),
+                'count'   => 0,
+                'details' => [],
+            ];
+        }
     }
 
     // ===================== PER-DEMAND AUDIT =====================

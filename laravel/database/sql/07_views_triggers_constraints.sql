@@ -175,9 +175,9 @@ CREATE INDEX IF NOT EXISTS idx_sl_outstanding
     ON supplier_ledger (supplier_id, transaction_date, balance)
     WHERE balance > 0;
 
-CREATE INDEX IF NOT EXISTS idx_bl_unsettled
+CREATE INDEX IF NOT EXISTS idx_bl_active
     ON branch_ledger (from_branch_id, to_branch_id, transaction_date)
-    WHERE is_settled = false;
+    WHERE is_reversed = false;
 
 CREATE INDEX IF NOT EXISTS idx_je_active
     ON journal_entries (entry_date, branch_id, reference_type)

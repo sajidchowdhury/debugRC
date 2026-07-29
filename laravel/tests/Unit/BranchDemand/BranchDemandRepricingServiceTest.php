@@ -155,7 +155,7 @@ class BranchDemandRepricingServiceTest extends TestCase
             'product_code' => 'P-RP-' . uniqid(),
             'product_name' => 'Reprice Test Product',
             'category_id' => $categoryId,
-            'unit' => 'pcs',
+            'unit' => 'Pcs',
             'is_active' => true,
             'created_at' => now(),
             'updated_at' => now(),

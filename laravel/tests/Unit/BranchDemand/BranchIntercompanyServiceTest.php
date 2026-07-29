@@ -150,12 +150,12 @@ class BranchIntercompanyServiceTest extends TestCase
         // Create a customer payment
         $customerId = $this->insertCustomer($debtorBranchId);
         $paymentId = DB::table('customer_payments')->insertGetId([
+            'payment_code' => 'PAY-BD-' . uniqid(),
             'customer_id' => $customerId,
             'branch_id' => $debtorBranchId,
             'amount' => 500.00,
             'payment_mode' => 'bank',
             'payment_date' => now()->toDateString(),
-            'status' => 'confirmed',
             'is_reversed' => false,
             'created_at' => now(),
             'updated_at' => now(),

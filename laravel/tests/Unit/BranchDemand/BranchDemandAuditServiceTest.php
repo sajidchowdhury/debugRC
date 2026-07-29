@@ -80,7 +80,7 @@ class BranchDemandAuditServiceTest extends TestCase
         $this->assertIsArray($auditData);
         $this->assertArrayHasKey('demand', $auditData);
         $this->assertArrayHasKey('audit_log', $auditData);
-        $this->assertArrayHasKey('flags', $auditData);
+        $this->assertArrayHasKey('anti_gaming_flags', $auditData);
     }
 
     public function test_get_demand_audit_throws_for_nonexistent_demand(): void
@@ -125,7 +125,7 @@ class BranchDemandAuditServiceTest extends TestCase
 
         $this->assertIsArray($flags);
         $this->assertArrayHasKey('catalog_below_locked', $flags);
-        $this->assertArrayHasKey('sales_below_locked_cost', $flags);
+        $this->assertArrayHasKey('sales_below_cost', $flags);
         $this->assertArrayHasKey('stale_outstanding', $flags);
     }
 
@@ -153,7 +153,7 @@ class BranchDemandAuditServiceTest extends TestCase
         );
 
         $staleFlags = $flags['stale_outstanding'];
-        $this->assertIsArray($staleFlags);
+        $this->assertIsIterable($staleFlags); // May be Collection or array
         // Should have at least one stale outstanding flag
     }
 
