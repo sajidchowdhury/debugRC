@@ -435,5 +435,186 @@
         </div>
     </div>
     @endif
+
+    {{-- Repricing History (Phase 7) --}}
+    @php
+        $repricingHistory = $demand->repricingAdjustments ?? collect();
+    @endphp
+    @if($demand->isReceived() && !$demand->is_reversed)
+    <div class="card shadow-sm mb-3" id="repricing-section">
+        <div class="card-header bg-light">
+            <i class="fas fa-tags me-1"></i> Repricing History
+            @if($repricingHistory->count() > 0)
+            <span class="badge bg-info ms-1">{{ $repricingHistory->count() }} adjustment(s)</span>
+            @endif
+        </div>
+        <div class="card-body">
+            @if($repricingHistory->count() > 0)
+            <div class="table-responsive mb-3">
+                <table class="table table-sm table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>#</th>
+                            <th>Original Value</th>
+                            <th>New Value</th>
+                            <th>Adjustment</th>
+                            <th>Reason</th>
+                            <th>GL Journal</th>
+                            <th>Approved By</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach($repricingHistory as $idx => $ra)
+                        <tr>
+                            <td>{{ $idx + 1 }}</td>
+                            <td>{{ number_format((float) $ra->original_total_value, 2) }}</td>
+                            <td class="fw-semibold">{{ number_format((float) $ra->new_total_value, 2) }}</td>
+                            <td>
+                                @if((float) $ra->adjustment_amount > 0)
+                                    <span class="text-danger">+{{ number_format((float) $ra->adjustment_amount, 2) }}</span>
+                                @else
+                                    <span class="text-success">{{ number_format((float) $ra->adjustment_amount, 2) }}</span>
+                                @endif
+                            </td>
+                            <td class="small">{{ $ra->reason }}</td>
+                            <td>
+                                @if($ra->journal_entry_id)
+                                    JE #{{ $ra->journal_entry_id }}
+                                @else
+                                    <span class="text-muted">-</span>
+                                @endif
+                            </td>
+                            <td>
+                                @if($ra->approved_by)
+                                    {{ App\Models\User::find($ra->approved_by)?->name ?? 'N/A' }}
+                                @else
+                                    <span class="text-muted">-</span>
+                                @endif
+                            </td>
+                            <td class="small text-muted">{{ $ra->created_at ? \Carbon\Carbon::parse($ra->created_at)->format('d M Y H:i') : '-' }}</td>
+                        </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+            @endif
+
+            {{-- Repricing form --}}
+            @if($demand->isReceived() && $demand->received_at !== null)
+            <div class="border rounded p-3 bg-light-subtle">
+                <h6 class="mb-2"><i class="fas fa-tags me-1"></i> Create Repricing Adjustment</h6>
+                <p class="small text-muted mb-3">
+                    Adjust the total value of this demand. This will create a GL adjustment journal and update the branch ledger.
+                    Current total value: <strong>{{ number_format((float) ($demand->total_value ?? 0), 2) }}</strong>
+                </p>
+                <form method="POST" action="{{ route('admin.branch-demands.reprice', $demand->id) }}"
+                      onsubmit="return confirm('Create repricing adjustment for demand {{ $demand->demand_code }}? This will update the total value and create GL entries.')">
+                    @csrf
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-3">
+                            <label class="form-label small">New Total Value</label>
+                            <input type="number" name="new_total_value" class="form-control form-control-sm"
+                                   step="0.01" min="0" required
+                                   value="{{ number_format((float) ($demand->total_value ?? 0), 2) }}"
+                                   placeholder="Enter new total value">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small">Reason <span class="text-muted">(min 10 chars)</span></label>
+                            <input type="text" name="reason" class="form-control form-control-sm"
+                                   required minlength="10" maxlength="1000"
+                                   placeholder="Reason for repricing adjustment...">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small">Approved By <span class="text-muted">(optional)</span></label>
+                            <input type="number" name="approved_by" class="form-control form-control-sm"
+                                   placeholder="User ID (optional)">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="submit" class="btn btn-warning btn-sm w-100">
+                                <i class="fas fa-tags me-1"></i> Reprice
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            @endif
+        </div>
+    </div>
+    @endif
+
+    {{-- Price Range Audit Section (Phase 7) --}}
+    @if($demand->isReceived() && !$demand->is_reversed && $demand->items->where('price_min', '>', 0)->count() > 0)
+    <div class="card shadow-sm mb-3">
+        <div class="card-header bg-light"><i class="fas fa-chart-line me-1"></i> Price Range Audit (Phase 7)</div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Product</th>
+                            <th>Qty</th>
+                            <th>Cost Rate</th>
+                            <th>Locked Min</th>
+                            <th>Locked Max</th>
+                            <th>Locked Default</th>
+                            <th>Current Default</th>
+                            <th>Variance</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach($demand->items->where('price_min', '>', 0) as $item)
+                        @php
+                            $currentPrice = \Illuminate\Support\Facades\DB::table('product_price_history')
+                                ->where('product_id', $item->product_id)
+                                ->where('effective_from', '<=', now()->format('Y-m-d'))
+                                ->where(function($q) { $q->whereNull('effective_to')->orWhere('effective_to', '>=', now()->format('Y-m-d')); })
+                                ->orderByDesc('effective_from')
+                                ->value('default_rate') ?? 0;
+                            $variance = round((float) $currentPrice - (float) $item->price_default, 2);
+                            $hasChanged = abs($variance) > 0.01;
+                        @endphp
+                        <tr class="{{ $hasChanged ? 'table-warning' : '' }}">
+                            <td>
+                                <span class="fw-semibold">{{ $item->product->product_name ?? 'N/A' }}</span>
+                                <br><small class="text-muted">{{ $item->product->product_code ?? '' }}</small>
+                            </td>
+                            <td>{{ number_format((float) $item->qty, 2) }}</td>
+                            <td>{{ number_format((float) $item->cost_rate, 4) }}</td>
+                            <td>{{ number_format((float) $item->price_min, 2) }}</td>
+                            <td>{{ number_format((float) $item->price_max, 2) }}</td>
+                            <td>{{ number_format((float) $item->price_default, 2) }}</td>
+                            <td class="fw-semibold">{{ number_format((float) $currentPrice, 2) }}</td>
+                            <td>
+                                @if($hasChanged)
+                                    @if($variance > 0)
+                                        <span class="text-danger">+{{ number_format($variance, 2) }}</span>
+                                    @else
+                                        <span class="text-success">{{ number_format($variance, 2) }}</span>
+                                    @endif
+                                @else
+                                    <span class="text-muted">0.00</span>
+                                @endif
+                            </td>
+                            <td>
+                                @if($hasChanged)
+                                    <span class="badge bg-warning-subtle text-warning">
+                                        <i class="fas fa-exclamation-triangle me-1"></i>Price Changed
+                                    </span>
+                                @else
+                                    <span class="badge bg-success-subtle text-success">
+                                        <i class="fas fa-check me-1"></i>Unchanged
+                                    </span>
+                                @endif
+                            </td>
+                        </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    @endif
 </div>
 @endsection

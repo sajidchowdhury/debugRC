@@ -653,6 +653,12 @@ Route::middleware('auth')->group(function () {
         Route::post('{id}/reverse', [BranchDemandController::class, 'reverse'])->name('reverse');
         Route::post('{id}/reject', [BranchDemandController::class, 'reject'])->name('reject');
 
+        // Phase 7: Price Range Handling & Repricing Logic
+        Route::post('{id}/reprice', [BranchDemandController::class, 'reprice'])->name('reprice');
+        Route::get('price-range-comparison', [BranchDemandController::class, 'priceRangeComparison'])->name('price-range-comparison');
+        Route::get('{id}/repricing-history', [BranchDemandController::class, 'getRepricingHistory'])->name('repricing-history');
+        Route::post('check-sale-price', [BranchDemandController::class, 'checkSalePriceRange'])->name('check-sale-price');
+
         // Phase 6: Weekly Audit Report
         Route::get('weekly-report', [BranchDemandReportController::class, 'weekly'])->name('weekly-report');
         Route::get('weekly-report/export', [BranchDemandReportController::class, 'exportCsv'])->name('weekly-report.export');

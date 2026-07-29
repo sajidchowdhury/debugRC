@@ -143,6 +143,10 @@ class BranchDemandWeeklyReportService
             'customer_due'        => $this->getCustomerDue($branchId, $date),
             'current_value'       => $this->getCurrentValue($branchId, $date),
             'gap'                 => $this->getGap($branchId, $date),
+            // Phase 7: Price Range Audit columns
+            'repricing_increase'  => $this->getRepricingIncrease($branchId, $date),
+            'repricing_decrease'  => $this->getRepricingDecrease($branchId, $date),
+            'price_range_impact'  => $this->getPriceRangeImpact($branchId, $date),
         ];
     }
 
@@ -794,6 +798,156 @@ class BranchDemandWeeklyReportService
 
     // ===================== HELPERS =====================
 
+    // ===================== PHASE 7: PRICE RANGE AUDIT COLUMNS =====================
+
+    /**
+     * Column: Repricing Increase — Total positive repricing adjustments for the day.
+     *
+     * Phase 7 — Price Range Handling & Repricing Logic.
+     *
+     * Sums the positive adjustment_amount values from branch_demand_repricing
+     * where the demand involves the branch (as either debtor or creditor)
+     * and the adjustment was created on the given date.
+     *
+     * @param int $branchId
+     * @param string $date
+     * @return float
+     */
+    public function getRepricingIncrease(int $branchId, string $date): float
+    {
+        return (float) DB::table('branch_demand_repricing as bdr')
+            ->join('branch_demands as bd', 'bdr.branch_demand_id', '=', 'bd.id')
+            ->where(function ($q) use ($branchId) {
+                $q->where('bd.from_branch_id', $branchId)
+                  ->orWhere('bd.to_branch_id', $branchId);
+            })
+            ->where('bdr.adjustment_amount', '>', 0)
+            ->whereDate('bdr.created_at', $date)
+            ->sum('bdr.adjustment_amount') ?? 0;
+    }
+
+    /**
+     * Column: Repricing Decrease — Total negative repricing adjustments for the day.
+     *
+     * Phase 7 — Price Range Handling & Repricing Logic.
+     *
+     * Sums the absolute value of negative adjustment_amount values from
+     * branch_demand_repricing where the demand involves the branch
+     * and the adjustment was created on the given date.
+     *
+     * @param int $branchId
+     * @param string $date
+     * @return float
+     */
+    public function getRepricingDecrease(int $branchId, string $date): float
+    {
+        return abs((float) DB::table('branch_demand_repricing as bdr')
+            ->join('branch_demands as bd', 'bdr.branch_demand_id', '=', 'bd.id')
+            ->where(function ($q) use ($branchId) {
+                $q->where('bd.from_branch_id', $branchId)
+                  ->orWhere('bd.to_branch_id', $branchId);
+            })
+            ->where('bdr.adjustment_amount', '<', 0)
+            ->whereDate('bdr.created_at', $date)
+            ->sum('bdr.adjustment_amount') ?? 0);
+    }
+
+    /**
+     * Column: Price Range Impact — Net impact of price range changes on outstanding balance.
+     *
+     * Phase 7 — Price Range Handling & Repricing Logic.
+     *
+     * For open demands involving this branch, calculates the total financial
+     * impact of current price range changes compared to the locked price range.
+     * This is (current_default - locked_default) * qty for each item where
+     * the price has changed.
+     *
+     * Positive = the branch owes more (price increased)
+     * Negative = the branch owes less (price decreased)
+     *
+     * @param int $branchId
+     * @param string $date Not used for daily calculation (computed on latest prices)
+     * @return float
+     */
+    public function getPriceRangeImpact(int $branchId, string $date): float
+    {
+        $today = now()->format('Y-m-d');
+
+        // Get all open demand items with price range data for this branch
+        $items = DB::table('branch_demand_items as bdi')
+            ->join('branch_demands as bd', 'bdi.branch_demand_id', '=', 'bd.id')
+            ->where(function ($q) use ($branchId) {
+                $q->where('bd.from_branch_id', $branchId)
+                  ->orWhere('bd.to_branch_id', $branchId);
+            })
+            ->where('bd.status', 'received')
+            ->where('bd.is_reversed', false)
+            ->where('bdi.price_min', '>', 0)
+            ->whereColumn('bd.total_value', '>', 'bd.settlement_amount')
+            ->select([
+                'bdi.product_id',
+                'bdi.qty',
+                'bdi.price_default as locked_default',
+            ])
+            ->get();
+
+        if ($items->isEmpty()) {
+            return 0;
+        }
+
+        // Load current price ranges
+        $productIds = $items->pluck('product_id')->unique()->toArray();
+        $currentRanges = $this->loadCurrentPriceRangesForReport($productIds, $today);
+
+        $totalImpact = 0;
+        foreach ($items as $item) {
+            $currentDefault = $currentRanges[$item->product_id] ?? null;
+            if ($currentDefault === null) {
+                continue;
+            }
+            $variance = $currentDefault - (float) $item->locked_default;
+            if (abs($variance) > 0.01) {
+                $totalImpact += $variance * (float) $item->qty;
+            }
+        }
+
+        return round($totalImpact, 2);
+    }
+
+    /**
+     * Load current effective price ranges for the weekly report.
+     *
+     * Returns [product_id => float (default_rate)]
+     */
+    private function loadCurrentPriceRangesForReport(array $productIds, string $asOfDate): array
+    {
+        if (empty($productIds)) {
+            return [];
+        }
+
+        $rows = DB::table('product_price_history')
+            ->whereIn('product_id', $productIds)
+            ->where('effective_from', '<=', $asOfDate)
+            ->where(function ($q) use ($asOfDate) {
+                $q->whereNull('effective_to')
+                  ->orWhere('effective_to', '>=', $asOfDate);
+            })
+            ->orderByDesc('effective_from')
+            ->get();
+
+        $ranges = [];
+        foreach ($rows as $row) {
+            $pid = (int) $row->product_id;
+            if (!isset($ranges[$pid])) {
+                $ranges[$pid] = (float) $row->default_rate;
+            }
+        }
+
+        return $ranges;
+    }
+
+    // ===================== HELPERS =====================
+
     /**
      * Return an empty row template with all columns initialized to 0.
      */
@@ -822,6 +976,10 @@ class BranchDemandWeeklyReportService
             'customer_due'        => 0,
             'current_value'       => 0,
             'gap'                 => 0,
+            // Phase 7: Price Range Audit columns
+            'repricing_increase'  => 0,
+            'repricing_decrease'  => 0,
+            'price_range_impact'  => 0,
         ];
     }
 
@@ -850,6 +1008,7 @@ class BranchDemandWeeklyReportService
             'Missing Bank Amount', 'HO Bill (BF)', 'HO Total Bill',
             'Cash In Hand', 'Warehouse Stock Value', 'Customer Due',
             'Current Value', 'GAP',
+            'Repricing Increase', 'Repricing Decrease', 'Price Range Impact',
         ];
 
         $rows = [$headers];
@@ -878,6 +1037,9 @@ class BranchDemandWeeklyReportService
                 round($row['customer_due'], 2),
                 round($row['current_value'], 2),
                 round($row['gap'], 2),
+                round($row['repricing_increase'], 2),
+                round($row['repricing_decrease'], 2),
+                round($row['price_range_impact'], 2),
             ];
         }
 
@@ -906,6 +1068,9 @@ class BranchDemandWeeklyReportService
             round($s['customer_due'], 2),
             round($s['current_value'], 2),
             round($s['gap'], 2),
+            round($s['repricing_increase'], 2),
+            round($s['repricing_decrease'], 2),
+            round($s['price_range_impact'], 2),
         ];
 
         return $rows;

@@ -8,9 +8,11 @@ use App\Http\Requests\BranchDemand\SendBranchDemandRequest;
 use App\Http\Requests\BranchDemand\ReverseBranchDemandRequest;
 use App\Http\Requests\BranchDemand\RejectBranchDemandRequest;
 use App\Http\Requests\BranchDemand\ConfirmReceiptRequest;
+use App\Http\Requests\BranchDemand\RepriceBranchDemandRequest;
 use App\Models\BranchDemand;
 use App\Services\BranchDemand\BranchDemandService;
 use App\Services\BranchDemand\BranchIntercompanyService;
+use App\Services\BranchDemand\BranchDemandRepricingService;
 use App\Services\Stock\StockAvailabilityService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
@@ -19,7 +21,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Branch Demand Controller — Phase 2 + Phase 5.
+ * Branch Demand Controller — Phase 2 + Phase 5 + Phase 7.
  *
  * Web controller for the cross-branch demand lifecycle:
  *   - index:   Filtered list of demands (my demands + incoming)
@@ -30,6 +32,8 @@ use Illuminate\Support\Facades\Log;
  *   - show:     Full detail view (items, warehouse pickers, settlements, stock trace, GL)
  *   - send:     Send goods with warehouse selection
  *   - confirmReceipt:  Confirm receipt of goods (Phase 5)
+ *   - reprice:  Reprice a demand's total value (Phase 7)
+ *   - priceRangeComparison:  Price range audit (Phase 7)
  *   - reverse:  Reverse a sent/received demand
  *   - delete:   Delete a pending demand
  *   - reject:   Reject a pending demand
@@ -40,6 +44,7 @@ class BranchDemandController extends Controller
     public function __construct(
         private BranchDemandService $demandService,
         private BranchIntercompanyService $intercompanyService,
+        private BranchDemandRepricingService $repricingService,
         private StockService $stockService,
         private StockAvailabilityService $stockAvailabilityService,
     ) {}
@@ -437,6 +442,118 @@ class BranchDemandController extends Controller
                 'avg_cost'       => round($avgCost, 4),
             ];
         }
+
+        return response()->json($result);
+    }
+
+    // ===================== REPRICING (Phase 7) =====================
+
+    /**
+     * Reprice a demand's total value.
+     *
+     * Phase 7 — Price Range Handling & Repricing Logic.
+     *
+     * Creates a repricing adjustment that:
+     *   - Records the original and new total value
+     *   - Posts GL adjustment journals (creditor + debtor)
+     *   - Records branch ledger adjustment entries
+     *   - Updates the demand's total_value
+     *
+     * Only received (non-reversed) demands can be repriced.
+     * The new total value must not be less than the already-settled amount.
+     */
+    public function reprice(RepriceBranchDemandRequest $request, int $id)
+    {
+        try {
+            $validated = $request->validated();
+
+            $repricing = $this->repricingService->createRepricingAdjustment(
+                $id,
+                (float) $validated['new_total_value'],
+                $validated['reason'],
+                isset($validated['approved_by']) ? (int) $validated['approved_by'] : null,
+                $this->currentUserId()
+            );
+
+            return redirect()
+                ->route('admin.branch-demands.show', $id)
+                ->with('success', "Demand repriced successfully. Adjustment: " . number_format((float) $repricing->adjustment_amount, 2));
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['error' => $e->getMessage()]);
+        } catch (\InvalidArgumentException $e) {
+            return back()->withErrors(['error' => $e->getMessage()]);
+        } catch (\Throwable $e) {
+            Log::error('BranchDemand reprice failed', ['demand_id' => $id, 'error' => $e->getMessage()]);
+            return back()->withErrors(['error' => 'Failed to reprice demand. ' . $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Show the price range comparison view.
+     *
+     * Phase 7 — Price Range Handling & Repricing Logic.
+     *
+     * Shows all demand items where the current price range differs from the
+     * locked price range at send time. This helps management identify:
+     *   - Products where the price has changed since the demand was sent
+     *   - The financial impact of the price change on outstanding balances
+     *   - The margin variance (actual sale price vs locked cost)
+     */
+    public function priceRangeComparison(Request $request)
+    {
+        $branchId = $this->currentBranchId();
+        $dateFrom = $request->input('date_from');
+        $dateTo = $request->input('date_to');
+
+        $changes = $this->repricingService->getPriceRangeComparison(
+            $branchId,
+            $dateFrom,
+            $dateTo
+        );
+
+        // Get out-of-range sales warnings
+        $outOfRangeSales = $this->repricingService->getOutOfRangeSales(
+            $branchId,
+            $dateFrom,
+            $dateTo
+        );
+
+        return view('admin.branch-demands.price-range-comparison', [
+            'changes'          => $changes,
+            'outOfRangeSales'  => $outOfRangeSales,
+            'dateFrom'         => $dateFrom,
+            'dateTo'           => $dateTo,
+        ]);
+    }
+
+    /**
+     * JSON: Get repricing history for a specific demand.
+     *
+     * Phase 7 — Price Range Handling & Repricing Logic.
+     */
+    public function getRepricingHistory(int $id)
+    {
+        $history = $this->repricingService->getRepricingHistory($id);
+
+        return response()->json($history);
+    }
+
+    /**
+     * JSON: Check if a sale price is within the locked price range for a demand item.
+     *
+     * Phase 7 — Price Range Handling & Repricing Logic.
+     */
+    public function checkSalePriceRange(Request $request)
+    {
+        $request->validate([
+            'demand_item_id' => 'required|integer|exists:branch_demand_items,id',
+            'sale_price'     => 'required|numeric|min:0',
+        ]);
+
+        $result = $this->repricingService->checkSalePriceRange(
+            (int) $request->demand_item_id,
+            (float) $request->sale_price
+        );
 
         return response()->json($result);
     }
