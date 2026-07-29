@@ -2,6 +2,7 @@
 
 namespace Tests\Unit\BranchDemand;
 
+use App\Models\Branch;
 use App\Services\BranchDemand\BranchIntercompanyService;
 use Illuminate\Support\Facades\DB;
 use Tests\Helpers\BuildsRoleUsers;
@@ -45,14 +46,9 @@ class BranchIntercompanyServiceTest extends TestCase
         $this->actingAs($user);
 
         $branchId = $user->getBranchId();
-        $partnerBranchId = $branchId + 1;
-
-        // Ensure partner branch exists
-        DB::table('branches')->where('id', $partnerBranchId)->exists()
-            || DB::table('branches')->insert([
-                'id' => $partnerBranchId, 'branch_code' => 'BR-PART', 'branch_name' => 'Partner Branch',
-                'is_active' => true, 'created_at' => now(), 'updated_at' => now(),
-            ]);
+        // Use Branch::factory() to avoid GENERATED ALWAYS identity column issue
+        $partnerBranch = Branch::factory()->create();
+        $partnerBranchId = $partnerBranch->id;
 
         // Create a received demand with outstanding balance
         $demandId = $this->insertBranchDemand($branchId, $partnerBranchId, 'received');
@@ -75,14 +71,8 @@ class BranchIntercompanyServiceTest extends TestCase
         $this->actingAs($user);
 
         $branchId = $user->getBranchId();
-        $partnerBranchId = $branchId + 1;
-
-        // Ensure partner branch exists
-        DB::table('branches')->where('id', $partnerBranchId)->exists()
-            || DB::table('branches')->insert([
-                'id' => $partnerBranchId, 'branch_code' => 'BR-PART2', 'branch_name' => 'Partner Branch 2',
-                'is_active' => true, 'created_at' => now(), 'updated_at' => now(),
-            ]);
+        $partnerBranch = Branch::factory()->create();
+        $partnerBranchId = $partnerBranch->id;
 
         $debtorBranchId = min($branchId, $partnerBranchId);
         $creditorBranchId = max($branchId, $partnerBranchId);
@@ -103,14 +93,8 @@ class BranchIntercompanyServiceTest extends TestCase
         $this->actingAs($user);
 
         $branchId = $user->getBranchId();
-        $partnerBranchId = $branchId + 1;
-
-        // Ensure partner branch exists
-        DB::table('branches')->where('id', $partnerBranchId)->exists()
-            || DB::table('branches')->insert([
-                'id' => $partnerBranchId, 'branch_code' => 'BR-PART3', 'branch_name' => 'Partner Branch 3',
-                'is_active' => true, 'created_at' => now(), 'updated_at' => now(),
-            ]);
+        $partnerBranch = Branch::factory()->create();
+        $partnerBranchId = $partnerBranch->id;
 
         $debtorBranchId = min($branchId, $partnerBranchId);
         $creditorBranchId = max($branchId, $partnerBranchId);
@@ -149,14 +133,8 @@ class BranchIntercompanyServiceTest extends TestCase
         $this->actingAs($user);
 
         $branchId = $user->getBranchId();
-        $partnerBranchId = $branchId + 1;
-
-        // Ensure partner branch exists
-        DB::table('branches')->where('id', $partnerBranchId)->exists()
-            || DB::table('branches')->insert([
-                'id' => $partnerBranchId, 'branch_code' => 'BR-PART4', 'branch_name' => 'Partner Branch 4',
-                'is_active' => true, 'created_at' => now(), 'updated_at' => now(),
-            ]);
+        $partnerBranch = Branch::factory()->create();
+        $partnerBranchId = $partnerBranch->id;
 
         $debtorBranchId = min($branchId, $partnerBranchId);
         $creditorBranchId = max($branchId, $partnerBranchId);

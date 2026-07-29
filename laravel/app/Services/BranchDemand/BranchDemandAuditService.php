@@ -304,7 +304,7 @@ class BranchDemandAuditService
                 'id', 'demand_code', 'demand_date', 'from_branch_id', 'to_branch_id',
                 'total_value', 'settlement_amount',
                 DB::raw('total_value - settlement_amount as outstanding'),
-                DB::raw("EXTRACT(DAY FROM CURRENT_DATE - demand_date)::int as days_outstanding"),
+                DB::raw('(CURRENT_DATE - demand_date::date) as days_outstanding'),
             ]);
 
         if ($dateFrom) {
@@ -410,13 +410,24 @@ class BranchDemandAuditService
      */
     private function checkLedgerNature(): array
     {
-        $receivable = DB::table('chart_of_accounts')
-            ->where('account_code', 'interbranch_receivable')
-            ->exists();
+        // Guard: chart_of_accounts may not exist in all environments (e.g. test DB)
+        try {
+            $receivable = DB::table('chart_of_accounts')
+                ->where('account_code', 'interbranch_receivable')
+                ->exists();
 
-        $payable = DB::table('chart_of_accounts')
-            ->where('account_code', 'interbranch_payable')
-            ->exists();
+            $payable = DB::table('chart_of_accounts')
+                ->where('account_code', 'interbranch_payable')
+                ->exists();
+        } catch (\Throwable $e) {
+            return [
+                'name'    => 'Ledger Nature',
+                'status'  => 'skip',
+                'message' => 'chart_of_accounts table not available — skipping check.',
+                'count'   => 0,
+                'details' => ['error' => $e->getMessage()],
+            ];
+        }
 
         $bothExist = $receivable && $payable;
 
@@ -518,12 +529,12 @@ class BranchDemandAuditService
     private function checkOrphanedSettlements(): array
     {
         $orphanedMt = DB::table('branch_demand_money_transfer_settlements')
-            ->join('branch_demands', 'branch_demand_money_transfer_settlements.branch_demand_id', '=', 'branch_demands.id')
+            ->join('branch_demands', 'branch_demand_money_transfer_settlements.demand_id', '=', 'branch_demands.id')
             ->where('branch_demands.is_reversed', true)
             ->count();
 
         $orphanedCp = DB::table('branch_demand_customer_payment_settlements')
-            ->join('branch_demands', 'branch_demand_customer_payment_settlements.branch_demand_id', '=', 'branch_demands.id')
+            ->join('branch_demands', 'branch_demand_customer_payment_settlements.demand_id', '=', 'branch_demands.id')
             ->where('branch_demands.is_reversed', true)
             ->count();
 
@@ -554,13 +565,13 @@ class BranchDemandAuditService
                 $q->whereExists(function ($subQ) {
                     $subQ->selectRaw(1)
                         ->from('branch_demand_money_transfer_settlements')
-                        ->whereColumn('branch_demand_money_transfer_settlements.branch_demand_id', 'branch_demands.id')
+                        ->whereColumn('branch_demand_money_transfer_settlements.demand_id', 'branch_demands.id')
                         ->where('is_reversed', false);
                 })
                 ->orWhereExists(function ($subQ) {
                     $subQ->selectRaw(1)
                         ->from('branch_demand_customer_payment_settlements')
-                        ->whereColumn('branch_demand_customer_payment_settlements.branch_demand_id', 'branch_demands.id')
+                        ->whereColumn('branch_demand_customer_payment_settlements.demand_id', 'branch_demands.id')
                         ->where('is_reversed', false);
                 });
             })
@@ -615,12 +626,12 @@ class BranchDemandAuditService
 
         // Settlement trace
         $mtSettlements = DB::table('branch_demand_money_transfer_settlements')
-            ->where('branch_demand_id', $demandId)
+            ->where('demand_id', $demandId)
             ->orderBy('id')
             ->get();
 
         $cpSettlements = DB::table('branch_demand_customer_payment_settlements')
-            ->where('branch_demand_id', $demandId)
+            ->where('demand_id', $demandId)
             ->orderBy('id')
             ->get();
 

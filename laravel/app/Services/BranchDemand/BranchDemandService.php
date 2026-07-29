@@ -595,6 +595,14 @@ class BranchDemandService
                 );
             }
 
+            // ★ Phase 8 — Audit log BEFORE the demand is deleted (FK constraint requires demand to exist)
+            $this->auditLogger->log($demandId, 'delete', (int) $demand->from_branch_id, [
+                'demand_code'    => $demand->demand_code,
+                'from_branch_id' => (int) $demand->from_branch_id,
+                'to_branch_id'   => (int) $demand->to_branch_id,
+                'demand_date'    => $demand->demand_date,
+            ]);
+
             // Delete items first (cascade)
             DB::table('branch_demand_items')
                 ->where('branch_demand_id', $demandId)
@@ -608,14 +616,6 @@ class BranchDemandService
             Log::info('BranchDemand deleted (draft)', [
                 'demand_id'   => $demandId,
                 'demand_code' => $demand->demand_code,
-            ]);
-
-            // ★ Phase 8 — Audit log (before the demand is deleted, we still have the ID)
-            $this->auditLogger->log($demandId, 'delete', (int) $demand->from_branch_id, [
-                'demand_code'   => $demand->demand_code,
-                'from_branch_id' => (int) $demand->from_branch_id,
-                'to_branch_id'  => (int) $demand->to_branch_id,
-                'demand_date'   => $demand->demand_date,
             ]);
         });
     }

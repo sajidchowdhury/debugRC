@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\BranchDemand;
 
+use App\Models\Branch;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Tests\Helpers\BuildsRoleUsers;
@@ -17,8 +18,6 @@ use Tests\TestCase;
  *   - GET  /api/v1/branch-demands              List demands
  *   - POST /api/v1/branch-demands              Create demand
  *   - GET  /api/v1/branch-demands/{id}          Show demand
- *   - POST /api/v1/branch-demands/{id}/send      Send goods
- *   - POST /api/v1/branch-demands/{id}/confirm-receipt  Confirm receipt
  *   - POST /api/v1/branch-demands/{id}/reverse   Reverse demand
  *   - POST /api/v1/branch-demands/{id}/reject    Reject demand
  *   - DELETE /api/v1/branch-demands/{id}         Delete demand
@@ -123,14 +122,9 @@ class BranchDemandApiTest extends TestCase
     {
         $token = $this->adminUser->generateApiToken();
 
-        $toBranchId = $this->branchId + 1;
-
-        // Ensure the to_branch exists
-        DB::table('branches')->where('id', $toBranchId)->exists()
-            || DB::table('branches')->insert([
-                'id' => $toBranchId, 'branch_code' => 'BR-API', 'branch_name' => 'API Test Branch',
-                'is_active' => true, 'created_at' => now(), 'updated_at' => now(),
-            ]);
+        // Use Branch::factory() to avoid GENERATED ALWAYS identity column issue
+        $toBranch = Branch::factory()->create();
+        $toBranchId = $toBranch->id;
 
         $categoryId = $this->insertProductCategory();
         $productId = DB::table('products')->insertGetId([
@@ -196,12 +190,10 @@ class BranchDemandApiTest extends TestCase
         $demandId = $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'received');
 
         // Set received_at to allow reversal
+        // Use null for warehouse_transfer_id and journal_entry_id to avoid FK violations
         DB::table('branch_demands')->where('id', $demandId)->update([
             'received_at' => now(),
             'received_by' => $this->adminUser->id,
-            'journal_entry_id' => 1,
-            'journal_entry_id_debtor' => 1,
-            'warehouse_transfer_id' => 1,
         ]);
 
         $response = $this->withHeader('Authorization', "Bearer {$token}")
@@ -345,14 +337,9 @@ class BranchDemandApiTest extends TestCase
         $whManager = $this->makeRoleUser('warehouse_manager');
         $token = $whManager->generateApiToken();
 
-        $toBranchId = $whManager->getBranchId() + 1;
-
-        // Ensure the to_branch exists
-        DB::table('branches')->where('id', $toBranchId)->exists()
-            || DB::table('branches')->insert([
-                'id' => $toBranchId, 'branch_code' => 'BR-WH', 'branch_name' => 'WH Test Branch',
-                'is_active' => true, 'created_at' => now(), 'updated_at' => now(),
-            ]);
+        // Use Branch::factory() to avoid GENERATED ALWAYS identity column issue
+        $toBranch = Branch::factory()->create();
+        $toBranchId = $toBranch->id;
 
         $categoryId = $this->insertProductCategory();
         $productId = DB::table('products')->insertGetId([

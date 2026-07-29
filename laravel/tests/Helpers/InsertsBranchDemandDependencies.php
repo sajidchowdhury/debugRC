@@ -130,16 +130,15 @@ trait InsertsBranchDemandDependencies
      */
     protected function insertMoneyTransferSettlement(
         int $demandId,
-        int $moneyTransferId,
+        int $transferId,
         float $settledAmount,
         array $overrides = [],
     ): int {
         return DB::table('branch_demand_money_transfer_settlements')->insertGetId(array_merge([
-            'demand_id'         => $demandId,
-            'money_transfer_id' => $moneyTransferId,
-            'settled_amount'    => $settledAmount,
-            'settled_at'        => now(),
-            'created_at'        => now(),
+            'demand_id'      => $demandId,
+            'transfer_id'    => $transferId,
+            'settled_amount' => $settledAmount,
+            'created_at'     => now(),
         ], $overrides));
     }
 
@@ -149,16 +148,15 @@ trait InsertsBranchDemandDependencies
      */
     protected function insertCustomerPaymentSettlement(
         int $demandId,
-        int $customerPaymentId,
+        int $paymentId,
         float $settledAmount,
         array $overrides = [],
     ): int {
         return DB::table('branch_demand_customer_payment_settlements')->insertGetId(array_merge([
-            'demand_id'            => $demandId,
-            'customer_payment_id'  => $customerPaymentId,
-            'settled_amount'       => $settledAmount,
-            'settled_at'           => now(),
-            'created_at'           => now(),
+            'demand_id'      => $demandId,
+            'payment_id'     => $paymentId,
+            'settled_amount' => $settledAmount,
+            'created_at'     => now(),
         ], $overrides));
     }
 

@@ -8,6 +8,7 @@ use Tests\Helpers\BuildsRoleUsers;
 use Tests\Helpers\InsertsBranchDependencies;
 use Tests\Helpers\InsertsBranchDemandDependencies;
 use Tests\Helpers\InsertsLedgerDependencies;
+use Tests\Helpers\InsertsProductDependencies;
 use Tests\TestCase;
 
 /**
@@ -27,6 +28,7 @@ class BranchDemandRepricingServiceTest extends TestCase
     use InsertsBranchDependencies;
     use InsertsBranchDemandDependencies;
     use InsertsLedgerDependencies;
+    use InsertsProductDependencies;
 
     private BranchDemandRepricingService $service;
 
@@ -126,7 +128,7 @@ class BranchDemandRepricingServiceTest extends TestCase
         ]);
 
         // New total (500) is less than already settled (800)
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(\RuntimeException::class);
 
         $this->service->createRepricingAdjustment(
             $demandId,

@@ -2,6 +2,7 @@
 
 namespace Tests\Unit\BranchDemand;
 
+use App\Models\Branch;
 use App\Services\BranchDemand\BranchDemandService;
 use App\Services\BranchDemand\BranchDemandAuditLogger;
 use Illuminate\Support\Facades\DB;
@@ -48,14 +49,8 @@ class BranchDemandServiceTest extends TestCase
         $this->actingAs($user);
 
         $fromBranchId = $user->getBranchId();
-        $toBranchId = $fromBranchId + 1;
-
-        // Ensure the to_branch exists
-        DB::table('branches')->where('id', $toBranchId)->exists()
-            || DB::table('branches')->insert([
-                'id' => $toBranchId, 'branch_code' => 'BR-TEST-TO', 'branch_name' => 'Test To Branch',
-                'is_active' => true, 'created_at' => now(), 'updated_at' => now(),
-            ]);
+        $toBranch = Branch::factory()->create();
+        $toBranchId = $toBranch->id;
 
         // Insert a product
         $categoryId = $this->insertProductCategory();
@@ -226,14 +221,8 @@ class BranchDemandServiceTest extends TestCase
         $this->actingAs($user);
 
         $fromBranchId = $user->getBranchId();
-        $toBranchId = $fromBranchId + 1;
-
-        // Ensure the to_branch exists
-        DB::table('branches')->where('id', $toBranchId)->exists()
-            || DB::table('branches')->insert([
-                'id' => $toBranchId, 'branch_code' => 'BR-TEST-TO2', 'branch_name' => 'Test To Branch 2',
-                'is_active' => true, 'created_at' => now(), 'updated_at' => now(),
-            ]);
+        $toBranch = Branch::factory()->create();
+        $toBranchId = $toBranch->id;
 
         $categoryId = $this->insertProductCategory();
         $productId = DB::table('products')->insertGetId([
