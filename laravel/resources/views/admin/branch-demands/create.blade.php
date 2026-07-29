@@ -89,8 +89,9 @@
         </div>
     </form>
 </div>
+@endsection
 
-@section('scripts')
+@push('scripts')
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const container = document.getElementById('items-container');
@@ -156,5 +157,4 @@ document.addEventListener('DOMContentLoaded', function() {
     addItem();
 });
 </script>
-@endsection
-@endsection
+@endpush
