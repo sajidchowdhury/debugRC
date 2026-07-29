@@ -355,6 +355,11 @@ Route::middleware('auth')->group(function () {
         Route::get('stocktake-weekly/export', [ReportController::class, 'stocktakeWeeklyExport'])->name('stocktakeWeeklyExport');
         Route::get('branch-demand-weekly', [ReportController::class, 'branchDemandWeekly'])->name('branchDemandWeekly');
 
+        // Phase 6 (Damage plan): Dedicated damage report with CSV export.
+        // RLS on damage_invoices scopes reads by branch automatically.
+        Route::get('damage', [ReportController::class, 'damageReport'])->name('damageReport');
+        Route::get('damage/export', [ReportController::class, 'damageReportExport'])->name('damageReportExport');
+
         // Phase 1E (Task 32): CTE-Based Reports (single-query complex aggregation)
         Route::get('today-summary-cte', [ReportController::class, 'todaySummaryCte'])->name('todaySummaryCte');
         Route::get('ar-aging-cte', [ReportController::class, 'arAgingCte'])->name('arAgingCte');

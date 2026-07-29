@@ -8,6 +8,7 @@ use App\Services\Reports\ReportService;
 use App\Services\Reports\CteReportService;
 use App\Services\Stock\StockTakeVarianceReport;
 use App\Services\Stock\StockTakeWeeklyReport;
+use App\Services\Reports\DamageReportService;
 use App\Services\Accounting\JournalPostingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -28,6 +29,7 @@ class ReportController extends Controller
         private CteReportService $cteReportService,
         private StockTakeVarianceReport $stocktakeVarianceReport,
         private StockTakeWeeklyReport $stocktakeWeeklyReport,
+        private DamageReportService $damageReportService,
         private JournalPostingService $journalPosting,
     ) {}
 
@@ -706,6 +708,94 @@ SQL, [$data['from'], $data['to']]);
         return view('admin.reports.gross_margin_cte', array_merge($report, [
             'branches' => $branches,
         ]));
+    }
+
+    // ============================================================
+    // Phase 6 (Damage plan): Dedicated Damage Report
+    // ============================================================
+
+    /**
+     * Damage Report — multi-dimensional breakdown of damage/loss data.
+     *
+     * Renders KPI cards + monthly trend line + category donut + warehouse bar
+     * + employee ranking table + top-products table + status distribution +
+     * detail line table with CSV export.
+     */
+    public function damageReport(Request $request)
+    {
+        $data     = $this->parseDateRange($request);
+        $from     = $data['from']->format('Y-m-d');
+        $to       = $data['to']->format('Y-m-d');
+        $branchId = $request->filled('branch_id') ? (int) $request->input('branch_id') : null;
+
+        $filters = [
+            'from'       => $from,
+            'to'         => $to,
+            'branch_id'  => $branchId,
+            'warehouse_id'        => $request->filled('warehouse_id') ? (int) $request->input('warehouse_id') : null,
+            'damage_type'         => $request->input('damage_type'),
+            'status'              => $request->input('status'),
+            'accountable_employee_id' => $request->filled('accountable_employee_id') ? (int) $request->input('accountable_employee_id') : null,
+        ];
+
+        $kpi          = $this->damageReportService->kpi($from, $to, $branchId);
+        $monthly      = $this->damageReportService->monthlyTrend($from, $to, $branchId);
+        $byWarehouse  = $this->damageReportService->byWarehouse($from, $to, $branchId);
+        $byCategory   = $this->damageReportService->byCategory($from, $to, $branchId);
+        $byEmployee   = $this->damageReportService->byEmployee($from, $to, $branchId);
+        $topProducts  = $this->damageReportService->topProducts($from, $to, 20, $branchId);
+        $byStatus     = $this->damageReportService->byStatus($from, $to, $branchId);
+        $detail       = $this->damageReportService->getDetailLines($filters);
+        $summary      = $this->damageReportService->summarize($detail);
+
+        $branches    = \App\Models\Branch::active()->orderBy('branch_name')->get();
+        $warehouses  = \App\Models\Warehouse::active()->orderBy('warehouse_name')->get();
+        $employees   = \App\Models\Employee::active()->orderBy('name')->limit(500)->get();
+        $damageTypes = \App\Models\DamageInvoice::DAMAGE_TYPES;
+
+        return view('admin.reports.damage_report', [
+            'meta'        => ['title' => 'Damage Report', 'from_date' => $from, 'to_date' => $to, 'branch_id' => $branchId],
+            'kpi'         => $kpi,
+            'monthly'     => $monthly,
+            'byWarehouse' => $byWarehouse,
+            'byCategory'  => $byCategory,
+            'byEmployee'  => $byEmployee,
+            'topProducts' => $topProducts,
+            'byStatus'    => $byStatus,
+            'detail'      => $detail,
+            'summary'     => $summary,
+            'filters'     => $filters,
+            'branches'    => $branches,
+            'warehouses'  => $warehouses,
+            'employees'   => $employees,
+            'damageTypes' => $damageTypes,
+            'is_admin'    => $this->currentUserIsAdmin(),
+        ]);
+    }
+
+    /**
+     * CSV export of damage detail lines.
+     */
+    public function damageReportExport(Request $request)
+    {
+        $data     = $this->parseDateRange($request);
+        $from     = $data['from']->format('Y-m-d');
+        $to       = $data['to']->format('Y-m-d');
+        $branchId = $request->filled('branch_id') ? (int) $request->input('branch_id') : null;
+
+        $filters = [
+            'from'       => $from,
+            'to'         => $to,
+            'branch_id'  => $branchId,
+            'warehouse_id'        => $request->filled('warehouse_id') ? (int) $request->input('warehouse_id') : null,
+            'damage_type'         => $request->input('damage_type'),
+            'status'              => $request->input('status'),
+            'accountable_employee_id' => $request->filled('accountable_employee_id') ? (int) $request->input('accountable_employee_id') : null,
+        ];
+
+        $rows = $this->damageReportService->getDetailLines($filters);
+
+        return $this->damageReportService->exportCsv($rows);
     }
 
     // ============================================================

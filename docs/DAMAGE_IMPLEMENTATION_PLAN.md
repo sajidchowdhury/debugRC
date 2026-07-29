@@ -1212,6 +1212,44 @@ return [
 
 ---
 
+#### Phase 6 — Implementation Status ✅ COMPLETED
+
+**Files changed:** 1 new + 5 modified.
+
+| File | Change |
+|---|---|
+| `app/Services/Reports/DamageReportService.php` | **NEW** — 9 methods: `kpi()`, `monthlyTrend()`, `byWarehouse()`, `byCategory()`, `byEmployee()`, `topProducts()`, `byStatus()`, `getDetailLines()`, `summarize()`, `exportCsv()`. Uses live aggregate queries (not materialized views) for real-time accuracy; RLS handles branch scoping automatically; explicit `branchId` param is defense-in-depth for admin single-branch view. Only confirmed (posted) damages contribute to cost totals; `byStatus()` counts all statuses for the worklist. CSV export with UTF-8 BOM (mirrors `StockTakeVarianceReport::exportCsv`). |
+| `app/Http/Controllers/Admin/ReportController.php` | Constructor injects `DamageReportService` (6th DI param); 2 new methods: `damageReport()` (renders multi-dimensional report with 8 data sections + 6 filter inputs) + `damageReportExport()` (CSV stream). Uses existing `parseDateRange()` helper (defaults to MTD). |
+| `app/Helpers/ReportsCatalog.php` | New entry `damage_report` in the **operations** category: featured=true, preset_days=30, filter_type=range, tags=['damage','loss','export']. |
+| `routes/web.php` | 2 new routes inside the `admin/reports` group: `GET admin/reports/damage` (name `damageReport`) + `GET admin/reports/damage/export` (name `damageReportExport`). No explicit role guard (RLS enforces branch scoping; the reports group is `auth`-only). |
+| `resources/views/admin/reports/damage_report.blade.php` | **NEW** — full report view: hero header + 6-filter form (date range / branch / warehouse / type / status) + 6 KPI cards (period cost, growth %, recovered, net loss, detail rows, awaiting approval) + 4 Chart.js charts (monthly trend stacked-bar, category donut, warehouse horizontal-bar, status distribution bar) + 4 breakdown tables (employee ranking, top-20 products, category, warehouse) + scrollable detail table (500-row cap) with damage_code links to `admin.damages.show`. |
+| `app/Http/Controllers/DashboardController.php` | NEW `getDamageKPIs()` private method (mirrors `getRevenueKPIs()` pattern): MTD confirmed cost + count + recovered + net_loss + growth_pct vs last month + awaiting-approval worklist count/value + 6-month trend array for the sparkline. All wrapped in try/catch (zero defaults if tables missing). `index()` calls it + passes `$damageKpis` to the view. |
+| `resources/views/dashboard/index.blade.php` | NEW "Damage Cost Overview" widget card (full-width, between mini-tables and quick-stats rows): 4 KPI mini-cards (MTD cost, vs last month growth, recovered, awaiting approval) + 6-month trend sparkline (`#damageTrendChart`). Wrapped in `@can('viewAny', DamageInvoice::class)` so only roles with damage-module access see it. Chart.js script added to the existing `@push('scripts')` block. |
+
+**Acceptance criteria verification:**
+- ✅ A manager can see "Damage cost this month = Tk X, this year = Tk Y" instantly (dashboard widget MTD card + report KPI card; the report's date-range filter allows any period including full year).
+- ✅ Can drill into category (real_damage vs missing vs theft) for any period (`byCategory()` aggregation + donut chart + category breakdown table).
+- ✅ Can see which employee is accountable for the most damage cost (`byEmployee()` ranking table with liable / recovered / outstanding columns).
+- ✅ Can see top 20 most-damaged products (`topProducts(20)` with product name/code, damage count, qty, cost).
+- ✅ Dashboard widget shows a trend sparkline (6-month confirmed cost line chart with fill).
+- ✅ Reports respect RLS (branch-scoped for non-admins) — `baseConfirmedQuery()` adds explicit `branchId` filter as defense-in-depth; RLS policies on `damage_invoices` enforce at the DB layer.
+
+**Key design decisions:**
+1. **Live aggregate queries, not materialized views** — the spec offered both options. Chose live queries because: (a) simpler — no refresh job, no pg_cron dependency, no stale-data window; (b) consistent with the existing `DashboardController` pattern (all KPIs are live); (c) the partial indexes from Phases 1/4/5 (`idx_dmg_type`, `idx_dmg_accountable`, `idx_dmg_submitted`, `idx_dmg_recovery`) make these queries fast for typical volumes; (d) the spec explicitly notes "a live aggregate query (indexed) is fast enough for typical volumes". Materialized views remain a future optimization if volume grows.
+2. **Only confirmed damages contribute to cost totals** — drafts/submitted/approved have not yet posted stock or GL, so including them would overstate the loss. `byStatus()` is the exception: it counts ALL statuses for the worklist view (managers need to see how many are awaiting approval). Cancelled/rejected are excluded from all cost aggregations.
+3. **Dashboard widget wrapped in `@can('viewAny', DamageInvoice::class)`** — hides the widget from roles that lack damage-module read access (salesman, dispatcher, hr, user, accountant). Uses the existing `DamagePolicy::viewAny()` method — no new RBAC code needed.
+4. **Report route has no explicit role guard** — the `admin/reports` group is `auth`-only (every authenticated user can access the reports hub). RLS on `damage_invoices` ensures non-admin users only see their own branch's damage data. This matches the existing report routes (P&L, trial balance, etc. are all `auth`-only).
+5. **`request()->query()` in the CSV export link** — passes ALL current filter params to the export endpoint, so the exported CSV matches exactly what the user sees on screen. No need to rebuild the query string manually.
+6. **6-month sparkline on the dashboard** (not 30-day) — damage is a low-frequency, high-value event; monthly granularity is more meaningful than daily. The trend array is built in PHP with a 6-iteration loop, filling zero-months for gaps (so the sparkline always shows 6 points even if there was no damage in a month).
+7. **Detail table 500-row cap** — mirrors `StockTakeVarianceReport` (which has no cap but uses paginated sessions). For damage, a 500-row cap prevents the page from becoming unresponsive on high-volume branches; the CSV export has no cap (full dataset).
+
+**Notes for subsequent phases:**
+- Phase 7 (UX polish) should add quick-filter buttons (Today / This Week / This Month / This Year) to the damage report, and a "Damage cost last 12 months" bar chart in the report header.
+- Phase 8 (tests) should add `DamageReportTest` covering: monthly/category/employee/top-products aggregations, branch scoping (RLS), CSV export format, and the dashboard KPI growth calculation.
+- A future materialized-view optimization (if volume grows) can replace the live queries in `DamageReportService` with `REFRESH MATERIALIZED VIEW damage_summary_monthly` calls — the service method signatures won't change.
+
+---
+
 ### Phase 7 — UX Polish, Quick Filters, Print & Export
 
 **Goal:** Make the module genuinely pleasant and operator-friendly. Fix the "today only" default, add quick filters, add a printable damage slip, and improve the index for high-volume branches.
@@ -1288,7 +1326,7 @@ return [
 | **3** | Photo / evidence attachments | Yes | 🔴 Shared #22 | Phase 1 (type-aware required-ness) | ✅ **COMPLETED** |
 | **4** | Witness + accountable employee + recovery | Yes | 🔴 Shared #23 | Phase 1 | ✅ **COMPLETED** |
 | **5** | Approval workflow + threshold escalation | Yes | 🔴 Shared #26, #27 | Phases 0, 1, 3, 4 | ✅ **COMPLETED** |
-| **6** | Dedicated reports + dashboard widget | Yes (views) | 🔴 Shared #28, #9 | Phases 1, 4, 5 | ⬜ Pending |
+| **6** | Dedicated reports + dashboard widget | Yes (views) | 🔴 Shared #28, #9 | Phases 1, 4, 5 | ✅ **COMPLETED** |
 | **7** | UX polish, quick filters, print, barcode | No | 🟡 Shared #30 | Phase 6 | ⬜ Pending |
 | **8** | Tests, reversal window, hardening | Yes (minor) | 🟠 #32, #33, #34 | All prior | ⬜ Pending |
 

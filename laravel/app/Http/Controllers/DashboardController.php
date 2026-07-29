@@ -78,6 +78,11 @@ class DashboardController extends Controller
         // ============================================================
         $topProducts = $this->getTopProducts(5);
 
+        // ============================================================
+        // Phase 6 (Damage plan): Damage KPIs for the dashboard widget
+        // ============================================================
+        $damageKpis = $this->getDamageKPIs();
+
         return view('dashboard.index', [
             'title' => 'Dashboard — Remote Center ERP',
             'user' => $user,
@@ -88,6 +93,7 @@ class DashboardController extends Controller
             'agingData' => $agingData,
             'topCustomers' => $topCustomers,
             'topProducts' => $topProducts,
+            'damageKpis' => $damageKpis,
             'legacyUrl' => config('app.legacy_url', '/'),
         ]);
     }
@@ -386,6 +392,98 @@ class DashboardController extends Controller
             ])->values()->toArray();
         } catch (\Throwable $e) {
             return [];
+        }
+    }
+
+    /**
+     * Phase 6 (Damage plan): Damage KPIs for the dashboard widget.
+     *
+     * Returns MTD confirmed damage cost + count + month-over-month growth %
+     * + recovery totals + a 6-month trend sparkline. RLS on damage_invoices
+     * scopes reads by branch automatically (no manual branch_id filter).
+     */
+    private function getDamageKPIs(): array
+    {
+        try {
+            $today      = now()->toDateString();
+            $monthStart = now()->startOfMonth()->toDateString();
+            $prevStart  = now()->subMonth()->startOfMonth()->toDateString();
+            $prevEnd    = now()->subMonth()->endOfMonth()->toDateString();
+
+            // MTD confirmed damage cost + count + recovered
+            $mtdRow = DB::table('damage_invoices')
+                ->whereBetween('damage_date', [$monthStart, $today])
+                ->where('status', 'confirmed')
+                ->where('is_reversed', false)
+                ->whereNull('deleted_at')
+                ->selectRaw('COUNT(*) AS cnt, COALESCE(SUM(total_value), 0) AS val, COALESCE(SUM(recovery_amount), 0) AS rec')
+                ->first();
+
+            $mtdValue  = (float) ($mtdRow->val ?? 0);
+            $mtdCount  = (int) ($mtdRow->cnt ?? 0);
+            $recovered = (float) ($mtdRow->rec ?? 0);
+
+            // Previous-month confirmed damage cost (for growth %)
+            $prevValue = (float) DB::table('damage_invoices')
+                ->whereBetween('damage_date', [$prevStart, $prevEnd])
+                ->where('status', 'confirmed')
+                ->where('is_reversed', false)
+                ->whereNull('deleted_at')
+                ->sum('total_value');
+
+            $growth = $prevValue > 0
+                ? round((($mtdValue - $prevValue) / $prevValue) * 100, 1)
+                : 0.0;
+
+            // Awaiting-approval worklist count + value
+            $awaitingRow = DB::table('damage_invoices')
+                ->where('status', 'submitted')
+                ->where('is_reversed', false)
+                ->whereNull('deleted_at')
+                ->selectRaw('COUNT(*) AS cnt, COALESCE(SUM(total_value), 0) AS val')
+                ->first();
+
+            // 6-month trend for the sparkline
+            $trendStart = now()->subMonths(5)->startOfMonth()->toDateString();
+            $trendRows = DB::table('damage_invoices')
+                ->whereBetween('damage_date', [$trendStart, $today])
+                ->where('status', 'confirmed')
+                ->where('is_reversed', false)
+                ->whereNull('deleted_at')
+                ->selectRaw("TO_CHAR(damage_date, 'YYYY-MM') AS month, COALESCE(SUM(total_value), 0) AS val")
+                ->groupByRaw("TO_CHAR(damage_date, 'YYYY-MM')")
+                ->orderByRaw('month ASC')
+                ->get()
+                ->keyBy('month');
+
+            $trend = [];
+            for ($i = 5; $i >= 0; $i--) {
+                $m = now()->subMonths($i)->format('Y-m');
+                $row = $trendRows->get($m);
+                $trend[] = [
+                    'month' => now()->subMonths($i)->format('M Y'),
+                    'value' => $row ? round((float) $row->val, 2) : 0.0,
+                ];
+            }
+
+            return [
+                'mtd_value'        => round($mtdValue, 2),
+                'mtd_count'        => $mtdCount,
+                'recovered'        => round($recovered, 2),
+                'net_loss'         => round($mtdValue - $recovered, 2),
+                'growth_pct'       => $growth,
+                'prev_value'       => round($prevValue, 2),
+                'awaiting_count'   => (int) ($awaitingRow->cnt ?? 0),
+                'awaiting_value'   => round((float) ($awaitingRow->val ?? 0), 2),
+                'trend'            => $trend,
+            ];
+        } catch (\Throwable $e) {
+            return [
+                'mtd_value' => 0, 'mtd_count' => 0, 'recovered' => 0, 'net_loss' => 0,
+                'growth_pct' => 0, 'prev_value' => 0,
+                'awaiting_count' => 0, 'awaiting_value' => 0,
+                'trend' => [],
+            ];
         }
     }
 }

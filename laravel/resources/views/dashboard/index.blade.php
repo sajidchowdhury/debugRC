@@ -232,6 +232,67 @@
         </div>
     </div>
 
+    {{-- ========== PHASE 6: DAMAGE COST WIDGET ========== --}}
+    @can('viewAny', \App\Models\DamageInvoice::class)
+    <div class="row g-3 mb-4">
+        <div class="col-12">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center py-2">
+                    <h3 class="h6 mb-0"><i class="fas fa-triangle-exclamation me-1 text-danger"></i> Damage Cost Overview</h3>
+                    <a href="{{ route('admin.reports.damageReport') }}" class="btn btn-sm btn-outline-danger">
+                        <i class="fas fa-chart-bar me-1"></i> Full Report
+                    </a>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3 align-items-center">
+                        {{-- KPI summary (left, 7 cols) --}}
+                        <div class="col-lg-7">
+                            <div class="row g-2">
+                                <div class="col-6 col-md-3">
+                                    <div class="border-start border-danger border-3 ps-2">
+                                        <small class="text-muted d-block">MTD Damage Cost</small>
+                                        <div class="h5 mb-0 fw-bold text-danger">Tk {{ number_format($damageKpis['mtd_value'], 0) }}</div>
+                                        <small class="text-muted">{{ $damageKpis['mtd_count'] }} confirmed</small>
+                                    </div>
+                                </div>
+                                <div class="col-6 col-md-3">
+                                    <div class="border-start border-warning border-3 ps-2">
+                                        <small class="text-muted d-block">vs Last Month</small>
+                                        <div class="h5 mb-0 fw-bold {{ $damageKpis['growth_pct'] >= 0 ? 'text-danger' : 'text-success' }}">
+                                            <i class="fas fa-{{ $damageKpis['growth_pct'] >= 0 ? 'arrow-up' : 'arrow-down' }}"></i>
+                                            {{ abs($damageKpis['growth_pct']) }}%
+                                        </div>
+                                        <small class="text-muted">Prev: Tk {{ number_format($damageKpis['prev_value'], 0) }}</small>
+                                    </div>
+                                </div>
+                                <div class="col-6 col-md-3">
+                                    <div class="border-start border-info border-3 ps-2">
+                                        <small class="text-muted d-block">Recovered</small>
+                                        <div class="h5 mb-0 fw-bold text-info">Tk {{ number_format($damageKpis['recovered'], 0) }}</div>
+                                        <small class="text-muted">from employees</small>
+                                    </div>
+                                </div>
+                                <div class="col-6 col-md-3">
+                                    <div class="border-start border-secondary border-3 ps-2">
+                                        <small class="text-muted d-block">Awaiting Approval</small>
+                                        <div class="h5 mb-0 fw-bold text-secondary">{{ $damageKpis['awaiting_count'] }}</div>
+                                        <small class="text-muted">Tk {{ number_format($damageKpis['awaiting_value'], 0) }} pending</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {{-- Sparkline (right, 5 cols) --}}
+                        <div class="col-lg-5">
+                            <small class="text-muted d-block mb-1">Confirmed Damage Cost — Last 6 Months</small>
+                            <canvas id="damageTrendChart" height="90"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    @endcan
+
     {{-- ========== QUICK STATS CARDS (basic) ========== --}}
     <div class="row g-3 mb-4">
         <div class="col-6 col-md-3">
@@ -531,6 +592,43 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     });
+
+    // ============================================================
+    // Phase 6: Damage trend sparkline (6-month)
+    // ============================================================
+    const dmgTrendEl = document.getElementById('damageTrendChart');
+    if (dmgTrendEl) {
+        const dmgKpis = @json($damageKpis);
+        const dmgTrend = dmgKpis.trend || [];
+        new Chart(dmgTrendEl.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: dmgTrend.map(d => d.month),
+                datasets: [{
+                    label: 'Damage Cost',
+                    data: dmgTrend.map(d => d.value),
+                    borderColor: colors.danger,
+                    backgroundColor: alpha(colors.danger, 0.12),
+                    fill: true,
+                    tension: 0.35,
+                    pointRadius: 3,
+                    pointBackgroundColor: colors.danger,
+                    borderWidth: 2,
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: { label: ctx => 'Tk ' + ctx.parsed.y.toLocaleString() } }
+                },
+                scales: {
+                    x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+                    y: { ticks: { callback: v => 'Tk ' + (v/1000).toFixed(0) + 'k', font: { size: 10 } }, grid: { color: alpha(colors.slate, 0.08) } }
+                }
+            }
+        });
+    }
 });
 </script>
 @endpush
