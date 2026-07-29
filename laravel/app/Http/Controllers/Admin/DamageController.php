@@ -113,13 +113,6 @@ class DamageController extends Controller
             'awaiting_value' => (float) DamageInvoice::where('status', 'submitted')->sum('total_value'),
         ];
 
-        // Phase 7 — "Damage cost last 12 months" bar chart for the summary
-        // header. One indexed grouped query over confirmed (posted) damages;
-        // RLS scopes non-admins to their branch, branch_id filter is applied
-        // as defense-in-depth when an admin selects a single branch. Zero-
-        // months are filled in PHP so the chart always shows 12 bars.
-        $costLast12Months = $this->costLast12Months($request->input('branch_id'));
-
         // Reflect the resolved date window back into the filter inputs so the
         // date pickers + quick-filter buttons stay in sync with what's shown.
         $filters = array_merge(
@@ -141,7 +134,6 @@ class DamageController extends Controller
             'damageTypeLabels' => DamageInvoice::DAMAGE_TYPE_LABELS,
             'stats' => $stats,
             'filters' => $filters,
-            'costLast12Months' => $costLast12Months,
         ]);
     }
 
@@ -199,50 +191,6 @@ class DamageController extends Controller
         }
 
         return [$from, $to, ''];
-    }
-
-    /**
-     * Phase 7 — confirmed-damage cost for the last 12 months (incl. current).
-     *
-     * Returns an array of 12 {label, value} pairs (oldest → newest) for the
-     * summary-header bar chart. Zero-months are filled so the chart is always
-     * 12 bars wide. RLS scopes non-admin users; $branchId is defense-in-depth
-     * for an admin's single-branch view.
-     *
-     * @return array<int, array{label:string, value:float}>
-     */
-    private function costLast12Months($branchId): array
-    {
-        $start = Carbon::today()->startOfMonth()->subMonths(11);
-        $end   = Carbon::today()->endOfMonth();
-
-        $q = DB::table('damage_invoices')
-            ->where('status', 'confirmed')
-            ->where('is_reversed', false)
-            ->whereNull('deleted_at')
-            ->whereBetween('damage_date', [$start->toDateString(), $end->toDateString()]);
-
-        if ($branchId) {
-            // An admin's single-branch filter is reflected in the chart too.
-            // (Non-admins are already scoped by RLS — no explicit filter needed.)
-            $q->where('branch_id', (int) $branchId);
-        }
-
-        $q = $q->selectRaw("TO_CHAR(damage_date, 'YYYY-MM') AS month, COALESCE(SUM(total_value), 0) AS total")
-            ->groupByRaw("TO_CHAR(damage_date, 'YYYY-MM')")
-            ->pluck('total', 'month');
-
-        $out = [];
-        for ($i = 11; $i >= 0; $i--) {
-            $m = Carbon::today()->startOfMonth()->subMonths($i);
-            $key = $m->format('Y-m');
-            $out[] = [
-                'label' => $m->format('M Y'),         // e.g. "Jan 2026"
-                'value' => round((float) ($q[$key] ?? 0), 2),
-            ];
-        }
-
-        return $out;
     }
 
     public function create()

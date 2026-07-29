@@ -323,19 +323,26 @@
     {{-- set in buildRow(). The desktop table is untouched above the sm/md    --}}
     {{-- breakpoint.                                                          --}}
     @@media (max-width: 767.98px) {
+        /* Hide the table headers — each cell renders its own label via ::before */
         #itemsTable thead { display: none; }
+
+        /* Table → stacked-card layout (block-level, full width) */
         #itemsTable,
         #itemsTable tbody,
         #itemsTable tr,
         #itemsTable td { display: block; width: 100%; }
-        #itemsTable tr {
+
+        /* Each row becomes a card */
+        #itemsTable tbody tr {
             margin-bottom: 12px;
             border: 1px solid #dee2e6;
             border-radius: 8px;
             padding: 4px 8px;
             background: #fff;
         }
-        #itemsTable td {
+
+        /* Each body cell becomes a flex row: label on the left, control on the right */
+        #itemsTable tbody td {
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -344,28 +351,79 @@
             border: 0;
             border-bottom: 1px solid #f1f5f9;
             padding: 8px 4px;
-            min-height: 40px;
+            min-height: 44px;
         }
-        #itemsTable td::before {
+        #itemsTable tbody td:last-child { border-bottom: 0; }
+
+        /* Cell label from data-label attribute (left side, fixed width) */
+        #itemsTable tbody td::before {
             content: attr(data-label);
             font-weight: 600;
             color: #475569;
             text-align: left;
             flex: 0 0 38%;
         }
-        #itemsTable td[data-label=""]::before { content: ""; }
-        #itemsTable td .form-control,
-        #itemsTable td .form-select,
-        #itemsTable td .select2-container { width: 100% !important; flex: 1 1 auto; }
-        #itemsTable tfoot { display: block; width: 100%; }
+
+        /* Cells with empty data-label (the remove-button column) get no
+           label at all — the button takes the full row, right-aligned. */
+        #itemsTable tbody td[data-label=""]::before { display: none; }
+        #itemsTable tbody td[data-label=""] { justify-content: flex-end; }
+
+        /* Form controls inside body cells take the remaining width */
+        #itemsTable tbody td .form-control,
+        #itemsTable tbody td .form-select,
+        #itemsTable tbody td .select2-container {
+            width: 100% !important;
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+        /* The hidden original <select> must not steal flex space */
+        #itemsTable tbody td .select2-hidden-accessible {
+            position: absolute !important;
+            width: 1px !important;
+        }
+
+        /* Total row (tfoot) — render as a single horizontal bar:
+           "Total damage value" on the left, amount on the right.
+           The colspan="4" is ignored in flex/block layout, so we explicitly
+           lay the cells out side-by-side and hide the empty placeholder cell. */
+        #itemsTable tfoot {
+            display: block;
+            width: 100%;
+            margin-top: 8px;
+        }
         #itemsTable tfoot tr {
             display: flex;
             justify-content: space-between;
-            border: 0;
-            background: transparent;
-            padding: 4px 0;
+            align-items: center;
+            border: 1px solid #dee2e6;
+            background: #f8fafc;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-weight: 600;
         }
-        #itemsTable tfoot td { border: 0; padding: 4px 0; min-height: 0; }
+        /* tfoot cells: block (not flex), no ::before label */
+        #itemsTable tfoot td {
+            display: block;
+            border: 0;
+            padding: 0;
+            min-height: 0;
+            background: transparent;
+        }
+        #itemsTable tfoot td::before { display: none; }
+        /* Hide the empty placeholder <td></td> after the total */
+        #itemsTable tfoot td:empty { display: none; }
+        /* "Total damage value" label takes the left side; amount stays right */
+        #itemsTable tfoot td:first-child { flex: 1 1 auto; text-align: left; }
+        #itemsTable tfoot td#totalAmount { flex: 0 0 auto; text-align: right; }
+
+        /* The barcode scan input should be full-width on mobile (the 460px
+           cap is for desktop). The input-group's text + button stay glued. */
+        .card-body .input-group { max-width: 100% !important; }
+
+        /* Let the cards breathe inside the table-responsive wrapper — the
+           stacked layout never overflows horizontally. */
+        .table-responsive { overflow-x: visible; }
     }
 </style>
 @endpush
@@ -562,7 +620,7 @@ $(function () {
      * scan results and for sticky rows after a validation error (the label is
      * resolved from #productOptionsTpl via productLabelMap).
      *
-     * Each <td> carries a data-label so the responsive CSS (see @push('css'))
+     * Each <td> carries a data-label so the responsive CSS block above
      * can collapse the table into stacked cards on mobile.
      */
     function buildRow(idx, preset) {

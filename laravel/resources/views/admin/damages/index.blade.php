@@ -15,9 +15,6 @@
         'search'        => '',
     ], is_array($filters ?? null) ? $filters : []);
 
-    // Phase 7 — last-12-months cost series for the summary-header bar chart.
-    $costLast12Months = $costLast12Months ?? [];
-
     // Phase 7 — quick-filter URL builder. Preserves the active non-date
     // filters (warehouse/status/type/branch/employee/search) while setting the
     // `range` param and dropping any manual from_date/to_date (range takes
@@ -253,27 +250,6 @@
                 </div>
             </div>
         @endif
-    </div>
-
-    {{-- Phase 7 — "Damage cost last 12 months" bar chart in the summary --}}
-    {{-- header. Full-width card; data is the 12-point series passed from  --}}
-    {{-- DamageController::index (confirmed damages only, RLS-scoped).       --}}
-    <div class="card border-0 shadow-sm mb-3">
-        <div class="card-body py-3">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-                <h2 class="h6 mb-0">
-                    <i class="fas fa-chart-column me-1 text-danger"></i>
-                    Damage cost — last 12 months
-                </h2>
-                <span class="text-muted small">
-                    Confirmed write-offs only
-                    @if (!empty($filters['branch_id'])) · single branch @endif
-                </span>
-            </div>
-            <div style="height:180px;">
-                <canvas id="damage12mChart"></canvas>
-            </div>
-        </div>
     </div>
 
     {{-- Filter form --}}
@@ -544,69 +520,9 @@
 </div>
 
 @push('scripts')
-{{-- Phase 7 — Chart.js for the "last 12 months" summary bar chart. --}}
-{{-- Loaded only on this page (not in the admin layout globally). --}}
-<script src="/assets/js/bootstrep/chart.umd.min.js"></script>
 <script>
 $(function () {
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
-
-    // ============================================================
-    // Phase 7 — "Damage cost last 12 months" bar chart.
-    // Data is the 12-point series passed from DamageController::index
-    // (confirmed damages only, RLS-scoped). Renders compact (180px) so the
-    // summary header stays scannable.
-    // ============================================================
-    (function () {
-        var el = document.getElementById('damage12mChart');
-        if (!el || typeof Chart === 'undefined') return;
-        var data = @json($costLast12Months);
-        var labels = data.map(function (d) { return d.label; });
-        var values = data.map(function (d) { return d.value; });
-
-        new Chart(el.getContext('2d'), {
-            type: 'bar',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: 'Damage cost (Tk)',
-                    data: values,
-                    backgroundColor: 'rgba(220, 38, 38, 0.75)',
-                    borderColor: 'rgba(185, 28, 28, 1)',
-                    borderWidth: 1,
-                    borderRadius: 3,
-                    maxBarThickness: 36
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: function (ctx) {
-                                return 'Tk ' + Number(ctx.parsed.y).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                            }
-                        }
-                    }
-                },
-                scales: {
-                    x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-                    y: {
-                        beginAtZero: true,
-                        ticks: {
-                            font: { size: 10 },
-                            callback: function (v) {
-                                return v >= 1000 ? (v / 1000) + 'k' : v;
-                            }
-                        },
-                        grid: { color: 'rgba(0,0,0,0.05)' }
-                    }
-                }
-            }
-        });
-    })();
 
     // DataTables on visible rows only (server-side pagination handles page size).
     $('#dataTable').DataTable({
