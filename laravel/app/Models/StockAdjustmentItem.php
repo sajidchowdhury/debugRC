@@ -29,7 +29,8 @@ use Illuminate\Database\Eloquent\Model;
  * product_id can no longer corrupt the reversal.
  *
  * @property int $id
- * @property int|null $stock_transaction_id  Phase 6.2 — exact stock_tx row (set on confirm).
+ * @property int|null $stock_transaction_id    Phase 6.2 — exact stock_tx row (set on confirm).
+ * @property string|null $stock_transaction_date Phase 6.2 fix — composite-FK partner (tx's date).
  * @property int $stock_adjustment_id
  * @property int $product_id
  * @property string $qty           Base qty (legacy alias of qty_base).
@@ -56,7 +57,8 @@ class StockAdjustmentItem extends Model
         'uom_factor',    // Phase 5
         'rate',
         'reason',
-        'stock_transaction_id', // Phase 6.2
+        'stock_transaction_id',   // Phase 6.2
+        'stock_transaction_date', // Phase 6.2 fix — composite-FK partner
     ];
 
     protected $casts = [
@@ -65,8 +67,9 @@ class StockAdjustmentItem extends Model
         'qty_entered' => 'decimal:4',
         'qty_base'    => 'decimal:4',
         'uom_factor'  => 'decimal:6',
-        'rate'        => 'decimal:2',
-        'stock_transaction_id' => 'integer', // Phase 6.2
+        'rate'                  => 'decimal:2',
+        'stock_transaction_id'   => 'integer', // Phase 6.2
+        'stock_transaction_date' => 'date',    // Phase 6.2 fix — composite-FK partner
     ];
 
     public function adjustment(): \Illuminate\Database\Eloquent\Relations\BelongsTo
@@ -85,6 +88,13 @@ class StockAdjustmentItem extends Model
      * a product+reference `.first()` lookup, which was ambiguous when two
      * items shared a product_id). Null for pre-Phase-6.2 rows (cancel falls
      * back to the legacy lookup for those).
+     *
+     * NOTE (Phase 6.2 fix): stock_transactions is RANGE-partitioned, so its
+     * PK is composite (id, transaction_date). The DB-level FK is therefore
+     * composite — backed by BOTH stock_transaction_id AND
+     * stock_transaction_date (written together at confirm time). This
+     * belongsTo relation still keys on stock_transaction_id alone, which is
+     * safe because the id sequence is globally unique across all partitions.
      */
     public function stockTransaction(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {

@@ -1,11 +1,11 @@
 # Stock Adjustment — Phased Implementation Plan (Legacy → Laravel ERP)
 
-**Document version:** 1.7
+**Document version:** 1.8
 **Date:** 2025-07-29
 **Scope:** A complete gap analysis and phase-by-phase implementation plan to transform the Laravel ERP's *Stock Adjustment* module into a robust, accountant-grade **bookkeeping correction tool**.
 **Context:** A generic, administrative quantity correction for cases that are **not** operational losses — opening balances, data migration, system/unit-of-measure errors, post-conversion fixes, legacy cleanup. It is a **bookkeeping tool, not a warehouse tool**. Triggered by an **Accountant / system administrator, infrequently**. The quantity correction (and its financial damage) is applied **warehouse-wise**.
 **Target stack:** Laravel 12 + PostgreSQL 16 (RLS-enabled, partitioned ledger, moving-average costing).
-**Current state:** **Phases 1-7 COMPLETE ✅** (authorization, categorization, maker-checker approval, dedicated audit log, UOM handling, pipeline-aware availability + reversal safety + date integrity, drift reconciliation + nightly alert) plus 2 post-launch hotfixes (total_amount column, journal_entry_id FK). The module is now role-gated, audit-logged, categorized, UOM-aware, reversal-safe, and drift-monitored. **Phases 8-10 remain** (UI parity/CSV/print, API routes, test coverage).
+**Current state:** **Phases 1-7 COMPLETE ✅** (authorization, categorization, maker-checker approval, dedicated audit log, UOM handling, pipeline-aware availability + reversal safety + date integrity, drift reconciliation + nightly alert) plus 3 post-launch hotfixes (total_amount column, journal_entry_id FK, partitioned-table composite-FK). The module is now role-gated, audit-logged, categorized, UOM-aware, reversal-safe, and drift-monitored. **Phases 8-10 remain** (UI parity/CSV/print, API routes, test coverage).
 
 ---
 
@@ -1000,7 +1000,7 @@ DB::statement("ALTER TABLE stock_adjustment_items ADD CONSTRAINT sai_adj_product
 ### Implementation Summary (Phase 6)
 
 **Files created:**
-- `laravel/database/migrations/2025_08_07_000001_add_stock_transaction_id_to_stock_adjustment_items.php` — adds `stock_transaction_id` (nullable bigint, FK → stock_transactions ON DELETE SET NULL) + partial index `idx_sai_stock_tx` + `UNIQUE(stock_adjustment_id, product_id)` constraint `sai_adj_product_unique`. The UNIQUE add is DEFENSIVE: it counts existing duplicate groups first and SKIPS the constraint with a `Log::warning` (rather than failing the migration) when dupes exist — the application-layer dedup guard (6.4) is the runtime gate; an operator can clean historical dupes and re-run the DDL. Idempotent (`Schema::hasColumn` + `pg_constraint`/`pg_indexes` introspection). Safe up/down.
+- `laravel/database/migrations/2025_08_07_000001_add_stock_transaction_id_to_stock_adjustment_items.php` — adds `stock_transaction_id` (nullable **integer** — type matches `stock_transactions.id`; see **Hotfix 3**) + `stock_transaction_date` (nullable date) + **COMPOSITE FK** `sai_stock_tx_fk (stock_transaction_id, stock_transaction_date) → stock_transactions(id, transaction_date) ON DELETE SET NULL` (a single-column FK on `(id)` is impossible on a partitioned table — see **Hotfix 3**) + composite partial index `idx_sai_stock_tx` + `UNIQUE(stock_adjustment_id, product_id)` constraint `sai_adj_product_unique`. The UNIQUE add is DEFENSIVE: it counts existing duplicate groups first and SKIPS the constraint with a `Log::warning` (rather than failing the migration) when dupes exist — the application-layer dedup guard (6.4) is the runtime gate; an operator can clean historical dupes and re-run the DDL. Idempotent (`Schema::hasColumn` + `pg_constraint`/`pg_indexes` introspection). Safe up/down.
 
 **Files modified:**
 - `laravel/app/Services/Stock/StockAdjustmentService.php` —
@@ -1016,7 +1016,7 @@ DB::statement("ALTER TABLE stock_adjustment_items ADD CONSTRAINT sai_adj_product
 - `laravel/config/stock_adjustment.php` — new `force_confirmer_roles` knob (default `['admin']`) with full doc-block explaining the force path semantics.
 - `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` — `confirm()` validates + threads `force` + `force_reason` (defense-in-depth admin check before the service re-check); `show()` passes `canForceConfirm` flag to the view.
 - `laravel/resources/views/admin/stock-adjustments/show.blade.php` — both confirm forms (draft one-step + approved) carry hidden `force` + `force_reason` fields; the confirm Swal now renders a custom HTML with the optional confirm_reason textarea + (when `canForceConfirm && isDecrease`) a force checkbox + force_reason textarea (required when checked, validated via `preConfirm`).
-- `laravel/database/sql/03_stock.sql` — fresh-install parity: `stock_adjustment_items` gains `stock_transaction_id` column + `sai_adj_product_unique` UNIQUE constraint + `idx_sai_stock_tx` partial index.
+- `laravel/database/sql/03_stock.sql` — fresh-install parity: `stock_adjustment_items` gains `stock_transaction_id` (integer) + `stock_transaction_date` (date) + composite FK `sai_stock_tx_fk → stock_transactions(id, transaction_date)` + `sai_adj_product_unique` UNIQUE constraint + composite partial index `idx_sai_stock_tx` (see **Hotfix 3** for the composite-FK rationale).
 
 **Key design decisions:**
 1. `StockAvailabilityService` was chosen over a new bespoke "adjustment availability" method because it already implements the exact Legacy formula (physical − open sales-invoice dispatches) with 5-min pipeline caching + invalidation hooks wired into SalesInvoice/SalesChallan services. Re-using it keeps one source of truth for "available qty".
@@ -1047,6 +1047,21 @@ Two runtime defects surfaced during end-to-end testing of the Phase 1-6 stack. B
 - `laravel/database/migrations/2025_08_05_000001_add_total_amount_to_stock_adjustments.php` (new — total_amount column + backfill)
 - `laravel/app/Services/Stock/StockAdjustmentService.php` (`postAdjustmentGL` returns `?int`; confirm stores `null` not `0`)
 - `laravel/database/sql/03_stock.sql` (fresh-install parity: `total_amount DECIMAL(14,2)` on `stock_adjustments`)
+
+**Hotfix 3 — Phase 6 migration FK failure on partitioned `stock_transactions` (composite-FK fix)**
+- **Symptom:** `php artisan migrate` failed on the real PostgreSQL DB: `SQLSTATE[42830]: Invalid foreign key: 7 ERROR: there is no unique constraint matching given keys for referenced table "stock_transactions"` on migration `2025_08_07_000001` (the Phase 6 `stock_transaction_id` FK).
+- **Root cause:** `stock_transactions` is `PARTITION BY RANGE (transaction_date)` (Task 34). PostgreSQL REQUIRES every UNIQUE/PRIMARY KEY on a partitioned table to include ALL partitioning columns (PG docs §5.11.2), so its PK is COMPOSITE `(id, transaction_date)` — there is no `UNIQUE(id)` and one CANNOT be added. A FK may only reference columns backed by a UNIQUE/PK, so `REFERENCES stock_transactions(id)` is structurally impossible. (This is the deliberate PG design that lets FK validation happen per-partition — exactly what makes the append-only ledger scale to large data: monthly partitions → partition pruning, small per-partition indexes, O(1) archival via DETACH PARTITION.)
+- **Second latent bug fixed in the same pass:** the original migration declared `stock_transaction_id` as `unsignedBigInteger` (= PG `bigint`), but `stock_transactions.id` is `integer GENERATED ALWAYS AS IDENTITY`. PG requires FK column types to match the referenced column EXACTLY, so the FK would have failed on type mismatch even without the partitioning issue.
+- **Proper fix (NOT a workaround):** COMPOSITE FOREIGN KEY referencing the table's real primary key — `FOREIGN KEY (stock_transaction_id, stock_transaction_date) REFERENCES stock_transactions(id, transaction_date) ON DELETE SET NULL`. This preserves partitioning (the #1 scalability lever), gives true DB-level referential integrity, is the idiomatic PG pattern for referencing a partitioned table, and `ON DELETE SET NULL` nulls BOTH columns for a composite FK. Minimal/additive: one new nullable `date` column; `(NULL, NULL)` is valid for pre-Phase-6.2 rows. A composite partial index `idx_sai_stock_tx (stock_transaction_id, stock_transaction_date) WHERE stock_transaction_id IS NOT NULL` serves both the cancel-time lookup and the `ON DELETE SET NULL` row-finder (no seq scan on large data).
+- **Rejected workarounds:** drop partitioning (destroys scalability for large data); add `UNIQUE(id)` (impossible on a partitioned table); drop the FK + app-only integrity (loses DB-level guarantee, orphan rows possible).
+- **Migration rewritten in place** (not a new migration) because it had never successfully run on any real PG DB — no environment has it recorded in the `migrations` table. Fully idempotent: `ADD COLUMN IF NOT EXISTS` + defensive `bigint→integer` type-normalisation (covers any half-applied state) + `pg_constraint`/`pg_indexes` guards.
+- **App changes:** `StockAdjustmentService::confirmAdjustment()` now persists BOTH `stock_transaction_id` AND `stock_transaction_date` (the date = `adjustment_date`, exactly what was written to `stock_transactions.transaction_date`). `cancelAdjustment()` needs NO change — reversal marks `is_reversed=true` (does not DELETE the row), so the composite FK stays satisfied. `StockAdjustmentItem` model gains `stock_transaction_date` in `$fillable`/`$casts` (`date`).
+
+**Files modified (Hotfix 3):**
+- `laravel/database/migrations/2025_08_07_000001_add_stock_transaction_id_to_stock_adjustment_items.php` (rewritten: composite FK + `stock_transaction_date` column + `integer` type + type-normalisation + composite partial index)
+- `laravel/app/Models/StockAdjustmentItem.php` (`stock_transaction_date` in `$fillable` + `$casts`; doc-block)
+- `laravel/app/Services/Stock/StockAdjustmentService.php` (confirm path writes both columns)
+- `laravel/database/sql/03_stock.sql` (fresh-install parity: composite FK + `stock_transaction_date` + composite index + `integer` type)
 
 ---
 

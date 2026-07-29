@@ -163,7 +163,18 @@ CREATE TABLE stock_adjustment_items (
     -- product+reference `.first()` lookup that was ambiguous when two
     -- items shared a product_id). Added by migration
     -- 2025_08_07_000001_add_stock_transaction_id_to_stock_adjustment_items.php.
-    stock_transaction_id bigint REFERENCES stock_transactions(id) ON DELETE SET NULL,
+    --
+    -- Phase 6.2 FIX: COMPOSITE FK into stock_transactions. The ledger is
+    -- PARTITION BY RANGE (transaction_date), so its PK is (id, transaction_date)
+    -- and a single-column FK on (id) is IMPOSSIBLE — PostgreSQL requires every
+    -- unique/PK constraint on a partitioned table to include ALL partitioning
+    -- columns, so there is no UNIQUE(id) to reference. The item therefore
+    -- carries the tx's date as the FK partner. Both columns nullable: the
+    -- (NULL, NULL) pair is valid for pre-Phase-6.2 rows. ON DELETE SET NULL
+    -- nulls BOTH columns. Column type is `integer` to match stock_transactions.id
+    -- (integer GENERATED ALWAYS AS IDENTITY) — PG requires exact type match.
+    stock_transaction_id integer,
+    stock_transaction_date date,
     stock_adjustment_id integer NOT NULL REFERENCES stock_adjustments(id) ON DELETE CASCADE,
     product_id integer NOT NULL REFERENCES products(id),
     qty numeric(14,4) NOT NULL,
@@ -185,12 +196,19 @@ CREATE TABLE stock_adjustment_items (
     -- for the duplicate-product-per-adjustment bug. The application-layer
     -- dedup guard (StockAdjustmentService::validateCreateInput) is the
     -- runtime gate; this is the invariant.
-    CONSTRAINT sai_adj_product_unique UNIQUE (stock_adjustment_id, product_id)
+    CONSTRAINT sai_adj_product_unique UNIQUE (stock_adjustment_id, product_id),
+    -- Phase 6.2 fix: composite FK into the partitioned ledger's real PK.
+    CONSTRAINT sai_stock_tx_fk
+        FOREIGN KEY (stock_transaction_id, stock_transaction_date)
+        REFERENCES stock_transactions(id, transaction_date)
+        ON DELETE SET NULL
 );
 CREATE INDEX idx_sai_adjustment ON stock_adjustment_items(stock_adjustment_id);
 CREATE INDEX idx_sai_product ON stock_adjustment_items(product_id);
--- Phase 6.2 — powers the cancel-time reverse-by-item lookup.
-CREATE INDEX idx_sai_stock_tx ON stock_adjustment_items(stock_transaction_id) WHERE stock_transaction_id IS NOT NULL;
+-- Phase 6.2 — powers the cancel-time reverse-by-item lookup AND the
+-- ON DELETE SET NULL row-finder (composite, so a stock_transactions DELETE
+-- never seq-scans stock_adjustment_items). Partial: only confirmed items.
+CREATE INDEX idx_sai_stock_tx ON stock_adjustment_items(stock_transaction_id, stock_transaction_date) WHERE stock_transaction_id IS NOT NULL;
 
 CREATE TABLE stock_take_sessions (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

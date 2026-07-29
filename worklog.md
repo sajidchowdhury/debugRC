@@ -663,3 +663,74 @@ Files modified:
 - STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md (Phase 7 DONE; G12 FIXED; overview + post-impl + progress + current-state + version bump)
 
 Gaps closed: G12 (no warehouse_stock ↔ ledger drift reconciliation check → FIXED). G15 + G16 were already closed by Phases 1/3 — retrospectively noted in the Phase 7 data-hygiene scope. The module is now drift-monitored: a nightly job alerts admins on divergence, an interactive reconcile view lets accountants triage, and an admin-only rebuild recomputes the snapshot cache from the immutable ledger (SSOT).
+
+---
+
+## SA-HOTFIX-3 — Phase 6 migration FK failure on partitioned stock_transactions (composite-FK fix)
+
+**Date:** 2025-08-07
+**Trigger:** user ran `php artisan migrate` on the real PostgreSQL DB after pulling Phases 1-7; the Phase 6 migration `2025_08_07_000001` FAILED.
+
+**Error:**
+```
+SQLSTATE[42830]: Invalid foreign key: 7 ERROR: there is no unique constraint
+matching given keys for referenced table "stock_transactions"
+SQL: ALTER TABLE stock_adjustment_items ADD CONSTRAINT sai_stock_tx_fk
+     FOREIGN KEY (stock_transaction_id) REFERENCES stock_transactions(id)
+     ON DELETE SET NULL
+```
+
+**Root cause (definitive):**
+`stock_transactions` is `PARTITION BY RANGE (transaction_date)` (Task 34). PostgreSQL REQUIRES every UNIQUE/PRIMARY KEY on a partitioned table to include ALL partitioning columns (PG docs §5.11.2), so its PK is COMPOSITE `(id, transaction_date)` — there is no `UNIQUE(id)` and one CANNOT be added. A FK may only reference columns backed by a UNIQUE/PK, so `REFERENCES stock_transactions(id)` is structurally impossible. This is the deliberate PG design that lets FK validation happen per-partition (cheaply) — exactly what makes the append-only ledger scale to LARGE DATA (monthly partitions → partition pruning, small per-partition indexes, O(1) archival via DETACH PARTITION).
+
+**Second latent bug found in the same migration:** the original declared `stock_transaction_id` as `unsignedBigInteger` (= PG `bigint`), but `stock_transactions.id` is `integer GENERATED ALWAYS AS IDENTITY`. PG requires FK column types to match the referenced column EXACTLY — so even without the partitioning issue the FK would have failed on type mismatch.
+
+**The proper, long-term, large-data-friendly fix (NOT a workaround):**
+COMPOSITE FOREIGN KEY referencing the table's real primary key:
+```sql
+ALTER TABLE stock_adjustment_items
+  ADD COLUMN stock_transaction_id integer NULL,
+  ADD COLUMN stock_transaction_date date NULL,
+  ADD CONSTRAINT sai_stock_tx_fk
+    FOREIGN KEY (stock_transaction_id, stock_transaction_date)
+    REFERENCES stock_transactions(id, transaction_date)
+    ON DELETE SET NULL;
+```
+Why this is correct and scalable:
+- Preserves partitioning (the #1 scalability lever for the ledger).
+- True DB-level referential integrity (no app-only workaround).
+- Idiomatic PG pattern for referencing a partitioned table.
+- `ON DELETE SET NULL` works: PG nulls BOTH columns for a composite FK.
+- Minimal/additive: one new nullable `date` column; `(NULL, NULL)` is valid for pre-Phase-6.2 rows.
+- Composite partial index `idx_sai_stock_tx (stock_transaction_id, stock_transaction_date) WHERE stock_transaction_id IS NOT NULL` serves both the cancel-time lookup AND the `ON DELETE SET NULL` row-finder (no seq scan on large data).
+
+**Why the naive workarounds were rejected:**
+- Drop partitioning → destroys the scalability design for large data. ❌
+- Add `UNIQUE(id)` on stock_transactions → IMPOSSIBLE on a partitioned table (PG rejects it). ❌
+- Drop the FK, app-only integrity → loses DB-level guarantee; orphan rows possible. ❌
+
+**Application changes shipped with the fix:**
+- `StockAdjustmentService::confirmAdjustment()` now persists BOTH `stock_transaction_id` AND `stock_transaction_date` on each item (the date = `adjustment_date`, which is exactly what was written to `stock_transactions.transaction_date` for that row). `cancelAdjustment()` needs NO change — reversal marks `is_reversed=true` (does not DELETE the row), so the composite FK stays satisfied.
+- `StockAdjustmentItem` model: `stock_transaction_date` added to `$fillable` + `$casts` (cast `date`). `stockTransaction()` BelongsTo unchanged (keys on id alone, safe because the id sequence is globally unique across partitions).
+
+**Migration rewrite strategy:** the existing migration `2025_08_07_000001` was rewritten IN PLACE (not a new migration) because it had never successfully run on any real PG database (the FK always failed) — so no environment has it recorded in the `migrations` table. Rewriting keeps history clean. The rewritten migration is fully idempotent: `ADD COLUMN IF NOT EXISTS` + a defensive `bigint→integer` type-normalisation step (covers any half-applied state) + `pg_constraint`/`pg_indexes` existence guards.
+
+**Files changed:**
+- `laravel/database/migrations/2025_08_07_000001_add_stock_transaction_id_to_stock_adjustment_items.php` — rewritten: composite FK + `stock_transaction_date` column + `integer` type + type-normalisation + composite partial index.
+- `laravel/app/Models/StockAdjustmentItem.php` — `stock_transaction_date` in `$fillable` + `$casts` (`date`); `stockTransaction()` doc-block updated.
+- `laravel/app/Services/Stock/StockAdjustmentService.php` — confirm path UPDATE writes both `stock_transaction_id` + `stock_transaction_date`.
+- `laravel/database/sql/03_stock.sql` — fresh-install parity: composite FK + `stock_transaction_date` column + composite partial index + corrected column type (`integer`).
+- `STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md` — Phase 6 Implementation Summary + fresh-install parity line updated; Hotfix 3 added to the Post-Launch Hotfixes section; Current-state line updated (3 hotfixes).
+- `worklog.md` — this entry.
+
+**Verification (user must run):**
+```
+docker compose exec rcerp_app php artisan migrate
+```
+Expected: `2025_08_07_000001` now succeeds (composite FK is valid against the partitioned table). Then confirm the shape:
+```
+docker compose exec rcerp_postgres psql -U rcerp_app -d rcerp -c "\d stock_adjustment_items"
+```
+should show `stock_transaction_id integer` + `stock_transaction_date date` + FK `sai_stock_tx_fk` referencing `stock_transactions(id, transaction_date)`.
+
+**Stage Summary:** Migration failure root-caused to the PostgreSQL partitioned-table unique-constraint rule (PG docs §5.11.2). Properly fixed with a composite FK that preserves the partitioning design (long-term scalable for large data) instead of dropping/scaling-crippling workarounds. A second latent type-mismatch bug (bigint vs integer) was fixed in the same pass. Phase 7 reconciliation work is unaffected — it is pure read/recompute with no schema dependency on the FK shape.

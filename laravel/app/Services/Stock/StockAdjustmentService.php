@@ -612,9 +612,20 @@ class StockAdjustmentService
                 // Persist the exact stock_transaction id on the item row.
                 // (Idempotent: if the item already has this id, the UPDATE
                 // is a no-op; safe under re-confirm / retry.)
+                //
+                // Phase 6.2 fix (composite FK): stock_transactions is RANGE-
+                // partitioned, so its PK is (id, transaction_date) and the
+                // FK on stock_adjustment_items is composite — it requires
+                // BOTH stock_transaction_id AND stock_transaction_date. The
+                // date is the adjustment_date (exactly what was passed to
+                // applyTransaction() above as transaction_date, line ~608),
+                // so it is guaranteed to match the ledger row's date.
                 DB::table('stock_adjustment_items')
                     ->where('id', $item->id)
-                    ->update(['stock_transaction_id' => $stockTx->id]);
+                    ->update([
+                        'stock_transaction_id'   => $stockTx->id,
+                        'stock_transaction_date' => $adjustment->adjustment_date->format('Y-m-d'),
+                    ]);
             }
 
             // Post the GL journal entry.
