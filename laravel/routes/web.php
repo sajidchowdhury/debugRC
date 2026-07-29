@@ -25,6 +25,7 @@ use App\Http\Controllers\Admin\StockAdjustmentController;
 use App\Http\Controllers\Admin\StockTakeController;
 use App\Http\Controllers\Admin\WarehouseTransferController;
 use App\Http\Controllers\Admin\BranchDemandController;
+use App\Http\Controllers\Admin\BranchDemandReportController;
 use App\Http\Controllers\Admin\DamageController;
 use App\Http\Controllers\Admin\PurchaseOrderController;
 use App\Http\Controllers\Admin\PurchaseReceiveController;
@@ -651,6 +652,11 @@ Route::middleware('auth')->group(function () {
         Route::post('{id}/confirm-receipt', [BranchDemandController::class, 'confirmReceipt'])->name('confirm-receipt');
         Route::post('{id}/reverse', [BranchDemandController::class, 'reverse'])->name('reverse');
         Route::post('{id}/reject', [BranchDemandController::class, 'reject'])->name('reject');
+
+        // Phase 6: Weekly Audit Report
+        Route::get('weekly-report', [BranchDemandReportController::class, 'weekly'])->name('weekly-report');
+        Route::get('weekly-report/export', [BranchDemandReportController::class, 'exportCsv'])->name('weekly-report.export');
+        Route::get('weekly-report/drill-down', [BranchDemandReportController::class, 'drillDown'])->name('weekly-report.drill-down');
     });
     Route::resource('admin/branch-demands', BranchDemandController::class)
         ->only(['index', 'create', 'store', 'show', 'destroy'])
