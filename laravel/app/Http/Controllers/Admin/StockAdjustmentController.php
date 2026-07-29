@@ -6,11 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Models\StockAdjustment;
 use App\Models\Warehouse;
 use App\Services\Stock\StockAdjustmentPolicyService;
+use App\Services\Stock\StockAdjustmentReconcileService;
 use App\Services\Stock\StockAdjustmentService;
 use App\Services\Stock\StockService;
 use App\Services\Stock\UomConversionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Stock Adjustment Controller — Phase 6.3.
@@ -50,7 +52,8 @@ class StockAdjustmentController extends Controller
         private StockAdjustmentService $adjustmentService,
         private StockService $stockService,
         private StockAdjustmentPolicyService $policy,
-        private UomConversionService $uom  // Phase 5 — UOM dropdown data
+        private UomConversionService $uom,  // Phase 5 — UOM dropdown data
+        private StockAdjustmentReconcileService $reconcile  // Phase 7 — drift detection
     ) {}
 
     /**
@@ -569,5 +572,134 @@ SQL);
         ];
 
         return $checks;
+    }
+
+    // ========================================================================
+    // Phase 7 — Reconciliation, Drift Detection & Data-Hygiene
+    // ------------------------------------------------------------------------
+    // Reconcile view + AJAX refresh + admin-only snapshot rebuild. The
+    // reconcile page is module-agnostic (it checks the warehouse_stock ↔
+    // stock_transactions invariant for the whole tenant) but is surfaced
+    // under Stock Adjustment because that module is the bookkeeping-
+    // correction tool — "find + fix stock drift" is an accountant job.
+    // ========================================================================
+
+    /**
+     * Reconciliation page — renders the view; data is fetched via AJAX so a
+     * slow drift query never blocks the page load. Branch-scoped for non-
+     * admins (RLS already enforces this at the DB level; the service-level
+     * branch filter is defense-in-depth + lets the view show the scope).
+     */
+    public function reconcile()
+    {
+        $this->authorize('audit', StockAdjustment::class);
+
+        $userBranchId = $this->getUserBranchId();
+        $warehouses = Warehouse::active()
+            ->when($userBranchId, fn($q) => $q->where('branch_id', $userBranchId))
+            ->orderBy('warehouse_name')
+            ->get();
+
+        return view('admin.stock-adjustments.reconcile', [
+            'title' => 'Stock Reconciliation',
+            'userBranchId' => $userBranchId,
+            'warehouses' => $warehouses,
+        ]);
+    }
+
+    /**
+     * AJAX: run the drift computation and return JSON. Accepts an optional
+     * warehouse_id scope (for the per-warehouse filter on the view). Non-
+     * admins are branch-locked: a forged warehouse_id from another branch
+     * is rejected by the service's branch filter (the warehouse doesn't
+     * belong to their branch, so it returns no rows for it).
+     */
+    public function runReconcile(Request $request)
+    {
+        $this->authorize('audit', StockAdjustment::class);
+
+        $validated = $request->validate([
+            'warehouse_id' => 'nullable|integer|min:1',
+        ]);
+
+        $userBranchId = $this->getUserBranchId();
+        $warehouseId = $validated['warehouse_id'] ?? null;
+
+        try {
+            $result = $this->reconcile->computeDrift($userBranchId, $warehouseId);
+            return response()->json($result);
+        } catch (\Throwable $e) {
+            Log::error('StockAdjustment reconcile failed', [
+                'error' => $e->getMessage(),
+                'branch_id' => $userBranchId,
+                'warehouse_id' => $warehouseId,
+            ]);
+            return response()->json([
+                'error' => 'Failed to run reconciliation: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * AJAX (POST): rebuild the warehouse_stock snapshot from the ledger for
+     * a given warehouse (or all warehouses when warehouse_id is null).
+     *
+     * ADMIN-ONLY — enforced by the route's role:admin middleware + a defense-
+     * in-depth isAdmin() check here. The rebuild is destructive (DELETE +
+     * INSERT) so it must not be reachable by an accountant, even though
+     * accountants can VIEW the drift. Rebuilding is a maintenance op.
+     */
+    public function rebuildSnapshot(Request $request)
+    {
+        $this->authorize('audit', StockAdjustment::class);
+
+        /** @var \App\Models\User $user */
+        $user = auth()->user();
+        if (!$user || !$user->isAdmin()) {
+            return response()->json([
+                'error' => 'Only administrators may rebuild the stock snapshot.',
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'warehouse_id' => 'nullable|integer|min:1',
+        ]);
+
+        $warehouseId = $validated['warehouse_id'] ?? null;
+
+        try {
+            $result = $this->reconcile->rebuildSnapshot($warehouseId);
+            return response()->json([
+                'success' => true,
+                'rebuilt' => $result['rebuilt'],
+                'message' => sprintf(
+                    'Snapshot rebuilt for %s — %d row(s) recomputed from the ledger.',
+                    $warehouseId ? "warehouse #{$warehouseId}" : 'all warehouses',
+                    $result['rebuilt']
+                ),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('StockAdjustment rebuildSnapshot failed', [
+                'error' => $e->getMessage(),
+                'warehouse_id' => $warehouseId,
+            ]);
+            return response()->json([
+                'error' => 'Failed to rebuild snapshot: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Resolve the current user's branch id (null for admins who see all).
+     * Mirrors WarehouseTransferController::getUserBranchId.
+     */
+    private function getUserBranchId(): ?int
+    {
+        /** @var \App\Models\User|null $user */
+        $user = auth()->user();
+        if ($user && $user->isAdmin()) {
+            return null;
+        }
+        return $user ? (int) (session('branch_id') ?? $user->getBranchId() ?? 0) : 0;
     }
 }

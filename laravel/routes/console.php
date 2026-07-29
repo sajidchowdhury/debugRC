@@ -26,3 +26,17 @@ Schedule::command('sales:cancel-stale-drafts')
     ->runInBackground()
     ->name('sales-cancel-stale-drafts')
     ->description('Cancel stale draft sales invoices (>14 days, no godown)');
+
+// Phase 7 (Stock Adjustment): Nightly stock drift reconciliation at 03:00.
+// Computes warehouse_stock.qty vs SUM(stock_transactions.qty) for every
+// (warehouse, product). When drift is found, fires an ERPNotification to
+// every user whose employee role is in stock_adjustment.reconcile_alert_roles
+// (default admin). Offset from the 02:00 stale-draft job so the two heavy
+// queries don't overlap. withoutOverlapping prevents a slow run from
+// stacking; runInBackground frees the schedule worker.
+Schedule::command('stock:reconcile-drift')
+    ->dailyAt('03:00')
+    ->withoutOverlapping()
+    ->runInBackground()
+    ->name('stock-reconcile-drift')
+    ->description('Detect warehouse_stock ↔ stock_transactions drift and alert admins');

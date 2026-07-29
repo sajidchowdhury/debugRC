@@ -165,4 +165,59 @@ return [
     */
 
     'stale_draft_days' => env('STOCK_ADJ_STALE_DRAFT_DAYS', 7),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Reconcile drift tolerance (Phase 7)
+    |--------------------------------------------------------------------------
+    |
+    | The numeric(14,4) scale used by warehouse_stock.qty + stock_transactions.
+    | qty can hold 4 decimal places, so anything |drift| <= this tolerance is
+    | treated as zero (rounding noise) and excluded from the drift report +
+    | the nightly alert. 0.0001 matches the DB CHECK constraint
+    | (qty >= -0.0001) and the StockService::QTY_TOLERANCE constant.
+    |
+    | Raise to 0.01 if a tenant's historical data has sub-cent drift they
+    | don't want to triage; lower to 0 to surface every micro-drift.
+    |
+    | Default: 0.0001.
+    */
+
+    'reconcile_tolerance' => env('STOCK_ADJ_RECONCILE_TOLERANCE', 0.0001),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Reconcile drift alert toggle (Phase 7)
+    |--------------------------------------------------------------------------
+    |
+    | When TRUE, the nightly stock:reconcile-drift schedule fires an
+    | ERPNotification to the alert roles when drift is detected. When FALSE,
+    | the drift is still computed + logged (so an admin running the command
+    | manually or opening the Reconcile page can see it) but no push
+    | notification is sent.
+    |
+    | Default: true (alert on drift — drift is a data-integrity signal).
+    */
+
+    'reconcile_drift_alert' => env('STOCK_ADJ_RECONCILE_DRIFT_ALERT', true),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Reconcile drift alert roles (Phase 7)
+    |--------------------------------------------------------------------------
+    |
+    | Employee roles notified when the nightly drift check finds mismatches.
+    | The role is stored on employees.role (not users — see User::getRole()),
+    | so the recipient query joins users → employees. Each matching user
+    | receives the notification directly via $user->notify() (NOT via the
+    | rule-based NotificationService::dispatch — drift alerts are system
+    | health, not business events, and must not depend on a notification_rule
+    | being configured).
+    |
+    | Default: admin, superadmin. Add 'manager' if a tenant wants branch
+    | managers alerted on drift in their branch (note: the nightly job is
+    | all-tenant, so managers would see ALL branches' drift, not just theirs).
+    */
+
+    'reconcile_alert_roles' => ['admin', 'superadmin'],
 ];

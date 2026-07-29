@@ -70,6 +70,9 @@
             </p>
         </div>
         <div class="d-flex gap-2 flex-wrap">
+            <a href="{{ route('admin.stock-adjustments.reconcile') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-scale-balanced me-1"></i> Reconciliation
+            </a>
             <a href="{{ route('admin.stock-adjustments.audit') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-clipboard-check me-1"></i> Audit
             </a>

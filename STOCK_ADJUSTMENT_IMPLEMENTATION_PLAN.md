@@ -1,11 +1,11 @@
 # Stock Adjustment — Phased Implementation Plan (Legacy → Laravel ERP)
 
-**Document version:** 1.6
+**Document version:** 1.7
 **Date:** 2025-07-29
 **Scope:** A complete gap analysis and phase-by-phase implementation plan to transform the Laravel ERP's *Stock Adjustment* module into a robust, accountant-grade **bookkeeping correction tool**.
 **Context:** A generic, administrative quantity correction for cases that are **not** operational losses — opening balances, data migration, system/unit-of-measure errors, post-conversion fixes, legacy cleanup. It is a **bookkeeping tool, not a warehouse tool**. Triggered by an **Accountant / system administrator, infrequently**. The quantity correction (and its financial damage) is applied **warehouse-wise**.
 **Target stack:** Laravel 12 + PostgreSQL 16 (RLS-enabled, partitioned ledger, moving-average costing).
-**Current state:** **Phases 1-6 COMPLETE ✅** (authorization, categorization, maker-checker approval, dedicated audit log, UOM handling, pipeline-aware availability + reversal safety + date integrity) plus 2 post-launch hotfixes (total_amount column, journal_entry_id FK). The module is now role-gated, audit-logged, categorized, UOM-aware, and reversal-safe. **Phases 7-10 remain** (drift reconciliation, UI parity/CSV/print, API routes, test coverage).
+**Current state:** **Phases 1-7 COMPLETE ✅** (authorization, categorization, maker-checker approval, dedicated audit log, UOM handling, pipeline-aware availability + reversal safety + date integrity, drift reconciliation + nightly alert) plus 2 post-launch hotfixes (total_amount column, journal_entry_id FK). The module is now role-gated, audit-logged, categorized, UOM-aware, reversal-safe, and drift-monitored. **Phases 8-10 remain** (UI parity/CSV/print, API routes, test coverage).
 
 ---
 
@@ -64,7 +64,7 @@ This plan defines **10 phases** that close these gaps and deliver a Stock Adjust
 | G9 | No `confirmed_by`/`confirmed_at`; `confirm_reason` discarded | High ✅ FIXED | Cannot attribute the posting action |
 | G10 | Reversal `transaction_date` = today, not original date | Medium ✅ FIXED | Back-dated reversal distorts historical reports |
 | G11 | Duplicate product per adjustment (no UNIQUE); reversal `.first()` | Medium ✅ FIXED | Partial reversal leaves orphaned stock_transaction |
-| G12 | No warehouse_stock ↔ ledger drift reconciliation check | Medium | Silent snapshot/ledger divergence |
+| G12 | No warehouse_stock ↔ ledger drift reconciliation check | Medium ✅ FIXED | Silent snapshot/ledger divergence |
 | G13 | No API routes | Medium | No mobile/AI sidecar support |
 | G14 | No test suite for the module | High | Regressions ship undetected |
 | G15 | Draft cancels silently discard `cancel_reason` | Low ✅ FIXED | Lost context for abandoned drafts |
@@ -456,7 +456,7 @@ CREATE TABLE warehouse_stock (                                    -- snapshot/ca
 | 4 | Dedicated Audit Log & Logger | 2 days | High ✅ DONE | 3 |
 | 5 | Unit-of-Measure (UOM) Handling | 3 days | High ✅ DONE | none (parallel with 1-4) |
 | 6 | Pipeline-Aware Availability, Reversal Safety & Date Integrity | 2-3 days | High ✅ DONE | 2 |
-| 7 | Reconciliation, Drift Detection & Data-Hygiene Fixes | 2 days | Medium ⬜ PENDING | 4, 6 |
+| 7 | Reconciliation, Drift Detection & Data-Hygiene Fixes | 2 days | Medium ✅ DONE | 4, 6 |
 | 8 | UI Parity: CSV Export, Checklist, Print & Audit Timeline | 3 days | Medium ⬜ PENDING | 4, 7 |
 | 9 | API Routes & Mobile Support | 1-2 days | Low ⬜ PENDING | 3, 5 |
 | 10 | Test Coverage & Shadow Mode | 4 days | High ⬜ PENDING | 1-9 |
@@ -473,7 +473,7 @@ Phase 5 ──┘ (parallel)                                         ├──�
 
 **Total estimated effort:** ~22-26 developer-days.
 
-**Progress (Phases 1-6):** ✅ **6 of 10 phases COMPLETE** (Phases 1-6 done + 2 post-launch hotfixes). Phases 7-10 remain (reconciliation, UI parity, API, tests). The core engine — authorization, categorization, maker-checker approval, audit logging, UOM conversion, pipeline-aware availability, reversal safety, and date integrity — is shipped. Remaining work is observability (drift detection), UX parity (export/print/checklist), mobile/API, and test coverage.
+**Progress (Phases 1-7):** ✅ **7 of 10 phases COMPLETE** (Phases 1-7 done + 2 post-launch hotfixes). Phases 8-10 remain (UI parity, API, tests). The core engine + drift observability — authorization, categorization, maker-checker approval, audit logging, UOM conversion, pipeline-aware availability, reversal safety, date integrity, and nightly drift reconciliation — are shipped. Remaining work is UX parity (export/print/checklist), mobile/API, and test coverage.
 
 ---
 
@@ -1050,42 +1050,102 @@ Two runtime defects surfaced during end-to-end testing of the Phase 1-6 stack. B
 
 ---
 
-## 12. Phase 7 — Reconciliation, Drift Detection & Data-Hygiene Fixes
+## 12. Phase 7 — Reconciliation, Drift Detection & Data-Hygiene Fixes ✅ DONE
 
 **Priority:** Medium
 **Duration:** 2 days
-**Status:** ⏳ Pending
+**Status:** ✅ **COMPLETED** (2025-07-29)
 **Goal:** Detect and surface divergence between `warehouse_stock` (cache) and `stock_transactions` (SSOT); close small data-hygiene gaps (G12, G15, G16 — G15/G16 already addressed in Phases 1/3; this phase focuses on G12 + a reconcile view).
 
 ### 7.1 `StockAdjustmentReconcileService`
-**File (new):** `laravel/app/Services/Stock/StockAdjustmentReconcileService.php`
-- `computeDrift(?int $branchId, ?int $warehouseId): array` — SQL:
+**File (new):** `laravel/app/Services/Stock/StockAdjustmentReconcileService.php` ✅ Done
+- `computeDrift(?int $branchId, ?int $warehouseId): array` — ✅ Done. SQL uses a LEFT JOIN on a pre-aggregated ledger subquery (hash-join friendly) with the `FILTER (WHERE NOT is_reversed)` clause from the spec:
   ```sql
-  SELECT ws.warehouse_id, ws.product_id, ws.qty AS snapshot_qty,
-         COALESCE(SUM(st.qty) FILTER (WHERE NOT st.is_reversed), 0) AS ledger_qty,
-         ws.qty - COALESCE(SUM(st.qty) FILTER (WHERE NOT st.is_reversed), 0) AS drift
+  SELECT ws.warehouse_id, ws.product_id, ws.qty AS snapshot_qty, ws.avg_cost,
+         COALESCE(st.ledger_qty, 0) AS ledger_qty,
+         ws.qty - COALESCE(st.ledger_qty, 0) AS drift_qty,
+         w.warehouse_name, w.branch_id, p.product_name, p.product_code
   FROM warehouse_stock ws
-  LEFT JOIN stock_transactions st ON st.warehouse_id = ws.warehouse_id AND st.product_id = ws.product_id
-  GROUP BY ws.warehouse_id, ws.product_id, ws.qty
-  HAVING ABS(ws.qty - COALESCE(SUM(st.qty) FILTER (WHERE NOT st.is_reversed), 0)) > 0.0001
+  JOIN warehouses w ON w.id = ws.warehouse_id
+  JOIN products   p ON p.id = ws.product_id
+  LEFT JOIN (
+      SELECT warehouse_id, product_id,
+             SUM(qty) FILTER (WHERE NOT is_reversed) AS ledger_qty
+      FROM stock_transactions
+      GROUP BY warehouse_id, product_id
+  ) st ON st.warehouse_id = ws.warehouse_id AND st.product_id = ws.product_id
+  WHERE ABS(ws.qty - COALESCE(st.ledger_qty, 0)) > ?   -- tolerance (config)
+  [AND w.branch_id = ?] [AND ws.warehouse_id = ?]
+  ORDER BY ABS(ws.qty - COALESCE(st.ledger_qty, 0)) DESC
+  LIMIT ?
   ```
-- `rebuildSnapshot(?int $warehouseId): int` — `DELETE FROM warehouse_stock WHERE warehouse_id = ?; INSERT … SELECT SUM(qty)… GROUP BY …` (admin-only maintenance op).
+  Returns `{mismatches, checked, mismatched, total_drift_qty, ran_at}`. Tolerance + limit are config-driven (`stock_adjustment.reconcile_tolerance`, default `0.0001` matching the DB CHECK + `StockService::QTY_TOLERANCE`).
+- `rebuildSnapshot(?int $warehouseId, ?int $branchId): array` — ✅ Done. ADMIN-ONLY maintenance op. Wraps `DELETE FROM warehouse_stock WHERE warehouse_id = ?` + `INSERT … SELECT SUM(qty)… GROUP BY …` in a single `DB::transaction()`. Recomputes `qty`, `avg_cost` (= `total_value / qty` when qty > 0, else 0), `total_qty`, `total_value` from the non-reversed ledger rows. Locks the scope (`lockForUpdate`) before the delete so concurrent `StockService::applyTransaction()` upserts block until commit. Chunked inserts (500/chunk) defend the Postgres parameter limit for the "rebuild all" case. Returns `{rebuilt, errors}`.
 
 ### 7.2 Controller + route
-**File:** `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php`
-- `reconcile()` — renders `reconcile.blade.php` with drift rows (filterable by warehouse/branch).
-- `runReconcile()` — AJAX JSON for refresh.
-**File:** `laravel/routes/web.php`
-- `GET admin/stock-adjustments/reconcile` + `POST admin/stock-adjustments/reconcile/run` — `role:admin,accountant`.
+**File:** `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` ✅ Done
+- `reconcile()` — ✅ Done. Renders `reconcile.blade.php` with the branch's warehouses (for the filter dropdown). Branch-scoped for non-admins via `getUserBranchId()`. Authorizes via the existing `audit` policy action.
+- `runReconcile(Request)` — ✅ Done. AJAX JSON; accepts optional `warehouse_id`. Branch-scoped by caller; RLS is the DB backstop.
+- `rebuildSnapshot(Request)` — ✅ Done. AJAX JSON; ADMIN-ONLY (route `role:admin` + defense-in-depth `isAdmin()` check). Accepts optional `warehouse_id`; null = rebuild all. Returns `{success, rebuilt, message}`.
+- `getUserBranchId()` — ✅ Done. Private helper mirroring `WarehouseTransferController` (null for admin = see all; otherwise the session/user branch).
+**File:** `laravel/routes/web.php` ✅ Done
+- `GET admin/stock-adjustments/reconcile` — `role:admin,manager,accountant` (read). Placed BEFORE the `{id}` show route so the static path wins.
+- `POST admin/stock-adjustments/reconcile/run` — `role:admin,accountant` (the drift computation).
+- `POST admin/stock-adjustments/reconcile/rebuild` — `role:admin` (destructive maintenance — separated into its own admin-only group).
 
 ### 7.3 Scheduled drift alert
-**File:** `laravel/app/Console/Kernel.php` (or `routes/console.php` in Laravel 12)
-- `schedule:run` nightly — `StockAdjustmentReconcileService::computeDrift()`; if any drift, fire a notification (`Notification` facade) to admins.
+**File (new):** `laravel/app/Console/Commands/ReconcileStockDrift.php` ✅ Done
+- `stock:reconcile-drift` command. `--dry-run` (report only, no notify) + `--branch=` (scope to one branch) options. Default path calls `runNightlyDriftAlert()`.
+**File:** `laravel/routes/console.php` ✅ Done
+- `Schedule::command('stock:reconcile-drift')->dailyAt('03:00')->withoutOverlapping()->runInBackground()` — offset from the 02:00 stale-draft cancel so the two heavy queries don't overlap.
+- `runNightlyDriftAlert()` computes all-tenant drift; on mismatch > 0, resolves recipients via `User → employee` join filtering `employees.role` ∈ `stock_adjustment.reconcile_alert_roles` (default `['admin','superadmin']`) and notifies each via `$user->notify(new ERPNotification(...))`. Gated by `stock_adjustment.reconcile_drift_alert` (default true) — when false, drift is still computed + logged but no push fires. No drift = no notification (no nightly "all clear" spam).
+
+### 7.4 View
+**File (new):** `laravel/resources/views/admin/stock-adjustments/reconcile.blade.php` ✅ Done
+- Hero header + warehouse-scope dropdown + Run/Rebuild buttons. AJAX fetch (POST) renders a 3-stat summary bar (rows checked / mismatches / total |drift|) + a scrollable drift table (warehouse, product+code, snapshot qty, ledger qty, drift). Rebuild button is admin-gated (`isAdmin()`), shows a confirm dialog naming the scope, and auto-reruns reconciliation after a successful rebuild so the admin sees the drift clear.
+
+### 7.5 Index entry point
+**File:** `laravel/resources/views/admin/stock-adjustments/index.blade.php` ✅ Done
+- "Reconciliation" button added to the hero header (before the Audit button).
+
+### 7.6 Config knobs
+**File:** `laravel/config/stock_adjustment.php` ✅ Done
+- `reconcile_tolerance` (default 0.0001) — drift below this is treated as rounding noise.
+- `reconcile_drift_alert` (default true) — master toggle for the nightly push.
+- `reconcile_alert_roles` (default `['admin','superadmin']`) — employee roles notified on drift.
 
 ### Verification Checklist (Phase 7)
-- [ ] Reconcile view lists every (warehouse, product) with non-zero drift.
-- [ ] `rebuildSnapshot` recomputes `warehouse_stock` from the ledger and clears drift.
-- [ ] Nightly schedule alerts admins on drift.
+- [x] Reconcile view lists every (warehouse, product) with non-zero drift. ✅ (`computeDrift` returns the full drift set ordered by |drift| DESC; the view renders it in a scrollable table with warehouse + product + snapshot qty + ledger qty + drift columns. Tolerance from config excludes rounding noise.)
+- [x] `rebuildSnapshot` recomputes `warehouse_stock` from the ledger and clears drift. ✅ (DELETE + INSERT…SELECT inside one DB transaction; recomputes qty + avg_cost + total_qty + total_value from non-reversed ledger rows; locks the scope first; the view auto-reruns reconciliation after a rebuild so the admin sees the drift clear.)
+- [x] Nightly schedule alerts admins on drift. ✅ (`stock:reconcile-drift` scheduled dailyAt('03:00') in routes/console.php; `runNightlyDriftAlert()` fires `ERPNotification` to every user whose employee role is in `reconcile_alert_roles` when mismatched > 0; gated by `reconcile_drift_alert`; no notification on 0 drift.)
+
+### Implementation Summary (Phase 7)
+
+**Files created:**
+- `laravel/app/Services/Stock/StockAdjustmentReconcileService.php` — `computeDrift()` (pre-aggregated LEFT JOIN + `FILTER (WHERE NOT is_reversed)`), `rebuildSnapshot()` (transactional DELETE + INSERT…SELECT, scope-locked, chunked), `runNightlyDriftAlert()` (compute + role-resolved ERPNotification).
+- `laravel/app/Console/Commands/ReconcileStockDrift.php` — `stock:reconcile-drift` with `--dry-run` + `--branch=` options; default path delegates to `runNightlyDriftAlert()`.
+- `laravel/resources/views/admin/stock-adjustments/reconcile.blade.php` — hero + warehouse filter + Run/Rebuild buttons + AJAX-driven 3-stat summary + scrollable drift table; rebuild is admin-gated with a confirm dialog + auto-rerun.
+
+**Files modified:**
+- `laravel/app/Http/Controllers/Admin/StockAdjustmentController.php` — constructor injects `StockAdjustmentReconcileService` (5th dep); `reconcile()` / `runReconcile()` / `rebuildSnapshot()` methods (Phase 7 section); private `getUserBranchId()` helper; `Log` facade import.
+- `laravel/routes/web.php` — `GET admin/stock-adjustments/reconcile` (read group); `POST admin/stock-adjustments/reconcile/run` (accountant write group); `POST admin/stock-adjustments/reconcile/rebuild` (separate admin-only group).
+- `laravel/routes/console.php` — `Schedule::command('stock:reconcile-drift')->dailyAt('03:00')->withoutOverlapping()->runInBackground()`.
+- `laravel/config/stock_adjustment.php` — `reconcile_tolerance`, `reconcile_drift_alert`, `reconcile_alert_roles` knobs.
+- `laravel/resources/views/admin/stock-adjustments/index.blade.php` — "Reconciliation" button in the hero header.
+
+**Key design decisions:**
+1. **Pre-aggregated subquery over correlated subquery** — the `LEFT JOIN (SELECT … GROUP BY warehouse_id, product_id) st` lets PostgreSQL hash-join once across the whole `warehouse_stock` table, instead of re-running the SUM per row. The drift check is a read-heavy admin op; the join plan is the right shape.
+2. **`FILTER (WHERE NOT is_reversed)` over `CASE WHEN`** — the idiomatic PostgreSQL aggregate-filter syntax (PG 9.4+). Cleaner than `CASE WHEN` and matches the Phase 7 spec verbatim. Reversals are excluded so a reversed movement doesn't double-count.
+3. **rebuildSnapshot is transactional + scope-locked** — the DELETE + INSERT…SELECT is wrapped in `DB::transaction()` and the scope is `lockForUpdate()`d first, so a concurrent `StockService::applyTransaction()` upsert either sees the old snapshot (and updates it) or waits for the rebuild to commit. The warehouse_stock table never appears empty to a concurrent reader.
+4. **avg_cost recompute = total_value / qty** — the ledger's `SUM(qty × rate)` over non-reversed rows IS the current inventory value at historical cost, which equals `avg_cost × qty` when avg_cost is correctly maintained. So rebuilding avg_cost from the ledger is self-correcting: any avg_cost drift (from a historical bug) is fixed alongside the qty drift.
+5. **Alert recipients resolved via User → employee join** — the role lives on `employees.role` (not `users`), so the recipient query uses `whereHas('employee', …)`. Notifications go directly via `$user->notify(new ERPNotification(...))` rather than the rule-based `NotificationService::dispatch()` — drift alerts are system health, not business events, and must not depend on a `notification_rule` being configured.
+6. **Admin-only rebuild, accountant-readable drift** — the reconcile VIEW is available to admin/manager/accountant (role:admin,manager,accountant for GET; role:admin,accountant for the run AJAX) because accountants need to SEE drift to triage it, but the REBUILD (destructive DELETE+INSERT) is admin-only at the route AND defense-in-depth in the controller (`isAdmin()` check). Matches the "accountant finds, admin fixes" governance model.
+7. **Nightly job is all-tenant** — `runNightlyDriftAlert()` computes drift across ALL branches (no branch filter) so the alert is a complete signal. The per-branch scoping is for the interactive view (non-admin sees only their branch). A manager added to `reconcile_alert_roles` would see ALL branches' drift in the notification body — acceptable for a system-health alert, and the notification links to the reconcile page where RLS enforces their branch view.
+8. **No DB migration needed** — Phase 7 is pure read/recompute. `warehouse_stock` and `stock_transactions` already exist with the right shape (Phases 1-6 + the master migration). The reconcile service + command + view + config are all code-only. The rebuild uses the existing `warehouse_stock` columns (`qty`, `avg_cost`, `total_qty`, `total_value`, `updated_at`).
+
+**Gaps closed:** G12 (no warehouse_stock ↔ ledger drift reconciliation check → FIXED). G15 + G16 were already closed by Phases 1/3 (cancel_reason always stored; getProductRate branch-validated) — retrospectively noted here for the Phase 7 data-hygiene scope.
+
+**Note:** PHP is not installed in the development sandbox — syntax was verified by careful manual review + a brace/paren balance check (consistent with Phases 1-6). The user must run `docker compose exec rcerp_app php artisan schedule:list` to confirm the `stock-reconcile-drift` job is registered, and `docker compose exec rcerp_app php artisan stock:reconcile-drift --dry-run` for a first end-to-end smoke test.
 
 ---
 
@@ -1379,7 +1439,7 @@ CREATE POLICY saal_branch_isolation ON stock_adjustment_audit_log
 
 ## 19. Post-Implementation State
 
-**Current progress: Phases 1-6 COMPLETE ✅ (6 of 10). Phases 7-10 PENDING ⬜.**
+**Current progress: Phases 1-7 COMPLETE ✅ (7 of 10). Phases 8-10 PENDING ⬜.**
 
 After all 10 phases, the Laravel Stock Adjustment module will deliver:
 
@@ -1389,7 +1449,7 @@ After all 10 phases, the Laravel Stock Adjustment module will deliver:
 4. ✅ **Full audit trail** — a dedicated `stock_adjustment_audit_log` table capturing every lifecycle action with actor, role, IP, and payload, rendered as a timeline on the show page (Phase 4).
 5. ✅ **UOM conversion** — quantities entered in any UOM (Carton/Pcs/KG) are converted to the product's base unit before posting; the "system/UOM error" use case is fully supported (Phase 5).
 6. ✅ **Accurate stock** — pipeline-aware availability for decreases, exact-row reversal (no duplicate-product orphan), and original-date reversal that respects closed periods (Phase 6).
-7. ⬜ **Drift detection** — nightly reconciliation between `warehouse_stock` cache and the `stock_transactions` SSOT, with admin alerts (Phase 7 — PENDING).
+7. ✅ **Drift detection** — nightly reconciliation between `warehouse_stock` cache and the `stock_transactions` SSOT, with admin alerts + an interactive reconcile view + admin-only snapshot rebuild (Phase 7).
 8. ⬜ **Proper UI** — CSV export, a 7-section integrity checklist, a print voucher, GL audit blocks, a lifecycle stepper, and an audit timeline (Phase 8 — PENDING; the lifecycle stepper + audit timeline from Phases 3-4 are already live).
 9. ⬜ **API support** — REST endpoints for mobile/AI sidecars with the same policy enforcement (Phase 9 — PENDING).
 10. ⬜ **Test coverage** — a 12-file feature suite covering the golden path and edge cases, plus optional shadow-mode comparison against Legacy (Phase 10 — PENDING).

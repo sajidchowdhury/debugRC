@@ -412,6 +412,9 @@ Route::middleware('auth')->group(function () {
     Route::middleware('role:admin,manager,accountant')->group(function () {
         Route::get('admin/stock-adjustments', [StockAdjustmentController::class, 'index'])->name('admin.stock-adjustments.index');
         Route::get('admin/stock-adjustments/audit', [StockAdjustmentController::class, 'audit'])->name('admin.stock-adjustments.audit');
+        // Phase 7 — Reconciliation view (drift detection). GET only; the
+        // drift computation runs via the POST run-reconcile AJAX below.
+        Route::get('admin/stock-adjustments/reconcile', [StockAdjustmentController::class, 'reconcile'])->name('admin.stock-adjustments.reconcile');
         Route::get('admin/stock-adjustments/{id}', [StockAdjustmentController::class, 'show'])->name('admin.stock-adjustments.show')
             ->where(['id' => '[0-9]+']);
     });
@@ -439,6 +442,18 @@ Route::middleware('auth')->group(function () {
         Route::post('admin/stock-adjustments/{id}/cancel', [StockAdjustmentController::class, 'cancel'])->name('admin.stock-adjustments.cancel')
             ->where(['id' => '[0-9]+'])
             ->middleware('branch.isolation');
+
+        // Phase 7 — Reconciliation AJAX: run the drift computation. No
+        // {id} in the URL so no branch.isolation needed; the service scopes
+        // by the caller's branch_id (non-admin) and RLS enforces at the DB.
+        Route::post('admin/stock-adjustments/reconcile/run', [StockAdjustmentController::class, 'runReconcile'])->name('admin.stock-adjustments.run-reconcile');
+    });
+
+    // --- Phase 7: Rebuild snapshot (admin only): destructive maintenance op ---
+    // Rebuilds warehouse_stock from the stock_transactions ledger. Admin-only
+    // at the route (role:admin) AND defense-in-depth in the controller.
+    Route::middleware('role:admin')->group(function () {
+        Route::post('admin/stock-adjustments/reconcile/rebuild', [StockAdjustmentController::class, 'rebuildSnapshot'])->name('admin.stock-adjustments.rebuild-snapshot');
     });
 
     // --- Phase 3: Approve / Reject (maker-checker): admin, manager only ---
