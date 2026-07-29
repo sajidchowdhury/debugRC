@@ -144,6 +144,67 @@ class DamagePolicy
         return $this->sameBranch($user, $damage);
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | Phase 3 — Photo / Evidence Attachments
+    |--------------------------------------------------------------------------
+    | Upload / delete / view evidence files. Mirrors the legacy create/store
+    | role matrix (admin, manager, warehouse_manager may all upload evidence —
+    | a warehouse_manager is usually the one on the floor photographing the
+    | damaged stock). Confirm/cancel (which lock the evidence) stay admin/manager.
+    |
+    | Critical rule: attachments can only be added or removed while the damage
+    | is in `draft`. Once confirmed, the evidence set is FROZEN for audit
+    | integrity (you can't retroactively swap the photo that justified a
+    | write-off). A cancelled/reversed damage keeps its attachments for the
+    | audit trail (only a hard delete cascades to the files — see migration).
+    */
+
+    /**
+     * Upload an evidence attachment to a draft damage.
+     * Routes: admin.damages.{id}.attachments.store — role:admin,manager,warehouse_manager + branch.isolation.
+     */
+    public function uploadAttachment(User $user, DamageInvoice $damage): bool
+    {
+        if (!$user->hasRole('admin', 'manager', 'warehouse_manager')) {
+            return false;
+        }
+        // Evidence is locked once the damage leaves draft.
+        if (!$damage->isDraft()) {
+            return false;
+        }
+
+        return $this->sameBranch($user, $damage);
+    }
+
+    /**
+     * Delete an evidence attachment from a draft damage.
+     * Routes: admin.damages.{id}.attachments.destroy — role:admin,manager,warehouse_manager + branch.isolation.
+     */
+    public function deleteAttachment(User $user, DamageInvoice $damage): bool
+    {
+        // Same gate as upload — draft only, same branch.
+        return $this->uploadAttachment($user, $damage);
+    }
+
+    /**
+     * View / download an evidence attachment (streamed via controller).
+     * Routes: admin.damages.{id}.attachments.{att}.view / .download —
+     *   role:admin,manager,warehouse_manager + branch.isolation.
+     *
+     * Broader than upload/delete: evidence may be viewed on a CONFIRMED or
+     * CANCELLED damage (auditors / managers reviewing historical write-offs).
+     * The draft-only lock applies to mutations, not reads.
+     */
+    public function viewAttachment(User $user, DamageInvoice $damage): bool
+    {
+        if (!$user->hasRole('admin', 'manager', 'warehouse_manager')) {
+            return false;
+        }
+
+        return $this->sameBranch($user, $damage);
+    }
+
     /**
      * Branch check: admin/superadmin may operate on any branch (the
      * cross-branch override is logged by EnforceBranchIsolation). All

@@ -155,6 +155,19 @@ class DamageInvoice extends Model
     }
 
     /**
+     * Evidence attachments (Phase 3 — Photo / Evidence Attachments).
+     *
+     * Photos / PDFs uploaded as proof of the damage. Eager-load with
+     * ->with('attachments.uploadedBy') on the detail page. Countable inline
+     * via withCount('attachments') for the index / integrity checks.
+     */
+    public function attachments(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(DamageAttachment::class, 'damage_invoice_id')
+            ->orderBy('id');
+    }
+
+    /**
      * The structured reason taxonomy row (Phase 1) — matched by reason_code.
      *
      * Named `reasonTaxonomy` (NOT `reason`) because the `reason` column

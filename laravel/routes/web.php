@@ -666,12 +666,41 @@ Route::middleware('auth')->group(function () {
         Route::get('admin/damages/{id}', [DamageController::class, 'show'])->name('admin.damages.show')
             ->where(['id' => '[0-9]+'])
             ->middleware('branch.isolation');
+
+        // Phase 3 — evidence attachment view/download. Same role gate as show
+        // (read access). branch.isolation resolves {id} → damage_invoices
+        // .branch_id (the 'damages' URI is mapped in inferTableFromUri).
+        // Files are streamed from the private disk via the controller — they
+        // are NOT web-accessible via /storage/... (evidence is sensitive).
+        Route::get('admin/damages/{id}/attachments/{attachmentId}/view', [DamageController::class, 'viewAttachment'])
+            ->name('admin.damages.attachments.view')
+            ->where(['id' => '[0-9]+', 'attachmentId' => '[0-9]+'])
+            ->middleware('branch.isolation');
+        Route::get('admin/damages/{id}/attachments/{attachmentId}/download', [DamageController::class, 'downloadAttachment'])
+            ->name('admin.damages.attachments.download')
+            ->where(['id' => '[0-9]+', 'attachmentId' => '[0-9]+'])
+            ->middleware('branch.isolation');
     });
 
     // --- Write access (create draft, fetch product-stock): admin, manager, warehouse_manager ---
     Route::middleware('role:admin,manager,warehouse_manager')->group(function () {
         Route::get('admin/damages/create', [DamageController::class, 'create'])->name('admin.damages.create');
         Route::post('admin/damages', [DamageController::class, 'store'])->name('admin.damages.store');
+
+        // Phase 3 — evidence upload + delete. Same role gate as create/store
+        // (warehouse_manager is usually the one on the floor photographing).
+        // Draft-only enforcement lives in DamagePolicy (uploadAttachment /
+        // deleteAttachment return false when !isDraft). branch.isolation
+        // protects cross-branch access at the request level; RLS is the
+        // DB-level backstop on damage_attachments.
+        Route::post('admin/damages/{id}/attachments', [DamageController::class, 'uploadAttachment'])
+            ->name('admin.damages.attachments.store')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
+        Route::delete('admin/damages/{id}/attachments/{attachmentId}', [DamageController::class, 'deleteAttachment'])
+            ->name('admin.damages.attachments.destroy')
+            ->where(['id' => '[0-9]+', 'attachmentId' => '[0-9]+'])
+            ->middleware('branch.isolation');
     });
 
     // --- Destructive access (confirm posts stock+GL; cancel reverses): admin, manager only ---

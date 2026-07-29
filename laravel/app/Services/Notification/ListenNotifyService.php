@@ -63,6 +63,13 @@ class ListenNotifyService
         // The worker now LISTENs so damage index/detail pages auto-refresh
         // via SSE when another user creates/confirms/cancels a damage.
         'rcerp_damage_change',
+        // Phase 3 (Damage plan) — evidence attachment changes. Fires on
+        // INSERT/DELETE of damage_attachments (not on the parent header), so
+        // the damage detail page can auto-refresh its Evidence gallery when
+        // another tab uploads a photo. Deliberately separate from
+        // rcerp_damage_change so the index refresh banner does NOT fire on
+        // an attachment upload (the header row is unchanged).
+        'rcerp_damage_attachment_change',
     ];
 
     /**

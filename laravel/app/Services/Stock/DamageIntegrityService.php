@@ -89,6 +89,11 @@ class DamageIntegrityService
         if ($damage->is_reversed) {
             $items[] = $this->checkReversed($damage);
         }
+        // Phase 3 — evidence requirement (photo mandate for photographable
+        // loss types). Runs for every damage so the panel surfaces a missing
+        // photo proactively, before the user hits Confirm and gets a hard
+        // error from DamageService::confirmDamage.
+        $items[] = $this->checkEvidence($damage);
 
         $summary = ['pass' => 0, 'warn' => 0, 'fail' => 0, 'info' => 0];
         foreach ($items as $it) {
@@ -306,6 +311,88 @@ class DamageIntegrityService
         return $this->item('reversed', 'Reversed',
             'Reversed damage must carry a reverse reason.',
             'warn', 'No reverse reason recorded' . $by);
+    }
+
+    /**
+     * 6. Evidence / photo requirement (Phase 3).
+     *
+     * For damage types that represent a real, photographable loss
+     * (real_damage / theft / quality_reject — driven by
+     * config('damage.require_photo_for_types')), at least one attachment is
+     * REQUIRED. This mirrors the hard gate in DamageService::confirmDamage
+     * but surfaces the gap on the detail page *before* the user hits Confirm.
+     *
+     * State-aware:
+     *   · draft      → warn if 0 attachments (can still upload + retry).
+     *   · confirmed  → fail if 0 attachments (the gate was bypassed — a
+     *                  confirmed write-off with no proof is an audit hole;
+     *                  this should never happen because confirmDamage blocks
+     *                  it, but if it does, the panel must flag it).
+     *   · cancelled  → info (no longer actionable; the requirement lapsed
+     *                  with the cancellation).
+     *
+     * Types NOT in the require-photo list (missing, customer_return, other):
+     *   → pass with a note explaining WHY no photo is required (so the panel
+     *     doesn't look like it skipped the check). `missing` will require an
+     *     accountable employee instead in Phase 4.
+     *
+     * Uses the already-eager-loaded `attachments` relation (no extra query)
+     * when available; falls back to a counted DB query otherwise.
+     */
+    private function checkEvidence(DamageInvoice $damage): array
+    {
+        $requirePhoto = config('damage.require_photo_for_types', []);
+        $requirePhoto = is_array($requirePhoto) ? $requirePhoto : [];
+        $typeLabel    = DamageInvoice::DAMAGE_TYPE_LABELS[$damage->damage_type] ?? $damage->damage_type;
+
+        if (!in_array($damage->damage_type, $requirePhoto, true)) {
+            return $this->item(
+                'evidence',
+                'Evidence',
+                'Photo evidence is required only for real_damage / theft / quality_reject.',
+                'pass',
+                "{$typeLabel} — no photo required for this damage type."
+            );
+        }
+
+        // Prefer the eager-loaded collection (controller loads attachments)
+        // so we avoid an extra query on the detail page. Falls back to a
+        // count query if the relation wasn't loaded (e.g. called from a
+        // context that only fetched the header).
+        if ($damage->relationLoaded('attachments')) {
+            $count = $damage->attachments->count();
+        } else {
+            $count = DB::table('damage_attachments')
+                ->where('damage_invoice_id', $damage->id)
+                ->count();
+        }
+
+        if ($damage->isDraft()) {
+            return $count > 0
+                ? $this->item('evidence', 'Evidence',
+                    "At least one photo is required to confirm a {$typeLabel} damage.",
+                    'pass', "{$count} attachment(s) attached — requirement met.")
+                : $this->item('evidence', 'Evidence',
+                    "At least one photo is required to confirm a {$typeLabel} damage.",
+                    'warn', 'No evidence uploaded — Confirm will be blocked until at least one photo is added.');
+        }
+
+        if ($damage->isConfirmed()) {
+            // confirmDamage enforces this, so 0 here means the gate was
+            // bypassed (e.g. data migration, or a pre-Phase-3 confirmed row).
+            return $count > 0
+                ? $this->item('evidence', 'Evidence',
+                    "Confirmed {$typeLabel} damage must retain its evidence.",
+                    'pass', "{$count} attachment(s) on record.")
+                : $this->item('evidence', 'Evidence',
+                    "Confirmed {$typeLabel} damage must have evidence (confirmDamage should have blocked this).",
+                    'fail', 'No evidence on a confirmed photographable loss — audit hole.');
+        }
+
+        // Cancelled — no longer actionable.
+        return $this->item('evidence', 'Evidence',
+            "Evidence requirement lapsed when this {$typeLabel} damage was cancelled.",
+            'info', $count > 0 ? "{$count} attachment(s) retained for audit." : 'No attachments were recorded.');
     }
 
     /**

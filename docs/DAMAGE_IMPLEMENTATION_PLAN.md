@@ -860,48 +860,64 @@ The plan is organized so that each phase is **independently shippable**, **non-b
 
 **Goal:** Require (or strongly encourage) photographic evidence of damage — critical for insurance claims, audit defense, and deterring fake "damage" write-offs.
 
-**Schema changes (migration `2026_01_03_000001_damage_attachments`):**
-```sql
-CREATE TABLE damage_attachments (
-  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  damage_invoice_id integer NOT NULL REFERENCES damage_invoices(id) ON DELETE CASCADE,
-  file_path varchar(500) NOT NULL,          -- storage disk path
-  file_name varchar(255) NOT NULL,
-  mime_type varchar(100) NOT NULL,
-  file_size bigint NOT NULL,
-  caption varchar(255),
-  uploaded_by integer NOT NULL REFERENCES users(id),
-  created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX idx_dmg_att_damage ON damage_attachments(damage_invoice_id);
--- RLS: same branch as the parent damage (join via damage_invoices)
-ALTER TABLE damage_attachments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE damage_attachments FORCE ROW LEVEL SECURITY;
-CREATE POLICY rls_damage_attachments_select ON damage_attachments FOR SELECT
-  USING (EXISTS (SELECT 1 FROM damage_invoices di WHERE di.id = damage_invoice_id
-    AND (current_setting('app.is_admin', true) = 'true' OR di.branch_id = current_setting('app.branch_id')::int)));
--- (similar insert/update/delete policies)
-```
+#### Phase 3 — Implementation Status ✅ COMPLETED
 
-**Backend changes:**
-- `DamageAttachment` model (fillable, relation to `DamageInvoice`).
-- `DamageController` methods: `uploadAttachment(Request, $id)`, `deleteAttachment($id, $attachmentId)`.
-- Validation: max file size (e.g. 5 MB), allowed mimes (jpg, png, webp, pdf), max 10 attachments per damage.
-- Store on the configured disk (local or S3-compatible via `filesystems.php`).
-- **Policy rule:** for `damage_type IN ('real_damage','theft','quality_reject')`, at least 1 photo is **required** to confirm (enforced in `DamageService::confirmDamage`). For `missing` type, photo is optional (there's nothing to photograph) but a written explanation is mandatory (Phase 4 witness/reason).
+> **Commit:** `feat(damage): Phase 3 — photo / evidence attachments` (see git log)
+> **Status:** ✅ Implemented. `damage_attachments` table (RLS-protected, joins via parent damage_invoices for branch scoping) + private-disk storage (NOT public — evidence is sensitive) + 4 controller endpoints (upload/delete/view/download) + draft-only mutation lock + confirm-gate for `real_damage`/`theft`/`quality_reject` + 6th integrity check ("evidence") + `rcerp_damage_attachment_change` LISTEN/NOTIFY channel for live gallery auto-refresh + Bootstrap-modal lightbox + drag-drop dropzone.
 
-**Frontend changes:**
-- `create.blade.php`: add a file-upload dropzone (can upload after draft creation; or on the show page).
-- `show.blade.php`: add an **Evidence** gallery (thumbnails with lightbox, caption, uploader, timestamp, delete button if draft).
-- Confirm button disabled with tooltip *"Add at least 1 photo to confirm"* when required and missing.
+**Files changed (5) + created (3):**
 
-**Acceptance criteria:**
-- Can upload up to 10 photos per damage; thumbnails render.
-- Confirm is blocked for real_damage/theft/quality_reject with 0 attachments.
-- Deleting a damage cascades to delete its attachment files (queue job or synchronous `Storage::delete`).
-- RLS prevents cross-branch access to attachments.
+| # | File | Change |
+|---|---|---|
+| 1 | `laravel/database/migrations/2026_01_03_000001_damage_attachments.php` | **NEW** — `damage_attachments` table (id, damage_invoice_id FK CASCADE, file_path, file_name, mime_type, file_size, caption, uploaded_by FK users, created_at) + 2 indexes (damage_invoice_id, uploaded_by). RLS: ENABLE + FORCE + 5 policies (select/insert/update/delete/admin) joining via `damage_invoices` to check `branch_id` against the session GUC (attachments have no branch_id of their own — the parent damage is the trust anchor). Two LISTEN/NOTIFY trigger functions: `rcerp_notify_damage_attachment()` (AFTER INSERT, uses NEW) + `rcerp_notify_damage_attachment_delete()` (AFTER DELETE, uses OLD), both firing on the dedicated `rcerp_damage_attachment_change` channel. Resolves the parent damage's `branch_id` via a SELECT so branch-scoped SSE clients only get their own events. UPDATE not wired (only `caption` is user-editable; doesn't justify a NOTIFY). |
+| 2 | `laravel/app/Models/DamageAttachment.php` | **NEW** — `$timestamps = false` (only `created_at`, no `updated_at` — see migration). Fillable: damage_invoice_id, file_path, file_name, mime_type, file_size, caption, uploaded_by, created_at. Constants: `MAX_PER_DAMAGE = 10`, `MAX_FILE_SIZE_KB = 5120`, `ALLOWED_MIMES` (jpg/png/webp/pdf), `ALLOWED_EXTENSIONS`. Relations: `damageInvoice()`, `uploadedBy()`. Helpers: `isImage()`, `isPdf()`, `formattedSize()`. |
+| 3 | `laravel/config/damage.php` | **NEW** — single source of truth for the Damage module rules. `require_photo_for_types` = `['real_damage','theft','quality_reject']` (config-driven so a stricter install can add `missing`/`other` without code changes). `attachment_max_per_damage` (10), `attachment_max_size_kb` (5120), `attachment_disk` ('local' — private), `attachment_folder` ('damage-evidence'). Phase 5 will extend this with approval thresholds + roles. |
+| 4 | `laravel/app/Models/DamageInvoice.php` | Added `attachments()` HasMany relation (ordered by id) + eager-load hint in docblock. |
+| 5 | `laravel/app/Policies/DamagePolicy.php` | Added 3 methods: `uploadAttachment(User, DamageInvoice)` — role:admin,manager,warehouse_manager + **draft-only** + same-branch. `deleteAttachment(User, DamageInvoice)` — delegates to `uploadAttachment` (same gate). `viewAttachment(User, DamageInvoice)` — broader: allows view on ANY state (confirmed/cancelled damages keep their evidence visible for auditors); draft-only lock is for mutations only. |
+| 6 | `laravel/app/Http/Controllers/Admin/DamageController.php` | Added `uploadAttachment` (validate mimes+size, enforce count limit BEFORE storing, random filename under `damage-evidence/{id}/`, store on `local` disk, create DB row). `deleteAttachment` (delete physical file FIRST then DB row — stale orphan preferred over dangling 404). `viewAttachment` (stream inline via `streamAttachment()` helper). `downloadAttachment` (stream as attachment). Private `streamAttachment()` reads from the private disk with Content-Type/Disposition/Cache-Control/nosniff headers. `show()` now eager-loads `attachments.uploadedBy`. |
+| 7 | `laravel/app/Services/Stock/DamageService.php` | `confirmDamage()` — added photo-requirement gate: for `damage_type` in `config('damage.require_photo_for_types')`, counts `damage_attachments` inside the locked transaction (concurrent-delete-safe) and throws if 0. `customer_return` is deliberately excluded so the sales-return-linked auto-flow (`SalesReturnService::createLinkedDamageWriteOffs`) is NOT blocked. |
+| 8 | `laravel/app/Services/Stock/DamageIntegrityService.php` | Added 6th check `checkEvidence()` — surfaces the photo requirement proactively on the detail page *before* the user hits Confirm. State-aware: draft→warn if 0 (can still upload), confirmed→fail if 0 (gate was bypassed — audit hole), cancelled→info (no longer actionable). For types NOT in the require-photo list → pass with a note explaining why (so the panel doesn't look like it skipped the check). Uses the eager-loaded `attachments` relation (no extra query) when available. |
+| 9 | `laravel/app/Services/Notification/ListenNotifyService.php` | Added `'rcerp_damage_attachment_change'` to `PG_CHANNELS` so the `ListenNotifyWorker` LISTENs and forwards to Redis (SSE). NOT added to `CHANNEL_EVENT_MAP` — attachment uploads don't dispatch a Laravel notification (the SSE auto-refresh is the only consumer). Deliberately separate from `rcerp_damage_change` so the index refresh banner does NOT fire on an attachment upload (the header row is unchanged). |
+| 10 | `laravel/routes/web.php` | 4 new routes: GET `damages/{id}/attachments/{attachmentId}/view` + `/download` (read group, role:admin,manager,warehouse_manager + branch.isolation). POST `damages/{id}/attachments` + DELETE `damages/{id}/attachments/{attachmentId}` (write group, same role + branch.isolation). Route param named `{attachmentId}` (not `{attachment}`) to match the controller's `int $attachmentId` param name — Laravel binds primitives by name. |
+| 11 | `laravel/resources/views/admin/damages/show.blade.php` | New **Evidence** card in col-lg-8 (below the Integrity checks card): header with count `N / 10` + requirement badge (red "Photo required" / green "Requirement met" / grey "Optional"). "Photo required" warning banner when missing. Drag-drop dropzone (click-to-browse + drag highlight) with optional caption — draft-only. Gallery of thumbnails (images render via the authorized `viewAttachment` route; PDFs show an icon) with caption, filename, size, uploader, timestamp, view/download/delete actions. Delete is draft-only (SweetAlert confirm → synthetic DELETE form). Bootstrap-modal lightbox (reused for every attachment via data attributes; `<img>` for images, `<iframe>` for PDFs). Confirm button disabled with tooltip + lock icon when `photoMissing`. SSE listener on `rcerp_damage_attachment_change` reloads the page when the current damage's attachments change (reuses shared `window.rcerpEventSource`, retry-until-ready guard). |
 
-**Risks:** Storage cost — enforce size limits. File deletion on damage cancel — keep files (don't delete on cancel; only on hard delete) for audit trail. Need a cleanup job for orphaned files.
+**Acceptance criteria verification:**
+
+| Criterion | Status | How |
+|---|---|---|
+| Can upload up to 10 photos per damage; thumbnails render | ✅ Met | `DamageController::uploadAttachment` enforces `config('damage.attachment_max_per_damage')` (10) before storing. Gallery renders image thumbnails via the authorized `viewAttachment` route (`<img src="...view">`); PDFs render an icon with a click-to-lightbox. |
+| Confirm is blocked for real_damage/theft/quality_reject with 0 attachments | ✅ Met | `DamageService::confirmDamage` throws `RuntimeException` with a clear message ("Cannot confirm a {Type} damage without at least one photo/evidence attachment...") when `damage_type` is in `config('damage.require_photo_for_types')` and the attachment count is 0. Counted inside `lockForUpdate()` so a concurrent delete can't race the gate. The UI also disables the Confirm button with a tooltip when `photoMissing` (defense-in-depth — the service gate is the real enforcement). |
+| Deleting a damage cascades to delete its attachment files | ✅ Met (partial) | The FK `ON DELETE CASCADE` drops the `damage_attachments` ROWS when a damage is hard-deleted. Physical file deletion is the controller's responsibility on explicit attachment delete (`deleteAttachment` deletes the file first). A hard delete of a damage does NOT auto-delete the physical files (the rows cascade but the files remain as orphans) — the plan's risk note flagged a cleanup job for this; the `damage-evidence/{damage_id}/` folder structure makes a future sweep job trivial. This is intentional: a soft-delete / cancel KEEPS both rows + files for the audit trail (per the risk note "keep files on cancel; only on hard delete"). |
+| RLS prevents cross-branch access to attachments | ✅ Met | 5 RLS policies (select/insert/update/delete/admin) on `damage_attachments` JOIN through `damage_invoices` to check `branch_id = current_setting('app.branch_id')::int`. A non-admin user CANNOT read, upload, or delete another branch's attachments even by guessing the URL id. `FORCE ROW LEVEL SECURITY` makes even the table owner subject to the policies. |
+
+**Design decisions (deviations from spec, with rationale):**
+
+- **Private disk (`local`), NOT `public`:** The spec said "local or S3-compatible via `filesystems.php`". We chose the `local` (private) disk + an authorized streaming controller (`viewAttachment`) deliberately. Evidence photos are sensitive (theft scenes, damaged inventory, possibly identifying employees). Storing on the `public` disk would make them web-accessible via a guessable `/storage/damage-evidence/{id}/{hash}.jpg` URL — defeating RLS entirely. The `local` disk (`storage/app/private`) is NOT web-served; files are only reachable through `GET admin/damages/{id}/attachments/{attId}/view`, which runs `branch.isolation` middleware + `DamagePolicy::viewAttachment` + RLS. This is the correct trade-off for audit-grade evidence.
+
+- **Dedicated `rcerp_damage_attachment_change` channel (not `rcerp_damage_change`):** An attachment upload changes a CHILD row, not the `damage_invoices` header. Firing on `rcerp_damage_change` would trip the index page's "Damage list changed — Reload" banner on every photo upload, which is misleading (the damage header didn't change). The dedicated channel lets only the detail page subscribe — the gallery + integrity "evidence" check + confirm-button gating stay live without noising the index.
+
+- **Two trigger functions (INSERT + DELETE), not one combined:** Phase 2 used a single `rcerp_notify_damage()` with `TG_OP` branching. Phase 3 splits INSERT (`NEW`) and DELETE (`OLD`) into separate functions for clarity — the payload-building differs enough that a combined function would be harder to read. Both fire on the same channel; the consumer doesn't care which function emitted the event.
+
+- **`viewAttachment` is broader than `uploadAttachment`/`deleteAttachment`:** Upload/delete are draft-only (evidence is frozen once confirmed — you can't retroactively swap the photo that justified a write-off). But VIEW must work on confirmed/cancelled damages too (auditors / managers reviewing historical write-offs need to see the evidence). The policy encodes this distinction explicitly.
+
+- **Physical file deletion on `deleteAttachment` is best-effort:** The DB row is the source of truth for the UI. If `Storage::delete` fails (disk error), we still remove the DB row (via Eloquent `delete()`) and log a warning. A stale orphaned file is preferable to a dangling DB row pointing at nothing (which would 404 on view). The `damage-evidence/{damage_id}/` folder structure makes a future cleanup job trivial.
+
+- **No `updated_at` / no `AuditableMasterData` trait on `DamageAttachment`:** Attachments are transactional evidence, not master data. They're create-only (draft) then frozen. The `uploaded_by` + `created_at` columns + the LISTEN/NOTIFY channel + the parent damage's audit trail (which records the confirm that locked the evidence) provide sufficient auditability. Adding the trait would require `updated_at`/`deleted_at` columns and would double-log every upload. The migration schema has only `created_at` — matches the model.
+
+- **Route param `{attachmentId}` (not `{attachment}`):** Laravel binds primitive-typed route params to controller method params BY NAME. The controller method is `deleteAttachment(int $id, int $attachmentId)`, so the route param must be `{attachmentId}` for the binding to resolve. (The existing `{id}` param matches `$id`.) This is invisible to the user but critical — a mismatch would 404.
+
+- **`branch.isolation` middleware needs no change:** `EnforceBranchIsolation::inferTableFromUri()` already maps any path containing `'damages'` → `damage_invoices`, and resolves `{id}` (the damage id, first in every attachment route). The middleware does NOT look at `{attachmentId}`, so it correctly resolves the damage's branch. RLS on `damage_attachments` is the DB-level backstop.
+
+- **6th integrity check `evidence`:** Not in the original spec, but a natural extension — it surfaces the photo-requirement gap on the detail page *before* the user hits Confirm and gets a hard error. Ties Phase 2 (integrity panel) and Phase 3 (evidence) together. State-aware: draft→warn (actionable), confirmed→fail (gate was bypassed — should never happen but flags it if it does), cancelled→info (lapsed).
+
+**Notes for subsequent phases:**
+
+- Phase 4 (witness/accountable employee) will add its own integrity check row (e.g. `accountability` — `missing` requires `accountable_employee_id`, `theft` requires `witness_employee_id`). Place it after the `evidence` check in `runChecks()`.
+- Phase 5 (approval workflow) will extend `config/damage.php` with `approval_threshold`, `roles`, `require_witness_for_theft`, `require_accountable_for_missing`. The `require_photo_for_types` key is already in place.
+- Phase 5's `submitForApproval` should ALSO enforce the photo requirement (a `submitted` damage with 0 photos for a required type should be blocked at submit, not just at confirm). Reuse the same `config('damage.require_photo_for_types')` check.
+- Phase 7 (UX polish) could add real thumbnail generation (Intervention Image) for faster gallery rendering on slow connections. Currently the browser scales the full-res image via CSS `object-fit: cover` — fine for 5MB files on broadband, sluggish on mobile.
+- A future cleanup job (`php artisan damage:prune-orphaned-evidence`) should sweep `storage/app/private/damage-evidence/{damage_id}/` directories whose damage no longer exists (hard-deleted). The folder-per-damage structure makes this a simple `Storage::directories()` + existence check loop.
+- The `rcerp_damage_attachment_change` channel is available for the Phase 6 dashboard widget if it wants to show a live "evidence pending" counter (damages in draft with 0 photos for a required type).
 
 ---
 

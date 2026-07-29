@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\DamageAttachment;
 use App\Models\DamageInvoice;
 use App\Models\DamageReason;
 use App\Models\Warehouse;
@@ -13,6 +14,7 @@ use App\Services\Stock\DamageService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 
 /**
@@ -154,6 +156,9 @@ class DamageController extends Controller
             'journalEntry.lines.ledger',
             // Phase 1 — eager-load the structured reason label for display.
             'reasonTaxonomy',
+            // Phase 3 — eager-load evidence attachments + uploader for the
+            // Evidence card. Avoids N+1 on the gallery render.
+            'attachments.uploadedBy',
         ])->findOrFail($id);
 
         // Phase 0 (Damage plan): defense-in-depth policy check (same-branch
@@ -253,6 +258,186 @@ class DamageController extends Controller
         return response()->json([
             'rate' => round($rate, 2),
             'available_qty' => round($qty, 4),
+        ]);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Phase 3 — Photo / Evidence Attachments
+    |--------------------------------------------------------------------------
+    */
+
+    /**
+     * Upload an evidence attachment to a draft damage.
+     *
+     * Stores the file on the configured `local` (private) disk — NOT the
+     * public disk — because evidence is sensitive (theft scenes, damaged
+     * inventory, possibly identifying employees). Files are served only via
+     * the authorized viewAttachment() route, so RLS actually means something.
+     */
+    public function uploadAttachment(Request $request, int $id)
+    {
+        $damage = DamageInvoice::findOrFail($id);
+        $this->authorize('uploadAttachment', $damage);
+
+        $maxKb    = (int) config('damage.attachment_max_size_kb', DamageAttachment::MAX_FILE_SIZE_KB);
+        $maxCount = (int) config('damage.attachment_max_per_damage', DamageAttachment::MAX_PER_DAMAGE);
+        $diskName = (string) config('damage.attachment_disk', 'local');
+        $folder   = (string) config('damage.attachment_folder', 'damage-evidence');
+
+        $request->validate([
+            'file'    => ['required', 'file', 'max:' . $maxKb, 'mimes:jpg,jpeg,png,webp,pdf'],
+            'caption' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $file = $request->file('file');
+        if (!$file->isValid()) {
+            return back()->with('error', 'Uploaded file is not valid.');
+        }
+
+        // Enforce the per-damage count limit BEFORE storing (avoids orphaned
+        // files when the limit is hit). RLS + the draft-only policy gate
+        // already prevent cross-branch / post-confirm uploads.
+        $currentCount = $damage->attachments()->count();
+        if ($currentCount >= $maxCount) {
+            return back()->with('error', "Attachment limit reached ({$maxCount} per damage). Remove one before adding another.");
+        }
+
+        $mime     = $file->getMimeType() ?: 'application/octet-stream';
+        $origName = $file->getClientOriginalName() ?: 'evidence';
+        $size     = (int) $file->getSize();
+
+        // Store under damage-evidence/{damage_id}/ so a future cleanup job
+        // (orphaned-file sweep) can prune by directory. Random filename to
+        // avoid collisions + path-traversal via user-supplied names.
+        $storedPath = $file->storeAs(
+            $folder . '/' . $id,
+            bin2hex(random_bytes(16)) . '.' . ($file->getClientOriginalExtension() ?: 'bin'),
+            $diskName
+        );
+
+        if ($storedPath === false) {
+            return back()->with('error', 'Could not store the uploaded file. Check disk permissions.');
+        }
+
+        DamageAttachment::create([
+            'damage_invoice_id' => $damage->id,
+            'file_path'         => $storedPath,
+            'file_name'         => $origName,
+            'mime_type'         => $mime,
+            'file_size'         => $size,
+            'caption'           => trim((string) $request->input('caption')) ?: null,
+            'uploaded_by'       => auth()->id(),
+            'created_at'        => now(),
+        ]);
+
+        return redirect()->route('admin.damages.show', $damage)
+            ->with('success', 'Evidence uploaded.');
+    }
+
+    /**
+     * Delete an evidence attachment (draft only — policy enforces).
+     *
+     * Removes the physical file FIRST, then the DB row. If the file delete
+     * fails (disk error), the DB row is still removed — the row is the
+     * source of truth for the UI, and a stale orphaned file is preferable
+     * to a dangling DB row pointing at nothing (which would 404 on view).
+     * A scheduled cleanup job can sweep orphans later.
+     */
+    public function deleteAttachment(int $id, int $attachmentId)
+    {
+        $damage = DamageInvoice::findOrFail($id);
+        $this->authorize('deleteAttachment', $damage);
+
+        /** @var DamageAttachment|null $attachment */
+        $attachment = $damage->attachments()->where('id', $attachmentId)->first();
+        if (!$attachment) {
+            return back()->with('error', 'Attachment not found on this damage.');
+        }
+
+        $diskName = (string) config('damage.attachment_disk', 'local');
+        try {
+            if (Storage::disk($diskName)->exists($attachment->file_path)) {
+                Storage::disk($diskName)->delete($attachment->file_path);
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Damage attachment file delete failed (DB row will still be removed)', [
+                'attachment_id' => $attachment->id,
+                'file_path'     => $attachment->file_path,
+                'error'         => $e->getMessage(),
+            ]);
+        }
+
+        $attachment->delete();
+
+        return redirect()->route('admin.damages.show', $damage)
+            ->with('success', 'Evidence removed.');
+    }
+
+    /**
+     * Stream an evidence attachment inline (for the gallery / lightbox <img>).
+     *
+     * Authorization: DamagePolicy::viewAttachment (role + same-branch) +
+     * branch.isolation middleware + RLS on damage_attachments. The file is
+     * read from the `local` (private) disk and streamed with the correct
+     * Content-Type so the browser renders it inline.
+     */
+    public function viewAttachment(int $id, int $attachmentId)
+    {
+        $damage = DamageInvoice::findOrFail($id);
+        $this->authorize('viewAttachment', $damage);
+
+        /** @var DamageAttachment|null $attachment */
+        $attachment = $damage->attachments()->where('id', $attachmentId)->first();
+        if (!$attachment) {
+            abort(404, 'Attachment not found.');
+        }
+
+        return $this->streamAttachment($attachment, inline: true);
+    }
+
+    /**
+     * Force-download an evidence attachment (Content-Disposition: attachment).
+     */
+    public function downloadAttachment(int $id, int $attachmentId)
+    {
+        $damage = DamageInvoice::findOrFail($id);
+        $this->authorize('viewAttachment', $damage);
+
+        /** @var DamageAttachment|null $attachment */
+        $attachment = $damage->attachments()->where('id', $attachmentId)->first();
+        if (!$attachment) {
+            abort(404, 'Attachment not found.');
+        }
+
+        return $this->streamAttachment($attachment, inline: false);
+    }
+
+    /**
+     * Stream a damage attachment file from the private disk with the right
+     * headers. Centralizes the disk read so view + download share the same
+     * authorization + 404 handling.
+     */
+    private function streamAttachment(DamageAttachment $attachment, bool $inline)
+    {
+        $diskName = (string) config('damage.attachment_disk', 'local');
+        $disk     = Storage::disk($diskName);
+
+        if (!$disk->exists($attachment->file_path)) {
+            abort(404, 'Evidence file is missing from storage.');
+        }
+
+        $disposition = $inline ? 'inline' : 'attachment';
+        // Sanitize filename for the Content-Disposition header (RFC 5987
+        // fallback for non-ASCII names — avoids header injection).
+        $safeName = str_replace(['"', "\r", "\n"], '', $attachment->file_name);
+
+        return response($disk->get($attachment->file_path), 200, [
+            'Content-Type'        => $attachment->mime_type,
+            'Content-Length'      => (string) $attachment->file_size,
+            'Content-Disposition' => $disposition . '; filename="' . $safeName . '"',
+            'Cache-Control'       => 'private, no-store, max-age=0',
+            'X-Content-Type-Options' => 'nosniff',
         ]);
     }
 }

@@ -213,6 +213,34 @@ class DamageService
                 throw new \RuntimeException("Only draft damages can be confirmed (current: {$damage->status}).");
             }
 
+            // Phase 3 — evidence requirement. For damage types that represent
+            // a real, photographable loss (real_damage / theft /
+            // quality_reject), at least one attachment MUST exist before the
+            // write-off is posted. This is the core accountability control:
+            // without it, an employee can declare stock as "damaged" and walk
+            // out with it, no proof required. `missing` is exempt (nothing to
+            // photograph — Phase 4 requires an accountable employee instead).
+            // `customer_return` is exempt (the return itself is the evidence;
+            // the linked-damage auto-flow would otherwise be blocked).
+            //
+            // The list is config-driven (config/damage.php) so a stricter
+            // install can add `missing` / `other` without code changes.
+            $requirePhoto = config('damage.require_photo_for_types', []);
+            if (is_array($requirePhoto) && in_array($damage->damage_type, $requirePhoto, true)) {
+                // Count inside the locked transaction so a concurrent delete
+                // can't race the gate. Indexed on damage_invoice_id.
+                $count = DB::table('damage_attachments')
+                    ->where('damage_invoice_id', $damage->id)
+                    ->count();
+                if ($count < 1) {
+                    $typeLabel = DamageInvoice::DAMAGE_TYPE_LABELS[$damage->damage_type] ?? $damage->damage_type;
+                    throw new \RuntimeException(
+                        "Cannot confirm a {$typeLabel} damage without at least one photo/evidence attachment. "
+                        . "Upload evidence on the detail page and retry."
+                    );
+                }
+            }
+
             $warehouseId = $damage->warehouse_id;
             $damageDate = $damage->damage_date->format('Y-m-d');
 
