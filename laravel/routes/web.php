@@ -25,6 +25,7 @@ use App\Http\Controllers\Admin\StockAdjustmentController;
 use App\Http\Controllers\Admin\StockTakeController;
 use App\Http\Controllers\Admin\WarehouseTransferController;
 use App\Http\Controllers\Admin\BranchDemandController;
+use App\Http\Controllers\Admin\BranchDemandShadowController;
 use App\Http\Controllers\Admin\BranchDemandReportController;
 use App\Http\Controllers\Admin\DamageController;
 use App\Http\Controllers\Admin\PurchaseOrderController;
@@ -700,6 +701,19 @@ Route::middleware('auth')->group(function () {
         Route::post('run-comparison', [ShadowModeController::class, 'runComparison'])->name('run-comparison');
         Route::post('purge', [ShadowModeController::class, 'purge'])->name('purge');
         Route::post('toggle-mode', [ShadowModeController::class, 'toggleMode'])->name('toggle-mode');
+    });
+
+    // ============================================================
+    // Phase 10: Branch Demand Shadow Mode Dashboard
+    // Admin-only: compare Laravel vs legacy demand data, track cutover readiness
+    // ============================================================
+    Route::prefix('admin/branch-demand-shadow')->name('admin.branch-demand-shadow.')->group(function () {
+        Route::get('/', [BranchDemandShadowController::class, 'index'])->name('index');
+        Route::get('comparisons', [BranchDemandShadowController::class, 'comparisons'])->name('comparisons');
+        Route::get('comparisons/{id}', [BranchDemandShadowController::class, 'comparisonDetail'])->name('detail');
+        Route::get('cutover', [BranchDemandShadowController::class, 'cutover'])->name('cutover');
+        Route::post('run-comparison', [BranchDemandShadowController::class, 'runComparison'])->name('run-comparison');
+        Route::post('purge', [BranchDemandShadowController::class, 'purge'])->name('purge');
     });
 
     // ============================================================

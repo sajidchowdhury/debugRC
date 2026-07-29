@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\V1\Sales\CommissionApiController;
 use App\Http\Controllers\Api\V1\StockAdjustment\StockAdjustmentApiController;
 use App\Http\Controllers\Api\V1\StockTake\StockTakeItemApiController;
 use App\Http\Controllers\Api\V1\StockTake\StockTakeSessionApiController;
+use App\Http\Controllers\Api\V1\BranchDemand\BranchDemandApiController;
 use App\Http\Controllers\Api\V1\WarehouseTransfer\WarehouseTransferApiController;
 use Illuminate\Support\Facades\Route;
 
@@ -464,5 +465,90 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
         Route::get('sessions/{id}/variance', [StockTakeItemApiController::class, 'variance'])
             ->where('id', '[0-9]+')
             ->middleware('api.rate:60');
+    });
+
+    // ======================================================================
+    // Branch Demand Phase 10 — Branch Demand API (mobile / AI sidecar)
+    // ======================================================================
+    // All branch-demand routes sit behind api.auth + set.api.branch
+    // (sets app.branch_id + app.is_admin GUC so RLS on branch_demands
+    // filters by the authenticated user's branch — non-admins see only
+    // demands involving their own branch; admins see all).
+    //
+    // Reuses the SAME BranchDemandService + BranchIntercompanyService +
+    // BranchDemandRepricingService + BranchDemandAuditService as the web
+    // controller — every Phase 1-8 protection is in force:
+    //   - Phase 1: cross-branch demand creation
+    //   - Phase 2: send with warehouse selection
+    //   - Phase 3: GL posting (dual creditor + debtor journals)
+    //   - Phase 4: FIFO settlement (bank payments + money transfers)
+    //   - Phase 5: receipt confirmation before reversal
+    //   - Phase 6: weekly audit report
+    //   - Phase 7: price range + repricing
+    //   - Phase 8: anti-gaming + audit trail
+    //
+    // Rate limits (mirrors Warehouse Transfer + Stock Adjustment):
+    //   - Reads (list/show/audit/outstanding/ledger/stock): 60 req/min
+    //   - Writes (store/send/confirm/reverse/reject/delete/reprice): 30 req/min
+    //
+    // Role enforcement:
+    //   - Read: any authenticated user
+    //   - Create + store: admin, manager, warehouse_manager
+    //   - Send + confirm-receipt: admin, manager, warehouse_manager
+    //   - Reverse + reject: admin, manager (destructive — reverses stock + GL)
+    //   - Reprice: admin, manager (posts GL adjustment)
+    //   - Delete: admin, manager
+    // ======================================================================
+    Route::prefix('branch-demands')->middleware('set.api.branch')->group(function (): void {
+
+        // ---------- Reads (60 req/min) ----------
+        Route::get('/', [BranchDemandApiController::class, 'index'])
+            ->middleware('api.rate:60');
+        Route::get('/{id}', [BranchDemandApiController::class, 'show'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.rate:60');
+        Route::get('/outstanding', [BranchDemandApiController::class, 'outstanding'])
+            ->middleware('api.rate:60');
+        Route::get('/ledger-history', [BranchDemandApiController::class, 'ledgerHistory'])
+            ->middleware('api.rate:60');
+        Route::get('/settlement-preview', [BranchDemandApiController::class, 'settlementPreview'])
+            ->middleware('api.rate:60');
+        Route::get('/{id}/audit', [BranchDemandApiController::class, 'audit'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.rate:60');
+        Route::get('/warehouses/{branchId}', [BranchDemandApiController::class, 'warehouses'])
+            ->where('branchId', '[0-9]+')
+            ->middleware('api.rate:60');
+        Route::get('/product-stock/{productId}/{branchId}', [BranchDemandApiController::class, 'productStock'])
+            ->where('productId', '[0-9]+')->where('branchId', '[0-9]+')
+            ->middleware('api.rate:60');
+
+        // ---------- Writes — create + send + confirm (30 req/min) ----------
+        Route::post('/', [BranchDemandApiController::class, 'store'])
+            ->middleware('api.auth:admin,manager,warehouse_manager', 'api.rate:30');
+        Route::post('/{id}/send', [BranchDemandApiController::class, 'send'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager,warehouse_manager', 'api.rate:30');
+        Route::post('/{id}/confirm-receipt', [BranchDemandApiController::class, 'confirmReceipt'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager,warehouse_manager', 'api.rate:30');
+
+        // ---------- Writes — reverse + reject (30 req/min, admin/manager) ----------
+        Route::post('/{id}/reverse', [BranchDemandApiController::class, 'reverse'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager', 'api.rate:30');
+        Route::post('/{id}/reject', [BranchDemandApiController::class, 'reject'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager,warehouse_manager', 'api.rate:30');
+
+        // ---------- Writes — delete (30 req/min, admin/manager) ----------
+        Route::delete('/{id}', [BranchDemandApiController::class, 'destroy'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager', 'api.rate:30');
+
+        // ---------- Writes — reprice (30 req/min, admin/manager) ----------
+        Route::post('/{id}/reprice', [BranchDemandApiController::class, 'reprice'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager', 'api.rate:30');
     });
 });
