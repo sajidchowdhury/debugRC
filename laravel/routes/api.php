@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\V1\Sales\SalesChallanApiController;
 use App\Http\Controllers\Api\V1\Sales\SalesReturnApiController;
 use App\Http\Controllers\Api\V1\Sales\CustomerPaymentApiController;
 use App\Http\Controllers\Api\V1\Sales\CommissionApiController;
+use App\Http\Controllers\Api\V1\StockAdjustment\StockAdjustmentApiController;
 use App\Http\Controllers\Api\V1\StockTake\StockTakeItemApiController;
 use App\Http\Controllers\Api\V1\StockTake\StockTakeSessionApiController;
 use App\Http\Controllers\Api\V1\WarehouseTransfer\WarehouseTransferApiController;
@@ -77,6 +78,16 @@ use Illuminate\Support\Facades\Route;
  *   POST   /api/v1/warehouse-transfers/{id}/confirm      confirm (manager/admin)
  *   POST   /api/v1/warehouse-transfers/{id}/cancel        cancel/reverse (manager/admin)
  *   GET    /api/v1/warehouse-transfers/product-stock      pipeline-aware availability
+ *
+ * Stock Adjustment Phase 9 — stock-adjustment API (mobile / AI sidecar):
+ *   GET    /api/v1/stock-adjustments                     list (paginated + filtered)
+ *   POST   /api/v1/stock-adjustments                     create draft
+ *   GET    /api/v1/stock-adjustments/{id}                show detail (items + movements + GL + audit)
+ *   POST   /api/v1/stock-adjustments/{id}/submit         submit draft for approval
+ *   POST   /api/v1/stock-adjustments/{id}/approve        approve (admin/manager)
+ *   POST   /api/v1/stock-adjustments/{id}/reject         reject → draft (admin/manager)
+ *   POST   /api/v1/stock-adjustments/{id}/confirm        confirm = apply stock + GL
+ *   POST   /api/v1/stock-adjustments/{id}/cancel         cancel = reverse stock + GL if confirmed
  */
 
 // Phase 18: Public API docs page (NOT behind api.auth or api.rate).
@@ -311,6 +322,81 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
         Route::post('/{id}/cancel', [WarehouseTransferApiController::class, 'cancel'])
             ->where('id', '[0-9]+')
             ->middleware('api.auth:manager,admin', 'api.rate:30');
+    });
+
+    // ======================================================================
+    // Stock Adjustment Phase 9 — Stock Adjustment API (mobile / AI sidecar)
+    // ======================================================================
+    // All stock-adjustment routes sit behind api.auth + set.api.branch
+    // (sets app.branch_id + app.is_admin GUC so RLS on stock_adjustments
+    // filters by the authenticated user's branch — non-admins see only
+    // their own branch; admins see all).
+    //
+    // Reuses the SAME StockAdjustmentService + StockAdjustmentPolicyService
+    // as the web controller — every Phase 1-7 protection is in force:
+    //   - Phase 1: role gating (route-level + Policy::canSubmit/Approve/Confirm)
+    //   - Phase 2: adjustment_category routing (opening_balance → 'opening_balance'
+    //     reference_type in the ledger; everything else → 'stock_adjustment')
+    //   - Phase 3: maker-checker (approver ≠ submitter; auto-approve below threshold)
+    //   - Phase 4: audit-log row written for every lifecycle transition
+    //   - Phase 5: UOM conversion (per-item uom_id → qty_base + uom_factor)
+    //   - Phase 6.1: pipeline-aware availability on decrease (admin can force)
+    //   - Phase 6.2: reversal safety (cancel reverses by exact stock_transaction_id)
+    //
+    // Rate limits (mirrors Warehouse Transfer):
+    //   - Reads (index/show): 60 req/min
+    //   - Writes (store/submit/approve/reject/confirm/cancel): 30 req/min
+    //
+    // Role enforcement:
+    //   - Read + store + submit: admin, manager, accountant (route group gate)
+    //   - Approve + reject: admin, manager (maker-checker approvers)
+    //   - Confirm + cancel: admin, accountant (the poster / reverser)
+    //   - Force-confirm: admin only (Policy::canForceConfirm — service re-checks)
+    // ======================================================================
+    Route::prefix('stock-adjustments')->middleware('set.api.branch')->group(function (): void {
+
+        // ---------- Reads (60 req/min) ----------
+        Route::get('/', [StockAdjustmentApiController::class, 'index'])
+            ->middleware('api.rate:60');
+        Route::get('/{id}', [StockAdjustmentApiController::class, 'show'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.rate:60');
+
+        // ---------- Writes — draft + submit (30 req/min) ----------
+        // Any authenticated admin/manager/accountant can create a draft or
+        // submit one for approval. Route-level role gate mirrors the web
+        // routes (role:admin,accountant); the controller re-checks via
+        // Policy::canSubmit for defense-in-depth.
+        Route::post('/', [StockAdjustmentApiController::class, 'store'])
+            ->middleware('api.auth:admin,manager,accountant', 'api.rate:30');
+        Route::post('/{id}/submit', [StockAdjustmentApiController::class, 'submit'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager,accountant', 'api.rate:30');
+
+        // ---------- Writes — approve / reject (30 req/min, admin/manager) ----------
+        // Phase 3 maker-checker: the approver cannot be the submitter
+        // (enforced in the controller via Policy::isSubmitter + re-checked
+        // by the service).
+        Route::post('/{id}/approve', [StockAdjustmentApiController::class, 'approve'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager', 'api.rate:30');
+        Route::post('/{id}/reject', [StockAdjustmentApiController::class, 'reject'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,manager', 'api.rate:30');
+
+        // ---------- Writes — confirm / cancel (30 req/min) ----------
+        // Confirm applies stock + posts GL; cancel reverses them. Both are
+        // gated to admin/accountant at the route level (mirrors the web
+        // role:admin,accountant gate); the controller re-checks via
+        // Policy::canConfirm. Force-confirm (Phase 6.1, admin-only) is
+        // gated inside the controller via Policy::canForceConfirm +
+        // re-checked by the service.
+        Route::post('/{id}/confirm', [StockAdjustmentApiController::class, 'confirm'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,accountant', 'api.rate:30');
+        Route::post('/{id}/cancel', [StockAdjustmentApiController::class, 'cancel'])
+            ->where('id', '[0-9]+')
+            ->middleware('api.auth:admin,accountant', 'api.rate:30');
     });
 
     Route::prefix('stock-take')->middleware('set.api.branch')->group(function (): void {

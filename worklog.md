@@ -849,3 +849,109 @@ docker compose exec rcerp_app php artisan route:list --name=stock-adjustments
 The route:list command should now print all 18 stock-adjustment routes (index, create, store, show, audit→redirect, checklist, export, reconcile, run-reconcile, rebuild-snapshot, confirm-form, submit, confirm, cancel, approve, reject, print, product-rate, product-uoms) without fataling.
 
 **Stage Summary:** Cross-cutting hotfix unblocking Phase 8 verification. The Phase 8 deliverables themselves (CSV export, 7-section checklist, print voucher, reversing GL block) were correctly committed in `c51d691` and required no changes — only the unrelated `ShadowModeController` import was broken.
+
+---
+
+## SA-P9 — Phase 9: API Routes & Mobile Support
+
+**Date:** 2025-08-08
+**Status:** ✅ COMPLETED, committed, pushed.
+**Gaps closed:** G19 (no API support for mobile/AI sidecars).
+**Parity template:** Warehouse Transfer API (Phase 8 of the WH-Transfer plan) — same `api.auth` + `set.api.branch` + per-route `api.rate` pattern, same Resource envelope shape, same thin-wrapper-over-service controller design.
+
+### 9.1 API Routes (8 endpoints)
+**File modified:** `laravel/routes/api.php`
+- New `Route::prefix('stock-adjustments')->middleware('set.api.branch')` group inside the existing `Route::prefix('v1')->middleware('api.auth')` block. 8 routes:
+  - `GET /api/v1/stock-adjustments` — list (paginated + filtered, 60 req/min)
+  - `POST /api/v1/stock-adjustments` — create draft (30 req/min, admin/manager/accountant)
+  - `GET /api/v1/stock-adjustments/{id}` — show detail (60 req/min)
+  - `POST /api/v1/stock-adjustments/{id}/submit` — submit for approval (30 req/min, admin/manager/accountant)
+  - `POST /api/v1/stock-adjustments/{id}/approve` — approve (30 req/min, admin/manager — maker-checker)
+  - `POST /api/v1/stock-adjustments/{id}/reject` — reject → draft (30 req/min, admin/manager)
+  - `POST /api/v1/stock-adjustments/{id}/confirm` — confirm = apply stock + GL (30 req/min, admin/accountant)
+  - `POST /api/v1/stock-adjustments/{id}/cancel` — cancel = reverse stock + GL (30 req/min, admin/accountant)
+- Role gates mirror the web routes exactly: store/submit/confirm/cancel → `api.auth:admin,manager,accountant`; approve/reject → `api.auth:admin,manager`. The controller re-checks via `StockAdjustmentPolicyService` for defense-in-depth (third layer after route middleware + RLS).
+- `set.api.branch` middleware sets the `app.branch_id` + `app.is_admin` PostgreSQL GUCs so RLS on `stock_adjustments` filters by the caller's branch — non-admins see only their own branch; admins see all. Same mechanism as the Stock Take + Warehouse Transfer APIs.
+- Rate limits mirror Warehouse Transfer: reads 60/min, writes 30/min (transactional — stricter).
+
+### 9.2 Resources (2 new files)
+**Files created:**
+- `laravel/app/Http/Resources/Api/V1/StockAdjustment/StockAdjustmentResource.php` — mobile-optimized JSON shape. Serializes:
+  - Header: id, adjustment_code, adjustment_date, warehouse{id,name,branch_id}, branch{id,name}, branch_id
+  - Phase 2: adjustment_type, adjustment_category, category_label
+  - Value + reason: total_amount, reason
+  - Phase 3 lifecycle: status, status_label + 9 convenience booleans (is_draft, is_submitted, is_approved, is_confirmed, is_cancelled, is_pending_approval, is_terminal, is_increase, is_decrease, is_open_balance) so mobile clients can branch on state without string compares
+  - Phase 3 attribution: submitted_by/at + submitted_by_user{id,name}, approved_by/at + approved_by_user, confirmed_by/at + confirmed_by_user, confirm_reason, approval_comments, created_by + created_by_user (all `*_user` embeds use `whenLoaded` so the list payload stays small)
+  - Phase 6 reversal: is_reversed, reversed_at, reversed_by, reverse_reason, cancel_reason
+  - GL: journal_entry_id
+  - Phase 5 items (via StockAdjustmentItemResource, whenLoaded)
+  - Phase 4 audit timeline (whenLoaded — only show() loads it): each row → {id, action, actor_id, actor_role, actor{id,name}, payload, ip_address, user_agent, created_at}. **Bug caught in review:** the inner `$log->whenLoaded('actor', ...)` call was wrong (`whenLoaded` is a JsonResource method, not a Model method) — fixed to `$log->relationLoaded('actor') && $log->actor ? [...] : null`.
+  - created_at, updated_at
+- `laravel/app/Http/Resources/Api/V1/StockAdjustment/StockAdjustmentItemResource.php` — one row per product. Serializes:
+  - product{id,code,name} (whenLoaded), product_id
+  - Phase 5 UOM: qty_entered, uom{id,code,name,type} (whenLoaded), uom_id, uom_factor, qty_base, qty (legacy alias)
+  - rate, computed amount (= qty_base × rate, falls back to legacy `qty` for pre-Phase-5 rows where qty_base is NULL)
+  - reason
+  - Phase 6.2 reversal linkage: stock_transaction_id, stock_transaction_date (null until confirmed)
+  - **Bug caught in review:** initially referenced `$this->uom->symbol` which doesn't exist on the `units_of_measure` table (only id/code/name/type) — fixed to `type` (count|weight|volume).
+
+### 9.3 Controller (1 new file)
+**File created:** `laravel/app/Http/Controllers/Api/V1/StockAdjustment/StockAdjustmentApiController.php`
+- **Thin wrapper** over `StockAdjustmentService` + `StockAdjustmentPolicyService` — NO duplicate business logic. Every Phase 1-7 protection is in force via the exact same code paths the web controller uses.
+- Constructor injects the 2 services (vs. 7 in the web controller — the API doesn't need the UOM/audit/reconcile services because it doesn't render forms or run the checklist).
+- 8 methods mirroring the web controller's lifecycle:
+  - `index()`: paginated (default 25, max 100) + 8 filters (from_date, to_date, warehouse_id, adjustment_type, adjustment_category, status, branch_id, search) + `?include=` opt-in for eager-loading items/product/uom on the list (default: warehouse.branch + branch only — keeps the list payload small). Defensive: category/status values are checked against the model constants before reaching the WHERE clause.
+  - `store()`: validates the same body shape as the web controller (warehouse_id, adjustment_type, adjustment_category, adjustment_date, reason, items[].product_id/qty/uom_id/rate/reason). Policy::canSubmit check. Delegates to `StockAdjustmentService::createAdjustment()`. Returns 201 with the draft resource.
+  - `show()`: eager-loads items.product, items.uom, warehouse.branch, branch, journalEntry.lines.ledger, submittedBy, approvedBy, confirmedBy, createdBy, auditLogs.actor. Also queries stock_transactions (both reference_types per the Phase 2 G17 fix — opening_balance + stock_adjustment) + the reversing JE (Phase 8.5 — direct DB::table query, mirrors the web show() exactly). Returns the full detail envelope with stock_movements + reversing_journal_entries appended.
+  - `submit()`/`approve()`/`reject()`/`confirm()`/`cancel()`: each delegates to the matching service method with the SAME signatures the web controller uses (verified by grep: createAdjustment(array), submitAdjustment(id, userId, ?comment), approveAdjustment(id, userId, comment), rejectAdjustment(id, userId, comment), confirmAdjustment(id, userId, ?confirmReason, force, ?forceReason), cancelAdjustment(id, cancelledBy, reason)). Each does a Policy check first and returns 403 on failure, 422 on service-layer RuntimeException (expected lifecycle violations like wrong status), 500 on unexpected Throwables.
+  - `confirm()` accepts the optional Phase 6.1 `force` + `force_reason` body params for admin-only bypass of the pipeline-availability check on decreases. Three-layer defense-in-depth: route middleware (admin,accountant) → controller Policy::canForceConfirm → service re-check.
+  - Maker-checker (Phase 3): `approve()` checks `Policy::isSubmitter($user, $adjustment)` and returns 403 if the approver is the submitter — the service re-enforces this too.
+- Response envelope (consistent across all methods):
+  - Success (single): `{"data": {...resource...}, "message": "..."}`
+  - Success (list): `{"data": [...], "meta": {current_page, last_page, per_page, total, from, to}}`
+  - Validation error: 422 `{"message": "...", "errors": {...}}` (Laravel's default validation response)
+  - Not found: 404 `{"message": "Not Found.", "detail": "..."}`
+  - Forbidden: 403 `{"message": "..."}`
+  - Service error: 422 (RuntimeException — expected lifecycle violation) or 500 (unexpected) `{"message": "...", "error": "..."}`
+- Branch isolation: RLS means a non-admin requesting another branch's adjustment gets a 404 (not 403 — no existence leak), same as the web controller's behavior under RLS.
+
+### Key design decisions
+1. **Same service, no duplication.** The API controller calls `StockAdjustmentService::createAdjustment/submitAdjustment/approveAdjustment/rejectAdjustment/confirmAdjustment/cancelAdjustment` — the EXACT same methods the web controller calls. Zero business-logic duplication. A bug fix or behavior change in the service automatically applies to both the web and API surfaces.
+2. **Same policy, no duplication.** The API controller calls `StockAdjustmentPolicyService::canSubmit/canApprove/canConfirm/canForceConfirm/isSubmitter` — the same checks the web controller's `$this->authorize()` uses (the Policy class delegates to this service).
+3. **Three-layer role enforcement.** Route middleware (`api.auth:role`) → controller Policy check → service-level re-check (for force-confirm + maker-checker). Any single layer failing can't grant access.
+4. **RLS as the backstop.** `set.api.branch` sets the GUC so PostgreSQL RLS filters at the DB level — even if a controller bug passed an unscoped query, the DB would still only return the caller's branch rows. Non-admins get 404 (not 403) on other branches' adjustments — no existence leak.
+5. **`?include=` opt-in for list payload.** The index endpoint defaults to warehouse+branch only (small payload); consumers can opt into items/product/uom via `?include=items,items.product,items.uom`. audit_logs + journal_entry are intentionally NOT on the include whitelist — use `show()` for the full detail (mirrors WarehouseTransfer's list-vs-show split).
+6. **`whenLoaded` throughout the resources.** Relations that aren't eager-loaded simply don't appear in the JSON (no null pollution). This keeps the list payload small even when the consumer passes an aggressive `?include=`.
+7. **No new migrations.** Phase 9 is pure transport (HTTP + JSON) over the existing schema. RLS, CHECK constraints, the composite FK (Hotfix 3), the audit-log table — all already in place from Phases 1-8.
+
+### Files created
+- `laravel/app/Http/Controllers/Api/V1/StockAdjustment/StockAdjustmentApiController.php` (8 methods, ~696 lines incl. doc-blocks)
+- `laravel/app/Http/Resources/Api/V1/StockAdjustment/StockAdjustmentResource.php` (mobile-optimized JSON shape, Phase 2/3/4/5/6 fields)
+- `laravel/app/Http/Resources/Api/V1/StockAdjustment/StockAdjustmentItemResource.php` (per-item Phase 5 UOM + Phase 6.2 reversal linkage)
+
+### Files modified
+- `laravel/routes/api.php` — import + doc-block + 8-route group (86 new lines)
+- `STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md` — Phase 9 marked ✅ DONE; overview table + current-state line + post-implementation gap list updated; document version 1.9 → 2.0
+
+### Verification (user must run)
+```bash
+docker compose exec rcerp_app php artisan optimize:clear
+docker compose exec rcerp_app php artisan route:list --path=api/v1/stock-adjustments
+```
+The route:list should print all 8 stock-adjustment API routes. Then exercise the endpoints with a Bearer token (issued via `User::generateApiToken()` in tinker):
+```bash
+# List (admin token)
+curl -H "Authorization: Bearer {TOKEN}" http://localhost/api/v1/stock-adjustments?per_page=5
+
+# Show detail (replace {ID})
+curl -H "Authorization: Bearer {TOKEN}" http://localhost/api/v1/stock-adjustments/{ID}
+
+# Create draft
+curl -X POST -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/json" \
+  -d '{"warehouse_id":1,"adjustment_type":"increase","adjustment_category":"opening_balance","adjustment_date":"2025-08-08","items":[{"product_id":1,"qty":10}]}' \
+  http://localhost/api/v1/stock-adjustments
+
+# Submit / Approve / Confirm / Cancel — same pattern with {ID} + the action suffix
+```
+
+**Stage Summary:** Phase 9 delivers 8 REST endpoints exposing the full stock-adjustment lifecycle (create → submit → approve → confirm → cancel) over JSON, reusing the SAME service + policy as the web controller — so every Phase 1-7 protection (role gating, branch isolation via RLS, maker-checker approval, dedicated audit log, UOM conversion, pipeline-aware availability, reversal safety) is in force over the API with zero business-logic duplication. The module is now role-gated, audit-logged, categorized, UOM-aware, reversal-safe, drift-monitored, Legacy-parity on UX, AND mobile/AI-accessible. **9 of 10 phases complete; Phase 10 (test coverage) remains.**

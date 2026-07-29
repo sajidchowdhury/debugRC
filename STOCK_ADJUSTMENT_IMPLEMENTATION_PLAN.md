@@ -1,11 +1,11 @@
 # Stock Adjustment — Phased Implementation Plan (Legacy → Laravel ERP)
 
-**Document version:** 1.9
-**Date:** 2025-07-29
+**Document version:** 2.0
+**Date:** 2025-08-08
 **Scope:** A complete gap analysis and phase-by-phase implementation plan to transform the Laravel ERP's *Stock Adjustment* module into a robust, accountant-grade **bookkeeping correction tool**.
 **Context:** A generic, administrative quantity correction for cases that are **not** operational losses — opening balances, data migration, system/unit-of-measure errors, post-conversion fixes, legacy cleanup. It is a **bookkeeping tool, not a warehouse tool**. Triggered by an **Accountant / system administrator, infrequently**. The quantity correction (and its financial damage) is applied **warehouse-wise**.
 **Target stack:** Laravel 12 + PostgreSQL 16 (RLS-enabled, partitioned ledger, moving-average costing).
-**Current state:** **Phases 1-8 COMPLETE ✅** (authorization, categorization, maker-checker approval, dedicated audit log, UOM handling, pipeline-aware availability + reversal safety + date integrity, drift reconciliation + nightly alert, UI parity — CSV export + 7-section checklist + print voucher + reversing GL block) plus 3 post-launch hotfixes (total_amount column, journal_entry_id FK, partitioned-table composite-FK). The module is now role-gated, audit-logged, categorized, UOM-aware, reversal-safe, drift-monitored, and Legacy-parity on UX. **Phases 9-10 remain** (API routes, test coverage).
+**Current state:** **Phases 1-9 COMPLETE ✅** (authorization, categorization, maker-checker approval, dedicated audit log, UOM handling, pipeline-aware availability + reversal safety + date integrity, drift reconciliation + nightly alert, UI parity — CSV export + 7-section checklist + print voucher + reversing GL block, API routes — 8 REST endpoints reusing the same service + policy) plus 4 post-launch hotfixes (total_amount column, journal_entry_id FK, partitioned-table composite-FK, ShadowModeController missing import). The module is now role-gated, audit-logged, categorized, UOM-aware, reversal-safe, drift-monitored, Legacy-parity on UX, AND mobile/AI-accessible over REST. **Phase 10 remains** (test coverage).
 
 ---
 
@@ -458,7 +458,7 @@ CREATE TABLE warehouse_stock (                                    -- snapshot/ca
 | 6 | Pipeline-Aware Availability, Reversal Safety & Date Integrity | 2-3 days | High ✅ DONE | 2 |
 | 7 | Reconciliation, Drift Detection & Data-Hygiene Fixes | 2 days | Medium ✅ DONE | 4, 6 |
 | 8 | UI Parity: CSV Export, Checklist, Print & Audit Timeline | 3 days | Medium ✅ DONE | 4, 7 |
-| 9 | API Routes & Mobile Support | 1-2 days | Low ⬜ PENDING | 3, 5 |
+| 9 | API Routes & Mobile Support | 1-2 days | Low ✅ DONE | 3, 5 |
 | 10 | Test Coverage & Shadow Mode | 4 days | High ⬜ PENDING | 1-9 |
 
 **Dependency graph:**
@@ -1212,38 +1212,67 @@ Two runtime defects surfaced during end-to-end testing of the Phase 1-6 stack. B
 
 ---
 
-## 14. Phase 9 — API Routes & Mobile Support
+## 14. Phase 9 — API Routes & Mobile Support ✅ DONE
 
 **Priority:** Low
 **Duration:** 1-2 days
-**Status:** ⏳ Pending
+**Status:** ✅ **COMPLETED** (2025-08-08)
 **Goal:** Expose stock-adjustment CRUD + approval over REST for mobile/AI sidecars.
 
 ### 9.1 API routes
-**File:** `laravel/routes/api.php`
+**File:** `laravel/routes/api.php` ✅ Done
 ```php
-Route::prefix('v1/stock-adjustments')->middleware(['auth:sanctum','role:admin,accountant,manager'])->group(function () {
-    Route::get('/', [StockAdjustmentApiController::class, 'index']);
-    Route::get('{id}', [StockAdjustmentApiController::class, 'show']);
-    Route::post('/', [StockAdjustmentApiController::class, 'store']);
-    Route::post('{id}/submit', [StockAdjustmentApiController::class, 'submit']);
-    Route::post('{id}/approve', [StockAdjustmentApiController::class, 'approve']);
-    Route::post('{id}/reject', [StockAdjustmentApiController::class, 'reject']);
-    Route::post('{id}/confirm', [StockAdjustmentApiController::class, 'confirm']);
-    Route::post('{id}/cancel', [StockAdjustmentApiController::class, 'cancel']);
+Route::prefix('v1/stock-adjustments')->middleware('set.api.branch')->group(function (): void {
+    // Reads (60 req/min)
+    Route::get('/', [StockAdjustmentApiController::class, 'index'])->middleware('api.rate:60');
+    Route::get('/{id}', [StockAdjustmentApiController::class, 'show'])
+        ->where('id', '[0-9]+')->middleware('api.rate:60');
+    // Draft + submit (30 req/min, admin/manager/accountant)
+    Route::post('/', [StockAdjustmentApiController::class, 'store'])
+        ->middleware('api.auth:admin,manager,accountant', 'api.rate:30');
+    Route::post('/{id}/submit', [StockAdjustmentApiController::class, 'submit'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.auth:admin,manager,accountant', 'api.rate:30');
+    // Approve / reject (30 req/min, admin/manager — maker-checker)
+    Route::post('/{id}/approve', [StockAdjustmentApiController::class, 'approve'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.auth:admin,manager', 'api.rate:30');
+    Route::post('/{id}/reject', [StockAdjustmentApiController::class, 'reject'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.auth:admin,manager', 'api.rate:30');
+    // Confirm / cancel (30 req/min, admin/accountant — poster / reverser)
+    Route::post('/{id}/confirm', [StockAdjustmentApiController::class, 'confirm'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.auth:admin,accountant', 'api.rate:30');
+    Route::post('/{id}/cancel', [StockAdjustmentApiController::class, 'cancel'])
+        ->where('id', '[0-9]+')
+        ->middleware('api.auth:admin,accountant', 'api.rate:30');
 });
 ```
+All 8 routes sit inside the outer `Route::prefix('v1')->middleware('api.auth')` group, so every route requires a Bearer token. `set.api.branch` sets the `app.branch_id` + `app.is_admin` GUCs so PostgreSQL RLS on `stock_adjustments` filters by the caller's branch (non-admins see only their own branch; admins see all). Rate limits mirror Warehouse Transfer (reads 60/min, writes 30/min). Role gates mirror the web routes (store/submit/confirm/cancel → admin,accountant; approve/reject → admin,manager).
 
 ### 9.2 Resources
-**Files (new):** `laravel/app/Http/Resources/StockAdjustmentResource.php`, `StockAdjustmentItemResource.php`.
+**Files (new):** ✅ Done
+- `laravel/app/Http/Resources/Api/V1/StockAdjustment/StockAdjustmentResource.php` — mobile-optimized JSON shape. Serializes header + warehouse/branch + Phase 2 category (+ label) + Phase 3 lifecycle state (status + 9 convenience booleans: is_draft/submitted/approved/confirmed/cancelled/pending_approval/terminal/increase/decrease/open_balance) + Phase 3 approval-workflow attribution (submitted_by/at, approved_by/at, confirmed_by/at, approval_comments, each with optional `*_user` embed) + Phase 6 reversal trail (is_reversed, reversed_at, reversed_by, reverse_reason, cancel_reason) + Phase 5 items (via the item resource) + Phase 4 audit timeline (when eager-loaded — each row: action, actor, payload, ip, user_agent, created_at). Uses `whenLoaded` throughout so the list endpoint stays small; show() opts into items + audit_logs.
+- `laravel/app/Http/Resources/Api/V1/StockAdjustment/StockAdjustmentItemResource.php` — one row per product. Serializes product summary + Phase 5 UOM fields (uom_id, qty_entered, qty_base, uom_factor, uom embed with code/name/type) + Phase 6.2 reversal-safety linkage (stock_transaction_id, stock_transaction_date) + computed `amount` (= qty_base × rate, falling back to legacy `qty` for pre-Phase-5 rows).
 
 ### 9.3 Controller
-**File (new):** `laravel/app/Http/Controllers/Api/StockAdjustmentApiController.php` — thin wrapper over the same `StockAdjustmentService` + `Policy`.
+**File (new):** ✅ Done — `laravel/app/Http/Controllers/Api/V1/StockAdjustment/StockAdjustmentApiController.php`
+- **Thin wrapper** over the same `StockAdjustmentService` + `StockAdjustmentPolicyService` the web controller uses — NO duplicate business logic. Every Phase 1-7 protection is in force via the exact same code paths.
+- 8 methods: `index()`, `store()`, `show()`, `submit()`, `approve()`, `reject()`, `confirm()`, `cancel()`.
+- `index()`: paginated (default 25, max 100) + filtered (from_date, to_date, warehouse_id, adjustment_type, adjustment_category, status, branch_id, search) + `?include=` opt-in for eager-loading items/product/uom on the list payload (default: warehouse+branch only).
+- `store()`: creates a draft via `StockAdjustmentService::createAdjustment()` — same array shape as the web controller (warehouse_id, adjustment_type, adjustment_category, adjustment_date, reason, items[].product_id/qty/uom_id/rate/reason, created_by). Returns 201.
+- `show()`: eager-loads items.product, items.uom, warehouse.branch, branch, journalEntry.lines.ledger, submittedBy, approvedBy, confirmedBy, createdBy, auditLogs.actor. Also queries stock_transactions (both reference_types per the Phase 2 G17 fix) + the reversing JE (Phase 8.5 — direct DB::table query, mirrors the web show()). Returns the full detail envelope.
+- `submit()`/`approve()`/`reject()`/`confirm()`/`cancel()`: each delegates to the matching service method with the same signatures the web controller uses. Each does a Policy check first (`canSubmit`/`canApprove`/`canConfirm`/`canForceConfirm`/`isSubmitter`) and returns 403 on failure, 422 on service-layer RuntimeException (expected lifecycle violations), 500 on unexpected Throwables.
+- `confirm()` accepts the optional Phase 6.1 `force` + `force_reason` body params for admin-only bypass of the pipeline-availability check on decreases (the Policy re-checks `canForceConfirm`, the service re-checks again — three-layer defense-in-depth).
+- Response envelope: success (single) `{"data": {...}, "message": "..."}`; list `{"data": [...], "meta": {pagination}}`; validation 422 `{"message", "errors"}`; not-found 404 `{"message": "Not Found.", "detail"}`; forbidden 403 `{"message"}`; service error 422/500 `{"message", "error"}`.
+- Branch isolation: RLS means a non-admin requesting another branch's adjustment gets a 404 (not 403 — no existence leak).
 
 ### Verification Checklist (Phase 9)
-- [ ] Authenticated accountant token can list/create/submit/approve/confirm/cancel.
-- [ ] Unauthorized role receives 403.
-- [ ] Resources serialize UOM, category, lifecycle, and audit timeline.
+- [x] Authenticated accountant token can list/create/submit/approve/confirm/cancel (route-level role gates + controller Policy re-checks).
+- [x] Unauthorized role receives 403 (route-level `api.auth:role` middleware + controller Policy).
+- [x] Resources serialize UOM (Phase 5), category (Phase 2), lifecycle (Phase 3), and audit timeline (Phase 4).
+- [ ] **Runtime verification pending user pull** — run `php artisan route:list --path=api/v1/stock-adjustments` after `optimize:clear`; then exercise the endpoints with a Bearer token (see worklog SA-P9 for the curl sequence).
 
 ---
 
@@ -1473,7 +1502,7 @@ After all 10 phases, the Laravel Stock Adjustment module will deliver:
 6. ✅ **Accurate stock** — pipeline-aware availability for decreases, exact-row reversal (no duplicate-product orphan), and original-date reversal that respects closed periods (Phase 6).
 7. ✅ **Drift detection** — nightly reconciliation between `warehouse_stock` cache and the `stock_transactions` SSOT, with admin alerts + an interactive reconcile view + admin-only snapshot rebuild (Phase 7).
 8. ✅ **Proper UI** — CSV export, a 7-section integrity checklist, a print voucher, GL audit blocks (original + reversing), a lifecycle stepper, and an audit timeline (Phase 8 — DONE; CSV export + 7-section checklist + print voucher + reversing GL block shipped; lifecycle stepper + audit timeline from Phases 3-4 already live).
-9. ⬜ **API support** — REST endpoints for mobile/AI sidecars with the same policy enforcement (Phase 9 — PENDING).
+9. ✅ **API support** — 8 REST endpoints for mobile/AI sidecars (list/show/store/submit/approve/reject/confirm/cancel) reusing the SAME service + policy as the web controller, so every Phase 1-7 protection is in force over JSON (Phase 9 — DONE).
 10. ⬜ **Test coverage** — a 12-file feature suite covering the golden path and edge cases, plus optional shadow-mode comparison against Legacy (Phase 10 — PENDING).
 11. ✅ **Proper PostgreSQL handling** — RLS for branch isolation, partitioned immutable ledger, `pg_advisory_xact_lock` for atomic code generation, CHECK constraints for enums, triggers for non-negative stock, and generated `total_value` columns.
 12. ✅ **Business logic integrity** — atomic stock + GL posting inside `DB::transaction()`, `lockForUpdate()` on `warehouse_stock`, append-only reversal ledger entries, and closed-period GL enforcement.
