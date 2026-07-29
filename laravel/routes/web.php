@@ -645,6 +645,7 @@ Route::middleware('auth')->group(function () {
         Route::get('stock/{pid}/{bid}', [BranchDemandController::class, 'getWarehouseStock'])->name('stock');
         Route::get('outstanding', [BranchDemandController::class, 'getOutstanding'])->name('outstanding');
         Route::get('ledger-history', [BranchDemandController::class, 'getLedgerHistory'])->name('ledger-history');
+        Route::get('settlement-preview', [BranchDemandController::class, 'previewSettlement'])->name('settlement-preview');
         Route::post('{id}/send', [BranchDemandController::class, 'send'])->name('send');
         Route::post('{id}/reverse', [BranchDemandController::class, 'reverse'])->name('reverse');
         Route::post('{id}/reject', [BranchDemandController::class, 'reject'])->name('reject');

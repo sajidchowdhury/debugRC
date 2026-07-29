@@ -423,4 +423,29 @@ class BranchDemandController extends Controller
 
         return response()->json($history);
     }
+
+    /**
+     * JSON: Preview which demands would be settled for a given amount.
+     */
+    public function previewSettlement(Request $request)
+    {
+        $request->validate([
+            'partner_branch_id' => 'required|integer|exists:branches,id',
+            'amount'            => 'required|numeric|min:0.01',
+        ]);
+
+        $branchId = $this->currentBranchId();
+        $partnerBranchId = (int) $request->partner_branch_id;
+
+        $debtorBranchId = min($branchId, $partnerBranchId);
+        $creditorBranchId = max($branchId, $partnerBranchId);
+
+        $preview = $this->intercompanyService->previewDemandSettlement(
+            $debtorBranchId,
+            $creditorBranchId,
+            (float) $request->amount
+        );
+
+        return response()->json($preview);
+    }
 }

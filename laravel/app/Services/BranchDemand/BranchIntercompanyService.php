@@ -630,4 +630,448 @@ class BranchIntercompanyService
             'count'        => (int) ($stats->count ?? 0),
         ];
     }
+
+    // ===================== FIFO SETTLEMENT =====================
+
+    /**
+     * Settle branch demands from a bank customer payment.
+     *
+     * When a customer payment with payment_mode = 'bank' is confirmed at the
+     * debtor branch, the bank is central (not branch-specific). This means the
+     * debtor branch has effectively paid toward its obligation to the creditor branch.
+     *
+     * FIFO settlement: oldest demands are settled first.
+     * Cash payments do NOT settle demands (they use money transfer instead).
+     *
+     * @param int $paymentId The customer_payments.id
+     * @param int $branchId The debtor branch (where the payment was made)
+     * @param float $amount The payment amount available for settlement
+     * @param int $postedBy User ID who confirmed the payment
+     * @return array{ total_settled: float, settlements: array }
+     */
+    public function settleFromCustomerPayment(
+        int $paymentId,
+        int $branchId,
+        float $amount,
+        int $postedBy
+    ): array {
+        if ($amount <= 0) {
+            return ['total_settled' => 0, 'settlements' => []];
+        }
+
+        // Get all creditor branches with open demands for this debtor branch
+        $creditorBranches = DB::table('branch_demands')
+            ->where('from_branch_id', $branchId) // debtor
+            ->where('status', 'received')
+            ->where('is_reversed', false)
+            ->whereColumn('total_value', '>', 'settlement_amount')
+            ->distinct()
+            ->pluck('to_branch_id');
+
+        $totalSettled = 0.0;
+        $remainingAmount = $amount;
+        $allSettlements = [];
+
+        foreach ($creditorBranches as $creditorBranchId) {
+            if ($remainingAmount <= 0.01) {
+                break;
+            }
+
+            $result = $this->fifoSettleDemands(
+                debtorBranchId: $branchId,
+                creditorBranchId: (int) $creditorBranchId,
+                amount: $remainingAmount,
+                referenceType: 'demand_settlement_bank',
+                referenceId: $paymentId,
+                postedBy: $postedBy,
+                settlementTable: 'branch_demand_customer_payment_settlements',
+                foreignKeyColumn: 'payment_id',
+            );
+
+            $totalSettled += $result['total_settled'];
+            $remainingAmount -= $result['total_settled'];
+            $allSettlements = array_merge($allSettlements, $result['settlements']);
+        }
+
+        Log::info('BranchDemand settlement from customer payment', [
+            'payment_id'    => $paymentId,
+            'branch_id'     => $branchId,
+            'amount'        => $amount,
+            'total_settled' => $totalSettled,
+            'settlements_count' => count($allSettlements),
+        ]);
+
+        return [
+            'total_settled' => round($totalSettled, 2),
+            'settlements'   => $allSettlements,
+        ];
+    }
+
+    /**
+     * Settle branch demands from a money transfer.
+     *
+     * When a cash_to_cash or cash_to_bank money transfer is made between branches,
+     * it auto-settles open branch demands in FIFO order (oldest first).
+     *
+     * bank_to_cash / bank_to_bank at the same branch do NOT settle demands
+     * (the bank is central, not branch-specific — those are settled via
+     * customer payments instead).
+     *
+     * @param int $transferId The money_transfers.id
+     * @param int $fromBranchId The debtor branch (sending money)
+     * @param int $toBranchId The creditor branch (receiving money)
+     * @param float $amount The transfer amount available for settlement
+     * @param string $transferType The transfer type (cash_to_cash, cash_to_bank, etc.)
+     * @param int $postedBy User ID who confirmed the transfer
+     * @return array{ total_settled: float, settlements: array }
+     */
+    public function settleFromMoneyTransfer(
+        int $transferId,
+        int $fromBranchId,
+        int $toBranchId,
+        float $amount,
+        string $transferType,
+        int $postedBy
+    ): array {
+        // Only inter-branch transfers from debtor to creditor settle demands
+        if (!in_array($transferType, ['cash_to_cash', 'cash_to_bank'])) {
+            return ['total_settled' => 0, 'settlements' => []];
+        }
+
+        if ($fromBranchId === $toBranchId) {
+            return ['total_settled' => 0, 'settlements' => []];
+        }
+
+        if ($amount <= 0) {
+            return ['total_settled' => 0, 'settlements' => []];
+        }
+
+        $result = $this->fifoSettleDemands(
+            debtorBranchId: $fromBranchId,
+            creditorBranchId: $toBranchId,
+            amount: $amount,
+            referenceType: 'demand_settlement_transfer',
+            referenceId: $transferId,
+            postedBy: $postedBy,
+            settlementTable: 'branch_demand_money_transfer_settlements',
+            foreignKeyColumn: 'transfer_id',
+        );
+
+        Log::info('BranchDemand settlement from money transfer', [
+            'transfer_id'   => $transferId,
+            'from_branch'   => $fromBranchId,
+            'to_branch'     => $toBranchId,
+            'transfer_type' => $transferType,
+            'amount'        => $amount,
+            'total_settled' => $result['total_settled'],
+            'settlements_count' => count($result['settlements']),
+        ]);
+
+        return $result;
+    }
+
+    /**
+     * Preview which demands would be settled for a given amount.
+     *
+     * Used in the money transfer UI to show the user what will happen
+     * before they confirm the transfer.
+     *
+     * @param int $debtorBranchId
+     * @param int $creditorBranchId
+     * @param float $amount
+     * @return array{ total_settled: float, demands: array }
+     */
+    public function previewDemandSettlement(
+        int $debtorBranchId,
+        int $creditorBranchId,
+        float $amount
+    ): array {
+        $openDemands = $this->getOpenDemandsForFifo($debtorBranchId, $creditorBranchId);
+
+        $remainingAmount = $amount;
+        $preview = [];
+
+        foreach ($openDemands as $demand) {
+            $outstanding = (float) $demand->total_value - (float) $demand->settlement_amount;
+            if ($outstanding <= 0 || $remainingAmount <= 0.01) {
+                continue;
+            }
+
+            $settleAmount = min($outstanding, $remainingAmount);
+            $remainingAmount -= $settleAmount;
+
+            $preview[] = [
+                'demand_id'       => (int) $demand->id,
+                'demand_code'     => $demand->demand_code,
+                'demand_date'     => $demand->demand_date,
+                'total_value'     => (float) $demand->total_value,
+                'current_settled' => (float) $demand->settlement_amount,
+                'outstanding'     => round($outstanding, 2),
+                'would_settle'    => round($settleAmount, 2),
+                'would_remain'    => round($outstanding - $settleAmount, 2),
+            ];
+        }
+
+        return [
+            'total_settled' => round($amount - $remainingAmount, 2),
+            'demands'       => $preview,
+        ];
+    }
+
+    /**
+     * Reverse all customer payment settlements for a payment.
+     *
+     * Called when a customer payment is cancelled/reversed.
+     * Reverses the settlement journals, ledger entries, and reduces
+     * settlement_amount on the demands.
+     *
+     * @param int $paymentId
+     * @param int $reversedBy
+     * @param string $reason
+     */
+    public function reverseCustomerPaymentSettlements(
+        int $paymentId,
+        int $reversedBy,
+        string $reason
+    ): void {
+        $this->reverseSettlementsByReference(
+            referenceType: 'demand_settlement_bank',
+            referenceId: $paymentId,
+            settlementTable: 'branch_demand_customer_payment_settlements',
+            foreignKeyColumn: 'payment_id',
+            reversedBy: $reversedBy,
+            reason: $reason,
+        );
+    }
+
+    /**
+     * Reverse all money transfer settlements for a transfer.
+     *
+     * Called when a money transfer is cancelled/reversed.
+     *
+     * @param int $transferId
+     * @param int $reversedBy
+     * @param string $reason
+     */
+    public function reverseMoneyTransferSettlements(
+        int $transferId,
+        int $reversedBy,
+        string $reason
+    ): void {
+        $this->reverseSettlementsByReference(
+            referenceType: 'demand_settlement_transfer',
+            referenceId: $transferId,
+            settlementTable: 'branch_demand_money_transfer_settlements',
+            foreignKeyColumn: 'transfer_id',
+            reversedBy: $reversedBy,
+            reason: $reason,
+        );
+    }
+
+    // ===================== FIFO PRIVATE HELPERS =====================
+
+    /**
+     * Get open (received, not fully settled, not reversed) demands for FIFO.
+     *
+     * Ordered by demand_date ASC, id ASC (oldest first).
+     */
+    private function getOpenDemandsForFifo(int $debtorBranchId, int $creditorBranchId): \Illuminate\Support\Collection
+    {
+        return DB::table('branch_demands')
+            ->where('from_branch_id', $debtorBranchId)
+            ->where('to_branch_id', $creditorBranchId)
+            ->where('status', 'received')
+            ->where('is_reversed', false)
+            ->whereColumn('total_value', '>', 'settlement_amount')
+            ->orderBy('demand_date')
+            ->orderBy('id')
+            ->get();
+    }
+
+    /**
+     * Core FIFO settlement logic.
+     *
+     * For each open demand (oldest first), allocate as much as possible
+     * until the available amount is exhausted.
+     *
+     * For each settlement:
+     *   1. Create settlement row in the appropriate table
+     *   2. Update branch_demands.settlement_amount
+     *   3. Record branch_ledger pair
+     *   4. Post settlement journal (Dr Due to Branches / Cr Cash/Bank)
+     *
+     * @return array{ total_settled: float, settlements: array }
+     */
+    private function fifoSettleDemands(
+        int $debtorBranchId,
+        int $creditorBranchId,
+        float $amount,
+        string $referenceType,
+        int $referenceId,
+        int $postedBy,
+        string $settlementTable,
+        string $foreignKeyColumn
+    ): array {
+        $openDemands = $this->getOpenDemandsForFifo($debtorBranchId, $creditorBranchId);
+
+        $remainingAmount = $amount;
+        $totalSettled = 0.0;
+        $settlements = [];
+
+        // Resolve ledger accounts for settlement journal
+        $interbranchPayableId = $this->journalPosting->lookupLedgerByNature('interbranch_payable');
+        $cashBankId = $this->journalPosting->lookupLedgerByNature('cash_bank');
+
+        foreach ($openDemands as $demand) {
+            $outstanding = (float) $demand->total_value - (float) $demand->settlement_amount;
+            if ($outstanding <= 0 || $remainingAmount <= 0.01) {
+                continue;
+            }
+
+            $settleAmount = min($outstanding, $remainingAmount);
+
+            // 1. Create settlement row
+            DB::table($settlementTable)->insert([
+                $foreignKeyColumn => $referenceId,
+                'demand_id'       => (int) $demand->id,
+                'settled_amount'  => round($settleAmount, 2),
+                'created_at'      => now(),
+            ]);
+
+            // 2. Update demand settlement_amount
+            $newSettlementAmount = (float) $demand->settlement_amount + $settleAmount;
+            DB::table('branch_demands')
+                ->where('id', $demand->id)
+                ->update([
+                    'settlement_amount' => round($newSettlementAmount, 2),
+                    'updated_at'        => now(),
+                ]);
+
+            // 3. Record branch ledger pair
+            $demandDate = $demand->demand_date ?? now()->format('Y-m-d');
+            $this->recordDemandSettlement(
+                debtorBranchId: $debtorBranchId,
+                creditorBranchId: $creditorBranchId,
+                settledAmount: $settleAmount,
+                referenceType: $referenceType,
+                referenceId: $referenceId,
+                journalEntryId: null, // Settlement journal posted per batch, not per demand
+                postedBy: $postedBy,
+                entryDate: $demandDate,
+                remarks: "FIFO settlement for demand #{$demand->demand_code}",
+            );
+
+            $totalSettled += $settleAmount;
+            $remainingAmount -= $settleAmount;
+
+            $settlements[] = [
+                'demand_id'      => (int) $demand->id,
+                'demand_code'    => $demand->demand_code,
+                'settled_amount' => round($settleAmount, 2),
+                'outstanding_before' => round($outstanding, 2),
+                'outstanding_after'  => round($outstanding - $settleAmount, 2),
+            ];
+        }
+
+        // 4. Post a single settlement journal for the total amount settled
+        if ($totalSettled > 0.01 && $interbranchPayableId && $cashBankId) {
+            $this->journalPosting->createJournalEntry([
+                'entry_date'     => now()->format('Y-m-d'),
+                'reference_type' => $referenceType,
+                'reference_id'   => $referenceId,
+                'branch_id'      => $debtorBranchId,
+                'description'    => "FIFO demand settlement — " . str_replace('demand_settlement_', '', $referenceType) . " #{$referenceId}",
+                'source'         => 'branch_demand_settlement',
+                'created_by'     => $postedBy,
+            ], [
+                [
+                    'ledger_id' => $interbranchPayableId,
+                    'debit'     => $totalSettled,
+                    'credit'    => 0,
+                    'memo'      => "Settlement of branch demands via {$referenceType} #{$referenceId}",
+                ],
+                [
+                    'ledger_id' => $cashBankId,
+                    'debit'     => 0,
+                    'credit'    => $totalSettled,
+                    'memo'      => "Bank payment for branch demand settlement #{$referenceId}",
+                ],
+            ]);
+        }
+
+        return [
+            'total_settled' => round($totalSettled, 2),
+            'settlements'   => $settlements,
+        ];
+    }
+
+    /**
+     * Reverse settlements by reference type and ID.
+     *
+     * Used by both reverseCustomerPaymentSettlements and reverseMoneyTransferSettlements.
+     *
+     * For each settlement:
+     *   1. Reduce branch_demands.settlement_amount by the settled amount
+     *   2. Delete the settlement rows
+     *   3. Reverse the branch ledger entries
+     *   4. Reverse the settlement journal
+     */
+    private function reverseSettlementsByReference(
+        string $referenceType,
+        int $referenceId,
+        string $settlementTable,
+        string $foreignKeyColumn,
+        int $reversedBy,
+        string $reason
+    ): void {
+        $settlements = DB::table($settlementTable)
+            ->where($foreignKeyColumn, $referenceId)
+            ->get();
+
+        if ($settlements->isEmpty()) {
+            return;
+        }
+
+        // Reverse each settlement
+        foreach ($settlements as $settlement) {
+            $demandId = (int) $settlement->demand_id;
+            $settledAmount = (float) $settlement->settled_amount;
+
+            // Reduce the demand's settlement_amount
+            DB::table('branch_demands')
+                ->where('id', $demandId)
+                ->decrement('settlement_amount', round($settledAmount, 2));
+        }
+
+        // Delete the settlement rows
+        DB::table($settlementTable)
+            ->where($foreignKeyColumn, $referenceId)
+            ->delete();
+
+        // Reverse the branch ledger entries for this settlement
+        $this->reverseLedgerByReference(
+            $referenceType,
+            $referenceId,
+            $reversedBy,
+            $reason,
+            now()->format('Y-m-d')
+        );
+
+        // Reverse the settlement journal (if found)
+        $journal = $this->journalPosting->findJournalEntryByReference($referenceType, $referenceId);
+        if ($journal) {
+            $this->journalPosting->reverseJournalEntry(
+                (int) $journal->id,
+                $reversedBy,
+                "Settlement reversal: {$reason}"
+            );
+        }
+
+        Log::info('BranchDemand settlement reversed', [
+            'reference_type'     => $referenceType,
+            'reference_id'       => $referenceId,
+            'settlements_count'  => $settlements->count(),
+            'reversed_by'        => $reversedBy,
+        ]);
+    }
 }
