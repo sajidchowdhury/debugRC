@@ -1,29 +1,13 @@
 @extends('layouts.admin')
 
+@section('title', 'Branch Demands')
+
+@push('css')
+<link rel="stylesheet" href="/assets/css/branch-demand.css">
+@endpush
+
 @section('content')
-@php
-    $statusBadge = function (string $status, ?string $receivedAt = null): string {
-        if ($status === 'received' && $receivedAt === null) {
-            return '<span class="badge bg-warning-subtle text-warning"><i class="fas fa-clock me-1"></i>Awaiting Confirmation</span>';
-        }
-        if ($status === 'received' && $receivedAt !== null) {
-            return '<span class="badge bg-success-subtle text-success"><i class="fas fa-circle-check me-1"></i>Confirmed</span>';
-        }
-        return [
-            'pending'  => '<span class="badge bg-info-subtle text-info"><i class="fas fa-hourglass-half me-1"></i>Pending</span>',
-            'rejected' => '<span class="badge bg-danger-subtle text-danger"><i class="fas fa-ban me-1"></i>Rejected</span>',
-            'reversed' => '<span class="badge bg-secondary-subtle text-secondary"><i class="fas fa-rotate-left me-1"></i>Reversed</span>',
-        ][$status] ?? '<span class="badge bg-light text-dark">' . e($status) . '</span>';
-    };
-
-    $directionBadge = function (string $direction): string {
-        return $direction === 'outgoing'
-            ? '<span class="badge bg-primary-subtle text-primary"><i class="fas fa-arrow-up me-1"></i>Outgoing</span>'
-            : '<span class="badge bg-success-subtle text-success"><i class="fas fa-arrow-down me-1"></i>Incoming</span>';
-    };
-@endphp
-
-<div class="container-fluid py-2">
+<div class="bd-demand-app container-fluid py-2">
     {{-- Hero header --}}
     <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
             style="background: linear-gradient(135deg,#4f46e5,#7c3aed);">
@@ -42,6 +26,12 @@
             </a>
             <a href="{{ route('admin.branch-demands.pending-receipt') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-clipboard-check me-1"></i> Pending Receipt
+            </a>
+            <a href="{{ route('admin.branch-demands.weekly-report') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-chart-bar me-1"></i> Weekly Report
+            </a>
+            <a href="{{ route('admin.branch-demands.checklist') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-clipboard-check me-1"></i> Audit Checklist
             </a>
         </div>
     </header>
@@ -92,7 +82,7 @@
     <div class="card shadow-sm">
         <div class="card-body p-0">
             <div class="table-responsive">
-                <table class="table table-hover align-middle mb-0">
+                <table class="bd-index-table table table-hover align-middle mb-0">
                     <thead class="table-light">
                         <tr>
                             <th>Demand Code</th>
@@ -121,7 +111,7 @@
                                 <span class="badge bg-light text-dark">{{ $demand->items->count() }}</span>
                             </td>
                             <td class="fw-semibold">{{ $demand->total_value ? number_format((float) $demand->total_value, 2) : '-' }}</td>
-                            <td>{!! $statusBadge($demand->status, $demand->received_at) !!}</td>
+                            <td><x-branch-demand.status-badge :status="$demand->status" :received-at="$demand->received_at" /></td>
                             <td>
                                 @if($demand->received_at)
                                     <span class="text-success small"><i class="fas fa-check me-1"></i>{{ $demand->received_at->format('d M H:i') }}</span>
@@ -132,15 +122,20 @@
                                 @endif
                             </td>
                             <td class="text-center">
-                                <a href="{{ route('admin.branch-demands.show', $demand->id) }}" class="btn btn-outline-primary btn-sm">
+                                <a href="{{ route('admin.branch-demands.show', $demand->id) }}" class="btn btn-outline-primary btn-sm" title="View Details">
                                     <i class="fas fa-eye"></i>
                                 </a>
+                                @if($demand->status === 'received' && !$demand->is_reversed)
+                                <a href="{{ route('admin.branch-demands.audit', $demand->id) }}" class="btn btn-outline-info btn-sm" title="Audit Trail">
+                                    <i class="fas fa-search"></i>
+                                </a>
+                                @endif
                             </td>
                         </tr>
                         @empty
                         <tr>
-                            <td colspan="9" class="text-center text-muted py-4">
-                                No branch demands found.
+                            <td colspan="9" class="bd-empty-state text-center text-muted py-4">
+                                <i class="fas fa-inbox me-1"></i> No branch demands found.
                             </td>
                         </tr>
                         @endforelse

@@ -1,7 +1,13 @@
 @extends('layouts.admin')
 
+@section('title', 'Create Branch Demand')
+
+@push('css')
+<link rel="stylesheet" href="/assets/css/branch-demand.css">
+@endpush
+
 @section('content')
-<div class="container-fluid py-2">
+<div class="bd-demand-app container-fluid py-2">
     {{-- Header --}}
     <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
             style="background: linear-gradient(135deg,#4f46e5,#7c3aed);">
@@ -35,7 +41,7 @@
 
         <div class="row g-3 mb-3">
             <div class="col-lg-6">
-                <div class="card shadow-sm h-100">
+                <div class="bd-form-card card shadow-sm h-100">
                     <div class="card-header bg-light"><i class="fas fa-info-circle me-1"></i> Demand Details</div>
                     <div class="card-body">
                         <div class="mb-3">
@@ -61,7 +67,7 @@
                 </div>
             </div>
             <div class="col-lg-6">
-                <div class="card shadow-sm h-100">
+                <div class="bd-form-card card shadow-sm h-100">
                     <div class="card-header bg-light"><i class="fas fa-boxes-stacked me-1"></i> Demand Items</div>
                     <div class="card-body">
                         <div id="items-container">

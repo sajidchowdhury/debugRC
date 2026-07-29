@@ -2,6 +2,11 @@
 
 @section('title', 'Branch Demand Reconciliation')
 
+@push('css')
+<link rel="stylesheet" href="/assets/css/branch-demand.css">
+<link rel="stylesheet" href="/assets/css/branch-demand-weekly.css">
+@endpush
+
 @section('content')
 <div class="container-fluid py-4">
     <div class="row mb-4">

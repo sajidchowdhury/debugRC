@@ -2,6 +2,10 @@
 
 @section('title', 'Branch Demand Audit Trail — ' . $auditData['demand']->demand_code)
 
+@push('css')
+<link rel="stylesheet" href="/assets/css/branch-demand.css">
+@endpush
+
 @section('content')
 <div class="container-fluid py-4">
     <div class="row mb-4">

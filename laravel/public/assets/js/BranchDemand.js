@@ -1,13 +1,20 @@
 // BranchDemand.js — inter-branch demand UI
+// Phase 9: Updated to point to Laravel named routes instead of legacy URLs.
+// The Blade views set window.BD_ROUTES with all the Laravel route URLs.
 
-function bdBaseUrl() {
-    if (window.BD_BOOT?.baseUrl) {
-        let u = window.BD_BOOT.baseUrl;
-        return u.endsWith('/') ? u : u + '/';
+function bdRoute(name, params) {
+    if (window.BD_ROUTES && window.BD_ROUTES[name]) {
+        let url = window.BD_ROUTES[name];
+        if (params) {
+            Object.keys(params).forEach(key => {
+                url = url.replace('{' + key + '}', params[key]);
+            });
+        }
+        return url;
     }
-    const baseInput = document.getElementById('base_url');
-    let u = baseInput ? baseInput.value : '/remote-center-erp/public/';
-    return u.endsWith('/') ? u : u + '/';
+    // Fallback: try to construct from base URL + legacy path
+    const base = window.BD_BOOT?.baseUrl || '/admin/branch-demands/';
+    return base + name;
 }
 
 function parseJsonPayload(data) {
@@ -17,11 +24,7 @@ function parseJsonPayload(data) {
     return data;
 }
 
-let BASE_URL = '';
-
 document.addEventListener('DOMContentLoaded', function () {
-    BASE_URL = bdBaseUrl();
-
     if (document.getElementById('branchDemandForm')) {
         loadOtherBranches();
         initCreateForm();
@@ -40,7 +43,7 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 function loadOtherBranches() {
-    fetch(BASE_URL + 'BranchDemand/getBranches')
+    fetch(bdRoute('branches'))
         .then((r) => r.json())
         .then((raw) => {
             const data = parseJsonPayload(raw) ?? raw;
@@ -86,13 +89,13 @@ function initCreateForm() {
         formData.append('items', JSON.stringify(items));
 
         try {
-            const res = await fetch(BASE_URL + 'BranchDemand/store', { method: 'POST', body: formData });
+            const res = await fetch(bdRoute('store'), { method: 'POST', body: formData });
             const raw = await res.json();
             const data = parseJsonPayload(raw) ?? raw;
 
-            if (data.status === 'success') {
-                Swal.fire('Success', `Demand created: ${data.demand_code}`, 'success').then(
-                    () => (window.location.href = BASE_URL + 'BranchDemand')
+            if (data.status === 'success' || res.ok) {
+                Swal.fire('Success', `Demand created successfully`, 'success').then(
+                    () => (window.location.href = bdRoute('index'))
                 );
             } else {
                 Swal.fire('Error', data.message || 'Could not create demand', 'error');
@@ -139,11 +142,11 @@ function addItemRow() {
 
 function loadProducts(select) {
     if (!select) return;
-    fetch(BASE_URL + 'BranchDemand/getProducts')
+    fetch(bdRoute('products'))
         .then((r) => r.json())
         .then((raw) => {
             const data = parseJsonPayload(raw) ?? raw;
-            const products = Array.isArray(data) ? data : [];
+            const products = Array.isArray(data) ? data : (data.data || []);
             select.innerHTML = '<option value="">— Select product —</option>';
             products.forEach((p) => {
                 select.add(new Option(`${p.product_code} - ${p.product_name}`, p.id));
@@ -171,6 +174,7 @@ function sendGoods(demandId) {
         }
 
         items.push({
+            id: parseInt(row.dataset.itemId, 10),
             product_id: pid,
             qty: qty,
             from_warehouse_id: parseInt(fromSelect?.value, 10),
@@ -191,13 +195,28 @@ function sendGoods(demandId) {
     }).then((result) => {
         if (!result.isConfirmed) return;
 
-        fetch(BASE_URL + 'BranchDemand/send', {
+        // Build form data for Laravel
+        const formData = new FormData();
+        items.forEach((item, idx) => {
+            formData.append(`items[${idx}][id]`, item.id);
+            formData.append(`items[${idx}][from_warehouse_id]`, item.from_warehouse_id);
+            formData.append(`items[${idx}][to_warehouse_id]`, item.to_warehouse_id);
+        });
+
+        fetch(bdRoute('send', { id: demandId }), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `demand_id=${demandId}&items=${encodeURIComponent(JSON.stringify(items))}`,
+            body: formData,
+            headers: { 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || window.CSRF_TOKEN },
         })
-            .then((r) => r.json())
+            .then((r) => {
+                if (r.redirected) {
+                    window.location.href = r.url;
+                } else {
+                    return r.json();
+                }
+            })
             .then((raw) => {
+                if (!raw) return;
                 const data = parseJsonPayload(raw) ?? raw;
                 if (data.status === 'success') {
                     Swal.fire('Success', data.message || 'Goods sent', 'success').then(() => location.reload());
@@ -224,13 +243,23 @@ function reverseDemand(id, code) {
             return Swal.fire('Error', 'Reason is required', 'error');
         }
 
-        fetch(BASE_URL + 'BranchDemand/reverse', {
+        const formData = new FormData();
+        formData.append('reason', result.value);
+
+        fetch(bdRoute('reverse', { id: id }), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `id=${id}&reverse_reason=${encodeURIComponent(result.value)}`,
+            body: formData,
+            headers: { 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || window.CSRF_TOKEN },
         })
-            .then((r) => r.json())
+            .then((r) => {
+                if (r.redirected) {
+                    window.location.href = r.url;
+                } else {
+                    return r.json();
+                }
+            })
             .then((raw) => {
+                if (!raw) return;
                 const data = parseJsonPayload(raw) ?? raw;
                 if (data.status === 'success') {
                     Swal.fire('Reversed', data.message || 'Done', 'success').then(() => location.reload());
@@ -252,13 +281,21 @@ function deleteDemand(id, code) {
     }).then((result) => {
         if (!result.isConfirmed) return;
 
-        fetch(BASE_URL + 'BranchDemand/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `id=${id}`,
+        fetch(bdRoute('destroy', { id: id }), {
+            method: 'DELETE',
+            headers: {
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || window.CSRF_TOKEN,
+            },
         })
-            .then((r) => r.json())
+            .then((r) => {
+                if (r.redirected) {
+                    window.location.href = r.url;
+                } else {
+                    return r.json();
+                }
+            })
             .then((raw) => {
+                if (!raw) return;
                 const data = parseJsonPayload(raw) ?? raw;
                 if (data.status === 'success') {
                     Swal.fire('Deleted', '', 'success').then(() => location.reload());
@@ -272,7 +309,7 @@ function deleteDemand(id, code) {
 function loadWarehousesForBranch(branchId, selector, label = 'Warehouse') {
     if (!branchId) return;
 
-    fetch(BASE_URL + 'BranchDemand/getWarehousesByBranch?branch_id=' + branchId)
+    fetch(bdRoute('warehouses', { id: branchId }))
         .then((r) => r.json())
         .then((raw) => {
             const data = parseJsonPayload(raw) ?? raw;

@@ -210,6 +210,16 @@ class EnforceBranchIsolation
         if (str_contains($path, 'damages')) {
             return 'damage_invoices';
         }
+        // --- Phase 9 (Branch Demand plan): Branch demands are cross-branch by
+        // nature — they involve BOTH from_branch_id and to_branch_id. Standard
+        // branch isolation (single branch_id column) does NOT apply. Instead,
+        // we skip the table inference and let the controller authorize based on
+        // the user's role in the demand (requester or supplier). The middleware
+        // will still allow the request through (admin bypass or no branch_id
+        // match), and the controller's own authorization check handles the rest.
+        if (str_contains($path, 'branch-demands')) {
+            return null; // Skip — cross-branch demands need special handling
+        }
         return null;
     }
 

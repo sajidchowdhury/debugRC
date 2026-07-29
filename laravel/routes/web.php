@@ -638,7 +638,13 @@ Route::middleware('auth')->group(function () {
     // Phase 2: Branch Demands (cross-branch product supply)
     // Create → Send → Confirm Receipt → Reverse/Delete/Reject
     // ============================================================
+    // Phase 9: Branch Demand — role-based access
+    //   admin, manager — Full access
+    //   warehouse_manager — Create, send, confirm receipt, view
+    //   accountant — View, audit checklist, weekly report
+    // ============================================================
     Route::prefix('admin/branch-demands')->name('admin.branch-demands.')->group(function () {
+        // Read-only routes — accessible to all branch demand roles
         Route::get('pending', [BranchDemandController::class, 'pending'])->name('pending');
         Route::get('pending-receipt', [BranchDemandController::class, 'pendingReceipt'])->name('pending-receipt');
         Route::get('branches', [BranchDemandController::class, 'getBranches'])->name('branches');
@@ -648,26 +654,35 @@ Route::middleware('auth')->group(function () {
         Route::get('outstanding', [BranchDemandController::class, 'getOutstanding'])->name('outstanding');
         Route::get('ledger-history', [BranchDemandController::class, 'getLedgerHistory'])->name('ledger-history');
         Route::get('settlement-preview', [BranchDemandController::class, 'previewSettlement'])->name('settlement-preview');
-        Route::post('{id}/send', [BranchDemandController::class, 'send'])->name('send');
-        Route::post('{id}/confirm-receipt', [BranchDemandController::class, 'confirmReceipt'])->name('confirm-receipt');
-        Route::post('{id}/reverse', [BranchDemandController::class, 'reverse'])->name('reverse');
-        Route::post('{id}/reject', [BranchDemandController::class, 'reject'])->name('reject');
 
-        // Phase 7: Price Range Handling & Repricing Logic
-        Route::post('{id}/reprice', [BranchDemandController::class, 'reprice'])->name('reprice');
+        // Write operations — admin, manager, warehouse_manager
+        Route::post('{id}/send', [BranchDemandController::class, 'send'])->name('send')
+            ->middleware('role:admin,manager,warehouse_manager');
+        Route::post('{id}/confirm-receipt', [BranchDemandController::class, 'confirmReceipt'])->name('confirm-receipt')
+            ->middleware('role:admin,manager,warehouse_manager');
+        Route::post('{id}/reverse', [BranchDemandController::class, 'reverse'])->name('reverse')
+            ->middleware('role:admin,manager');
+        Route::post('{id}/reject', [BranchDemandController::class, 'reject'])->name('reject')
+            ->middleware('role:admin,manager,warehouse_manager');
+
+        // Phase 7: Repricing — admin, manager only
+        Route::post('{id}/reprice', [BranchDemandController::class, 'reprice'])->name('reprice')
+            ->middleware('role:admin,manager');
         Route::get('price-range-comparison', [BranchDemandController::class, 'priceRangeComparison'])->name('price-range-comparison');
         Route::get('{id}/repricing-history', [BranchDemandController::class, 'getRepricingHistory'])->name('repricing-history');
         Route::post('check-sale-price', [BranchDemandController::class, 'checkSalePriceRange'])->name('check-sale-price');
 
-        // Phase 6: Weekly Audit Report
+        // Phase 6: Weekly Audit Report — all roles
         Route::get('weekly-report', [BranchDemandReportController::class, 'weekly'])->name('weekly-report');
         Route::get('weekly-report/export', [BranchDemandReportController::class, 'exportCsv'])->name('weekly-report.export');
         Route::get('weekly-report/drill-down', [BranchDemandReportController::class, 'drillDown'])->name('weekly-report.drill-down');
 
-        // Phase 8: Anti-Gaming & Accountability Controls
-        Route::get('checklist', [BranchDemandController::class, 'checklist'])->name('checklist');
+        // Phase 8: Audit & Accountability — admin, manager, accountant
+        Route::get('checklist', [BranchDemandController::class, 'checklist'])->name('checklist')
+            ->middleware('role:admin,manager,accountant');
         Route::get('{id}/audit', [BranchDemandController::class, 'audit'])->name('audit');
-        Route::get('reconcile', [BranchDemandController::class, 'reconcile'])->name('reconcile');
+        Route::get('reconcile', [BranchDemandController::class, 'reconcile'])->name('reconcile')
+            ->middleware('role:admin,manager,accountant');
     });
     Route::resource('admin/branch-demands', BranchDemandController::class)
         ->only(['index', 'create', 'store', 'show', 'destroy'])

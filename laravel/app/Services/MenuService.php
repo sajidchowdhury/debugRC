@@ -162,7 +162,7 @@ class MenuService
             'stocktake' => 'admin.stock-take.index',
             'stockadjustment' => 'admin.stock-adjustments.index',
             'warehousetransfer' => 'admin.warehouse-transfers.index',
-            'branchdemand' => $action === 'weekly' ? 'admin.branch-demands.weekly' : 'admin.branch-demands.index',
+            'branchdemand' => $this->resolveBranchDemandRoute($action),
             'damage' => 'admin.damages.index',
             'moneytransfer' => 'admin.money-transfers.index',
             'otherincome' => 'admin.other-incomes.index',
@@ -187,6 +187,25 @@ class MenuService
         }
 
         return '#';
+    }
+
+    /**
+     * Resolve the Branch Demand action to a Laravel named route.
+     * Phase 9 — supports all sub-menu actions.
+     */
+    private function resolveBranchDemandRoute(string $action): string
+    {
+        $actionMap = [
+            'index'            => 'admin.branch-demands.index',
+            'pending'          => 'admin.branch-demands.pending',
+            'pending_receipt'  => 'admin.branch-demands.pending-receipt',
+            'weekly'           => 'admin.branch-demands.weekly-report',
+            'checklist'        => 'admin.branch-demands.checklist',
+            'reconcile'        => 'admin.branch-demands.reconcile',
+            'price_range'      => 'admin.branch-demands.price-range-comparison',
+        ];
+
+        return $actionMap[strtolower($action)] ?? 'admin.branch-demands.index';
     }
 
     /**

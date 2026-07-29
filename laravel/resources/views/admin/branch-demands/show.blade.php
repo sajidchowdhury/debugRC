@@ -1,23 +1,13 @@
 @extends('layouts.admin')
 
-@section('content')
-@php
-    $statusBadge = function (string $status, ?string $receivedAt = null): string {
-        if ($status === 'received' && $receivedAt === null) {
-            return '<span class="badge bg-warning-subtle text-warning"><i class="fas fa-clock me-1"></i>Awaiting Confirmation</span>';
-        }
-        if ($status === 'received' && $receivedAt !== null) {
-            return '<span class="badge bg-success-subtle text-success"><i class="fas fa-circle-check me-1"></i>Confirmed</span>';
-        }
-        return [
-            'pending'  => '<span class="badge bg-info-subtle text-info"><i class="fas fa-hourglass-half me-1"></i>Pending</span>',
-            'rejected' => '<span class="badge bg-danger-subtle text-danger"><i class="fas fa-ban me-1"></i>Rejected</span>',
-            'reversed' => '<span class="badge bg-secondary-subtle text-secondary"><i class="fas fa-rotate-left me-1"></i>Reversed</span>',
-        ][$status] ?? '<span class="badge bg-light text-dark">' . e($status) . '</span>';
-    };
-@endphp
+@section('title', $demand->demand_code)
 
-<div class="container-fluid py-2">
+@push('css')
+<link rel="stylesheet" href="/assets/css/branch-demand.css">
+@endpush
+
+@section('content')
+<div class="bd-demand-app container-fluid py-2">
     {{-- Header --}}
     <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
             style="background: linear-gradient(135deg,#4f46e5,#7c3aed);">
@@ -94,7 +84,7 @@
                     </div>
                     <div>
                         <div class="small text-muted">Status</div>
-                        <div>{!! $statusBadge($demand->status, $demand->received_at) !!}</div>
+                        <div><x-branch-demand.status-badge :status="$demand->status" :received-at="$demand->received_at" /></div>
                     </div>
                 </div>
             </div>

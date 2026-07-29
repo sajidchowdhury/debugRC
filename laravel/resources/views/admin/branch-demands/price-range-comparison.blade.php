@@ -1,5 +1,9 @@
 @extends('layouts.admin')
 
+@push('css')
+<link rel="stylesheet" href="/assets/css/branch-demand.css">
+@endpush
+
 @section('content')
 <div class="container-fluid py-2">
     {{-- Header --}}

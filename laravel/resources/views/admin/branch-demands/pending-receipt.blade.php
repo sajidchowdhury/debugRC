@@ -1,23 +1,13 @@
 @extends('layouts.admin')
 
-@section('content')
-@php
-    $statusBadge = function (string $status, ?string $receivedAt = null): string {
-        if ($status === 'received' && $receivedAt === null) {
-            return '<span class="badge bg-warning-subtle text-warning"><i class="fas fa-clock me-1"></i>Awaiting Confirmation</span>';
-        }
-        if ($status === 'received' && $receivedAt !== null) {
-            return '<span class="badge bg-success-subtle text-success"><i class="fas fa-circle-check me-1"></i>Receipt Confirmed</span>';
-        }
-        return [
-            'pending'  => '<span class="badge bg-info-subtle text-info"><i class="fas fa-hourglass-half me-1"></i>Pending</span>',
-            'rejected' => '<span class="badge bg-danger-subtle text-danger"><i class="fas fa-ban me-1"></i>Rejected</span>',
-            'reversed' => '<span class="badge bg-secondary-subtle text-secondary"><i class="fas fa-rotate-left me-1"></i>Reversed</span>',
-        ][$status] ?? '<span class="badge bg-light text-dark">' . e($status) . '</span>';
-    };
-@endphp
+@section('title', 'Pending Receipt Confirmation')
 
-<div class="container-fluid py-2">
+@push('css')
+<link rel="stylesheet" href="/assets/css/branch-demand.css">
+@endpush
+
+@section('content')
+<div class="bd-demand-app container-fluid py-2">
     {{-- Hero header --}}
     <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
             style="background: linear-gradient(135deg,#0d9488,#059669);">
@@ -60,7 +50,7 @@
     <div class="card shadow-sm">
         <div class="card-body p-0">
             <div class="table-responsive">
-                <table class="table table-hover align-middle mb-0">
+                <table class="bd-index-table table table-hover align-middle mb-0">
                     <thead class="table-light">
                         <tr>
                             <th>Demand Code</th>
@@ -97,7 +87,7 @@
                                     <span class="text-muted">0.00</span>
                                 @endif
                             </td>
-                            <td>{!! $statusBadge($demand->status, $demand->received_at) !!}</td>
+                            <td><x-branch-demand.status-badge :status="$demand->status" :received-at="$demand->received_at" /></td>
                             <td class="text-center">
                                 @if($demand->status === 'received' && $demand->received_at === null)
                                 <form method="POST" action="{{ route('admin.branch-demands.confirm-receipt', $demand->id) }}"
@@ -114,7 +104,7 @@
                         </tr>
                         @empty
                         <tr>
-                            <td colspan="8" class="text-center text-muted py-4">
+                            <td colspan="8" class="bd-empty-state text-center text-muted py-4">
                                 <i class="fas fa-check-circle me-1"></i> No pending receipt confirmations.
                             </td>
                         </tr>
