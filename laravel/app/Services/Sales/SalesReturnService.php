@@ -678,7 +678,23 @@ class SalesReturnService
                 ->update(['sales_return_id' => $return->id]);
 
             // Confirm the damage (stock OUT + GL Dr damage_loss / Cr inventory).
-            $damage = $this->damageService->confirmDamage($damage->id, $confirmedBy);
+            // Phase 5 (Approval Workflow): pass force_confirm=true with an
+            // audit note so the maker-checker gate is bypassed for this
+            // system-originated damage. The sales-return-linked auto-flow
+            // creates + confirms in one shot with no human approval step —
+            // the return's own confirm flow is the approval (a manager
+            // confirmed the return, which implicitly authorizes the linked
+            // write-off). The damage's submitted_by/at + approved_by/at are
+            // stamped with the confirmer + the note, so the approval
+            // timeline still reflects what happened. This preserves the
+            // one-shot automation without weakening the maker-checker rule
+            // for human-created damages.
+            $damage = $this->damageService->confirmDamage(
+                $damage->id,
+                $confirmedBy,
+                force_confirm: true,
+                forceNote: "Auto-approved: linked to sales return #" . $return->return_code,
+            );
 
             // Link each return item to the damage invoice.
             foreach ($damageItems as $item) {

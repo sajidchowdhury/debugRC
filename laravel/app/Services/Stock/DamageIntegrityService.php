@@ -34,25 +34,43 @@ use Illuminate\Support\Facades\DB;
  *                     is a bug to catch before confirm).
  *
  *   3. stock       — state-aware:
- *                     · draft      → info  "Not yet posted" (no movements expected)
+ *                     · draft / submitted / approved → info  "Not yet posted"
+ *                       (Phase 5 added submitted + approved between draft and
+ *                       confirmed; both behave like draft from the stock
+ *                       perspective — no movements expected).
  *                     · confirmed  → pass if active (non-reversed) stock_transactions
  *                                    exist with reference_type='damage';
  *                                    fail if missing.
  *                     · cancelled  → pass if ALL damage stock_transactions are
  *                                    reversed; warn if any active remain (partial
  *                                    reversal — should not happen but flags drift).
+ *                     · rejected   → info (terminal, never posted).
  *
  *   4. gl          — state-aware:
- *                     · draft      → info  "Not yet posted"
+ *                     · draft / submitted / approved → info  "Not yet posted"
+ *                       (Phase 5 — submitted/approved behave like draft).
  *                     · confirmed  → pass if journal_entry_id set AND JE not
  *                                    reversed; warn if missing (total>=0.01);
  *                                    info if total<0.01 (no GL expected).
  *                     · cancelled  → pass if journal_entry_id set AND JE
  *                                    is_reversed=true (proper reversal);
  *                                    warn if JE not reversed.
+ *                     · rejected   → info (terminal, never posted).
  *
  *   5. reversed    — only when is_reversed=true: pass if reverse_reason is
  *                     non-empty; warn otherwise (legacy behaviour).
+ *
+ *   8. approval (Phase 5) — timeline consistency:
+ *                     · draft      → info (not yet submitted).
+ *                     · submitted  → pass if submitted_by/at set; warn otherwise.
+ *                     · approved   → pass if approved_by/at set AND approver ≠
+ *                                    submitter (or wasAutoApproved flag); fail
+ *                                    if approver === submitter without the
+ *                                    auto-approve flag.
+ *                     · confirmed  → pass if approved_by/at set (the gate ran).
+ *                     · rejected   → pass if approval_rejected_by/at set AND
+ *                                    approval_notes non-empty.
+ *                     · cancelled  → info (approval timeline preserved as-is).
  *
  * Each check returns: id, title, expected (description), status (pass/warn/
  * fail/info), detail (human-readable evidence). The summary tallies
@@ -101,6 +119,13 @@ class DamageIntegrityService
         // recovery status (pending / posted / reversed) when an accountable
         // employee is set.
         $items[] = $this->checkAccountability($damage);
+
+        // Phase 5 — approval-workflow timeline consistency. Verifies the
+        // submitted_by/at + approved_by/at + approval_rejected_by/at stamps
+        // are consistent with the current status, and that the segregation-
+        // of-duties rule (approver ≠ submitter) holds for non-auto-approved
+        // damages.
+        $items[] = $this->checkApproval($damage);
 
         $summary = ['pass' => 0, 'warn' => 0, 'fail' => 0, 'info' => 0];
         foreach ($items as $it) {
@@ -210,11 +235,11 @@ class DamageIntegrityService
                 'fail', 'Lookup failed: ' . $e->getMessage());
         }
 
-        if ($damage->isDraft()) {
+        if ($damage->isPreConfirm()) {
             return $this->item('stock', 'Stock movements',
                 'Negative-qty movements for each damaged line (on confirm).',
                 'info',
-                'Not yet posted — draft does not move stock.');
+                'Not yet posted — ' . $damage->status . ' does not move stock.');
         }
 
         if ($damage->isConfirmed()) {
@@ -254,10 +279,10 @@ class DamageIntegrityService
         $jeId = $damage->journal_entry_id;
         $je = $damage->journalEntry;
 
-        if ($damage->isDraft()) {
+        if ($damage->isPreConfirm()) {
             return $this->item('gl', 'Damage GL',
                 'Dr loss / Cr inventory journal posted on confirm (when total ≥ 0.01).',
-                'info', 'Not yet posted — draft does not post GL.');
+                'info', 'Not yet posted — ' . $damage->status . ' does not post GL.');
         }
 
         if ($damage->isConfirmed()) {
@@ -505,6 +530,120 @@ class DamageIntegrityService
 
         return $this->item('accountability', 'Accountability', $expected,
             'pass', $namedSummary . $recoveryNote);
+    }
+
+    /**
+     * 8. Approval-workflow timeline consistency (Phase 5).
+     *
+     * Verifies the submitted_by/at + approved_by/at + approval_rejected_by/at
+     * stamps are consistent with the current status, and that the
+     * segregation-of-duties rule (approver ≠ submitter) holds for
+     * non-auto-approved damages.
+     *
+     * State-aware:
+     *   · draft      → info (not yet submitted — timeline is empty by design).
+     *   · submitted  → pass if submitted_by/at set; warn otherwise (should
+     *                  never happen — submitForApproval always stamps both).
+     *   · approved   → pass if approved_by/at set AND (approver ≠ submitter
+     *                  OR wasAutoApproved). fail if approver === submitter
+     *                  without the auto-approve flag (segregation-of-duties
+     *                  violation — the gate was bypassed improperly).
+     *   · confirmed  → pass if approved_by/at set (the gate ran before
+     *                  confirm). warn if missing (force_confirm system flow
+     *                  stamps them, so missing means a pre-Phase-5 row or a
+     *                  bypass bug).
+     *   · rejected   → pass if approval_rejected_by/at set AND approval_notes
+     *                  non-empty (the reason is required). warn otherwise.
+     *   · cancelled  → info (approval timeline preserved as-is — a cancelled
+     *                  submitted/approved damage keeps its stamps for audit).
+     *
+     * Uses the already-eager-loaded submitter / approver / rejecter relations
+     * (no extra query) when available; falls back to the raw integer IDs
+     * otherwise (the stamps are the source of truth — the User lookup is
+     * only for the detail line).
+     */
+    private function checkApproval(DamageInvoice $damage): array
+    {
+        $expected = 'Approval timeline stamps must match the current status; '
+            . 'approver ≠ submitter (segregation of duties).';
+
+        if ($damage->isDraft()) {
+            return $this->item('approval', 'Approval timeline', $expected,
+                'info', 'Not yet submitted — draft has no approval timeline.');
+        }
+
+        if ($damage->isSubmitted()) {
+            if ($damage->submitted_by && $damage->submitted_at) {
+                $who = $damage->submitter?->name ?? ('User #' . $damage->submitted_by);
+                $when = \Carbon\Carbon::parse($damage->submitted_at)->format('d M Y H:i');
+                return $this->item('approval', 'Approval timeline', $expected,
+                    'pass', "Submitted by {$who} on {$when} — awaiting manager approval.");
+            }
+            return $this->item('approval', 'Approval timeline', $expected,
+                'warn', 'Submitted status but submitted_by/at not stamped (data integrity issue).');
+        }
+
+        if ($damage->isApproved()) {
+            if (!$damage->approved_by || !$damage->approved_at) {
+                return $this->item('approval', 'Approval timeline', $expected,
+                    'fail', 'Approved status but approved_by/at not stamped.');
+            }
+            // Segregation of duties — approver ≠ submitter, UNLESS the
+            // auto-approve shortcut fired (submitted_by === approved_by,
+            // flagged via wasAutoApproved()).
+            $auto = $damage->wasAutoApproved();
+            if (!$auto && (int) $damage->submitted_by === (int) $damage->approved_by) {
+                return $this->item('approval', 'Approval timeline', $expected,
+                    'fail',
+                    'Segregation-of-duties violation: approver === submitter '
+                    . 'without the auto-approve flag.');
+            }
+            $who = $damage->approver?->name ?? ('User #' . $damage->approved_by);
+            $when = \Carbon\Carbon::parse($damage->approved_at)->format('d M Y H:i');
+            $badge = $auto ? ' (auto-approved — within threshold)' : '';
+            return $this->item('approval', 'Approval timeline', $expected,
+                'pass', "Approved by {$who} on {$when}{$badge} — ready to confirm.");
+        }
+
+        if ($damage->isConfirmed()) {
+            // The gate ran before confirm. force_confirm (system flow) also
+            // stamps these, so missing approved_by/at means a pre-Phase-5 row
+            // or a bypass bug.
+            if ($damage->approved_by && $damage->approved_at) {
+                $who = $damage->approver?->name ?? ('User #' . $damage->approved_by);
+                $when = \Carbon\Carbon::parse($damage->approved_at)->format('d M Y H:i');
+                return $this->item('approval', 'Approval timeline', $expected,
+                    'pass', "Gate ran — approved by {$who} on {$when} before confirm.");
+            }
+            return $this->item('approval', 'Approval timeline', $expected,
+                'warn',
+                'Confirmed without approved_by/at — pre-Phase-5 row or force_confirm bypass.');
+        }
+
+        if ($damage->isRejected()) {
+            if (!$damage->approval_rejected_by || !$damage->approval_rejected_at) {
+                return $this->item('approval', 'Approval timeline', $expected,
+                    'fail', 'Rejected status but approval_rejected_by/at not stamped.');
+            }
+            $who = $damage->rejecter?->name ?? ('User #' . $damage->approval_rejected_by);
+            $when = \Carbon\Carbon::parse($damage->approval_rejected_at)->format('d M Y H:i');
+            $notes = trim((string) $damage->approval_notes);
+            $noteText = $notes !== '' ? " — reason: \"{$notes}\"" : ' — no reason recorded';
+            return $this->item('approval', 'Approval timeline', $expected,
+                'pass', "Rejected by {$who} on {$when}{$noteText} (terminal).");
+        }
+
+        // cancelled — timeline preserved as-is for the audit trail.
+        $parts = [];
+        if ($damage->submitted_by) {
+            $parts[] = 'submitted by ' . ($damage->submitter?->name ?? ('User #' . $damage->submitted_by));
+        }
+        if ($damage->approved_by) {
+            $parts[] = 'approved by ' . ($damage->approver?->name ?? ('User #' . $damage->approved_by));
+        }
+        $summary = $parts ? implode(' · ', $parts) : 'no approval stamps (cancelled as draft)';
+        return $this->item('approval', 'Approval timeline', $expected,
+            'info', "Cancelled — {$summary}.");
     }
 
     /**

@@ -5,11 +5,16 @@
     $dmg = $damage;
 
     // Damages = loss → confirmed = danger (red), draft = warning, cancelled = secondary.
+    // Phase 5 — added submitted (info, awaiting approval), approved (primary,
+    // ready to post), rejected (dark, terminal denial).
     $statusBadge = function () use ($dmg): string {
         return [
             'draft'     => '<span class="badge bg-warning-subtle text-warning fs-6"><i class="fas fa-pen-to-square me-1"></i>Draft</span>',
+            'submitted' => '<span class="badge bg-info-subtle text-info fs-6"><i class="fas fa-paper-plane me-1"></i>Submitted</span>',
+            'approved'  => '<span class="badge bg-primary-subtle text-primary fs-6"><i class="fas fa-circle-check me-1"></i>Approved</span>',
             'confirmed' => '<span class="badge bg-danger-subtle text-danger fs-6"><i class="fas fa-triangle-exclamation me-1"></i>Confirmed</span>',
             'cancelled' => '<span class="badge bg-secondary-subtle text-secondary fs-6"><i class="fas fa-ban me-1"></i>Cancelled</span>',
+            'rejected'  => '<span class="badge bg-dark text-white fs-6"><i class="fas fa-circle-xmark me-1"></i>Rejected</span>',
         ][$dmg->status] ?? '<span class="badge bg-light text-dark fs-6">' . e($dmg->status) . '</span>';
     };
 
@@ -69,6 +74,21 @@
     // employee profiles — so the link degrades to plain text for them.
     $canViewEmployees = auth()->check()
         && auth()->user()->hasRole('admin', 'manager', 'hr');
+
+    // Phase 5 — approval-workflow context.
+    // submitter / approver / rejecter are eager-loaded by the controller.
+    // The action-panel visibility is driven by the policy (can('submit' /
+    // 'approve' / 'reject' / 'confirm' / 'cancel')) so the rules stay in one
+    // place. $canPost stays as-is (admin/manager) for the confirm/cancel/
+    // recover actions; submit is broader (includes warehouse_manager).
+    $submitter = $dmg->submitter;
+    $approver  = $dmg->approver;
+    $rejecter  = $dmg->rejecter;
+    $canSubmit  = auth()->check() && auth()->user()->can('submit', $dmg);   // draft + create-roles + same-branch
+    $canApprove = auth()->check() && auth()->user()->can('approve', $dmg);  // submitted + admin/manager + ≠submitter + same-branch
+    $canReject  = auth()->check() && auth()->user()->can('reject', $dmg);   // submitted + admin/manager + ≠submitter + same-branch
+    $approvalThreshold = (float) config('damage.approval.threshold', 5000);
+    $wasAutoApproved   = $dmg->wasAutoApproved();
 @endphp
 
 <div class="container-fluid py-2">
@@ -761,6 +781,110 @@
                     </dl>
                 </div>
             </div>
+
+            {{-- Phase 5 — Approval Timeline card. Shows the maker-checker flow:
+                 who submitted, who approved (or auto-approved), who rejected
+                 (with reason). Renders a vertical timeline so the segregation-
+                 of-duties audit trail is visible at a glance. Hidden for draft
+                 damages (no timeline yet) — the action panel already prompts
+                 the user to submit. --}}
+            @if ($dmg->submitted_by || $dmg->approved_by || $dmg->approval_rejected_by)
+                <div class="card border-0 shadow-sm mb-3" id="approvalTimelineCard">
+                    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-list-check me-1 text-primary"></i> Approval timeline
+                        </h2>
+                        @if ($wasAutoApproved)
+                            <span class="badge bg-success-subtle text-success">
+                                <i class="fas fa-bolt me-1"></i>Auto-approved
+                            </span>
+                        @endif
+                    </div>
+                    <div class="card-body">
+                        <ul class="timeline ms-3">
+                            {{-- Submitted --}}
+                            @if ($dmg->submitted_by)
+                                <li class="timeline-item mb-3">
+                                    <span class="timeline-badge bg-info"><i class="fas fa-paper-plane"></i></span>
+                                    <div class="ms-3">
+                                        <div class="fw-semibold small">
+                                            Submitted
+                                            <span class="text-muted fw-normal">·</span>
+                                            <span class="text-muted">
+                                                {{ $submitter?->name ?? ('User #' . $dmg->submitted_by) }}
+                                            </span>
+                                        </div>
+                                        @if ($dmg->submitted_at)
+                                            <div class="text-muted" style="font-size:0.8rem">
+                                                {{ \Carbon\Carbon::parse($dmg->submitted_at)->format('d M Y, H:i') }}
+                                            </div>
+                                        @endif
+                                    </div>
+                                </li>
+                            @endif
+
+                            {{-- Approved (manual or auto) --}}
+                            @if ($dmg->approved_by && !$dmg->approval_rejected_by)
+                                <li class="timeline-item mb-3">
+                                    <span class="timeline-badge bg-success"><i class="fas fa-circle-check"></i></span>
+                                    <div class="ms-3">
+                                        <div class="fw-semibold small">
+                                            {{ $wasAutoApproved ? 'Auto-approved' : 'Approved' }}
+                                            <span class="text-muted fw-normal">·</span>
+                                            <span class="text-muted">
+                                                {{ $approver?->name ?? ('User #' . $dmg->approved_by) }}
+                                            </span>
+                                        </div>
+                                        @if ($dmg->approved_at)
+                                            <div class="text-muted" style="font-size:0.8rem">
+                                                {{ \Carbon\Carbon::parse($dmg->approved_at)->format('d M Y, H:i') }}
+                                            </div>
+                                        @endif
+                                        @if ($wasAutoApproved)
+                                            <div class="text-muted" style="font-size:0.8rem">
+                                                <i class="fas fa-bolt me-1"></i>
+                                                Within Tk {{ number_format($approvalThreshold, 2) }} auto-approval threshold.
+                                            </div>
+                                        @endif
+                                    </div>
+                                </li>
+                            @endif
+
+                            {{-- Rejected (terminal) --}}
+                            @if ($dmg->approval_rejected_by)
+                                <li class="timeline-item mb-3">
+                                    <span class="timeline-badge bg-danger"><i class="fas fa-circle-xmark"></i></span>
+                                    <div class="ms-3">
+                                        <div class="fw-semibold small">
+                                            Rejected <span class="badge bg-dark text-white ms-1">terminal</span>
+                                            <span class="text-muted fw-normal">·</span>
+                                            <span class="text-muted">
+                                                {{ $rejecter?->name ?? ('User #' . $dmg->approval_rejected_by) }}
+                                            </span>
+                                        </div>
+                                        @if ($dmg->approval_rejected_at)
+                                            <div class="text-muted" style="font-size:0.8rem">
+                                                {{ \Carbon\Carbon::parse($dmg->approval_rejected_at)->format('d M Y, H:i') }}
+                                            </div>
+                                        @endif
+                                    </div>
+                                </li>
+                            @endif
+                        </ul>
+
+                        {{-- Approval / rejection note (shared column) --}}
+                        @if ($dmg->approval_notes)
+                            <div class="alert alert-light border small mb-0 mt-2">
+                                <div class="text-muted fw-semibold mb-1" style="font-size:0.75rem">
+                                    <i class="fas fa-comment me-1"></i>
+                                    {{ $dmg->isRejected() ? 'REJECTION REASON' : 'APPROVAL NOTE' }}
+                                </div>
+                                <div class="text-body">{{ $dmg->approval_notes }}</div>
+                            </div>
+                        @endif
+                    </div>
+                </div>
+            @endif
         </div>
 
         {{-- Right: actions aside --}}
@@ -778,17 +902,99 @@
                         </div>
                     </div>
 
-                    {{-- CONFIRM (draft only) — admin/manager only --}}
-                    @if ($dmg->isDraft() && $canPost)
-                        <form method="POST" action="{{ route('admin.damages.confirm', $dmg) }}"
-                              id="confirmForm">
+                    {{-- Phase 5 — state-aware action panel. The damage's status
+                         determines which actions are available; the policy
+                         (can('submit'/'approve'/'reject'/'confirm'/'cancel'))
+                         re-confirms role + branch + state + segregation-of-
+                         duties rules. A user who lacks permission sees an
+                         explanatory note instead of a button that would 403. --}}
+
+                    {{-- DRAFT → Submit for approval (admin/manager/warehouse_manager) --}}
+                    @if ($canSubmit)
+                        <form method="POST" action="{{ route('admin.damages.submit', $dmg) }}" id="submitForm">
+                            @csrf
+                            <button type="button" class="btn btn-primary w-100 mb-2" id="submitBtn">
+                                <i class="fas fa-paper-plane me-1"></i> Submit for approval
+                            </button>
+                        </form>
+                        <div class="alert alert-info small mb-3">
+                            <i class="fas fa-circle-info me-1"></i>
+                            @if ($approvalThreshold > 0 && (float) $dmg->total_value <= $approvalThreshold && auth()->user()->hasRole('admin', 'manager'))
+                                Submitting will <strong>auto-approve</strong> this damage
+                                (Tk {{ number_format((float) $dmg->total_value, 2) }} ≤
+                                Tk {{ number_format($approvalThreshold, 2) }} threshold) —
+                                you can then confirm immediately.
+                            @else
+                                Submitting routes this damage to a <strong>manager for approval</strong>.
+                                @if ($approvalThreshold > 0 && (float) $dmg->total_value > $approvalThreshold)
+                                    Above the Tk {{ number_format($approvalThreshold, 2) }} threshold —
+                                    a second admin/manager must approve (segregation of duties).
+                                @endif
+                            @endif
+                            @if ($photoMissing)
+                                <br><i class="fas fa-camera me-1"></i>
+                                <strong>Photo required</strong> — upload at least one in the Evidence card first
+                                (the submit gate enforces this).
+                            @endif
+                        </div>
+                    @endif
+
+                    {{-- SUBMITTED → Approve / Reject (admin/manager, ≠ submitter) --}}
+                    @if ($canApprove || $canReject)
+                        @if ($canApprove)
+                            <form method="POST" action="{{ route('admin.damages.approve', $dmg) }}" id="approveForm" class="mb-2">
+                                @csrf
+                                <div class="mb-2">
+                                    <label class="form-label small text-muted mb-1" for="approveNotes">Approval note (optional)</label>
+                                    <textarea name="approval_notes" id="approveNotes" class="form-control form-control-sm"
+                                              rows="2" maxlength="1000" placeholder="e.g. verified against stock count">{{ old('approval_notes') }}</textarea>
+                                </div>
+                                <button type="button" class="btn btn-success w-100" id="approveBtn">
+                                    <i class="fas fa-circle-check me-1"></i> Approve
+                                </button>
+                            </form>
+                        @endif
+                        @if ($canReject)
+                            <form method="POST" action="{{ route('admin.damages.reject', $dmg) }}" id="rejectForm">
+                                @csrf
+                                <div class="mb-2">
+                                    <label class="form-label small text-muted mb-1" for="rejectNotes">Rejection reason <span class="text-danger">*</span></label>
+                                    <textarea name="approval_notes" id="rejectNotes"
+                                              class="form-control form-control-sm @error('approval_notes') is-invalid @enderror"
+                                              rows="2" maxlength="1000" placeholder="Why is this being rejected?" required>{{ old('approval_notes') }}</textarea>
+                                    @error('approval_notes')
+                                        <div class="invalid-feedback d-block">{{ $message }}</div>
+                                    @enderror
+                                </div>
+                                <button type="button" class="btn btn-outline-danger w-100" id="rejectBtn">
+                                    <i class="fas fa-circle-xmark me-1"></i> Reject
+                                </button>
+                            </form>
+                        @endif
+                    @endif
+
+                    {{-- SUBMITTED + submitter viewing → "Awaiting approval" note --}}
+                    @if ($dmg->isSubmitted() && !$canApprove && !$canReject)
+                        <div class="alert alert-info small mb-0">
+                            <i class="fas fa-clock me-1"></i>
+                            <strong>Awaiting manager approval.</strong>
+                            @if ($submitter)
+                                Submitted by {{ $submitter->name }} on
+                                {{ \Carbon\Carbon::parse($dmg->submitted_at)->format('d M Y H:i') }}.
+                            @endif
+                            @if (auth()->check() && (int) $dmg->submitted_by === (int) auth()->id())
+                                You submitted this damage — another admin/manager must approve it
+                                (segregation of duties). Cancel to withdraw it from the queue.
+                            @endif
+                        </div>
+                    @endif
+
+                    {{-- APPROVED → Confirm damage (admin/manager) --}}
+                    @if ($dmg->isApproved() && $canPost)
+                        <form method="POST" action="{{ route('admin.damages.confirm', $dmg) }}" id="confirmForm">
                             @csrf
                             <input type="hidden" name="confirm_reason" id="confirmReasonField" value="">
                             @if ($photoMissing)
-                                {{-- Phase 3 — confirm is blocked until a photo is uploaded.
-                                     The hard gate is in DamageService::confirmDamage; this
-                                     disabled button + tooltip gives the user a clear hint
-                                     instead of a 500 after clicking. --}}
                                 <button type="button" class="btn btn-danger w-100 mb-2" id="confirmBtn"
                                         disabled
                                         data-bs-toggle="tooltip" data-bs-placement="top"
@@ -805,19 +1011,16 @@
                             <i class="fas fa-triangle-exclamation me-1"></i>
                             Confirming will <strong>write off stock</strong> (OUT) and <strong>post a GL loss</strong>
                             (Dr Damage Loss / Cr Inventory).
-                            @if ($photoRequired)
-                                <br>
-                                <i class="fas fa-camera me-1"></i>
-                                This damage type requires
-                                <strong>at least one photo</strong> before confirm.
+                            @if ($wasAutoApproved)
+                                <br><i class="fas fa-bolt me-1"></i>
+                                Auto-approved at submit (within threshold).
                             @endif
                         </div>
                     @endif
 
-                    {{-- CANCEL (draft or confirmed) — admin/manager only --}}
-                    @if (($dmg->isDraft() || $dmg->isConfirmed()) && $canPost)
-                        <form method="POST" action="{{ route('admin.damages.cancel', $dmg) }}"
-                              id="cancelForm">
+                    {{-- CANCEL (draft / submitted / approved / confirmed) — admin/manager --}}
+                    @if (($dmg->isDraft() || $dmg->isSubmitted() || $dmg->isApproved() || $dmg->isConfirmed()) && $canPost)
+                        <form method="POST" action="{{ route('admin.damages.cancel', $dmg) }}" id="cancelForm">
                             @csrf
                             <input type="hidden" name="cancel_reason" id="cancelReasonField" value="">
                             <button type="button" class="btn btn-outline-danger w-100" id="cancelBtn">
@@ -825,7 +1028,7 @@
                                 @if ($dmg->isConfirmed())
                                     Cancel &amp; reverse
                                 @else
-                                    Cancel draft
+                                    Cancel {{ $dmg->status }}
                                 @endif
                             </button>
                         </form>
@@ -889,17 +1092,19 @@
                         </div>
                     @endif
 
-                    {{-- Phase 0 (Damage plan): warehouse_manager sees this note instead of
-                        the confirm/cancel buttons (which would 403). --}}
-                    @if (($dmg->isDraft() || $dmg->isConfirmed()) && !$canPost)
+                    {{-- Phase 0/5: warehouse_manager sees this note when they can't
+                        perform the next action (e.g. an approved damage they can't
+                        confirm, or a submitted damage they can't approve because
+                        they're the submitter). --}}
+                    @if (($dmg->isApproved() && !$canPost)
+                        || ($dmg->isSubmitted() && auth()->check() && (int) $dmg->submitted_by === (int) auth()->id() && !$canApprove))
                         <div class="alert alert-info small mb-0">
                             <i class="fas fa-circle-info me-1"></i>
-                            @if ($dmg->isDraft())
-                                This draft damage must be <strong>confirmed</strong> by a manager or admin
+                            @if ($dmg->isApproved())
+                                This approved damage must be <strong>confirmed</strong> by a manager or admin
                                 to write off stock and post the GL loss.
                             @else
-                                This confirmed damage can only be <strong>cancelled/reversed</strong> by a
-                                manager or admin.
+                                You submitted this damage — another admin/manager must approve it.
                             @endif
                         </div>
                     @endif
@@ -908,6 +1113,19 @@
                         <div class="alert alert-secondary small mb-0">
                             <i class="fas fa-ban me-1"></i>
                             This damage invoice is cancelled and cannot be modified further.
+                        </div>
+                    @endif
+
+                    @if ($dmg->isRejected())
+                        <div class="alert alert-dark small mb-0">
+                            <i class="fas fa-circle-xmark me-1"></i>
+                            This damage was <strong>rejected</strong> and is terminal — it cannot be
+                            re-submitted or confirmed. Create a new damage if needed.
+                            @if ($dmg->approval_notes)
+                                <div class="mt-1 text-muted">
+                                    <strong>Reason:</strong> {{ $dmg->approval_notes }}
+                                </div>
+                            @endif
                         </div>
                     @endif
                 </div>
@@ -1001,6 +1219,41 @@
     </div>
 </div>
 
+@push('css')
+<style>
+    /* Phase 5 — Approval Timeline. A lightweight vertical timeline (Bootstrap
+       doesn't ship one). The left border is the timeline rail; each item's
+       badge sits on the rail. Keeps the maker-checker audit trail scannable. */
+    .timeline { list-style: none; padding-left: 0; position: relative; }
+    .timeline::before {
+        content: '';
+        position: absolute;
+        left: 11px;
+        top: 4px;
+        bottom: 4px;
+        width: 2px;
+        background: #e2e8f0;
+        border-radius: 1px;
+    }
+    .timeline-item { position: relative; padding-left: 0; }
+    .timeline-badge {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-size: 0.7rem;
+        z-index: 1;
+        box-shadow: 0 0 0 3px #fff;
+    }
+</style>
+@endpush
+
 @push('scripts')
 <script>
 $(function () {
@@ -1062,6 +1315,100 @@ $(function () {
                 $btn.prop('disabled', true)
                     .html('<i class="fas fa-spinner fa-spin me-1"></i> Cancelling…');
                 $('#cancelForm').submit();
+            }
+        });
+    });
+
+    // ====== Phase 5 — Submit for approval (draft → submitted/approved) ======
+    $('#submitBtn').on('click', function () {
+        var totalValue = @json((float) $dmg->total_value);
+        var threshold  = @json($approvalThreshold);
+        var autoApprove = threshold > 0 && totalValue <= threshold
+            && @json(auth()->check() && auth()->user()->hasRole('admin', 'manager'));
+
+        Swal.fire({
+            icon: 'question',
+            title: autoApprove ? 'Submit & auto-approve?' : 'Submit for approval?',
+            html: autoApprove
+                ? '<p class="text-start">This damage (Tk ' + totalValue.toFixed(2)
+                  + ') is within the auto-approval threshold (Tk ' + threshold.toFixed(2)
+                  + '). It will be <strong>auto-approved</strong> and you can confirm immediately.</p>'
+                : '<p class="text-start">This will route the damage to a <strong>manager for approval</strong>. '
+                  + 'You will not be able to confirm it until it is approved.</p>',
+            showCancelButton: true,
+            confirmButtonText: '<i class="fas fa-paper-plane"></i> Submit',
+            confirmButtonColor: '#0d6efd',
+            cancelButtonText: 'Cancel',
+            reverseButtons: true
+        }).then(function (result) {
+            if (result.isConfirmed) {
+                var $btn = $('#submitBtn');
+                $btn.prop('disabled', true)
+                    .html('<i class="fas fa-spinner fa-spin me-1"></i> Submitting…');
+                $('#submitForm').submit();
+            }
+        });
+    });
+
+    // ====== Phase 5 — Approve (submitted → approved) ======
+    $('#approveBtn').on('click', function () {
+        var notes = ($('#approveNotes').val() || '').trim();
+        Swal.fire({
+            icon: 'success',
+            title: 'Approve this damage?',
+            html: '<p class="text-start">Approving makes this damage <strong>ready to confirm</strong> '
+                  + '(posts stock OUT + GL). The submitter will be notified.</p>',
+            input: 'textarea',
+            inputValue: notes,
+            inputLabel: 'Approval note (optional)',
+            inputPlaceholder: 'e.g. verified against stock count',
+            showCancelButton: true,
+            confirmButtonText: '<i class="fas fa-circle-check"></i> Approve',
+            confirmButtonColor: '#16a34a',
+            cancelButtonText: 'Cancel',
+            reverseButtons: true
+        }).then(function (result) {
+            if (result.isConfirmed) {
+                $('#approveNotes').val(result.value || '');
+                var $btn = $('#approveBtn');
+                $btn.prop('disabled', true)
+                    .html('<i class="fas fa-spinner fa-spin me-1"></i> Approving…');
+                $('#approveForm').submit();
+            }
+        });
+    });
+
+    // ====== Phase 5 — Reject (submitted → rejected, terminal) ======
+    $('#rejectBtn').on('click', function () {
+        var currentNotes = ($('#rejectNotes').val() || '').trim();
+        Swal.fire({
+            icon: 'warning',
+            title: 'Reject this damage?',
+            html: '<p class="text-start">A rejected damage is <strong>terminal</strong> — it cannot be '
+                  + 're-submitted or confirmed. The submitter must create a new damage if needed. '
+                  + 'A reason is required.</p>',
+            input: 'textarea',
+            inputValue: currentNotes,
+            inputLabel: 'Rejection reason (required)',
+            inputPlaceholder: 'Why is this damage being rejected?',
+            showCancelButton: true,
+            confirmButtonText: '<i class="fas fa-circle-xmark"></i> Reject',
+            confirmButtonColor: '#dc3545',
+            cancelButtonText: 'Keep',
+            reverseButtons: true,
+            inputValidator: function (value) {
+                if (!value || !value.trim()) {
+                    return 'A rejection reason is required.';
+                }
+                return null;
+            }
+        }).then(function (result) {
+            if (result.isConfirmed) {
+                $('#rejectNotes').val(result.value.trim());
+                var $btn = $('#rejectBtn');
+                $btn.prop('disabled', true)
+                    .html('<i class="fas fa-spinner fa-spin me-1"></i> Rejecting…');
+                $('#rejectForm').submit();
             }
         });
     });

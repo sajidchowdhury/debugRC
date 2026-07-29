@@ -701,6 +701,16 @@ Route::middleware('auth')->group(function () {
             ->name('admin.damages.attachments.destroy')
             ->where(['id' => '[0-9]+', 'attachmentId' => '[0-9]+'])
             ->middleware('branch.isolation');
+
+        // Phase 5 — submit a draft for approval (draft → submitted/approved).
+        // Same role gate as create/store (warehouse_manager is the maker).
+        // The auto-approve shortcut (admin/manager + total ≤ threshold) is
+        // handled in DamageService::submitForApproval — the route is the
+        // same regardless. branch.isolation resolves {id} → branch_id.
+        Route::post('admin/damages/{id}/submit', [DamageController::class, 'submit'])
+            ->name('admin.damages.submit')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
     });
 
     // --- Destructive access (confirm posts stock+GL; cancel reverses): admin, manager only ---
@@ -711,6 +721,18 @@ Route::middleware('auth')->group(function () {
             ->where(['id' => '[0-9]+'])
             ->middleware('branch.isolation');
         Route::post('admin/damages/{id}/cancel', [DamageController::class, 'cancel'])->name('admin.damages.cancel')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
+
+        // Phase 5 — approve / reject a submitted damage (the maker-checker
+        // gate). Approve transitions submitted → approved (ready to confirm);
+        // reject transitions submitted → rejected (terminal). Both enforce
+        // segregation of duties (approver/rejecter ≠ submitter) in the policy
+        // + the service. branch.isolation resolves {id} → branch_id.
+        Route::post('admin/damages/{id}/approve', [DamageController::class, 'approve'])->name('admin.damages.approve')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
+        Route::post('admin/damages/{id}/reject', [DamageController::class, 'reject'])->name('admin.damages.reject')
             ->where(['id' => '[0-9]+'])
             ->middleware('branch.isolation');
 

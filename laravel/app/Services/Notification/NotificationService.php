@@ -51,6 +51,12 @@ class NotificationService
         'user_login'                => ['icon' => 'fa-user', 'color' => 'secondary', 'title' => 'User Login'],
         'user_logout'               => ['icon' => 'fa-right-from-bracket', 'color' => 'secondary', 'title' => 'User Logout'],
         'damage_invoice_created'    => ['icon' => 'fa-triangle-exclamation', 'color' => 'danger', 'title' => 'Damage Invoice Created'],
+        // Phase 5 — approval workflow events. `submitted` routes to managers/
+        // admins (the approval worklist). `approved` / `rejected` route back
+        // to the submitter (so they know the decision + can act on it).
+        'damage_invoice_submitted'  => ['icon' => 'fa-paper-plane',         'color' => 'warning', 'title' => 'Damage Submitted for Approval'],
+        'damage_invoice_approved'   => ['icon' => 'fa-circle-check',        'color' => 'success', 'title' => 'Damage Approved'],
+        'damage_invoice_rejected'   => ['icon' => 'fa-circle-xmark',        'color' => 'danger',  'title' => 'Damage Rejected'],
         'branch_demand_created'     => ['icon' => 'fa-clipboard-list', 'color' => 'info', 'title' => 'Branch Demand Created'],
         'customer_limit_increased'  => ['icon' => 'fa-arrow-up-right-dots', 'color' => 'success', 'title' => 'Customer Limit Increased'],
         // Sales return events

@@ -89,6 +89,15 @@ class DamageController extends Controller
                 ->sum('total_value'),
             // Phase 4 — total recovered to date (from employee deductions).
             'recovered_total' => (float) DamageInvoice::where('recovery_amount', '>', 0)->sum('recovery_amount'),
+            // Phase 5 — approval-workflow counts. `submitted` = awaiting a
+            // manager decision (the worklist). `approved` = ready to post
+            // (pre-confirm). `rejected` = terminal denials. The awaiting-
+            // approval value is the sum of submitted damages' total_value —
+            // the exposure sitting in the approval queue.
+            'submitted' => DamageInvoice::where('status', 'submitted')->count(),
+            'approved' => DamageInvoice::where('status', 'approved')->count(),
+            'rejected' => DamageInvoice::where('status', 'rejected')->count(),
+            'awaiting_value' => (float) DamageInvoice::where('status', 'submitted')->sum('total_value'),
         ];
 
         return view('admin.damages.index', [
@@ -189,7 +198,7 @@ class DamageController extends Controller
                 'created_by' => auth()->id(),
             ]);
             return redirect()->route('admin.damages.show', $damage)
-                ->with('success', "Draft damage {$damage->damage_code} created. Review and confirm to apply.");
+                ->with('success', "Draft damage {$damage->damage_code} created. Submit for approval to proceed.");
         } catch (\Throwable $e) {
             return back()->withInput()->with('error', $e->getMessage());
         }
@@ -212,6 +221,13 @@ class DamageController extends Controller
             'accountableEmployee.branch',
             'employeeLedgerEntry.employee',
             'recoveryJournalEntry',
+            // Phase 5 — eager-load the approval-workflow users (submitter /
+            // approver / rejecter) for the Approval Timeline card. Integer
+            // IDs resolve to User models (no FK on the columns — mirrors
+            // reversed_by / created_by on this table).
+            'submitter',
+            'approver',
+            'rejecter',
         ])->findOrFail($id);
 
         // Phase 0 (Damage plan): defense-in-depth policy check (same-branch
@@ -281,6 +297,107 @@ class DamageController extends Controller
             $damage = $this->damageService->cancelDamage($id, auth()->id(), $request->input('cancel_reason'));
             return redirect()->route('admin.damages.show', $damage)
                 ->with('success', "Damage {$damage->damage_code} cancelled.");
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Phase 5 — Approval Workflow (Maker-Checker + Threshold Escalation)
+    |--------------------------------------------------------------------------
+    | submit / approve / reject implement the state-machine gate between draft
+    | and confirm. The auto-approve shortcut (admin/manager + total ≤
+    | threshold) collapses submit+approve into one step — the service handles
+    | it; the controller just forwards. Segregation of duties (approver ≠
+    | submitter) is enforced in both the policy (403) and the service (throw).
+    */
+
+    /**
+     * Submit a draft damage for approval (draft → submitted/approved).
+     *
+     * Route: POST admin/damages/{id}/submit — role:admin,manager,
+     * warehouse_manager + branch.isolation.
+     *
+     * If the auto-approve rule fires (submitter ∈ admin/manager AND total ≤
+     * config('damage.approval.threshold')), the damage transitions straight
+     * to `approved` and can be confirmed immediately. Otherwise it lands in
+     * `submitted` and waits for a manager's approve/reject decision.
+     */
+    public function submit(Request $request, int $id)
+    {
+        $damage = DamageInvoice::findOrFail($id);
+        $this->authorize('submit', $damage);
+
+        try {
+            $damage = $this->damageService->submitForApproval($id, (int) auth()->id());
+
+            $msg = $damage->isApproved()
+                ? "Damage {$damage->damage_code} auto-approved (within threshold) — ready to confirm."
+                : "Damage {$damage->damage_code} submitted — awaiting manager approval.";
+
+            return redirect()->route('admin.damages.show', $damage)
+                ->with('success', $msg);
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Approve a submitted damage (submitted → approved).
+     *
+     * Route: POST admin/damages/{id}/approve — role:admin,manager +
+     * branch.isolation. Segregation of duties: the approver cannot be the
+     * same user who submitted (submitted_by) — enforced by the policy +
+     * the service.
+     */
+    public function approve(Request $request, int $id)
+    {
+        $damage = DamageInvoice::findOrFail($id);
+        $this->authorize('approve', $damage);
+
+        $validated = $request->validate([
+            'approval_notes' => 'nullable|string|max:1000',
+        ]);
+
+        try {
+            $damage = $this->damageService->approve(
+                $id,
+                (int) auth()->id(),
+                $validated['approval_notes'] ?? ''
+            );
+            return redirect()->route('admin.damages.show', $damage)
+                ->with('success', "Damage {$damage->damage_code} approved — ready to confirm.");
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Reject a submitted damage (submitted → rejected, terminal).
+     *
+     * Route: POST admin/damages/{id}/reject — role:admin,manager +
+     * branch.isolation. A rejection reason is REQUIRED (the submitter needs
+     * to know why). A rejected damage is terminal — it cannot be
+     * re-submitted; create a new damage instead.
+     */
+    public function reject(Request $request, int $id)
+    {
+        $damage = DamageInvoice::findOrFail($id);
+        $this->authorize('reject', $damage);
+
+        $validated = $request->validate([
+            'approval_notes' => 'required|string|max:1000',
+        ]);
+
+        try {
+            $damage = $this->damageService->reject(
+                $id,
+                (int) auth()->id(),
+                $validated['approval_notes']
+            );
+            return redirect()->route('admin.damages.show', $damage)
+                ->with('success', "Damage {$damage->damage_code} rejected.");
         } catch (\Throwable $e) {
             return back()->with('error', $e->getMessage());
         }

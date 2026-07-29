@@ -38,17 +38,21 @@ use Illuminate\Auth\Access\HandlesAuthorization;
  * Role reference (User::getRole() reads from Employee):
  *   superadmin → bypasses everything (EnsureRole middleware)
  *   admin      → full access, cross-branch override (logged)
- *   manager    → full access within own branch (create + confirm + cancel)
- *   warehouse_manager → create + view only (CANNOT confirm/cancel — those
- *                       post or reverse GL + stock and need a manager)
+ *   manager    → full access within own branch (create + submit + approve + confirm + cancel)
+ *   warehouse_manager → create + submit + view only (CANNOT approve/confirm/cancel —
+ *                       those post or reverse GL + stock and need a manager, AND
+ *                       the maker-checker rule requires a different person to approve)
  *   salesman, dispatcher, hr, user, accountant, other → NO access
  *
- * Phase 5 (Approval Workflow) will further gate `confirm` behind an
- * 'approved' status and a maker-checker flow; for now (Phase 0) the
- * role gate is the primary control.
+ * Phase 5 (Approval Workflow) — implemented:
+ *   - `confirm` now requires status='approved' (the maker-checker gate).
+ *   - `submit` / `approve` / `reject` methods implement the state machine.
+ *   - Segregation of duties: approve() / reject() throw if the actor is the
+ *     same user who submitted (submitted_by). The auto-approve shortcut
+ *     (submitter ∈ admin/manager AND total ≤ threshold) is the ONE exception.
  *
  * @see routes/web.php  admin/damages route groups
- * @see docs/DAMAGE_IMPLEMENTATION_PLAN.md  Phase 0
+ * @see docs/DAMAGE_IMPLEMENTATION_PLAN.md  Phase 0 + Phase 5
  */
 class DamagePolicy
 {
@@ -107,21 +111,30 @@ class DamagePolicy
     }
 
     /**
-     * Confirm a draft damage (apply stock OUT + post GL).
+     * Confirm an approved damage (apply stock OUT + post GL).
      * Route: admin.damages.{id}.confirm — role:admin,manager + branch.isolation.
      *
      * This is the most sensitive action — it posts to stock and GL
      * (Dr Damage Loss / Cr Inventory). Only admin + manager may perform it.
-     * warehouse_manager (who can create drafts) is explicitly excluded so
-     * that no single person can both create AND post a write-off
+     * warehouse_manager (who can create + submit drafts) is explicitly
+     * excluded so that no single person can both create AND post a write-off
      * (segregation of duties — the core accountability control).
      *
-     * Phase 5 (Approval Workflow) will additionally require the damage to
-     * be in the 'approved' state before confirm can run.
+     * Phase 5: the damage MUST be in the `approved` state. The maker-checker
+     * gate (submit → approve) runs before this; confirm is the final post.
+     * The auto-approve shortcut (admin/manager submitter, total ≤ threshold)
+     * still satisfies this because it transitions to `approved` at submit.
      */
     public function confirm(User $user, DamageInvoice $damage): bool
     {
         if (!$user->hasRole('admin', 'manager')) {
+            return false;
+        }
+        // Phase 5 — confirm requires the approved state. A draft / submitted
+        // damage must go through submitForApproval + approve first (unless
+        // auto-approved at submit). The service re-checks this under a row
+        // lock; this method gives a clean 403.
+        if (!$damage->isApproved()) {
             return false;
         }
 
@@ -129,8 +142,13 @@ class DamagePolicy
     }
 
     /**
-     * Cancel a damage (reverse stock + GL if confirmed, or mark draft cancelled).
-     * Route: admin.damages.{id}.cancel — role:admin,manager + branch.isolation.
+     * Cancel a damage (reverse stock + GL if confirmed, or mark pre-confirm
+     * cancelled). Route: admin.damages.{id}.cancel — role:admin,manager +
+     * branch.isolation.
+     *
+     * Phase 5: cancellable states are draft / submitted / approved / confirmed.
+     * `rejected` is terminal (cannot be cancelled — it was never posted).
+     * `cancelled` is already terminal (the service throws).
      *
      * Same role gate as confirm — cancelling a confirmed damage reverses
      * GL + stock, which is as sensitive as the original post.
@@ -138,6 +156,97 @@ class DamagePolicy
     public function cancel(User $user, DamageInvoice $damage): bool
     {
         if (!$user->hasRole('admin', 'manager')) {
+            return false;
+        }
+        // Phase 5 — rejected + cancelled are terminal.
+        if ($damage->isRejected() || $damage->isCancelled()) {
+            return false;
+        }
+
+        return $this->sameBranch($user, $damage);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Phase 5 — Approval Workflow (Maker-Checker + Threshold Escalation)
+    |--------------------------------------------------------------------------
+    | submit / approve / reject implement the state-machine gate between draft
+    | and confirm. The maker-checker rule (approver ≠ submitter) is enforced
+    | both here (clean 403) and in the service (throws under a row lock).
+    |
+    | submit  : admin/manager/warehouse_manager (same as create) + draft state
+    |           + same-branch. The submitter becomes `submitted_by`.
+    | approve : admin/manager only + submitted state + same-branch + approver ≠
+    |           submitter. The auto-approve shortcut bypasses this for small
+    |           admin/manager-submitted damages (handled in the service).
+    | reject  : admin/manager only + submitted state + same-branch + rejecter ≠
+    |           submitter + reason required (enforced in the controller).
+    */
+
+    /**
+     * Submit a draft damage for approval (draft → submitted/approved).
+     * Route: admin.damages.{id}.submit — role:admin,manager,warehouse_manager
+     * + branch.isolation.
+     *
+     * Same role gate as create (the submitter is the maker). The service
+     * enforces the photo + witness/accountable gates at submit time too
+     * (not just at confirm) so the approver doesn't review an incomplete
+     * submission. The auto-approve shortcut (admin/manager + total ≤
+     * threshold) collapses submit+approve into one step.
+     */
+    public function submit(User $user, DamageInvoice $damage): bool
+    {
+        if (!$user->hasRole('admin', 'manager', 'warehouse_manager')) {
+            return false;
+        }
+        if (!$damage->isDraft()) {
+            return false;
+        }
+
+        return $this->sameBranch($user, $damage);
+    }
+
+    /**
+     * Approve a submitted damage (submitted → approved).
+     * Route: admin.damages.{id}.approve — role:admin,manager + branch.isolation.
+     *
+     * Segregation of duties: the approver CANNOT be the same user who
+     * submitted (submitted_by). The service re-checks this under a row
+     * lock; this method gives a clean 403.
+     */
+    public function approve(User $user, DamageInvoice $damage): bool
+    {
+        if (!$user->hasRole('admin', 'manager')) {
+            return false;
+        }
+        if (!$damage->isSubmitted()) {
+            return false;
+        }
+        // Maker-checker: the submitter cannot approve their own submission.
+        if ((int) $damage->submitted_by === (int) $user->id) {
+            return false;
+        }
+
+        return $this->sameBranch($user, $damage);
+    }
+
+    /**
+     * Reject a submitted damage (submitted → rejected, terminal).
+     * Route: admin.damages.{id}.reject — role:admin,manager + branch.isolation.
+     *
+     * Same segregation-of-duties rule as approve — the submitter cannot
+     * reject their own submission (that's a cancel, not a reject). A
+     * rejection reason is required (enforced in the controller validation).
+     */
+    public function reject(User $user, DamageInvoice $damage): bool
+    {
+        if (!$user->hasRole('admin', 'manager')) {
+            return false;
+        }
+        if (!$damage->isSubmitted()) {
+            return false;
+        }
+        if ((int) $damage->submitted_by === (int) $user->id) {
             return false;
         }
 

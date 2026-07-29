@@ -26,6 +26,11 @@
         'recoverable_count' => 0,
         'recoverable_value' => 0,
         'recovered_total'   => 0,
+        // Phase 5 — approval-workflow stats.
+        'submitted'     => 0,
+        'approved'      => 0,
+        'rejected'      => 0,
+        'awaiting_value'=> 0,
     ], $stats ?? []);
 
     // Phase 1 — damage type badge renderer. Uses the model's badge/icon maps.
@@ -40,12 +45,16 @@
     };
 
     // Damages = financial loss → red/danger theme.
-    // draft = warning, confirmed = danger, cancelled = secondary (per task spec)
+    // Phase 5 — added submitted (info, awaiting approval), approved (primary,
+    // ready to post), rejected (dark, terminal denial).
     $statusBadge = function (string $status): string {
         return [
             'draft'     => '<span class="badge bg-warning-subtle text-warning"><i class="fas fa-pen-to-square me-1"></i>Draft</span>',
+            'submitted' => '<span class="badge bg-info-subtle text-info"><i class="fas fa-paper-plane me-1"></i>Submitted</span>',
+            'approved'  => '<span class="badge bg-primary-subtle text-primary"><i class="fas fa-circle-check me-1"></i>Approved</span>',
             'confirmed' => '<span class="badge bg-danger-subtle text-danger"><i class="fas fa-triangle-exclamation me-1"></i>Confirmed</span>',
             'cancelled' => '<span class="badge bg-secondary-subtle text-secondary"><i class="fas fa-ban me-1"></i>Cancelled</span>',
+            'rejected'  => '<span class="badge bg-dark text-white"><i class="fas fa-circle-xmark me-1"></i>Rejected</span>',
         ][$status] ?? '<span class="badge bg-light text-dark">' . e($status) . '</span>';
     };
 @endphp
@@ -180,6 +189,36 @@
                 </div>
             </div>
         </div>
+        {{-- Phase 5 — Awaiting approval: submitted damages in the user's
+             branch awaiting a manager decision. The worklist card for
+             approvers. Shows the count + the total exposure sitting in the
+             queue. Click-through (via the status filter) lands on the
+             worklist. Only meaningful for admin/manager (the approver roles)
+             — warehouse_manager can't approve, so we hide it for them. --}}
+        @if (auth()->check() && auth()->user()->hasRole('admin', 'manager'))
+            <div class="col-sm-6 col-lg">
+                <div class="card border-0 shadow-sm h-100 border-start border-info border-3">
+                    <div class="card-body d-flex align-items-center">
+                        <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                             style="width:48px;height:48px;background:#0dcaf0;">
+                            <i class="fas fa-paper-plane"></i>
+                        </div>
+                        <div>
+                            <div class="h4 mb-0">{{ number_format((int) $stats['submitted']) }}</div>
+                            <div class="text-muted small">
+                                Awaiting approval
+                                @if ((float) $stats['awaiting_value'] > 0)
+                                    · <span class="text-info">Tk {{ number_format((float) $stats['awaiting_value'], 2) }}</span>
+                                @endif
+                                @if ((int) $stats['approved'] > 0)
+                                    · <span class="text-primary">{{ (int) $stats['approved'] }} approved</span>
+                                @endif
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        @endif
     </div>
 
     {{-- Filter form --}}
@@ -225,8 +264,11 @@
                     <select id="status" name="status" class="form-select form-select-sm">
                         <option value="">All statuses</option>
                         <option value="draft"     {{ $filters['status'] === 'draft' ? 'selected' : '' }}>Draft</option>
+                        <option value="submitted" {{ $filters['status'] === 'submitted' ? 'selected' : '' }}>Submitted</option>
+                        <option value="approved"  {{ $filters['status'] === 'approved' ? 'selected' : '' }}>Approved</option>
                         <option value="confirmed" {{ $filters['status'] === 'confirmed' ? 'selected' : '' }}>Confirmed</option>
                         <option value="cancelled" {{ $filters['status'] === 'cancelled' ? 'selected' : '' }}>Cancelled</option>
+                        <option value="rejected"  {{ $filters['status'] === 'rejected' ? 'selected' : '' }}>Rejected</option>
                     </select>
                 </div>
                 {{-- Phase 1 — damage type filter --}}

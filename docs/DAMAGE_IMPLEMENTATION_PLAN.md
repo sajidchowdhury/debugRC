@@ -1118,6 +1118,49 @@ return [
 
 **Risks:** Must NOT break the sales-return-linked flow — `SalesReturnService::createLinkedDamageWriteOffs` calls `createDamage` + `confirmDamage` back-to-back. Update it to `createDamage` → `submitForApproval` (auto-approved because system-submitted) → `confirmDamage`, OR add a `force_confirm` flag for system-originated damages. Choose the latter for simplicity (system damages skip the approval gate with an audit note "Auto-confirmed: linked to sales return #{code}").
 
+#### Phase 5 — Implementation Status ✅ COMPLETED
+
+**Files changed:** 1 new + 11 modified.
+
+| File | Change |
+|---|---|
+| `database/migrations/2026_01_05_000001_damage_approval_workflow.php` | **NEW** — 7 approval columns (submitted_by/at, approved_by/at, approval_rejected_by/at, approval_notes) + status CHECK widened to 6 states + 2 partial indexes (idx_dmg_submitted, idx_dmg_approved_pending). Mirrors the stock_take approval migration pattern (pg_constraint introspection for the CHECK drop). |
+| `config/damage.php` | `approval` block (threshold + auto_approve_roles) + `roles` matrix. Threshold defaults to 5000 BDT via `DAMAGE_APPROVAL_THRESHOLD` env. |
+| `app/Models/DamageInvoice.php` | 7 fillables + casts; 3 relations (submitter/approver/rejecter → User); 6 state helpers (isSubmitted/isApproved/isRejected/isPreConfirm/isTerminal/isAwaitingApproval) + wasAutoApproved() detector. |
+| `app/Services/Stock/DamageService.php` | 3 new methods (submitForApproval/approve/reject) + dispatchApprovalNotification helper; confirmDamage requires `approved` (force_confirm bypass for system flow); cancelDamage state-aware (rejected is terminal). Auto-approve rule: admin/manager + total ≤ threshold → approved inline; warehouse_manager always routes to submitted. |
+| `app/Policies/DamagePolicy.php` | 3 new methods (submit/approve/reject) + confirm tightened to require isApproved; cancel allows draft/submitted/approved/confirmed (rejected+cancelled terminal); segregation-of-duties (approver ≠ submitter) enforced in approve/reject. |
+| `app/Http/Controllers/Admin/DamageController.php` | 3 new actions (submit/approve/reject); show eager-loads submitter/approver/rejecter; index adds submitted/approved/rejected/awaiting_value stats; store success message prompts "Submit for approval". |
+| `routes/web.php` | 3 new routes: POST submit (admin/manager/warehouse_manager), POST approve + POST reject (admin/manager) — all with branch.isolation. |
+| `app/Services/Sales/SalesReturnService.php` | createLinkedDamageWriteOffs passes force_confirm=true + audit note "Auto-approved: linked to sales return #{code}" — preserves the one-shot create+confirm automation. |
+| `app/Services/Stock/DamageIntegrityService.php` | checkStockMovements + checkGlJournal now treat submitted/approved/rejected as "not yet posted" (isPreConfirm); NEW checkApproval (8th check) verifies timeline stamps + segregation-of-duties. |
+| `app/Services/Notification/NotificationService.php` | 3 new events: damage_invoice_submitted (warning), damage_invoice_approved (success), damage_invoice_rejected (danger). |
+| `resources/views/admin/damages/show.blade.php` | Status badges for all 6 states; state-aware action panel (submit/approve/reject/confirm/cancel); Approval Timeline card with vertical timeline UI + auto-approved badge; SweetAlert2 handlers for the 3 new actions. |
+| `resources/views/admin/damages/index.blade.php` | Status filter + badges for all 6 states; "Awaiting approval" stat card (admin/manager only) showing submitted count + awaiting_value + approved count. |
+
+**Acceptance criteria verification:**
+- ✅ A `warehouse_manager` can create + submit, but cannot approve or confirm (policy + role middleware + service all enforce; warehouse_manager excluded from auto_approve_roles so always routes to submitted).
+- ✅ A damage above threshold requires explicit manager approval (submitForApproval checks `total_value <= threshold` for the auto-approve shortcut; above threshold always goes to submitted).
+- ✅ A damage below threshold submitted by a manager is auto-approved (submitted_by === approved_by, flagged via wasAutoApproved()).
+- ✅ `confirmDamage` throws if status != 'approved' (unless force_confirm=true for system flow).
+- ✅ Approval/rejection notifications fire (dispatchApprovalNotification → NotificationService::dispatch for all 3 events).
+- ✅ The approval timeline is fully visible on the detail page (Approval Timeline card with submitted/approved/rejected badges + timestamps + notes).
+- ✅ Segregation of duties enforced (approve/reject throw if approver === submitter; wasAutoApproved is the ONE exception, explicitly flagged).
+- ✅ Sales-return-linked flow preserved (force_confirm bypass stamps the timeline + audit note; no human approval step needed).
+
+**Key design decisions:**
+1. **`force_confirm` flag (not a submitForApproval system path)** — the spec offered two options for the sales-return flow; chose the flag because it's simpler (one call site, no extra service method) and the audit note makes the bypass explicit. The timeline still reflects what happened (submitted_by/at + approved_by/at stamped with the system user).
+2. **Auto-approve detected via `wasAutoApproved()`** (submitted_by === approved_by) rather than a separate boolean column — avoids schema bloat; the condition is unambiguous because the segregation-of-duties rule blocks manual same-user approval.
+3. **Threshold in config/env, not a DB table** — unlike stock_take (which has a `stock_take_policies` table), Damage's threshold is a single number that rarely changes. A DB table would be overkill; `config('damage.approval.threshold')` + `DAMAGE_APPROVAL_THRESHOLD` env var is sufficient and cacheable.
+4. **`approval_notes` shared by approve + reject** — one nullable text column serves both (an approval note is optional context; a rejection reason is required). Avoids a separate `rejection_reason` column; the status makes the semantics clear.
+5. **Rejected is terminal (cannot be cancelled)** — a rejected damage never posted anything, so there's nothing to reverse. The submitter creates a new damage if they want to retry. This keeps the state machine clean (no rejected→draft transition).
+6. **Submit gate enforces photo + witness/accountable** — the spec notes (lines 917, 1010, 1011) asked for this; enforced in submitForApproval so the approver doesn't review an incomplete submission. The hard confirm-time gates remain as defense-in-depth.
+7. **Maker-checker for cancel too** — cancel is admin/manager only (same as confirm), because cancelling a submitted damage withdraws it from the approval queue (a sensitive action). A warehouse_manager who submitted must ask a manager to cancel their submission.
+
+**Notes for subsequent phases:**
+- Phase 6 (reports) can now filter by approval state (submitted/approved/rejected) — the partial indexes (idx_dmg_submitted, idx_dmg_approved_pending) power the worklist queries.
+- Phase 8 (tests) should cover: ApprovalWorkflowTest (submit/approve/reject/threshold/segregation), the force_confirm bypass, and the auto-approve shortcut.
+- The `cancel_reason` is currently only persisted for confirmed damages (in `reverse_reason`). A future enhancement could store it in `approval_notes` for submitted/approved cancellations — left as-is for now to match the pre-existing draft-cancel behavior.
+
 ---
 
 ### Phase 6 — Dedicated Damage Reports & Dashboard Widget
@@ -1244,7 +1287,7 @@ return [
 | **2** | Integrity audit panel + LISTEN/NOTIFY | Yes (trigger) | 🟠 Regression #10, #17 | Phase 0 | ✅ **COMPLETED** |
 | **3** | Photo / evidence attachments | Yes | 🔴 Shared #22 | Phase 1 (type-aware required-ness) | ✅ **COMPLETED** |
 | **4** | Witness + accountable employee + recovery | Yes | 🔴 Shared #23 | Phase 1 | ✅ **COMPLETED** |
-| **5** | Approval workflow + threshold escalation | Yes | 🔴 Shared #26, #27 | Phases 0, 1, 3, 4 | ⬜ Pending |
+| **5** | Approval workflow + threshold escalation | Yes | 🔴 Shared #26, #27 | Phases 0, 1, 3, 4 | ✅ **COMPLETED** |
 | **6** | Dedicated reports + dashboard widget | Yes (views) | 🔴 Shared #28, #9 | Phases 1, 4, 5 | ⬜ Pending |
 | **7** | UX polish, quick filters, print, barcode | No | 🟡 Shared #30 | Phase 6 | ⬜ Pending |
 | **8** | Tests, reversal window, hardening | Yes (minor) | 🟠 #32, #33, #34 | All prior | ⬜ Pending |

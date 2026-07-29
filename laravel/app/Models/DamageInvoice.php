@@ -40,6 +40,13 @@ use App\Traits\AuditableMasterData;
  * @property string $recovery_amount            Phase 4 — BDT recovered from the accountable employee.
  * @property int|null $employee_ledger_entry_id  Phase 4 — link to the recovery employee_ledger row.
  * @property int|null $recovery_journal_entry_id Phase 4 — link to the recovery GL journal entry.
+ * @property int|null $submitted_by              Phase 5 — user who pushed the draft into the approval queue.
+ * @property string|null $submitted_at           Phase 5 — when the draft was submitted.
+ * @property int|null $approved_by               Phase 5 — user who approved (or auto-approved at submit).
+ * @property string|null $approved_at            Phase 5 — when approved.
+ * @property int|null $approval_rejected_by      Phase 5 — user who rejected the submission.
+ * @property string|null $approval_rejected_at   Phase 5 — when rejected.
+ * @property string|null $approval_notes         Phase 5 — approver/rejecter note (rejection reason).
  */
 class DamageInvoice extends Model
 {
@@ -131,6 +138,14 @@ class DamageInvoice extends Model
         'recovery_amount',
         'employee_ledger_entry_id',
         'recovery_journal_entry_id',
+        // Phase 5 — approval workflow (maker-checker).
+        'submitted_by',
+        'submitted_at',
+        'approved_by',
+        'approved_at',
+        'approval_rejected_by',
+        'approval_rejected_at',
+        'approval_notes',
     ];
 
     protected $casts = [
@@ -149,6 +164,13 @@ class DamageInvoice extends Model
         'recovery_amount' => 'decimal:2',
         'employee_ledger_entry_id' => 'integer',
         'recovery_journal_entry_id' => 'integer',
+        // Phase 5 — approval workflow timestamps.
+        'submitted_at' => 'datetime',
+        'approved_at' => 'datetime',
+        'approval_rejected_at' => 'datetime',
+        'submitted_by' => 'integer',
+        'approved_by' => 'integer',
+        'approval_rejected_by' => 'integer',
     ];
 
     public function items(): \Illuminate\Database\Eloquent\Relations\HasMany
@@ -253,13 +275,123 @@ class DamageInvoice extends Model
 
     /*
     |--------------------------------------------------------------------------
+    | Phase 5 — Approval Workflow (Maker-Checker + Threshold Escalation)
+    |--------------------------------------------------------------------------
+    | The three named users in the approval timeline. submitted_by is set by
+    | submitForApproval; approved_by by approve (or by submitForApproval's
+    | auto-approve shortcut); approval_rejected_by by reject. All three
+    | resolve to a User via the integer ID (no FK — mirrors reversed_by /
+    | created_by on this table). Eager-load with ->with('submitter',
+    | 'approver', 'rejecter') on the detail page.
+    */
+
+    /**
+     * The user who pushed this draft into the approval queue (Phase 5).
+     * Set once by submitForApproval; never overwritten (a rejected damage
+     * is terminal — create a new damage to re-submit).
+     */
+    public function submitter(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(User::class, 'submitted_by');
+    }
+
+    /**
+     * The user who approved the submission (Phase 5). Set by approve() OR
+     * by submitForApproval's auto-approve shortcut (when the submitter is
+     * admin/manager AND total ≤ config('damage.approval.threshold')).
+     * Enforced: approver ≠ submitter (segregation of duties) — the service
+     * throws if approved_by === submitted_by for non-auto-approved rows.
+     */
+    public function approver(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(User::class, 'approved_by');
+    }
+
+    /**
+     * The user who rejected the submission (Phase 5). A rejected damage is
+     * terminal — it cannot be re-submitted or confirmed; create a new
+     * damage instead. rejection_reason lives in approval_notes.
+     */
+    public function rejecter(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(User::class, 'approval_rejected_by');
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | Phase 1 — damage_type helpers
     |--------------------------------------------------------------------------
     */
 
     public function isDraft(): bool { return $this->status === 'draft'; }
+    public function isSubmitted(): bool { return $this->status === 'submitted'; }
+    public function isApproved(): bool { return $this->status === 'approved'; }
     public function isConfirmed(): bool { return $this->status === 'confirmed'; }
     public function isCancelled(): bool { return $this->status === 'cancelled'; }
+    public function isRejected(): bool { return $this->status === 'rejected'; }
+
+    /**
+     * Whether the damage is in a pre-confirm state (no stock movement, no GL).
+     *
+     * Phase 5 introduced `submitted` and `approved` between draft and
+     * confirmed. Both behave like draft from the stock/GL perspective:
+     * nothing has been posted yet. Used by DamageIntegrityService to treat
+     * all three states uniformly as "not yet posted".
+     */
+    public function isPreConfirm(): bool
+    {
+        return in_array($this->status, ['draft', 'submitted', 'approved'], true);
+    }
+
+    /**
+     * Whether the damage is in a terminal state (no further transitions).
+     *
+     * `cancelled` and `rejected` are both terminal — neither can be
+     * re-opened. A cancelled damage keeps its audit trail (stock/GL
+     * reversals if it was confirmed); a rejected damage never posted
+     * anything (it was blocked at the approval gate).
+     */
+    public function isTerminal(): bool
+    {
+        return in_array($this->status, ['cancelled', 'rejected'], true);
+    }
+
+    /**
+     * Whether the damage is currently awaiting a manager's approval decision.
+     *
+     * True only when status='submitted' — the worklist state. Powers the
+     * "Awaiting my approval" stat card on the index page + the partial
+     * index idx_dmg_submitted.
+     */
+    public function isAwaitingApproval(): bool
+    {
+        return $this->status === 'submitted';
+    }
+
+    /**
+     * Whether the damage was auto-approved at submit time (Phase 5).
+     *
+     * True when submitted_by === approved_by AND approved_at is within a
+     * few seconds of submitted_at (the auto-approve shortcut stamps both
+     * in the same transaction). Used by the timeline UI to render an
+     * "Auto-approved (below threshold)" badge instead of a manual approval.
+     */
+    public function wasAutoApproved(): bool
+    {
+        if (!$this->submitted_by || !$this->approved_by) {
+            return false;
+        }
+        if ((int) $this->submitted_by !== (int) $this->approved_by) {
+            return false;
+        }
+        if (!$this->submitted_at || !$this->approved_at) {
+            return false;
+        }
+        // Same user + both timestamps set → auto-approve shortcut. (A manual
+        // approval by the same user is blocked by the segregation-of-duties
+        // rule in DamageService::approve, so this condition is unambiguous.)
+        return true;
+    }
 
     /*
     |--------------------------------------------------------------------------

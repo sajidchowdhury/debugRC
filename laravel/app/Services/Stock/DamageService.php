@@ -5,6 +5,7 @@ namespace App\Services\Stock;
 use App\Models\DamageInvoice;
 use App\Models\DamageInvoiceItem;
 use App\Models\DamageReason;
+use App\Models\User;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\SubLedgerService;
@@ -15,10 +16,26 @@ use Illuminate\Support\Facades\Log;
 /**
  * Damage Service — Phase 6.6 + Phase 1 (Damage Category & Reason Taxonomy).
  *
- * Two-phase flow (same as 6.3/6.4/6.5):
- *   1. createDamage(): creates draft (header + items, no stock/GL)
- *   2. confirmDamage(): stock OUT via StockService + GL (Dr Damage Loss / Cr Inventory)
- *   3. cancelDamage(): if confirmed, reverses; if draft, marks cancelled
+ * Phase 5 state machine (Maker-Checker + Threshold Escalation):
+ *   draft ──submit──► submitted ──approve──► approved ──confirm──► confirmed
+ *    │                   │                     │                     │
+ *    │ cancel            │ reject              │ cancel              │ cancel
+ *    ▼                   ▼                     ▼                     ▼
+ *  cancelled         rejected              cancelled             cancelled
+ *
+ *   1. createDamage():     creates draft (header + items, no stock/GL)
+ *   2. submitForApproval(): draft → submitted (or → approved if auto-approve
+ *                            rule fires: submitter ∈ admin/manager AND
+ *                            total ≤ config('damage.approval.threshold'))
+ *   3. approve() / reject(): submitted → approved / rejected (approver ≠
+ *                            submitter — segregation of duties)
+ *   4. confirmDamage():    approved → confirmed (stock OUT + GL). Requires
+ *                            status='approved'. A `force_confirm` flag
+ *                            bypasses the gate for system-originated
+ *                            damages (sales-return-linked auto-flow).
+ *   5. cancelDamage():     if confirmed, reverses stock+GL+recovery; if
+ *                            draft/submitted/approved, marks cancelled
+ *                            (no stock/GL to reverse). rejected is terminal.
  *
  * GL posting (re-derived from double-entry):
  *   Dr <loss ledger selected by damage_type> / Cr Inventory
@@ -222,23 +239,78 @@ class DamageService
     }
 
     /**
-     * Phase 2: Confirm a draft damage — apply stock OUT + post GL.
+     * Phase 5: Confirm an approved damage — apply stock OUT + post GL.
+     *
+     * State machine (Phase 5): a damage MUST be in the `approved` state
+     * before it can be confirmed. This is the maker-checker gate — the
+     * submitter (maker) cannot also be the confirmer (checker) for material
+     * write-offs. The auto-approve shortcut (submitter ∈ admin/manager AND
+     * total ≤ threshold) still satisfies this: it transitions the damage
+     * to `approved` at submit time, so a single user can self-confirm
+     * small damages but NOT large ones.
+     *
+     * The `force_confirm` flag bypasses the approved-state gate for
+     * system-originated damages (the sales-return-linked auto-flow, which
+     * creates + confirms in one shot with no human approval step). When
+     * `force_confirm` is true, the damage is stamped with submitted_by/at
+     * + approved_by/at (all = the system user) + an audit note, so the
+     * timeline still reflects what happened. This preserves the one-shot
+     * automation in SalesReturnService without weakening the maker-checker
+     * rule for human-created damages.
      *
      * @param int $damageId
      * @param int $confirmedBy
+     * @param bool $force_confirm  System-originated bypass (sales-return
+     *                              linked flow). Skips the approved-state
+     *                              check + stamps the approval timeline.
+     * @param string $forceNote    Audit note for force_confirm (e.g.
+     *                              "Auto-approved: linked to sales return
+     *                              #RET-2025-001"). Ignored when
+     *                              force_confirm=false.
      * @return DamageInvoice
-     * @throws \RuntimeException If not draft, or stock/GL posting fails.
+     * @throws \RuntimeException If not approved (or not pre-confirm when
+     *         force_confirm), or stock/GL posting fails.
      */
-    public function confirmDamage(int $damageId, int $confirmedBy): DamageInvoice
+    public function confirmDamage(int $damageId, int $confirmedBy, bool $force_confirm = false, string $forceNote = ''): DamageInvoice
     {
-        return DB::transaction(function () use ($damageId, $confirmedBy) {
+        return DB::transaction(function () use ($damageId, $confirmedBy, $force_confirm, $forceNote) {
             $damage = DamageInvoice::with('items')->lockForUpdate()->find($damageId);
 
             if (!$damage) {
                 throw new \RuntimeException("Damage invoice {$damageId} not found.");
             }
-            if (!$damage->isDraft()) {
-                throw new \RuntimeException("Only draft damages can be confirmed (current: {$damage->status}).");
+
+            if ($force_confirm) {
+                // System-originated bypass (sales-return-linked auto-flow).
+                // Stamp the approval timeline so the audit trail is complete:
+                // the system acted as both maker and checker, with a note
+                // explaining WHY (the linked sales return). The damage MUST
+                // still be in a pre-confirm state (draft/submitted/approved)
+                // — confirming an already-confirmed or terminal damage is
+                // always an error.
+                if (!$damage->isPreConfirm()) {
+                    throw new \RuntimeException(
+                        "Cannot force-confirm a damage in state '{$damage->status}' "
+                        . "(must be draft/submitted/approved)."
+                    );
+                }
+                $now = now();
+                $damage->update([
+                    'status'         => 'approved',
+                    'submitted_by'   => $damage->submitted_by ?? $confirmedBy,
+                    'submitted_at'   => $damage->submitted_at ?? $now,
+                    'approved_by'    => $damage->approved_by ?? $confirmedBy,
+                    'approved_at'    => $damage->approved_at ?? $now,
+                    'approval_notes' => $damage->approval_notes
+                        ? ($damage->approval_notes . ' | ' . $forceNote)
+                        : $forceNote,
+                ]);
+                $damage->refresh();
+            } elseif (!$damage->isApproved()) {
+                throw new \RuntimeException(
+                    "Only approved damages can be confirmed (current: {$damage->status}). "
+                    . "Submit the draft for approval first."
+                );
             }
 
             // Phase 3 — evidence requirement. For damage types that represent
@@ -307,14 +379,30 @@ class DamageService
     }
 
     /**
-     * Phase 3: Cancel a damage invoice.
-     * - If confirmed: reverse stock + GL.
-     * - If draft: just mark cancelled.
+     * Phase 5: Cancel a damage invoice (state-aware).
+     *
+     *   - confirmed  → reverse stock + GL (+ employee recovery if posted),
+     *                  then mark cancelled. The reversal metadata is stamped.
+     *   - draft / submitted / approved → mark cancelled (no stock/GL to
+     *                  reverse — nothing was posted yet). The approval
+     *                  timeline is preserved (submitted_by/at etc. remain
+     *                  for the audit trail).
+     *   - rejected   → terminal; cannot be cancelled (throws).
+     *   - cancelled  → throws (already terminal).
+     *
+     * Cancelling a SUBMITTED damage is the way to withdraw it from the
+     * approval queue (e.g. the submitter realised they made a mistake).
+     * Cancelling an APPROVED damage withdraws it before it's posted —
+     * useful when the approver changes their mind before the confirmer
+     * runs, or when business circumstances change between approval and
+     * confirm.
      *
      * @param int $damageId
      * @param int $cancelledBy
      * @param string $reason
      * @return DamageInvoice
+     * @throws \RuntimeException If the damage is already terminal
+     *         (cancelled/rejected) or not found.
      */
     public function cancelDamage(int $damageId, int $cancelledBy, string $reason = ''): DamageInvoice
     {
@@ -326,6 +414,12 @@ class DamageService
             }
             if ($damage->isCancelled()) {
                 throw new \RuntimeException("Damage invoice is already cancelled.");
+            }
+            if ($damage->isRejected()) {
+                throw new \RuntimeException(
+                    "Damage invoice was rejected — rejected damages are terminal "
+                    . "and cannot be cancelled. Create a new damage if needed."
+                );
             }
 
             if ($damage->isConfirmed()) {
@@ -385,13 +479,341 @@ class DamageService
                     'status' => 'cancelled',
                 ]);
             } else {
-                // Draft → cancelled (no stock/GL to reverse). Still use
-                // Eloquent so the audit trait fires.
+                // draft / submitted / approved → cancelled (no stock/GL to
+                // reverse — nothing was posted yet). The approval timeline
+                // (submitted_by/at, approved_by/at) is preserved for the
+                // audit trail. Still use Eloquent so the audit trait fires.
                 $damage->update(['status' => 'cancelled']);
             }
 
             return $damage->fresh();
         });
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Phase 5 — Approval Workflow (Maker-Checker + Threshold Escalation)
+    |--------------------------------------------------------------------------
+    | submitForApproval / approve / reject implement the maker-checker gate
+    | between draft and confirm. The auto-approve shortcut (submitter ∈
+    | admin/manager AND total ≤ threshold) collapses submit+approve into one
+    | step for small damages so they aren't bottlenecked. warehouse_manager
+    | submitters ALWAYS require explicit manager approval (they're the maker,
+    | never the checker for their own submission).
+    |
+    | Segregation of duties: the user who submits (submitted_by) CANNOT
+    | approve their own submission — approve() throws if approved_by ===
+    | submitted_by. The auto-approve shortcut is the ONE exception, and it's
+    | explicitly flagged via wasAutoApproved() (submitted_by === approved_by)
+    | so the timeline UI can render an "Auto-approved (below threshold)" badge.
+    */
+
+    /**
+     * Phase 5: Submit a draft damage for approval (draft → submitted/approved).
+     *
+     * Enforces the Phase 3 (photo) + Phase 4 (witness/accountable) gates at
+     * submit time too — not just at confirm. A submitted damage with a
+     * missing required photo / witness / accountable would waste the
+     * approver's review (they'd have to reject it for a missing photo the
+     * submitter could have uploaded first). The hard confirm-time gates
+     * remain as defense-in-depth.
+     *
+     * Auto-approve rule:
+     *   - If the submitter's role ∈ config('damage.approval.auto_approve_roles')
+     *     (default: admin, manager) AND total_value ≤ config('damage.approval.
+     *     threshold') (default: 5000 BDT) → transition straight to `approved`,
+     *     stamping submitted_by/at + approved_by/at with the SAME user (the
+     *     auto-approve flag). The damage can then be confirmed immediately.
+     *   - If the submitter is warehouse_manager (NOT in auto_approve_roles) →
+     *     ALWAYS go to `submitted`, regardless of amount. A warehouse_manager
+     *     can never self-approve.
+     *   - If total_value > threshold (any submitter) → go to `submitted`.
+     *
+     * @param int $damageId
+     * @param int $userId  The submitter (must be the creator or an admin/manager).
+     * @return DamageInvoice  The fresh damage (status submitted OR approved).
+     * @throws \RuntimeException  If the damage is not in draft state, or the
+     *         photo / witness / accountable gates fail.
+     */
+    public function submitForApproval(int $damageId, int $userId): DamageInvoice
+    {
+        return DB::transaction(function () use ($damageId, $userId) {
+            $damage = DamageInvoice::with('items')->lockForUpdate()->find($damageId);
+
+            if (!$damage) {
+                throw new \RuntimeException("Damage invoice {$damageId} not found.");
+            }
+            if (!$damage->isDraft()) {
+                throw new \RuntimeException(
+                    "Only draft damages can be submitted for approval (current: {$damage->status})."
+                );
+            }
+
+            // Phase 3 gate — photo evidence required for photographable loss
+            // types. Re-checked at confirm, but enforced here too so the
+            // approver doesn't review a submission that can't be confirmed.
+            $requirePhoto = (array) config('damage.require_photo_for_types', []);
+            if (in_array($damage->damage_type, $requirePhoto, true)) {
+                $count = DB::table('damage_attachments')
+                    ->where('damage_invoice_id', $damage->id)
+                    ->count();
+                if ($count < 1) {
+                    $typeLabel = DamageInvoice::DAMAGE_TYPE_LABELS[$damage->damage_type] ?? $damage->damage_type;
+                    throw new \RuntimeException(
+                        "Cannot submit a {$typeLabel} damage without at least one photo/evidence attachment. "
+                        . "Upload evidence and retry."
+                    );
+                }
+            }
+
+            // Phase 4 gate — witness / accountable employee required by type.
+            // Re-checked at confirm (defense-in-depth), but enforced here so
+            // the approver isn't asked to approve a submission that violates
+            // the accountability rule.
+            $this->validateAccountability(
+                $damage->damage_type,
+                $damage->witness_employee_id ? (int) $damage->witness_employee_id : null,
+                $damage->accountable_employee_id ? (int) $damage->accountable_employee_id : null
+            );
+
+            $user = User::find($userId);
+            $role = $user ? $user->getRole() : '';
+            $autoApproveRoles = (array) config('damage.approval.auto_approve_roles', ['admin', 'manager']);
+            $threshold = (float) config('damage.approval.threshold', 5000);
+            $totalValue = (float) $damage->total_value;
+
+            $canAutoApprove = in_array($role, $autoApproveRoles, true)
+                && $totalValue <= $threshold
+                && $threshold > 0;  // 0 disables auto-approval
+
+            $now = now();
+            $typeLabel = DamageInvoice::DAMAGE_TYPE_LABELS[$damage->damage_type] ?? $damage->damage_type;
+
+            if ($canAutoApprove) {
+                // Auto-approve shortcut: collapse submit+approve into one
+                // step. Stamp submitted_by/at + approved_by/at with the same
+                // user. The wasAutoApproved() helper detects this
+                // (submitted_by === approved_by) so the UI can render the
+                // badge. The damage can be confirmed immediately after.
+                $damage->update([
+                    'status'       => 'approved',
+                    'submitted_by' => $userId,
+                    'submitted_at' => $now,
+                    'approved_by'  => $userId,
+                    'approved_at'  => $now,
+                    'approval_notes' => "Auto-approved (≤ Tk {$threshold} threshold) at submit.",
+                ]);
+
+                // Notify the submitter that their submission was auto-approved
+                // (no separate approver involved). Suppressed when the caller
+                // is the sales-return-linked system flow (no submitter to
+                // notify — the system user is the actor).
+                $this->dispatchApprovalNotification(
+                    'damage_invoice_approved',
+                    "Damage {$damage->damage_code} ({$typeLabel}) auto-approved — "
+                    . "Tk " . number_format($totalValue, 2)
+                    . " is within the auto-approval threshold. Ready to confirm.",
+                    $damage,
+                    $userId
+                );
+            } else {
+                // Route to explicit approval. warehouse_manager submitters
+                // always land here (never auto-approved). Large damages from
+                // admin/manager also land here (above threshold).
+                $damage->update([
+                    'status'       => 'submitted',
+                    'submitted_by' => $userId,
+                    'submitted_at' => $now,
+                ]);
+
+                $reasonText = $threshold > 0 && $totalValue > $threshold
+                    ? " (above the Tk {$threshold} approval threshold)"
+                    : '';
+
+                $this->dispatchApprovalNotification(
+                    'damage_invoice_submitted',
+                    "Damage {$damage->damage_code} ({$typeLabel}) — Tk "
+                    . number_format($totalValue, 2)
+                    . "{$reasonText} — submitted by {$role}, awaiting manager approval.",
+                    $damage,
+                    $userId
+                );
+            }
+
+            return $damage->fresh([
+                'items.product', 'warehouse.branch',
+                'witnessEmployee.branch', 'accountableEmployee.branch',
+                'submitter', 'approver', 'rejecter',
+            ]);
+        });
+    }
+
+    /**
+     * Phase 5: Approve a submitted damage (submitted → approved).
+     *
+     * Segregation of duties: the approver CANNOT be the same user who
+     * submitted (submitted_by). This is the core maker-checker rule —
+     * the person who created the draft cannot also approve it. The
+     * auto-approve shortcut (in submitForApproval) is the ONE exception,
+     * and it only fires for admin/manager submitters below the threshold.
+     *
+     * @param int $damageId
+     * @param int $userId   The approver (admin/manager, ≠ submitter).
+     * @param string $notes  Optional approval note (context for the audit trail).
+     * @return DamageInvoice
+     * @throws \RuntimeException  If not in submitted state, or the approver
+     *         is the same user who submitted (segregation of duties).
+     */
+    public function approve(int $damageId, int $userId, string $notes = ''): DamageInvoice
+    {
+        return DB::transaction(function () use ($damageId, $userId, $notes) {
+            $damage = DamageInvoice::lockForUpdate()->find($damageId);
+
+            if (!$damage) {
+                throw new \RuntimeException("Damage invoice {$damageId} not found.");
+            }
+            if (!$damage->isSubmitted()) {
+                throw new \RuntimeException(
+                    "Only submitted damages can be approved (current: {$damage->status})."
+                );
+            }
+            // Segregation of duties — the maker cannot be the checker.
+            // (The auto-approve shortcut already stamped approved_by ===
+            // submitted_by at submit time, so this branch only runs for
+            // damages that are STILL in `submitted` — i.e. not auto-approved.)
+            if ((int) $damage->submitted_by === $userId) {
+                throw new \RuntimeException(
+                    "Segregation of duties: you cannot approve your own submission. "
+                    . "Another admin/manager must approve this damage."
+                );
+            }
+
+            $notes = trim($notes);
+            $damage->update([
+                'status'       => 'approved',
+                'approved_by'  => $userId,
+                'approved_at'  => now(),
+                'approval_notes' => $notes,
+            ]);
+
+            $typeLabel = DamageInvoice::DAMAGE_TYPE_LABELS[$damage->damage_type] ?? $damage->damage_type;
+            $this->dispatchApprovalNotification(
+                'damage_invoice_approved',
+                "Damage {$damage->damage_code} ({$typeLabel}) — Tk "
+                . number_format((float) $damage->total_value, 2)
+                . " — approved. Ready to confirm (posts stock OUT + GL).",
+                $damage,
+                (int) $damage->submitted_by  // notify the submitter
+            );
+
+            return $damage->fresh([
+                'items.product', 'warehouse.branch',
+                'submitter', 'approver', 'rejecter',
+            ]);
+        });
+    }
+
+    /**
+     * Phase 5: Reject a submitted damage (submitted → rejected, terminal).
+     *
+     * A rejected damage is TERMINAL — it cannot be re-submitted, confirmed,
+     * or cancelled. The submitter must create a new damage if they want to
+     * try again. The rejection reason is stored in approval_notes (shared
+     * column for approve/reject notes).
+     *
+     * Segregation of duties: the rejecter CANNOT be the submitter (same
+     * rule as approve — the maker cannot be the checker).
+     *
+     * @param int $damageId
+     * @param int $userId   The rejecter (admin/manager, ≠ submitter).
+     * @param string $reason  The rejection reason (REQUIRED — stored in
+     *                         approval_notes so the submitter knows why).
+     * @return DamageInvoice
+     * @throws \RuntimeException  If not in submitted state, or the rejecter
+     *         is the submitter, or the reason is empty.
+     */
+    public function reject(int $damageId, int $userId, string $reason): DamageInvoice
+    {
+        $reason = trim($reason);
+        if ($reason === '') {
+            throw new \RuntimeException('A rejection reason is required.');
+        }
+
+        return DB::transaction(function () use ($damageId, $userId, $reason) {
+            $damage = DamageInvoice::lockForUpdate()->find($damageId);
+
+            if (!$damage) {
+                throw new \RuntimeException("Damage invoice {$damageId} not found.");
+            }
+            if (!$damage->isSubmitted()) {
+                throw new \RuntimeException(
+                    "Only submitted damages can be rejected (current: {$damage->status})."
+                );
+            }
+            if ((int) $damage->submitted_by === $userId) {
+                throw new \RuntimeException(
+                    "Segregation of duties: you cannot reject your own submission."
+                );
+            }
+
+            $damage->update([
+                'status'                => 'rejected',
+                'approval_rejected_by'  => $userId,
+                'approval_rejected_at'  => now(),
+                'approval_notes'        => $reason,
+            ]);
+
+            $typeLabel = DamageInvoice::DAMAGE_TYPE_LABELS[$damage->damage_type] ?? $damage->damage_type;
+            $this->dispatchApprovalNotification(
+                'damage_invoice_rejected',
+                "Damage {$damage->damage_code} ({$typeLabel}) — Tk "
+                . number_format((float) $damage->total_value, 2)
+                . " — REJECTED. Reason: {$reason}",
+                $damage,
+                (int) $damage->submitted_by  // notify the submitter
+            );
+
+            return $damage->fresh([
+                'items.product', 'warehouse.branch',
+                'submitter', 'approver', 'rejecter',
+            ]);
+        });
+    }
+
+    /**
+     * Phase 5 helper: dispatch an approval-workflow notification.
+     *
+     * Wraps NotificationService::dispatch with the right event metadata +
+     * context (branch_id + created_by) so the notification rules can route
+     * to the right recipients (managers/admins for submitted; the submitter
+     * for approved/rejected). Failures are logged but never block the
+     * state transition — the audit trail + status change are the source of
+     * truth, not the notification.
+     */
+    private function dispatchApprovalNotification(
+        string $event,
+        string $body,
+        DamageInvoice $damage,
+        int $actorUserId
+    ): void {
+        try {
+            $this->notifications->dispatch(
+                $event,
+                $body,
+                'damage_invoice',
+                $damage->id,
+                [],
+                [
+                    'branch_id'  => (int) $damage->branch_id,
+                    'created_by' => $actorUserId,
+                ]
+            );
+        } catch (\Throwable $e) {
+            Log::warning("Notification dispatch failed ({$event})", [
+                'damage_id' => $damage->id,
+                'error'     => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
