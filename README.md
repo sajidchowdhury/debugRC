@@ -71,8 +71,8 @@ RC_ERP_v2/
 │   │   ├── sql/             # 7 raw PG DDL files (66 tables + 7 MVs + triggers)
 │   │   └── etl/             # pgloader config + post-load fixes + sequence sync + verify
 │   └── ...
+├── docs/                # All planning & implementation docs (migration, stock, damage, etc.)
 ├── docs/migration/       # Phase reports + accounting rules + schema mapping + nginx config
-├── MIGRATION_PLAN.md     # the master 13-phase plan
 └── .gitignore
 ```
 
@@ -484,7 +484,12 @@ php artisan journal:manual-verify
 
 | Document | Description |
 |---|---|
-| `MIGRATION_PLAN.md` | The full 13-phase migration plan |
+| `docs/MIGRATION_PLAN.md` | The full 13-phase migration plan |
+| `docs/DAMAGE_IMPLEMENTATION_PLAN.md` | Damage module — GAP analysis & phased implementation plan |
+| `docs/STOCK_ADJUSTMENT_IMPLEMENTATION_PLAN.md` | Stock adjustment module implementation plan |
+| `docs/WAREHOUSE_TRANSFER_INNER_BRANCH_PLAN.md` | Inner-branch warehouse transfer plan |
+| `docs/SETUP_GUIDE.md` | Setup guide |
+| `docs/DOCKER_README.md` | Docker deployment guide |
 | `docs/migration/avg_cost_rule.md` | Moving-average cost first-principles document |
 | `docs/migration/journal_posting_rules.md` | GL posting rules (all ~40 methods) |
 | `docs/migration/schema_mapping.md` | 66-table MySQL → PostgreSQL mapping |
