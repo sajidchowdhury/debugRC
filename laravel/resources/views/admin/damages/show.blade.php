@@ -24,6 +24,21 @@
     // drafts and view, but cannot post — so hide the action buttons and
     // show an explanatory note instead of letting them click into a 403.
     $canPost = auth()->check() && auth()->user()->hasRole('admin', 'manager');
+
+    // Phase 1 — damage type badge + structured reason label.
+    $typeLabels = \App\Models\DamageInvoice::DAMAGE_TYPE_LABELS;
+    $typeBadges = \App\Models\DamageInvoice::DAMAGE_TYPE_BADGE_CLASSES;
+    $typeIcons  = \App\Models\DamageInvoice::DAMAGE_TYPE_ICONS;
+    $typeBadge = function () use ($dmg, $typeLabels, $typeBadges, $typeIcons): string {
+        $t    = $dmg->damage_type ?? 'other';
+        $cls  = $typeBadges[$t] ?? 'bg-light text-dark';
+        $icon = $typeIcons[$t]  ?? 'fa-circle-question';
+        $lbl  = $typeLabels[$t] ?? $t;
+        return '<span class="badge ' . $cls . ' fs-6"><i class="fas ' . $icon . ' me-1"></i>' . e($lbl) . '</span>';
+    };
+    // Structured reason (from the eager-loaded reasonTaxonomy relation).
+    $reasonTax  = $dmg->reasonTaxonomy;
+    $reasonLbl  = $reasonTax ? $reasonTax->label : null;
 @endphp
 
 <div class="container-fluid py-2">
@@ -34,6 +49,8 @@
             <h1 class="h4 mb-1">
                 <i class="fas fa-triangle-exclamation me-2"></i>{{ $title }}
                 {!! $statusBadge() !!}
+                {{-- Phase 1 — damage type badge (prominent, next to status) --}}
+                {!! $typeBadge() !!}
                 @if ($dmg->is_reversed)
                     <span class="badge bg-light text-danger ms-1"><i class="fas fa-rotate-left me-1"></i>Reversed</span>
                 @endif
@@ -113,8 +130,28 @@
                             @endif
                         </dd>
 
+                        {{-- Phase 1 — Damage type (prominent) --}}
+                        <dt class="col-sm-3 text-muted">Damage type</dt>
+                        <dd class="col-sm-9">{!! $typeBadge() !!}</dd>
+
+                        {{-- Phase 1 — structured reason (label from taxonomy) --}}
                         <dt class="col-sm-3 text-muted">Reason</dt>
-                        <dd class="col-sm-9">{!! nl2br(e($dmg->reason ?: '—')) !!}</dd>
+                        <dd class="col-sm-9">
+                            @if ($reasonLbl)
+                                <span class="fw-semibold">{{ $reasonLbl }}</span>
+                                @if ($dmg->reason_code)
+                                    <code class="small text-muted ms-1">{{ $dmg->reason_code }}</code>
+                                @endif
+                            @elseif ($dmg->reason_code)
+                                <code>{{ $dmg->reason_code }}</code>
+                            @else
+                                <span class="text-muted">—</span>
+                            @endif
+                        </dd>
+
+                        {{-- Phase 1 — reason details (structured context) --}}
+                        <dt class="col-sm-3 text-muted">Reason details</dt>
+                        <dd class="col-sm-9">{!! nl2br(e($dmg->reason_detail ?: '—')) !!}</dd>
 
                         <dt class="col-sm-3 text-muted">Total value</dt>
                         <dd class="col-sm-9"><strong class="text-danger">Tk {{ number_format((float) $dmg->total_value, 2) }}</strong></dd>
@@ -124,6 +161,12 @@
                             {{ optional($dmg->created_at)->format('Y-m-d H:i') }}
                             @if ($dmg->created_by) · by user #{{ $dmg->created_by }} @endif
                         </dd>
+
+                        {{-- Legacy free-text reason (kept for back-compat) --}}
+                        @if ($dmg->reason)
+                            <dt class="col-sm-3 text-muted">Additional notes</dt>
+                            <dd class="col-sm-9">{!! nl2br(e($dmg->reason)) !!}</dd>
+                        @endif
                     </dl>
                 </div>
             </div>

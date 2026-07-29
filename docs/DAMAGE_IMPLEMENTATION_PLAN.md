@@ -673,6 +673,52 @@ The plan is organized so that each phase is **independently shippable**, **non-b
 
 ### Phase 1 — Damage Category & Reason Taxonomy (schema: enum + taxonomy table)
 
+#### Phase 1 — Implementation Status ✅ COMPLETED
+
+> **Commit:** `feat(damage): Phase 1 — damage category & reason taxonomy` (see git log)
+> **Status:** ✅ Implemented. Schema migration + model + service (type-aware GL) + controller + 3 views. Backward-compatible (legacy `reason` column kept).
+
+**Files changed (6) + created (2):**
+
+| # | File | Change |
+|---|---|---|
+| 1 | `laravel/database/migrations/2026_01_01_000001_damage_category_and_reason_taxonomy.php` | **NEW** — adds `damage_type` (varchar(30) NOT NULL DEFAULT 'real_damage', CHECK enum) + `reason_code` (varchar(50) nullable) + `reason_detail` (text nullable) to `damage_invoices`; backfills sales-return-linked rows → `customer_return`, everything else → `real_damage`; creates `damage_reasons` taxonomy table (reason_code UNIQUE, label, damage_type, is_active, sort_order, soft deletes, timestamps) with the same CHECK enum; seeds 17 standard reasons; RLS on `damage_reasons` (SELECT all, write admin-only); indexes `idx_dmg_type` + `idx_dr_type_active`. |
+| 2 | `laravel/app/Models/DamageReason.php` | **NEW** — global master-data model. `active`/`forType`/`ordered` scopes + `groupedByType()` helper that returns reasons grouped by damage_type for the create-form dropdown. SoftDeletes (a reason referenced by historical damages must never be hard-deleted). |
+| 3 | `laravel/app/Models/DamageInvoice.php` | Added `DAMAGE_TYPES`, `DAMAGE_TYPE_LABELS`, `DAMAGE_TYPE_BADGE_CLASSES`, `DAMAGE_TYPE_ICONS` constants. Added `damage_type`/`reason_code`/`reason_detail` to `$fillable`. Added `reasonTaxonomy()` relation (named to avoid the `reason` column/relation shadowing gotcha). |
+| 4 | `laravel/app/Services/Stock/DamageService.php` | `createDamage` now requires `damage_type` (validated against DAMAGE_TYPES) and accepts optional `reason_code` (validated against the `damage_reasons` taxonomy for the chosen type) + `reason_detail`. New `resolveLossLedgerId()` routes the GL Dr to `damage_loss` for real_damage/quality_reject/customer_return/other and `inventory_shrinkage` for missing/theft (with cross-fallback). GL description/memo now include the type label + reason. Notification message includes type + reason label. `validateCreateInput` enforces `damage_type`. |
+| 5 | `laravel/app/Services/Sales/SalesReturnService.php` | Linked-damage `createDamage` call now passes `damage_type => 'customer_return'` + `reason_code => 'returned_damaged'` + `reason_detail` so auto write-offs are correctly classified from creation (not reliant on a later backfill). |
+| 6 | `laravel/app/Http/Controllers/Admin/DamageController.php` | `store` validates `damage_type` (required, Rule::in) + `reason_code` (nullable, Rule::exists with damage_type+is_active scope) + `reason_detail` (nullable, max:2000). `index` adds `damage_type` filter + per-type counts (missing_count, theft_count). `create` passes `damageReasons` (groupedByType) + type labels to the view. `show` eager-loads `reasonTaxonomy`. |
+| 7 | `laravel/resources/views/admin/damages/create.blade.php` | Added Damage type select (required, 6 enum values) + Reason dropdown (filtered by type via JS) + Reason details textarea + accountability warning (shown for missing/theft) + relabeled legacy free-text as "Additional notes (optional)". JS: `populateReasons(type)` repopulates the dropdown; `toggleAccountabilityWarning(type)` shows/hides the warning; sticky on validation error. |
+| 8 | `laravel/resources/views/admin/damages/index.blade.php` | Added Damage type filter + Type column (colored badge per type) + "Missing + Theft (unaccounted)" stat card (the accountability metric) + `table-warning` row highlight for missing/theft rows. Empty-state colspan updated 8 → 9. |
+| 9 | `laravel/resources/views/admin/damages/show.blade.php` | Damage type badge in the hero header (next to status). Added "Damage type" + "Reason" (label from taxonomy + code) + "Reason details" + "Additional notes" (legacy free-text, conditional) rows in the details card. |
+
+**Acceptance criteria — verification status:**
+
+| Criterion | Status | How verified |
+|---|---|---|
+| Cannot create a damage without `damage_type` | ✅ Met | `DamageController::store` validates `damage_type` as `required` + `Rule::in(DAMAGE_TYPES)`. `DamageService::validateCreateInput` re-checks. The DB CHECK constraint `damage_invoices_type_check` is the final guard. The create form's `<select name="damage_type" required>` has a default selected option (`real_damage`). |
+| The `damage_reasons` dropdown filters by selected type | ✅ Met | `create.blade.php` JS `populateReasons(type)` empties and refills `#reason_code` with only the reasons whose `damage_type` matches. Wired to the `damage_type` `change` event + runs on load. The grouped data comes from `DamageReason::groupedByType()` via `@json`. |
+| Existing records backfilled to `damage_type='real_damage'` (or 'customer_return' where sales_return_id IS NOT NULL) | ✅ Met | Migration step 2: explicit UPDATE sets `real_damage` on any NULL/invalid rows, then a second UPDATE sets `customer_return` where `sales_return_id IS NOT NULL AND > 0`. The column DEFAULT 'real_damage' also covers the ALTER itself. |
+| GL posts to the type-specific ledger when configured | ✅ Met | `DamageService::resolveLossLedgerId($damageType)` maps missing/theft → `inventory_shrinkage` (fallback `damage_loss`), others → `damage_loss` (fallback `inventory_shrinkage`). `postDamageGL` calls it. Both natures are in `ReportService::operating_expenses` (Phase 0 fix), so the P&L now splits damage by type. |
+| `reason_code` is validated against the chosen `damage_type` | ✅ Met | Controller: `Rule::exists('damage_reasons','reason_code')->where(damage_type = input + is_active)`. Service: `DamageReason::active()->where('reason_code',…)->where('damage_type',…)->first()` throws `InvalidArgumentException` if not found. DB CHECK on `damage_reasons.damage_type` prevents bad seeds. |
+
+**Notes & decisions:**
+- **`reasonTaxonomy` relation naming:** The model has both a `reason` column (legacy free-text) and a relation to DamageReason. Eloquent's magic `__get` returns the attribute (column) when a name collision exists, so `$damage->reason` returns the free-text string — NOT the relation. The relation is therefore named `reasonTaxonomy()` to avoid the shadow. The GL memo in `postDamageGL` deliberately uses raw columns (`reason_code`, `reason`) rather than the relation to avoid a lazy-load inside the GL transaction.
+- **RLS on `damage_reasons` (master-data pattern):** `damage_reasons` has no `branch_id` (it's global reference data), so the RLS policy is role-based, not branch-based: SELECT visible to all (`USING (true)`), INSERT/UPDATE/DELETE admin-only (`app.is_admin = 'true'`). RLS is enabled + FORCED as the LAST migration step (after seeding) so the seed `updateOrInsert` calls succeed regardless of the `app.is_admin` GUC state at migration time. This is defense-in-depth; the app layer has no write route yet (a management UI is deferred).
+- **Type-aware GL routing (P&L split):** `missing` and `theft` hit `inventory_shrinkage` (unaccounted-for stock); `real_damage`, `quality_reject`, `customer_return`, `other` hit `damage_loss` (physical write-off). Both natures roll up under Operating Expenses, but are now distinguishable — addressing the core complaint that "missing" stock was indistinguishable from real damage in the books. Cross-fallback ensures the GL post never fails if one ledger is unconfigured.
+- **Backward compatibility:** The legacy `reason` text column is KEPT and still populated (the create form relabels it "Additional notes"). Existing rows keep their free-text reason; new rows get the structured `reason_code`/`reason_detail` + optional free-text notes. The `show` view displays the structured reason prominently and the legacy free-text as "Additional notes" (only if non-empty).
+- **SalesReturnService linked-damage flow:** Updated to pass `damage_type => 'customer_return'` + `reason_code => 'returned_damaged'` explicitly so auto write-offs are correctly classified from creation (the migration's backfill handles pre-existing rows, but new linked damages need the explicit value).
+- **Accountability warning (Phase 4 preview):** The create form shows a warning when `missing` or `theft` is selected, explaining that a witness/accountable employee will be required (arrives in Phase 4). This sets user expectations now without blocking creation.
+- **PHP syntax verification:** PHP CLI is not available in the dev sandbox; verified via brace/parenthesis balance checks (deltas identical to the pre-edit baseline, confirming no new imbalance) and Blade directive balance checks (all OK). Full validation will run in the Docker environment (PHP 8.2+).
+
+**Follow-up for later phases:**
+- Phase 2 will add the integrity-check panel (no schema change, reuses these columns in the `gl` check).
+- Phase 4 will make `accountable_employee_id` REQUIRED when `damage_type='missing'` and `witness_employee_id` REQUIRED when `damage_type='theft'` (enforced in `DamageService::createDamage` + the controller). The accountability warning text in `create.blade.php` already previews this.
+- Phase 5 will tighten `confirm` to require `status='approved'` (the maker-checker flow).
+- A management UI for `damage_reasons` (admin CRUD) is deferred — reasons are seeded and managed via migration for now.
+
+---
+
 **Goal:** Solve the #1 accountability gap — distinguish **real damage** from **missing/unaccounted** stock. Introduce a structured `damage_type` and a reason taxonomy so damage can be categorized and reported on.
 
 **Schema changes (migration `2026_01_01_000001_damage_category_and_reason_taxonomy`):**

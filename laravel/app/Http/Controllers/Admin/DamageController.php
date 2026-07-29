@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\DamageInvoice;
+use App\Models\DamageReason;
 use App\Models\Warehouse;
 use App\Models\Product;
 use App\Models\Branch;
@@ -11,6 +12,7 @@ use App\Services\Stock\DamageService;
 use App\Services\Stock\StockService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 /**
  * Damage Controller — Phase 6.6.
@@ -39,6 +41,7 @@ class DamageController extends Controller
             ->when($request->input('to_date'), fn($q, $d) => $q->where('damage_date', '<=', $d))
             ->when($request->input('warehouse_id'), fn($q, $wid) => $q->where('warehouse_id', $wid))
             ->when($request->input('status'), fn($q, $s) => $q->where('status', $s))
+            ->when($request->input('damage_type'), fn($q, $t) => $q->where('damage_type', $t))
             ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('damage_code', 'ILIKE', "%{$search}%");
@@ -57,6 +60,9 @@ class DamageController extends Controller
             'confirmed' => DamageInvoice::where('status', 'confirmed')->count(),
             'cancelled' => DamageInvoice::where('status', 'cancelled')->count(),
             'total_value' => DamageInvoice::where('status', 'confirmed')->sum('total_value'),
+            // Phase 1 — per-type counts for the accountability dashboard.
+            'missing_count' => DamageInvoice::where('damage_type', 'missing')->count(),
+            'theft_count' => DamageInvoice::where('damage_type', 'theft')->count(),
         ];
 
         return view('admin.damages.index', [
@@ -64,8 +70,10 @@ class DamageController extends Controller
             'damages' => $damages,
             'warehouses' => $warehouses,
             'branches' => $branches,
+            'damageTypes' => DamageInvoice::DAMAGE_TYPES,
+            'damageTypeLabels' => DamageInvoice::DAMAGE_TYPE_LABELS,
             'stats' => $stats,
-            'filters' => $request->only(['from_date', 'to_date', 'warehouse_id', 'status', 'branch_id', 'search']),
+            'filters' => $request->only(['from_date', 'to_date', 'warehouse_id', 'status', 'damage_type', 'branch_id', 'search']),
         ]);
     }
 
@@ -77,10 +85,17 @@ class DamageController extends Controller
         $warehouses = Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
         $products = Product::active()->orderBy('product_name')->limit(500)->get();
 
+        // Phase 1 — load the reason taxonomy grouped by damage_type for the
+        // type-filtered dropdown on the create form.
+        $damageReasons = DamageReason::groupedByType();
+
         return view('admin.damages.create', [
             'title' => 'New Damage Invoice',
             'warehouses' => $warehouses,
             'products' => $products,
+            'damageTypes' => DamageInvoice::DAMAGE_TYPES,
+            'damageTypeLabels' => DamageInvoice::DAMAGE_TYPE_LABELS,
+            'damageReasons' => $damageReasons,
         ]);
     }
 
@@ -92,6 +107,19 @@ class DamageController extends Controller
         $validated = $request->validate([
             'warehouse_id' => 'required|integer|exists:warehouses,id',
             'damage_date' => 'required|date',
+            // Phase 1 — damage_type is required and must be a known enum.
+            'damage_type' => ['required', 'string', Rule::in(DamageInvoice::DAMAGE_TYPES)],
+            // reason_code is optional but if supplied MUST be an active reason
+            // belonging to the chosen damage_type (so the dropdown filter is
+            // authoritative). DamageService re-validates this as a backstop.
+            'reason_code' => [
+                'nullable', 'string', 'max:50',
+                Rule::exists('damage_reasons', 'reason_code')->where(function ($q) use ($request) {
+                    $q->where('damage_type', $request->input('damage_type'))
+                      ->where('is_active', true);
+                }),
+            ],
+            'reason_detail' => 'nullable|string|max:2000',
             'reason' => 'nullable|string|max:1000',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
@@ -103,11 +131,13 @@ class DamageController extends Controller
             $damage = $this->damageService->createDamage([
                 'warehouse_id' => $validated['warehouse_id'],
                 'damage_date' => $validated['damage_date'],
+                'damage_type' => $validated['damage_type'],
+                'reason_code' => $validated['reason_code'] ?? '',
+                'reason_detail' => $validated['reason_detail'] ?? '',
                 'reason' => $validated['reason'] ?? '',
                 'items' => $validated['items'],
                 'created_by' => auth()->id(),
             ]);
-
             return redirect()->route('admin.damages.show', $damage)
                 ->with('success', "Draft damage {$damage->damage_code} created. Review and confirm to apply.");
         } catch (\Throwable $e) {
@@ -118,7 +148,10 @@ class DamageController extends Controller
     public function show(int $id)
     {
         $damage = DamageInvoice::with([
-            'items.product', 'warehouse.branch', 'branch', 'journalEntry.lines.ledger'
+            'items.product', 'warehouse.branch', 'branch',
+            'journalEntry.lines.ledger',
+            // Phase 1 — eager-load the structured reason label for display.
+            'reasonTaxonomy',
         ])->findOrFail($id);
 
         // Phase 0 (Damage plan): defense-in-depth policy check (same-branch

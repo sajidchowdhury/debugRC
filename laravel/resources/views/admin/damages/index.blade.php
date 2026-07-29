@@ -8,17 +8,31 @@
         'to_date'       => '',
         'warehouse_id'  => '',
         'status'        => '',
+        'damage_type'   => '',
         'branch_id'     => '',
         'search'        => '',
     ], is_array($filters ?? null) ? $filters : []);
 
     $stats = array_merge([
-        'total'      => 0,
-        'draft'      => 0,
-        'confirmed'  => 0,
-        'cancelled'  => 0,
-        'total_value'=> 0,
+        'total'         => 0,
+        'draft'         => 0,
+        'confirmed'     => 0,
+        'cancelled'     => 0,
+        'total_value'   => 0,
+        'missing_count' => 0,
+        'theft_count'   => 0,
     ], $stats ?? []);
+
+    // Phase 1 — damage type badge renderer. Uses the model's badge/icon maps.
+    $typeLabels  = $damageTypeLabels ?? \App\Models\DamageInvoice::DAMAGE_TYPE_LABELS;
+    $typeBadges  = \App\Models\DamageInvoice::DAMAGE_TYPE_BADGE_CLASSES;
+    $typeIcons   = \App\Models\DamageInvoice::DAMAGE_TYPE_ICONS;
+    $typeBadge = function (string $type) use ($typeLabels, $typeBadges, $typeIcons): string {
+        $label = $typeLabels[$type] ?? $type;
+        $cls   = $typeBadges[$type] ?? 'bg-light text-muted';
+        $icon  = $typeIcons[$type] ?? 'fa-circle-question';
+        return '<span class="badge ' . $cls . '"><i class="fas ' . $icon . ' me-1"></i>' . e($label) . '</span>';
+    };
 
     // Damages = financial loss → red/danger theme.
     // draft = warning, confirmed = danger, cancelled = secondary (per task spec)
@@ -120,6 +134,25 @@
                 </div>
             </div>
         </div>
+        {{-- Phase 1 — accountability flag: unaccounted-for (missing) + theft —}}
+        {{-- the core gap this phase addresses. Highlights how much stock is   --}}
+        {{-- being written off WITHOUT physical damage evidence.              --}}
+        <div class="col-sm-6 col-lg">
+            <div class="card border-0 shadow-sm h-100 border-start border-warning border-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#d97706;">
+                        <i class="fas fa-magnifying-glass"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">
+                            {{ number_format((int) ($stats['missing_count'] + $stats['theft_count'])) }}
+                        </div>
+                        <div class="text-muted small">Missing + Theft (unaccounted)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     {{-- Filter form --}}
@@ -169,6 +202,18 @@
                         <option value="cancelled" {{ $filters['status'] === 'cancelled' ? 'selected' : '' }}>Cancelled</option>
                     </select>
                 </div>
+                {{-- Phase 1 — damage type filter --}}
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1" for="damage_type">Damage type</label>
+                    <select id="damage_type" name="damage_type" class="form-select form-select-sm">
+                        <option value="">All types</option>
+                        @foreach (($damageTypes ?? \App\Models\DamageInvoice::DAMAGE_TYPES) as $t)
+                            <option value="{{ $t }}" {{ $filters['damage_type'] === $t ? 'selected' : '' }}>
+                                {{ $typeLabels[$t] ?? $t }}
+                            </option>
+                        @endforeach
+                    </select>
+                </div>
                 <div class="col-md-2">
                     <label class="form-label small text-muted mb-1" for="search">Search code</label>
                     <input type="text" id="search" name="search" class="form-control form-control-sm"
@@ -197,6 +242,7 @@
                             <th>Code</th>
                             <th>Date</th>
                             <th>Warehouse</th>
+                            <th>Type</th>
                             <th class="text-end">Items</th>
                             <th class="text-end">Total (Tk)</th>
                             <th>Status</th>
@@ -206,7 +252,7 @@
                     </thead>
                     <tbody>
                         @forelse ($damages as $dmg)
-                            <tr>
+                            <tr class="{{ in_array($dmg->damage_type, ['missing','theft'], true) ? 'table-warning' : '' }}">
                                 <td>
                                     <a href="{{ route('admin.damages.show', $dmg) }}"
                                        class="fw-semibold text-decoration-none">
@@ -228,6 +274,8 @@
                                         <span class="text-muted">—</span>
                                     @endif
                                 </td>
+                                {{-- Phase 1 — damage type badge --}}
+                                <td>{!! $typeBadge($dmg->damage_type) !!}</td>
                                 <td class="text-end">{{ number_format($dmg->items->count()) }}</td>
                                 <td class="text-end">{{ number_format((float) $dmg->total_value, 2) }}</td>
                                 <td>{!! $statusBadge($dmg->status) !!}</td>
@@ -249,7 +297,7 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="8" class="text-center text-muted py-5">
+                                <td colspan="9" class="text-center text-muted py-5">
                                     <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
                                     No damage invoices found. Try adjusting filters or
                                     <a href="{{ route('admin.damages.create') }}">create a new one</a>.

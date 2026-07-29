@@ -24,7 +24,10 @@ use App\Traits\AuditableMasterData;
  * @property int $warehouse_id
  * @property int $branch_id
  * @property string $total_value
- * @property string $reason
+ * @property string $reason          Legacy free-text reason (kept for back-compat).
+ * @property string $damage_type    One of DAMAGE_TYPES (Phase 1).
+ * @property string|null $reason_code   Structured reason → damage_reasons.reason_code (Phase 1).
+ * @property string|null $reason_detail  Optional extra context for the chosen reason_code (Phase 1).
  * @property string $status draft|confirmed|cancelled
  * @property int|null $journal_entry_id
  * @property bool $is_reversed
@@ -43,6 +46,62 @@ class DamageInvoice extends Model
 
     protected $dates = ['deleted_at'];
 
+    /**
+     * The six valid damage types (Phase 1 — Damage Category & Reason Taxonomy).
+     *
+     * Kept in sync with the DB CHECK constraint `damage_invoices_type_check`
+     * (migration 2026_01_01_000001). The `damage_type` drives:
+     *   - the create-form reason dropdown filter,
+     *   - the GL loss-ledger selection in DamageService::postDamageGL,
+     *   - the P&L split (damage_loss vs inventory_shrinkage),
+     *   - future Phase 4 validation (missing → accountable employee required).
+     */
+    public const DAMAGE_TYPES = [
+        'real_damage',     // physical breakage / spoilage / expiry / fire / water / transit
+        'missing',         // not found in warehouse, no physical damage (core complaint)
+        'theft',           // suspected / confirmed theft
+        'quality_reject',  // failed QC
+        'customer_return', // auto-created from a sales return
+        'other',
+    ];
+
+    /**
+     * Human-readable labels for each damage_type (UI badges / dropdowns).
+     */
+    public const DAMAGE_TYPE_LABELS = [
+        'real_damage'     => 'Real damage',
+        'missing'         => 'Missing / unaccounted',
+        'theft'           => 'Theft',
+        'quality_reject'  => 'Quality reject',
+        'customer_return' => 'Customer return',
+        'other'           => 'Other',
+    ];
+
+    /**
+     * Bootstrap-coloured badge classes per damage_type for the UI.
+     * (danger = physical loss, warning = accountability flag, dark = crime, etc.)
+     */
+    public const DAMAGE_TYPE_BADGE_CLASSES = [
+        'real_damage'     => 'bg-danger-subtle text-danger',
+        'missing'         => 'bg-warning-subtle text-warning',
+        'theft'           => 'bg-dark-subtle text-dark',
+        'quality_reject'  => 'bg-info-subtle text-info',
+        'customer_return' => 'bg-secondary-subtle text-secondary',
+        'other'           => 'bg-light text-muted',
+    ];
+
+    /**
+     * FontAwesome icons per damage_type (UI badges).
+     */
+    public const DAMAGE_TYPE_ICONS = [
+        'real_damage'     => 'fa-triangle-exclamation',
+        'missing'         => 'fa-magnifying-glass',
+        'theft'           => 'fa-user-secret',
+        'quality_reject'  => 'fa-clipboard-check',
+        'customer_return' => 'fa-rotate-left',
+        'other'           => 'fa-circle-question',
+    ];
+
     protected $fillable = [
         'damage_code',
         'damage_date',
@@ -51,6 +110,9 @@ class DamageInvoice extends Model
         'sales_return_id',
         'total_value',
         'reason',
+        'damage_type',
+        'reason_code',
+        'reason_detail',
         'status',
         'journal_entry_id',
         'is_reversed',
@@ -91,6 +153,27 @@ class DamageInvoice extends Model
     {
         return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'journal_entry_id');
     }
+
+    /**
+     * The structured reason taxonomy row (Phase 1) — matched by reason_code.
+     *
+     * Named `reasonTaxonomy` (NOT `reason`) because the `reason` column
+     * (legacy free-text) would shadow a `reason()` relation in Eloquent's
+     * magic __get (attributes take precedence over relations). Eager-load
+     * with ->with('reasonTaxonomy').
+     *
+     * Nullable: old rows / free-text-only damages have no reason_code.
+     */
+    public function reasonTaxonomy(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(DamageReason::class, 'reason_code', 'reason_code');
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Phase 1 — damage_type helpers
+    |--------------------------------------------------------------------------
+    */
 
     public function isDraft(): bool { return $this->status === 'draft'; }
     public function isConfirmed(): bool { return $this->status === 'confirmed'; }

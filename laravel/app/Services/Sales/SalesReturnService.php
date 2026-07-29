@@ -653,12 +653,19 @@ class SalesReturnService
             }
 
             // Create the damage invoice (draft) via DamageService.
+            // Phase 1 (Damage plan): tag linked-damage write-offs with the
+            // 'customer_return' damage_type + the 'returned_damaged' reason
+            // code so they're distinguishable from manual warehouse damages
+            // in the P&L split and the damage index.
             // F-18c: suppress_notification=true so this linked-damage flow
             // does NOT fire damage_invoice_created on top of return_confirmed
             // (the return event already notifies the configured recipients).
             $damage = $this->damageService->createDamage([
                 'warehouse_id' => $warehouseId,
                 'damage_date' => $returnDate,
+                'damage_type' => 'customer_return',
+                'reason_code' => 'returned_damaged',
+                'reason_detail' => 'Auto write-off for damaged sales return #' . $return->return_code,
                 'reason' => 'Auto write-off for damaged sales return #' . $return->return_code,
                 'created_by' => $confirmedBy,
                 'suppress_notification' => true,

@@ -4,6 +4,7 @@ namespace App\Services\Stock;
 
 use App\Models\DamageInvoice;
 use App\Models\DamageInvoiceItem;
+use App\Models\DamageReason;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Notification\NotificationService;
@@ -11,7 +12,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Damage Service — Phase 6.6.
+ * Damage Service — Phase 6.6 + Phase 1 (Damage Category & Reason Taxonomy).
  *
  * Two-phase flow (same as 6.3/6.4/6.5):
  *   1. createDamage(): creates draft (header + items, no stock/GL)
@@ -19,9 +20,14 @@ use Illuminate\Support\Facades\Log;
  *   3. cancelDamage(): if confirmed, reverses; if draft, marks cancelled
  *
  * GL posting (re-derived from double-entry):
- *   Dr Damage Loss (nature: damage_loss, fallback: inventory_shrinkage)
- *   Cr Inventory (nature: inventory)
+ *   Dr <loss ledger selected by damage_type> / Cr Inventory
  *   The loss is valued at the current avg_cost at time of damage.
+ *
+ * Phase 1 — type-aware loss ledger selection (postDamageGL):
+ *   real_damage / quality_reject / customer_return / other → damage_loss
+ *   missing / theft                                        → inventory_shrinkage
+ *   Both natures roll up under Operating Expenses in the P&L (Phase 0 fix),
+ *   so the P&L now splits damage cost by type automatically.
  *
  * Rate semantics (per avg_cost_rule.md §3):
  *   - Stock OUT at current avg_cost (cost flows out at average, avg unchanged)
@@ -40,7 +46,10 @@ class DamageService
      * @param array $data {
      *     warehouse_id: int,
      *     damage_date: string (Y-m-d),
-     *     reason: string|null,
+     *     damage_type: string (one of DamageInvoice::DAMAGE_TYPES) — Phase 1, required,
+     *     reason_code: string|null (must exist in damage_reasons for the given damage_type),
+     *     reason_detail: string|null,
+     *     reason: string|null (legacy free-text, kept for back-compat),
      *     created_by: int,
      *     items: array each { product_id, qty, rate }
      * }
@@ -94,8 +103,28 @@ class DamageService
 
         $damageCode = $this->generateDamageCode();
 
+        // Phase 1: resolve + validate the structured reason_code against the
+        // damage_reasons taxonomy. If a reason_code is supplied it MUST be
+        // active and belong to the chosen damage_type — otherwise the dropdown
+        // filter on the form would be meaningless.
+        $reasonCode  = trim((string) ($data['reason_code'] ?? ''));
+        $reasonLabel = '';
+        if ($reasonCode !== '') {
+            $reasonRow = DamageReason::active()
+                ->where('reason_code', $reasonCode)
+                ->where('damage_type', $data['damage_type'])
+                ->first();
+            if (!$reasonRow) {
+                throw new \InvalidArgumentException(
+                    "Invalid reason_code '{$reasonCode}' for damage_type '{$data['damage_type']}'."
+                );
+            }
+            $reasonLabel = $reasonRow->label;
+        }
+
         return DB::transaction(function () use (
-            $damageCode, $data, $warehouseId, $branchId, $totalValue, $validatedItems
+            $damageCode, $data, $warehouseId, $branchId, $totalValue, $validatedItems,
+            $reasonCode, $reasonLabel
         ) {
             // Phase 0 (Damage plan): use Eloquent create() so the
             // AuditableMasterData trait's `created` event fires and writes
@@ -103,15 +132,19 @@ class DamageService
             // DB::table()->insertGetId() which BYPASSED the trait entirely
             // (no audit trail for damage creation — a regression vs legacy).
             $damage = DamageInvoice::create([
-                'damage_code' => $damageCode,
-                'damage_date' => $data['damage_date'] ?? now()->format('Y-m-d'),
-                'warehouse_id' => $warehouseId,
-                'branch_id' => $branchId,
-                'total_value' => round($totalValue, 2),
-                'reason' => trim((string) ($data['reason'] ?? '')),
-                'status' => 'draft',
-                'is_reversed' => false,
-                'created_by' => $data['created_by'] ?? null,
+                'damage_code'   => $damageCode,
+                'damage_date'   => $data['damage_date'] ?? now()->format('Y-m-d'),
+                'warehouse_id'  => $warehouseId,
+                'branch_id'     => $branchId,
+                'total_value'   => round($totalValue, 2),
+                'reason'        => trim((string) ($data['reason'] ?? '')),
+                // Phase 1 — structured categorization.
+                'damage_type'   => $data['damage_type'],
+                'reason_code'   => $reasonCode !== '' ? $reasonCode : null,
+                'reason_detail' => trim((string) ($data['reason_detail'] ?? '')) ?: null,
+                'status'        => 'draft',
+                'is_reversed'   => false,
+                'created_by'    => $data['created_by'] ?? null,
             ]);
 
             // Insert items via Eloquent (bulk insert via the model so the
@@ -132,11 +165,13 @@ class DamageService
             // createLinkedDamageWriteOffs) sets this flag to avoid firing
             // damage_invoice_created on top of return_confirmed.
             if (empty($data['suppress_notification'])) {
+                $typeLabel = DamageInvoice::DAMAGE_TYPE_LABELS[$data['damage_type']] ?? $data['damage_type'];
                 try {
                     $this->notifications->dispatch(
                         'damage_invoice_created',
-                        "Damage invoice {$damageCode} created — Tk "
-                        . number_format((float) $totalValue, 2)
+                        "Damage invoice {$damageCode} created ({$typeLabel})"
+                        . ($reasonLabel ? " — {$reasonLabel}" : '')
+                        . " — Tk " . number_format((float) $totalValue, 2)
                         . " at warehouse #{$warehouseId} (branch #{$branchId}).",
                         'damage_invoice',
                         $damage->id,
@@ -283,9 +318,18 @@ class DamageService
      * Post the GL journal for a damage invoice.
      *
      * Re-derived GL rule:
-     *   Dr Damage Loss / Cr Inventory
+     *   Dr <loss ledger selected by damage_type> / Cr Inventory
      *
-     * Looks up damage_loss nature first, falls back to inventory_shrinkage.
+     * Phase 1 — type-aware loss ledger selection:
+     *   real_damage / quality_reject / customer_return / other → damage_loss
+     *     (falls back to inventory_shrinkage if damage_loss ledger missing)
+     *   missing / theft                                        → inventory_shrinkage
+     *     (falls back to damage_loss if inventory_shrinkage ledger missing)
+     *
+     * Both natures roll up under Operating Expenses in the P&L (Phase 0 fix),
+     * so the P&L now splits damage cost by type — real physical losses hit
+     * `damage_loss`, while unaccounted / stolen stock hits
+     * `inventory_shrinkage`, making the accountability gap visible.
      *
      * @param DamageInvoice $damage
      * @param int $createdBy
@@ -304,13 +348,22 @@ class DamageService
             throw new \RuntimeException('Inventory ledger not found (nature: inventory).');
         }
 
-        // Look up damage_loss first, fall back to inventory_shrinkage.
-        $damageLossLedgerId = $this->journalPosting->lookupLedgerByNature('damage_loss');
-        if (!$damageLossLedgerId) {
-            $damageLossLedgerId = $this->journalPosting->lookupLedgerByNature('inventory_shrinkage');
+        $lossLedgerId = $this->resolveLossLedgerId($damage->damage_type);
+
+        $typeLabel = DamageInvoice::DAMAGE_TYPE_LABELS[$damage->damage_type] ?? $damage->damage_type;
+        // Build a descriptive memo using the raw columns (NOT the
+        // reasonTaxonomy relation — that would lazy-load inside the GL
+        // transaction and the `reason` attribute shadows a `reason()`
+        // relation anyway). The UI renders the human label; the GL memo
+        // just needs enough text to identify the write-off.
+        $reasonText = '';
+        if ($damage->reason_code) {
+            $reasonText = $damage->reason_code;
+        } elseif ($damage->reason) {
+            $reasonText = $damage->reason;
         }
-        if (!$damageLossLedgerId) {
-            throw new \RuntimeException('Damage loss / inventory shrinkage ledger not found. Configure nature: damage_loss or inventory_shrinkage.');
+        if ($damage->reason_detail) {
+            $reasonText = ($reasonText ? $reasonText . ' — ' : '') . $damage->reason_detail;
         }
 
         return $this->journalPosting->createJournalEntry([
@@ -318,15 +371,15 @@ class DamageService
             'reference_type' => 'damage',
             'reference_id' => $damage->id,
             'branch_id' => $damage->branch_id,
-            'description' => 'Damage Write-off ' . $damage->damage_code
-                . ($damage->reason ? ' — ' . $damage->reason : ''),
+            'description' => "Damage Write-off {$damage->damage_code} ({$typeLabel})"
+                . ($reasonText ? ' — ' . $reasonText : ''),
             'source' => 'damage',
             'created_by' => $createdBy,
         ], [
             [
-                'ledger_id' => $damageLossLedgerId,
+                'ledger_id' => $lossLedgerId,
                 'debit' => $totalValue, 'credit' => 0,
-                'memo' => 'Damage / write-off — ' . $damage->damage_code,
+                'memo' => "Damage / write-off ({$typeLabel}) — {$damage->damage_code}",
             ],
             [
                 'ledger_id' => $inventoryLedgerId,
@@ -334,6 +387,45 @@ class DamageService
                 'memo' => 'Inventory reduction (damaged goods) — ' . $damage->damage_code,
             ],
         ]);
+    }
+
+    /**
+     * Phase 1 — resolve the loss ledger to debit based on damage_type.
+     *
+     * Mapping (see class docblock):
+     *   real_damage / quality_reject / customer_return / other → damage_loss
+     *     (fallback: inventory_shrinkage)
+     *   missing / theft                                        → inventory_shrinkage
+     *     (fallback: damage_loss)
+     *
+     * Falls back to whichever of the two natures is configured if the
+     * primary one is missing — so the GL post never fails just because a
+     * specific ledger hasn't been created yet. The fallback keeps the
+     * transaction balanced (the loss MUST be recorded somewhere).
+     *
+     * @throws \RuntimeException if NEITHER damage_loss nor inventory_shrinkage
+     *         ledgers are configured.
+     */
+    private function resolveLossLedgerId(string $damageType): int
+    {
+        $shrinkageNatures = ['missing', 'theft'];
+        $preferShrinkage  = in_array($damageType, $shrinkageNatures, true);
+
+        $primary   = $preferShrinkage ? 'inventory_shrinkage' : 'damage_loss';
+        $secondary = $preferShrinkage ? 'damage_loss' : 'inventory_shrinkage';
+
+        $id = $this->journalPosting->lookupLedgerByNature($primary);
+        if (!$id) {
+            $id = $this->journalPosting->lookupLedgerByNature($secondary);
+        }
+        if (!$id) {
+            throw new \RuntimeException(
+                'Neither damage_loss nor inventory_shrinkage ledger is configured. '
+                . 'Configure at least one of these natures in the chart of accounts.'
+            );
+        }
+
+        return $id;
     }
 
     /**
@@ -357,6 +449,19 @@ class DamageService
         }
         if (empty($data['items']) || !is_array($data['items'])) {
             throw new \InvalidArgumentException('At least one item is required.');
+        }
+
+        // Phase 1 — damage_type is required and must be one of the known
+        // enum values. The DB CHECK constraint is the final guard, but we
+        // validate here first to give a clear error before any work starts.
+        if (empty($data['damage_type'])) {
+            throw new \InvalidArgumentException('damage_type is required.');
+        }
+        if (!in_array($data['damage_type'], DamageInvoice::DAMAGE_TYPES, true)) {
+            throw new \InvalidArgumentException(
+                'Invalid damage_type: ' . $data['damage_type']
+                . '. Must be one of: ' . implode(', ', DamageInvoice::DAMAGE_TYPES)
+            );
         }
     }
 }

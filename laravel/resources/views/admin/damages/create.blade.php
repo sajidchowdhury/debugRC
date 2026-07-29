@@ -4,6 +4,15 @@
 @php
     $today   = now()->format('Y-m-d');
     $oldDate = old('damage_date', $today);
+
+    // Phase 1 — reason taxonomy grouped by damage_type (from DamageReason::groupedByType()).
+    $reasonsByType = $damageReasons ?? [];
+    $typeLabels    = $damageTypeLabels ?? [];
+    $types         = $damageTypes ?? \App\Models\DamageInvoice::DAMAGE_TYPES;
+
+    // Pre-select old damage_type (sticky on validation error).
+    $oldType = old('damage_type', 'real_damage');
+    $oldReasonCode = old('reason_code', '');
 @endphp
 
 <div class="container-fluid py-2">
@@ -28,8 +37,9 @@
         <i class="fas fa-triangle-exclamation me-2 fa-lg mt-1"></i>
         <div>
             <strong>Damaged stock will be written off at current average cost.</strong>
-            GL posts <span class="font-monospace">Dr Damage Loss / Cr Inventory</span>.
-            Only confirmed damage invoices move stock and post to the ledger.
+            GL posts <span class="font-monospace">Dr &lt;loss ledger&gt; / Cr Inventory</span> — the loss ledger is chosen by
+            <strong>damage type</strong> (real damage → <code>damage_loss</code>; missing/theft → <code>inventory_shrinkage</code>),
+            so the P&amp;L splits damage by type. Only confirmed damage invoices move stock and post to the ledger.
         </div>
     </div>
 
@@ -75,10 +85,76 @@
                         @error('damage_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
                     </div>
 
+                    {{-- Phase 1 — Damage type (required enum) --}}
+                    <div class="col-md-4">
+                        <label class="form-label" for="damage_type">
+                            Damage type <span class="text-danger">*</span>
+                        </label>
+                        <select id="damage_type" name="damage_type"
+                                class="form-select select2 @error('damage_type') is-invalid @enderror" required>
+                            @foreach ($types as $t)
+                                <option value="{{ $t }}" {{ $oldType === $t ? 'selected' : '' }}>
+                                    {{ $typeLabels[$t] ?? $t }}
+                                </option>
+                            @endforeach
+                        </select>
+                        @error('damage_type') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                        <div class="form-text small">
+                            <i class="fas fa-circle-info me-1"></i>
+                            <strong>Missing / Theft</strong> are accountability flags — they hit
+                            <code>inventory_shrinkage</code> and will require a witness / accountable employee (Phase 4).
+                        </div>
+                    </div>
+
+                    {{-- Phase 1 — structured reason (filtered by damage_type via JS) --}}
+                    <div class="col-md-6">
+                        <label class="form-label" for="reason_code">
+                            Reason
+                            <span class="text-muted small">(structured — recommended)</span>
+                        </label>
+                        <select id="reason_code" name="reason_code"
+                                class="form-select select2 @error('reason_code') is-invalid @enderror">
+                            <option value="">— Select a reason —</option>
+                        </select>
+                        @error('reason_code') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                        <div class="form-text small">
+                            Dropdown filters by the selected damage type. Leave blank only if none fits.
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label" for="reason_detail">
+                            Reason details
+                            <span class="text-muted small">(optional)</span>
+                        </label>
+                        <textarea id="reason_detail" name="reason_detail" rows="2" class="form-control"
+                                  placeholder="Extra context for the chosen reason (e.g. where / how it happened)">{{ old('reason_detail') }}</textarea>
+                        @error('reason_detail') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
+                    </div>
+
+                    {{-- Phase 1 — accountability warning (shown for missing / theft) --}}
                     <div class="col-12">
-                        <label class="form-label" for="reason">Reason / note</label>
+                        <div class="alert alert-warning d-flex align-items-start d-none mb-0" id="accountabilityWarning" role="alert">
+                            <i class="fas fa-user-shield me-2 fa-lg mt-1"></i>
+                            <div>
+                                <strong>Accountability action.</strong>
+                                Declaring stock as <span id="accountabilityTypeLabel">missing</span> is a serious
+                                classification — it means the goods are <em>unaccounted for</em>, not physically damaged.
+                                A <strong>witness and/or accountable employee</strong> will be required to confirm this
+                                write-off (arrives in Phase 4). For now, record as much detail as possible in the
+                                reason details above.
+                            </div>
+                        </div>
+                    </div>
+
+                    {{-- Legacy free-text reason (kept for back-compat / extra notes) --}}
+                    <div class="col-12">
+                        <label class="form-label" for="reason">
+                            Additional notes
+                            <span class="text-muted small">(optional, free text)</span>
+                        </label>
                         <textarea id="reason" name="reason" rows="2" class="form-control"
-                                  placeholder="e.g. fire damage, water damage, expired, broken in transit">{{ old('reason') }}</textarea>
+                                  placeholder="Any extra note not covered by the structured reason">{{ old('reason') }}</textarea>
                         @error('reason') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
                     </div>
                 </div>
@@ -165,6 +241,68 @@ $(function () {
 
     // Init select2 on header selects
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
+
+    // ====== Phase 1 — Damage type & reason taxonomy ======
+    // reasonsByType: { 'real_damage': [{code,label},...], 'missing': [...], ... }
+    var reasonsByType = @json($reasonsByType);
+    var typeLabels    = @json($typeLabels);
+    var $damageType   = $('#damage_type');
+    var $reasonCode   = $('#reason_code');
+    var $warn         = $('#accountabilityWarning');
+    var $warnLabel    = $('#accountabilityTypeLabel');
+    // Sticky value on validation error.
+    var oldReasonCode = @json($oldReasonCode);
+
+    // Types that trigger the accountability warning (missing / theft).
+    var ACCOUNTABILITY_TYPES = ['missing', 'theft'];
+
+    /**
+     * Repopulate the reason dropdown with only the reasons belonging to the
+     * given damage_type. Preserves the selected value if still valid.
+     */
+    function populateReasons(type, selectedCode) {
+        var list = (reasonsByType[type] || []);
+        $reasonCode.empty().append($('<option>').val('').text('— Select a reason —'));
+        list.forEach(function (r) {
+            var $opt = $('<option>').val(r.code).text(r.label);
+            if (selectedCode && r.code === selectedCode) {
+                $opt.prop('selected', true);
+            }
+            $reasonCode.append($opt);
+        });
+        // Re-sync select2 if it was already initialized on this element.
+        if ($reasonCode.hasClass('select2-hidden-accessible')) {
+            $reasonCode.trigger('change.select2');
+        }
+    }
+
+    /**
+     * Show / hide the accountability warning based on the damage type.
+     */
+    function toggleAccountabilityWarning(type) {
+        if (ACCOUNTABILITY_TYPES.indexOf(type) !== -1) {
+            $warnLabel.text(typeLabels[type] || type);
+            $warn.removeClass('d-none');
+        } else {
+            $warn.addClass('d-none');
+        }
+    }
+
+    // When damage_type changes: refresh the reason dropdown + warning.
+    $damageType.on('change', function () {
+        var type = $(this).val();
+        populateReasons(type, '');
+        toggleAccountabilityWarning(type);
+    });
+
+    // Initial population (on first load + sticky on validation error).
+    (function init() {
+        var type = $damageType.val();
+        if (type) {
+            populateReasons(type, oldReasonCode);
+            toggleAccountabilityWarning(type);
+        }
+    })();
 
     // ====== Item row helpers ======
 
