@@ -87,27 +87,62 @@ return new class extends Migration
     }
 
     /**
-     * Drop the existing CHECK (if present) and add a fresh one with the given
-     * allowed values. On a partitioned parent this propagates to all child
-     * partitions automatically.
+     * Drop EVERY existing CHECK matching `^stock_transactions_reference_type_check`
+     * on the parent AND all partitions (including suffixed copies like
+     * `_check1`, `_check2` that PG creates on partitions when the parent's
+     * constraint is re-added while partitions retain their own copy), then
+     * add a single fresh constraint on the parent — PG propagates it to
+     * every partition cleanly.
+     *
+     * NOTE: the original version of this migration only matched the EXACT
+     * constraint name on the parent, which left stale strict copies on
+     * partitions (`stock_transactions_default` etc.) that still rejected
+     * `'reversal'`. See the follow-up migration
+     * `2026_07_29_000001_fix_stock_transactions_reversal_check_on_all_partitions.php`
+     * for the full root-cause analysis. This method is now aligned with
+     * that fix so fresh installs (`migrate:fresh`) are correct too.
      */
     private function replaceConstraint(array $allowed): void
     {
-        $exists = DB::table('pg_constraint')
-            ->where('conname', self::CONSTRAINT_NAME)
-            ->where('contype', 'c') // 'c' = CHECK
-            ->exists();
-
-        if ($exists) {
-            DB::statement(
-                'ALTER TABLE stock_transactions DROP CONSTRAINT ' . self::CONSTRAINT_NAME
-            );
-        }
-
         $values = implode(',', array_map(
             fn (string $v): string => "'" . $v . "'",
             $allowed,
         ));
+
+        // Drop every matching CHECK on the parent + all partitions.
+        // Regex `^stock_transactions_reference_type_check` matches the base
+        // name AND every suffixed copy. pg_inherits enumerates partitions.
+        DB::statement(<<<SQL
+            DO $$
+            DECLARE
+                r RECORD;
+            BEGIN
+                FOR r IN
+                    SELECT n.nspname AS schemaname,
+                           c.relname AS tablename,
+                           con.conname AS constraintname
+                    FROM pg_constraint con
+                    JOIN pg_class c     ON c.oid = con.conrelid
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE con.contype = 'c'
+                      AND con.conname ~ '^stock_transactions_reference_type_check'
+                      AND (
+                          c.relname = 'stock_transactions'
+                          OR c.oid IN (
+                              SELECT inhrelid
+                              FROM pg_inherits
+                              WHERE inhparent = 'stock_transactions'::regclass
+                          )
+                      )
+                LOOP
+                    EXECUTE format(
+                        'ALTER TABLE %I.%I DROP CONSTRAINT IF EXISTS %I',
+                        r.schemaname, r.tablename, r.constraintname
+                    );
+                END LOOP;
+            END;
+            $$;
+        SQL);
 
         $name = self::CONSTRAINT_NAME;
 
