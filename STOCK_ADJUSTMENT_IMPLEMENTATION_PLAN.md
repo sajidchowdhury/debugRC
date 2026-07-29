@@ -1,11 +1,11 @@
 # Stock Adjustment — Phased Implementation Plan (Legacy → Laravel ERP)
 
-**Document version:** 1.0
-**Date:** 2025-07-28
+**Document version:** 1.6
+**Date:** 2025-07-29
 **Scope:** A complete gap analysis and phase-by-phase implementation plan to transform the Laravel ERP's *Stock Adjustment* module into a robust, accountant-grade **bookkeeping correction tool**.
 **Context:** A generic, administrative quantity correction for cases that are **not** operational losses — opening balances, data migration, system/unit-of-measure errors, post-conversion fixes, legacy cleanup. It is a **bookkeeping tool, not a warehouse tool**. Triggered by an **Accountant / system administrator, infrequently**. The quantity correction (and its financial damage) is applied **warehouse-wise**.
 **Target stack:** Laravel 12 + PostgreSQL 16 (RLS-enabled, partitioned ledger, moving-average costing).
-**Current state:** Phase 6.3 of the master migration is marked ✅ COMPLETE (two-phase draft → confirm → cancel is shipped), but the module is **authorization-blind, audit-blind, category-less, UOM-less**, and **thinner than both its Legacy predecessor and its sibling Warehouse Transfer module**.
+**Current state:** **Phases 1-6 COMPLETE ✅** (authorization, categorization, maker-checker approval, dedicated audit log, UOM handling, pipeline-aware availability + reversal safety + date integrity) plus 2 post-launch hotfixes (total_amount column, journal_entry_id FK). The module is now role-gated, audit-logged, categorized, UOM-aware, and reversal-safe. **Phases 7-10 remain** (drift reconciliation, UI parity/CSV/print, API routes, test coverage).
 
 ---
 
@@ -454,12 +454,12 @@ CREATE TABLE warehouse_stock (                                    -- snapshot/ca
 | 2 | Reason Categorization & Opening-Balance Reference | 1-2 days | High ✅ DONE | none |
 | 3 | Approval Workflow & Maker-Checker | 3-4 days | **Critical** ✅ DONE | 1, 2 |
 | 4 | Dedicated Audit Log & Logger | 2 days | High ✅ DONE | 3 |
-| 5 | Unit-of-Measure (UOM) Handling | 3 days | High | none (parallel with 1-4) |
-| 6 | Pipeline-Aware Availability, Reversal Safety & Date Integrity | 2-3 days | High | 2 |
-| 7 | Reconciliation, Drift Detection & Data-Hygiene Fixes | 2 days | Medium | 4, 6 |
-| 8 | UI Parity: CSV Export, Checklist, Print & Audit Timeline | 3 days | Medium | 4, 7 |
-| 9 | API Routes & Mobile Support | 1-2 days | Low | 3, 5 |
-| 10 | Test Coverage & Shadow Mode | 4 days | High | 1-9 |
+| 5 | Unit-of-Measure (UOM) Handling | 3 days | High ✅ DONE | none (parallel with 1-4) |
+| 6 | Pipeline-Aware Availability, Reversal Safety & Date Integrity | 2-3 days | High ✅ DONE | 2 |
+| 7 | Reconciliation, Drift Detection & Data-Hygiene Fixes | 2 days | Medium ⬜ PENDING | 4, 6 |
+| 8 | UI Parity: CSV Export, Checklist, Print & Audit Timeline | 3 days | Medium ⬜ PENDING | 4, 7 |
+| 9 | API Routes & Mobile Support | 1-2 days | Low ⬜ PENDING | 3, 5 |
+| 10 | Test Coverage & Shadow Mode | 4 days | High ⬜ PENDING | 1-9 |
 
 **Dependency graph:**
 ```
@@ -472,6 +472,8 @@ Phase 5 ──┘ (parallel)                                         ├──�
 ```
 
 **Total estimated effort:** ~22-26 developer-days.
+
+**Progress (Phases 1-6):** ✅ **6 of 10 phases COMPLETE** (Phases 1-6 done + 2 post-launch hotfixes). Phases 7-10 remain (reconciliation, UI parity, API, tests). The core engine — authorization, categorization, maker-checker approval, audit logging, UOM conversion, pipeline-aware availability, reversal safety, and date integrity — is shipped. Remaining work is observability (drift detection), UX parity (export/print/checklist), mobile/API, and test coverage.
 
 ---
 
@@ -854,7 +856,7 @@ class StockAdjustmentAuditLogger
 
 ---
 
-## 10. Phase 5 — Unit-of-Measure (UOM) Handling
+## 10. Phase 5 — Unit-of-Measure (UOM) Handling ✅ DONE
 
 **Priority:** High
 **Duration:** 3 days
@@ -948,7 +950,7 @@ Schema::table('stock_adjustment_items', function (Blueprint $table) {
 
 ---
 
-## 11. Phase 6 — Pipeline-Aware Availability, Reversal Safety & Date Integrity
+## 11. Phase 6 — Pipeline-Aware Availability, Reversal Safety & Date Integrity ✅ DONE
 
 **Priority:** High
 **Duration:** 2-3 days
@@ -1026,6 +1028,25 @@ DB::statement("ALTER TABLE stock_adjustment_items ADD CONSTRAINT sai_adj_product
 7. The cancel-time reversal uses `stock_transaction_id` when present (Phase 6.2+ rows) and falls back to the legacy `product+reference` lookup ONLY for pre-Phase-6.2 rows — fully backward compatible with adjustments confirmed before this migration shipped.
 
 **Gaps closed:** G3 (non-pipeline-aware availability → FIXED), G10 (back-dated reversal date → FIXED), G11 (duplicate-product reversal → FIXED).
+
+### Post-Launch Hotfixes (committed after Phase 6)
+
+Two runtime defects surfaced during end-to-end testing of the Phase 1-6 stack. Both are fixed, committed, and pushed (see git log: commits `e084a85` + `6a7be24`).
+
+**Hotfix 1 — Missing `total_amount` column** (commit `e084a85`)
+- **Symptom:** `SQLSTATE[42703]: column "total_amount" does not exist` on `/admin/stock-adjustments` (500 on index) + a latent INSERT failure on create.
+- **Root cause:** the `stock_adjustments` table (`database/sql/03_stock.sql`) never declared `total_amount`, but the model/service/controller/views have referenced it since Phase 6.3 of the master migration. The index page's `sum('total_amount')` stat query hit the missing column first.
+- **Fix:** migration `2025_08_05_000001_add_total_amount_to_stock_adjustments.php` adds `total_amount DECIMAL(14,2) NOT NULL DEFAULT 0` + backfills existing rows from `Σ(qty_base × rate)` of their items. Canonical `03_stock.sql` updated for fresh-install parity.
+
+**Hotfix 2 — `journal_entry_id` FK violation on zero-amount confirm** (commit `6a7be24`)
+- **Symptom:** `SQLSTATE[23503]: Foreign key violation: 7 ERROR: insert or update on table "stock_adjustments" violates foreign key constraint "stock_adjustments_journal_entry_id_fkey" — DETAIL: Key (journal_entry_id)=(0) is not present in table "journal_entries"`.
+- **Root cause:** when an adjustment's GL total is `0.00` (e.g. a zero-rate opening balance, or an item whose `qty_base × rate` rounds to zero), no journal entry is posted — but the service was writing the literal `0` into `stock_adjustments.journal_entry_id`. The FK `stock_adjustments.journal_entry_id → journal_entries.id` rejects `0` (no row with id 0 exists). The column is nullable; `0` is never a valid value.
+- **Fix:** `StockAdjustmentService::postAdjustmentGL()` now returns `?int` (the JE id, or `null` when no GL is posted) instead of `0`. The confirm path stores `NULL` in `journal_entry_id` when the GL total is zero. The method's doc-block explicitly documents the contract. Backward compatible — existing rows with a real `journal_entry_id` are untouched.
+
+**Files modified (hotfixes):**
+- `laravel/database/migrations/2025_08_05_000001_add_total_amount_to_stock_adjustments.php` (new — total_amount column + backfill)
+- `laravel/app/Services/Stock/StockAdjustmentService.php` (`postAdjustmentGL` returns `?int`; confirm stores `null` not `0`)
+- `laravel/database/sql/03_stock.sql` (fresh-install parity: `total_amount DECIMAL(14,2)` on `stock_adjustments`)
 
 ---
 
@@ -1358,6 +1379,8 @@ CREATE POLICY saal_branch_isolation ON stock_adjustment_audit_log
 
 ## 19. Post-Implementation State
 
+**Current progress: Phases 1-6 COMPLETE ✅ (6 of 10). Phases 7-10 PENDING ⬜.**
+
 After all 10 phases, the Laravel Stock Adjustment module will deliver:
 
 1. ✅ **Role-gated access** — only Accountant / system administrator / manager can touch adjustments (Phase 1).
@@ -1366,10 +1389,10 @@ After all 10 phases, the Laravel Stock Adjustment module will deliver:
 4. ✅ **Full audit trail** — a dedicated `stock_adjustment_audit_log` table capturing every lifecycle action with actor, role, IP, and payload, rendered as a timeline on the show page (Phase 4).
 5. ✅ **UOM conversion** — quantities entered in any UOM (Carton/Pcs/KG) are converted to the product's base unit before posting; the "system/UOM error" use case is fully supported (Phase 5).
 6. ✅ **Accurate stock** — pipeline-aware availability for decreases, exact-row reversal (no duplicate-product orphan), and original-date reversal that respects closed periods (Phase 6).
-7. ✅ **Drift detection** — nightly reconciliation between `warehouse_stock` cache and the `stock_transactions` SSOT, with admin alerts (Phase 7).
-8. ✅ **Proper UI** — CSV export, a 7-section integrity checklist, a print voucher, GL audit blocks, a lifecycle stepper, and an audit timeline (Phase 8).
-9. ✅ **API support** — REST endpoints for mobile/AI sidecars with the same policy enforcement (Phase 9).
-10. ✅ **Test coverage** — a 12-file feature suite covering the golden path and edge cases, plus optional shadow-mode comparison against Legacy (Phase 10).
+7. ⬜ **Drift detection** — nightly reconciliation between `warehouse_stock` cache and the `stock_transactions` SSOT, with admin alerts (Phase 7 — PENDING).
+8. ⬜ **Proper UI** — CSV export, a 7-section integrity checklist, a print voucher, GL audit blocks, a lifecycle stepper, and an audit timeline (Phase 8 — PENDING; the lifecycle stepper + audit timeline from Phases 3-4 are already live).
+9. ⬜ **API support** — REST endpoints for mobile/AI sidecars with the same policy enforcement (Phase 9 — PENDING).
+10. ⬜ **Test coverage** — a 12-file feature suite covering the golden path and edge cases, plus optional shadow-mode comparison against Legacy (Phase 10 — PENDING).
 11. ✅ **Proper PostgreSQL handling** — RLS for branch isolation, partitioned immutable ledger, `pg_advisory_xact_lock` for atomic code generation, CHECK constraints for enums, triggers for non-negative stock, and generated `total_value` columns.
 12. ✅ **Business logic integrity** — atomic stock + GL posting inside `DB::transaction()`, `lockForUpdate()` on `warehouse_stock`, append-only reversal ledger entries, and closed-period GL enforcement.
 13. ✅ **Warehouse-wise damage** — every adjustment is scoped to a single warehouse; the quantity correction and its GL impact are applied warehouse-wise, with the branch immutable on the header row.
