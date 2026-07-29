@@ -635,10 +635,11 @@ Route::middleware('auth')->group(function () {
 
     // ============================================================
     // Phase 2: Branch Demands (cross-branch product supply)
-    // Create → Send → Reverse/Delete/Reject
+    // Create → Send → Confirm Receipt → Reverse/Delete/Reject
     // ============================================================
     Route::prefix('admin/branch-demands')->name('admin.branch-demands.')->group(function () {
         Route::get('pending', [BranchDemandController::class, 'pending'])->name('pending');
+        Route::get('pending-receipt', [BranchDemandController::class, 'pendingReceipt'])->name('pending-receipt');
         Route::get('branches', [BranchDemandController::class, 'getBranches'])->name('branches');
         Route::get('products', [BranchDemandController::class, 'getProducts'])->name('products');
         Route::get('warehouses/{id}', [BranchDemandController::class, 'getWarehousesByBranch'])->name('warehouses');
@@ -647,6 +648,7 @@ Route::middleware('auth')->group(function () {
         Route::get('ledger-history', [BranchDemandController::class, 'getLedgerHistory'])->name('ledger-history');
         Route::get('settlement-preview', [BranchDemandController::class, 'previewSettlement'])->name('settlement-preview');
         Route::post('{id}/send', [BranchDemandController::class, 'send'])->name('send');
+        Route::post('{id}/confirm-receipt', [BranchDemandController::class, 'confirmReceipt'])->name('confirm-receipt');
         Route::post('{id}/reverse', [BranchDemandController::class, 'reverse'])->name('reverse');
         Route::post('{id}/reject', [BranchDemandController::class, 'reject'])->name('reject');
     });

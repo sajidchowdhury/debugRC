@@ -7,6 +7,7 @@ use App\Http\Requests\BranchDemand\StoreBranchDemandRequest;
 use App\Http\Requests\BranchDemand\SendBranchDemandRequest;
 use App\Http\Requests\BranchDemand\ReverseBranchDemandRequest;
 use App\Http\Requests\BranchDemand\RejectBranchDemandRequest;
+use App\Http\Requests\BranchDemand\ConfirmReceiptRequest;
 use App\Models\BranchDemand;
 use App\Services\BranchDemand\BranchDemandService;
 use App\Services\BranchDemand\BranchIntercompanyService;
@@ -18,15 +19,17 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Branch Demand Controller — Phase 2.
+ * Branch Demand Controller — Phase 2 + Phase 5.
  *
  * Web controller for the cross-branch demand lifecycle:
  *   - index:   Filtered list of demands (my demands + incoming)
  *   - pending:  Pending demands for my branch (supplier view)
+ *   - pendingReceipt:  Demands awaiting receipt confirmation (requester view, Phase 5)
  *   - create:   Create demand form
  *   - store:    Store new demand
  *   - show:     Full detail view (items, warehouse pickers, settlements, stock trace, GL)
  *   - send:     Send goods with warehouse selection
+ *   - confirmReceipt:  Confirm receipt of goods (Phase 5)
  *   - reverse:  Reverse a sent/received demand
  *   - delete:   Delete a pending demand
  *   - reject:   Reject a pending demand
@@ -208,6 +211,32 @@ class BranchDemandController extends Controller
         ));
     }
 
+    /**
+     * List demands awaiting receipt confirmation for my branch (requester view).
+     *
+     * Phase 5 — Warehouse Manager Confirmation.
+     *
+     * Shows all demands where my branch is the requester (from_branch_id)
+     * and goods have been sent (status='received') but the receiving
+     * warehouse manager has not yet confirmed receipt (received_at IS NULL).
+     *
+     * The receiving branch's warehouse manager must acknowledge receipt
+     * before any reversal can happen.
+     */
+    public function pendingReceipt(Request $request)
+    {
+        $branchId = $this->currentBranchId();
+
+        $demands = BranchDemand::pendingReceiptForBranch($branchId)
+            ->with(['fromBranch', 'toBranch', 'items.product', 'items.fromWarehouse', 'items.toWarehouse', 'createdBy'])
+            ->orderByDesc('demand_date')
+            ->orderByDesc('id')
+            ->paginate(20)
+            ->appends($request->query());
+
+        return view('admin.branch-demands.pending-receipt', compact('demands'));
+    }
+
     // ===================== ACTIONS =====================
 
     /**
@@ -230,6 +259,35 @@ class BranchDemandController extends Controller
         } catch (\Throwable $e) {
             Log::error('BranchDemand send failed', ['demand_id' => $id, 'error' => $e->getMessage()]);
             return back()->withErrors(['error' => 'Failed to send goods. ' . $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Confirm receipt of goods for a demand.
+     *
+     * Phase 5 — Warehouse Manager Confirmation.
+     *
+     * Only the requesting branch's warehouse manager can confirm receipt.
+     * This sets received_at and received_by on the demand, which is
+     * required before any reversal can happen.
+     */
+    public function confirmReceipt(ConfirmReceiptRequest $request, int $id)
+    {
+        try {
+            $demand = $this->demandService->confirmReceipt(
+                $id,
+                $this->currentUserId(),
+                $this->currentBranchId()
+            );
+
+            return redirect()
+                ->route('admin.branch-demands.show', $id)
+                ->with('success', "Receipt confirmed for demand {$demand->demand_code}.");
+        } catch (\RuntimeException $e) {
+            return back()->withErrors(['error' => $e->getMessage()]);
+        } catch (\Throwable $e) {
+            Log::error('BranchDemand receipt confirmation failed', ['demand_id' => $id, 'error' => $e->getMessage()]);
+            return back()->withErrors(['error' => 'Failed to confirm receipt. ' . $e->getMessage()]);
         }
     }
 

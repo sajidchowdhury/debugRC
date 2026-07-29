@@ -13,9 +13,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Branch Demand Service — Phase 2 + Phase 3.
+ * Branch Demand Service — Phase 2 + Phase 3 + Phase 5.
  *
- * Full demand lifecycle: create, send, reverse, delete, reject.
+ * Full demand lifecycle: create, send, confirm receipt, reverse, delete, reject.
  *
  * Business flow:
  *   1. CREATE: Branch B (requester/debtor) creates a demand to Branch A (supplier/creditor).
@@ -23,10 +23,12 @@ use Illuminate\Support\Facades\Log;
  *   2. SEND: Branch A's warehouse manager selects per-item FROM/TO warehouses and sends goods.
  *      Status = 'received'. Stock moves (OUT from supplier, IN to requester), WT created.
  *      Phase 3: GL journals posted (creditor + debtor), branch ledger updated.
- *   3. REVERSE: Undo a sent/received demand (stock restored, GL reversed, ledger reversed).
- *      Status = 'reversed'.
- *   4. DELETE: Remove a pending demand (only if status='pending').
- *   5. REJECT: Reject a pending demand (status='rejected').
+ *   3. CONFIRM RECEIPT: Branch B's warehouse manager confirms receipt (Phase 5).
+ *      Sets received_at / received_by. Required before reversal.
+ *   4. REVERSE: Undo a sent/received demand (stock restored, GL reversed, ledger reversed).
+ *      Status = 'reversed'. Blocked until receipt is confirmed (Phase 5).
+ *   5. DELETE: Remove a pending demand (only if status='pending').
+ *   6. REJECT: Reject a pending demand (status='rejected').
  *
  * Terminology:
  *   - from_branch_id = requester (debtor) — the branch that NEEDS the products
@@ -347,6 +349,16 @@ class BranchDemandService
                 throw new \RuntimeException("Demand #{$demandId} is already reversed.");
             }
 
+            // ★ Phase 5 — Block reversal until receipt is confirmed.
+            // The receiving branch must acknowledge receipt before any reversal
+            // can happen. This prevents the "I didn't know" problem.
+            if ($demand->received_at === null) {
+                throw new \RuntimeException(
+                    "Cannot reverse demand #{$demandId}: receipt has not been confirmed by the receiving warehouse manager. "
+                    . "The receiving branch must confirm receipt before any reversal can proceed."
+                );
+            }
+
             // Find all stock transactions linked to this demand.
             // We need to reverse them in the correct order:
             //   demand_receive (IN) first → then demand_send (OUT)
@@ -423,6 +435,96 @@ class BranchDemandService
                 'stock_reversed_count' => $receiveTransactions->count() + $sendTransactions->count(),
             ]);
 
+            return BranchDemand::find($demandId);
+        });
+    }
+
+    // ===================== CONFIRM RECEIPT (Phase 5) =====================
+
+    /**
+     * Confirm receipt of a branch demand by the receiving warehouse manager.
+     *
+     * This is the Phase 5 receipt acknowledgment step. After the supplier
+     * branch sends goods (status='received'), the requesting branch's
+     * warehouse manager must confirm that they have actually received the
+     * products. This prevents the "I don't know when it happened" problem.
+     *
+     * Business rules:
+     *   - Only the requesting branch (from_branch_id) can confirm receipt
+     *   - The demand must be in 'received' status
+     *   - The demand must not already be confirmed (received_at IS NULL)
+     *   - The demand must not be reversed
+     *
+     * Once confirmed, the demand cannot be reversed by the sending branch
+     * without the receiving branch's involvement — this ensures the receiving
+     * branch has acknowledged the transfer before any reversal can happen.
+     *
+     * @param int $demandId
+     * @param int $confirmedBy User ID who confirmed receipt
+     * @param int $branchId The confirmer's branch ID (for authorization)
+     * @return BranchDemand
+     * @throws \RuntimeException If demand cannot be confirmed.
+     */
+    public function confirmReceipt(int $demandId, int $confirmedBy, int $branchId): BranchDemand
+    {
+        return DB::transaction(function () use ($demandId, $confirmedBy, $branchId) {
+            // Lock the demand row
+            $demand = DB::table('branch_demands')
+                ->where('id', $demandId)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$demand) {
+                throw new \RuntimeException("Branch demand {$demandId} not found.");
+            }
+
+            // Authorization: only the requesting branch (from_branch_id) can confirm
+            if ((int) $demand->from_branch_id !== $branchId) {
+                throw new \RuntimeException(
+                    "Only the requesting branch can confirm receipt for demand #{$demandId}."
+                );
+            }
+
+            // Status must be 'received'
+            if ($demand->status !== 'received') {
+                throw new \RuntimeException(
+                    "Cannot confirm receipt for demand #{$demandId}: status is '{$demand->status}', expected 'received'."
+                );
+            }
+
+            // Must not already be confirmed
+            if ($demand->received_at !== null) {
+                throw new \RuntimeException(
+                    "Demand #{$demandId} has already been confirmed on {$demand->received_at}."
+                );
+            }
+
+            // Must not be reversed
+            if ($demand->is_reversed) {
+                throw new \RuntimeException(
+                    "Cannot confirm receipt for a reversed demand #{$demandId}."
+                );
+            }
+
+            // Update the demand with receipt confirmation
+            DB::table('branch_demands')
+                ->where('id', $demandId)
+                ->update([
+                    'received_at' => now(),
+                    'received_by' => $confirmedBy,
+                    'updated_at'  => now(),
+                ]);
+
+            // Log the receipt confirmation
+            Log::info('BranchDemand receipt confirmed', [
+                'demand_id'    => $demandId,
+                'demand_code'  => $demand->demand_code,
+                'confirmed_by' => $confirmedBy,
+                'branch_id'    => $branchId,
+            ]);
+
+            // Audit log via the model's AuditableMasterData trait
+            // (the model update will trigger the audit automatically)
             return BranchDemand::find($demandId);
         });
     }

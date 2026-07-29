@@ -1,8 +1,8 @@
 # Branch Demand — Complete Implementation Plan for Laravel ERP
 
-**Document version:** 1.4  
+**Document version:** 1.5  
 **Date:** 2026-07-29  
-**Last updated:** 2026-07-29 — Phase 1-4 completed  
+**Last updated:** 2026-07-29 — Phase 1-5 completed  
 **Scope:** Cross-Branch Demand / Supply Transfer System with Accountability, Audit, and Price Range Handling  
 **Target stack:** Laravel 11 + PostgreSQL 16  
 **Source of truth:** Legacy PHP/MySQL system (fully functional) + User-provided Excel audit sheet ("MAIN BILL SHIT1.xlsx")  
@@ -818,34 +818,52 @@ CREATE TABLE branch_demand_repricing (
 
 ---
 
-### Phase 5 — Warehouse Manager Confirmation (Receipt Acknowledgment)
+### Phase 5 — Warehouse Manager Confirmation (Receipt Acknowledgment) ✅ COMPLETED
 
 **Goal:** Add a confirmation step so the receiving warehouse manager must acknowledge receipt of the products. This prevents the "I don't know when it happened" problem.
 
 **Tasks:**
 
-1. **Modify the send flow:**
+1. **Modify the send flow:** ✅
    - After sending goods, the demand status changes to `received` (stock has moved)
    - But the `received_at` and `received_by` columns remain NULL until the receiving warehouse manager confirms
 
-2. **Create `BranchDemandController::confirmReceipt()`:**
-   - Only the receiving branch's warehouse manager can confirm
+2. **Create `BranchDemandController::confirmReceipt()`:** ✅
+   - Only the requesting branch's warehouse manager can confirm (from_branch_id)
    - Validates that the demand is in `received` status and `received_at` is NULL
    - Sets `received_at = now()`, `received_by = auth()->id()`
-   - Logs an audit event
+   - Logs an audit event via AuditableMasterData trait
 
-3. **Add a "Pending Receipt Confirmation" view:**
-   - Shows all demands where `to_branch_id = my branch` AND `status = 'received'` AND `received_at IS NULL`
+3. **Add a "Pending Receipt Confirmation" view:** ✅
+   - Shows all demands where `from_branch_id = my branch` AND `status = 'received'` AND `received_at IS NULL`
    - The warehouse manager can view the items and confirm receipt
+   - Route: `GET /admin/branch-demands/pending-receipt`
 
-4. **Add business rule:**
+4. **Add business rule:** ✅
    - A demand that has not been confirmed by the receiving warehouse manager cannot be reversed by the sending branch
    - This ensures the receiving branch has acknowledged the transfer before any reversal can happen
+   - Implemented in `BranchDemandService::reverseDemand()` — throws RuntimeException if received_at is NULL
 
-5. **Add audit logging:**
-   - `BranchDemandAuditLogger::logReceiptConfirmation()` — Log who confirmed and when
+5. **Add audit logging:** ✅
+   - `BranchDemandService::confirmReceipt()` logs via Laravel's Log facade
+   - The model's `AuditableMasterData` trait automatically logs the `received_at`/`received_by` update to `user_audit_log`
 
-**Exit criteria:**
+**Implementation files:**
+
+| File | Description |
+|------|-------------|
+| `app/Services/BranchDemand/BranchDemandService.php` | Added `confirmReceipt()` method; modified `reverseDemand()` to block reversal until receipt confirmed |
+| `app/Models/BranchDemand.php` | Added `scopePendingReceipt()` and `scopePendingReceiptForBranch()` scopes |
+| `app/Http/Controllers/Admin/BranchDemandController.php` | Added `pendingReceipt()` and `confirmReceipt()` methods |
+| `app/Http/Requests/BranchDemand/ConfirmReceiptRequest.php` | New form request for receipt confirmation |
+| `routes/web.php` | Added `pending-receipt` and `confirm-receipt` routes |
+| `resources/views/admin/branch-demands/pending-receipt.blade.php` | New view for pending receipt confirmation list |
+| `resources/views/admin/branch-demands/index.blade.php` | New view for demand listing with receipt status column |
+| `resources/views/admin/branch-demands/pending.blade.php` | New view for pending demands (supplier view) |
+| `resources/views/admin/branch-demands/show.blade.php` | New view for full demand detail with receipt confirmation and reversal blocking |
+| `resources/views/admin/branch-demands/create.blade.php` | New view for creating demands |
+
+**Exit criteria:** ✅ ALL MET
 - Receiving warehouse manager must confirm receipt of products
 - Unconfirmed demands are visible in a "Pending Receipt" view
 - Reversal is blocked until receipt is confirmed

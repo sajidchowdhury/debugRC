@@ -13,12 +13,12 @@ use App\Traits\AuditableMasterData;
  *      Status = 'pending'. No stock movement, no GL.
  *   2. SEND: Branch A's warehouse manager selects per-item FROM/TO warehouses and sends goods.
  *      Status = 'received'. Stock moves, GL posted, branch ledger updated.
- *   3. CONFIRM RECEIPT: Branch B's warehouse manager confirms receipt.
+ *   3. CONFIRM RECEIPT: Branch B's warehouse manager confirms receipt (Phase 5).
  *      Sets received_at / received_by. Required before reversal.
  *   4. SETTLE: Bank customer payments and inter-branch money transfers auto-settle
  *      open demands in FIFO order (oldest first).
  *   5. REVERSE: Undo a sent/received demand (stock restored, GL reversed, ledger reversed).
- *      Status = 'reversed'.
+ *      Status = 'reversed'. Blocked until receipt is confirmed (Phase 5).
  *
  * Terminology:
  *   - from_branch_id = requester (debtor) — the branch that NEEDS the products
@@ -208,6 +208,31 @@ class BranchDemand extends Model
         return $query->where('status', 'received')
                      ->where('is_reversed', false)
                      ->whereColumn('total_value', '>', 'settlement_amount');
+    }
+
+    /**
+     * Scope: received demands awaiting receipt confirmation (received_at IS NULL).
+     * These are demands where goods have been sent but the receiving
+     * warehouse manager has not yet acknowledged receipt.
+     */
+    public function scopePendingReceipt(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
+    {
+        return $query->where('status', 'received')
+                     ->where('is_reversed', false)
+                     ->whereNull('received_at');
+    }
+
+    /**
+     * Scope: received demands where the requesting branch (from_branch_id)
+     * is the given branch and receipt is still pending.
+     * Used by the receiving warehouse manager's "Pending Receipt" view.
+     */
+    public function scopePendingReceiptForBranch(\Illuminate\Database\Eloquent\Builder $query, int $branchId): \Illuminate\Database\Eloquent\Builder
+    {
+        return $query->where('from_branch_id', $branchId)
+                     ->where('status', 'received')
+                     ->where('is_reversed', false)
+                     ->whereNull('received_at');
     }
 
     // ===================== HELPERS =====================
