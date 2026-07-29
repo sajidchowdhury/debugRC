@@ -41,10 +41,12 @@ trait AuditableMasterData
             static::logAudit($model, 'deleted', $model->getAttributes(), null);
         });
 
-        // Log on restore
-        static::restored(function ($model) {
-            static::logAudit($model, 'restored', null, $model->getAttributes());
-        });
+        // Log on restore — only models that use SoftDeletes have the "restored" event
+        if (in_array(\Illuminate\Database\Eloquent\SoftDeletes::class, class_uses_recursive(static::class))) {
+            static::restored(function ($model) {
+                static::logAudit($model, 'restored', null, $model->getAttributes());
+            });
+        }
     }
 
     /**
