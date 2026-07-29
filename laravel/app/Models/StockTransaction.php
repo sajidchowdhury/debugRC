@@ -102,6 +102,9 @@ class StockTransaction extends Model
         'warehouse_transfer',
         'damage',
         'branch_demand',
+        'demand_send',
+        'demand_receive',
+        'demand_reversal',
         'opening_balance',
         'reversal',
     ];
