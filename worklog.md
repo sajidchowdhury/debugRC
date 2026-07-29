@@ -804,3 +804,48 @@ docker compose exec rcerp_app php artisan config:clear
 Then visit: `/admin/stock-adjustments` (Export CSV + Checklist buttons), `/admin/stock-adjustments/checklist` (7-section report), `/admin/stock-adjustments/{id}` (Print button + reversing JE block), `/admin/stock-adjustments/{id}/print` (print voucher).
 
 **Stage Summary:** Phase 8 delivers Legacy-parity UX — CSV export (G2), a 7-section integrity checklist (G4) backed by a dedicated `StockAdjustmentAuditService`, a print voucher (G18) with items + GL summary + signatures, and a reversing GL audit block on the show page. The module is now role-gated, audit-logged, categorized, UOM-aware, reversal-safe, drift-monitored, AND Legacy-parity on UX. 8 of 10 phases complete; Phases 9-10 (API routes, test coverage) remain.
+
+---
+
+## SA-HOTFIX-4 — ShadowModeController missing base Controller import (blocks Phase 8 verification)
+
+**Date:** 2025-08-08
+**Status:** ✅ COMPLETED, committed, pushed.
+**Discovered during:** Phase 8 verification (`php artisan route:list --name=stock-adjustments`).
+
+### Problem
+After pulling Phase 8 (commit `c51d691`), running `php artisan route:list --name=stock-adjustments` died with a fatal error:
+
+```
+Class "App\Http\Controllers\Admin\Controller" not found
+at app/Http/Controllers/Admin/ShadowModeController.php:25
+class ShadowModeController extends Controller
+```
+
+`route:list` reflects on every controller referenced in `routes/web.php` to build the table. `ShadowModeController` declares `namespace App\Http\Controllers\Admin;` and `extends Controller` **without** a `use App\Http\Controllers\Controller;` import, so PHP resolved `Controller` to the non-existent `App\Http\Controllers\Admin\Controller`. (No such file exists — only `App\Http\Controllers\Controller` does.) Every other Admin controller (`StockAdjustmentController`, `WarehouseTransferController`, etc.) has the explicit import; `ShadowModeController` was the sole omission.
+
+This is a **pre-existing bug** (not introduced by Phase 8 — `ShadowModeController` is not in the Phase 8 diff). It blocks `route:list` and would also fatal any request to `/admin/shadow-mode/*`.
+
+### Fix
+Added the missing import to `laravel/app/Http/Controllers/Admin/ShadowModeController.php`:
+```php
+use App\Http\Controllers\Controller;
+```
+placed first in the import block, matching the convention used by all sibling Admin controllers. One-line, no behavior change — `ShadowModeController` now correctly extends the base `App\Http\Controllers\Controller` (which provides `AuthorizesRequests` + `ValidatesRequests` + the branch-resolution helpers).
+
+### Verification (static)
+- Scanned all 40 controllers in `app/Http/Controllers/Admin/` for `extends Controller` without the matching import — `ShadowModeController` was the only offender; no other controller has the bug.
+- Confirmed `app/Http/Controllers/Controller.php` exists and extends `Illuminate\Routing\Controller` (Laravel base).
+- Neither docker nor php CLI is available in this sandbox, so `php -l` / `artisan route:list` could not be run here — user must re-run the Phase 8 verification commands after pulling.
+
+### Files modified
+- `laravel/app/Http/Controllers/Admin/ShadowModeController.php` — 1 import line added.
+
+### Verification (user must run after pull)
+```
+docker compose exec rcerp_app php artisan optimize:clear
+docker compose exec rcerp_app php artisan route:list --name=stock-adjustments
+```
+The route:list command should now print all 18 stock-adjustment routes (index, create, store, show, audit→redirect, checklist, export, reconcile, run-reconcile, rebuild-snapshot, confirm-form, submit, confirm, cancel, approve, reject, print, product-rate, product-uoms) without fataling.
+
+**Stage Summary:** Cross-cutting hotfix unblocking Phase 8 verification. The Phase 8 deliverables themselves (CSV export, 7-section checklist, print voucher, reversing GL block) were correctly committed in `c51d691` and required no changes — only the unrelated `ShadowModeController` import was broken.
