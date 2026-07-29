@@ -713,6 +713,17 @@ Route::middleware('auth')->group(function () {
         Route::post('admin/damages/{id}/cancel', [DamageController::class, 'cancel'])->name('admin.damages.cancel')
             ->where(['id' => '[0-9]+'])
             ->middleware('branch.isolation');
+
+        // Phase 4 — employee recovery. Posts a GL entry (Dr employee_payable
+        // / Cr loss) + an employee_ledger deduction row. As financially
+        // sensitive as confirm/cancel (it creates a liability for an
+        // employee), so it sits in the admin/manager destructive group.
+        // DamagePolicy::recoverFromEmployee additionally requires the damage
+        // to be confirmed + have an accountable employee + no prior recovery.
+        Route::post('admin/damages/{id}/recover', [DamageController::class, 'recoverFromEmployee'])
+            ->name('admin.damages.recover')
+            ->where(['id' => '[0-9]+'])
+            ->middleware('branch.isolation');
     });
 
     // ============================================================

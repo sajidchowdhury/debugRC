@@ -53,6 +53,22 @@
     $maxSizeKb         = (int) config('damage.attachment_max_size_kb', \App\Models\DamageAttachment::MAX_FILE_SIZE_KB);
     $canUpload         = auth()->check()
         && auth()->user()->can('uploadAttachment', $dmg);   // draft + same-branch + role
+
+    // Phase 4 — witness / accountable / recovery context.
+    $witness     = $dmg->witnessEmployee;
+    $accountable = $dmg->accountableEmployee;
+    $hasRecovery = $dmg->hasRecovery();
+    $recoveryAmount = (float) $dmg->recovery_amount;
+    $recoveryJe   = $dmg->recoveryJournalEntry;
+    $recoverable  = $dmg->isRecoverable();   // confirmed + accountable + no recovery yet
+    $canRecover   = auth()->check()
+        && auth()->user()->can('recoverFromEmployee', $dmg);  // admin/manager + same-branch + recoverable
+
+    // Whether the current user may view the employee profile/account page
+    // (admin/manager/hr). warehouse_manager can create damages but NOT view
+    // employee profiles — so the link degrades to plain text for them.
+    $canViewEmployees = auth()->check()
+        && auth()->user()->hasRole('admin', 'manager', 'hr');
 @endphp
 
 <div class="container-fluid py-2">
@@ -639,6 +655,112 @@
                     @endif
                 </div>
             </div>
+
+            {{-- Phase 4 — Accountability card.
+                 Names the witness + accountable employee for this damage and
+                 shows the recovery status. For missing/theft types, a missing
+                 required party is flagged here too (the create gate should
+                 have caught it, but pre-Phase-4 rows + the exempt
+                 sales-return flow may lack one). --}}
+            @php
+                $requireAccountable = in_array($dmg->damage_type, (array) (config('damage.accountability.require_accountable_for_types') ?? []), true);
+                $requireWitness     = in_array($dmg->damage_type, (array) (config('damage.accountability.require_witness_for_types') ?? []), true);
+                $missingAccountable = $requireAccountable && empty($accountable);
+                $missingWitness     = $requireWitness && empty($witness);
+
+                // Render an employee as a link (if the user may view employee
+                // profiles) or plain text (warehouse_manager can't).
+                $renderEmployee = function ($emp) use ($canViewEmployees) {
+                    if (!$emp) {
+                        return '<span class="text-muted">—</span>';
+                    }
+                    $name = e($emp->name) . ' <code class="small text-muted ms-1">#' . e($emp->employee_code) . '</code>';
+                    $role = $emp->role ? '<span class="badge bg-light text-muted ms-1">' . e($emp->role) . '</span>' : '';
+                    $branch = ($emp->branch ? ' · <span class="text-muted small">' . e($emp->branch->branch_name) . '</span>' : '');
+                    if ($canViewEmployees) {
+                        return '<a href="' . e(route('admin.employees.account', $emp)) . '" class="text-decoration-none fw-semibold">'
+                            . $name . '</a>' . $role . $branch;
+                    }
+                    return '<span class="fw-semibold">' . $name . '</span>' . $role . $branch;
+                };
+            @endphp
+            <div class="card border-0 shadow-sm mb-3" id="accountabilityCard">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <h2 class="h6 mb-0">
+                        <i class="fas fa-user-shield me-1 text-danger"></i> Accountability
+                    </h2>
+                    @if ($hasRecovery)
+                        <span class="badge bg-success-subtle text-success">
+                            <i class="fas fa-circle-check me-1"></i>Recovered Tk {{ number_format($recoveryAmount, 2) }}
+                        </span>
+                    @elseif ($recoverable)
+                        <span class="badge bg-warning-subtle text-warning">
+                            <i class="fas fa-circle-exclamation me-1"></i>Recovery pending
+                        </span>
+                    @elseif ($accountable || $witness)
+                        <span class="badge bg-light text-muted">Named</span>
+                    @else
+                        <span class="badge bg-light text-muted">None</span>
+                    @endif
+                </div>
+                <div class="card-body">
+                    @if ($missingAccountable || $missingWitness)
+                        <div class="alert alert-danger small mb-3" role="alert">
+                            <i class="fas fa-triangle-exclamation me-1"></i>
+                            @if ($missingAccountable)
+                                This <strong>{{ $typeLabels[$dmg->damage_type] ?? $dmg->damage_type }}</strong> damage
+                                requires an <strong>accountable employee</strong> but none is set.
+                            @endif
+                            @if ($missingWitness)
+                                @if ($missingAccountable)<br>@endif
+                                This <strong>{{ $typeLabels[$dmg->damage_type] ?? $dmg->damage_type }}</strong> damage
+                                requires a <strong>witness employee</strong> but none is set.
+                            @endif
+                            @if ($dmg->isDraft())
+                                This will block confirmation. Recreate the damage with the required party, or reclassify the type.
+                            @else
+                                The damage was created before Phase 4 (or via the sales-return-linked auto-flow which is exempt).
+                            @endif
+                        </div>
+                    @endif
+
+                    <dl class="row mb-0">
+                        <dt class="col-sm-4 text-muted">
+                            Accountable employee
+                            @if ($requireAccountable)<span class="text-danger">*</span>@endif
+                        </dt>
+                        <dd class="col-sm-8">{!! $renderEmployee($accountable) !!}</dd>
+
+                        <dt class="col-sm-4 text-muted">
+                            Witness
+                            @if ($requireWitness)<span class="text-danger">*</span>@endif
+                        </dt>
+                        <dd class="col-sm-8">{!! $renderEmployee($witness) !!}</dd>
+
+                        @if ($hasRecovery)
+                            <dt class="col-sm-4 text-muted">Recovery amount</dt>
+                            <dd class="col-sm-8">
+                                <strong class="text-success">Tk {{ number_format($recoveryAmount, 2) }}</strong>
+                                @if ($recoveryJe)
+                                    <span class="badge bg-secondary-subtle text-secondary ms-1">JE {{ $recoveryJe->entry_no }}</span>
+                                @endif
+                                <div class="small text-muted">
+                                    Posted against the accountable employee's ledger (salary deduction).
+                                    Reversed automatically if this damage is cancelled.
+                                </div>
+                            </dd>
+                        @elseif ($recoverable)
+                            <dt class="col-sm-4 text-muted">Recoverable</dt>
+                            <dd class="col-sm-8">
+                                <strong class="text-warning">Tk {{ number_format((float) $dmg->total_value, 2) }}</strong>
+                                <div class="small text-muted">
+                                    No recovery posted yet. Use the “Recover from employee” action to post a salary deduction.
+                                </div>
+                            </dd>
+                        @endif
+                    </dl>
+                </div>
+            </div>
         </div>
 
         {{-- Right: actions aside --}}
@@ -714,6 +836,57 @@
                                 A reason is required.
                             </div>
                         @endif
+                    @endif
+
+                    {{-- Phase 4 — Recover from employee (confirmed + accountable +
+                         no prior recovery + admin/manager + same-branch). Posts a
+                         one-shot GL entry (Dr employee_payable / Cr loss) + an
+                         employee_ledger deduction row. One-shot: to undo a
+                         recovery, cancel the damage (which reverses both). --}}
+                    @if ($canRecover)
+                        <hr class="my-3">
+                        <form method="POST" action="{{ route('admin.damages.recover', $dmg) }}" id="recoverForm">
+                            @csrf
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <i class="fas fa-hand-holding-dollar text-warning"></i>
+                                <span class="fw-semibold small">Recover from employee</span>
+                            </div>
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text">Tk</span>
+                                <input type="number" name="recovery_amount" id="recoveryAmountField"
+                                       class="form-control @error('recovery_amount') is-invalid @enderror"
+                                       step="0.01" min="0.01"
+                                       max="{{ number_format((float) $dmg->total_value, 2, '.', '') }}"
+                                       value="{{ old('recovery_amount', number_format((float) $dmg->total_value, 2, '.', '')) }}"
+                                       required>
+                                <button type="button" class="btn btn-warning" id="recoverBtn">
+                                    <i class="fas fa-check me-1"></i> Post
+                                </button>
+                            </div>
+                            @error('recovery_amount')
+                                <div class="invalid-feedback d-block">{{ $message }}</div>
+                            @enderror
+                            <div class="form-text small mt-1">
+                                @if ($accountable)
+                                    Debits <strong>{{ $accountable->name }}</strong>'s ledger (salary deduction).
+                                    Max Tk {{ number_format((float) $dmg->total_value, 2) }}.
+                                @endif
+                            </div>
+                        </form>
+                    @endif
+
+                    {{-- Phase 4 — if a recovery was already posted, show a read-only
+                         summary in the actions aside (the full detail is in the
+                         Accountability card). --}}
+                    @if ($hasRecovery && $dmg->isConfirmed())
+                        <div class="alert alert-success small mb-0 mt-2">
+                            <i class="fas fa-circle-check me-1"></i>
+                            Tk {{ number_format($recoveryAmount, 2) }} recovered from
+                            <strong>{{ $accountable?->name ?? 'employee' }}</strong>.
+                            <div class="text-muted small mt-1">
+                                Cancel the damage to reverse the recovery (and the write-off).
+                            </div>
+                        </div>
                     @endif
 
                     {{-- Phase 0 (Damage plan): warehouse_manager sees this note instead of
@@ -889,6 +1062,51 @@ $(function () {
                 $btn.prop('disabled', true)
                     .html('<i class="fas fa-spinner fa-spin me-1"></i> Cancelling…');
                 $('#cancelForm').submit();
+            }
+        });
+    });
+
+    // ====== Phase 4 — Recover from employee ======
+    // SweetAlert confirmation before posting a salary-deduction recovery
+    // against the accountable employee. The form itself is a plain POST to
+    // admin.damages.recover; this just asks "are you sure?" with the amount
+    // pre-filled (the user can adjust it in the modal input).
+    $('#recoverBtn').on('click', function () {
+        var maxAmount = @json((float) $dmg->total_value);
+        var employeeName = @json($accountable?->name ?? 'the employee');
+        var currentVal = parseFloat($('#recoveryAmountField').val()) || 0;
+
+        Swal.fire({
+            icon: 'warning',
+            title: 'Recover from employee?',
+            html: '<p class="text-start">This will debit <strong>' + $('<div>').text(employeeName).html()
+                + '</strong>\'s employee ledger (salary deduction) and credit the damage loss ledger.</p>',
+            input: 'number',
+            inputValue: currentVal.toFixed(2),
+            inputAttributes: { step: '0.01', min: '0.01', max: maxAmount.toFixed(2) },
+            inputLabel: 'Amount to recover (Tk)',
+            showCancelButton: true,
+            confirmButtonText: '<i class="fas fa-hand-holding-dollar"></i> Post recovery',
+            confirmButtonColor: '#d97706',
+            cancelButtonText: 'Cancel',
+            reverseButtons: true,
+            inputValidator: function (value) {
+                var v = parseFloat(value);
+                if (!v || v <= 0) {
+                    return 'Enter an amount greater than zero.';
+                }
+                if (v > maxAmount + 0.01) {
+                    return 'Amount cannot exceed Tk ' + maxAmount.toFixed(2) + '.';
+                }
+                return null;
+            }
+        }).then(function (result) {
+            if (result.isConfirmed) {
+                $('#recoveryAmountField').val(parseFloat(result.value).toFixed(2));
+                var $btn = $('#recoverBtn');
+                $btn.prop('disabled', true)
+                    .html('<i class="fas fa-spinner fa-spin me-1"></i> Posting…');
+                $('#recoverForm').submit();
             }
         });
     });

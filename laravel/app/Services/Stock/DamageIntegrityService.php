@@ -95,6 +95,13 @@ class DamageIntegrityService
         // error from DamageService::confirmDamage.
         $items[] = $this->checkEvidence($damage);
 
+        // Phase 4 — witness / accountable employee requirement. Surfaces a
+        // missing accountable employee (missing-type) or witness (theft-type)
+        // before the user hits the create/confirm gate. Also reports the
+        // recovery status (pending / posted / reversed) when an accountable
+        // employee is set.
+        $items[] = $this->checkAccountability($damage);
+
         $summary = ['pass' => 0, 'warn' => 0, 'fail' => 0, 'info' => 0];
         foreach ($items as $it) {
             $summary[$it['status']] = ($summary[$it['status']] ?? 0) + 1;
@@ -393,6 +400,111 @@ class DamageIntegrityService
         return $this->item('evidence', 'Evidence',
             "Evidence requirement lapsed when this {$typeLabel} damage was cancelled.",
             'info', $count > 0 ? "{$count} attachment(s) retained for audit." : 'No attachments were recorded.');
+    }
+
+    /**
+     * 7. Witness / accountable employee requirement (Phase 4).
+     *
+     * Surfaces the type-conditional accountability gate so it's visible on
+     * the detail page *before* the user hits Create/Confirm:
+     *   - missing → accountable_employee_id required
+     *   - theft   → witness_employee_id required
+     *
+     * State-aware:
+     *   · draft      → warn if the required party is missing (can still add
+     *                  before confirm; createDamage blocks it server-side,
+     *                  so a draft without one means it was created pre-Phase-4
+     *                  or via the sales-return-linked auto-flow which is
+     *                  exempt).
+     *   · confirmed  → fail if the required party is missing (the gate was
+     *                  bypassed — an audit hole). pass otherwise, with the
+     *                  recovery status appended (pending / posted).
+     *   · cancelled  → info (no longer actionable).
+     *
+     * For types with NO hard requirement, passes with a note — but if an
+     * accountable employee IS set (recommended for employee-caused damage),
+     * reports the recovery status so the panel reflects it.
+     *
+     * Uses the already-eager-loaded witnessEmployee / accountableEmployee
+     * relations (no extra query) when available.
+     */
+    private function checkAccountability(DamageInvoice $damage): array
+    {
+        $rules = (array) config('damage.accountability', []);
+        $requireAccountable = in_array(
+            $damage->damage_type,
+            (array) ($rules['require_accountable_for_types'] ?? []),
+            true
+        );
+        $requireWitness = in_array(
+            $damage->damage_type,
+            (array) ($rules['require_witness_for_types'] ?? []),
+            true
+        );
+
+        $typeLabel  = DamageInvoice::DAMAGE_TYPE_LABELS[$damage->damage_type] ?? $damage->damage_type;
+        $witness    = $damage->witnessEmployee;
+        $accountable = $damage->accountableEmployee;
+
+        // Build a short "who's named" summary for the detail line.
+        $namedParts = [];
+        if ($accountable) {
+            $namedParts[] = 'Accountable: ' . $accountable->name . ' (#' . $accountable->employee_code . ')';
+        }
+        if ($witness) {
+            $namedParts[] = 'Witness: ' . $witness->name . ' (#' . $witness->employee_code . ')';
+        }
+        $namedSummary = $namedParts ? implode(' · ', $namedParts) : 'No employee named.';
+
+        // Recovery status (only meaningful when an accountable employee exists).
+        $recoveryAmount = (float) $damage->recovery_amount;
+        $hasRecovery = $damage->hasRecovery();
+        $recoveryNote = '';
+        if ($accountable) {
+            if ($hasRecovery) {
+                $recoveryNote = ' · Recovery posted: Tk ' . number_format($recoveryAmount, 2);
+            } elseif ($damage->isConfirmed()) {
+                $recoveryNote = ' · Recovery pending (optional — Tk ' . number_format((float) $damage->total_value, 2) . ' recoverable)';
+            }
+        }
+
+        $expected = $requireAccountable
+            ? "A {$typeLabel} damage requires an accountable employee."
+            : ($requireWitness
+                ? "A {$typeLabel} damage requires a witness employee."
+                : 'Witness / accountable employee is optional for this damage type.');
+
+        // --- Hard requirement missing (missing→accountable, theft→witness) ---
+        $missingRequired = ($requireAccountable && empty($accountable))
+            || ($requireWitness && empty($witness));
+
+        if ($missingRequired) {
+            if ($damage->isDraft()) {
+                return $this->item('accountability', 'Accountability', $expected,
+                    'warn',
+                    $namedSummary . ' — Confirm will be blocked until the required employee is added.');
+            }
+            if ($damage->isConfirmed()) {
+                // createDamage blocks this, so 0 here means the gate was
+                // bypassed (pre-Phase-4 row, or the exempt sales-return flow).
+                return $this->item('accountability', 'Accountability', $expected,
+                    'fail',
+                    $namedSummary . ' — confirmed without the required employee (gate bypassed).');
+            }
+            // cancelled
+            return $this->item('accountability', 'Accountability', $expected,
+                'info',
+                $namedSummary . ' — no longer actionable (damage cancelled).');
+        }
+
+        // --- Requirement met (or no hard requirement) ---
+        if ($damage->isCancelled()) {
+            return $this->item('accountability', 'Accountability', $expected,
+                'info', $namedSummary . $recoveryNote);
+        }
+
+        return $this->item('accountability', 'Accountability', $expected,
+            'pass', $namedSummary . $recoveryNote);
     }
 
     /**

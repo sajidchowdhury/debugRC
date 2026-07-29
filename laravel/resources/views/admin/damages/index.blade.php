@@ -10,6 +10,7 @@
         'status'        => '',
         'damage_type'   => '',
         'branch_id'     => '',
+        'accountable_employee_id' => '',
         'search'        => '',
     ], is_array($filters ?? null) ? $filters : []);
 
@@ -21,6 +22,10 @@
         'total_value'   => 0,
         'missing_count' => 0,
         'theft_count'   => 0,
+        // Phase 4 — recovery stats.
+        'recoverable_count' => 0,
+        'recoverable_value' => 0,
+        'recovered_total'   => 0,
     ], $stats ?? []);
 
     // Phase 1 — damage type badge renderer. Uses the model's badge/icon maps.
@@ -153,6 +158,28 @@
                 </div>
             </div>
         </div>
+        {{-- Phase 4 — recoverable: confirmed damages with an accountable --}}
+        {{-- employee and no recovery posted yet. Click-through target for --}}
+        {{-- managers following up on salary deductions. --}}
+        <div class="col-sm-6 col-lg">
+            <div class="card border-0 shadow-sm h-100 border-start border-success border-3">
+                <div class="card-body d-flex align-items-center">
+                    <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
+                         style="width:48px;height:48px;background:#16a34a;">
+                        <i class="fas fa-hand-holding-dollar"></i>
+                    </div>
+                    <div>
+                        <div class="h4 mb-0">Tk {{ number_format((float) $stats['recoverable_value'], 2) }}</div>
+                        <div class="text-muted small">
+                            Recoverable ({{ (int) $stats['recoverable_count'] }} dmg)
+                            @if ((float) $stats['recovered_total'] > 0)
+                                · <span class="text-success">Tk {{ number_format((float) $stats['recovered_total'], 2) }} recovered</span>
+                            @endif
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     {{-- Filter form --}}
@@ -214,6 +241,21 @@
                         @endforeach
                     </select>
                 </div>
+                {{-- Phase 4 — accountable employee filter. "Show all damages where
+                     employee X is accountable" — for HR / manager review of an
+                     employee's accumulated damage responsibility. --}}
+                <div class="col-md-2">
+                    <label class="form-label small text-muted mb-1" for="accountable_employee_id">Accountable</label>
+                    <select id="accountable_employee_id" name="accountable_employee_id" class="form-select form-select-sm select2">
+                        <option value="">Anyone</option>
+                        @foreach (($employees ?? collect()) as $emp)
+                            <option value="{{ $emp->id }}"
+                                {{ (string) $filters['accountable_employee_id'] === (string) $emp->id ? 'selected' : '' }}>
+                                {{ $emp->employee_code }} — {{ $emp->name }}
+                            </option>
+                        @endforeach
+                    </select>
+                </div>
                 <div class="col-md-2">
                     <label class="form-label small text-muted mb-1" for="search">Search code</label>
                     <input type="text" id="search" name="search" class="form-control form-control-sm"
@@ -257,6 +299,8 @@
                             <th>Date</th>
                             <th>Warehouse</th>
                             <th>Type</th>
+                            {{-- Phase 4 — accountable employee column --}}
+                            <th>Accountable</th>
                             <th class="text-end">Items</th>
                             <th class="text-end">Total (Tk)</th>
                             <th>Status</th>
@@ -290,6 +334,25 @@
                                 </td>
                                 {{-- Phase 1 — damage type badge --}}
                                 <td>{!! $typeBadge($dmg->damage_type) !!}</td>
+                                {{-- Phase 4 — accountable employee (eager-loaded). Shows --}}
+                                {{-- the recovery badge too when a recovery was posted. --}}
+                                <td>
+                                    @if ($dmg->accountableEmployee)
+                                        <span class="fw-semibold">{{ $dmg->accountableEmployee->name }}</span>
+                                        <div class="small text-muted">{{ $dmg->accountableEmployee->employee_code }}</div>
+                                        @if ((float) $dmg->recovery_amount > 0)
+                                            <span class="badge bg-success-subtle text-success mt-1">
+                                                <i class="fas fa-circle-check me-1"></i>Tk {{ number_format((float) $dmg->recovery_amount, 2) }}
+                                            </span>
+                                        @elseif ($dmg->isConfirmed())
+                                            <span class="badge bg-warning-subtle text-warning mt-1">
+                                                <i class="fas fa-circle-exclamation me-1"></i>Recoverable
+                                            </span>
+                                        @endif
+                                    @else
+                                        <span class="text-muted">—</span>
+                                    @endif
+                                </td>
                                 <td class="text-end">{{ number_format($dmg->items->count()) }}</td>
                                 <td class="text-end">{{ number_format((float) $dmg->total_value, 2) }}</td>
                                 <td>{!! $statusBadge($dmg->status) !!}</td>
@@ -311,7 +374,7 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="9" class="text-center text-muted py-5">
+                                <td colspan="10" class="text-center text-muted py-5">
                                     <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
                                     No damage invoices found. Try adjusting filters or
                                     <a href="{{ route('admin.damages.create') }}">create a new one</a>.

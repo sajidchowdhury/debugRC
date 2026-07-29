@@ -35,6 +35,11 @@ use App\Traits\AuditableMasterData;
  * @property int|null $reversed_by
  * @property string|null $reverse_reason
  * @property int|null $created_by
+ * @property int|null $witness_employee_id      Phase 4 — corroborating employee (required for theft).
+ * @property int|null $accountable_employee_id  Phase 4 — responsible employee (required for missing).
+ * @property string $recovery_amount            Phase 4 — BDT recovered from the accountable employee.
+ * @property int|null $employee_ledger_entry_id  Phase 4 — link to the recovery employee_ledger row.
+ * @property int|null $recovery_journal_entry_id Phase 4 — link to the recovery GL journal entry.
  */
 class DamageInvoice extends Model
 {
@@ -120,6 +125,12 @@ class DamageInvoice extends Model
         'reversed_by',
         'reverse_reason',
         'created_by',
+        // Phase 4 — witness / accountable / recovery.
+        'witness_employee_id',
+        'accountable_employee_id',
+        'recovery_amount',
+        'employee_ledger_entry_id',
+        'recovery_journal_entry_id',
     ];
 
     protected $casts = [
@@ -132,6 +143,12 @@ class DamageInvoice extends Model
         'journal_entry_id' => 'integer',
         'created_by' => 'integer',
         'reversed_by' => 'integer',
+        // Phase 4 — accountability / recovery columns.
+        'witness_employee_id' => 'integer',
+        'accountable_employee_id' => 'integer',
+        'recovery_amount' => 'decimal:2',
+        'employee_ledger_entry_id' => 'integer',
+        'recovery_journal_entry_id' => 'integer',
     ];
 
     public function items(): \Illuminate\Database\Eloquent\Relations\HasMany
@@ -184,6 +201,58 @@ class DamageInvoice extends Model
 
     /*
     |--------------------------------------------------------------------------
+    | Phase 4 — Witness & Accountable Employee
+    |--------------------------------------------------------------------------
+    | The named responsible parties for a damage. `missing`-type damages MUST
+    | have an accountable employee; `theft`-type damages MUST have a witness.
+    | Enforced in DamageService::createDamage. Both relations eager-load with
+    | ->with('witnessEmployee.branch', 'accountableEmployee.branch').
+    */
+
+    /**
+     * The employee who corroborates a theft / sensitive write-off (Phase 4).
+     * Required for damage_type='theft'. Optional otherwise.
+     */
+    public function witnessEmployee(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(Employee::class, 'witness_employee_id');
+    }
+
+    /**
+     * The employee responsible for the loss (Phase 4). Required for
+     * damage_type='missing'. Optional (recommended) otherwise. The
+     * accountable employee is the target of the recovery flow
+     * (postEmployeeRecovery debits their employee_ledger).
+     */
+    public function accountableEmployee(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(Employee::class, 'accountable_employee_id');
+    }
+
+    /**
+     * The employee_ledger row created by the recovery (Phase 4). Nullable —
+     * set once by DamageService::postEmployeeRecovery. Reversed on cancel
+     * so the employee doesn't owe us for a write-off that was reversed.
+     */
+    public function employeeLedgerEntry(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(EmployeeLedger::class, 'employee_ledger_entry_id');
+    }
+
+    /**
+     * The GL journal entry posted by the recovery (Phase 4). Nullable — set
+     * once by postEmployeeRecovery. Reversed on cancel alongside the main
+     * damage JE. Stored explicitly (in addition to employee_ledger_entry_id,
+     * which also carries journal_entry_id) so cancelDamage can reverse it
+     * directly without an extra lookup.
+     */
+    public function recoveryJournalEntry(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'recovery_journal_entry_id');
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | Phase 1 — damage_type helpers
     |--------------------------------------------------------------------------
     */
@@ -191,4 +260,34 @@ class DamageInvoice extends Model
     public function isDraft(): bool { return $this->status === 'draft'; }
     public function isConfirmed(): bool { return $this->status === 'confirmed'; }
     public function isCancelled(): bool { return $this->status === 'cancelled'; }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Phase 4 — recovery helpers
+    |--------------------------------------------------------------------------
+    */
+
+    /**
+     * Whether a recovery has been posted against this damage
+     * (employee_ledger debit + GL credit). A recovered damage carries a
+     * non-zero recovery_amount + a linked employee_ledger row.
+     */
+    public function hasRecovery(): bool
+    {
+        return (float) $this->recovery_amount > 0
+            && !empty($this->employee_ledger_entry_id);
+    }
+
+    /**
+     * Whether this damage is eligible for employee recovery — confirmed,
+     * has an accountable employee, and no recovery has been posted yet.
+     * (Recovery is a one-shot: once posted it can only be reversed by
+     * cancelling the damage, not re-run.)
+     */
+    public function isRecoverable(): bool
+    {
+        return $this->isConfirmed()
+            && !empty($this->accountable_employee_id)
+            && !$this->hasRecovery();
+    }
 }

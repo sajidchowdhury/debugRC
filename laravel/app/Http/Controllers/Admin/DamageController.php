@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\DamageAttachment;
 use App\Models\DamageInvoice;
 use App\Models\DamageReason;
+use App\Models\Employee;
 use App\Models\Warehouse;
 use App\Models\Product;
 use App\Models\Branch;
@@ -40,13 +41,17 @@ class DamageController extends Controller
         // role:admin,manager,warehouse_manager route middleware.
         $this->authorize('viewAny', DamageInvoice::class);
 
-        $query = DamageInvoice::with(['warehouse.branch', 'items'])
+        $query = DamageInvoice::with(['warehouse.branch', 'items', 'accountableEmployee'])
             ->when($request->input('from_date'), fn($q, $d) => $q->where('damage_date', '>=', $d))
             ->when($request->input('to_date'), fn($q, $d) => $q->where('damage_date', '<=', $d))
             ->when($request->input('warehouse_id'), fn($q, $wid) => $q->where('warehouse_id', $wid))
             ->when($request->input('status'), fn($q, $s) => $q->where('status', $s))
             ->when($request->input('damage_type'), fn($q, $t) => $q->where('damage_type', $t))
             ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
+            // Phase 4 — filter by accountable employee ("show all damages
+            // where employee X is accountable" — for HR / manager review of
+            // an employee's accumulated damage responsibility).
+            ->when($request->input('accountable_employee_id'), fn($q, $eid) => $q->where('accountable_employee_id', $eid))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('damage_code', 'ILIKE', "%{$search}%");
             })
@@ -57,6 +62,10 @@ class DamageController extends Controller
 
         $warehouses = Warehouse::active()->with('branch')->orderBy('warehouse_name')->get();
         $branches = Branch::active()->orderBy('branch_name')->get();
+        // Phase 4 — active employees for the accountable filter dropdown.
+        // RLS scopes this to the user's branch (admins see all). Ordered by
+        // name for a stable dropdown.
+        $employees = Employee::active()->orderBy('name')->get(['id', 'employee_code', 'name', 'branch_id']);
 
         $stats = [
             'total' => DamageInvoice::count(),
@@ -67,6 +76,19 @@ class DamageController extends Controller
             // Phase 1 — per-type counts for the accountability dashboard.
             'missing_count' => DamageInvoice::where('damage_type', 'missing')->count(),
             'theft_count' => DamageInvoice::where('damage_type', 'theft')->count(),
+            // Phase 4 — recoverable: confirmed damages with an accountable
+            // employee and no recovery posted yet. Uses the partial index
+            // idx_dmg_recovery (confirmed + accountable + recovery_amount=0).
+            'recoverable_count' => DamageInvoice::where('status', 'confirmed')
+                ->whereNotNull('accountable_employee_id')
+                ->where('recovery_amount', 0)
+                ->count(),
+            'recoverable_value' => (float) DamageInvoice::where('status', 'confirmed')
+                ->whereNotNull('accountable_employee_id')
+                ->where('recovery_amount', 0)
+                ->sum('total_value'),
+            // Phase 4 — total recovered to date (from employee deductions).
+            'recovered_total' => (float) DamageInvoice::where('recovery_amount', '>', 0)->sum('recovery_amount'),
         ];
 
         return view('admin.damages.index', [
@@ -74,10 +96,11 @@ class DamageController extends Controller
             'damages' => $damages,
             'warehouses' => $warehouses,
             'branches' => $branches,
+            'employees' => $employees,
             'damageTypes' => DamageInvoice::DAMAGE_TYPES,
             'damageTypeLabels' => DamageInvoice::DAMAGE_TYPE_LABELS,
             'stats' => $stats,
-            'filters' => $request->only(['from_date', 'to_date', 'warehouse_id', 'status', 'damage_type', 'branch_id', 'search']),
+            'filters' => $request->only(['from_date', 'to_date', 'warehouse_id', 'status', 'damage_type', 'branch_id', 'accountable_employee_id', 'search']),
         ]);
     }
 
@@ -93,10 +116,22 @@ class DamageController extends Controller
         // type-filtered dropdown on the create form.
         $damageReasons = DamageReason::groupedByType();
 
+        // Phase 4 — active employees for the witness / accountable dropdowns.
+        // RLS scopes this to the user's branch (admins see all branches). The
+        // create form's JS cascades these by the selected warehouse's branch
+        // (an admin picking a cross-branch warehouse needs that branch's
+        // employees). We load branch_id so the JS filter works; we limit the
+        // column set to keep the payload small.
+        $employees = Employee::active()
+            ->orderBy('name')
+            ->limit(1000)
+            ->get(['id', 'employee_code', 'name', 'role', 'branch_id']);
+
         return view('admin.damages.create', [
             'title' => 'New Damage Invoice',
             'warehouses' => $warehouses,
             'products' => $products,
+            'employees' => $employees,
             'damageTypes' => DamageInvoice::DAMAGE_TYPES,
             'damageTypeLabels' => DamageInvoice::DAMAGE_TYPE_LABELS,
             'damageReasons' => $damageReasons,
@@ -125,6 +160,14 @@ class DamageController extends Controller
             ],
             'reason_detail' => 'nullable|string|max:2000',
             'reason' => 'nullable|string|max:1000',
+            // Phase 4 — witness / accountable employees. Both nullable here;
+            // the type-conditional requirement (missing→accountable,
+            // theft→witness) is enforced server-side in DamageService::
+            // createDamage (which also verifies the employee is active +
+            // same-branch). The frontend JS hints at the requirement but the
+            // service is the real gate.
+            'witness_employee_id' => 'nullable|integer|exists:employees,id',
+            'accountable_employee_id' => 'nullable|integer|exists:employees,id',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
             'items.*.qty' => 'required|numeric|min:0.001',
@@ -139,6 +182,9 @@ class DamageController extends Controller
                 'reason_code' => $validated['reason_code'] ?? '',
                 'reason_detail' => $validated['reason_detail'] ?? '',
                 'reason' => $validated['reason'] ?? '',
+                // Phase 4 — named responsible parties.
+                'witness_employee_id' => $validated['witness_employee_id'] ?? null,
+                'accountable_employee_id' => $validated['accountable_employee_id'] ?? null,
                 'items' => $validated['items'],
                 'created_by' => auth()->id(),
             ]);
@@ -159,6 +205,13 @@ class DamageController extends Controller
             // Phase 3 — eager-load evidence attachments + uploader for the
             // Evidence card. Avoids N+1 on the gallery render.
             'attachments.uploadedBy',
+            // Phase 4 — eager-load the named responsible employees + their
+            // branches (for the Accountability card + employee links), plus
+            // the recovery sub-ledger row + GL JE (if a recovery was posted).
+            'witnessEmployee.branch',
+            'accountableEmployee.branch',
+            'employeeLedgerEntry.employee',
+            'recoveryJournalEntry',
         ])->findOrFail($id);
 
         // Phase 0 (Damage plan): defense-in-depth policy check (same-branch
@@ -228,6 +281,52 @@ class DamageController extends Controller
             $damage = $this->damageService->cancelDamage($id, auth()->id(), $request->input('cancel_reason'));
             return redirect()->route('admin.damages.show', $damage)
                 ->with('success', "Damage {$damage->damage_code} cancelled.");
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Phase 4 — Witness & Accountable Employee: recovery
+    |--------------------------------------------------------------------------
+    */
+
+    /**
+     * Post an employee recovery against a confirmed damage.
+     *
+     * Debits the accountable employee's employee_ledger (they owe the company)
+     * and credits the original loss ledger (nets the recovery against the
+     * write-off). One-shot: a damage may have at most one recovery — to undo
+     * it, cancel the damage (which reverses both the recovery and the main
+     * write-off).
+     *
+     * Route: POST admin/damages/{id}/recover — role:admin,manager + branch.isolation.
+     */
+    public function recoverFromEmployee(Request $request, int $id)
+    {
+        $damage = DamageInvoice::findOrFail($id);
+        $this->authorize('recoverFromEmployee', $damage);
+
+        $validated = $request->validate([
+            // Amount must be > 0 and ≤ the damage total value. The service
+            // re-checks this under a row lock; this validator gives a clean
+            // 422 with a field error instead of a 500.
+            'recovery_amount' => [
+                'required', 'numeric', 'min:0.01',
+                'max:' . number_format((float) $damage->total_value, 2, '.', ''),
+            ],
+        ]);
+
+        try {
+            $damage = $this->damageService->postEmployeeRecovery(
+                $id,
+                (float) $validated['recovery_amount'],
+                (int) auth()->id()
+            );
+            return redirect()->route('admin.damages.show', $damage)
+                ->with('success', "Recovery of Tk " . number_format((float) $validated['recovery_amount'], 2)
+                    . " posted against " . ($damage->accountableEmployee?->name ?? 'employee') . ".");
         } catch (\Throwable $e) {
             return back()->with('error', $e->getMessage());
         }

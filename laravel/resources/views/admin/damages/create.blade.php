@@ -13,6 +13,22 @@
     // Pre-select old damage_type (sticky on validation error).
     $oldType = old('damage_type', 'real_damage');
     $oldReasonCode = old('reason_code', '');
+
+    // Phase 4 — employees for the witness / accountable dropdowns. Grouped
+    // by branch_id so the JS can cascade by the selected warehouse's branch
+    // (an admin picking a cross-branch warehouse needs that branch's staff).
+    $employees = $employees ?? collect();
+    $oldWitness = old('witness_employee_id', '');
+    $oldAccountable = old('accountable_employee_id', '');
+
+    // Clean array for @json (avoids Eloquent serializing extra keys).
+    $employeeOptions = $employees->map(fn ($e) => [
+        'id'        => (int) $e->id,
+        'code'      => $e->employee_code,
+        'name'      => $e->name,
+        'role'      => $e->role,
+        'branch_id' => (int) $e->branch_id,
+    ])->values();
 @endphp
 
 <div class="container-fluid py-2">
@@ -62,6 +78,7 @@
                             <option value="">Select warehouse</option>
                             @foreach ($warehouses as $wh)
                                 <option value="{{ $wh->id }}"
+                                    data-branch-id="{{ $wh->branch_id }}"
                                     {{ (string) old('warehouse_id') === (string) $wh->id ? 'selected' : '' }}>
                                     {{ $wh->warehouse_code }} — {{ $wh->warehouse_name }}
                                     @if ($wh->branch) ({{ $wh->branch->branch_name }}) @endif
@@ -132,7 +149,10 @@
                         @error('reason_detail') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
                     </div>
 
-                    {{-- Phase 1 — accountability warning (shown for missing / theft) --}}
+                    {{-- Phase 1 — accountability warning (shown for missing / theft).
+                         Phase 4 made the witness / accountable fields live
+                         (below), so the warning now points at them instead
+                         of promising a future release. --}}
                     <div class="col-12">
                         <div class="alert alert-warning d-flex align-items-start d-none mb-0" id="accountabilityWarning" role="alert">
                             <i class="fas fa-user-shield me-2 fa-lg mt-1"></i>
@@ -140,10 +160,50 @@
                                 <strong>Accountability action.</strong>
                                 Declaring stock as <span id="accountabilityTypeLabel">missing</span> is a serious
                                 classification — it means the goods are <em>unaccounted for</em>, not physically damaged.
-                                A <strong>witness and/or accountable employee</strong> will be required to confirm this
-                                write-off (arrives in Phase 4). For now, record as much detail as possible in the
-                                reason details above.
+                                <span id="accountabilityRequirementText">A witness / accountable employee is required.</span>
+                                Select the responsible party below before creating the draft.
                             </div>
+                        </div>
+                    </div>
+
+                    {{-- Phase 4 — Witness & Accountable employee dropdowns.
+                         Both are cascaded by the selected warehouse's branch
+                         (an admin picking a cross-branch warehouse needs that
+                         branch's employees). The required-ness is driven by
+                         damage_type: missing → accountable required, theft →
+                         witness required. The server (DamageService) is the
+                         real gate; this JS only hints + marks the label. --}}
+                    <div class="col-md-6">
+                        <label class="form-label" for="witness_employee_id">
+                            Witness (employee)
+                            <span class="text-danger d-none" id="witnessRequiredMark">*</span>
+                            <span class="text-muted small">(required for theft)</span>
+                        </label>
+                        <select id="witness_employee_id" name="witness_employee_id"
+                                class="form-select select2 @error('witness_employee_id') is-invalid @enderror">
+                            <option value="">— Select witness —</option>
+                        </select>
+                        @error('witness_employee_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                        <div class="form-text small">
+                            <i class="fas fa-circle-info me-1"></i>
+                            The employee who corroborates a theft / sensitive write-off.
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label" for="accountable_employee_id">
+                            Accountable employee
+                            <span class="text-danger d-none" id="accountableRequiredMark">*</span>
+                            <span class="text-muted small">(required for missing)</span>
+                        </label>
+                        <select id="accountable_employee_id" name="accountable_employee_id"
+                                class="form-select select2 @error('accountable_employee_id') is-invalid @enderror">
+                            <option value="">— Select accountable —</option>
+                        </select>
+                        @error('accountable_employee_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                        <div class="form-text small">
+                            <i class="fas fa-circle-info me-1"></i>
+                            The employee responsible for the loss. Recovery (salary deduction) is possible when set.
                         </div>
                     </div>
 
@@ -250,11 +310,73 @@ $(function () {
     var $reasonCode   = $('#reason_code');
     var $warn         = $('#accountabilityWarning');
     var $warnLabel    = $('#accountabilityTypeLabel');
+    var $warnReqText  = $('#accountabilityRequirementText');
+    var $witnessMark  = $('#witnessRequiredMark');
+    var $acctMark     = $('#accountableRequiredMark');
     // Sticky value on validation error.
     var oldReasonCode = @json($oldReasonCode);
 
-    // Types that trigger the accountability warning (missing / theft).
-    var ACCOUNTABILITY_TYPES = ['missing', 'theft'];
+    // ====== Phase 4 — Witness & Accountable employee ======
+    // employees: [{id, code, name, role, branch_id}, ...]
+    var employees     = @json($employeeOptions);
+    var oldWitness    = @json($oldWitness ? (string) $oldWitness : '');
+    var oldAccountable = @json($oldAccountable ? (string) $oldAccountable : '');
+
+    // Build warehouse→branch map from the data-branch-id attributes the blade
+    // rendered on each warehouse <option>. Used to cascade the employee
+    // dropdowns by the selected warehouse's branch.
+    var warehouseBranchMap = {};
+    $('#warehouse_id option[data-branch-id]').each(function () {
+        var wid = $(this).val();
+        if (wid) {
+            warehouseBranchMap[wid] = parseInt($(this).attr('data-branch-id'), 10);
+        }
+    });
+
+    var $witnessSel  = $('#witness_employee_id');
+    var $acctSel     = $('#accountable_employee_id');
+
+    // damage_type → required party. Must stay in sync with
+    // config/damage.php 'accountability' and DamageService::validateAccountability.
+    var ACCOUNTABLE_REQUIRED_TYPES = ['missing'];
+    var WITNESS_REQUIRED_TYPES     = ['theft'];
+    var ACCOUNTABILITY_TYPES = ACCOUNTABLE_REQUIRED_TYPES.concat(WITNESS_REQUIRED_TYPES);
+
+    /**
+     * Repopulate an employee <select> with the active employees belonging to
+     * the given branch. Preserves the selected value if it's still in the
+     * filtered set (sticky on validation error). Pass branchId=0/null to
+     * show all (used before a warehouse is picked, as a fallback).
+     */
+    function populateEmployees($select, branchId, selectedId) {
+        var list = employees.filter(function (e) {
+            return !branchId || e.branch_id === branchId;
+        });
+        var placeholder = $select.attr('id') === 'witness_employee_id'
+            ? '— Select witness —' : '— Select accountable —';
+        $select.empty().append($('<option>').val('').text(placeholder));
+        list.forEach(function (e) {
+            var label = e.code + ' — ' + e.name + ' (' + e.role + ')';
+            var $opt = $('<option>').val(e.id).text(label);
+            if (selectedId && String(e.id) === String(selectedId)) {
+                $opt.prop('selected', true);
+            }
+            $select.append($opt);
+        });
+        if ($select.hasClass('select2-hidden-accessible')) {
+            $select.trigger('change.select2');
+        }
+    }
+
+    /**
+     * Cascade both employee dropdowns by the selected warehouse's branch.
+     */
+    function refreshEmployeesByWarehouse() {
+        var wid = $warehouse.val();
+        var branchId = wid ? (warehouseBranchMap[wid] || 0) : 0;
+        populateEmployees($witnessSel, branchId, oldWitness);
+        populateEmployees($acctSel,    branchId, oldAccountable);
+    }
 
     /**
      * Repopulate the reason dropdown with only the reasons belonging to the
@@ -277,23 +399,43 @@ $(function () {
     }
 
     /**
-     * Show / hide the accountability warning based on the damage type.
+     * Show / hide the accountability warning + required marks based on type.
+     * Phase 4: the warning now points at the live witness/accountable fields
+     * below it (no longer "arrives in Phase 4"), and the requirement text +
+     * red asterisks update to match which party is mandatory.
      */
     function toggleAccountabilityWarning(type) {
+        var needsAccountable = ACCOUNTABLE_REQUIRED_TYPES.indexOf(type) !== -1;
+        var needsWitness     = WITNESS_REQUIRED_TYPES.indexOf(type) !== -1;
+
+        // Required marks (red asterisks) on the labels.
+        $witnessMark.toggleClass('d-none', !needsWitness);
+        $acctMark.toggleClass('d-none', !needsAccountable);
+
         if (ACCOUNTABILITY_TYPES.indexOf(type) !== -1) {
             $warnLabel.text(typeLabels[type] || type);
+            // Tailor the requirement sentence to the type.
+            if (needsAccountable) {
+                $warnReqText.html('An <strong>accountable employee</strong> is required — someone must be named responsible for the unaccounted-for stock.');
+            } else if (needsWitness) {
+                $warnReqText.html('A <strong>witness employee</strong> is required — a theft write-off must be corroborated by a second person.');
+            }
             $warn.removeClass('d-none');
         } else {
             $warn.addClass('d-none');
         }
     }
 
-    // When damage_type changes: refresh the reason dropdown + warning.
+    // When damage_type changes: refresh the reason dropdown + warning + marks.
     $damageType.on('change', function () {
         var type = $(this).val();
         populateReasons(type, '');
         toggleAccountabilityWarning(type);
     });
+
+    // When warehouse changes: cascade the employee dropdowns to the new
+    // branch (so the witness/accountable options always match the warehouse).
+    $warehouse.on('change', refreshEmployeesByWarehouse);
 
     // Initial population (on first load + sticky on validation error).
     (function init() {
@@ -302,6 +444,10 @@ $(function () {
             populateReasons(type, oldReasonCode);
             toggleAccountabilityWarning(type);
         }
+        // Seed the employee dropdowns for the pre-selected warehouse (or all
+        // if none selected yet — the user can still pick one before choosing
+        // a warehouse, though the server re-validates branch on submit).
+        refreshEmployeesByWarehouse();
     })();
 
     // ====== Item row helpers ======
@@ -494,6 +640,31 @@ $(function () {
 
     // ====== Submit guard ======
     $form.on('submit', function (e) {
+        // Phase 4 — client-side accountability hint. The server
+        // (DamageService::validateAccountability) is the real gate; this
+        // just saves a round-trip when the user forgot the required party.
+        var type = $damageType.val();
+        if (ACCOUNTABLE_REQUIRED_TYPES.indexOf(type) !== -1 && !$acctSel.val()) {
+            e.preventDefault();
+            Swal.fire({
+                icon: 'error',
+                title: 'Accountable employee required',
+                html: 'A <strong>' + (typeLabels[type] || type) + '</strong> damage requires an accountable employee — someone must be named responsible for the unaccounted-for stock.',
+                confirmButtonText: 'OK'
+            });
+            return false;
+        }
+        if (WITNESS_REQUIRED_TYPES.indexOf(type) !== -1 && !$witnessSel.val()) {
+            e.preventDefault();
+            Swal.fire({
+                icon: 'error',
+                title: 'Witness required',
+                html: 'A <strong>' + (typeLabels[type] || type) + '</strong> damage requires a witness employee — a theft write-off must be corroborated by a second person.',
+                confirmButtonText: 'OK'
+            });
+            return false;
+        }
+
         var rows = $tbody.find('tr').length;
         if (rows === 0) {
             e.preventDefault();

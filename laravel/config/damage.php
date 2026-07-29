@@ -54,4 +54,37 @@ return [
     'attachment_max_size_kb'    => env('DAMAGE_ATTACHMENT_MAX_KB', 5120), // 5 MB
     'attachment_disk'           => env('DAMAGE_ATTACHMENT_DISK', 'local'), // private disk
     'attachment_folder'         => 'damage-evidence', // storage/app/private/damage-evidence/{damage_id}/
+
+    /*
+    |--------------------------------------------------------------------------
+    | Witness & Accountable Employee (Phase 4)
+    |--------------------------------------------------------------------------
+    | damage_types for which a named responsible party is REQUIRED at create
+    | time, closing the "employee declares it as damage because they couldn't
+    | find it" loophole. Enforced in DamageService::createDamage.
+    |
+    |   - missing → accountable_employee_id required (someone owns the
+    |               unaccounted-for stock; they're the recovery target).
+    |   - theft   → witness_employee_id required (someone must corroborate
+    |               a theft claim before it's written off — a single-person
+    |               theft declaration is an abuse vector).
+    |
+    | Both lists are config-driven so a stricter install can add more types
+    | (e.g. require an accountable employee for quality_reject too) without
+    | code changes. customer_return is deliberately excluded — the
+    | sales-return-linked auto-flow (SalesReturnService::createLinkedDamage-
+    | WriteOffs) creates + confirms in one shot and has no human selecting
+    | an employee, so requiring one would break the automation.
+    |
+    | recovery_transaction_type: the employee_ledger.transaction_type used
+    | when posting a recovery (Dr employee_payable / Cr loss). 'deduction'
+    | nets against the employee's payable / future salary. Must be one of
+    | the employee_ledger CHECK values (advance|loan|repayment|salary|
+    | deduction|adjustment).
+    */
+    'accountability' => [
+        'require_accountable_for_types' => ['missing'],
+        'require_witness_for_types'     => ['theft'],
+        'recovery_transaction_type'     => 'deduction',
+    ],
 ];

@@ -205,6 +205,46 @@ class DamagePolicy
         return $this->sameBranch($user, $damage);
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | Phase 4 — Witness & Accountable Employee
+    |--------------------------------------------------------------------------
+    | Recovering the loss from the accountable employee posts a GL entry +
+    | an employee_ledger debit (the employee owes the company). This is a
+    | financial action — as sensitive as confirm/cancel — so it's gated to
+    | admin/manager only, on a CONFIRMED damage with an accountable employee
+    | and no prior recovery. The service (DamageService::postEmployeeRecovery)
+    | re-checks all of these inside a lockForUpdate, so the policy is
+    | defense-in-depth (a clear 403 instead of a 500).
+    */
+
+    /**
+     * Post an employee recovery against a confirmed damage.
+     * Route: admin.damages.{id}.recover — role:admin,manager + branch.isolation.
+     *
+     * Gates: admin/manager only + same-branch + damage MUST be confirmed +
+     * have an accountable employee + no prior recovery. The service enforces
+     * these again under a row lock; this method gives a clean 403.
+     */
+    public function recoverFromEmployee(User $user, DamageInvoice $damage): bool
+    {
+        if (!$user->hasRole('admin', 'manager')) {
+            return false;
+        }
+        if (!$damage->isConfirmed()) {
+            return false;
+        }
+        if (empty($damage->accountable_employee_id)) {
+            return false;
+        }
+        // One-shot: no recovery may already exist.
+        if ($damage->hasRecovery()) {
+            return false;
+        }
+
+        return $this->sameBranch($user, $damage);
+    }
+
     /**
      * Branch check: admin/superadmin may operate on any branch (the
      * cross-branch override is logged by EnforceBranchIsolation). All
