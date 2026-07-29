@@ -77,22 +77,22 @@ return new class extends Migration
 
         // Branch-scoped read policy: users can see comparisons where
         // their branch is either the from_branch or to_branch
+        // (No TO clause — applies to the current DB role, matching the project's
+        //  existing RLS pattern in add_rls_branch_isolation & branch_demand_audit_log)
         DB::statement("
             CREATE POLICY shadow_demand_comparisons_branch_read
                 ON shadow_demand_comparisons FOR SELECT
-                TO authenticated
                 USING (
                     from_branch_id = current_setting('app.branch_id', true)::integer
                     OR to_branch_id = current_setting('app.branch_id', true)::integer
-                    OR current_setting('app.is_admin', true)::boolean = true
+                    OR current_setting('app.is_admin', true) = 'true'
                 );
         ");
 
-        // Insert allowed for all authenticated users (shadow service writes)
+        // Insert allowed for all users (shadow service writes)
         DB::statement("
             CREATE POLICY shadow_demand_comparisons_insert
                 ON shadow_demand_comparisons FOR INSERT
-                TO authenticated
                 WITH CHECK (true);
         ");
 
