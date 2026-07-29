@@ -10,6 +10,7 @@ use App\Http\Requests\BranchDemand\RejectBranchDemandRequest;
 use App\Http\Requests\BranchDemand\ConfirmReceiptRequest;
 use App\Http\Requests\BranchDemand\RepriceBranchDemandRequest;
 use App\Models\BranchDemand;
+use App\Models\StockTransaction;
 use App\Services\BranchDemand\BranchDemandService;
 use App\Services\BranchDemand\BranchIntercompanyService;
 use App\Services\BranchDemand\BranchDemandRepricingService;
@@ -188,8 +189,7 @@ class BranchDemandController extends Controller
         }
 
         // Get stock transactions for traceability
-        $stockTransactions = DB::table('stock_transactions')
-            ->where('reference_id', $id)
+        $stockTransactions = StockTransaction::where('reference_id', $id)
             ->whereIn('reference_type', ['demand_send', 'demand_receive', 'demand_reversal'])
             ->with(['product', 'warehouse'])
             ->orderBy('id')
