@@ -1426,3 +1426,22 @@ Stage Summary:
 - Problem 1 (long single-page list → tabbed navigation): FIXED. The dashboard now has a sticky 5-tab pill nav at the top (Sales · Collections & Returns · Productivity · Commission & Stock · Approvals). Each tab shows only its own section. Tabs are role-gated — a salesman sees 4 tabs, a warehouse_manager sees 2, a superadmin sees all 5. The active tab persists across AJAX refreshes (sessionStorage) and is shareable via URL hash (#tab-sales). Switching tabs resizes Chart.js canvases so they render at the correct width after being shown.
 - Problem 2 (data loading hang + remove YTD): FIXED. The YTD (Year to Date) period option was the slowest — it scanned ~365 days of partitioned sales/payment data. Removed from both the blade period bar and the controller's resolvePeriod() method. Old ?period=ytd links gracefully fall through to MTD. The remaining 4 period options (Today, MTD, QTD, Last 30D) + Custom range cover every realistic use case, and combined with the existing 60s cache + 6 partial composite indexes, the dashboard now loads in well under 1 second on a cold cache.
 - The tab system also IMPROVES perceived performance: users see one section at a time instead of a long scroll, so the initial visual load feels faster even though the same data is being fetched. Chart.js canvases in hidden panes are still created (cheap — just a default 300×150 canvas) but only .resize()'d when their pane becomes visible, so initial render cost is unchanged.
+
+---
+Task ID: perf-tab-bugfix-loop-first
+Agent: Main Agent
+Task: User reported "Undefined constant 'loop'" 500 error at line 2071 of performance.blade.php after the tabbed-navigation work was deployed. PHP 8.4 treats bare `loop` (without `$`) as an undefined constant (was a warning in older PHP, now a fatal error).
+
+Work Log:
+- Read L2030-L2119 of performance.blade.php and found the bug at L2071 and L2074: inside the `@foreach ($visibleTabs as $tabId => $tab)` loop that renders the tab buttons, the `$loop->first` Blade variable was written as `loop->first` (missing `$` prefix). PHP 8.4 fatal-errors this as "Undefined constant 'loop'".
+- Fixed by adding the `$` prefix on both lines:
+    L2071: `class="perf-tab @if (loop->first) active @endif"` → `class="perf-tab @if ($loop->first) active @endif"`
+    L2074: `aria-selected="{{ loop->first ? 'true' : 'false' }}"` → `aria-selected="{{ $loop->first ? 'true' : 'false' }}"`
+- Grepped the entire file for other `[^$a-zA-Z_]loop->` patterns (bare `loop->` without `$` prefix or as part of a longer identifier). Zero matches — this was the only instance.
+- Verified the YTD removal is still in place in both blade (L2011-L2016 $periods array has no 'ytd' key, with a comment at L2008-L2010 explaining why) and controller (resolvePeriod at L561 has no 'ytd' case, falls through to MTD default at L591-L599).
+- Verified the tab system is fully wired: CSS at L1718-L1820 (tab bar, active states, mobile horizontal scroll), HTML nav at L2068-L2080, JS `window.switchPerfTab` at L3981, click delegation at L4048, hashchange listener at L4056, init-time tab restoration at L3349-L3350.
+- Verified Blade directive balance is intact (all @push/@endpush, @section/@endsection, @if/@endif, @foreach/@endforeach properly paired). The @@push escape from the earlier fix at L3712 (now slightly shifted due to file growth) is still in place.
+
+Stage Summary:
+- One-line root-cause fix: added the missing `$` prefix to `$loop->first` (used twice) inside the `@foreach` that renders the tab buttons. This was a regression introduced by the previous tabbed-navigation commit — the rest of that work (5-tab nav, role-gating, JS switcher, sessionStorage persistence, hash sync, Chart.js .resize() on tab show, YTD removal) is correct and intact.
+- Dashboard should now load without the 500 error. The 5-tab navigation (Sales · Collections & Returns · Productivity · Commission & Stock · Approvals) will be visible and functional.

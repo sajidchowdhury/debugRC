@@ -2068,10 +2068,10 @@
     <nav class="perf-tabbar" role="tablist" aria-label="Dashboard sections">
         @foreach ($visibleTabs as $tabId => $tab)
             <button type="button"
-                    class="perf-tab @if (loop->first) active @endif"
+                    class="perf-tab @if ($loop->first) active @endif"
                     data-tab="{{ $tabId }}"
                     role="tab"
-                    aria-selected="{{ loop->first ? 'true' : 'false' }}"
+                    aria-selected="{{ $loop->first ? 'true' : 'false' }}"
                     id="perf-tab-btn-{{ $tabId }}">
                 <i class="fas {{ $tab['icon'] }}"></i>{{ $tab['label'] }}
             </button>
