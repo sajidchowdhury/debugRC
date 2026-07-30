@@ -1708,6 +1708,113 @@
     }
 
     /* ============================================================
+       SECTION TAB NAVIGATION — split the long single-page dashboard
+       into 5 focused tabs so users see one section at a time.
+       Tabs: Sales · Collections & Returns · Productivity ·
+             Commission & Stock · Approvals
+       Active tab persists across AJAX refreshes via sessionStorage
+       and is shareable via URL hash (#tab-sales).
+       ============================================================ */
+    #perf-dashboard .perf-tabbar {
+        background: #ffffff;
+        border: 1px solid var(--perf-border);
+        border-radius: 0.85rem;
+        padding: 0.45rem;
+        box-shadow: var(--perf-shadow-sm);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem;
+        margin-bottom: 1.1rem;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+    }
+    #perf-dashboard .perf-tabbar .perf-tab {
+        flex: 1 1 auto;
+        min-width: 130px;
+        background: transparent;
+        border: 0;
+        color: #475569;
+        font-size: 0.85rem;
+        font-weight: 600;
+        padding: 0.55rem 0.9rem;
+        border-radius: 0.6rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.45rem;
+        text-decoration: none;
+        white-space: nowrap;
+        position: relative;
+    }
+    #perf-dashboard .perf-tabbar .perf-tab i {
+        font-size: 0.85rem;
+        opacity: 0.75;
+    }
+    #perf-dashboard .perf-tabbar .perf-tab:hover {
+        background: #f1f5f9;
+        color: #0f172a;
+        transform: translateY(-1px);
+    }
+    #perf-dashboard .perf-tabbar .perf-tab:hover i { opacity: 1; }
+    #perf-dashboard .perf-tabbar .perf-tab.active {
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+        color: #ffffff;
+        box-shadow: 0 6px 18px -6px rgba(79, 70, 229, 0.55);
+        transform: translateY(-1px);
+    }
+    #perf-dashboard .perf-tabbar .perf-tab.active i { opacity: 1; }
+    #perf-dashboard .perf-tabbar .perf-tab .perf-tab-count {
+        background: rgba(255,255,255,0.25);
+        color: #fff;
+        font-size: 0.68rem;
+        padding: 0.05rem 0.4rem;
+        border-radius: 999px;
+        font-weight: 700;
+        margin-left: 0.2rem;
+    }
+    #perf-dashboard .perf-tabbar .perf-tab:not(.active) .perf-tab-count {
+        background: #e2e8f0;
+        color: #475569;
+    }
+
+    /* Tab panes — only one visible at a time. We use display:none
+       (not visibility:hidden) for inactive panes to keep the page
+       short and snappy. Chart.js canvases inside hidden panes are
+       re-sized when their pane becomes visible (see switchTab() in
+       the scripts block). */
+    #perf-dashboard .perf-tab-pane {
+        display: none;
+        animation: perf-tab-in 280ms ease-out;
+    }
+    #perf-dashboard .perf-tab-pane.active {
+        display: block;
+    }
+    @keyframes perf-tab-in {
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* On small screens, allow horizontal scroll for the tab bar so
+       all 5 tabs stay tappable instead of wrapping to 3 rows. */
+    @media (max-width: 767.98px) {
+        #perf-dashboard .perf-tabbar {
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: thin;
+        }
+        #perf-dashboard .perf-tabbar .perf-tab {
+            flex: 0 0 auto;
+            min-width: auto;
+            font-size: 0.78rem;
+            padding: 0.5rem 0.7rem;
+        }
+    }
+
+    /* ============================================================
        PHASE 6 — SKELETON OVERLAY + AJAX REFRESH POLISH
        ============================================================
        The skeleton overlay appears during AJAX fragment refreshes. It
@@ -1898,11 +2005,13 @@
     <div class="d-flex flex-wrap align-items-center gap-2 mb-3 perf-period-bar">
         <span class="text-muted small me-2"><i class="far fa-calendar me-1"></i>Period:</span>
         @php
+            // YTD (Year to Date) removed per request — it scans ~365 days
+            // of partitioned data and was the slowest period option. The
+            // remaining 4 options + custom range cover every realistic use.
             $periods = [
                 'today'  => 'Today',
                 'mtd'    => 'MTD',
                 'qtd'    => 'QTD',
-                'ytd'    => 'YTD',
                 'last30' => 'Last 30D',
             ];
             $baseQuery = [];
@@ -1930,11 +2039,54 @@
     @endif
 
     {{-- ============================================================
+         SECTION TAB BAR — 5 focused tabs replace the single long scroll.
+         Each tab is gated by the same roleSections flag as the pane it
+         switches to, so users only see tabs for sections they can access.
+         The active tab is preserved across AJAX refreshes (see JS below).
+         ============================================================ --}}
+    @php
+        $visibleTabs = [];
+        if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly) {
+            if ($roleSections['sales'] ?? false) {
+                $visibleTabs['sales'] = ['icon' => 'fa-chart-line', 'label' => 'Sales'];
+            }
+            if (($roleSections['collections'] ?? false) || ($roleSections['returns'] ?? false)) {
+                $visibleTabs['collections'] = ['icon' => 'fa-hand-holding-usd', 'label' => 'Collections & Returns'];
+            }
+            if ($roleSections['operational'] ?? false) {
+                $visibleTabs['productivity'] = ['icon' => 'fa-user-clock', 'label' => 'Productivity'];
+            }
+            if (($roleSections['commission'] ?? false) || ($roleSections['stock_discipline'] ?? false) || ($roleSections['accuracy'] ?? false)) {
+                $visibleTabs['commission'] = ['icon' => 'fa-bullseye', 'label' => 'Commission & Stock'];
+            }
+            if ($roleSections['approval_workload'] ?? false) {
+                $visibleTabs['approvals'] = ['icon' => 'fa-check-double', 'label' => 'Approvals'];
+            }
+        }
+    @endphp
+    @if (!empty($visibleTabs))
+    <nav class="perf-tabbar" role="tablist" aria-label="Dashboard sections">
+        @foreach ($visibleTabs as $tabId => $tab)
+            <button type="button"
+                    class="perf-tab @if (loop->first) active @endif"
+                    data-tab="{{ $tabId }}"
+                    role="tab"
+                    aria-selected="{{ loop->first ? 'true' : 'false' }}"
+                    id="perf-tab-btn-{{ $tabId }}">
+                <i class="fas {{ $tab['icon'] }}"></i>{{ $tab['label'] }}
+            </button>
+        @endforeach
+    </nav>
+    @endif
+
+    {{-- ============================================================
          PHASE 1 — SALES PERFORMANCE CORE
          (Phase 5: role-aware — hidden for warehouse_manager, dispatcher,
          accountant; visible for everyone else)
+         Wrapped in a tab pane (#tab-sales) so only one section shows at a time.
          ============================================================ --}}
     @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly && ($roleSections['sales'] ?? true))
+    <div class="perf-tab-pane @if ($visibleTabs && array_key_first($visibleTabs) === 'sales') active @endif" id="tab-sales" role="tabpanel" aria-labelledby="perf-tab-btn-sales">
 
     {{-- ===== KPI ROW — 5 gradient-topped cards with sparklines ===== --}}
     <h3 class="section-h"><span class="bar"></span><i class="fas fa-chart-line text-primary"></i> Sales Performance</h3>
@@ -2139,6 +2291,7 @@
         </div>
     </div>
 
+    </div>
     @endif {{-- end of Phase 1 Sales block --}}
 
     {{-- ============================================================
@@ -2146,8 +2299,10 @@
          (Phase 5: role-aware — visible when roleSections.collections OR
          roleSections.returns is true. Accountant sees it; warehouse_manager
          and dispatcher do not.)
+         Wrapped in a tab pane (#tab-collections).
          ============================================================ --}}
     @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly && (($roleSections['collections'] ?? true) || ($roleSections['returns'] ?? true)))
+    <div class="perf-tab-pane @if ($visibleTabs && array_key_first($visibleTabs) === 'collections') active @endif" id="tab-collections" role="tabpanel" aria-labelledby="perf-tab-btn-collections">
     @php
         // Pull all Phase 2 datasets with safe defaults so missing data
         // doesn't break the markup.
@@ -2411,6 +2566,7 @@
         </div>
     </div>
 
+    </div>
     @endif {{-- end of Phase 2 Collections & Returns block --}}
 
     {{-- ============================================================
@@ -2418,8 +2574,10 @@
          (Phase 5: role-aware — visible to all roles per the plan since
          every role creates activity; the section tells the user when/how
          intensely they work, which is universal.)
+         Wrapped in a tab pane (#tab-productivity).
          ============================================================ --}}
     @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly && ($roleSections['operational'] ?? true))
+    <div class="perf-tab-pane @if ($visibleTabs && array_key_first($visibleTabs) === 'productivity') active @endif" id="tab-productivity" role="tabpanel" aria-labelledby="perf-tab-btn-productivity">
     @php
         // Pull all Phase 3 datasets with safe defaults so missing data
         // doesn't break the markup.
@@ -2657,6 +2815,7 @@
         </div>
     </div>
 
+    </div>
     @endif {{-- end of Phase 3 How You Work block --}}
 
     {{-- ============================================================
@@ -2678,6 +2837,7 @@
         ($roleSections['stock_discipline'] ?? false) ||
         ($roleSections['accuracy'] ?? false)
     ))
+    <div class="perf-tab-pane @if ($visibleTabs && array_key_first($visibleTabs) === 'commission') active @endif" id="tab-commission" role="tabpanel" aria-labelledby="perf-tab-btn-commission">
     @php
         // Pull all Phase 4 datasets with safe defaults so missing data
         // doesn't break the markup.
@@ -3021,6 +3181,7 @@
         @endif
     </div>
 
+    </div>
     @endif {{-- end of Phase 4 Commission, Stock Discipline & Accuracy block --}}
 
     {{-- ============================================================
@@ -3034,6 +3195,7 @@
          are user-attributed via approved_by.
          --}}
     @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly && ($roleSections['approval_workload'] ?? false))
+    <div class="perf-tab-pane @if ($visibleTabs && array_key_first($visibleTabs) === 'approvals') active @endif" id="tab-approvals" role="tabpanel" aria-labelledby="perf-tab-btn-approvals">
     @php
         $aw = $approvalWorkload ?? [
             'adjustments_pending_my_approval' => 0,
@@ -3123,6 +3285,7 @@
         </div>
     </div>
 
+    </div>
     @endif {{-- end of Phase 5 Approval Workload block --}}
 
 </div>
@@ -3154,6 +3317,52 @@
      jank. With it, the swap is clean and fast (<50ms on a dev laptop).
 --}}
 window.initPerfDashboard = function () {
+    // ── 0. Restore the active tab BEFORE initialising charts.
+    //       Chart.js canvases inside display:none panes get a 0×0 size
+    //       on creation; we restore the active pane first so the charts
+    //       in that pane measure the correct parent size. Charts in
+    //       hidden panes are still created (they just have a default
+    //       300×150 canvas size) and get .resize()'d when their pane
+    //       becomes visible (see switchTab()).
+    //       Active tab priority: URL hash > sessionStorage > first tab.
+    //       ──────────────────────────────────────────────────────
+    const perfRoot0 = document.getElementById('perf-dashboard');
+    if (perfRoot0) {
+        let activeTab = null;
+        // 1. URL hash takes precedence (shareable links).
+        if (window.location.hash && /^#tab-[\w-]+$/.test(window.location.hash)) {
+            activeTab = window.location.hash.substring(1);
+        }
+        // 2. Fall back to sessionStorage (survives AJAX refresh + page reload).
+        if (!activeTab) {
+            try { activeTab = sessionStorage.getItem('perf-tab'); } catch (e) {}
+        }
+        // 3. Validate that the tab actually exists in this user's view.
+        const panes = perfRoot0.querySelectorAll('.perf-tab-pane');
+        const paneIds = Array.from(panes).map(p => p.id);
+        if (!activeTab || paneIds.indexOf(activeTab) === -1) {
+            activeTab = paneIds[0] || null;
+        }
+        if (activeTab) {
+            // Defer to next tick so all DOM is ready.
+            setTimeout(function () {
+                if (typeof window.switchPerfTab === 'function') {
+                    window.switchPerfTab(activeTab, { silent: true });
+                } else {
+                    // Fallback: just toggle classes directly.
+                    perfRoot0.querySelectorAll('.perf-tab-pane').forEach(function (p) {
+                        p.classList.toggle('active', p.id === activeTab);
+                    });
+                    perfRoot0.querySelectorAll('.perf-tab').forEach(function (b) {
+                        const isActive = b.dataset.tab === activeTab;
+                        b.classList.toggle('active', isActive);
+                        b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+                    });
+                }
+            }, 0);
+        }
+    }
+
     // ── 1. Destroy any existing Chart instances on #perf-dashboard
     //       canvases. Chart.js v3+ exposes Chart.getChart(canvas) which
     //       returns the instance bound to that canvas (or undefined).
@@ -3749,6 +3958,104 @@ window.initPerfDashboard = function () {
             }, 250);
         }
     }
+
+    // ============================================================
+    // SECTION TAB SWITCHING
+    // ============================================================
+    // window.switchPerfTab(tabId, opts) — switch the visible tab pane.
+    // Called by:
+    //   • tab button clicks (this IIFE's click listener)
+    //   • initPerfDashboard() on page load / AJAX refresh (silent mode)
+    //   • popstate / hashchange (browser back/forward to a #tab-X URL)
+    //
+    // Behaviour:
+    //   1. Hide all panes, show the target pane.
+    //   2. Update tab button active/aria-selected state.
+    //   3. Resize all Chart.js instances inside the newly-shown pane
+    //      (canvases created while inside display:none had 0×0 size;
+    //      .resize() makes Chart.js re-measure the now-visible parent).
+    //   4. Persist the tab to sessionStorage so it survives AJAX refresh.
+    //   5. If opts.silent is false (default), also update location.hash
+    //      so the tab is shareable. Silent mode skips hash update to
+    //      avoid triggering a hashchange → switchTab loop.
+    window.switchPerfTab = function (tabId, opts) {
+        opts = opts || {};
+        const root = document.getElementById('perf-dashboard');
+        if (!root) return;
+        const targetPane = root.querySelector('#' + tabId);
+        if (!targetPane) return; // tab doesn't exist for this role
+
+        // 1. Toggle pane visibility.
+        root.querySelectorAll('.perf-tab-pane').forEach(function (p) {
+            p.classList.toggle('active', p.id === tabId);
+        });
+        // 2. Toggle tab button state.
+        root.querySelectorAll('.perf-tab').forEach(function (b) {
+            const isActive = b.dataset.tab === tabId;
+            b.classList.toggle('active', isActive);
+            b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+
+        // 3. Resize charts in the now-visible pane. Chart.js canvases
+        //    created while inside display:none had a default 300×150
+        //    size; .resize() forces a re-measure against the parent's
+        //    actual width. We loop through all canvases in the pane
+        //    and resize any Chart.js instances attached to them.
+        if (window.Chart && typeof window.Chart.getChart === 'function') {
+            targetPane.querySelectorAll('canvas').forEach(function (canvas) {
+                try {
+                    const c = window.Chart.getChart(canvas);
+                    if (c && typeof c.resize === 'function') c.resize();
+                } catch (e) { /* ignore */ }
+            });
+        }
+
+        // 4. Persist to sessionStorage (survives AJAX refresh + reload).
+        try { sessionStorage.setItem('perf-tab', tabId); } catch (e) {}
+
+        // 5. Update URL hash so the tab is shareable. Silent mode skips
+        //    this to avoid a hashchange → switchTab infinite loop.
+        if (!opts.silent && window.location.hash !== '#' + tabId) {
+            // Use history.replaceState so we don't pollute the back stack.
+            if (window.history && window.history.replaceState) {
+                window.history.replaceState(null, '', '#' + tabId);
+            } else {
+                window.location.hash = tabId;
+            }
+        }
+
+        // Scroll the dashboard top into view so the user sees the
+        // newly-shown section's header, not whatever mid-page position
+        // they were at in the previous tab.
+        if (!opts.silent) {
+            try { root.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+            catch (e) { root.scrollIntoView(); }
+        }
+    };
+
+    // ── Tab button click listener ───────────────────────────────
+    // Attached to document so it survives AJAX swap (the tab buttons
+    // are inside #perf-dashboard and get re-rendered on every refresh,
+    // but document-level listeners persist).
+    document.addEventListener('click', function (e) {
+        const btn = e.target.closest('.perf-tab');
+        if (!btn) return;
+        const root = document.getElementById('perf-dashboard');
+        if (!root || !root.contains(btn)) return;
+        e.preventDefault();
+        const tabId = btn.dataset.tab;
+        if (!tabId) return;
+        window.switchPerfTab(tabId);
+    });
+
+    // ── Browser back/forward via hashchange ─────────────────────
+    // If the user clicks back to a #tab-X URL, switch to that tab.
+    window.addEventListener('hashchange', function () {
+        if (window.location.hash && /^#tab-[\w-]+$/.test(window.location.hash)) {
+            const tabId = window.location.hash.substring(1);
+            window.switchPerfTab(tabId, { silent: true });
+        }
+    });
 
     // Swap #perf-dashboard innerHTML with the new fragment, then re-run
     // chart init. The fragment HTML contains <div id="perf-dashboard">…</div>

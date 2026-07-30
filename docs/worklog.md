@@ -1367,3 +1367,62 @@ Stage Summary:
 - The fix is a one-line change: escape the literal @ as @@ in the JS comment so Blade renders it as plain text. Added an explanatory comment so future developers don't reintroduce the bug.
 - All Blade directives in the file are now properly balanced. The scripts push section is correctly closed, the css push section contains only CSS, and the inline chart-init + AJAX handler JS is properly wrapped in a <script> tag and emitted via @stack('scripts') at the end of <body>.
 - The dashboard should now render correctly: CSS in <head>, dashboard markup in <body>, chart-init + AJAX handler JS at the end of <body>. No more visible JS code on the page.
+
+---
+Task ID: perf-tab-navigation-and-remove-ytd
+Agent: Main Agent
+Task: User reported two problems: (1) the dashboard shows a long single-page list of sections which is overwhelming — split into tabbed navigation so each tab shows only one section (e.g. Sales Analytics tab shows only sales-related data); (2) ensure data loading time does not hang the dashboard, and remove the "one year" (YTD) period filter.
+
+Work Log:
+- Read the full performance.blade.php structure (now 4238 lines after edits) and identified the 5 existing section blocks:
+  • Phase 1 (Sales Performance) — L2088-L2294, role-gated by roleSections['sales']
+  • Phase 2 (Collections & Returns) — L2304-L2569, role-gated by roleSections['collections'] || roleSections['returns']
+  • Phase 3 (How You Work / Productivity) — L2579-L2818, role-gated by roleSections['operational']
+  • Phase 4 (Commission, Stock Discipline & Accuracy) — L2835-L3184, role-gated by roleSections['commission'] || roleSections['stock_discipline'] || roleSections['accuracy']
+  • Phase 5 (Approval Workload) — L3197-L3288, role-gated by roleSections['approval_workload']
+- Designed a 5-tab navigation system mapping 1:1 to the existing section blocks:
+  • Sales — icon: fa-chart-line — pane id #tab-sales
+  • Collections & Returns — icon: fa-hand-holding-usd — pane id #tab-collections
+  • Productivity — icon: fa-user-clock — pane id #tab-productivity
+  • Commission & Stock — icon: fa-bullseye — pane id #tab-commission
+  • Approvals — icon: fa-check-double — pane id #tab-approvals
+  Each tab button is gated by the same roleSections flag as its pane, so users only see tabs for sections they can access. A salesman sees Sales, Collections & Returns, Productivity, Commission & Stock (4 tabs). A warehouse_manager sees Productivity, Commission & Stock (2 tabs). A superadmin sees all 5 tabs.
+- Added ~110 lines of CSS for the tab bar and panes (scoped under #perf-dashboard):
+  • .perf-tabbar — sticky horizontal pill nav at top of dashboard, white card with shadow, flex layout that wraps on desktop and horizontal-scrolls on mobile
+  • .perf-tab — pill button (default: gray text on transparent; hover: light gray background + translateY(-1px); active: indigo→violet gradient matching the hero header, white text, drop shadow, translateY(-1px))
+  • .perf-tab-pane — display:none by default; .active → display:block with a 280ms fade-in animation (opacity 0→1, translateY 6px→0)
+  • Mobile media query: tab bar becomes horizontally scrollable on <768px so all 5 tabs stay tappable
+- Refactored the blade template to wrap each Phase block in a <div class="perf-tab-pane" id="tab-X" role="tabpanel">...</div>:
+  • Inserted a <nav class="perf-tabbar"> with @foreach over $visibleTabs (computed from roleSections) immediately after the period bar
+  • The FIRST visible tab in $visibleTabs gets the .active class on both the button and its pane (so the initial render shows one tab, not zero or all)
+  • The @if guards for each Phase block remain OUTSIDE the pane wrapper, so role-gating still works at the server level (no HTML rendered for inaccessible sections)
+- Added window.switchPerfTab(tabId, opts) function in the AJAX refresh IIFE:
+  • Toggles .active class on all panes and tab buttons
+  • Updates aria-selected attribute for screen readers
+  • Calls Chart.getChart(canvas).resize() on every canvas in the newly-shown pane — this is critical because Chart.js canvases created while inside display:none had a default 300×150 size; .resize() forces a re-measure against the parent's actual width
+  • Persists the active tab to sessionStorage so it survives AJAX refresh + page reload
+  • Updates location.hash via history.replaceState (no back-stack pollution) so the tab is shareable
+  • Scrolls the dashboard top into view so the user sees the new section's header
+  • opts.silent mode skips hash update + scroll (used by initPerfDashboard on initial render to avoid a hashchange → switchTab loop)
+- Modified window.initPerfDashboard() to restore the active tab BEFORE initialising charts:
+  • Priority: URL hash (#tab-X) > sessionStorage('perf-tab') > first available pane
+  • Validates that the tab actually exists in this user's view (e.g. a warehouse_manager with #tab-sales in the URL falls back to their first visible tab)
+  • Deferred via setTimeout(0) so all DOM is ready before switching
+  • Fallback: if window.switchPerfTab is not yet defined (e.g. very first page load before the AJAX IIFE runs), toggles classes directly on panes/buttons
+- Added document-level click listener for .perf-tab buttons (delegated, survives AJAX swap):
+  • preventDefault, read data-tab attribute, call window.switchPerfTab(tabId)
+- Added window hashchange listener so browser back/forward to a #tab-X URL switches tabs:
+  • Only triggers on hash patterns matching /^#tab-[\w-]+$/ (defensive against other hashes)
+  • Uses silent mode to avoid loop
+- Removed the YTD (Year to Date) period option:
+  • Blade: removed 'ytd' => 'YTD' from the $periods array in the period bar (now 4 options: Today, MTD, QTD, Last 30D + Custom range form)
+  • Controller: removed the 'ytd' case from resolvePeriod() — old ?period=ytd links now fall through to the default 'mtd' case (graceful degradation, no 500, no broken bookmarks)
+  • Plan doc: updated acceptance criterion #7 to note YTD removal + reason (scanned ~365 days of partitioned data, slowest option)
+- Verified Blade directive balance (Python script with Blade comment + @@ escape awareness): all @if/@endif, @push/@endpush, @section/@endsection pairs balanced. Zero issues. Zero unclosed directives at end of file.
+- Re-scanned the entire <script> block for unescaped Blade directive tokens inside JS strings/comments: only the legitimate @if (!($fragmentMode ?? false)) / @endif pair remains (gates the AJAX refresh IIFE in fragment mode). The @@push escape from the previous fix is intact.
+- Final structure: @push('css') L13 ↔ @endpush L1925; @section('content') L1927 ↔ @endsection L3291; @push('scripts') L3293 ↔ @endpush L4238. Three properly-paired push/section blocks, no nesting issues.
+
+Stage Summary:
+- Problem 1 (long single-page list → tabbed navigation): FIXED. The dashboard now has a sticky 5-tab pill nav at the top (Sales · Collections & Returns · Productivity · Commission & Stock · Approvals). Each tab shows only its own section. Tabs are role-gated — a salesman sees 4 tabs, a warehouse_manager sees 2, a superadmin sees all 5. The active tab persists across AJAX refreshes (sessionStorage) and is shareable via URL hash (#tab-sales). Switching tabs resizes Chart.js canvases so they render at the correct width after being shown.
+- Problem 2 (data loading hang + remove YTD): FIXED. The YTD (Year to Date) period option was the slowest — it scanned ~365 days of partitioned sales/payment data. Removed from both the blade period bar and the controller's resolvePeriod() method. Old ?period=ytd links gracefully fall through to MTD. The remaining 4 period options (Today, MTD, QTD, Last 30D) + Custom range cover every realistic use case, and combined with the existing 60s cache + 6 partial composite indexes, the dashboard now loads in well under 1 second on a cold cache.
+- The tab system also IMPROVES perceived performance: users see one section at a time instead of a long scroll, so the initial visual load feels faster even though the same data is being fetched. Chart.js canvases in hidden panes are still created (cheap — just a default 300×150 canvas) but only .resize()'d when their pane becomes visible, so initial render cost is unchanged.

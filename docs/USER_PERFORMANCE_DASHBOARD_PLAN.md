@@ -832,7 +832,7 @@ The plan is complete when:
 4. ✅ A non-admin user navigating to `/dashboard?employee_id=5` is shown their own dashboard (the param is silently ignored — no error, no escalation).
 5. ✅ Every metric in §2.1 (Sales), §2.2 (Collections), §2.3 (Returns), §2.5 (Operational Efficiency), §2.8 (Commission for salesman role), §2.9 (Productivity), §2.10 (Accuracy) is rendered on the dashboard.
 6. ✅ The dashboard renders within 1 second on a cold cache for a user with 1000+ invoices.
-7. ✅ Period switcher (Today / MTD / QTD / YTD / Last 30 / Custom) works for all sections.
+7. ✅ Period switcher (Today / MTD / QTD / Last 30 / Custom) works for all sections. **YTD (Year to Date) removed** per request — it scanned ~365 days of partitioned data and was the slowest period option. Old `?period=ytd` links gracefully fall through to MTD.
 8. ✅ Role-aware sections: salesman sees commission; warehouse_manager sees dispatch throughput; accountant sees manual-journal volume; manager sees approval workload.
 9. ✅ All charts use Chart.js (consistent with the legacy dashboard) and are responsive (mobile-friendly).
 10. ✅ No artificial ending markers, no "End of Dashboard" text, no meta-commentary — the page ends naturally with the last section.

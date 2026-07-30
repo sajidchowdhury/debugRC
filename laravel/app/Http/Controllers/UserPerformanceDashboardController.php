@@ -549,9 +549,14 @@ class UserPerformanceDashboardController extends Controller
     /**
      * Resolve the selected period into a [$period, $label, [$start, $end]] tuple.
      *
-     * Supported values: today, mtd, qtd, ytd, last30, custom.
+     * Supported values: today, mtd, qtd, last30, custom.
      * For 'custom', reads ?from= and ?to= query params (YYYY-MM-DD); falls
      * back to MTD if either is missing/invalid.
+     *
+     * NOTE: 'ytd' (Year to Date) was removed per request — it scanned ~365
+     * days of partitioned sales/payment data and was the slowest period
+     * option. Old ?period=ytd links now fall through to the MTD default
+     * (graceful degradation — no 500, no broken bookmarks).
      */
     private function resolvePeriod(Request $request): array
     {
@@ -566,12 +571,6 @@ class UserPerformanceDashboardController extends Controller
                     'qtd',
                     'Quarter to Date (' . now()->format('M Y') . ')',
                     ['start' => now()->startOfQuarter()->toDateString(), 'end' => $today],
-                ];
-            case 'ytd':
-                return [
-                    'ytd',
-                    'Year to Date (' . now()->format('Y') . ')',
-                    ['start' => now()->startOfYear()->toDateString(), 'end' => $today],
                 ];
             case 'last30':
                 return [
@@ -591,6 +590,8 @@ class UserPerformanceDashboardController extends Controller
                 // no break
             case 'mtd':
             default:
+                // 'ytd' and any unknown value land here as MTD (graceful
+                // degradation for old bookmarks / shared links).
                 return [
                     'mtd',
                     'Month to Date (' . now()->format('M Y') . ')',
