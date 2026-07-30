@@ -3709,7 +3709,13 @@ window.initPerfDashboard = function () {
 
     // Show the skeleton overlay (a translucent veil with a spinner that
     // covers just the #perf-dashboard region). The CSS lives in the
-    // @push('css') block above.
+    // @@push('css') block above. NOTE: every literal "at-push" inside
+    // this <script> block MUST be escaped as @@push or Blade will
+    // interpret it as a real directive, swallow the rest of the script
+    // into the wrong stack, and render the JS as visible text in <head>.
+    // That was the root cause of the previous "all style and data broken"
+    // bug — the bare at-symbol before "push('css')" here opened a NEW
+    // css push section that captured everything from this point onward.
     function showSkeleton() {
         const root = document.getElementById('perf-dashboard');
         if (!root) return;

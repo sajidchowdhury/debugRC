@@ -1321,3 +1321,49 @@ Stage Summary:
 - Fixed the broken dashboard render by hardening all 15 @json calls to use explicit JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP flags. This prevents any data value (current or future) from breaking out of the <script> tag and rendering JS code as visible text.
 - Hardened swapDashboard() with try/catch + full-reload fallback so any AJAX refresh failure degrades gracefully to a full page reload instead of leaving the page in a broken half-swapped state.
 - The dashboard should now render correctly: CSS loads in <head> via @stack('css'), the dashboard markup renders in @section('content'), and the chart-init + AJAX refresh JS executes inside a properly-closed <script> tag via @stack('scripts').
+
+---
+Task ID: perf-fix-blade-directive-in-js-comment
+Agent: Main Agent
+Task: User reported dashboard STILL broken after previous @json + swapDashboard hardening fix — same visible JS code (showSkeleton/hideSkeleton/swapDashboard) appearing as plain text on the dashboard page. Diagnose and fix the actual root cause.
+
+Work Log:
+- Read the full performance.blade.php (now 3932 lines) and traced the @push/@endpush/@section/@endsection structure with a Python script that strips Blade {{-- --}} comments before scanning for directives.
+- Found the actual root cause: at line 3712 (original line numbering) the JavaScript block contained a comment line:
+    // The CSS lives in the @push('css') block above.
+  The literal text "@push('css')" inside this JS // comment was being parsed by Blade as a REAL @push directive — Blade does not know about JS comments, it scans the whole template for @directive tokens.
+- This caused Blade to interpret the structure as:
+    L3131: @push('scripts')           → pushStack = ['scripts']
+    L3712: @push('css')               → pushStack = ['scripts', 'css']   ← STRAY DIRECTIVE
+    L3931: @endpush                   → pushStack = ['scripts']          ← closes the WRONG push
+  End of file: 'scripts' push NEVER closed. Its content (chart.umd.min.js script tag + the initPerfDashboard function definition) was collected into an output buffer that got discarded at end of script.
+- Meanwhile the 'css' push section received everything from L3713 to L3930 — that is, the entire AJAX refresh IIFE (showSkeleton, hideSkeleton, swapDashboard, refreshDashboard, all the document listeners). When the layout called @stack('css') (in <head>), all that JS code was emitted there as RAW TEXT (no <script> wrapper) — which is exactly what the user was seeing as "broken styles and data" with the JS code visible on the page.
+- The previous fix (commit 7836257) hardened @json calls and swapDashboard, but those were NOT the actual cause. The @json fix was a latent-bug hardening that didn't address the visible-text symptom. The actual cause was the stray Blade directive parsing inside the JS comment.
+- Fixed by escaping the literal @push text in the JS comment using Blade's @@ escape syntax. Changed:
+    // The CSS lives in the @push('css') block above.
+  to:
+    // The CSS lives in the @@push('css') block above. NOTE: every literal "at-push" inside
+    // this <script> block MUST be escaped as @@push or Blade will interpret it as a real
+    // directive, swallow the rest of the script into the wrong stack, and render the JS as
+    // visible text in <head>. That was the root cause of the previous "all style and data
+    // broken" bug — the bare at-symbol before "push('css')" here opened a NEW css push
+    // section that captured everything from this point onward.
+  Blade compiles @@push as the literal text @push, so the JS comment reads correctly in the browser.
+- Re-ran the directive-balance Python script (with Blade comment awareness + @@ escape awareness): all @if/@endif, @push/@endpush, @section/@endsection pairs are now balanced. Zero unclosed directives at end of file. Zero mismatched pairs.
+- Re-scanned the entire <script> block (lines 3139-3930) for any other unescaped Blade directive tokens. Only the legitimate @if (!($fragmentMode ?? false)) / @endif pair (lines 3684 / 3929) remains — that one is intentional Blade logic gating the AJAX refresh IIFE in fragment mode.
+- Verified final structure:
+    L13:   @push('css')         → opens css push
+    L1818: @endpush             → closes css push
+    L1820: @section('content')  → opens content section
+    L3129: @endsection          → closes content section
+    L3131: @push('scripts')     → opens scripts push
+    L3712: @@push('css')        → literal text (no directive parsed)
+    L3929: @endif               → closes the L3684 @if
+    L3931: @endpush             → closes the L3131 scripts push  ✓ (now correctly paired!)
+- Verified admin.blade.php layout has @stack('css') at L195 (inside <head>) and @stack('scripts') at L452 (end of <body>) — so CSS will emit in head, scripts will emit at end of body, exactly as intended.
+
+Stage Summary:
+- Found and fixed the TRUE root cause of the "all style and data broken" dashboard bug: a stray @push('css') Blade directive hidden inside a JavaScript // comment was being parsed by Blade as a real directive, which swallowed the rest of the <script> block into the wrong push stack and rendered it as visible text in <head>.
+- The fix is a one-line change: escape the literal @ as @@ in the JS comment so Blade renders it as plain text. Added an explanatory comment so future developers don't reintroduce the bug.
+- All Blade directives in the file are now properly balanced. The scripts push section is correctly closed, the css push section contains only CSS, and the inline chart-init + AJAX handler JS is properly wrapped in a <script> tag and emitted via @stack('scripts') at the end of <body>.
+- The dashboard should now render correctly: CSS in <head>, dashboard markup in <body>, chart-init + AJAX handler JS at the end of <body>. No more visible JS code on the page.
