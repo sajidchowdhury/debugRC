@@ -37,6 +37,7 @@ use App\Http\Controllers\Admin\SalesCartController;
 use App\Http\Controllers\Admin\SalesInvoiceController;
 use App\Http\Controllers\Admin\SalesChallanController;
 use App\Http\Controllers\Admin\CustomerPaymentController;
+use App\Http\Controllers\Admin\SupplierTransactionController;
 use App\Http\Controllers\Admin\SalesReturnController;
 use App\Http\Controllers\Admin\SalesGuideController;
 use App\Http\Controllers\Admin\GoLiveChecklistController;
@@ -1270,6 +1271,34 @@ Route::middleware('auth')->group(function () {
         ->only(['store'])
         ->names('admin.customer-payments')
         ->middleware(['role:salesman,accountant,manager,admin', 'branch.isolation']);
+
+    // ============================================================
+    // Phase 1 (Accounts Sub-Ledger): Supplier Transactions
+    // RBAC — create/store/index/show allow accountant+manager+admin;
+    // reverse is accountant/manager/admin only.
+    // ============================================================
+    Route::prefix('admin/supplier-transactions')->name('admin.supplier-transactions.')->group(function () {
+        Route::get('audit', [SupplierTransactionController::class, 'audit'])
+            ->name('audit')->middleware('role:accountant,manager,admin');
+        Route::post('get-due', [SupplierTransactionController::class, 'getDue'])
+            ->name('get-due')->middleware('role:accountant,manager,admin');
+        Route::get('search', [SupplierTransactionController::class, 'searchSupplier'])
+            ->name('search')->middleware('role:accountant,manager,admin');
+        // Payment reverse — accountant, manager, admin
+        Route::post('{id}/reverse', [SupplierTransactionController::class, 'reverse'])
+            ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+        // Print payment slip
+        Route::get('{id}/slip', [SupplierTransactionController::class, 'slip'])
+            ->name('slip')->middleware('role:accountant,manager,admin');
+    });
+    Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
+        ->only(['index', 'create', 'show'])
+        ->names('admin.supplier-transactions')
+        ->middleware('role:accountant,manager,admin');
+    Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
+        ->only(['store'])
+        ->names('admin.supplier-transactions')
+        ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
 
     // ============================================================
     // Phase 8.5 + Phase 2: Sales Returns (stock IN at ORIGINAL avg_cost + GL)
