@@ -986,3 +986,40 @@ Stage Summary:
   * Period switcher preserves the selected employee when switching periods
   * Custom range form validates and falls back to MTD on invalid input
 - Phase 1 (Sales Performance Core) is the next step: add getSalesKPIs(), getSalesTrend(), getSalesByProductGroup(), getTopCustomers(), getCustomerAcquisition() to UserPerformanceDashboardController, then wire them into the placeholder cards.
+
+---
+Task ID: perf-dash-phase-1
+Agent: main (Claude)
+Task: Phase 1 of User Performance Dashboard — Sales Performance Core. Add 5 metric methods (getSalesKPIs, getSalesTrend, getSalesByProductGroup, getTopCustomers, getCustomerAcquisition) to UserPerformanceDashboardController; render the data in a visually exciting dashboard view (gradient KPI cards with sparklines, dual-axis trend chart, animated product-group bars, top-customer leaderboard with rank badges + progress bars, peak-day callout, new/repeat/active customer tiles). Phase 2-4 placeholders remain visible.
+
+Work Log:
+- Re-read schema for sales_invoices (partitioned by invoice_date — every query includes WHERE invoice_date BETWEEN for pruning), sales_invoice_items.amount (GENERATED qty*rate), products.group_id, product_groups.group_name, customers.customer_name.
+- Updated UserPerformanceDashboardController class docblock: documented Phase 0+1 scope and the per-method query convention (created_by = $userId AND invoice_date BETWEEN AND is_reversed=false AND status NOT IN ('cancelled','reversed','draft') AND deleted_at IS NULL).
+- Added private previousPeriodRange() helper — computes same-length previous period for growth-pct comparisons.
+- Added getSalesKPIs($userId, $range) — returns {invoice_count, total_sales, aov, growth_pct, active_days, peak_day_value, peak_day_date, prev_total_sales}. Three DB queries (current aggregate, previous aggregate, per-day breakdown) wrapped in try/catch with zeroed default.
+- Added getSalesTrend($userId, $range) — daily count + total with ZERO-FILLED contiguous date series (no gaps in the chart timeline).
+- Added getSalesByProductGroup($userId, $range, $limit=8) — joins sales_invoice_items → products → product_groups; LEFT JOIN on product_groups so uncategorized products show as "(Uncategorized)"; computes each group's share of the user's total revenue.
+- Added getTopCustomers($userId, $range, $limit=5) — joins sales_invoices → customers, grouped by customer_id; returns share + due_amount per customer (for the red "due" badge on the leaderboard).
+- Added getCustomerAcquisition($userId, $range) — active / new / repeat customers + repeat_rate / new_rate. "New" = customers in the period that have NO invoice by this user before period start. Two-query pattern: per-customer counts within period, then DISTINCT customer_ids in user's history before period start, then set-diff.
+- Updated index() to call all 5 methods and pass $salesKpis, $salesTrend, $salesByProductGroup, $topCustomers, $customerAcquisition to the view. Set scaffoldingOnly=false so the live Phase 1 sections render.
+- Upgraded salesTrendAjax() from the Phase 0 stub: now resolves the target user (same logic as index(), honoring super-admin ?employee_id) and returns real per-user trend data over the last N days. Phase number bumped 0 → 1.
+- Rewrote resources/views/dashboard/performance.blade.php (Phase 1 visual system, scoped under #perf-dashboard):
+  * Hero header: deep gradient (slate-900 → blue-900 → indigo-600) with radial-gradient glow accents, employee info pills with backdrop-blur
+  * Period switcher: pill-bar with gradient active state
+  * Sales KPI row: 4 cards each with a gradient top strip, gradient icon tile, big tabular-numeric value, contextual sub-text, color-coded delta pill (up/down/flat), and a mini Chart.js sparkline at the bottom of the volume card
+  * Peak Day callout: warm amber gradient card with trophy icon and Carbon-formatted date
+  * Repeat Customers tile: blue gradient with rate + count narrative
+  * Active Customers tile: amber gradient with customer count
+  * Sales Trend chart: Chart.js dual-axis (left = sales value line with gradient fill + smooth tension, right = invoice count bars in sky-500); dark tooltip; auto-skip x-axis ticks
+  * Product Group bars: animated horizontal bars with gradient fills, 8-color palette, share % on the right
+  * Top Customers leaderboard: circular rank badges (gold/silver/bronze for top 3), customer name + invoice count + share, progress bar (green→sky gradient), revenue right-aligned in tabular-nums, red "due" badge if outstanding
+  * Empty-state cards for product groups / top customers / trend when no data
+  * Phase 2-4 scaffolding placeholders preserved at the bottom (Collections, How You Work, Commission/Stock/Accuracy) so the user sees the full end-state plan
+- Verified Blade tag balance: @if/@endif 19/19, @foreach/@endforeach 5/5, @php/@endphp 9/9, @push/@endpush 2/2, @section/@endsection 1/1, JS braces 287/287. Controller braces 51/51.
+- No stale `DashboardController::class` references remain anywhere in the route file or view.
+
+Stage Summary:
+- Phase 1 ships the Sales Performance Core with the visual polish requested ("don't make it boring"). Every metric is per-user (created_by = $userId), partition-pruned (invoice_date BETWEEN), and protected by try/catch. Empty states render gracefully so a user with no sales sees empty cards, not 500 errors.
+- The dashboard now answers "How am I doing?" with: my sales volume + growth, AOV, active days, peak day, new vs repeat customers, daily trend, product-group mix, and top-5 customers. NO company-wide KPIs anywhere.
+- Super-admin switching is preserved: changing the employee <select> or period reloads all metrics for the new target+period combination.
+- Phase 2 (Collections & Returns) is next: getCollectionsKPIs, getReceivableAging, getReturnKPIs, then replace the Collections placeholder row.
