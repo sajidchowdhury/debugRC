@@ -12,9 +12,9 @@
     <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
             style="background: linear-gradient(135deg,#4f46e5,#7c3aed);">
         <div>
-            <h1 class="h4 mb-1"><i class="fas fa-right-left me-2"></i>Branch Demands</h1>
+            <h1 class="h4 mb-1"><i class="fas fa-right-left me-2"></i>My Demands</h1>
             <p class="mb-0 small opacity-75">
-                Cross-branch product supply requests — create, send, confirm receipt, and settle.
+                Demands created by my branch (requester view). To see demands from other branches, go to Pending.
             </p>
         </div>
         <div class="d-flex gap-2 flex-wrap">

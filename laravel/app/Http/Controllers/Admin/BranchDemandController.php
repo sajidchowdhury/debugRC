@@ -74,24 +74,18 @@ class BranchDemandController extends Controller
     // ===================== VIEWS =====================
 
     /**
-     * List all demands involving my branch (both directions).
+     * List all demands created BY my branch (from_branch_id = my branch).
+     * These are the demands my branch initiated as the requester (debtor).
      */
     public function index(Request $request)
     {
         $branchId = $this->currentBranchId();
-        $query = BranchDemand::forBranch($branchId)
+        $query = BranchDemand::myDemands($branchId)
             ->with(['fromBranch', 'toBranch', 'items.product', 'createdBy']);
 
         // Filters
         if ($request->filled('status')) {
             $query->where('status', $request->status);
-        }
-        if ($request->filled('direction')) {
-            if ($request->direction === 'outgoing') {
-                $query->where('from_branch_id', $branchId);
-            } elseif ($request->direction === 'incoming') {
-                $query->where('to_branch_id', $branchId);
-            }
         }
         if ($request->filled('date_from')) {
             $query->where('demand_date', '>=', $request->date_from);
@@ -112,12 +106,15 @@ class BranchDemandController extends Controller
     }
 
     /**
-     * List pending demands for my branch (supplier view — demands I need to fulfill).
+     * List pending demands created TO my branch (to_branch_id = my branch).
+     * These are demands from other branches that my branch needs to fulfill
+     * as the supplier (creditor). Only shows status='pending' demands
+     * that haven't been sent yet.
      */
     public function pending(Request $request)
     {
         $branchId = $this->currentBranchId();
-        $demands = BranchDemand::where('to_branch_id', $branchId)
+        $demands = BranchDemand::demandsForMe($branchId)
             ->where('status', 'pending')
             ->where('is_reversed', false)
             ->with(['fromBranch', 'toBranch', 'items.product', 'createdBy'])

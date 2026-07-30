@@ -266,6 +266,10 @@
     <div class="card shadow-sm mb-3" id="send-section">
         <div class="card-header bg-success text-white"><i class="fas fa-paper-plane me-1"></i> Send Goods — Select Warehouses</div>
         <div class="card-body">
+            <div class="alert alert-warning py-2 small mb-3">
+                <i class="fas fa-exclamation-triangle me-1"></i>
+                <strong>Stock Check:</strong> You cannot send more goods than available in the selected warehouse. Available stock is shown next to each warehouse. If stock is insufficient, the send will be blocked.
+            </div>
             <form method="POST" action="{{ route('admin.branch-demands.send', $demand->id) }}" id="sendForm">
                 @csrf
                 <div class="table-responsive">
@@ -273,8 +277,9 @@
                         <thead class="table-light">
                             <tr>
                                 <th>Product</th>
-                                <th>Qty</th>
+                                <th>Qty Requested</th>
                                 <th>From Warehouse (Supplier)</th>
+                                <th>Available Stock</th>
                                 <th>To Warehouse (Requester)</th>
                             </tr>
                         </thead>
@@ -282,14 +287,17 @@
                             @foreach($demand->items as $idx => $item)
                             <tr>
                                 <td>{{ $item->product->product_name ?? 'N/A' }}</td>
-                                <td>{{ number_format((float) $item->qty, 2) }}</td>
+                                <td class="fw-semibold">{{ number_format((float) $item->qty, 2) }}</td>
                                 <td>
-                                    <select name="items[{{ $idx }}][from_warehouse_id]" class="form-select form-select-sm" required>
+                                    <select name="items[{{ $idx }}][from_warehouse_id]" class="form-select form-select-sm warehouse-select" data-product-id="{{ $item->product_id }}" data-qty="{{ $item->qty }}" required>
                                         <option value="">Select supplier warehouse...</option>
                                         @foreach($supplierWarehouses as $wh)
                                         <option value="{{ $wh->id }}">{{ $wh->warehouse_name }}</option>
                                         @endforeach
                                     </select>
+                                </td>
+                                <td>
+                                    <span class="stock-avail badge bg-secondary" id="stock-avail-{{ $idx }}">—</span>
                                 </td>
                                 <td>
                                     <select name="items[{{ $idx }}][to_warehouse_id]" class="form-select form-select-sm" required>
@@ -306,7 +314,7 @@
                     </table>
                 </div>
                 <div class="mt-3">
-                    <button type="submit" class="btn btn-success" onclick="return confirm('Send goods for demand {{ $demand->demand_code }}? This will move stock and create GL entries.')">
+                    <button type="submit" class="btn btn-success" id="sendBtn" onclick="return confirm('Send goods for demand {{ $demand->demand_code }}? This will move stock and create GL entries.')">
                         <i class="fas fa-paper-plane me-1"></i> Send Goods
                     </button>
                 </div>
@@ -608,3 +616,80 @@
     @endif
 </div>
 @endsection
+
+@push('scripts')
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var supplierBranchId = '{{ $demand->to_branch_id }}';
+
+    // Warehouse stock check — when supplier selects a warehouse, show available stock
+    document.querySelectorAll('.warehouse-select').forEach(function(select) {
+        select.addEventListener('change', function() {
+            var warehouseId = this.value;
+            var productId = this.dataset.productId;
+            var qty = parseFloat(this.dataset.qty);
+            var idx = this.name.match(/items\[(\d+)\]/);
+            var itemIdx = idx ? idx[1] : '0';
+            var stockBadge = document.getElementById('stock-avail-' + itemIdx);
+
+            if (!warehouseId || !productId) {
+                if (stockBadge) {
+                    stockBadge.textContent = '—';
+                    stockBadge.className = 'stock-avail badge bg-secondary';
+                }
+                return;
+            }
+
+            // Fetch stock for all warehouses of the supplier branch, then find the selected one
+            fetch('{{ route("admin.branch-demands.stock", ["pid" => "PRODUCT_ID", "bid" => "BRANCH_ID"]) }}'
+                    .replace('PRODUCT_ID', productId)
+                    .replace('BRANCH_ID', supplierBranchId))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    // data is an array of warehouse stock objects
+                    var whStock = null;
+                    if (Array.isArray(data)) {
+                        whStock = data.find(function(w) { return String(w.warehouse_id) === String(warehouseId); });
+                    }
+
+                    var available = whStock ? parseFloat(whStock.available_qty ?? 0) : 0;
+                    if (stockBadge) {
+                        if (available < qty) {
+                            stockBadge.className = 'stock-avail badge bg-danger';
+                            stockBadge.textContent = available.toFixed(2) + ' (INSUFFICIENT!)';
+                        } else {
+                            stockBadge.className = 'stock-avail badge bg-success';
+                            stockBadge.textContent = available.toFixed(2) + ' OK';
+                        }
+                    }
+                })
+                .catch(function(err) {
+                    if (stockBadge) {
+                        stockBadge.textContent = 'Error';
+                        stockBadge.className = 'stock-avail badge bg-warning';
+                    }
+                    console.error('Stock check failed:', err);
+                });
+        });
+    });
+
+    // Form submit validation — block if any warehouse has insufficient stock
+    var sendForm = document.getElementById('sendForm');
+    if (sendForm) {
+        sendForm.addEventListener('submit', function(e) {
+            var insufficient = false;
+            document.querySelectorAll('.stock-avail').forEach(function(badge) {
+                if (badge.classList.contains('bg-danger')) {
+                    insufficient = true;
+                }
+            });
+            if (insufficient) {
+                e.preventDefault();
+                alert('Cannot send goods! One or more items have insufficient stock in the selected warehouse. Please select a different warehouse or reduce the quantity.');
+                return false;
+            }
+        });
+    }
+});
+</script>
+@endpush
