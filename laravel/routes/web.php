@@ -1256,12 +1256,18 @@ Route::middleware('auth')->group(function () {
     Route::prefix('admin/customer-payments')->name('admin.customer-payments.')->group(function () {
         Route::get('outstanding-invoices', [CustomerPaymentController::class, 'getOutstandingInvoices'])
             ->name('outstanding-invoices')->middleware('role:salesman,accountant,manager,admin');
+        // Phase 3B: Audit logs
+        Route::get('audit', [CustomerPaymentController::class, 'audit'])
+            ->name('audit')->middleware('role:accountant,manager,admin');
         // Payment reverse — accountant, manager, admin (legacy reverse_payment)
         Route::post('{id}/cancel', [CustomerPaymentController::class, 'cancel'])
             ->name('cancel')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         // P1-6: Print payment receipt
         Route::get('{id}/print-receipt', [CustomerPaymentController::class, 'printReceipt'])
             ->name('print-receipt')->middleware('role:salesman,accountant,manager,admin');
+        // Phase 3B: Print payment slip (voucher)
+        Route::get('{id}/slip', [CustomerPaymentController::class, 'slip'])
+            ->name('slip')->middleware('role:salesman,accountant,manager,admin');
     });
     // store carries branch_id in the request body → branch.isolation
     Route::resource('admin/customer-payments', CustomerPaymentController::class)

@@ -66,6 +66,9 @@
             </p>
         </div>
         <div class="d-flex gap-2">
+            <a href="{{ route('admin.customer-payments.slip', $payment) }}" class="btn btn-outline-light btn-sm" target="_blank">
+                <i class="fas fa-receipt me-1"></i> Slip
+            </a>
             <button type="button" class="btn btn-outline-light btn-sm" onclick="window.print()">
                 <i class="fas fa-print me-1"></i> Print
             </button>
@@ -187,6 +190,18 @@
                             <dt class="col-sm-3 text-muted">Reference no</dt>
                             <dd class="col-sm-9">
                                 <span class="badge bg-info-subtle text-info">{{ $payment->reference_no }}</span>
+                            </dd>
+                        @endif
+
+                        @if ($payment->collectedBy)
+                            <dt class="col-sm-3 text-muted">Collected by</dt>
+                            <dd class="col-sm-9">
+                                <span class="badge bg-secondary-subtle text-secondary">
+                                    <i class="fas fa-user me-1"></i>{{ $payment->collectedBy->employee_name }}
+                                </span>
+                                @if ($payment->collectedBy->employee_code)
+                                    <span class="small text-muted ms-1">{{ $payment->collectedBy->employee_code }}</span>
+                                @endif
                             </dd>
                         @endif
 

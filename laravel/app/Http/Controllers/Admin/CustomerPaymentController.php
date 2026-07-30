@@ -32,7 +32,7 @@ class CustomerPaymentController extends Controller
 
     public function index(Request $request)
     {
-        $query = CustomerPayment::with(['customer', 'branch', 'bank', 'allocations.invoice'])
+        $query = CustomerPayment::with(['customer', 'branch', 'bank', 'collectedBy', 'allocations.invoice'])
             ->when($request->input('from_date'), fn($q, $d) => $q->where('payment_date', '>=', $d))
             ->when($request->input('to_date'), fn($q, $d) => $q->where('payment_date', '<=', $d))
             ->when($request->input('customer_id'), fn($q, $cid) => $q->where('customer_id', $cid))
@@ -110,6 +110,7 @@ class CustomerPaymentController extends Controller
             'customer_id' => 'required|integer|exists:customers,id',
             'branch_id' => 'required|integer|exists:branches,id',
             'bank_id' => 'nullable|integer|exists:banks,id',
+            'collected_by' => 'nullable|integer|exists:employees,id',
             'payment_mode' => 'required|in:cash,bank,mobile_banking,cheque,adjustment',
             'transaction_type' => 'required|in:receive,discount,write_off,payment',
             'amount' => 'required|numeric|min:0.01',
@@ -163,6 +164,7 @@ class CustomerPaymentController extends Controller
                 'customer_id' => $validated['customer_id'],
                 'branch_id' => $validated['branch_id'],
                 'bank_id' => $validated['bank_id'] ?? null,
+                'collected_by' => $validated['collected_by'] ?? null,
                 'payment_mode' => $validated['payment_mode'],
                 'transaction_type' => $transactionType,
                 'amount' => $validated['amount'],
@@ -273,7 +275,7 @@ class CustomerPaymentController extends Controller
     public function show(int $id)
     {
         $payment = CustomerPayment::with([
-            'customer', 'branch', 'bank',
+            'customer', 'branch', 'bank', 'collectedBy',
             'journalEntry.lines.ledger',
             'intercompanyJournalEntry.lines.ledger',
             'allocations.invoice',
@@ -351,6 +353,39 @@ class CustomerPaymentController extends Controller
             ->get();
 
         return response()->json($invoices);
+    }
+
+    /**
+     * Phase 3B: Print a payment slip (voucher).
+     */
+    public function slip(int $id)
+    {
+        $payment = CustomerPayment::with([
+            'customer', 'branch', 'bank', 'collectedBy',
+            'allocations.invoice',
+        ])->findOrFail($id);
+
+        return view('admin.customer-payments.slip', [
+            'title'   => 'Customer Payment Slip',
+            'payment' => $payment,
+        ]);
+    }
+
+    /**
+     * Phase 3B: Show audit logs for customer payments.
+     */
+    public function audit()
+    {
+        $logs = DB::table('user_audit_log')
+            ->where('action', 'LIKE', 'customer_payment_%')
+            ->orderBy('created_at', 'desc')
+            ->limit(300)
+            ->get();
+
+        return view('admin.customer-payments.audit', [
+            'title' => 'Customer Payment Audit Logs',
+            'logs'  => $logs,
+        ]);
     }
 
     /**

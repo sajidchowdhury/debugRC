@@ -69,7 +69,7 @@ class CustomerPayment extends Model
 
     protected $fillable = [
         'payment_code', 'payment_date', 'customer_id', 'branch_id',
-        'bank_id', 'payment_mode', 'amount', 'discount_amount',
+        'bank_id', 'collected_by', 'payment_mode', 'amount', 'discount_amount',
         'reference_no', 'transaction_type', 'journal_entry_id', 'intercompany_journal_entry_id',
         'is_reversed', 'reversed_at', 'reversed_by', 'reverse_reason',
         'notes', 'created_by',
@@ -84,6 +84,7 @@ class CustomerPayment extends Model
         'customer_id' => 'integer',
         'branch_id' => 'integer',
         'bank_id' => 'integer',
+        'collected_by' => 'integer',
         'journal_entry_id' => 'integer',
         'intercompany_journal_entry_id' => 'integer',
         'created_by' => 'integer',
@@ -103,6 +104,14 @@ class CustomerPayment extends Model
     public function bank(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(Bank::class, 'bank_id');
+    }
+
+    /**
+     * Phase 3A: Employee who collected the cash/payment.
+     */
+    public function collectedBy(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(Employee::class, 'collected_by');
     }
 
     public function journalEntry(): \Illuminate\Database\Eloquent\Relations\BelongsTo

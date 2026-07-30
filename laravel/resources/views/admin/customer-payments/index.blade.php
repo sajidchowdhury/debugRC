@@ -57,6 +57,9 @@
             </p>
         </div>
         <div class="d-flex gap-2">
+            <a href="{{ route('admin.customer-payments.audit') }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-clock-rotate-left me-1"></i> Audit
+            </a>
             <a href="{{ route('admin.customer-payments.create') }}" class="btn btn-light btn-sm">
                 <i class="fas fa-plus me-1"></i> Receive Payment
             </a>
@@ -316,6 +319,10 @@
                                     <a href="{{ route('admin.customer-payments.show', $p) }}"
                                        class="btn btn-sm btn-outline-secondary" title="View">
                                         <i class="fas fa-eye"></i>
+                                    </a>
+                                    <a href="{{ route('admin.customer-payments.slip', $p) }}"
+                                       class="btn btn-sm btn-outline-secondary" title="Print Slip" target="_blank">
+                                        <i class="fas fa-receipt"></i>
                                     </a>
                                 </td>
                             </tr>

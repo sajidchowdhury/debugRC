@@ -237,12 +237,73 @@
                         @error('reference_no') <div class="invalid-feedback">{{ $message }}</div> @enderror
                     </div>
 
+                    <div class="col-md-4" id="collectedByField">
+                        <label class="form-label" for="collected_by">
+                            Collected by
+                            <span class="text-muted small">(who received the cash)</span>
+                        </label>
+                        <select id="collected_by" name="collected_by"
+                                class="form-select select2 @error('collected_by') is-invalid @enderror">
+                            <option value="">Select employee</option>
+                            @foreach (\App\Models\Employee::active()->orderBy('employee_name')->get() as $emp)
+                                <option value="{{ $emp->id }}"
+                                    {{ (string) old('collected_by') === (string) $emp->id ? 'selected' : '' }}>
+                                    {{ $emp->employee_code }} — {{ $emp->employee_name }}
+                                </option>
+                            @endforeach
+                        </select>
+                        @error('collected_by') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
+
                     <div class="col-12">
                         <label class="form-label" for="notes">Notes</label>
                         <textarea id="notes" name="notes" rows="2" class="form-control"
                                   placeholder="Internal notes — source, remarks, etc.">{{ $oldNotes }}</textarea>
                         @error('notes') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
                     </div>
+                </div>
+            </div>
+        </div>
+
+        {{-- Phase 3C: GL Preview card — live Dr/Cr preview before save --}}
+        <div class="card border-0 shadow-sm mb-3" id="glPreviewCard">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-scale-balanced me-1 text-success"></i> GL Journal Preview
+                    <span class="text-muted small ms-2">(live — updates as you type)</span>
+                </h2>
+                <span class="badge bg-success-subtle text-success" id="glBalanceBadge">
+                    <i class="fas fa-check me-1"></i>Balanced
+                </span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm table-bordered align-middle mb-0" id="glPreviewTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width:5%;">#</th>
+                                <th style="width:40%;">Ledger Account</th>
+                                <th class="text-end" style="width:25%;">Debit (Tk)</th>
+                                <th class="text-end" style="width:25%;">Credit (Tk)</th>
+                                <th style="width:5%;"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="glPreviewBody">
+                            {{-- Rows injected by JS --}}
+                        </tbody>
+                        <tfoot class="table-light fw-bold">
+                            <tr>
+                                <td colspan="2" class="text-end">Total</td>
+                                <td class="text-end" id="glTotalDebit">0.00</td>
+                                <td class="text-end" id="glTotalCredit">0.00</td>
+                                <td></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+                <div class="p-2 small text-muted">
+                    <i class="fas fa-info-circle me-1"></i>
+                    This preview shows the GL journal entry that will be posted when you save. Actual ledger names may differ based on Chart of Accounts configuration.
                 </div>
             </div>
         </div>
@@ -698,8 +759,90 @@ $(function () {
             .html('<i class="fas fa-spinner fa-spin me-1"></i> Processing…');
     });
 
+    // ====== Phase 3C: GL Preview — live Dr/Cr preview ======
+    var $glBody      = $('#glPreviewBody');
+    var $glTotalDr   = $('#glTotalDebit');
+    var $glTotalCr   = $('#glTotalCredit');
+    var $glBadge     = $('#glBalanceBadge');
+    var $discount    = $('#discount_amount');
+
+    function updateGLPreview() {
+        var type      = $transType.val();
+        var amount    = parseFloat($amount.val()) || 0;
+        var disc      = parseFloat($discount.val()) || 0;
+        var mode      = $mode.val();
+        var bankLabel = mode === 'bank' ? 'Bank Ledger' : (mode === 'cheque' ? 'Bank Ledger (Cheque)' : (mode === 'mobile_banking' ? 'Mobile Banking' : 'Cash / Bank'));
+        var arLabel   = 'Accounts Receivable';
+        var lines     = [];
+
+        switch (type) {
+            case 'receive':
+                // Dr Bank/Cash / Cr AR
+                lines.push({ account: bankLabel, dr: amount, cr: 0 });
+                // If discount_amount > 0, also: Dr Sales Discount / Cr AR
+                if (disc > 0.001) {
+                    lines.push({ account: 'Sales Discount', dr: disc, cr: 0 });
+                    lines.push({ account: arLabel, dr: 0, cr: amount + disc });
+                } else {
+                    lines.push({ account: arLabel, dr: 0, cr: amount });
+                }
+                break;
+            case 'discount':
+                // Dr Sales Discount / Cr AR
+                lines.push({ account: 'Sales Discount', dr: amount, cr: 0 });
+                lines.push({ account: arLabel, dr: 0, cr: amount });
+                break;
+            case 'write_off':
+                // Dr Bad Debt Expense / Cr AR
+                lines.push({ account: 'Bad Debt Expense', dr: amount, cr: 0 });
+                lines.push({ account: arLabel, dr: 0, cr: amount });
+                break;
+            case 'payment':
+                // Dr AR / Cr Bank/Cash
+                lines.push({ account: arLabel, dr: amount, cr: 0 });
+                lines.push({ account: bankLabel, dr: 0, cr: amount });
+                break;
+        }
+
+        // Render rows.
+        $glBody.empty();
+        var totalDr = 0, totalCr = 0;
+        lines.forEach(function (line, idx) {
+            var drVal = line.dr > 0.001 ? line.dr.toFixed(2) : '';
+            var crVal = line.cr > 0.001 ? line.cr.toFixed(2) : '';
+            totalDr += line.dr;
+            totalCr += line.cr;
+
+            var $tr = $('<tr>');
+            $tr.append($('<td>').text(idx + 1));
+            $tr.append($('<td>').text(line.account));
+            $tr.append($('<td>').addClass('text-end fw-semibold' + (line.dr > 0.001 ? ' text-success' : '')).text(drVal));
+            $tr.append($('<td>').addClass('text-end fw-semibold' + (line.cr > 0.001 ? ' text-danger' : '')).text(crVal));
+            $tr.append($('<td>').html(line.dr > 0.001 ? '<i class="fas fa-arrow-up text-success small"></i>' : (line.cr > 0.001 ? '<i class="fas fa-arrow-down text-danger small"></i>' : '')));
+            $glBody.append($tr);
+        });
+
+        $glTotalDr.text(totalDr.toFixed(2));
+        $glTotalCr.text(totalCr.toFixed(2));
+
+        // Balance badge.
+        var balanced = Math.abs(totalDr - totalCr) < 0.01;
+        if (balanced) {
+            $glBadge.html('<i class="fas fa-check me-1"></i>Balanced').attr('class', 'badge bg-success-subtle text-success');
+        } else {
+            $glBadge.html('<i class="fas fa-triangle-exclamation me-1"></i>Unbalanced').attr('class', 'badge bg-danger-subtle text-danger');
+        }
+    }
+
+    // Events that trigger GL preview update.
+    $amount.on('input', updateGLPreview);
+    $discount.on('input', updateGLPreview);
+    $transType.on('change', updateGLPreview);
+    $mode.on('change', updateGLPreview);
+
     // ====== Apply initial type config ======
     applyTypeConfig('{{ $oldType }}');
+    updateGLPreview();
 
     // ====== If customer is preselected (e.g., via query string), trigger initial load ======
     @if (!empty($selectedCustomerId) && $preloadedInvoices->isEmpty())

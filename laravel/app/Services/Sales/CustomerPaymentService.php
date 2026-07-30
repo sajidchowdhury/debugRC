@@ -2,6 +2,7 @@
 
 namespace App\Services\Sales;
 
+use App\Models\Bank;
 use App\Models\CustomerPayment;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
@@ -100,6 +101,7 @@ class CustomerPaymentService
                 'customer_id' => $customerId,
                 'branch_id' => $branchId,
                 'bank_id' => $data['bank_id'] ?? null,
+                'collected_by' => $data['collected_by'] ?? null,
                 'payment_mode' => $data['payment_mode'] ?? 'cash',
                 'transaction_type' => $transactionType,
                 'amount' => round((float) $data['amount'], 2),
@@ -184,6 +186,14 @@ class CustomerPaymentService
             $intercompanyJournalId = null;
             if ($payment->isBankMode() && in_array($transactionType, self::AR_REDUCTION_TYPES)) {
                 $intercompanyJournalId = $this->postIntercompanySettlement($payment, $confirmedBy);
+            }
+
+            // 4b. Sync bank balance (if bank mode).
+            // Phase 3A: receive = money coming in (increase bank balance)
+            //           payment (refund) = money going out (decrease bank balance)
+            //           discount/write_off = no bank change (adjustment)
+            if ($payment->isBankMode() && $payment->bank_id) {
+                $this->syncBankBalance($payment->bank_id, $amount, $transactionType);
             }
 
             // 5. Update payment status.
@@ -316,6 +326,16 @@ class CustomerPaymentService
                     'reverse_reason' => $reason,
                     'updated_at' => now(),
                 ]);
+
+            // Phase 3A: Undo bank balance sync.
+            if ($payment->isBankMode() && $payment->bank_id) {
+                $this->syncBankBalance(
+                    $payment->bank_id,
+                    (float) $payment->amount,
+                    $payment->transaction_type ?? 'receive',
+                    undo: true
+                );
+            }
 
             // P1-3: Audit log — payment_reversed.
             $this->auditLogger->paymentReversed(
@@ -894,6 +914,35 @@ class CustomerPaymentService
                     'mode' => $mode, 'customer_id' => $data['customer_id'],
                 ]);
             }
+        }
+    }
+
+    // ============================================================
+    // BANK BALANCE SYNC
+    // ============================================================
+
+    /**
+     * Sync bank balance after a customer payment.
+     *
+     * receive:  money coming in (increase bank balance)
+     * payment:  money going out — refund (decrease bank balance)
+     * discount/write_off: no bank change (adjustment, no money moves)
+     */
+    private function syncBankBalance(int $bankId, float $amount, string $transactionType, bool $undo = false): void
+    {
+        $bank = Bank::find($bankId);
+        if (!$bank) return;
+
+        // receive = money coming in (increase bank balance)
+        // payment (refund) = money going out (decrease bank balance)
+        // discount/write_off = no bank change
+        $increase = in_array($transactionType, self::AR_REDUCTION_TYPES);
+        if ($undo) $increase = !$increase;
+
+        if ($increase) {
+            $bank->increment('balance', $amount);
+        } else {
+            $bank->decrement('balance', $amount);
         }
     }
 
