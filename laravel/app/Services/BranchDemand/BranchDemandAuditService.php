@@ -3,6 +3,7 @@
 namespace App\Services\BranchDemand;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Branch Demand Audit Service — Phase 8 (Anti-Gaming & Accountability Controls).
@@ -406,44 +407,71 @@ class BranchDemandAuditService
 
     /**
      * Check 2: Ledger Nature — interbranch_receivable and interbranch_payable
-     * accounts must exist in the chart of accounts.
+     * accounts must exist in the ledgers table.
      */
     private function checkLedgerNature(): array
     {
-        // Guard: chart_of_accounts may not exist in all environments (e.g. test DB)
-        // Use a savepoint so that a failed query doesn't abort the entire
-        // PostgreSQL transaction — catching the PHP exception is not enough;
-        // PG stays in "aborted transaction" state until ROLLBACK TO SAVEPOINT.
         try {
-            return DB::transaction(function () {
-                $receivable = DB::table('chart_of_accounts')
-                    ->where('account_code', 'interbranch_receivable')
-                    ->exists();
-
-                $payable = DB::table('chart_of_accounts')
-                    ->where('account_code', 'interbranch_payable')
-                    ->exists();
-
-                $bothExist = $receivable && $payable;
-
+            // Check if the ledgers table exists first
+            if (!Schema::hasTable('ledgers')) {
                 return [
                     'name'    => 'Ledger Nature',
-                    'status'  => $bothExist ? 'pass' : 'fail',
-                    'message' => $bothExist
-                        ? 'Both interbranch_receivable and interbranch_payable accounts exist.'
-                        : 'Missing ' . (!$receivable ? 'interbranch_receivable ' : '') . (!$payable ? 'interbranch_payable ' : '') . 'account(s).',
-                    'count'   => ($receivable ? 0 : 1) + ($payable ? 0 : 1),
-                    'details' => [
-                        'interbranch_receivable_exists' => $receivable,
-                        'interbranch_payable_exists'    => $payable,
-                    ],
+                    'status'  => 'skip',
+                    'message' => 'Ledgers table does not exist — skipping check. Run: php artisan migrate',
+                    'count'   => 0,
+                    'details' => [],
                 ];
-            });
+            }
+
+            // Check if ledger_nature column exists
+            if (!Schema::hasColumn('ledgers', 'ledger_nature')) {
+                return [
+                    'name'    => 'Ledger Nature',
+                    'status'  => 'skip',
+                    'message' => 'Ledgers table missing ledger_nature column — skipping check. Run: php artisan migrate',
+                    'count'   => 0,
+                    'details' => [],
+                ];
+            }
+
+            // Build query — only use deleted_at if the column exists
+            $query = DB::table('ledgers')
+                ->where('is_active', true);
+
+            if (Schema::hasColumn('ledgers', 'deleted_at')) {
+                $query->whereNull('deleted_at');
+            }
+
+            $receivable = (clone $query)
+                ->where('ledger_nature', 'interbranch_receivable')
+                ->exists();
+
+            $payable = (clone $query)
+                ->where('ledger_nature', 'interbranch_payable')
+                ->exists();
+
+            $bothExist = $receivable && $payable;
+
+            return [
+                'name'    => 'Ledger Nature',
+                'status'  => $bothExist ? 'pass' : 'fail',
+                'message' => $bothExist
+                    ? 'Both interbranch_receivable and interbranch_payable accounts exist.'
+                    : 'Missing ' . (!$receivable ? 'interbranch_receivable ' : '') . (!$payable ? 'interbranch_payable ' : '') . 'account(s).',
+                'count'   => ($receivable ? 0 : 1) + ($payable ? 0 : 1),
+                'details' => [
+                    'interbranch_receivable_exists' => $receivable,
+                    'interbranch_payable_exists'    => $payable,
+                ],
+            ];
         } catch (\Throwable $e) {
+            Log::warning('BranchDemandAuditService: checkLedgerNature failed', [
+                'error' => $e->getMessage(),
+            ]);
             return [
                 'name'    => 'Ledger Nature',
                 'status'  => 'skip',
-                'message' => 'chart_of_accounts table not available — skipping check.',
+                'message' => 'Ledger nature check failed: ' . $e->getMessage(),
                 'count'   => 0,
                 'details' => ['error' => $e->getMessage()],
             ];
@@ -896,22 +924,31 @@ class BranchDemandAuditService
 
     /**
      * Get the latest running balance from branch_ledger for a debtor/creditor pair.
-     * Uses the existing branch_ledger schema (from_branch_id, to_branch_id, amount)
-     * since the migration adding running_balance/is_reversed may not be applied yet.
+     * Uses the new branch_ledger schema (debit, credit, running_balance, is_reversed).
+     * Falls back to computing from SUM(debit) - SUM(credit) if running_balance is null.
      */
     private function getLedgerRunningBalance(int $debtorBranchId, int $creditorBranchId)
     {
+        // Try to get the latest running_balance from the most recent non-reversed entry
         $row = DB::table('branch_ledger')
             ->where('from_branch_id', $debtorBranchId)
             ->where('to_branch_id', $creditorBranchId)
+            ->where('is_reversed', false)
+            ->whereNotNull('running_balance')
             ->orderByDesc('id')
             ->first();
 
-        // Compute running balance from sum of amounts
+        if ($row && $row->running_balance !== null) {
+            return (object) ['running_balance' => (float) $row->running_balance];
+        }
+
+        // Fallback: compute running balance from SUM(debit) - SUM(credit)
         $balance = (float) DB::table('branch_ledger')
             ->where('from_branch_id', $debtorBranchId)
             ->where('to_branch_id', $creditorBranchId)
-            ->sum('amount');
+            ->where('is_reversed', false)
+            ->selectRaw('COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0) as balance')
+            ->value('balance');
 
         return (object) ['running_balance' => $balance];
     }

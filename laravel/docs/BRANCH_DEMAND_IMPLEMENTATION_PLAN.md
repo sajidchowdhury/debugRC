@@ -1,4 +1,4 @@
-# Branch Demand Implementation Plan — v1.10
+# Branch Demand Implementation Plan — v1.11
 
 ## Overview
 
@@ -160,6 +160,8 @@ inter-branch product supply requests: create → send → confirm receipt → se
 - `database/migrations/2026_07_29_000017_create_branch_demand_audit_log_table.php`
 - `database/migrations/2026_07_29_000018_add_branch_demand_sidebar_menu.php`
 - `database/migrations/2026_07_29_000019_create_shadow_demand_comparisons_table.php`
+- `database/migrations/2026_07_30_000001_remove_branch_demand_from_inventory_menu.php`
+- `database/migrations/2026_07_30_000002_deactivate_branch_demand_under_inventory_menu.php`
 
 ### Views
 - `resources/views/admin/branch-demands/index.blade.php`
@@ -176,6 +178,9 @@ inter-branch product supply requests: create → send → confirm receipt → se
 - `resources/views/admin/branch-demand-shadow/comparisons.blade.php`
 - `resources/views/admin/branch-demand-shadow/detail.blade.php`
 - `resources/views/admin/branch-demand-shadow/cutover.blade.php`
+
+### Console Commands
+- `app/Console/Commands/VerifyBranchDemandSchema.php` — `php artisan branch-demand:verify-schema`
 
 ### Config
 - `config/branch_demand_shadow.php`

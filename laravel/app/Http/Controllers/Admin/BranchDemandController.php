@@ -251,21 +251,67 @@ class BranchDemandController extends Controller
      */
     public function send(SendBranchDemandRequest $request, int $id)
     {
+        $validated = $request->validated();
+        $userId = $this->currentUserId();
+        $branchId = $this->currentBranchId();
+
+        Log::info('BranchDemand send() called', [
+            'demand_id' => $id,
+            'user_id'   => $userId,
+            'branch_id' => $branchId,
+            'items'     => $validated['items'] ?? [],
+        ]);
+
+        // Guard: if userId is 0, the session is not properly synced
+        if ($userId <= 0) {
+            Log::error('BranchDemand send() aborted: user not authenticated', [
+                'demand_id' => $id,
+                'auth_id'   => Auth::id(),
+                'session_branch_id' => session('branch_id'),
+            ]);
+            return back()->withInput()->withErrors([
+                'send_error' => 'Your session is not properly authenticated. Please log out and log back in, then try again.',
+            ]);
+        }
+
         try {
             $demand = $this->demandService->sendGoodsWithWarehouses(
                 $id,
-                $request->validated()['items'],
-                $this->currentUserId()
+                $validated['items'],
+                $userId
             );
 
             return redirect()
                 ->route('admin.branch-demands.show', $id)
-                ->with('success', "Goods sent for demand {$demand->demand_code}. Stock moved successfully.");
+                ->with('success', "Goods sent for demand {$demand->demand_code}. Stock moved successfully.")
+                ->with('gl_warning', session('gl_warning')); // propagate if set by service
+        } catch (\InvalidArgumentException $e) {
+            Log::warning('BranchDemand send validation error', ['demand_id' => $id, 'error' => $e->getMessage()]);
+            return back()->withInput()->withErrors(['send_error' => $e->getMessage()]);
         } catch (\RuntimeException $e) {
-            return back()->withErrors(['error' => $e->getMessage()]);
+            Log::warning('BranchDemand send business error', ['demand_id' => $id, 'error' => $e->getMessage()]);
+
+            // Check if this is a database constraint violation (likely missing migration)
+            $msg = $e->getMessage();
+            if (str_contains($msg, 'reference_type') || str_contains($msg, 'check constraint') || str_contains($msg, 'branch_demand_item_id')) {
+                return back()->withInput()->withErrors([
+                    'send_error' => 'Database schema error: ' . $msg . '. Run: php artisan migrate',
+                ]);
+            }
+
+            return back()->withInput()->withErrors(['send_error' => $msg]);
         } catch (\Throwable $e) {
-            Log::error('BranchDemand send failed', ['demand_id' => $id, 'error' => $e->getMessage()]);
-            return back()->withErrors(['error' => 'Failed to send goods. ' . $e->getMessage()]);
+            Log::error('BranchDemand send failed', ['demand_id' => $id, 'error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+
+            // Check for database constraint violations
+            $msg = $e->getMessage();
+            if (str_contains($msg, 'reference_type') || str_contains($msg, 'check constraint') || str_contains($msg, 'branch_demand_item_id')) {
+                return back()->withInput()->withErrors([
+                    'send_error' => 'Database schema error: ' . $msg . '. Run: php artisan migrate',
+                ]);
+            }
+
+            return back()->withInput()->withErrors(['send_error' => 'Failed to send goods. ' . $msg]);
         }
     }
 

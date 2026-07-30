@@ -223,16 +223,22 @@ class BranchDemand extends Model
     }
 
     /**
-     * Scope: received demands where the requesting branch (from_branch_id)
-     * is the given branch and receipt is still pending.
-     * Used by the receiving warehouse manager's "Pending Receipt" view.
+     * Scope: received demands where the given branch is the requester
+     * (from_branch_id) and receipt is still pending.
+     *
+     * Only shows demands where MY branch needs to confirm receipt of goods
+     * that were sent by the supplier branch. The supplier branch can see
+     * these same demands on the pending page (to_branch_id = my branch).
+     *
+     * Requirement: /admin/branch-demands/pending-receipt shows only those
+     * demand which are made FROM my branch and approved (status='received').
      */
     public function scopePendingReceiptForBranch(\Illuminate\Database\Eloquent\Builder $query, int $branchId): \Illuminate\Database\Eloquent\Builder
     {
         return $query->where('from_branch_id', $branchId)
-                     ->where('status', 'received')
-                     ->where('is_reversed', false)
-                     ->whereNull('received_at');
+             ->where('status', 'received')
+             ->where('is_reversed', false)
+             ->whereNull('received_at');
     }
 
     // ===================== HELPERS =====================

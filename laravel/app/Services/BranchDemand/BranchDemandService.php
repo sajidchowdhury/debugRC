@@ -178,6 +178,12 @@ class BranchDemandService
      */
     public function sendGoodsWithWarehouses(int $demandId, array $items, int $sentBy): BranchDemand
     {
+        Log::info('BranchDemand sendGoodsWithWarehouses START', [
+            'demand_id' => $demandId,
+            'items'     => $items,
+            'sent_by'   => $sentBy,
+        ]);
+
         return DB::transaction(function () use ($demandId, $items, $sentBy) {
             // Lock the demand row
             $demand = DB::table('branch_demands')
@@ -199,6 +205,14 @@ class BranchDemandService
                 throw new \RuntimeException("Cannot send goods for a reversed demand #{$demandId}.");
             }
 
+            Log::info('BranchDemand sendGoodsWithWarehouses: demand found', [
+                'demand_id'      => $demandId,
+                'demand_code'    => $demand->demand_code,
+                'status'         => $demand->status,
+                'from_branch_id' => $demand->from_branch_id,
+                'to_branch_id'   => $demand->to_branch_id,
+            ]);
+
             $fromBranchId = (int) $demand->from_branch_id; // requester (debtor)
             $toBranchId = (int) $demand->to_branch_id;     // supplier (creditor)
 
@@ -217,7 +231,12 @@ class BranchDemandService
             // Execute stock movements
             $totalValue = 0.0;
 
-            foreach ($sendPlan as $planItem) {
+            Log::info('BranchDemand sendGoodsWithWarehouses: executing stock movements', [
+                'demand_id'  => $demandId,
+                'plan_count' => count($sendPlan),
+            ]);
+
+            foreach ($sendPlan as $planIdx => $planItem) {
                 $itemQty = (float) $planItem['qty'];
                 $costRate = (float) $planItem['cost_rate'];
                 $fromWarehouseId = (int) $planItem['from_warehouse_id'];
@@ -229,6 +248,18 @@ class BranchDemandService
                 $available = $this->stockAvailabilityService->getWarehouseAvailableQty(
                     $productId, $fromWarehouseId
                 );
+
+                Log::info('BranchDemand sendGoodsWithWarehouses: stock check', [
+                    'demand_id'       => $demandId,
+                    'plan_idx'        => $planIdx,
+                    'product_id'      => $productId,
+                    'from_warehouse'  => $fromWarehouseId,
+                    'to_warehouse'    => $toWarehouseId,
+                    'qty_requested'   => $itemQty,
+                    'qty_available'   => $available,
+                    'cost_rate'       => $costRate,
+                ]);
+
                 if ($itemQty > $available + self::QTY_TOLERANCE) {
                     $physical = $this->stockService->getWarehouseQty($fromWarehouseId, $productId);
                     $pipeline = $physical - $available;
@@ -299,8 +330,19 @@ class BranchDemandService
                 ]);
 
             // ★ Phase 3 — Post intercompany GL journals and branch ledger
-            $demandModel = BranchDemand::find($demandId);
-            $this->intercompanyService->postDemandFulfillmentJournals($demandModel, $sentBy);
+            // If GL accounts are not configured, log a warning and continue
+            // without journal posting. The stock movement is still valid.
+            try {
+                $demandModel = BranchDemand::find($demandId);
+                $this->intercompanyService->postDemandFulfillmentJournals($demandModel, $sentBy);
+            } catch (\RuntimeException $e) {
+                Log::warning('BranchDemand: GL posting skipped — missing ledger accounts', [
+                    'demand_id'  => $demandId,
+                    'error'      => $e->getMessage(),
+                ]);
+                // Store the GL error so the controller can inform the user
+                session()->flash('gl_warning', 'Stock moved successfully, but GL journal posting was skipped: ' . $e->getMessage() . '. Please configure the required ledger accounts (interbranch_receivable, interbranch_payable, inventory).');
+            }
 
             Log::info('BranchDemand goods sent', [
                 'demand_id'             => $demandId,
@@ -845,32 +887,43 @@ class BranchDemandService
      */
     private function loadCurrentPriceRanges(array $productIds): array
     {
-        $today = now()->format('Y-m-d');
-
-        $rows = DB::table('product_price_history')
-            ->whereIn('product_id', $productIds)
-            ->where('effective_from', '<=', $today)
-            ->where(function ($q) use ($today) {
-                $q->whereNull('effective_to')
-                  ->orWhere('effective_to', '>=', $today);
-            })
-            ->orderByDesc('effective_from')
-            ->get();
-
-        $ranges = [];
-        foreach ($rows as $row) {
-            $pid = (int) $row->product_id;
-            // Take the most recent effective range for each product
-            if (!isset($ranges[$pid])) {
-                $ranges[$pid] = [
-                    'min'     => (float) $row->min_rate,
-                    'max'     => (float) $row->max_rate,
-                    'default' => (float) $row->default_rate,
-                ];
-            }
+        if (empty($productIds)) {
+            return [];
         }
 
-        return $ranges;
+        try {
+            $today = now()->format('Y-m-d');
+
+            $rows = DB::table('product_price_history')
+                ->whereIn('product_id', $productIds)
+                ->where('effective_from', '<=', $today)
+                ->where(function ($q) use ($today) {
+                    $q->whereNull('effective_to')
+                      ->orWhere('effective_to', '>=', $today);
+                })
+                ->orderByDesc('effective_from')
+                ->get();
+
+            $ranges = [];
+            foreach ($rows as $row) {
+                $pid = (int) $row->product_id;
+                // Take the most recent effective range for each product
+                if (!isset($ranges[$pid])) {
+                    $ranges[$pid] = [
+                        'min'     => (float) ($row->min_rate ?? 0),
+                        'max'     => (float) ($row->max_rate ?? 0),
+                        'default' => (float) ($row->default_rate ?? 0),
+                    ];
+                }
+            }
+
+            return $ranges;
+        } catch (\Throwable $e) {
+            Log::warning('BranchDemand: price history lookup failed', [
+                'error' => $e->getMessage(),
+            ]);
+            return [];
+        }
     }
 
     /**

@@ -463,13 +463,17 @@ class BranchDemandWeeklyReportService
      */
     public function getHOBillBroughtForward(int $branchId, string $date): float
     {
-        // Sum all amounts before this date to compute the brought-forward balance.
-        // Uses the existing branch_ledger schema (amount, is_settled) — the
-        // migration adds running_balance/is_reversed but may not be applied yet.
-        return (float) DB::table('branch_ledger')
+        // Compute the brought-forward balance from branch_ledger.
+        // Uses the new schema (debit, credit, is_reversed) — the migration
+        // drops the old 'amount' column and replaces it with debit/credit.
+        $result = DB::table('branch_ledger')
             ->where('from_branch_id', $branchId)
             ->where('transaction_date', '<', $date)
-            ->sum('amount') ?? 0;
+            ->where('is_reversed', false)
+            ->selectRaw('COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0) as balance')
+            ->first();
+
+        return $result ? (float) $result->balance : 0.0;
     }
 
     /**
@@ -481,10 +485,14 @@ class BranchDemandWeeklyReportService
      */
     public function getHOTotalBill(int $branchId, string $date): float
     {
-        return (float) DB::table('branch_ledger')
+        $result = DB::table('branch_ledger')
             ->where('from_branch_id', $branchId)
             ->where('transaction_date', '<=', $date)
-            ->sum('amount') ?? 0;
+            ->where('is_reversed', false)
+            ->selectRaw('COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0) as balance')
+            ->first();
+
+        return $result ? (float) $result->balance : 0.0;
     }
 
     /**

@@ -8,6 +8,19 @@
 
 @section('content')
 <div class="bd-demand-app container-fluid py-2">
+    {{-- Flash messages --}}
+    @if($errors->any())
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        <i class="fas fa-exclamation-triangle me-1"></i>
+        <ul class="mb-0">
+            @foreach($errors->all() as $error)
+            <li>{{ $error }}</li>
+            @endforeach
+        </ul>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    @endif
+
     {{-- Header --}}
     <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
             style="background: linear-gradient(135deg,#4f46e5,#7c3aed);">

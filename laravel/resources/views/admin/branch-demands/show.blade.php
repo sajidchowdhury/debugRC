@@ -8,6 +8,43 @@
 
 @section('content')
 <div class="bd-demand-app container-fluid py-2">
+    {{-- Flash messages --}}
+    @if(session('success'))
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        <i class="fas fa-check-circle me-1"></i> {{ session('success') }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    @endif
+    @if(session('warning'))
+    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+        <i class="fas fa-exclamation-triangle me-1"></i> {{ session('warning') }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    @endif
+    @if(session('gl_warning'))
+    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+        <i class="fas fa-exclamation-triangle me-1"></i> {{ session('gl_warning') }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    @endif
+    @if($errors->any())
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        <i class="fas fa-exclamation-triangle me-1"></i>
+        <ul class="mb-0">
+            @foreach($errors->all() as $error)
+            <li>{{ $error }}</li>
+            @endforeach
+        </ul>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    @endif
+    @if(session('error'))
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        <i class="fas fa-exclamation-circle me-1"></i> {{ session('error') }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    @endif
+
     {{-- Header --}}
     <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
             style="background: linear-gradient(135deg,#4f46e5,#7c3aed);">
@@ -266,6 +303,23 @@
     <div class="card shadow-sm mb-3" id="send-section">
         <div class="card-header bg-success text-white"><i class="fas fa-paper-plane me-1"></i> Send Goods — Select Warehouses</div>
         <div class="card-body">
+            {{-- Show send-specific errors prominently --}}
+            @if($errors->has('send_error'))
+            <div class="alert alert-danger py-2 mb-3">
+                <i class="fas fa-exclamation-circle me-1"></i>
+                <strong>Send Error:</strong> {{ $errors->first('send_error') }}
+            </div>
+            @endif
+            @if($errors->any())
+            <div class="alert alert-danger py-2 mb-3">
+                <i class="fas fa-exclamation-circle me-1"></i>
+                <ul class="mb-0">
+                    @foreach($errors->all() as $error)
+                    <li>{{ $error }}</li>
+                    @endforeach
+                </ul>
+            </div>
+            @endif
             <div class="alert alert-warning py-2 small mb-3">
                 <i class="fas fa-exclamation-triangle me-1"></i>
                 <strong>Stock Check:</strong> You cannot send more goods than available in the selected warehouse. Available stock is shown next to each warehouse. If stock is insufficient, the send will be blocked.
