@@ -33,7 +33,8 @@ class CustomersDiagnose extends Command
     protected $signature = 'customers:diagnose
                             {--branch= : Override session branch_id for the diagnostic}
                             {--admin : Bypass RLS (set app.is_admin = true)}
-                            {--limit=25 : Number of rows to fetch}';
+                            {--limit=25 : Number of rows to fetch}
+                            {--controller : Reproduce the EXACT CustomerController::dataTablesResponse() code path}';
 
     protected $description = 'Diagnose why the customer DataTables AJAX endpoint fails';
 
@@ -199,6 +200,85 @@ class CustomersDiagnose extends Command
             $this->line("  • search_vector column: NOT PRESENT (full-text search will use ILIKE fallback)");
         }
         $this->newLine();
+
+        // ── 8. (Optional) Reproduce the EXACT controller code path ──
+        if ($this->option('controller')) {
+            $this->info('[7/7] Reproducing CustomerController::dataTablesResponse() code path');
+            $start = 0;
+            $length = (int) $this->option('limit');
+            $search = '';
+
+            try {
+                $query = Customer::query()->with(['branch', 'salesPerson']);
+                $query->whereNull('deleted_at');
+
+                $total = $query->count();
+                $this->line("  ✓ \$query->count() = {$total}");
+
+                $filtered = $query->count();
+                $this->line("  ✓ filtered count = {$filtered}");
+
+                $items = $query->skip($start)->take($length)->get();
+                $this->line("  ✓ Fetched " . $items->count() . " models via skip({$start})->take({$length})->get()");
+
+                // Reproduce the EXACT map callback from CustomerController.php line 149-177
+                $data = $items->map(function (Customer $c) {
+                    return [
+                        'id'             => $c->id,
+                        'customer_code'  => $c->customer_code,
+                        'customer_name'  => $c->customer_name,
+                        'phone'          => $c->phone,
+                        'mobile'         => $c->mobile,
+                        'email'          => $c->email,
+                        'address'        => $c->address,
+                        'branch_id'      => $c->branch_id,
+                        'sales_person_id'=> $c->sales_person_id,
+                        'credit_limit'   => $c->credit_limit !== null
+                                            ? (float) $c->credit_limit
+                                            : null,
+                        'opening_balance'=> $c->opening_balance !== null
+                                            ? (float) $c->opening_balance
+                                            : null,
+                        'balance_type'   => $c->balance_type,
+                        'is_active'      => (bool) $c->is_active,
+                        'created_at'     => $c->created_at?->toIso8601String(),
+                        'updated_at'     => $c->updated_at?->toIso8601String(),
+                        'branch'         => $c->branch
+                            ? ['id' => $c->branch->id, 'branch_name' => $c->branch->branch_name]
+                            : null,
+                        'sales_person'   => $c->salesPerson
+                            ? ['id' => $c->salesPerson->id, 'name' => $c->salesPerson->name]
+                            : null,
+                    ];
+                })->values();
+
+                $this->line("  ✓ Mapped to plain arrays (" . $data->count() . " rows)");
+
+                $payload = [
+                    'draw'            => 1,
+                    'recordsTotal'    => $total,
+                    'recordsFiltered' => $filtered,
+                    'data'            => $data,
+                ];
+                $json = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                $this->line("  ✓ JSON encoded successfully (" . strlen($json) . " bytes)");
+            } catch (\Throwable $e) {
+                $this->error("  ✗ Controller code path failed: " . $e->getMessage());
+                $this->line("  Exception class: " . get_class($e));
+                $this->line("  File: " . $e->getFile() . ":" . $e->getLine());
+                $this->newLine();
+                $this->line("  Stack trace (first 15 frames):");
+                foreach (array_slice($e->getTrace(), 0, 15) as $i => $frame) {
+                    $file = $frame['file'] ?? '<unknown>';
+                    $line = $frame['line'] ?? '?';
+                    $fn   = $frame['function'] ?? '<unknown>';
+                    $cls  = $frame['class'] ?? '';
+                    $this->line("    #{$i} {$cls}{$fn}() at {$file}:{$line}");
+                }
+                return 1;
+            }
+            $this->newLine();
+        }
 
         // ── Summary ──
         $this->info('════════════════════════════════════════════════════════════');
