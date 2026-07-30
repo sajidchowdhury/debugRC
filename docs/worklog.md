@@ -1162,3 +1162,62 @@ Stage Summary:
 - Super-admin switching is preserved: changing the employee <select> or period reloads all Phase 4 metrics for the new target+period combination. Commission lifetime breakdown ignores period (it's a ledger); attainment %, stock discipline, and accuracy are all period-filtered.
 - Migrations G1 (user_login_log), G2 (customers.created_by), G3 (sales_invoices.due_date) from the plan are NOT shipped in this phase — they were marked optional in the plan and the dashboard works without them. They can be added in Phase 5 (Role-Aware Refinement & Schema Gaps) if needed.
 - Next: Phase 5 (Role-Aware Refinement & Schema Gaps) and Phase 6 (Polish, Performance & Post-Launch Gaps) remain in the plan but are post-launch nice-to-haves. The dashboard is now production-ready against the original spec.
+
+---
+Task ID: phase-5
+Agent: main (Super Z)
+Task: Phase 5 of User Performance Dashboard — Role-Aware Refinement & Schema Gaps. Per the plan: add G4-G9 attribution migrations + role-aware dashboard sections + approval-workload cards for managers. Practical decision: G4-G9 migrations are LOW-PRIORITY schema gaps (the plan itself marks them as low-impact — the dashboard works without them by falling back to created_by). Defer them to a future phase unless business requests. Ship the role-aware visibility + approval-workload cards using the EXISTING approved_by / submitted_by columns on stock_adjustments and damage_invoices. Push after done.
+
+Work Log:
+- Verified Phase 0-4 all pushed to origin/main (commits 61bee66, 5d87416, 2cca641, 2c3d907, 5870a68, 5a2e3d4, 2337596).
+- Re-read schema for Phase 5 sources:
+  * stock_adjustments (status IN draft/submitted/approved/confirmed/cancelled/rejected, submitted_by, submitted_at, approved_by, approved_at, confirmed_by, confirmed_at, is_reversed, deleted_at, total_amount) — maker-checker workflow already in place via migration 2025_07_29_000001.
+  * damage_invoices (status IN draft/submitted/approved/confirmed/cancelled/rejected, submitted_by, approved_by, approved_at, is_reversed) — same maker-checker workflow via migration 2026_01_05_000001.
+  * Both tables already have everything needed for an Approval Workload section. No new migrations needed.
+- Reviewed plan's G4-G9 migration list:
+  * G4 godown_prepared_by on sales_invoices — for warehouse-attributed velocity metrics. Currently falls back to created_by (the booker). LOW IMPACT — the velocity tile still tells the user something useful.
+  * G5 dispatched_by on sales_invoice_dispatches — for pick/dispatch productivity. Same fallback.
+  * G7 approved_by on purchase_orders, G8 received_by on purchase_receives, G9 requested_by/received_by on warehouse_transfers — all purchase-side attribution. The current dashboard doesn't show purchase metrics at all (out of scope per §0).
+  * Decision: DEFER all G4-G9 migrations. The dashboard is feature-complete without them. They can be added in a future phase if business explicitly wants warehouse-side or purchase-side per-user metrics.
+- Added resolveRoleSections(string $role): array — pure function, no DB calls. Returns a map of 8 section keys to bool visibility. Per the plan:
+  * salesman → sales + collections + returns + commission + operational + accuracy
+  * warehouse_manager / dispatcher → operational + stock_discipline + accuracy
+  * accountant → collections + returns + operational + accuracy
+  * manager / admin / superadmin → ALL sections + approval_workload
+  * hr / other / unknown → sales + collections + operational + accuracy (permissive default)
+- Added getApprovalWorkload($userId, $employeeId, $range) — 4 queries:
+  (1) stock_adjustments WHERE status='submitted' → COUNT + SUM(total_amount) for pending.
+  (2) stock_adjustments WHERE approved_by=$userId AND approved_at BETWEEN → COUNT for approved-this-period.
+  (3) damage_invoices WHERE status='submitted' → COUNT for pending.
+  (4) damage_invoices WHERE approved_by=$userId AND approved_at BETWEEN → COUNT for approved-this-period.
+  Note: "pending my approval" is branch-wide (any manager in the branch can approve), so it's not user-attributed. "Approved by me" IS user-attributed via approved_by.
+- Both methods are private, try/catch with Log::warning(), return fully-zeroed $zero arrays on failure.
+- Updated index() to call resolveRoleSections() always, and getApprovalWorkload() only when roleSections['approval_workload'] is true (avoids wasted queries for non-manager roles). Passes $roleSections + $approvalWorkload to the view.
+- View changes in performance.blade.php:
+  * Phase 1 (Sales) outer @if: added && ($roleSections['sales'] ?? true). Hidden for warehouse_manager, dispatcher, accountant.
+  * Phase 2 (Collections & Returns) outer @if: added && (($roleSections['collections'] ?? true) || ($roleSections['returns'] ?? true)). Hidden for warehouse_manager and dispatcher.
+  * Phase 3 (Operational Efficiency) outer @if: added && ($roleSections['operational'] ?? true). Visible to all roles per the plan (every role creates activity).
+  * Phase 4 (Commission + Stock Discipline + Accuracy) outer @if: rewritten to render if ANY of commission/stock_discipline/accuracy is visible. Inner sub-section @ifs:
+    - Commission: @if ($isSalesman && ($roleSections['commission'] ?? false)) — combines the existing salesman-role guard with the new roleSections guard.
+    - Stock Discipline: wrapped in @if ($roleSections['stock_discipline'] ?? false). Hidden for accountant, salesman (salesman doesn't create stock adjustments as a primary job).
+    - Accuracy: wrapped in @if ($roleSections['accuracy'] ?? false). Visible to all roles (everyone makes mistakes).
+  * Hero header: added a new "X sections visible" pill next to the role pill, with a title= tooltip listing the visible section keys. Computed via array_keys(array_filter($roleSections)).
+  * Phase 5 Approval Workload section (NEW): rendered only when $roleSections['approval_workload'] is true. Layout:
+    - Left (4/12 cols): aw-hero tile with urgency-tiered gradient (good=green/0 pending, mid=amber/1-5 pending, low=red/6+ pending). Shows total pending count big, with sub-line breaking down stock-adjustments vs damage-invoices, pending value, and an urgency pill ("All caught up" / "Light queue" / "Backlog").
+    - Right (8/12 cols): 4 aw-stat-tiles in a 2x2 grid — Adjustments Approved (indigo), Damages Approved (red), Total Approvals (green), Pending Value (amber).
+- Added ~135 lines of CSS for Phase 5:
+  * .aw-hero + .aw-hero--good/mid/low — gradient hero tile with radial-glow ::before/::after, glassy icon tile, urgency pill.
+  * .aw-stat-tile + .aw-stat-icon + .aw-stat-val — 4-up secondary tiles matching the .sd-tile pattern from Phase 4 (left-side accent strip, gradient icon, hover lift).
+- No new Chart.js code needed — Approval Workload is pure HTML/CSS (no charts).
+- Updated Phase 4 footer note: "Phases 1, 2, 3, 4 & 5 complete. ... all live, with role-aware visibility."
+- Verified Blade tag balance (after stripping comments): @if 35/35, @php 21/21, @foreach 10/10, @push 2/2, @section 1/1, {{ }} 260/260, JS braces 154/154, JS parens 148/148. Controller PHP braces 143/143. Both new methods present (1 each).
+- Note on initial brace-check false positive: a Blade comment line "The outer @if renders the block if ANY of the three sub-sections is visible" contains the literal text @if, which Python's regex matched. Blade's compiler ignores @if inside {{-- ... --}} comments, so the actual template is balanced. Re-ran the check after stripping comments — confirmed 35/35.
+
+Stage Summary:
+- Phase 5 ships Role-Aware Refinement + Approval Workload. The dashboard now respects the user's role: a salesman doesn't see Stock Discipline or Approval Workload; a warehouse_manager doesn't see Sales, Collections, Returns, or Commission; an accountant doesn't see Sales, Commission, or Stock Discipline; a manager/admin/superadmin sees everything including Approval Workload. Unknown roles get a permissive default (sales + collections + operational + accuracy).
+- The G4-G9 attribution migrations were DEFERRED — they're low-priority schema gaps and the dashboard works without them by falling back to created_by. Documented in the plan doc so future readers know what was shipped vs deferred.
+- Approval Workload uses EXISTING approved_by / submitted_by columns on stock_adjustments and damage_invoices (no migrations needed). The "pending my approval" count is branch-wide (RLS auto-scopes); the "approved by me" count is user-attributed via approved_by.
+- Visual variety: urgency-tiered gradient hero tile (green/amber/red by pending count) + 4-up secondary stat tiles. The hero's color tier gives managers an instant visual cue — green = relax, amber = check soon, red = clear backlog now.
+- Super-admin switching is preserved: changing the employee <select> reloads roleSections + approvalWorkload for the new target. A super-admin viewing a salesman sees the salesman's sections; viewing a manager sees the manager's sections including Approval Workload.
+- The hero header now shows a "X sections visible" pill so the user knows at a glance which sections they're getting and why some are hidden (title= tooltip lists the visible section keys).
+- Next: Phase 6 (Polish, Performance & Post-Launch Gaps) — caching, AJAX refresh, performance audit. The dashboard is now functionally complete; Phase 6 is productionization.

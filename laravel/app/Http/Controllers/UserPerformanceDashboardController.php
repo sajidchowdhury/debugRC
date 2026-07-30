@@ -199,6 +199,26 @@ class UserPerformanceDashboardController extends Controller
         $accuracyKpis      = $this->getAccuracyKPIs($userId, $range);
 
         // ============================================================
+        // 9. Phase 5 — Role-aware section visibility + Approval Workload
+        // ============================================================
+        // Resolve which top-level dashboard sections to render for this
+        // employee's role. The map is intentionally permissive — when in
+        // doubt, show the section — so unknown / future roles still see a
+        // useful dashboard. The Approval Workload section is exclusive to
+        // manager / admin / superadmin (the only roles that approve stock
+        // adjustments and damage invoices per the maker-checker workflow).
+        $roleSections = $this->resolveRoleSections($targetEmployee->role ?? 'other');
+        $approvalWorkload = $roleSections['approval_workload']
+            ? $this->getApprovalWorkload($userId, $targetEmployee->id, $range)
+            : [
+                'adjustments_pending_my_approval' => 0,
+                'adjustments_approved_by_me'      => 0,
+                'damages_pending_my_approval'     => 0,
+                'damages_approved_by_me'          => 0,
+                'total_pending_value'             => 0.0,
+            ];
+
+        // ============================================================
         // 8. Render the view
         // ============================================================
         return view('dashboard.performance', [
@@ -238,6 +258,10 @@ class UserPerformanceDashboardController extends Controller
             'commissionSummary' => $commissionSummary,
             'stockDiscipline'   => $stockDiscipline,
             'accuracyKpis'      => $accuracyKpis,
+
+            // Phase 5 data
+            'roleSections'      => $roleSections,
+            'approvalWorkload'  => $approvalWorkload,
         ]);
     }
 
@@ -1783,6 +1807,200 @@ class UserPerformanceDashboardController extends Controller
             ];
         } catch (\Throwable $e) {
             Log::warning('Phase 4 getAccuracyKPIs failed: ' . $e->getMessage());
+            return $zero;
+        }
+    }
+
+    // ============================================================
+    // PHASE 5 — ROLE-AWARE REFINEMENT & APPROVAL WORKLOAD
+    // ============================================================
+    //
+    // Phase 5 makes the dashboard role-aware: each role sees only the
+    // sections that are meaningful for their job. The plan calls for
+    // migrations G4-G9 (godown_prepared_by, dispatched_by, received_by,
+    // etc.) but those are LOW-PRIORITY schema gaps — the dashboard works
+    // without them by falling back to created_by. They're deferred to a
+    // future phase unless business explicitly requests them.
+    //
+    // What Phase 5 ships:
+    //   1. resolveRoleSections() — map role → {section: bool} visibility
+    //   2. getApprovalWorkload() — manager/admin/superadmin-only KPIs
+    //      using the EXISTING approved_by / confirmed_by columns on
+    //      stock_adjustments and damage_invoices.
+
+    /**
+     * Resolve which dashboard sections to render for the given role.
+     *
+     * Map per the Phase 5 plan:
+     *   salesman           → sales + collections + returns + commission + operational + accuracy
+     *   warehouse_manager  → stock_discipline + operational + accuracy
+     *   dispatcher         → stock_discipline + operational + accuracy
+     *   accountant         → collections + accuracy (+ operational for activity)
+     *   manager            → all + approval_workload
+     *   admin              → all + approval_workload
+     *   superadmin         → all + approval_workload
+     *   hr / other         → sales + collections + operational (their own work)
+     *
+     * Intentionally permissive: unknown roles get a sensible default
+     * (sales + collections + operational + accuracy) rather than an
+     * empty dashboard.
+     *
+     * @return array<string,bool>  Map of section_key => visible
+     */
+    private function resolveRoleSections(string $role): array
+    {
+        // Default: everything off, then turn on per role below.
+        $sections = [
+            'sales'              => false,
+            'collections'        => false,
+            'returns'            => false,
+            'commission'         => false,
+            'operational'        => false,
+            'stock_discipline'   => false,
+            'accuracy'           => false,
+            'approval_workload'  => false,
+        ];
+
+        switch ($role) {
+            case 'salesman':
+                $sections['sales']            = true;
+                $sections['collections']      = true;
+                $sections['returns']          = true;
+                $sections['commission']       = true;
+                $sections['operational']      = true;
+                $sections['accuracy']         = true;
+                break;
+
+            case 'warehouse_manager':
+            case 'dispatcher':
+                $sections['operational']      = true;
+                $sections['stock_discipline'] = true;
+                $sections['accuracy']         = true;
+                break;
+
+            case 'accountant':
+                $sections['collections']      = true;
+                $sections['returns']          = true;
+                $sections['operational']      = true;
+                $sections['accuracy']         = true;
+                break;
+
+            case 'manager':
+            case 'admin':
+            case 'superadmin':
+                // All sections + approval workload.
+                foreach ($sections as $k => $_) {
+                    $sections[$k] = true;
+                }
+                break;
+
+            case 'hr':
+            case 'other':
+            default:
+                // Permissive default for unknown roles.
+                $sections['sales']            = true;
+                $sections['collections']      = true;
+                $sections['operational']      = true;
+                $sections['accuracy']         = true;
+                break;
+        }
+
+        return $sections;
+    }
+
+    /**
+     * Approval workload for manager / admin / superadmin roles.
+     *
+     * Pulls counts of:
+     *   - Stock adjustments submitted but not yet approved (status='submitted')
+     *     → "pending my approval" — these are branch-wide, not user-attributed.
+     *   - Stock adjustments this user has approved in the period
+     *     (approved_by = $userId, approved_at within range).
+     *   - Damage invoices submitted but not yet approved (status='submitted')
+     *     → "pending my approval" — same logic.
+     *   - Damage invoices this user has approved in the period.
+     *   - Total pending value = SUM(total_amount) of pending stock adjustments.
+     *
+     * Uses the EXISTING approved_by / submitted_by columns on
+     * stock_adjustments (migration 2025_07_29_000001) and damage_invoices
+     * (migration 2026_01_05_000001). No new migrations needed.
+     *
+     * Note on attribution: "pending my approval" is inherently branch-wide
+     * (any manager in the branch can approve), so we don't filter by user.
+     * The "approved by me" count IS user-attributed via approved_by.
+     *
+     * @return array{
+     *   adjustments_pending_my_approval: int,
+     *   adjustments_approved_by_me: int,
+     *   damages_pending_my_approval: int,
+     *   damages_approved_by_me: int,
+     *   total_pending_value: float
+     * }
+     */
+    private function getApprovalWorkload(int $userId, int $employeeId, array $range): array
+    {
+        $zero = [
+            'adjustments_pending_my_approval' => 0,
+            'adjustments_approved_by_me'      => 0,
+            'damages_pending_my_approval'     => 0,
+            'damages_approved_by_me'          => 0,
+            'total_pending_value'             => 0.0,
+        ];
+        if ($userId <= 0) {
+            return $zero;
+        }
+        try {
+            // ── 1. Stock adjustments pending approval (branch-wide)
+            //    status='submitted' means submitted-but-not-yet-approved.
+            //    RLS auto-scopes to the user's branch.
+            $saPending = DB::table('stock_adjustments')
+                ->where('status', 'submitted')
+                ->where('is_reversed', false)
+                ->whereNull('deleted_at')
+                ->selectRaw("
+                    COUNT(*) AS cnt,
+                    COALESCE(SUM(total_amount), 0) AS total_value
+                ")
+                ->first();
+
+            // ── 2. Stock adjustments this user has approved in the period.
+            //    approved_by references users.id (set in StockAdjustmentService::approve).
+            //    approved_at is a timestamp — we filter by date range for the period.
+            $saApproved = DB::table('stock_adjustments')
+                ->where('approved_by', $userId)
+                ->whereBetween('approved_at', [
+                    $range['start'] . ' 00:00:00',
+                    $range['end'] . ' 23:59:59',
+                ])
+                ->where('is_reversed', false)
+                ->whereNull('deleted_at')
+                ->count();
+
+            // ── 3. Damage invoices pending approval (branch-wide)
+            $dmgPending = DB::table('damage_invoices')
+                ->where('status', 'submitted')
+                ->where('is_reversed', false)
+                ->count();
+
+            // ── 4. Damage invoices this user has approved in the period
+            $dmgApproved = DB::table('damage_invoices')
+                ->where('approved_by', $userId)
+                ->whereBetween('approved_at', [
+                    $range['start'] . ' 00:00:00',
+                    $range['end'] . ' 23:59:59',
+                ])
+                ->where('is_reversed', false)
+                ->count();
+
+            return [
+                'adjustments_pending_my_approval' => (int) ($saPending->cnt ?? 0),
+                'adjustments_approved_by_me'      => (int) $saApproved,
+                'damages_pending_my_approval'     => (int) $dmgPending,
+                'damages_approved_by_me'          => (int) $dmgApproved,
+                'total_pending_value'             => (float) ($saPending->total_value ?? 0),
+            ];
+        } catch (\Throwable $e) {
+            Log::warning('Phase 5 getApprovalWorkload failed: ' . $e->getMessage());
             return $zero;
         }
     }

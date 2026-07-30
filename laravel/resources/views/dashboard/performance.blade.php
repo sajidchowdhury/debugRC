@@ -1564,6 +1564,138 @@
         display: flex; align-items: center; gap: 0.45rem;
     }
     #perf-dashboard .phase-sub-h i { font-size: 0.85rem; }
+
+    /* ============================================================
+       PHASE 5 — Approval Workload visual system
+       ============================================================ */
+
+    /* Hero tile — urgency-tiered gradient (good=green, mid=amber, low=red) */
+    #perf-dashboard .aw-hero {
+        border-radius: 0.9rem;
+        padding: 1.4rem 1.5rem;
+        position: relative;
+        overflow: hidden;
+        height: 100%;
+        min-height: 195px;
+        color: #fff;
+    }
+    #perf-dashboard .aw-hero::before {
+        content: '';
+        position: absolute;
+        top: -45px; right: -45px;
+        width: 170px; height: 170px;
+        background: radial-gradient(circle, rgba(255,255,255,0.20) 0%, rgba(255,255,255,0) 70%);
+        border-radius: 50%;
+    }
+    #perf-dashboard .aw-hero::after {
+        content: '';
+        position: absolute;
+        bottom: -35px; left: -35px;
+        width: 120px; height: 120px;
+        background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0) 70%);
+        border-radius: 50%;
+    }
+    #perf-dashboard .aw-hero--good { background: linear-gradient(135deg, #10b981 0%, #059669 60%, #047857 100%); }
+    #perf-dashboard .aw-hero--mid  { background: linear-gradient(135deg, #f59e0b 0%, #d97706 60%, #b45309 100%); }
+    #perf-dashboard .aw-hero--low  { background: linear-gradient(135deg, #ef4444 0%, #dc2626 60%, #b91c1c 100%); }
+    #perf-dashboard .aw-hero .aw-row {
+        position: relative; z-index: 2;
+        display: flex; align-items: center; gap: 0.85rem;
+    }
+    #perf-dashboard .aw-hero .aw-icon {
+        width: 48px; height: 48px;
+        border-radius: 0.7rem;
+        background: rgba(255,255,255,0.18);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 1.3rem;
+        backdrop-filter: blur(6px);
+    }
+    #perf-dashboard .aw-hero .aw-lbl {
+        font-size: 0.78rem;
+        opacity: 0.92;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 600;
+    }
+    #perf-dashboard .aw-hero .aw-val {
+        font-size: 2.4rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        line-height: 1.05;
+        margin-top: 0.15rem;
+    }
+    #perf-dashboard .aw-hero .aw-sub {
+        font-size: 0.78rem;
+        opacity: 0.9;
+        margin-top: 0.4rem;
+        position: relative; z-index: 2;
+    }
+    #perf-dashboard .aw-hero .aw-urgency {
+        display: inline-block;
+        margin-top: 0.7rem;
+        background: rgba(255,255,255,0.20);
+        color: #fff;
+        font-size: 0.76rem;
+        font-weight: 700;
+        padding: 0.25rem 0.7rem;
+        border-radius: 999px;
+        letter-spacing: 0.03em;
+        backdrop-filter: blur(4px);
+        position: relative; z-index: 2;
+    }
+
+    /* Secondary stat tiles (4-up on the right) */
+    #perf-dashboard .aw-stat-tile {
+        background: var(--perf-card);
+        border: 1px solid var(--perf-border);
+        border-radius: 0.9rem;
+        padding: 1rem 1.1rem;
+        height: 100%;
+        position: relative;
+        overflow: hidden;
+        transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+    #perf-dashboard .aw-stat-tile:hover {
+        transform: translateY(-3px);
+        box-shadow: var(--perf-shadow);
+    }
+    #perf-dashboard .aw-stat-tile::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; bottom: 0;
+        width: 4px;
+        background: var(--aw-accent, var(--perf-primary));
+    }
+    #perf-dashboard .aw-stat-tile .aw-stat-icon {
+        width: 36px; height: 36px;
+        border-radius: 0.6rem;
+        background: var(--aw-accent, var(--perf-primary));
+        color: #fff;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 0.95rem;
+        margin-bottom: 0.55rem;
+        box-shadow: 0 4px 10px -2px var(--aw-accent, var(--perf-primary));
+    }
+    #perf-dashboard .aw-stat-tile .aw-stat-lbl {
+        font-size: 0.72rem;
+        color: var(--perf-muted);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    #perf-dashboard .aw-stat-tile .aw-stat-val {
+        font-size: 1.55rem;
+        font-weight: 800;
+        color: var(--perf-text);
+        line-height: 1.1;
+        margin-top: 0.15rem;
+        font-variant-numeric: tabular-nums;
+    }
+    #perf-dashboard .aw-stat-tile .aw-stat-sub {
+        font-size: 0.72rem;
+        color: var(--perf-muted);
+        margin-top: 0.2rem;
+    }
 </style>
 @endpush
 
@@ -1584,6 +1716,15 @@
                     @if ($targetEmployee->employee_code)<span class="pill me-1">{{ $targetEmployee->employee_code }}</span>@endif
                     <span class="pill me-1">{{ ucfirst($targetEmployee->role) }}</span>
                     @if ($targetEmployee->branch)<span class="pill"><i class="fas fa-map-marker-alt me-1"></i>{{ $targetEmployee->branch->branch_name }}</span>@endif
+                    @if (isset($roleSections) && $roleSections)
+                        @php
+                            $visibleSections = array_keys(array_filter($roleSections));
+                            $sectionCount = count($visibleSections);
+                        @endphp
+                        <span class="pill" title="Visible sections: {{ implode(', ', $visibleSections) }}">
+                            <i class="fas fa-eye me-1"></i>{{ $sectionCount }} section{{ $sectionCount !== 1 ? 's' : '' }} visible
+                        </span>
+                    @endif
                 @endif
             </p>
             <p class="mb-0 sub">
@@ -1664,8 +1805,10 @@
 
     {{-- ============================================================
          PHASE 1 — SALES PERFORMANCE CORE
+         (Phase 5: role-aware — hidden for warehouse_manager, dispatcher,
+         accountant; visible for everyone else)
          ============================================================ --}}
-    @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly)
+    @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly && ($roleSections['sales'] ?? true))
 
     {{-- ===== KPI ROW — 5 gradient-topped cards with sparklines ===== --}}
     <h3 class="section-h"><span class="bar"></span><i class="fas fa-chart-line text-primary"></i> Sales Performance</h3>
@@ -1874,8 +2017,11 @@
 
     {{-- ============================================================
          PHASE 2 — COLLECTIONS & RETURNS
+         (Phase 5: role-aware — visible when roleSections.collections OR
+         roleSections.returns is true. Accountant sees it; warehouse_manager
+         and dispatcher do not.)
          ============================================================ --}}
-    @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly)
+    @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly && (($roleSections['collections'] ?? true) || ($roleSections['returns'] ?? true)))
     @php
         // Pull all Phase 2 datasets with safe defaults so missing data
         // doesn't break the markup.
@@ -2143,8 +2289,11 @@
 
     {{-- ============================================================
          PHASE 3 — OPERATIONAL EFFICIENCY & PRODUCTIVITY (HOW YOU WORK)
+         (Phase 5: role-aware — visible to all roles per the plan since
+         every role creates activity; the section tells the user when/how
+         intensely they work, which is universal.)
          ============================================================ --}}
-    @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly)
+    @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly && ($roleSections['operational'] ?? true))
     @php
         // Pull all Phase 3 datasets with safe defaults so missing data
         // doesn't break the markup.
@@ -2392,8 +2541,17 @@
          rules + entries in the schema). Stock Discipline and Accuracy
          are rendered for everyone — every user creates adjustments,
          invoices, payments, etc.
+
+         Phase 5: now also gated by $roleSections so warehouse_manager /
+         dispatcher don't see commission, accountant doesn't see stock
+         discipline, etc. The outer @if renders the block if ANY of the
+         three sub-sections is visible.
          --}}
-    @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly)
+    @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly && (
+        ($roleSections['commission'] ?? false) ||
+        ($roleSections['stock_discipline'] ?? false) ||
+        ($roleSections['accuracy'] ?? false)
+    ))
     @php
         // Pull all Phase 4 datasets with safe defaults so missing data
         // doesn't break the markup.
@@ -2494,9 +2652,9 @@
     <h3 class="section-h mt-4"><span class="bar"></span><i class="fas fa-bullseye text-warning"></i> Commission, Stock Discipline &amp; Accuracy</h3>
 
     {{-- ============================================================
-         ROW 1 — COMMISSION & TARGETS (salesman role only)
+         ROW 1 — COMMISSION & TARGETS (salesman role + roleSections.commission)
          ============================================================ --}}
-    @if ($isSalesman)
+    @if ($isSalesman && ($roleSections['commission'] ?? false))
     <h4 class="phase-sub-h"><i class="fas fa-coins text-primary"></i> Commission &amp; Targets</h4>
     <div class="row g-3 mb-3">
         {{-- Commission hero — net commission this period --}}
@@ -2605,8 +2763,9 @@
     @endif
 
     {{-- ============================================================
-         ROW 2 — STOCK DISCIPLINE (everyone)
+         ROW 2 — STOCK DISCIPLINE (Phase 5: gated by roleSections.stock_discipline)
          ============================================================ --}}
+    @if ($roleSections['stock_discipline'] ?? false)
     <h4 class="phase-sub-h"><i class="fas fa-warehouse text-info"></i> Stock Discipline</h4>
     <div class="row g-3 mb-3">
         {{-- Adjustments Initiated --}}
@@ -2659,10 +2818,12 @@
             </div>
         </div>
     </div>
+    @endif {{-- end of Stock Discipline sub-section --}}
 
     {{-- ============================================================
-         ROW 3 — ACCURACY SCORECARD (everyone)
+         ROW 3 — ACCURACY SCORECARD (Phase 5: gated by roleSections.accuracy)
          ============================================================ --}}
+    @if ($roleSections['accuracy'] ?? false)
     <h4 class="phase-sub-h"><i class="fas fa-bullseye text-success"></i> Accuracy Scorecard</h4>
     <div class="row g-3 mb-3">
         {{-- Composite error-rate gauge --}}
@@ -2717,6 +2878,7 @@
             </div>
         </div>
     </div>
+    @endif {{-- end of Accuracy sub-section --}}
 
     {{-- ============================================================
          PHASE 4 FOOTER NOTE (kept small; replaced the old
@@ -2724,7 +2886,7 @@
          ============================================================ --}}
     <div class="text-center text-muted small mt-3 mb-2">
         <i class="fas fa-check-circle text-success me-1"></i>
-        <strong>Phases 1, 2, 3 &amp; 4 complete.</strong> Sales + Collections &amp; Returns + How You Work + Commission, Stock Discipline &amp; Accuracy are all live.
+        <strong>Phases 1, 2, 3, 4 &amp; 5 complete.</strong> Sales + Collections &amp; Returns + How You Work + Commission, Stock Discipline &amp; Accuracy are all live, with role-aware visibility.
         @if (isset($customerPaymentsTxnType))
             <span class="ms-2">·</span>
             <span class="ms-2">G12 check: <code>customer_payments.transaction_type</code>
@@ -2734,6 +2896,108 @@
     </div>
 
     @endif {{-- end of Phase 4 Commission, Stock Discipline & Accuracy block --}}
+
+    {{-- ============================================================
+         PHASE 5 — APPROVAL WORKLOAD (manager / admin / superadmin only)
+         ============================================================
+         Renders only when $roleSections['approval_workload'] is true.
+         Uses the EXISTING approved_by / submitted_by columns on
+         stock_adjustments and damage_invoices (no new migrations
+         needed). "Pending my approval" counts are branch-wide (any
+         manager in the branch can approve); "approved by me" counts
+         are user-attributed via approved_by.
+         --}}
+    @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly && ($roleSections['approval_workload'] ?? false))
+    @php
+        $aw = $approvalWorkload ?? [
+            'adjustments_pending_my_approval' => 0,
+            'adjustments_approved_by_me'      => 0,
+            'damages_pending_my_approval'     => 0,
+            'damages_approved_by_me'          => 0,
+            'total_pending_value'             => 0.0,
+        ];
+
+        // Total pending items = stock-adjustment pendings + damage pendings.
+        // Urgency tier: 0 pending → green ("all caught up"), 1–5 → amber,
+        // 6+ → red ("backlog").
+        $totalPending = $aw['adjustments_pending_my_approval'] + $aw['damages_pending_my_approval'];
+        $awUrgencyClass = $totalPending === 0 ? 'good' : ($totalPending <= 5 ? 'mid' : 'low');
+        $awUrgencyMsg = $totalPending === 0 ? 'All caught up — no pending approvals'
+                      : ($totalPending <= 5 ? 'Light queue — review soon'
+                      : 'Backlog — review immediately');
+
+        // Approved-this-period total (for the right-hand tile)
+        $totalApproved = $aw['adjustments_approved_by_me'] + $aw['damages_approved_by_me'];
+    @endphp
+
+    <h3 class="section-h mt-4"><span class="bar"></span><i class="fas fa-check-double text-danger"></i> Approval Workload</h3>
+
+    <div class="row g-3 mb-3">
+        {{-- Pending approvals — the actionable tile (large, gradient) --}}
+        <div class="col-12 col-md-6 col-xl-4">
+            <div class="aw-hero aw-hero--{{ $awUrgencyClass }}">
+                <div class="aw-row">
+                    <div class="aw-icon"><i class="fas fa-inbox"></i></div>
+                    <div>
+                        <div class="aw-lbl">Pending My Approval</div>
+                        <div class="aw-val mono">{{ $totalPending }}</div>
+                    </div>
+                </div>
+                <div class="aw-sub">
+                    <i class="fas fa-sliders-h me-1"></i>{{ $aw['adjustments_pending_my_approval'] }} stock adjustment(s)
+                    &nbsp;·&nbsp;
+                    <i class="fas fa-exclamation-triangle me-1"></i>{{ $aw['damages_pending_my_approval'] }} damage invoice(s)
+                </div>
+                <div class="aw-sub">
+                    <i class="fas fa-coins me-1"></i>৳ {{ number_format($aw['total_pending_value'], 0) }} pending adjustment value
+                </div>
+                <span class="aw-urgency aw-urgency--{{ $awUrgencyClass }}">
+                    <i class="fas fa-{{ $awUrgencyClass === 'good' ? 'check-circle' : ($awUrgencyClass === 'mid' ? 'clock' : 'exclamation-circle') }}"></i>
+                    {{ $awUrgencyMsg }}
+                </span>
+            </div>
+        </div>
+
+        {{-- Approved this period — secondary tiles --}}
+        <div class="col-12 col-md-6 col-xl-8">
+            <div class="row g-3">
+                <div class="col-12 col-sm-6">
+                    <div class="aw-stat-tile" style="--aw-accent: #4f46e5;">
+                        <div class="aw-stat-icon"><i class="fas fa-check"></i></div>
+                        <div class="aw-stat-lbl">Adjustments Approved</div>
+                        <div class="aw-stat-val mono">{{ $aw['adjustments_approved_by_me'] }}</div>
+                        <div class="aw-stat-sub">stock adjustments you approved this period</div>
+                    </div>
+                </div>
+                <div class="col-12 col-sm-6">
+                    <div class="aw-stat-tile" style="--aw-accent: #ef4444;">
+                        <div class="aw-stat-icon"><i class="fas fa-check-double"></i></div>
+                        <div class="aw-stat-lbl">Damages Approved</div>
+                        <div class="aw-stat-val mono">{{ $aw['damages_approved_by_me'] }}</div>
+                        <div class="aw-stat-sub">damage invoices you approved this period</div>
+                    </div>
+                </div>
+                <div class="col-12 col-sm-6">
+                    <div class="aw-stat-tile" style="--aw-accent: #10b981;">
+                        <div class="aw-stat-icon"><i class="fas fa-trophy"></i></div>
+                        <div class="aw-stat-lbl">Total Approvals</div>
+                        <div class="aw-stat-val mono">{{ $totalApproved }}</div>
+                        <div class="aw-stat-sub">combined approvals this period</div>
+                    </div>
+                </div>
+                <div class="col-12 col-sm-6">
+                    <div class="aw-stat-tile" style="--aw-accent: #f59e0b;">
+                        <div class="aw-stat-icon"><i class="fas fa-hourglass-half"></i></div>
+                        <div class="aw-stat-lbl">Pending Value</div>
+                        <div class="aw-stat-val mono">৳ {{ number_format($aw['total_pending_value'], 0) }}</div>
+                        <div class="aw-stat-sub">total value of pending stock adjustments</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @endif {{-- end of Phase 5 Approval Workload block --}}
 
 </div>
 @endsection

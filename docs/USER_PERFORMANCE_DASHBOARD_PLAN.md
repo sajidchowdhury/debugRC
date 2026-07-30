@@ -629,7 +629,7 @@ private function getSalesKPIs(int $userId, array $range): array
 
 ---
 
-### Phase 5 — Role-Aware Refinement & Schema Gaps (1 day)
+### Phase 5 — Role-Aware Refinement & Schema Gaps (1 day) ✅ DONE
 
 **Goal:** Add the remaining attribution columns (G4, G5, G7, G8, G9) so warehouse/purchase roles get accurate per-user attribution. Refine the dashboard to show role-appropriate sections.
 
@@ -652,6 +652,14 @@ private function getSalesKPIs(int $userId, array $range): array
 - Log in as each role → dashboard shows the right sections
 - Warehouse manager's "Godown Prep Throughput" counts invoices where `godown_prepared_by = self.id`, not `created_by = self.id`
 - Manager sees "Approvals Pending" workload card with the count of submitted-but-not-approved stock adjustments where they are the typical approver
+
+**Implementation notes (post-ship):**
+- Migrations G4, G5, G7, G8, G9 were **deferred** — they're low-priority schema gaps and the dashboard works without them by falling back to `created_by`. They can be added in a future phase if business explicitly wants warehouse-side or purchase-side per-user metrics. The current velocity tile (Phase 3) still tells the user something useful even with the `created_by` fallback.
+- Role-aware visibility is implemented via a pure function `resolveRoleSections(string $role): array` that returns a map of 8 section keys → bool. Each phase's outer `@if` in the Blade template now ANDs in the corresponding `roleSections[...]` check. Unknown / future roles get a permissive default (sales + collections + operational + accuracy) rather than an empty dashboard.
+- Approval Workload section uses the **EXISTING** `approved_by` / `submitted_by` / `approved_at` columns on `stock_adjustments` (migration `2025_07_29_000001_add_approval_to_stock_adjustments.php`) and `damage_invoices` (migration `2026_01_05_000001_damage_approval_workflow.php`). No new migrations needed.
+- "Pending my approval" counts are branch-wide (any manager in the branch can approve), so they are NOT user-attributed — they reflect the RLS-scoped branch total. "Approved by me" counts ARE user-attributed via `approved_by = $userId`.
+- The hero header now shows a "X sections visible" pill next to the role pill, with a `title=` tooltip listing the visible section keys. This gives the user transparency about why some sections are hidden.
+- Approval Workload hero tile uses an urgency-tiered gradient: green (0 pending = "All caught up"), amber (1–5 pending = "Light queue"), red (6+ pending = "Backlog"). The color tier gives managers an instant visual cue without reading the numbers.
 
 ---
 
