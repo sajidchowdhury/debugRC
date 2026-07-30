@@ -49,8 +49,10 @@ class CustomersDiagnose extends Command
         $isAdmin  = $this->option('admin') ? 'true' : 'false';
 
         try {
-            DB::statement("SET app.branch_id = ?", [$branchId]);
-            DB::statement("SET app.is_admin = ?", [$isAdmin]);
+            // PostgreSQL SET does NOT accept PDO bound parameters (?/$1).
+            // See SetAppBranchId middleware for the same constraint.
+            DB::unprepared("SET app.branch_id = {$branchId}");
+            DB::unprepared("SET app.is_admin = {$isAdmin}");
             $this->line("  ✓ RLS context set: app.branch_id={$branchId}, app.is_admin={$isAdmin}");
         } catch (\Throwable $e) {
             $this->error("  ✗ Failed to set RLS context: " . $e->getMessage());

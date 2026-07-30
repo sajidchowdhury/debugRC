@@ -58,8 +58,12 @@ class SetApiBranchContext
             $isAdmin = $user?->isAdmin() ? 'true' : 'false';
 
             try {
-                DB::statement("SET app.branch_id = ?", [$branchId > 0 ? $branchId : 0]);
-                DB::statement("SET app.is_admin = ?", [$isAdmin]);
+                // PostgreSQL SET does NOT accept PDO bound parameters (?/$1).
+                // Values are already safely cast — inline them and use unprepared().
+                $safeBranchId = (int) ($branchId > 0 ? $branchId : 0);
+                $safeIsAdmin  = $isAdmin === 'true' ? 'true' : 'false';
+                DB::unprepared("SET app.branch_id = {$safeBranchId}");
+                DB::unprepared("SET app.is_admin = {$safeIsAdmin}");
             } catch (\Throwable $e) {
                 // GUC may not exist yet (migration not run) — silently skip.
                 // RLS policies use current_setting(..., true) which returns

@@ -26,8 +26,9 @@ use Symfony\Component\HttpFoundation\Response;
  * is returned to the pool. No explicit RESET is needed.
  *
  * Console commands: This middleware does NOT run for artisan commands.
- * For CLI contexts, use `DB::statement("SET app.branch_id = ?", [$branchId])`
+ * For CLI contexts, use `DB::unprepared("SET app.branch_id = " . (int)$branchId)`
  * manually before running branch-scoped queries, or run unscoped (admin mode).
+ * (PostgreSQL SET does NOT accept PDO bound parameters — never use ? placeholders.)
  *
  * Defense-in-depth layers:
  *   Layer 1 (Query):  BranchScope Eloquent global scope — filters reads
@@ -51,10 +52,16 @@ class SetAppBranchId
                 // Using SET LOCAL would scope to transaction only; SET scopes
                 // to the session (connection), which persists for all queries
                 // in this request but resets when connection is recycled.
-                DB::statement("SET app.branch_id = ?", [$branchId > 0 ? $branchId : 0]);
-
-                // Set admin flag for RLS bypass policies.
-                DB::statement("SET app.is_admin = ?", [$isAdmin]);
+                //
+                // NOTE: PostgreSQL SET does NOT accept bound parameters (?/$1).
+                // PDO::prepare() would fail with: "syntax error at or near \"$1\"".
+                // The values are already safely cast (int / known 'true'|'false'
+                // string), so inlining is SQL-injection-safe. Use DB::unprepared()
+                // to send the statement as-is without PDO binding.
+                $safeBranchId = (int) ($branchId > 0 ? $branchId : 0);
+                $safeIsAdmin  = $isAdmin === 'true' ? 'true' : 'false';
+                DB::unprepared("SET app.branch_id = {$safeBranchId}");
+                DB::unprepared("SET app.is_admin = {$safeIsAdmin}");
             } catch (\Throwable $e) {
                 // If GUC doesn't exist yet (migration not run), silently skip.
                 // This allows code deployment before migration.

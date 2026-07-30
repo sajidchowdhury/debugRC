@@ -102,8 +102,10 @@ class RlsCrossBranchTest extends TestCase
      */
     private function setGuc(int $branchId, bool $isAdmin): void
     {
-        DB::statement("SET app.branch_id = ?", [$branchId]);
-        DB::statement("SET app.is_admin = ?", [$isAdmin ? 'true' : 'false']);
+        // PostgreSQL SET does NOT accept PDO bound parameters — inline the values.
+        $safeIsAdmin = $isAdmin ? 'true' : 'false';
+        DB::unprepared("SET app.branch_id = {$branchId}");
+        DB::unprepared("SET app.is_admin = {$safeIsAdmin}");
     }
 
     // ========================================================================
