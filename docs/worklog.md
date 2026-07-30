@@ -1299,3 +1299,25 @@ Stage Summary:
 - Telemetry: timed() helper wraps every cached metric call, logs >200ms to storage/logs/perf.log via Log::build() on-demand channel (no config/logging.php change). Try/finally + inner try/catch so telemetry never breaks the dashboard.
 - Visual polish (per the "make it visually exciting" requirement): skeleton overlay with conic-gradient spinner matching the hero's indigo→violet palette, pulse animation on active period pill during refresh, fade-in animation on swapped content, "Live · Cached" badge in hero header with bolt icon.
 - All 6 phases of the User Performance Dashboard plan are now complete. The dashboard delivers the end-state vision from §5 of the plan: a single page at /dashboard that answers "How am I doing?" — sales, collections, returns, customers, work pattern, commission, stock discipline, accuracy, approval workload — every metric per-user, role-aware, with super-admin employee switching.
+
+---
+Task ID: perf-fix-broken-render
+Agent: Main Agent
+Task: User reported "all style and data broken" — JS code from the AJAX refresh IIFE (showSkeleton, hideSkeleton, swapDashboard functions) visible as plain text on the dashboard page, indicating the <script> tag was being closed prematurely and the rest of the JS was rendering as HTML. Fix the broken render and harden the dashboard against future breakage.
+
+Work Log:
+- Read the full performance.blade.php (3917 lines) and traced the @push('scripts') block structure: <script src="chart.umd.min.js"></script> + <script>window.initPerfDashboard = function() {...}; (IIFE with AJAX refresh)</script>. Verified @if/@endif, @push/@endpush, @php/@endphp, <script>/<\/script>, <style>/<\/style> are all balanced (37/37, 2/2, 21/21, 2/2, 1/1).
+- Searched for any premature </script> substring in the script block. Found only 2 legitimate </script> patterns (the Chart.js tag close at L3136 and the main script close at L3915). No premature closing.
+- Identified the root cause: Laravel 12's @json directive compiles to Illuminate\Support\Js::from($data)->toHtml() which calls json_encode($data, JSON_THROW_ON_ERROR) — NO JSON_HEX_TAG flag. This means if any @json data value contains the literal string "</script>", it would be output as-is into the <script> block, causing the browser to close the script tag prematurely and render the rest of the JS as visible text. While the current data (sales trend, KPIs, payment mode mix, etc.) doesn't contain "</script>" today, this is a latent XSS/breakage vector that could trigger at any time if a customer name, product name, or commission period label ever contains that substring.
+- Replaced all 15 @json(...) calls with {!! json_encode(..., JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!} — the explicit json_encode with all 4 HEX flags guarantees that <, >, ', ", & are all escaped to their \uXXXX forms, so no data value can ever break out of the <script> tag. This matches the behavior of older Laravel versions (pre-9) where @json used json_encode($data, 15) by default.
+- Hardened the swapDashboard() function (the AJAX fragment refresh core):
+  * Replaced DOMParser with a detached <div> + innerHTML approach. DOMParser can move <style> tags to <head> and has edge cases with <script> handling in some browsers. A detached div keeps everything in document order and is more predictable.
+  * Wrapped the entire function body in try/catch. Any failure (parse error, missing element, script execution error) now falls back to window.location.reload() instead of leaving the page half-swapped with broken JS.
+  * Used Array.from() on the script NodeList before forEach. A live NodeList can skip elements if the list changes during iteration (e.g., if a script modifies the DOM). Array.from() snapshots the list first.
+  * Added early-return + reload guards: if #perf-dashboard is missing, or if the fragment doesn't contain #perf-dashboard, reload the full page instead of silently failing.
+- Verified the fix by simulating Blade compilation: all 15 {!! json_encode(...) !!} calls are correctly replaced, no remaining raw @json directives, only 2 </script> patterns in the compiled output (the legitimate closing tags). CSS block braces balanced (302/302). No Blade directives inside the CSS block (only CSS at-rules like @media, @keyframes).
+
+Stage Summary:
+- Fixed the broken dashboard render by hardening all 15 @json calls to use explicit JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP flags. This prevents any data value (current or future) from breaking out of the <script> tag and rendering JS code as visible text.
+- Hardened swapDashboard() with try/catch + full-reload fallback so any AJAX refresh failure degrades gracefully to a full page reload instead of leaving the page in a broken half-swapped state.
+- The dashboard should now render correctly: CSS loads in <head> via @stack('css'), the dashboard markup renders in @section('content'), and the chart-init + AJAX refresh JS executes inside a properly-closed <script> tag via @stack('scripts').

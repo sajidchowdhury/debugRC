@@ -3177,7 +3177,7 @@ window.initPerfDashboard = function () {
     // ============================================================
     // 1. Sales Trend — dual-axis line+bar chart
     // ============================================================
-    const trendData = @json($salesTrend ?? []);
+    const trendData = {!! json_encode($salesTrend ?? [], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!};
     const trendEl = document.getElementById('salesTrendChart');
     if (trendEl && trendData.length) {
         const labels = trendData.map(d => {
@@ -3322,7 +3322,7 @@ window.initPerfDashboard = function () {
     // is rendered as HTML overlay (.gauge-readout) — keeps the canvas simple.
     const gaugeEl = document.getElementById('collectionGauge');
     if (gaugeEl && typeof Chart !== 'undefined') {
-        const rate = Math.max(0, Math.min(100, Number(@json($ck['collection_rate'] ?? 0))));
+        const rate = Math.max(0, Math.min(100, Number({!! json_encode($ck['collection_rate'] ?? 0, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!})));
         // Color shifts with severity: red → amber → green
         let gaugeColor = '#ef4444';
         if (rate >= 80) gaugeColor = '#10b981';
@@ -3353,10 +3353,10 @@ window.initPerfDashboard = function () {
     // 4. Phase 2 — Payment Mode Mix donut
     // ============================================================
     const pmixEl = document.getElementById('pmixDonut');
-    const pmixData = @json($pmix ?? []);
+    const pmixData = {!! json_encode($pmix ?? [], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!};
     // pmixPalette is defined in the PHP block above; no inline fallback needed
     // (Blade's json directive regex doesn't reliably handle multi-line arrays).
-    const pmixPalette = @json($pmixPalette ?? []);
+    const pmixPalette = {!! json_encode($pmixPalette ?? [], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!};
     if (pmixEl && pmixData.length && typeof Chart !== 'undefined') {
         new Chart(pmixEl.getContext('2d'), {
             type: 'doughnut',
@@ -3399,8 +3399,8 @@ window.initPerfDashboard = function () {
     // 5. Phase 3 — Work Pattern histogram (24-bin hour-of-day)
     // ============================================================
     const wpEl = document.getElementById('workPatternChart');
-    const wpData = @json($wp ?? []);
-    const wpPeakHour = @json($wpPeakHour ?? null);
+    const wpData = {!! json_encode($wp ?? [], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!};
+    const wpPeakHour = {!! json_encode($wpPeakHour ?? null, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!};
     if (wpEl && typeof Chart !== 'undefined') {
         const labels = wpData.map(d => {
             // "09:00"
@@ -3496,9 +3496,9 @@ window.initPerfDashboard = function () {
     // ============================================================
     const neEl = document.getElementById('notifRing');
     if (neEl && typeof Chart !== 'undefined') {
-        const rate = Math.max(0, Math.min(100, Number(@json($ne['read_rate'] ?? 0))));
-        const neColor = @json($neColor ?? '#94a3b8');
-        const total = Number(@json($ne['total'] ?? 0));
+        const rate = Math.max(0, Math.min(100, Number({!! json_encode($ne['read_rate'] ?? 0, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!})));
+        const neColor = {!! json_encode($neColor ?? '#94a3b8', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!};
+        const total = Number({!! json_encode($ne['total'] ?? 0, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!});
 
         if (total > 0) {
             new Chart(neEl.getContext('2d'), {
@@ -3545,8 +3545,8 @@ window.initPerfDashboard = function () {
     // ============================================================
     const csDonutEl = document.getElementById('commStatusDonut');
     if (csDonutEl && typeof Chart !== 'undefined') {
-        const csData = @json($cmStatusData ?? []);
-        const csTotal = @json($cmStatusTotal ?? 0.0001);
+        const csData = {!! json_encode($cmStatusData ?? [], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!};
+        const csTotal = {!! json_encode($cmStatusTotal ?? 0.0001, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!};
         if (csData.length && csTotal > 0) {
             const nonZero = csData.filter(s => s.value > 0);
             const data = nonZero.length ? nonZero : csData;
@@ -3602,10 +3602,10 @@ window.initPerfDashboard = function () {
     // ============================================================
     const attainEl = document.getElementById('attainGauge');
     if (attainEl && typeof Chart !== 'undefined') {
-        const attainPct = Math.max(0, Math.min(150, Number(@json($cm['attainment_pct'] ?? 0))));
+        const attainPct = Math.max(0, Math.min(150, Number({!! json_encode($cm['attainment_pct'] ?? 0, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!})));
         // For the gauge, we cap the visual at 100% (anything over 100% shows full + .over class)
         const visualPct = Math.min(100, attainPct);
-        const attainColor = @json($attainColor ?? '#ef4444');
+        const attainColor = {!! json_encode($attainColor ?? '#ef4444', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!};
         new Chart(attainEl.getContext('2d'), {
             type: 'doughnut',
             data: {
@@ -3633,10 +3633,10 @@ window.initPerfDashboard = function () {
     // Error rate displayed on a 0–10% scale (anything > 10% pins the needle).
     const accGaugeEl = document.getElementById('accuracyGauge');
     if (accGaugeEl && typeof Chart !== 'undefined') {
-        const errRateVal = Math.max(0, Math.min(10, Number(@json($ax['composite_error_rate'] ?? 0))));
+        const errRateVal = Math.max(0, Math.min(10, Number({!! json_encode($ax['composite_error_rate'] ?? 0, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!})));
         // Scale 0–10% to 0–100% of the gauge arc
         const gaugePct = (errRateVal / 10) * 100;
-        const errColor = @json($errColor ?? '#10b981');
+        const errColor = {!! json_encode($errColor ?? '#10b981', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) !!};
         new Chart(accGaugeEl.getContext('2d'), {
             type: 'doughnut',
             data: {
@@ -3745,70 +3745,79 @@ window.initPerfDashboard = function () {
     }
 
     // Swap #perf-dashboard innerHTML with the new fragment, then re-run
-    // chart init. The fragment HTML may include <style> and <script>
-    // blocks; we extract scripts and re-execute them (browser won't run
-    // <script> tags inserted via innerHTML).
+    // chart init. The fragment HTML contains <div id="perf-dashboard">…</div>
+    // followed by <style> and <script> blocks. We use a detached container
+    // div (not DOMParser) to parse the HTML, extract the new dashboard
+    // innerHTML, swap it in, then re-execute the script tags by creating
+    // fresh <script> elements (browser won't run scripts inserted via
+    // innerHTML). All wrapped in try/catch so any failure falls back to
+    // a full page reload instead of leaving the page half-swapped.
     function swapDashboard(html) {
-        const root = document.getElementById('perf-dashboard');
-        if (!root) return;
+        try {
+            const root = document.getElementById('perf-dashboard');
+            if (!root) { window.location.reload(); return; }
 
-        // Parse the fragment into a detached DOM tree so we can pick out
-        // the new #perf-dashboard child(ren) and any <script> tags.
-        const parser = new DOMParser();
-        const doc = parser.parseFromString('<div>' + html + '</div>', 'text/html');
-        const wrapper = doc.body.firstChild;
+            // Parse the fragment in a detached <div> (NOT DOMParser —
+            // DOMParser can move <style> to <head> and mishandle
+            // <script> in some edge cases). A detached div keeps
+            // everything in document order.
+            const holder = document.createElement('div');
+            holder.innerHTML = html;
 
-        // The fragment layout renders @yield('content') which is the
-        // <div id="perf-dashboard">…</div>. Find it.
-        const newRoot = wrapper.querySelector('#perf-dashboard');
-        if (!newRoot) {
-            // Fallback: full reload. Should never happen.
+            // Find the new #perf-dashboard.
+            const newRoot = holder.querySelector('#perf-dashboard');
+            if (!newRoot) { window.location.reload(); return; }
+
+            // Preserve the skeleton overlay (it lives inside #perf-dashboard)
+            // by detaching it before the swap, then re-attaching after.
+            const oldOverlay = root.querySelector('.perf-skeleton-overlay');
+
+            // Swap the dashboard content.
+            root.innerHTML = newRoot.innerHTML;
+
+            // Re-attach overlay so hideSkeleton() can fade it out smoothly.
+            if (oldOverlay) {
+                root.appendChild(oldOverlay);
+            }
+
+            // Re-execute any <script> tags that came with the fragment.
+            // Browser doesn't run scripts inserted via innerHTML, so we
+            // create new <script> elements with the same content.
+            // We use Array.from() because forEach on a live NodeList
+            // can skip elements if the list changes during iteration.
+            const scripts = Array.from(holder.querySelectorAll('script'));
+            scripts.forEach(function (oldScript) {
+                const newScript = document.createElement('script');
+                // Copy non-src attributes (e.g. type).
+                for (let i = 0; i < oldScript.attributes.length; i++) {
+                    const attr = oldScript.attributes[i];
+                    newScript.setAttribute(attr.name, attr.value);
+                }
+                if (oldScript.src) {
+                    newScript.src = oldScript.src;
+                } else {
+                    newScript.textContent = oldScript.textContent;
+                }
+                document.body.appendChild(newScript);
+            });
+
+            // Now that scripts have re-defined window.initPerfDashboard,
+            // call it to render the fresh charts.
+            if (window.Chart && typeof window.initPerfDashboard === 'function') {
+                window.initPerfDashboard();
+            }
+
+            // Trigger the fade-in animation on the freshly-swapped content.
+            root.classList.add('perf-fresh');
+            setTimeout(function () {
+                root.classList.remove('perf-fresh');
+            }, 450);
+        } catch (err) {
+            // Any failure → full reload. Better to show a working page
+            // than a half-swapped broken one.
+            console.error('[perf] swapDashboard failed, reloading:', err);
             window.location.reload();
-            return;
         }
-
-        // Preserve the skeleton overlay (it lives inside #perf-dashboard)
-        // by detaching it before the swap, then re-attaching after.
-        const oldOverlay = root.querySelector('.perf-skeleton-overlay');
-
-        root.innerHTML = newRoot.innerHTML;
-
-        // Re-attach overlay so hideSkeleton() can fade it out smoothly.
-        if (oldOverlay) {
-            root.appendChild(oldOverlay);
-        }
-
-        // Re-execute any <script> tags that came with the fragment.
-        // Browser doesn't run scripts inserted via innerHTML, so we
-        // create new <script> elements with the same content.
-        wrapper.querySelectorAll('script').forEach(function (oldScript) {
-            const newScript = document.createElement('script');
-            // Copy non-src attributes (e.g. type).
-            for (let i = 0; i < oldScript.attributes.length; i++) {
-                const attr = oldScript.attributes[i];
-                newScript.setAttribute(attr.name, attr.value);
-            }
-            if (oldScript.src) {
-                newScript.src = oldScript.src;
-            } else {
-                newScript.textContent = oldScript.textContent;
-            }
-            document.body.appendChild(newScript);
-        });
-
-        // Now that scripts have re-defined window.initPerfDashboard,
-        // call it to render the fresh charts.
-        if (window.Chart && typeof window.initPerfDashboard === 'function') {
-            window.initPerfDashboard();
-        }
-
-        // Trigger the fade-in animation on the freshly-swapped content.
-        // The .perf-fresh class is removed after 400ms so the animation
-        // doesn't replay on subsequent interactions within the same swap.
-        root.classList.add('perf-fresh');
-        setTimeout(function () {
-            root.classList.remove('perf-fresh');
-        }, 450);
     }
 
     // Core fetch + swap routine. `qs` is the query string (without ?).
