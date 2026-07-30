@@ -975,8 +975,6 @@ class BranchDemandService
                 'product_id'            => (int) $planItem['product_id'],
                 'qty'                   => (float) $planItem['qty'],
                 'rate'                  => (float) $planItem['cost_rate'],
-                'created_at'            => now(),
-                'updated_at'            => now(),
             ]);
         }
 
