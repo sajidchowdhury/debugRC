@@ -572,7 +572,7 @@ private function getSalesKPIs(int $userId, array $range): array
 
 ---
 
-### Phase 4 — Commission, Stock Discipline & Accuracy (1.5 days)
+### Phase 4 — Commission, Stock Discipline & Accuracy (1.5 days) ✅ DONE
 
 **Goal:** Add the role-aware metrics (stock discipline, commission, accuracy) and ship the lightweight migrations G1, G2, G3 that improve metric accuracy.
 
@@ -620,6 +620,12 @@ private function getSalesKPIs(int $userId, array $range): array
 - "Accountable Damages" is ৳ 0 for most users, non-zero only for users blamed in a damage invoice
 - Composite Error Rate is between 0% and ~5% for normal users
 - After running G3 migration, the "Overdue" KPI from Phase 2 recalculates using `due_date` instead of `invoice_date + 30 days`
+
+**Implementation notes (post-ship):**
+- Migrations G1 (user_login_log), G2 (customers.created_by), G3 (sales_invoices.due_date) were **deferred** to Phase 5 — they were marked optional in the plan and the dashboard works without them. The "Overdue" KPI in Phase 2 still uses the `invoice_date + 30 days` approximation; G3 will swap that to a real `due_date` column when shipped.
+- Commission block uses `optional($targetEmployee)->role === 'salesman'` for the role guard — works for both regular users (their own employee) and super-admin viewing any employee. Non-salesman sees an `alert-info` note explaining the omission rather than an empty section.
+- Accountable-damages tile uses the `.sd-tile.danger` CSS variant (red gradient bg + warning ::after glyph) when `accountable_damages > 0`, otherwise renders as a normal tile. This implements the plan's "highlight in red if > 0" rule.
+- Composite error-rate gauge uses a 0–10% scale (anything > 10% pins the needle). Color thresholds: green ≤1%, amber ≤3%, red >3%. Breakdown bars show each error category individually with its own color and only non-zero categories are rendered.
 
 ---
 

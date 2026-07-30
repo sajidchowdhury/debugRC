@@ -1031,6 +1031,539 @@
     #perf-dashboard .act-chip.teal   { background: linear-gradient(135deg, #14b8a6, #0d9488); }
     #perf-dashboard .act-chip.fuchsia{ background: linear-gradient(135deg, #d946ef, #a21caf); }
     #perf-dashboard .act-chip.cyan   { background: linear-gradient(135deg, #06b6d4, #0e7490); }
+
+    /* ============================================================
+       PHASE 4 — Commission, Stock Discipline & Accuracy visual system
+       ============================================================ */
+
+    /* ── Commission hero card — the "money" tile with big number ── */
+    #perf-dashboard .comm-hero {
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 60%, #c026d3 100%);
+        color: #fff;
+        border-radius: 0.9rem;
+        padding: 1.4rem 1.5rem;
+        position: relative;
+        overflow: hidden;
+        height: 100%;
+        min-height: 175px;
+    }
+    #perf-dashboard .comm-hero::before {
+        content: '';
+        position: absolute;
+        top: -40px; right: -40px;
+        width: 160px; height: 160px;
+        background: radial-gradient(circle, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0) 70%);
+        border-radius: 50%;
+    }
+    #perf-dashboard .comm-hero::after {
+        content: '';
+        position: absolute;
+        bottom: -30px; left: -30px;
+        width: 110px; height: 110px;
+        background: radial-gradient(circle, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0) 70%);
+        border-radius: 50%;
+    }
+    #perf-dashboard .comm-hero .ch-row {
+        position: relative; z-index: 2;
+        display: flex; align-items: center; gap: 0.85rem;
+    }
+    #perf-dashboard .comm-hero .ch-icon {
+        width: 46px; height: 46px;
+        border-radius: 0.7rem;
+        background: rgba(255,255,255,0.18);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 1.25rem;
+        backdrop-filter: blur(6px);
+    }
+    #perf-dashboard .comm-hero .ch-lbl {
+        font-size: 0.78rem;
+        opacity: 0.92;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 600;
+    }
+    #perf-dashboard .comm-hero .ch-val {
+        font-size: 2rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        line-height: 1.1;
+        margin-top: 0.2rem;
+    }
+    #perf-dashboard .comm-hero .ch-sub {
+        font-size: 0.78rem;
+        opacity: 0.88;
+        margin-top: 0.35rem;
+    }
+    #perf-dashboard .comm-hero .ch-period {
+        position: absolute;
+        top: 1.2rem; right: 1.3rem;
+        background: rgba(255,255,255,0.18);
+        color: #fff;
+        font-size: 0.7rem;
+        font-weight: 700;
+        padding: 0.18rem 0.55rem;
+        border-radius: 999px;
+        letter-spacing: 0.04em;
+        z-index: 3;
+    }
+
+    /* ── Attainment gauge (semicircular) — reused gauge-card structure ── */
+    #perf-dashboard .attain-card {
+        background: var(--perf-card);
+        border: 1px solid var(--perf-border);
+        border-radius: 0.9rem;
+        padding: 1.1rem 1.25rem;
+        height: 100%;
+        position: relative;
+        overflow: hidden;
+    }
+    #perf-dashboard .attain-card::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #f59e0b, #d97706);
+    }
+    #perf-dashboard .attain-card .attain-gauge-wrap {
+        position: relative;
+        margin: 0.4rem auto 0.25rem;
+        width: 100%;
+        max-width: 220px;
+        aspect-ratio: 2 / 1.15;
+    }
+    #perf-dashboard .attain-card .attain-gauge-wrap canvas {
+        width: 100% !important;
+        height: 100% !important;
+    }
+    #perf-dashboard .attain-card .attain-readout {
+        position: absolute;
+        left: 0; right: 0; bottom: 0;
+        text-align: center;
+        pointer-events: none;
+    }
+    #perf-dashboard .attain-card .attain-pct {
+        font-size: 1.95rem;
+        font-weight: 800;
+        color: var(--perf-text);
+        letter-spacing: -0.02em;
+        line-height: 1;
+    }
+    #perf-dashboard .attain-card .attain-cap {
+        font-size: 0.7rem;
+        color: var(--perf-muted);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-top: 0.15rem;
+    }
+    #perf-dashboard .attain-card .attain-meta {
+        font-size: 0.74rem;
+        color: var(--perf-muted);
+        text-align: center;
+        margin-top: 0.2rem;
+    }
+    #perf-dashboard .attain-card .attain-meta strong {
+        color: var(--perf-text);
+        font-weight: 700;
+    }
+
+    /* ── Target progress bar with milestone ticks ── */
+    #perf-dashboard .target-card {
+        background: var(--perf-card);
+        border: 1px solid var(--perf-border);
+        border-radius: 0.9rem;
+        padding: 1.1rem 1.25rem;
+        height: 100%;
+        position: relative;
+        overflow: hidden;
+    }
+    #perf-dashboard .target-card::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #10b981, #059669);
+    }
+    #perf-dashboard .target-card .tc-head {
+        display: flex; justify-content: space-between; align-items: baseline;
+        margin-bottom: 0.7rem;
+    }
+    #perf-dashboard .target-card .tc-title {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: var(--perf-text);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    #perf-dashboard .target-card .tc-rule {
+        font-size: 0.72rem;
+        color: var(--perf-muted);
+        font-weight: 600;
+        background: #f1f5f9;
+        padding: 0.18rem 0.55rem;
+        border-radius: 999px;
+    }
+    #perf-dashboard .target-card .tc-numbers {
+        display: flex; justify-content: space-between; align-items: baseline;
+        margin-bottom: 0.5rem;
+    }
+    #perf-dashboard .target-card .tc-current {
+        font-size: 1.2rem;
+        font-weight: 800;
+        color: var(--perf-text);
+    }
+    #perf-dashboard .target-card .tc-target {
+        font-size: 0.78rem;
+        color: var(--perf-muted);
+    }
+    #perf-dashboard .target-track {
+        position: relative;
+        height: 14px;
+        background: #f1f5f9;
+        border-radius: 999px;
+        overflow: visible;
+        margin: 0.35rem 0 0.7rem;
+    }
+    #perf-dashboard .target-fill {
+        position: absolute;
+        top: 0; left: 0; bottom: 0;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #10b981, #059669);
+        transition: width 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+        box-shadow: 0 2px 6px -1px rgba(16, 185, 129, 0.4);
+    }
+    #perf-dashboard .target-fill.over {
+        background: linear-gradient(90deg, #10b981, #14b8a6, #0ea5e9);
+    }
+    #perf-dashboard .target-tick {
+        position: absolute;
+        top: -3px; bottom: -3px;
+        width: 2px;
+        background: #94a3b8;
+        border-radius: 1px;
+    }
+    #perf-dashboard .target-tick.t-50 { left: 50%; }
+    #perf-dashboard .target-tick.t-100 { left: 100%; background: #475569; }
+    #perf-dashboard .target-card .tc-ticks-lbl {
+        display: flex; justify-content: space-between;
+        font-size: 0.68rem;
+        color: var(--perf-muted);
+        margin-top: 0.15rem;
+    }
+    #perf-dashboard .target-card .tc-status {
+        display: inline-block;
+        margin-top: 0.5rem;
+        font-size: 0.74rem;
+        font-weight: 700;
+        padding: 0.18rem 0.6rem;
+        border-radius: 999px;
+    }
+    #perf-dashboard .target-card .tc-status.good { background: #d1fae5; color: #065f46; }
+    #perf-dashboard .target-card .tc-status.mid  { background: #fef3c7; color: #92400e; }
+    #perf-dashboard .target-card .tc-status.low  { background: #fee2e2; color: #991b1b; }
+
+    /* ── Commission status breakdown donut + legend ── */
+    #perf-dashboard .comm-status-card {
+        background: var(--perf-card);
+        border: 1px solid var(--perf-border);
+        border-radius: 0.9rem;
+        padding: 1.1rem 1.25rem;
+        height: 100%;
+    }
+    #perf-dashboard .comm-status-card .cs-head {
+        display: flex; justify-content: space-between; align-items: baseline;
+        margin-bottom: 0.7rem;
+    }
+    #perf-dashboard .comm-status-card .cs-title {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: var(--perf-text);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    #perf-dashboard .comm-status-card .cs-sub {
+        font-size: 0.72rem;
+        color: var(--perf-muted);
+    }
+    #perf-dashboard .comm-status-card .cs-row {
+        display: flex; align-items: center; gap: 0.85rem;
+    }
+    #perf-dashboard .comm-status-card .cs-canvas-wrap {
+        position: relative;
+        width: 130px; height: 130px;
+        flex-shrink: 0;
+    }
+    #perf-dashboard .comm-status-card .cs-canvas-wrap canvas {
+        width: 100% !important; height: 100% !important;
+    }
+    #perf-dashboard .comm-status-card .cs-center {
+        position: absolute; inset: 0;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        pointer-events: none;
+    }
+    #perf-dashboard .comm-status-card .cs-center .cs-center-val {
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: var(--perf-text);
+        line-height: 1;
+    }
+    #perf-dashboard .comm-status-card .cs-center .cs-center-lbl {
+        font-size: 0.62rem;
+        color: var(--perf-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-top: 0.15rem;
+    }
+    #perf-dashboard .comm-status-card .cs-legend {
+        flex: 1;
+        display: flex; flex-direction: column;
+        gap: 0.35rem;
+    }
+    #perf-dashboard .comm-status-card .cs-leg-item {
+        display: flex; align-items: center; gap: 0.5rem;
+        font-size: 0.78rem;
+    }
+    #perf-dashboard .comm-status-card .cs-leg-dot {
+        width: 10px; height: 10px;
+        border-radius: 3px;
+        flex-shrink: 0;
+    }
+    #perf-dashboard .comm-status-card .cs-leg-lbl { color: var(--perf-muted); flex: 1; }
+    #perf-dashboard .comm-status-card .cs-leg-val {
+        font-weight: 700;
+        color: var(--perf-text);
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* ── Stock discipline tile — 5-up row of stat-tiles ── */
+    #perf-dashboard .sd-tile {
+        background: var(--perf-card);
+        border: 1px solid var(--perf-border);
+        border-radius: 0.9rem;
+        padding: 1rem 1.1rem;
+        height: 100%;
+        position: relative;
+        overflow: hidden;
+        transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+    #perf-dashboard .sd-tile:hover {
+        transform: translateY(-3px);
+        box-shadow: var(--perf-shadow);
+    }
+    #perf-dashboard .sd-tile::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; bottom: 0;
+        width: 4px;
+        background: var(--sd-accent, var(--perf-primary));
+    }
+    #perf-dashboard .sd-tile .sd-icon {
+        width: 36px; height: 36px;
+        border-radius: 0.6rem;
+        background: var(--sd-accent, var(--perf-primary));
+        color: #fff;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 0.95rem;
+        margin-bottom: 0.55rem;
+        box-shadow: 0 4px 10px -2px var(--sd-accent, var(--perf-primary));
+    }
+    #perf-dashboard .sd-tile .sd-lbl {
+        font-size: 0.72rem;
+        color: var(--perf-muted);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    #perf-dashboard .sd-tile .sd-val {
+        font-size: 1.5rem;
+        font-weight: 800;
+        color: var(--perf-text);
+        line-height: 1.1;
+        margin-top: 0.15rem;
+        font-variant-numeric: tabular-nums;
+    }
+    #perf-dashboard .sd-tile .sd-sub {
+        font-size: 0.72rem;
+        color: var(--perf-muted);
+        margin-top: 0.2rem;
+    }
+    /* Accountable damages — special "danger" treatment when > 0 */
+    #perf-dashboard .sd-tile.danger {
+        background: linear-gradient(135deg, #fef2f2 0%, #fff 60%);
+        border-color: #fecaca;
+        --sd-accent: #ef4444;
+    }
+    #perf-dashboard .sd-tile.danger .sd-val { color: #b91c1c; }
+    #perf-dashboard .sd-tile.danger::after {
+        content: '\f071';
+        font-family: 'Font Awesome 6 Free';
+        font-weight: 900;
+        position: absolute;
+        top: 0.8rem; right: 0.95rem;
+        color: #ef4444;
+        font-size: 0.85rem;
+        opacity: 0.55;
+    }
+
+    /* ── Accuracy scorecard — gauge + breakdown bars ── */
+    #perf-dashboard .acc-gauge-card {
+        background: var(--perf-card);
+        border: 1px solid var(--perf-border);
+        border-radius: 0.9rem;
+        padding: 1.1rem 1.25rem;
+        height: 100%;
+        position: relative;
+        overflow: hidden;
+    }
+    #perf-dashboard .acc-gauge-card::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #10b981, #f59e0b, #ef4444);
+    }
+    #perf-dashboard .acc-gauge-card .ag-head {
+        display: flex; justify-content: space-between; align-items: baseline;
+        margin-bottom: 0.5rem;
+    }
+    #perf-dashboard .acc-gauge-card .ag-title {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: var(--perf-text);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    #perf-dashboard .acc-gauge-card .ag-sub {
+        font-size: 0.72rem;
+        color: var(--perf-muted);
+    }
+    #perf-dashboard .acc-gauge-card .ag-wrap {
+        position: relative;
+        margin: 0.5rem auto 0.5rem;
+        width: 100%;
+        max-width: 240px;
+        aspect-ratio: 2 / 1.1;
+    }
+    #perf-dashboard .acc-gauge-card .ag-wrap canvas {
+        width: 100% !important; height: 100% !important;
+    }
+    #perf-dashboard .acc-gauge-card .ag-readout {
+        position: absolute;
+        left: 0; right: 0; bottom: 0;
+        text-align: center;
+        pointer-events: none;
+    }
+    #perf-dashboard .acc-gauge-card .ag-pct {
+        font-size: 2.1rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        line-height: 1;
+    }
+    #perf-dashboard .acc-gauge-card .ag-pct.good { color: #059669; }
+    #perf-dashboard .acc-gauge-card .ag-pct.mid  { color: #d97706; }
+    #perf-dashboard .acc-gauge-card .ag-pct.low  { color: #dc2626; }
+    #perf-dashboard .acc-gauge-card .ag-cap {
+        font-size: 0.7rem;
+        color: var(--perf-muted);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-top: 0.15rem;
+    }
+    #perf-dashboard .acc-gauge-card .ag-footer {
+        font-size: 0.74rem;
+        color: var(--perf-muted);
+        text-align: center;
+        margin-top: 0.4rem;
+    }
+    #perf-dashboard .acc-gauge-card .ag-footer strong {
+        color: var(--perf-text);
+        font-weight: 700;
+    }
+
+    /* ── Accuracy breakdown bar chart ── */
+    #perf-dashboard .acc-breakdown-card {
+        background: var(--perf-card);
+        border: 1px solid var(--perf-border);
+        border-radius: 0.9rem;
+        padding: 1.1rem 1.25rem;
+        height: 100%;
+    }
+    #perf-dashboard .acc-breakdown-card .ab-head {
+        display: flex; justify-content: space-between; align-items: baseline;
+        margin-bottom: 0.7rem;
+    }
+    #perf-dashboard .acc-breakdown-card .ab-title {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: var(--perf-text);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    #perf-dashboard .acc-breakdown-card .ab-sub {
+        font-size: 0.72rem;
+        color: var(--perf-muted);
+    }
+    #perf-dashboard .acc-breakdown-card .ab-row {
+        display: grid;
+        grid-template-columns: 1.4fr 3fr 0.8fr;
+        gap: 0.7rem;
+        align-items: center;
+        padding: 0.45rem 0;
+        border-bottom: 1px dashed #e2e8f0;
+    }
+    #perf-dashboard .acc-breakdown-card .ab-row:last-child { border-bottom: 0; }
+    #perf-dashboard .acc-breakdown-card .ab-lbl {
+        font-size: 0.78rem;
+        color: var(--perf-text);
+        font-weight: 600;
+        display: flex; align-items: center; gap: 0.4rem;
+    }
+    #perf-dashboard .acc-breakdown-card .ab-lbl i { color: var(--ab-icon, #94a3b8); font-size: 0.78rem; }
+    #perf-dashboard .acc-breakdown-card .ab-track {
+        position: relative;
+        height: 10px;
+        background: #f1f5f9;
+        border-radius: 999px;
+        overflow: hidden;
+    }
+    #perf-dashboard .acc-breakdown-card .ab-fill {
+        position: absolute;
+        top: 0; left: 0; bottom: 0;
+        border-radius: 999px;
+        background: var(--ab-color, #94a3b8);
+        transition: width 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    #perf-dashboard .acc-breakdown-card .ab-num {
+        font-size: 0.84rem;
+        font-weight: 700;
+        color: var(--perf-text);
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+    }
+    #perf-dashboard .acc-breakdown-card .ab-empty {
+        text-align: center;
+        padding: 1.5rem 0.5rem;
+        color: var(--perf-muted);
+    }
+    #perf-dashboard .acc-breakdown-card .ab-empty i {
+        font-size: 1.8rem;
+        color: #10b981;
+        margin-bottom: 0.4rem;
+    }
+
+    /* Phase 4 sub-section header — visually distinct from main section-h */
+    #perf-dashboard .phase-sub-h {
+        font-size: 0.95rem;
+        font-weight: 700;
+        color: #334155;
+        margin: 1.1rem 0 0.55rem;
+        padding-bottom: 0.3rem;
+        border-bottom: 1px solid var(--perf-border);
+        display: flex; align-items: center; gap: 0.45rem;
+    }
+    #perf-dashboard .phase-sub-h i { font-size: 0.85rem; }
 </style>
 @endpush
 
@@ -1852,30 +2385,355 @@
     @endif {{-- end of Phase 3 How You Work block --}}
 
     {{-- ============================================================
-         PHASE 4 — SCAFFOLDING PLACEHOLDER (kept visible so the
-         user sees what's coming next; will be filled in next phase)
-         ============================================================ --}}
+         PHASE 4 — COMMISSION, STOCK DISCIPLINE & ACCURACY
+         ============================================================
+         Commission block is ROLE-AWARE: only rendered when the target
+         employee's role is 'salesman' (the only role with commission
+         rules + entries in the schema). Stock Discipline and Accuracy
+         are rendered for everyone — every user creates adjustments,
+         invoices, payments, etc.
+         --}}
     @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly)
+    @php
+        // Pull all Phase 4 datasets with safe defaults so missing data
+        // doesn't break the markup.
+        $cm = $commissionSummary ?? [
+            'net_commission' => 0.0, 'calculated' => 0.0, 'confirmed' => 0.0,
+            'paid' => 0.0, 'reversed' => 0.0, 'total_to_date' => 0.0,
+            'attainment_pct' => 0.0, 'target_amount' => 0.0,
+            'sales_to_date' => 0.0, 'has_rule' => false,
+            'rule_type' => null, 'rate' => null, 'period_label' => '',
+        ];
+        $sd = $stockDiscipline ?? [
+            'adjustments_initiated' => 0, 'adjustment_value' => 0.0,
+            'loss_adjustments' => 0, 'accountable_damages' => 0.0,
+            'accountable_damages_count' => 0, 'damage_recovery' => 0.0,
+            'stock_take_variances' => 0, 'transfers_initiated' => 0,
+        ];
+        $ax = $accuracyKpis ?? [
+            'reversed_invoices' => 0, 'cancelled_invoices' => 0,
+            'reversed_payments' => 0, 'reversed_returns' => 0,
+            'reversed_challans' => 0, 'manual_journals' => 0,
+            'total_actions' => 0, 'composite_error_rate' => 0.0,
+        ];
 
-    <h3 class="section-h mt-3"><span class="bar"></span><i class="fas fa-bullseye text-warning"></i> Commission, Stock Discipline & Accuracy</h3>
+        // Role guard: commission block shows only for salesman role.
+        // (super-admin viewing a non-salesman employee also won't see it,
+        // which matches the plan's "salesman-role users only" rule.)
+        $isSalesman = optional($targetEmployee)->role === 'salesman';
+
+        // Attainment gauge color thresholds
+        $attainPct = $cm['attainment_pct'];
+        $attainColor = $attainPct >= 100 ? '#10b981'
+                     : ($attainPct >= 70  ? '#f59e0b'
+                     : '#ef4444');
+        $attainClass = $attainPct >= 100 ? 'good'
+                     : ($attainPct >= 70  ? 'mid'
+                     : 'low');
+        $attainMsg = $attainPct >= 100 ? 'Target achieved'
+                   : ($attainPct >= 70  ? 'On track'
+                   : 'Behind target');
+
+        // Target progress bar — cap visually at 100% (attainment may be > 100%
+        // which we mark with .over gradient). Milestone ticks at 50% and 100%.
+        $targetFillPct = min(100, $attainPct);
+        $targetIsOver = $attainPct >= 100;
+
+        // Rule type label
+        $ruleTypeLabel = match($cm['rule_type']) {
+            'flat'         => 'Flat %',
+            'tiered'       => 'Tiered',
+            'product_group'=> 'By Group',
+            'target_bonus' => 'Target Bonus',
+            default        => 'No rule',
+        };
+
+        // Commission status breakdown donut data
+        $cmStatusData = [
+            ['label' => 'Calculated', 'value' => $cm['calculated'], 'color' => '#94a3b8'],
+            ['label' => 'Confirmed',  'value' => $cm['confirmed'],  'color' => '#4f46e5'],
+            ['label' => 'Paid',       'value' => $cm['paid'],       'color' => '#10b981'],
+            ['label' => 'Reversed',   'value' => abs($cm['reversed']), 'color' => '#ef4444'],
+        ];
+        $cmStatusTotal = max(array_sum(array_map(fn($s) => $s['value'], $cmStatusData)), 0.0001);
+
+        // Stock discipline tile accent palette
+        $sdPalette = [
+            'adjustments' => '#4f46e5',
+            'loss'        => '#f59e0b',
+            'damages'     => '#ef4444',
+            'variances'   => '#0ea5e9',
+            'transfers'   => '#14b8a6',
+        ];
+
+        // Accuracy gauge thresholds (error rate — lower is better)
+        // 0–1% green, 1–3% amber, 3%+ red
+        $errRate = $ax['composite_error_rate'];
+        $errColor = $errRate <= 1.0 ? '#10b981'
+                  : ($errRate <= 3.0 ? '#f59e0b'
+                  : '#ef4444');
+        $errClass = $errRate <= 1.0 ? 'good'
+                  : ($errRate <= 3.0 ? 'mid'
+                  : 'low');
+        $errMsg = $errRate <= 1.0 ? 'Excellent accuracy'
+                : ($errRate <= 3.0 ? 'Acceptable — review reversals'
+                : 'High error rate — coach needed');
+
+        // Accuracy breakdown rows (only non-zero categories shown)
+        $accRows = [
+            ['label' => 'Reversed Invoices',  'count' => $ax['reversed_invoices'],  'color' => '#ef4444', 'icon' => 'fa-file-invoice-dollar'],
+            ['label' => 'Cancelled Invoices', 'count' => $ax['cancelled_invoices'], 'color' => '#f97316', 'icon' => 'fa-ban'],
+            ['label' => 'Reversed Payments',  'count' => $ax['reversed_payments'],  'color' => '#f59e0b', 'icon' => 'fa-undo-alt'],
+            ['label' => 'Reversed Returns',   'count' => $ax['reversed_returns'],   'color' => '#fb923c', 'icon' => 'fa-rotate-left'],
+            ['label' => 'Reversed Challans',  'count' => $ax['reversed_challans'],  'color' => '#f87171', 'icon' => 'fa-truck-loading'],
+        ];
+        $accTotalErrors = array_sum(array_map(fn($r) => $r['count'], $accRows));
+        $accMaxCount = max(array_map(fn($r) => $r['count'], $accRows) + [1]);
+    @endphp
+
+    <h3 class="section-h mt-4"><span class="bar"></span><i class="fas fa-bullseye text-warning"></i> Commission, Stock Discipline &amp; Accuracy</h3>
+
+    {{-- ============================================================
+         ROW 1 — COMMISSION & TARGETS (salesman role only)
+         ============================================================ --}}
+    @if ($isSalesman)
+    <h4 class="phase-sub-h"><i class="fas fa-coins text-primary"></i> Commission &amp; Targets</h4>
     <div class="row g-3 mb-3">
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-coins"></i><div class="title">Net Commission</div><span class="phase-tag">Phase 4</span></div></div>
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-bullseye"></i><div class="title">Target Attainment</div><span class="phase-tag">Phase 4</span></div></div>
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-warehouse"></i><div class="title">Stock Discipline</div><span class="phase-tag">Phase 4</span></div></div>
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-bug"></i><div class="title">Error Rate</div><span class="phase-tag">Phase 4</span></div></div>
+        {{-- Commission hero — net commission this period --}}
+        <div class="col-12 col-md-6 col-xl-3">
+            <div class="comm-hero">
+                <span class="ch-period">{{ $cm['period_label'] }}</span>
+                <div class="ch-row">
+                    <div class="ch-icon"><i class="fas fa-coins"></i></div>
+                    <div>
+                        <div class="ch-lbl">Net Commission</div>
+                        <div class="ch-val mono">৳ {{ number_format($cm['net_commission'], 0) }}</div>
+                    </div>
+                </div>
+                <div class="ch-sub">
+                    @if ($cm['has_rule'])
+                        Rate <strong>{{ number_format($cm['rate'], 2) }}%</strong> · {{ $ruleTypeLabel }}
+                    @else
+                        No active commission rule configured.
+                    @endif
+                </div>
+            </div>
+        </div>
+
+        {{-- Attainment gauge --}}
+        <div class="col-12 col-md-6 col-xl-3">
+            <div class="attain-card">
+                <div class="kpi-label text-center" style="margin-top:0.2rem;">Target Attainment</div>
+                <div class="attain-gauge-wrap">
+                    <canvas id="attainGauge"></canvas>
+                    <div class="attain-readout">
+                        <div class="attain-pct mono">{{ number_format($attainPct, 0) }}<span style="font-size:1rem;">%</span></div>
+                        <div class="attain-cap">of monthly target</div>
+                    </div>
+                </div>
+                <div class="attain-meta">
+                    Sales <strong>৳ {{ number_format($cm['sales_to_date'], 0) }}</strong>
+                    @if ($cm['target_amount'] > 0)
+                        / Target <strong>৳ {{ number_format($cm['target_amount'], 0) }}</strong>
+                    @endif
+                </div>
+            </div>
+        </div>
+
+        {{-- Target progress bar with milestones --}}
+        <div class="col-12 col-md-6 col-xl-3">
+            <div class="target-card">
+                <div class="tc-head">
+                    <span class="tc-title">Monthly Progress</span>
+                    <span class="tc-rule">{{ $ruleTypeLabel }}</span>
+                </div>
+                <div class="tc-numbers">
+                    <span class="tc-current mono">৳ {{ number_format($cm['sales_to_date'], 0) }}</span>
+                    @if ($cm['target_amount'] > 0)
+                        <span class="tc-target">of ৳ {{ number_format($cm['target_amount'], 0) }}</span>
+                    @else
+                        <span class="tc-target">no target set</span>
+                    @endif
+                </div>
+                <div class="target-track">
+                    <div class="target-fill {{ $targetIsOver ? 'over' : '' }}" style="width: {{ $targetFillPct }}%;"></div>
+                    <div class="target-tick t-50"></div>
+                    <div class="target-tick t-100"></div>
+                </div>
+                <div class="tc-ticks-lbl">
+                    <span>0</span><span>50%</span><span>100%</span>
+                </div>
+                <span class="tc-status {{ $attainClass }}">{{ $attainMsg }}</span>
+            </div>
+        </div>
+
+        {{-- Commission status breakdown donut --}}
+        <div class="col-12 col-md-6 col-xl-3">
+            <div class="comm-status-card">
+                <div class="cs-head">
+                    <span class="cs-title">Status Breakdown</span>
+                    <span class="cs-sub">lifetime</span>
+                </div>
+                <div class="cs-row">
+                    <div class="cs-canvas-wrap">
+                        <canvas id="commStatusDonut"></canvas>
+                        <div class="cs-center">
+                            <div class="cs-center-val mono">৳ {{ number_format($cm['total_to_date'], 0) }}</div>
+                            <div class="cs-center-lbl">total</div>
+                        </div>
+                    </div>
+                    <div class="cs-legend">
+                        @foreach ($cmStatusData as $s)
+                            <div class="cs-leg-item">
+                                <span class="cs-leg-dot" style="background: {{ $s['color'] }};"></span>
+                                <span class="cs-leg-lbl">{{ $s['label'] }}</span>
+                                <span class="cs-leg-val mono">৳ {{ number_format($s['value'], 0) }}</span>
+                            </div>
+                        @endforeach
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    @else
+    {{-- Non-salesman: show a small info note explaining the commission block is hidden --}}
+    <div class="alert alert-info py-2 mb-3" style="font-size:0.82rem; border-radius:0.7rem;">
+        <i class="fas fa-info-circle me-1"></i>
+        Commission &amp; Targets are visible only to employees with the <strong>salesman</strong> role.
+        This employee's role is <code>{{ $targetEmployee->role }}</code>, so the commission block is hidden.
+    </div>
+    @endif
+
+    {{-- ============================================================
+         ROW 2 — STOCK DISCIPLINE (everyone)
+         ============================================================ --}}
+    <h4 class="phase-sub-h"><i class="fas fa-warehouse text-info"></i> Stock Discipline</h4>
+    <div class="row g-3 mb-3">
+        {{-- Adjustments Initiated --}}
+        <div class="col-6 col-md-4 col-xl">
+            <div class="sd-tile" style="--sd-accent: {{ $sdPalette['adjustments'] }};">
+                <div class="sd-icon"><i class="fas fa-sliders-h"></i></div>
+                <div class="sd-lbl">Adjustments Initiated</div>
+                <div class="sd-val mono">{{ $sd['adjustments_initiated'] }}</div>
+                <div class="sd-sub">stock adjustments you created this period</div>
+            </div>
+        </div>
+
+        {{-- Loss Adjustment Value --}}
+        <div class="col-6 col-md-4 col-xl">
+            <div class="sd-tile" style="--sd-accent: {{ $sdPalette['loss'] }};">
+                <div class="sd-icon"><i class="fas fa-arrow-trend-down"></i></div>
+                <div class="sd-lbl">Loss Adj. Value</div>
+                <div class="sd-val mono">৳ {{ number_format($sd['adjustment_value'], 0) }}</div>
+                <div class="sd-sub">{{ $sd['loss_adjustments'] }} decrease-type adjustment(s)</div>
+            </div>
+        </div>
+
+        {{-- Accountable Damages (red highlight if > 0) --}}
+        <div class="col-6 col-md-4 col-xl {{ $sd['accountable_damages'] > 0 ? '' : '' }}">
+            <div class="sd-tile {{ $sd['accountable_damages'] > 0 ? 'danger' : '' }}" style="--sd-accent: {{ $sdPalette['damages'] }};">
+                <div class="sd-icon"><i class="fas fa-exclamation-triangle"></i></div>
+                <div class="sd-lbl">Accountable Damages</div>
+                <div class="sd-val mono">৳ {{ number_format($sd['accountable_damages'], 0) }}</div>
+                <div class="sd-sub">{{ $sd['accountable_damages_count'] }} damage invoice(s) attributed to you</div>
+            </div>
+        </div>
+
+        {{-- Stock-Take Variances --}}
+        <div class="col-6 col-md-4 col-xl">
+            <div class="sd-tile" style="--sd-accent: {{ $sdPalette['variances'] }};">
+                <div class="sd-icon"><i class="fas fa-clipboard-check"></i></div>
+                <div class="sd-lbl">Stock-Take Variances</div>
+                <div class="sd-val mono">{{ $sd['stock_take_variances'] }}</div>
+                <div class="sd-sub">reconciliation_variance adjustments this period</div>
+            </div>
+        </div>
+
+        {{-- Transfers Initiated --}}
+        <div class="col-6 col-md-4 col-xl">
+            <div class="sd-tile" style="--sd-accent: {{ $sdPalette['transfers'] }};">
+                <div class="sd-icon"><i class="fas fa-exchange-alt"></i></div>
+                <div class="sd-lbl">Transfers Initiated</div>
+                <div class="sd-val mono">{{ $sd['transfers_initiated'] }}</div>
+                <div class="sd-sub">warehouse transfers you created this period</div>
+            </div>
+        </div>
     </div>
 
-    <div class="text-center text-muted small mt-4 mb-3">
-        <i class="fas fa-info-circle me-1"></i>
-        <strong>Phases 1, 2 &amp; 3 complete.</strong> Sales + Collections &amp; Returns + How You Work are live. Commission, stock discipline, and accuracy arrive in Phase 4.
+    {{-- ============================================================
+         ROW 3 — ACCURACY SCORECARD (everyone)
+         ============================================================ --}}
+    <h4 class="phase-sub-h"><i class="fas fa-bullseye text-success"></i> Accuracy Scorecard</h4>
+    <div class="row g-3 mb-3">
+        {{-- Composite error-rate gauge --}}
+        <div class="col-12 col-md-6 col-xl-5">
+            <div class="acc-gauge-card">
+                <div class="ag-head">
+                    <span class="ag-title">Composite Error Rate</span>
+                    <span class="ag-sub">{{ $ax['total_actions'] }} actions this period</span>
+                </div>
+                <div class="ag-wrap">
+                    <canvas id="accuracyGauge"></canvas>
+                    <div class="ag-readout">
+                        <div class="ag-pct mono {{ $errClass }}">{{ number_format($errRate, 2) }}<span style="font-size:1rem;">%</span></div>
+                        <div class="ag-cap">reversed + cancelled / total</div>
+                    </div>
+                </div>
+                <div class="ag-footer">
+                    <i class="fas fa-info-circle me-1"></i>
+                    <strong>{{ $errMsg }}</strong>
+                </div>
+            </div>
+        </div>
+
+        {{-- Breakdown bars --}}
+        <div class="col-12 col-md-6 col-xl-7">
+            <div class="acc-breakdown-card">
+                <div class="ab-head">
+                    <span class="ab-title">Error Breakdown by Category</span>
+                    <span class="ab-sub">{{ $accTotalErrors }} error(s) total</span>
+                </div>
+                @if ($accTotalErrors === 0)
+                    <div class="ab-empty">
+                        <i class="fas fa-circle-check"></i>
+                        <div>No reversals or cancellations this period. Pristine work!</div>
+                    </div>
+                @else
+                    @foreach ($accRows as $r)
+                        @if ($r['count'] > 0)
+                            <div class="ab-row" style="--ab-color: {{ $r['color'] }};">
+                                <div class="ab-lbl">
+                                    <i class="fas {{ $r['icon'] }}" style="--ab-icon: {{ $r['color'] }};"></i>
+                                    {{ $r['label'] }}
+                                </div>
+                                <div class="ab-track">
+                                    <div class="ab-fill" style="width: {{ max(3, round(($r['count'] / $accMaxCount) * 100, 1)) }}%;"></div>
+                                </div>
+                                <div class="ab-num">{{ $r['count'] }}</div>
+                            </div>
+                        @endif
+                    @endforeach
+                @endif
+            </div>
+        </div>
+    </div>
+
+    {{-- ============================================================
+         PHASE 4 FOOTER NOTE (kept small; replaced the old
+         "Phases 1, 2 & 3 complete" placeholder)
+         ============================================================ --}}
+    <div class="text-center text-muted small mt-3 mb-2">
+        <i class="fas fa-check-circle text-success me-1"></i>
+        <strong>Phases 1, 2, 3 &amp; 4 complete.</strong> Sales + Collections &amp; Returns + How You Work + Commission, Stock Discipline &amp; Accuracy are all live.
         @if (isset($customerPaymentsTxnType))
-            <br>G12 check: <code>customer_payments.transaction_type</code>
+            <span class="ms-2">·</span>
+            <span class="ms-2">G12 check: <code>customer_payments.transaction_type</code>
             @if ($customerPaymentsTxnType) <span class="text-success">exists</span> @else <span class="text-warning">missing</span> @endif
-            — used by Phase 2 to filter receive-type payments.
+            </span>
         @endif
     </div>
 
-    @endif
+    @endif {{-- end of Phase 4 Commission, Stock Discipline & Accuracy block --}}
 
 </div>
 @endsection
@@ -2250,6 +3108,124 @@
                 }
             });
         }
+    }
+
+    // ============================================================
+    // 7. Phase 4 — Commission status breakdown donut
+    // ============================================================
+    const csDonutEl = document.getElementById('commStatusDonut');
+    if (csDonutEl && typeof Chart !== 'undefined') {
+        const csData = @json($cmStatusData ?? []);
+        const csTotal = @json($cmStatusTotal ?? 0.0001);
+        if (csData.length && csTotal > 0) {
+            const nonZero = csData.filter(s => s.value > 0);
+            const data = nonZero.length ? nonZero : csData;
+            const values = data.map(s => Math.max(0.0001, s.value));
+            const colors = data.map(s => s.color);
+            new Chart(csDonutEl.getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    labels: data.map(s => s.label),
+                    datasets: [{
+                        data: values,
+                        backgroundColor: colors,
+                        borderWidth: 2,
+                        borderColor: '#ffffff',
+                        hoverOffset: 6,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '68%',
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(ctx) {
+                                    const v = ctx.parsed;
+                                    const pct = ((v / csTotal) * 100).toFixed(1);
+                                    return ctx.label + ': ৳ ' + Math.round(v).toLocaleString() + ' (' + pct + '%)';
+                                }
+                            }
+                        }
+                    },
+                    animation: { animateRotate: true, duration: 1000, easing: 'easeOutCubic' }
+                }
+            });
+        } else {
+            // Empty state — gray ring
+            new Chart(csDonutEl.getContext('2d'), {
+                type: 'doughnut',
+                data: { datasets: [{ data: [1], backgroundColor: ['#f1f5f9'], borderWidth: 0 }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false, cutout: '68%',
+                    plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                    animation: { duration: 0 }
+                }
+            });
+        }
+    }
+
+    // ============================================================
+    // 8. Phase 4 — Target attainment semicircular gauge
+    // ============================================================
+    const attainEl = document.getElementById('attainGauge');
+    if (attainEl && typeof Chart !== 'undefined') {
+        const attainPct = Math.max(0, Math.min(150, Number(@json($cm['attainment_pct'] ?? 0))));
+        // For the gauge, we cap the visual at 100% (anything over 100% shows full + .over class)
+        const visualPct = Math.min(100, attainPct);
+        const attainColor = @json($attainColor ?? '#ef4444');
+        new Chart(attainEl.getContext('2d'), {
+            type: 'doughnut',
+            data: {
+                datasets: [{
+                    data: [visualPct, Math.max(0.0001, 100 - visualPct)],
+                    backgroundColor: [attainColor, '#f1f5f9'],
+                    borderWidth: 0,
+                    circumference: 180,
+                    rotation: 270,
+                    cutout: '72%',
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                animation: { animateRotate: true, duration: 1100, easing: 'easeOutCubic' }
+            }
+        });
+    }
+
+    // ============================================================
+    // 9. Phase 4 — Composite error-rate semicircular gauge
+    // ============================================================
+    // Error rate displayed on a 0–10% scale (anything > 10% pins the needle).
+    const accGaugeEl = document.getElementById('accuracyGauge');
+    if (accGaugeEl && typeof Chart !== 'undefined') {
+        const errRateVal = Math.max(0, Math.min(10, Number(@json($ax['composite_error_rate'] ?? 0))));
+        // Scale 0–10% to 0–100% of the gauge arc
+        const gaugePct = (errRateVal / 10) * 100;
+        const errColor = @json($errColor ?? '#10b981');
+        new Chart(accGaugeEl.getContext('2d'), {
+            type: 'doughnut',
+            data: {
+                datasets: [{
+                    data: [gaugePct, Math.max(0.0001, 100 - gaugePct)],
+                    backgroundColor: [errColor, '#f1f5f9'],
+                    borderWidth: 0,
+                    circumference: 180,
+                    rotation: 270,
+                    cutout: '72%',
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                animation: { animateRotate: true, duration: 1100, easing: 'easeOutCubic' }
+            }
+        });
     }
 })();
 </script>
