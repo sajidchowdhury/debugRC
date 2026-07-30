@@ -106,11 +106,36 @@ class DbRestoreBasic extends Command
             'suppliers', 'products', 'ledgers', 'menus',
         ]);
 
+        // ---- Bypass RLS for the restore session ----
+        // The schema has FORCE ROW LEVEL SECURITY on 28+ tables (employees,
+        // customers, suppliers, warehouses, journal_entries, document_sequences,
+        // etc.). The INSERT policy checks:
+        //   current_setting('app.is_admin', true) = 'true'
+        //     OR branch_id = current_setting('app.branch_id')::int
+        // When running from CLI, no middleware sets app.is_admin, so it
+        // defaults to 'false' (set by ALTER DATABASE in the RLS migration),
+        // and every INSERT into an RLS-protected table fails with:
+        //   "new row violates row-level security policy for table X"
+        // Setting app.is_admin = 'true' for this session bypasses all RLS
+        // policies. We reset it to 'false' at the end so the connection
+        // returns to the pool with the safe default.
+        $this->info('Bypassing RLS for restore session...');
+        try {
+            DB::unprepared("SET app.is_admin = true");
+            DB::unprepared("SET app.branch_id = 0");
+        } catch (\Throwable $e) {
+            $this->warn('  Could not set RLS bypass GUCs: ' . $e->getMessage());
+            $this->warn('  INSERTs into RLS-protected tables will likely fail.');
+            $this->warn('  (RLS GUCs are created by migration 2025_01_20_000007.)');
+        }
+        $this->newLine();
+
         // ---- Execute statements one by one ----
         $this->info('Executing statements...');
         $succeeded = 0;
         $failed = 0;
         $failedStatements = [];
+        $errorGroups = []; // [errorMessage => ['count' => N, 'tables' => [...], 'sample' => stmt]]
         $currentTable = '(unknown)';
 
         foreach ($statements as $i => $stmt) {
@@ -136,13 +161,37 @@ class DbRestoreBasic extends Command
             } catch (\Throwable $e) {
                 $failed++;
                 $errMsg = $e->getMessage();
-                $failedStatements[] = [
-                    'index' => $i + 1,
-                    'table' => $currentTable,
-                    'error' => $errMsg,
-                    'statement' => substr($stmt, 0, 200),
-                ];
-                $this->error("  ✗ [{$currentTable}] {$errMsg}");
+
+                // Keep the first 20 failing statements for the detailed report.
+                if (count($failedStatements) < 20) {
+                    $failedStatements[] = [
+                        'index' => $i + 1,
+                        'table' => $currentTable,
+                        'error' => $errMsg,
+                        'statement' => $stmt,
+                    ];
+                }
+
+                // Group errors by message for the summary.
+                if (!isset($errorGroups[$errMsg])) {
+                    $errorGroups[$errMsg] = [
+                        'count' => 0,
+                        'tables' => [],
+                        'sample' => $stmt,
+                    ];
+                }
+                $errorGroups[$errMsg]['count']++;
+                if (!in_array($currentTable, $errorGroups[$errMsg]['tables'])) {
+                    $errorGroups[$errMsg]['tables'][] = $currentTable;
+                }
+
+                // Don't spam 4318 error lines — only print first 3.
+                if ($failed <= 3) {
+                    $this->error("  ✗ [{$currentTable}] {$errMsg}");
+                } elseif ($failed === 4) {
+                    $this->warn('  ... (suppressing further per-statement errors; summary below)');
+                }
+
                 if ($this->option('stop-on-error')) {
                     $this->warn('  --stop-on-error: aborting.');
                     break;
@@ -150,20 +199,39 @@ class DbRestoreBasic extends Command
             }
         }
 
+        // ---- Reset RLS bypass back to safe default ----
+        try {
+            DB::unprepared("SET app.is_admin = false");
+            DB::unprepared("SET app.branch_id = 0");
+        } catch (\Throwable $e) {
+            // Ignore — connection will recycle anyway.
+        }
+
         // ---- Summary ----
         $this->newLine();
         $this->info("Statements: {$succeeded} succeeded, {$failed} failed, " . ($totalStatements - $succeeded - $failed) . " skipped.");
 
-        if (!empty($failedStatements) && !$this->option('stop-on-error')) {
+        // ---- Error grouping report (much more useful than 4318 raw errors) ----
+        if (!empty($errorGroups)) {
             $this->newLine();
-            $this->warn('Failed statements (first 10):');
-            foreach (array_slice($failedStatements, 0, 10) as $f) {
-                $this->line("  [{$f['index']}] table={$f['table']}");
-                $this->line("      error:   {$f['error']}");
-                $this->line("      stmt:    {$f['statement']}");
-            }
-            if (count($failedStatements) > 10) {
-                $this->line("  ... and " . (count($failedStatements) - 10) . " more.");
+            $this->warn('Error summary (grouped by message):');
+            // Sort by count descending.
+            uasort($errorGroups, fn($a, $b) => $b['count'] <=> $a['count']);
+            $i = 0;
+            foreach ($errorGroups as $msg => $info) {
+                $i++;
+                if ($i > 10) {
+                    $this->line("  ... and " . (count($errorGroups) - 10) . " more unique error message(s).");
+                    break;
+                }
+                $tables = implode(', ', array_slice($info['tables'], 0, 5));
+                $moreTables = count($info['tables']) > 5 ? " (+".(count($info['tables'])-5)." more)" : '';
+                $this->line("  [{$info['count']}×] {$msg}");
+                $this->line("        tables: {$tables}{$moreTables}");
+                // Show a sample statement (first 300 chars).
+                $sample = substr($info['sample'], 0, 300);
+                $this->line("        sample: {$sample}");
+                $this->newLine();
             }
         }
 
