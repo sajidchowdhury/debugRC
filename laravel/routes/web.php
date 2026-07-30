@@ -3,7 +3,8 @@
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\PasswordResetLinkController;
 use App\Http\Controllers\Auth\NewPasswordController;
-use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\LegacyDashboardController;
+use App\Http\Controllers\UserPerformanceDashboardController;
 use App\Http\Controllers\Admin\ProductController;
 use App\Http\Controllers\Admin\ProductCategoryController;
 use App\Http\Controllers\Admin\ProductGroupController;
@@ -77,9 +78,15 @@ Route::middleware('auth')->group(function () {
     Route::post('logout', [AuthenticatedSessionController::class, 'destroy'])
         ->name('logout');
 
-    Route::get('dashboard', [DashboardController::class, 'index'])
+    // ============================================================
+    // User Performance Dashboard (Phase 0+ — replaces legacy
+    // company-wide DashboardController for the /dashboard route).
+    // See docs/USER_PERFORMANCE_DASHBOARD_PLAN.md for the full plan.
+    // Legacy controller kept as LegacyDashboardController for reference.
+    // ============================================================
+    Route::get('dashboard', [UserPerformanceDashboardController::class, 'index'])
         ->name('dashboard');
-    Route::get('dashboard/sales-trend', [DashboardController::class, 'salesTrendAjax'])
+    Route::get('dashboard/sales-trend', [UserPerformanceDashboardController::class, 'salesTrendAjax'])
         ->name('dashboard.salesTrend');
 
     // UI Preview — Phase 4 dev/design tool (storybook-style component showcase).

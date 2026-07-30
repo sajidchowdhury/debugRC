@@ -7,22 +7,35 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Dashboard Controller — Phase 3 + Revenue Overview.
+ * Legacy Dashboard Controller — Phase 3 + Revenue Overview (COMPANY-WIDE).
  *
- * Provides the main dashboard with:
+ * ⚠️  SUPERSEDED — kept for reference only.
+ *
+ * This controller powered the old `/dashboard` route. Every metric here is
+ * COMPANY-WIDE (or branch-scoped via RLS) — none of it is per-user. As of
+ * Phase 0 of the User Performance Dashboard plan (see
+ * docs/USER_PERFORMANCE_DASHBOARD_PLAN.md), the `/dashboard` route now points
+ * to {@see UserPerformanceDashboardController}, which replaces every query in
+ * this file with a per-user-attributed equivalent.
+ *
+ * This file is intentionally NOT deleted because the query patterns
+ * (especially getReceivableAging() and getSalesTrend()) are reusable as
+ * templates — just add a `->where('created_by', $userId)` filter to each.
+ *
+ * Original purpose:
  *   - Basic entity stats (customers, products, invoices, challans)
  *   - Revenue KPIs: today's sales, MTD revenue, collection rate, outstanding
  *   - Sales trend data (last 7/30 days) for Chart.js
  *   - Top customers and top products for mini-tables
  *   - Branch revenue comparison for Chart.js bar chart
  *
- * The Revenue Overview section uses Chart.js (loaded via CDN) to render:
+ * Original charts:
  *   1. Sales Trend line chart (7-day or 30-day toggle)
  *   2. Revenue vs Collection comparison chart
  *   3. Branch revenue breakdown bar chart
  *   4. Customer receivable aging donut chart
  */
-class DashboardController extends Controller
+class LegacyDashboardController extends Controller
 {
     public function index()
     {

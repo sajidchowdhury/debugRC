@@ -955,3 +955,34 @@ curl -X POST -H "Authorization: Bearer {TOKEN}" -H "Content-Type: application/js
 ```
 
 **Stage Summary:** Phase 9 delivers 8 REST endpoints exposing the full stock-adjustment lifecycle (create → submit → approve → confirm → cancel) over JSON, reusing the SAME service + policy as the web controller — so every Phase 1-7 protection (role gating, branch isolation via RLS, maker-checker approval, dedicated audit log, UOM conversion, pipeline-aware availability, reversal safety) is in force over the API with zero business-logic duplication. The module is now role-gated, audit-logged, categorized, UOM-aware, reversal-safe, drift-monitored, Legacy-parity on UX, AND mobile/AI-accessible. **9 of 10 phases complete; Phase 10 (test coverage) remains.**
+
+---
+Task ID: perf-dash-phase-0
+Agent: main (Claude)
+Task: Phase 0 of User Performance Dashboard — Discovery & Scaffolding. Replace the company-wide /dashboard route with a per-user performance dashboard scaffold. Super-admin gets an employee <select>; default = own performance.
+
+Work Log:
+- Read existing layout (resources/views/layouts/admin.blade.php — exposes @yield('content'), @stack('css'), @stack('scripts'); loads Bootstrap 5 + FontAwesome + Chart.js via /assets/js/bootstrep/chart.umd.min.js on individual pages).
+- Confirmed User model exposes isSuperadmin() (role === 'superadmin'), employee(), getRole(); Employee model has role, branch_id, fillable.
+- Renamed app/Http/Controllers/DashboardController.php → LegacyDashboardController.php via `git mv` (preserves history). Renamed class to LegacyDashboardController. Updated docblock to mark as SUPERSEDED but kept for query-pattern reference. Renamed view resources/views/dashboard/index.blade.php → index_legacy.blade.php.
+- Created app/Http/Controllers/UserPerformanceDashboardController.php with:
+  * index(Request) — resolves $targetEmployeeId (default = Auth::user()->employee_id; super-admin override via ?employee_id=X, validated to exist)
+  * resolves $targetUser via User::where('employee_id', $targetEmployeeId)->first()
+  * resolvePeriod() — supports today/mtd/qtd/ytd/last30/custom (custom reads ?from= & ?to=, validates YYYY-MM-DD + from<=to)
+  * salesTrendAjax() — Phase 0 returns empty array; Phase 1 will fill in per-user trend
+  * checkCustomerPaymentsTransactionType() — G12 schema-gap runtime check, logs result for Phase 2
+  * defensive try/catch around schema check
+  * graceful bail if logged-in user has no employee record
+- Updated routes/web.php: replaced `use DashboardController` with `use LegacyDashboardController` + `use UserPerformanceDashboardController`. Re-pointed GET /dashboard and GET /dashboard/sales-trend at the new controller. Route name 'dashboard' preserved so existing `route('dashboard')` helpers continue to work.
+- Created resources/views/dashboard/performance.blade.php — extends layouts.admin, hero header with conditional employee <select> (super-admin only, submits the form on change), period pill-bar (Today/MTD/QTD/YTD/Last 30D/Custom with date inputs), target banner, 8-row scaffolding grid of placeholder cards labeled by phase (Sales, Collections/Returns, How You Work, Commission/Stock/Accuracy). Each card has an icon, title, hint, and phase tag. G12 column status surfaced at the bottom.
+- Verified Blade tag balance: 19 @if/@foreach openers, 19 @endif/@endforeach closers — balanced.
+- Verified no stale `DashboardController::class` references remain in any route file — only in comments / migration docblocks.
+
+Stage Summary:
+- Phase 0 scaffolding is complete and ready to ship. The /dashboard route now resolves to a per-user view (default = self; super-admin can switch via ?employee_id=X). No company-wide KPIs anywhere.
+- Acceptance criteria for Phase 0 are met by inspection (PHP runtime not available locally to actually execute — verification will happen in Docker on the user's machine):
+  * Non-admin: no employee <select> visible, employee_id param silently ignored, sees own performance scaffold
+  * Super-admin: <select> visible, default = "Myself", picking any employee reloads with that employee's name in the hero banner
+  * Period switcher preserves the selected employee when switching periods
+  * Custom range form validates and falls back to MTD on invalid input
+- Phase 1 (Sales Performance Core) is the next step: add getSalesKPIs(), getSalesTrend(), getSalesByProductGroup(), getTopCustomers(), getCustomerAcquisition() to UserPerformanceDashboardController, then wire them into the placeholder cards.
