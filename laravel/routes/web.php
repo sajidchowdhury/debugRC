@@ -38,6 +38,7 @@ use App\Http\Controllers\Admin\SalesInvoiceController;
 use App\Http\Controllers\Admin\SalesChallanController;
 use App\Http\Controllers\Admin\CustomerPaymentController;
 use App\Http\Controllers\Admin\SupplierTransactionController;
+use App\Http\Controllers\Admin\EmployeeTransactionController;
 use App\Http\Controllers\Admin\SalesReturnController;
 use App\Http\Controllers\Admin\SalesGuideController;
 use App\Http\Controllers\Admin\GoLiveChecklistController;
@@ -1298,6 +1299,34 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
         ->only(['store'])
         ->names('admin.supplier-transactions')
+        ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+
+    // ============================================================
+    // Phase 2 (Accounts Sub-Ledger): Employee Transactions
+    // RBAC — create/store/index/show allow accountant+manager+admin;
+    // reverse is accountant/manager/admin only.
+    // ============================================================
+    Route::prefix('admin/employee-transactions')->name('admin.employee-transactions.')->group(function () {
+        Route::get('audit', [EmployeeTransactionController::class, 'audit'])
+            ->name('audit')->middleware('role:accountant,manager,admin');
+        Route::post('get-due', [EmployeeTransactionController::class, 'getDue'])
+            ->name('get-due')->middleware('role:accountant,manager,admin');
+        Route::get('search', [EmployeeTransactionController::class, 'searchEmployee'])
+            ->name('search')->middleware('role:accountant,manager,admin');
+        // Transaction reverse — accountant, manager, admin
+        Route::post('{id}/reverse', [EmployeeTransactionController::class, 'reverse'])
+            ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+        // Print transaction slip
+        Route::get('{id}/slip', [EmployeeTransactionController::class, 'slip'])
+            ->name('slip')->middleware('role:accountant,manager,admin');
+    });
+    Route::resource('admin/employee-transactions', EmployeeTransactionController::class)
+        ->only(['index', 'create', 'show'])
+        ->names('admin.employee-transactions')
+        ->middleware('role:accountant,manager,admin');
+    Route::resource('admin/employee-transactions', EmployeeTransactionController::class)
+        ->only(['store'])
+        ->names('admin.employee-transactions')
         ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
 
     // ============================================================
