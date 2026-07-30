@@ -88,6 +88,12 @@ Route::middleware('auth')->group(function () {
         ->name('dashboard');
     Route::get('dashboard/sales-trend', [UserPerformanceDashboardController::class, 'salesTrendAjax'])
         ->name('dashboard.salesTrend');
+    // Phase 6 — AJAX fragment endpoint for no-full-reload period/employee
+    // switching. Returns JSON {html, period, periodLabel, range, employeeId}
+    // where `html` is the rendered #perf-dashboard inner markup. The Blade
+    // view detects fragmentMode=true and skips @extends('layouts.admin').
+    Route::get('dashboard/fragment', [UserPerformanceDashboardController::class, 'fragmentAjax'])
+        ->name('dashboard.fragment');
 
     // UI Preview — Phase 4 dev/design tool (storybook-style component showcase).
     // Renders all <x-erp.*> design-system components with sample data.

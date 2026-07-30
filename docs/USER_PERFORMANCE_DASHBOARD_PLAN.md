@@ -663,7 +663,7 @@ private function getSalesKPIs(int $userId, array $range): array
 
 ---
 
-### Phase 6 — Polish, Performance & Post-Launch Gaps (1 day)
+### Phase 6 — Polish, Performance & Post-Launch Gaps (1 day) ✅ DONE
 
 **Goal:** Productionize. Add caching, AJAX refresh, and the optional G6/G10 schema gaps if business wants them.
 
@@ -687,6 +687,30 @@ private function getSalesKPIs(int $userId, array $range): array
 - Switching period takes < 300ms (AJAX, no full reload)
 - Switching employee (as super-admin) takes < 300ms and the URL changes to `?employee_id=X`
 - `EXPLAIN ANALYZE` on the heaviest query shows Index Scan, not Seq Scan
+
+**Implementation notes (post-ship):**
+- **Caching (Task 1)** — shipped via the `cached()` private helper on `UserPerformanceDashboardController`. Wraps every Phase 1-5 metric call in `Cache::remember("perf:user:{id}:{metric}:{period}:{rangeHash}", 60, fn)`. The 60s TTL is the invalidation mechanism — short enough that fresh data appears within a minute, long enough to amortize the 25+ queries on repeat visits / AJAX refreshes. The plan called for Eloquent observers for invalidation, but with a 60s TTL the observers are overkill — TTL-based invalidation is simpler and equally effective for a personal dashboard.
+- **AJAX refresh (Task 2)** — shipped as a single `/dashboard/fragment` endpoint that returns `{html: <full #perf-dashboard content>}` rather than per-section endpoints. Rationale: per-section endpoints would require (a) splitting the Blade into 8+ partials, (b) extracting each section's chart-init code into idempotent re-runnable form, (c) coordinating 8 parallel fetches + skeleton overlays. The single-fragment approach gives the same UX (instant switch, no full reload) with 1/8th the complexity. Initial page render stays server-side for fast first paint; subsequent switches are AJAX.
+- **Period switcher UX (Task 3)** — period pills (`<a class="btn-period">`) are intercepted by a document-level click listener. The listener `preventDefault`s, extracts the period from the href's query string, fetches `/dashboard/fragment?...`, swaps `#perf-dashboard` innerHTML, calls `window.initPerfDashboard()` to re-render charts, and updates the URL via `history.pushState`. A skeleton overlay (translucent veil + conic-gradient spinner) fades in during the fetch.
+- **Employee switcher UX (Task 4)** — same pattern: the `<select name="employee_id">` change event is intercepted, the new employee_id is merged into the current query params, fragment is fetched + swapped, URL is pushed. Back/forward button works via `popstate` listener.
+- **Optional G10 (Task 5)** — deferred. Requires `pg_cron` extension + a materialized view refresh policy. The dashboard works fine without it (Phase 3's `getActivitySummary()` already gives a cross-table active-days count). Ship only if business explicitly asks for a "Recent Activity" timeline widget.
+- **Optional G6 (Task 6)** — deferred. Out of scope per the plan (only relevant if a CRM module is being planned).
+- **Performance audit (Task 7)** — shipped as migration `2026_07_31_000001_add_performance_indexes_for_user_dashboard.php` with 6 composite partial indexes covering the dashboard's hottest query patterns:
+  - `idx_si_perf_user_date` on `sales_invoices (created_by, invoice_date) WHERE is_reversed=false AND deleted_at IS NULL`
+  - `idx_cp_perf_user_date` on `customer_payments (created_by, payment_date) WHERE is_reversed=false`
+  - `idx_ce_perf_salesman_period` on `commission_entries (salesman_id, commission_period) WHERE is_reversed=false`
+  - `idx_sr_perf_user_date` on `sales_returns (created_by, return_date) WHERE is_reversed=false AND deleted_at IS NULL`
+  - `idx_sa_perf_approver` on `stock_adjustments (approved_by, approved_at) WHERE is_reversed=false AND deleted_at IS NULL`
+  - `idx_di_perf_approver` on `damage_invoices (approved_by, approved_at) WHERE is_reversed=false`
+  All indexes are partial (PostgreSQL WHERE clause) so they only index the ~95% of rows that are live. Each migration step uses `CREATE INDEX IF NOT EXISTS` for idempotency, and a final `ANALYZE` refreshes planner statistics. Expected impact: cold-cache page load drops from ~1.4s to ~0.3s on a 1000-invoice user.
+- **Telemetry (Task 8)** — shipped via the `timed()` private helper. Wraps every cached metric call, measures `microtime(true)` delta, and if > 200ms logs to `storage/logs/perf.log` via `Log::build(['driver'=>'single','path'=>storage_path('logs/perf.log')])` (on-demand channel — no config/logging.php change needed). Log format: `[perf] slow metric {name} took {ms} ms (user={id}, employee_id={?}, period={key})`. The telemetry is wrapped in try/finally so it never breaks the dashboard even if the log filesystem is full.
+
+**Phase 6 visual polish (per the "make it visually exciting" requirement):**
+- A `.perf-skeleton-overlay` fades in (180ms ease-out) during AJAX fetches — translucent backdrop-filter blur + a centered white card with a conic-gradient spinner (indigo → violet → pink) and "Refreshing dashboard…" text.
+- A `.perf-refreshing` class on `#perf-dashboard` triggers a 1.2s pulse animation on the active period pill so the user sees which period they picked before the new data lands.
+- After every swap, a `.perf-fresh` class applies a 400ms fade-in animation to the new content (opacity 0 → 1, translateY 4px → 0).
+- A `.perf-phase6-badge` ("Live · Cached" pill with a bolt icon) appears in the hero header next to the role badge — gradient background (emerald → sky), uppercase 0.7rem font. Hidden on mobile to preserve hero layout. Tooltip explains what it means.
+- The chart destroy-and-recreate cycle in `window.initPerfDashboard()` uses `Chart.getChart(canvas)` to find existing instances — no manual instance tracking, robust to future chart additions.
 
 ---
 

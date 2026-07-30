@@ -6,13 +6,17 @@ use App\Models\Employee;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
  * User Performance Dashboard Controller — Phase 0 (Scaffolding) +
  * Phase 1 (Sales Performance Core) + Phase 2 (Collections & Returns) +
- * Phase 3 (Operational Efficiency & Productivity).
+ * Phase 3 (Operational Efficiency & Productivity) +
+ * Phase 4 (Commission, Stock Discipline & Accuracy) +
+ * Phase 5 (Role-Aware Refinement & Approval Workload) +
+ * Phase 6 (Polish, Performance & Post-Launch Gaps).
  *
  * Replaces {@see LegacyDashboardController} for the `/dashboard` route.
  *
@@ -50,6 +54,20 @@ use Illuminate\Support\Facades\Log;
  *   Pipeline snapshot is point-in-time. Activity summary derives
  *   cross-table active days + peak day. Notification engagement uses the
  *   notifications table keyed by user_id (NOT created_by).
+ * PHASE 4 — Commission, Stock Discipline & Accuracy: getCommissionSummary,
+ *   getStockDiscipline, getAccuracyKPIs. Commission uses salesman_id
+ *   (employees.id); stock discipline uses created_by (activity) +
+ *   accountable_employee_id (damage blame); accuracy uses created_by.
+ * PHASE 5 — Role-Aware Refinement & Approval Workload: resolveRoleSections
+ *   (role → section visibility map), getApprovalWorkload (manager-only
+ *   pending/approved counts using existing approved_by columns on
+ *   stock_adjustments + damage_invoices).
+ * PHASE 6 — Polish, Performance & Post-Launch Gaps: 60s Cache::remember()
+ *   on every metric (keyed perf:user:{uid}:{metric}:{period}:{rangeHash}),
+ *   slow-query telemetry (>200ms logged to storage/logs/perf.log via
+ *   Log::build on-demand channel), AJAX fragment refresh endpoint
+ *   /dashboard/fragment for no-full-reload period/employee switching,
+ *   composite partial indexes migration for high-traffic query patterns.
  *
  * ATTRIBUTION CONVENTION:
  *   - $targetUser->id         → for `created_by` queries (activity metrics)
@@ -73,143 +91,69 @@ class UserPerformanceDashboardController extends Controller
      */
     public function index(Request $request)
     {
-        $authUser = Auth::user();
-        $isSuperadmin = $authUser->isSuperadmin();
+        $ctx = $this->resolveContext($request);
 
-        // ============================================================
-        // 1. Resolve target employee + user
-        // ============================================================
-        // Default: the logged-in user's own employee.
-        // Super-admin override: ?employee_id=X (only honored if valid).
-        $authEmployeeId = $authUser->employee?->id;
-        $targetEmployeeId = $authEmployeeId;
-
-        $requestedEmployeeId = $request->integer('employee_id');
-        if ($isSuperadmin && $requestedEmployeeId > 0) {
-            $exists = Employee::where('id', $requestedEmployeeId)
-                ->whereNull('deleted_at')
-                ->exists();
-            if ($exists) {
-                $targetEmployeeId = $requestedEmployeeId;
-            }
-        }
-
-        // If the logged-in user has no employee record (edge case), bail
-        // gracefully — this should never happen in production because
-        // users.employee_id is NOT NULL UNIQUE, but we guard anyway.
-        if ($targetEmployeeId === null) {
+        // Edge case: logged-in user has no employee record → render the
+        // scaffolding-only view with an error message.
+        if (($ctx['scaffoldingOnly'] ?? false) || empty($ctx['targetEmployee'])) {
             return view('dashboard.performance', [
                 'title'              => 'My Performance — Remote Center ERP',
-                'user'               => $authUser,
-                'isSuperadmin'       => $isSuperadmin,
+                'user'               => $ctx['authUser'],
+                'isSuperadmin'       => $ctx['isSuperadmin'],
                 'targetEmployee'     => null,
                 'targetUser'         => null,
-                'employeeOptions'    => collect(),
-                'period'             => 'mtd',
-                'periodLabel'        => 'Month to Date',
-                'range'              => ['start' => now()->startOfMonth()->toDateString(), 'end' => now()->toDateString()],
+                'employeeOptions'    => $ctx['employeeOptions'] ?? collect(),
+                'period'             => $ctx['period'],
+                'periodLabel'        => $ctx['periodLabel'],
+                'range'              => $ctx['range'],
                 'scaffoldingOnly'    => true,
                 'errorMessage'       => 'Your user account is not linked to an employee record. Please contact an administrator.',
             ]);
         }
 
-        $targetEmployee = Employee::with('branch')->find($targetEmployeeId);
-        $targetUser = User::where('employee_id', $targetEmployeeId)->first();
+        // ============================================================
+        // Phase 6 — CACHED METRIC LOADING
+        // ============================================================
+        // Every metric is wrapped in $this->cached() which:
+        //   1. Calls Cache::remember(key, 60s, fn) where the key encodes
+        //      userId/employeeId + metric name + period + range hash.
+        //   2. Inside the cache miss branch, calls $this->timed(metric, fn)
+        //      which times the query and logs slow ones (>200ms) to
+        //      storage/logs/perf.log via Log::build on-demand channel.
+        // The 60s TTL is the invalidation mechanism — short enough that
+        // fresh data appears within a minute, long enough to amortize the
+        // cost of the 25+ queries on repeat visits / AJAX refreshes.
+        $userId         = $ctx['targetUser']?->id ?? 0;
+        $employeeId     = $ctx['targetEmployee']->id;
+        $period         = $ctx['period'];
+        $range          = $ctx['range'];
+        $txnTypeExists  = $ctx['customerPaymentsTxnType'];
+        $role           = $ctx['targetEmployee']->role ?? 'other';
+        $roleSections   = $this->resolveRoleSections($role);
 
-        // ============================================================
-        // 2. Resolve period range
-        // ============================================================
-        [$period, $periodLabel, $range] = $this->resolvePeriod($request);
+        $salesKpis             = $this->cached('sales_kpis', $userId, $period, $range, fn() => $this->getSalesKPIs($userId, $range));
+        $salesTrend            = $this->cached('sales_trend', $userId, $period, $range, fn() => $this->getSalesTrend($userId, $range));
+        $salesByProductGroup   = $this->cached('sales_by_pg', $userId, $period, $range, fn() => $this->getSalesByProductGroup($userId, $range));
+        $topCustomers          = $this->cached('top_customers', $userId, $period, $range, fn() => $this->getTopCustomers($userId, $range, 5));
+        $customerAcquisition   = $this->cached('cust_acq', $userId, $period, $range, fn() => $this->getCustomerAcquisition($userId, $range));
 
-        // ============================================================
-        // 3. Load employee options for super-admin <select>
-        // ============================================================
-        // Only loaded for super-admin — non-admins never see the box.
-        // Ordered by name; the current target is marked selected in the view.
-        $employeeOptions = collect();
-        if ($isSuperadmin) {
-            $employeeOptions = Employee::whereNull('deleted_at')
-                ->where('is_active', true)
-                ->orderBy('name')
-                ->select('id', 'name', 'employee_code', 'role', 'branch_id')
-                ->with('branch:id,branch_name')
-                ->get();
-        }
+        $collectionKpis    = $this->cached('collection_kpis', $userId, $period, $range, fn() => $this->getCollectionKPIs($userId, $range, $txnTypeExists));
+        $receivableAging   = $this->cached('recv_aging', $userId, $period, $range, fn() => $this->getReceivableAging($userId));
+        $returnKpis        = $this->cached('return_kpis', $userId, $period, $range, fn() => $this->getReturnKPIs($userId, $range));
+        $paymentModeMix    = $this->cached('pmix', $userId, $period, $range, fn() => $this->getPaymentModeMix($userId, $range));
 
-        // ============================================================
-        // 4. Phase 0 — Runtime verification of G12 schema gap
-        // ============================================================
-        // Per the plan: verify whether customer_payments.transaction_type
-        // exists at runtime so Phase 2 (Collections) knows whether to use it
-        // for write-off / discount / refund metrics (C9).
-        $customerPaymentsTxnType = $this->checkCustomerPaymentsTransactionType();
+        $velocityKpis          = $this->cached('velocity', $userId, $period, $range, fn() => $this->getVelocityKPIs($userId, $range));
+        $pipelineSnapshot      = $this->cached('pipeline', $userId, $period, $range, fn() => $this->getPipelineSnapshot($userId));
+        $workPattern           = $this->cached('work_pattern', $userId, $period, $range, fn() => $this->getWorkPattern($userId, $range));
+        $activitySummary       = $this->cached('activity', $userId, $period, $range, fn() => $this->getActivitySummary($userId, $range));
+        $notificationEngagement = $this->cached('notif', $userId, $period, $range, fn() => $this->getNotificationEngagement($userId));
 
-        // ============================================================
-        // 5. Phase 1 — Sales Performance Core metrics
-        // ============================================================
-        // Every query is scoped to the resolved target user (created_by = $userId)
-        // AND the resolved period range. Partition-pruned via invoice_date BETWEEN.
-        $userId = $targetUser?->id ?? 0;
-        $salesKpis             = $this->getSalesKPIs($userId, $range);
-        $salesTrend            = $this->getSalesTrend($userId, $range);
-        $salesByProductGroup   = $this->getSalesByProductGroup($userId, $range);
-        $topCustomers          = $this->getTopCustomers($userId, $range, 5);
-        $customerAcquisition   = $this->getCustomerAcquisition($userId, $range);
+        $commissionSummary = $this->cached('commission', $employeeId, $period, $range, fn() => $this->getCommissionSummary($employeeId, $range));
+        $stockDiscipline   = $this->cached('stock_disc', $userId, $period, $range, fn() => $this->getStockDiscipline($userId, $employeeId, $range));
+        $accuracyKpis      = $this->cached('accuracy', $userId, $period, $range, fn() => $this->getAccuracyKPIs($userId, $range));
 
-        // ============================================================
-        // 6. Phase 2 — Collections & Returns metrics
-        // ============================================================
-        // Collection / payment / return queries are scoped to created_by = $userId
-        // AND the period range. Outstanding + aging are point-in-time snapshots
-        // (no period filter) so they always reflect the user's current book.
-        $collectionKpis    = $this->getCollectionKPIs($userId, $range, $customerPaymentsTxnType);
-        $receivableAging   = $this->getReceivableAging($userId);
-        $returnKpis        = $this->getReturnKPIs($userId, $range);
-        $paymentModeMix    = $this->getPaymentModeMix($userId, $range);
-
-        // ============================================================
-        // 7. Phase 3 — Operational Efficiency & Productivity metrics
-        // ============================================================
-        // Velocity KPIs use sales_invoices lifecycle timestamps (created_at,
-        // godown_prepared_at, challan_issued_at) → period-filtered by invoice_date
-        // for partition pruning. Pipeline snapshot is point-in-time. Work pattern
-        // is a 24-bin hour-of-day histogram UNIONed across activity tables.
-        // Activity summary derives cross-table active days + peak day.
-        // Notification engagement uses notifications.user_id = $userId.
-        $velocityKpis          = $this->getVelocityKPIs($userId, $range);
-        $pipelineSnapshot      = $this->getPipelineSnapshot($userId);
-        $workPattern           = $this->getWorkPattern($userId, $range);
-        $activitySummary       = $this->getActivitySummary($userId, $range);
-        $notificationEngagement = $this->getNotificationEngagement($userId);
-
-        // ============================================================
-        // 8. Phase 4 — Commission, Stock Discipline & Accuracy metrics
-        // ============================================================
-        // Commission queries use salesman_id = $targetEmployee->id (NOT
-        // created_by) — commission_entries is a salesman ledger. Stock
-        // discipline + accuracy use created_by = $userId for activity
-        // metrics AND accountable_employee_id = $targetEmployee->id for
-        // damage-blame (K11). All counts are period-filtered for partition
-        // pruning (sales_invoices.invoice_date, customer_payments.payment_date,
-        // sales_returns.return_date, sales_challans.created_at, plus
-        // stock_adjustments.adjustment_date / damage_invoices.damage_date /
-        // warehouse_transfers.transfer_date).
-        $commissionSummary = $this->getCommissionSummary($targetEmployee->id, $range);
-        $stockDiscipline   = $this->getStockDiscipline($userId, $targetEmployee->id, $range);
-        $accuracyKpis      = $this->getAccuracyKPIs($userId, $range);
-
-        // ============================================================
-        // 9. Phase 5 — Role-aware section visibility + Approval Workload
-        // ============================================================
-        // Resolve which top-level dashboard sections to render for this
-        // employee's role. The map is intentionally permissive — when in
-        // doubt, show the section — so unknown / future roles still see a
-        // useful dashboard. The Approval Workload section is exclusive to
-        // manager / admin / superadmin (the only roles that approve stock
-        // adjustments and damage invoices per the maker-checker workflow).
-        $roleSections = $this->resolveRoleSections($targetEmployee->role ?? 'other');
         $approvalWorkload = $roleSections['approval_workload']
-            ? $this->getApprovalWorkload($userId, $targetEmployee->id, $range)
+            ? $this->cached('approval', $userId, $period, $range, fn() => $this->getApprovalWorkload($userId, $employeeId, $range))
             : [
                 'adjustments_pending_my_approval' => 0,
                 'adjustments_approved_by_me'      => 0,
@@ -218,21 +162,18 @@ class UserPerformanceDashboardController extends Controller
                 'total_pending_value'             => 0.0,
             ];
 
-        // ============================================================
-        // 8. Render the view
-        // ============================================================
         return view('dashboard.performance', [
             'title'                       => 'My Performance — Remote Center ERP',
-            'user'                        => $authUser,
-            'isSuperadmin'                => $isSuperadmin,
-            'targetEmployee'              => $targetEmployee,
-            'targetUser'                  => $targetUser,
-            'employeeOptions'             => $employeeOptions,
+            'user'                        => $ctx['authUser'],
+            'isSuperadmin'                => $ctx['isSuperadmin'],
+            'targetEmployee'              => $ctx['targetEmployee'],
+            'targetUser'                  => $ctx['targetUser'],
+            'employeeOptions'             => $ctx['employeeOptions'],
             'period'                      => $period,
-            'periodLabel'                 => $periodLabel,
+            'periodLabel'                 => $ctx['periodLabel'],
             'range'                       => $range,
             'scaffoldingOnly'             => false,
-            'customerPaymentsTxnType'     => $customerPaymentsTxnType,
+            'customerPaymentsTxnType'     => $txnTypeExists,
 
             // Phase 1 data
             'salesKpis'             => $salesKpis,
@@ -262,7 +203,304 @@ class UserPerformanceDashboardController extends Controller
             // Phase 5 data
             'roleSections'      => $roleSections,
             'approvalWorkload'  => $approvalWorkload,
+
+            // Phase 6 flags
+            'fragmentMode'      => false,
         ]);
+    }
+
+    /**
+     * AJAX endpoint: return just the dashboard inner HTML (#perf-dashboard
+     * container) for no-full-reload period/employee switching.
+     *
+     * Route: GET /dashboard/fragment
+     * Name:  dashboard.fragment
+     *
+     * Phase 6 implementation. Same context resolution + cached metrics as
+     * index(), but renders the view with $fragmentMode=true so the Blade
+     * template skips @extends('layouts.admin') and outputs only the inner
+     * dashboard markup. Returns JSON {html, period, periodLabel, range,
+     * employeeId} so the caller can also update the URL via
+     * history.pushState.
+     *
+     * On any error → 200 OK with {error: '...'} so the caller can fall
+     * back to a full page reload (window.location = url).
+     */
+    public function fragmentAjax(Request $request)
+    {
+        try {
+            $ctx = $this->resolveContext($request);
+
+            if (($ctx['scaffoldingOnly'] ?? false) || empty($ctx['targetEmployee'])) {
+                return response()->json([
+                    'error' => 'no-employee',
+                    'html'  => '',
+                ], 200);
+            }
+
+            $userId         = $ctx['targetUser']?->id ?? 0;
+            $employeeId     = $ctx['targetEmployee']->id;
+            $period         = $ctx['period'];
+            $range          = $ctx['range'];
+            $txnTypeExists  = $ctx['customerPaymentsTxnType'];
+            $role           = $ctx['targetEmployee']->role ?? 'other';
+            $roleSections   = $this->resolveRoleSections($role);
+
+            $salesKpis             = $this->cached('sales_kpis', $userId, $period, $range, fn() => $this->getSalesKPIs($userId, $range));
+            $salesTrend            = $this->cached('sales_trend', $userId, $period, $range, fn() => $this->getSalesTrend($userId, $range));
+            $salesByProductGroup   = $this->cached('sales_by_pg', $userId, $period, $range, fn() => $this->getSalesByProductGroup($userId, $range));
+            $topCustomers          = $this->cached('top_customers', $userId, $period, $range, fn() => $this->getTopCustomers($userId, $range, 5));
+            $customerAcquisition   = $this->cached('cust_acq', $userId, $period, $range, fn() => $this->getCustomerAcquisition($userId, $range));
+
+            $collectionKpis    = $this->cached('collection_kpis', $userId, $period, $range, fn() => $this->getCollectionKPIs($userId, $range, $txnTypeExists));
+            $receivableAging   = $this->cached('recv_aging', $userId, $period, $range, fn() => $this->getReceivableAging($userId));
+            $returnKpis        = $this->cached('return_kpis', $userId, $period, $range, fn() => $this->getReturnKPIs($userId, $range));
+            $paymentModeMix    = $this->cached('pmix', $userId, $period, $range, fn() => $this->getPaymentModeMix($userId, $range));
+
+            $velocityKpis          = $this->cached('velocity', $userId, $period, $range, fn() => $this->getVelocityKPIs($userId, $range));
+            $pipelineSnapshot      = $this->cached('pipeline', $userId, $period, $range, fn() => $this->getPipelineSnapshot($userId));
+            $workPattern           = $this->cached('work_pattern', $userId, $period, $range, fn() => $this->getWorkPattern($userId, $range));
+            $activitySummary       = $this->cached('activity', $userId, $period, $range, fn() => $this->getActivitySummary($userId, $range));
+            $notificationEngagement = $this->cached('notif', $userId, $period, $range, fn() => $this->getNotificationEngagement($userId));
+
+            $commissionSummary = $this->cached('commission', $employeeId, $period, $range, fn() => $this->getCommissionSummary($employeeId, $range));
+            $stockDiscipline   = $this->cached('stock_disc', $userId, $period, $range, fn() => $this->getStockDiscipline($userId, $employeeId, $range));
+            $accuracyKpis      = $this->cached('accuracy', $userId, $period, $range, fn() => $this->getAccuracyKPIs($userId, $range));
+
+            $approvalWorkload = $roleSections['approval_workload']
+                ? $this->cached('approval', $userId, $period, $range, fn() => $this->getApprovalWorkload($userId, $employeeId, $range))
+                : [
+                    'adjustments_pending_my_approval' => 0,
+                    'adjustments_approved_by_me'      => 0,
+                    'damages_pending_my_approval'     => 0,
+                    'damages_approved_by_me'          => 0,
+                    'total_pending_value'             => 0.0,
+                ];
+
+            $html = view('dashboard.performance', [
+                'title'                       => 'My Performance — Remote Center ERP',
+                'user'                        => $ctx['authUser'],
+                'isSuperadmin'                => $ctx['isSuperadmin'],
+                'targetEmployee'              => $ctx['targetEmployee'],
+                'targetUser'                  => $ctx['targetUser'],
+                'employeeOptions'             => $ctx['employeeOptions'],
+                'period'                      => $period,
+                'periodLabel'                 => $ctx['periodLabel'],
+                'range'                       => $range,
+                'scaffoldingOnly'             => false,
+                'customerPaymentsTxnType'     => $txnTypeExists,
+
+                'salesKpis'             => $salesKpis,
+                'salesTrend'            => $salesTrend,
+                'salesByProductGroup'   => $salesByProductGroup,
+                'topCustomers'          => $topCustomers,
+                'customerAcquisition'   => $customerAcquisition,
+
+                'collectionKpis'        => $collectionKpis,
+                'receivableAging'       => $receivableAging,
+                'returnKpis'            => $returnKpis,
+                'paymentModeMix'        => $paymentModeMix,
+
+                'velocityKpis'           => $velocityKpis,
+                'pipelineSnapshot'       => $pipelineSnapshot,
+                'workPattern'            => $workPattern,
+                'activitySummary'        => $activitySummary,
+                'notificationEngagement' => $notificationEngagement,
+
+                'commissionSummary' => $commissionSummary,
+                'stockDiscipline'   => $stockDiscipline,
+                'accuracyKpis'      => $accuracyKpis,
+
+                'roleSections'      => $roleSections,
+                'approvalWorkload'  => $approvalWorkload,
+
+                'fragmentMode'      => true,
+            ])->render();
+
+            return response()->json([
+                'html'         => $html,
+                'period'       => $period,
+                'periodLabel'  => $ctx['periodLabel'],
+                'range'        => $range,
+                'employeeId'   => $employeeId,
+                'employeeName' => $ctx['targetEmployee']->name,
+            ], 200, [
+                // Suppress layout-level chrome from any middleware.
+                'X-Perf-Fragment' => '1',
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('Phase 6 fragmentAjax failed: ' . $e->getMessage());
+            return response()->json([
+                'error' => 'server-error',
+                'message' => $e->getMessage(),
+                'html'  => '',
+            ], 200);
+        }
+    }
+
+    /**
+     * Phase 6 — Resolve all dashboard context (auth, target employee/user,
+     * period range, employee options, G12 schema check) into a single
+     * array. Shared by index() and fragmentAjax() so both code paths see
+     * identical resolution logic.
+     *
+     * @return array{
+     *   authUser: User, isSuperadmin: bool,
+     *   targetEmployee: Employee|null, targetUser: User|null,
+     *   employeeOptions: \Illuminate\Support\Collection,
+     *   period: string, periodLabel: string, range: array{start:string,end:string},
+     *   customerPaymentsTxnType: bool,
+     *   scaffoldingOnly: bool
+     * }
+     */
+    private function resolveContext(Request $request): array
+    {
+        $authUser = Auth::user();
+        $isSuperadmin = $authUser->isSuperadmin();
+
+        // ============================================================
+        // 1. Resolve target employee + user
+        // ============================================================
+        $authEmployeeId = $authUser->employee?->id;
+        $targetEmployeeId = $authEmployeeId;
+
+        $requestedEmployeeId = $request->integer('employee_id');
+        if ($isSuperadmin && $requestedEmployeeId > 0) {
+            $exists = Employee::where('id', $requestedEmployeeId)
+                ->whereNull('deleted_at')
+                ->exists();
+            if ($exists) {
+                $targetEmployeeId = $requestedEmployeeId;
+            }
+        }
+
+        if ($targetEmployeeId === null) {
+            return [
+                'authUser'        => $authUser,
+                'isSuperadmin'    => $isSuperadmin,
+                'targetEmployee'  => null,
+                'targetUser'      => null,
+                'employeeOptions' => collect(),
+                'period'          => 'mtd',
+                'periodLabel'     => 'Month to Date',
+                'range'           => [
+                    'start' => now()->startOfMonth()->toDateString(),
+                    'end'   => now()->toDateString(),
+                ],
+                'customerPaymentsTxnType' => false,
+                'scaffoldingOnly'         => true,
+            ];
+        }
+
+        $targetEmployee = Employee::with('branch')->find($targetEmployeeId);
+        $targetUser = User::where('employee_id', $targetEmployeeId)->first();
+
+        [$period, $periodLabel, $range] = $this->resolvePeriod($request);
+
+        $employeeOptions = collect();
+        if ($isSuperadmin) {
+            $employeeOptions = Employee::whereNull('deleted_at')
+                ->where('is_active', true)
+                ->orderBy('name')
+                ->select('id', 'name', 'employee_code', 'role', 'branch_id')
+                ->with('branch:id,branch_name')
+                ->get();
+        }
+
+        $customerPaymentsTxnType = $this->checkCustomerPaymentsTransactionType();
+
+        return [
+            'authUser'                => $authUser,
+            'isSuperadmin'            => $isSuperadmin,
+            'targetEmployee'          => $targetEmployee,
+            'targetUser'              => $targetUser,
+            'employeeOptions'         => $employeeOptions,
+            'period'                  => $period,
+            'periodLabel'             => $periodLabel,
+            'range'                   => $range,
+            'customerPaymentsTxnType' => $customerPaymentsTxnType,
+            'scaffoldingOnly'         => false,
+        ];
+    }
+
+    /**
+     * Phase 6 — Cache::remember() wrapper with built-in slow-query
+     * telemetry.
+     *
+     * Cache key format: perf:user:{id}:{metric}:{period}:{rangeHash}
+     *   - {id} is userId for activity metrics, employeeId for portfolio
+     *     metrics (commission). Both flows use the same key namespace.
+     *   - {rangeHash} is md5(start_end) so custom ranges work.
+     *
+     * TTL: 60 seconds. Short enough that fresh data appears within a
+     * minute, long enough to amortize the 25+ queries on repeat visits /
+     * AJAX refreshes. The TTL is the invalidation mechanism — no Eloquent
+     * observers needed.
+     *
+     * Inside the cache miss branch, $this->timed() wraps the callable and
+     * logs slow ones (>200ms) to storage/logs/perf.log.
+     *
+     * @param string   $metric  Short metric key (e.g. 'sales_kpis')
+     * @param int      $id      userId OR employeeId (depending on metric)
+     * @param string   $period  Period key ('mtd', 'qtd', etc.)
+     * @param array    $range   ['start' => YYYY-MM-DD, 'end' => YYYY-MM-DD]
+     * @param callable $fn      The metric computation
+     * @param int      $ttl     Cache TTL in seconds (default 60)
+     */
+    private function cached(string $metric, int $id, string $period, array $range, callable $fn, int $ttl = 60)
+    {
+        if ($id <= 0) {
+            // No user → just compute (and time) without caching. Avoids
+            // polluting the cache with junk keys for unauthenticated /
+            // scaffolding-only requests.
+            return $this->timed($metric, $fn);
+        }
+        $rangeHash = md5($range['start'] . '_' . $range['end']);
+        $key = "perf:user:{$id}:{$metric}:{$period}:{$rangeHash}";
+        return Cache::remember($key, $ttl, function () use ($metric, $fn) {
+            return $this->timed($metric, $fn);
+        });
+    }
+
+    /**
+     * Phase 6 — Time a callable and log slow ones (>200ms) to
+     * storage/logs/perf.log via Log::build on-demand channel.
+     *
+     * Uses Log::build() to create a one-off single-file channel pointing
+     * at storage_path('logs/perf.log') — no need to modify config/logging.php.
+     * The file accumulates slow-metric warnings across requests, making it
+     * easy to spot the heaviest queries during a perf audit.
+     */
+    private function timed(string $label, callable $fn)
+    {
+        $start = microtime(true);
+        try {
+            return $fn();
+        } finally {
+            $elapsedMs = (microtime(true) - $start) * 1000;
+            if ($elapsedMs > 200.0) {
+                try {
+                    $req = request();
+                    $userId = $req?->user()?->id ?? 0;
+                    $period = $req?->input('period', 'mtd');
+                    $empId = $req?->input('employee_id', '-');
+                    Log::build([
+                        'driver' => 'single',
+                        'path'   => storage_path('logs/perf.log'),
+                        'level'  => 'warning',
+                    ])->warning(sprintf(
+                        '[perf] slow metric %s took %.1f ms (user=%d, employee_id=%s, period=%s)',
+                        $label,
+                        $elapsedMs,
+                        $userId,
+                        $empId,
+                        $period
+                    ));
+                } catch (\Throwable $_) {
+                    // Telemetry must never break the dashboard.
+                }
+            }
+        }
     }
 
     /**

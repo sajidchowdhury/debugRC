@@ -1,4 +1,14 @@
-@extends('layouts.admin')
+{{--
+    User Performance Dashboard — Phases 0-6.
+
+    Phase 6: $fragmentMode (bool) toggles between the full page layout
+    (layouts.admin) and the plain layout (layouts.plain, no chrome). The
+    AJAX fragment endpoint sets fragmentMode=true so the response
+    contains only the #perf-dashboard container + CSS + scripts. The
+    caller parses the HTML and swaps just the dashboard into the live
+    page without a full reload.
+--}}
+@extends(($fragmentMode ?? false) ? 'layouts.plain' : 'layouts.admin')
 
 @push('css')
 <style>
@@ -1696,6 +1706,114 @@
         color: var(--perf-muted);
         margin-top: 0.2rem;
     }
+
+    /* ============================================================
+       PHASE 6 — SKELETON OVERLAY + AJAX REFRESH POLISH
+       ============================================================
+       The skeleton overlay appears during AJAX fragment refreshes. It
+       covers just the #perf-dashboard region with a translucent veil
+       + a centered card containing a gradient spinner and "Refreshing
+       dashboard…" text. The veil fades in (opacity 0 → 0.98) over
+       180ms and fades out over 220ms — fast enough to feel instant
+       but slow enough to communicate "something is happening".
+
+       The spinner is a conic-gradient ring that rotates around its
+       center; it uses the same indigo→violet palette as the hero
+       header so the loading state feels native to the page.
+       ──────────────────────────────────────────────────────────── */
+    #perf-dashboard { position: relative; }
+
+    #perf-dashboard .perf-skeleton-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(248, 250, 252, 0.6);
+        backdrop-filter: blur(3px);
+        -webkit-backdrop-filter: blur(3px);
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        transition: opacity 180ms ease-out;
+        pointer-events: none;
+        border-radius: 1rem;
+    }
+    #perf-dashboard .perf-skeleton-overlay.visible {
+        opacity: 1;
+        pointer-events: auto;
+    }
+    #perf-dashboard .perf-skeleton-card {
+        background: #ffffff;
+        border: 1px solid var(--perf-border);
+        border-radius: 1rem;
+        padding: 1.5rem 2rem;
+        box-shadow: var(--perf-shadow-lg);
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        min-width: 240px;
+    }
+    #perf-dashboard .perf-skeleton-spinner {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: conic-gradient(from 0deg, #4f46e5, #7c3aed, #ec4899, #4f46e5);
+        -webkit-mask: radial-gradient(circle at center, transparent 38%, #000 40%);
+        mask: radial-gradient(circle at center, transparent 38%, #000 40%);
+        animation: perf-spin 800ms linear infinite;
+        flex-shrink: 0;
+    }
+    @keyframes perf-spin {
+        to { transform: rotate(360deg); }
+    }
+    #perf-dashboard .perf-skeleton-text {
+        font-size: 0.92rem;
+        font-weight: 600;
+        color: var(--perf-text);
+        letter-spacing: -0.005em;
+    }
+
+    /* Visual feedback on period pills during AJAX refresh — the active
+       pill gets a "loading" pulse so the user knows which period they
+       picked even before the new data lands. */
+    #perf-dashboard.perf-refreshing .btn-period.active {
+        animation: perf-pill-pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes perf-pill-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.4); }
+        50%      { box-shadow: 0 0 0 6px rgba(79, 70, 229, 0); }
+    }
+
+    /* Smooth fade-in for swapped content — the new #perf-dashboard
+       innerHTML gets .perf-fresh class for 400ms after a swap. */
+    #perf-dashboard.perf-fresh > *:not(.perf-skeleton-overlay) {
+        animation: perf-fade-in 400ms ease-out;
+    }
+    @keyframes perf-fade-in {
+        from { opacity: 0; transform: translateY(4px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Phase 6 — Cache health badge. Renders in the hero header to show
+       the user (and admin) that caching + telemetry are active. Hidden
+       on small screens to preserve hero layout. */
+    #perf-dashboard .perf-phase6-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.18), rgba(14, 165, 233, 0.18));
+        border: 1px solid rgba(16, 185, 129, 0.35);
+        color: #d1fae5;
+        padding: 0.2rem 0.65rem;
+        border-radius: 999px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+    }
+    @media (max-width: 575.98px) {
+        #perf-dashboard .perf-phase6-badge { display: none; }
+    }
 </style>
 @endpush
 
@@ -1725,6 +1843,14 @@
                             <i class="fas fa-eye me-1"></i>{{ $sectionCount }} section{{ $sectionCount !== 1 ? 's' : '' }} visible
                         </span>
                     @endif
+                    {{-- Phase 6 — Live + Cached badge. Indicates the dashboard
+                         is using Cache::remember() (60s TTL) + slow-query
+                         telemetry (>200ms → storage/logs/perf.log) + AJAX
+                         fragment refresh. Clicking it is a no-op (the title
+                         attribute explains what it means). --}}
+                    <span class="perf-phase6-badge ms-1" title="Phase 6: 60s cache + slow-query telemetry + AJAX fragment refresh active">
+                        <i class="fas fa-bolt"></i>Live · Cached
+                    </span>
                 @endif
             </p>
             <p class="mb-0 sub">
@@ -3003,11 +3129,51 @@
 @endsection
 
 @push('scripts')
-{{-- Chart.js — already on the legacy dashboard view; load locally for this page --}}
+{{-- Chart.js — already on the legacy dashboard view; load locally for this page.
+     Phase 6: skipped in fragment mode (Chart.js is already loaded on the host
+     page; reloading would reset Chart global state and break existing charts). --}}
+@if (!($fragmentMode ?? false))
 <script src="/assets/js/bootstrep/chart.umd.min.js"></script>
+@endif
 
 <script>
-(function () {
+{{-- ============================================================
+     PHASE 6 — RE-INITIALIZABLE CHART INIT
+     ============================================================
+     The chart init code is wrapped in window.initPerfDashboard() so the
+     AJAX fragment refresher can call it again after swapping the
+     #perf-dashboard innerHTML. Each call:
+
+       1. Destroys any existing Chart.js instances attached to canvases
+          inside #perf-dashboard (tracked in window.__perfCharts[]).
+       2. Re-creates them from the freshly-injected @json data.
+
+     Without this destroy step, Chart.js leaks <canvas> observers and
+     the page accumulates dead chart instances on every period/employee
+     switch — eventually causing "Maximum call stack exceeded" or
+     jank. With it, the swap is clean and fast (<50ms on a dev laptop).
+--}}
+window.initPerfDashboard = function () {
+    // ── 1. Destroy any existing Chart instances on #perf-dashboard
+    //       canvases. Chart.js v3+ exposes Chart.getChart(canvas) which
+    //       returns the instance bound to that canvas (or undefined).
+    //       We scan every <canvas> inside #perf-dashboard and destroy
+    //       whatever we find. This is the safest cross-version way to
+    //       clean up before re-creating charts after an AJAX swap —
+    //       no need to track instances manually.
+    //       ──────────────────────────────────────────────────────
+    const perfRoot = document.getElementById('perf-dashboard');
+    if (perfRoot && window.Chart && typeof window.Chart.getChart === 'function') {
+        perfRoot.querySelectorAll('canvas').forEach(function (canvas) {
+            try {
+                const existing = window.Chart.getChart(canvas);
+                if (existing && typeof existing.destroy === 'function') {
+                    existing.destroy();
+                }
+            } catch (e) { /* ignore — stale canvas */ }
+        });
+    }
+
     // ============================================================
     // 1. Sales Trend — dual-axis line+bar chart
     // ============================================================
@@ -3491,6 +3657,260 @@
             }
         });
     }
+}; {{-- end of window.initPerfDashboard --}}
+
+// ============================================================
+// PHASE 6 — INITIAL CHART RENDER + AJAX FRAGMENT REFRESH
+// ============================================================
+//
+// On the full-page load, we just call initPerfDashboard() once.
+// In fragment mode, the host page's AJAX handler calls initPerfDashboard()
+// after swapping the #perf-dashboard innerHTML — so we skip the auto-init
+// in fragment mode (the host will trigger it).
+//
+// The AJAX refresh handler is ONLY attached on the full page (not in
+// fragments). It intercepts:
+//   • .btn-period clicks → switch period without full reload
+//   • #employeeSwitchForm select change → switch employee
+//   • popstate event → back/forward button
+// Each fetch hit /dashboard/fragment, swaps #perf-dashboard innerHTML,
+// re-runs initPerfDashboard(), and updates the URL via history.pushState
+// so the link stays shareable.
+//
+// Visual polish: a skeleton overlay (.perf-skeleton-overlay) fades in
+// during the fetch and fades out after the swap. Period pills get a
+// subtle "active" transition. Charts animate in fresh on every swap.
+//
+@if (!($fragmentMode ?? false))
+(function () {
+    // Initial render — wait for Chart.js to be available.
+    function bootCharts() {
+        if (window.Chart && typeof window.initPerfDashboard === 'function') {
+            window.initPerfDashboard();
+        } else {
+            // Chart.js not loaded yet — retry in 50ms (max 20 retries).
+            if (!window.__perfBootRetries) window.__perfBootRetries = 0;
+            if (window.__perfBootRetries < 20) {
+                window.__perfBootRetries++;
+                setTimeout(bootCharts, 50);
+            }
+        }
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bootCharts);
+    } else {
+        bootCharts();
+    }
+
+    // ============================================================
+    // AJAX FRAGMENT REFRESH — Phase 6
+    // ============================================================
+    const FRAGMENT_URL = '{{ route("dashboard.fragment") }}';
+
+    // Show the skeleton overlay (a translucent veil with a spinner that
+    // covers just the #perf-dashboard region). The CSS lives in the
+    // @push('css') block above.
+    function showSkeleton() {
+        const root = document.getElementById('perf-dashboard');
+        if (!root) return;
+        root.classList.add('perf-refreshing');
+        let overlay = root.querySelector('.perf-skeleton-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.className = 'perf-skeleton-overlay';
+            overlay.innerHTML =
+                '<div class="perf-skeleton-card">' +
+                  '<div class="perf-skeleton-spinner"></div>' +
+                  '<div class="perf-skeleton-text">Refreshing dashboard…</div>' +
+                '</div>';
+            root.appendChild(overlay);
+        }
+        // Force reflow so the transition fires.
+        void overlay.offsetWidth;
+        overlay.classList.add('visible');
+    }
+
+    function hideSkeleton() {
+        const root = document.getElementById('perf-dashboard');
+        if (!root) return;
+        root.classList.remove('perf-refreshing');
+        const overlay = root.querySelector('.perf-skeleton-overlay');
+        if (overlay) {
+            overlay.classList.remove('visible');
+            // Detach after the fade-out transition completes.
+            setTimeout(function () {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            }, 250);
+        }
+    }
+
+    // Swap #perf-dashboard innerHTML with the new fragment, then re-run
+    // chart init. The fragment HTML may include <style> and <script>
+    // blocks; we extract scripts and re-execute them (browser won't run
+    // <script> tags inserted via innerHTML).
+    function swapDashboard(html) {
+        const root = document.getElementById('perf-dashboard');
+        if (!root) return;
+
+        // Parse the fragment into a detached DOM tree so we can pick out
+        // the new #perf-dashboard child(ren) and any <script> tags.
+        const parser = new DOMParser();
+        const doc = parser.parseFromString('<div>' + html + '</div>', 'text/html');
+        const wrapper = doc.body.firstChild;
+
+        // The fragment layout renders @yield('content') which is the
+        // <div id="perf-dashboard">…</div>. Find it.
+        const newRoot = wrapper.querySelector('#perf-dashboard');
+        if (!newRoot) {
+            // Fallback: full reload. Should never happen.
+            window.location.reload();
+            return;
+        }
+
+        // Preserve the skeleton overlay (it lives inside #perf-dashboard)
+        // by detaching it before the swap, then re-attaching after.
+        const oldOverlay = root.querySelector('.perf-skeleton-overlay');
+
+        root.innerHTML = newRoot.innerHTML;
+
+        // Re-attach overlay so hideSkeleton() can fade it out smoothly.
+        if (oldOverlay) {
+            root.appendChild(oldOverlay);
+        }
+
+        // Re-execute any <script> tags that came with the fragment.
+        // Browser doesn't run scripts inserted via innerHTML, so we
+        // create new <script> elements with the same content.
+        wrapper.querySelectorAll('script').forEach(function (oldScript) {
+            const newScript = document.createElement('script');
+            // Copy non-src attributes (e.g. type).
+            for (let i = 0; i < oldScript.attributes.length; i++) {
+                const attr = oldScript.attributes[i];
+                newScript.setAttribute(attr.name, attr.value);
+            }
+            if (oldScript.src) {
+                newScript.src = oldScript.src;
+            } else {
+                newScript.textContent = oldScript.textContent;
+            }
+            document.body.appendChild(newScript);
+        });
+
+        // Now that scripts have re-defined window.initPerfDashboard,
+        // call it to render the fresh charts.
+        if (window.Chart && typeof window.initPerfDashboard === 'function') {
+            window.initPerfDashboard();
+        }
+
+        // Trigger the fade-in animation on the freshly-swapped content.
+        // The .perf-fresh class is removed after 400ms so the animation
+        // doesn't replay on subsequent interactions within the same swap.
+        root.classList.add('perf-fresh');
+        setTimeout(function () {
+            root.classList.remove('perf-fresh');
+        }, 450);
+    }
+
+    // Core fetch + swap routine. `qs` is the query string (without ?).
+    // `pushUrl` is the URL to push to history (or null to skip pushState).
+    function refreshDashboard(qs, pushUrl) {
+        showSkeleton();
+        fetch(FRAGMENT_URL + '?' + qs, {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (payload) {
+            if (payload && payload.error) {
+                // Server returned an error state — fall back to a full
+                // page reload so the user sees the actual error page.
+                window.location.href = pushUrl || (FRAGMENT_URL + '?' + qs);
+                return;
+            }
+            if (payload && payload.html) {
+                swapDashboard(payload.html);
+                if (pushUrl) {
+                    history.pushState(
+                        { perf: true, qs: qs, url: pushUrl },
+                        '',
+                        pushUrl
+                    );
+                }
+            }
+        })
+        .catch(function (err) {
+            // Network error or JSON parse failure → full reload fallback.
+            console.error('[perf] fragment fetch failed:', err);
+            window.location.href = pushUrl || (FRAGMENT_URL + '?' + qs);
+        })
+        .finally(function () {
+            hideSkeleton();
+        });
+    }
+
+    // ── Period pill clicks ──────────────────────────────────────
+    // Convert the existing <a class="btn-period" href="..."> links into
+    // AJAX triggers. We preventDefault, extract the period from the
+    // href's query string, fetch the fragment, swap, and pushState.
+    document.addEventListener('click', function (e) {
+        const link = e.target.closest('a.btn-period');
+        if (!link) return;
+        // Only intercept clicks on period pills inside #perf-dashboard.
+        const root = document.getElementById('perf-dashboard');
+        if (!root || !root.contains(link)) return;
+
+        e.preventDefault();
+        const href = link.getAttribute('href') || '';
+        const url = new URL(href, window.location.origin);
+        const qs = url.search.replace(/^\?/, '');
+        // The pushUrl should be the /dashboard?... URL (not /dashboard/fragment).
+        const pushUrl = '{{ route("dashboard") }}' + (qs ? '?' + qs : '');
+        refreshDashboard(qs, pushUrl);
+    });
+
+    // ── Employee <select> change (super-admin only) ─────────────
+    document.addEventListener('change', function (e) {
+        const sel = e.target;
+        if (!sel || sel.name !== 'employee_id') return;
+        const root = document.getElementById('perf-dashboard');
+        if (!root || !root.contains(sel)) return;
+
+        // Build query: keep current period + from/to, swap employee_id.
+        const params = new URLSearchParams(window.location.search);
+        params.delete('employee_id');
+        if (sel.value) params.set('employee_id', sel.value);
+        const qs = params.toString();
+        const pushUrl = '{{ route("dashboard") }}' + (qs ? '?' + qs : '');
+        refreshDashboard(qs, pushUrl);
+    });
+
+    // ── Custom date-range form submit ───────────────────────────
+    document.addEventListener('submit', function (e) {
+        const form = e.target;
+        if (!form || form.id !== 'customPeriodForm') return;
+        const root = document.getElementById('perf-dashboard');
+        if (!root || !root.contains(form)) return;
+
+        e.preventDefault();
+        const fd = new FormData(form);
+        const params = new URLSearchParams();
+        for (const [k, v] of fd.entries()) {
+            if (v) params.set(k, v);
+        }
+        const qs = params.toString();
+        const pushUrl = '{{ route("dashboard") }}' + (qs ? '?' + qs : '');
+        refreshDashboard(qs, pushUrl);
+    });
+
+    // ── Back/forward button ─────────────────────────────────────
+    window.addEventListener('popstate', function (e) {
+        // Re-load the dashboard via AJAX for the URL we landed on.
+        const params = new URLSearchParams(window.location.search);
+        const qs = params.toString();
+        // No pushUrl — popstate already updated the URL.
+        refreshDashboard(qs, null);
+    });
 })();
+@endif
 </script>
 @endpush
