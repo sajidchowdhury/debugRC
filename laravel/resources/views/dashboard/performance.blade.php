@@ -453,6 +453,316 @@
 
     /* Number-format helper visuals */
     #perf-dashboard .mono { font-variant-numeric: tabular-nums; }
+
+    /* ============================================================
+       PHASE 2 — Collections & Returns visual system
+       ============================================================ */
+
+    /* Gauge chart — semicircular collection-rate gauge */
+    #perf-dashboard .gauge-card {
+        background: var(--perf-card);
+        border: 1px solid var(--perf-border);
+        border-radius: 0.9rem;
+        padding: 1.1rem 1.25rem;
+        height: 100%;
+        position: relative;
+        overflow: hidden;
+    }
+    #perf-dashboard .gauge-card::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #0ea5e9, #2563eb);
+    }
+    #perf-dashboard .gauge-wrap {
+        position: relative;
+        margin: 0.4rem auto 0.25rem;
+        width: 100%;
+        max-width: 200px;
+        aspect-ratio: 2 / 1.1;
+    }
+    #perf-dashboard .gauge-wrap canvas {
+        width: 100% !important;
+        height: 100% !important;
+    }
+    #perf-dashboard .gauge-readout {
+        position: absolute;
+        left: 0; right: 0; bottom: 0;
+        text-align: center;
+        pointer-events: none;
+    }
+    #perf-dashboard .gauge-readout .gauge-pct {
+        font-size: 1.85rem;
+        font-weight: 800;
+        color: var(--perf-text);
+        letter-spacing: -0.02em;
+        line-height: 1;
+    }
+    #perf-dashboard .gauge-readout .gauge-cap {
+        font-size: 0.7rem;
+        color: var(--perf-muted);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-top: 0.15rem;
+    }
+    #perf-dashboard .gauge-target {
+        font-size: 0.72rem;
+        color: var(--perf-muted);
+        text-align: center;
+        margin-top: 0.15rem;
+    }
+    #perf-dashboard .gauge-target .tgt-mark {
+        display: inline-block;
+        padding: 0.1rem 0.45rem;
+        border-radius: 999px;
+        font-weight: 700;
+        margin-left: 0.2rem;
+    }
+    #perf-dashboard .gauge-target .tgt-mark.good { background: #d1fae5; color: #065f46; }
+    #perf-dashboard .gauge-target .tgt-mark.mid  { background: #fef3c7; color: #92400e; }
+    #perf-dashboard .gauge-target .tgt-mark.low  { background: #fee2e2; color: #991b1b; }
+
+    /* Stat tile — colored gradient block (Discount / Return Value / etc.) */
+    #perf-dashboard .stat-tile {
+        border-radius: 0.9rem;
+        padding: 1.1rem 1.25rem;
+        color: #fff;
+        position: relative;
+        overflow: hidden;
+        height: 100%;
+        transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+    #perf-dashboard .stat-tile:hover {
+        transform: translateY(-3px);
+        box-shadow: var(--perf-shadow);
+    }
+    #perf-dashboard .stat-tile::after {
+        content: '';
+        position: absolute;
+        top: -30px; right: -30px;
+        width: 120px; height: 120px;
+        background: radial-gradient(circle, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0) 70%);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+    #perf-dashboard .stat-tile.green   { background: linear-gradient(135deg, #10b981, #047857); }
+    #perf-dashboard .stat-tile.amber   { background: linear-gradient(135deg, #f59e0b, #d97706); }
+    #perf-dashboard .stat-tile.red     { background: linear-gradient(135deg, #ef4444, #b91c1c); }
+    #perf-dashboard .stat-tile.rose    { background: linear-gradient(135deg, #f43f5e, #be123c); }
+    #perf-dashboard .stat-tile.indigo  { background: linear-gradient(135deg, #6366f1, #4338ca); }
+    #perf-dashboard .stat-tile.sky     { background: linear-gradient(135deg, #0ea5e9, #1d4ed8); }
+    #perf-dashboard .stat-tile.violet  { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
+    #perf-dashboard .stat-tile .stat-icon {
+        width: 36px; height: 36px;
+        border-radius: 0.55rem;
+        background: rgba(255,255,255,0.22);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 0.95rem;
+        margin-bottom: 0.5rem;
+        backdrop-filter: blur(4px);
+    }
+    #perf-dashboard .stat-tile .stat-lbl {
+        font-size: 0.74rem;
+        opacity: 0.92;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    #perf-dashboard .stat-tile .stat-val {
+        font-size: 1.6rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        line-height: 1.1;
+        margin-top: 0.1rem;
+    }
+    #perf-dashboard .stat-tile .stat-sub {
+        font-size: 0.76rem;
+        opacity: 0.88;
+        margin-top: 0.2rem;
+    }
+    #perf-dashboard .stat-tile .stat-delta {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.2rem;
+        background: rgba(255,255,255,0.22);
+        padding: 0.12rem 0.45rem;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        margin-top: 0.35rem;
+        backdrop-filter: blur(4px);
+    }
+
+    /* Aging breakdown — 5 horizontal stacked bars */
+    #perf-dashboard .aging-row {
+        display: flex;
+        align-items: center;
+        gap: 0.7rem;
+        margin-bottom: 0.55rem;
+    }
+    #perf-dashboard .aging-row:last-child { margin-bottom: 0; }
+    #perf-dashboard .aging-row .aging-lbl {
+        width: 90px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: var(--perf-text);
+        white-space: nowrap;
+    }
+    #perf-dashboard .aging-row .aging-lbl .dot {
+        display: inline-block;
+        width: 8px; height: 8px;
+        border-radius: 50%;
+        margin-right: 0.35rem;
+        vertical-align: middle;
+    }
+    #perf-dashboard .aging-row .aging-track {
+        flex: 1;
+        height: 22px;
+        background: #f1f5f9;
+        border-radius: 5px;
+        overflow: hidden;
+        position: relative;
+    }
+    #perf-dashboard .aging-row .aging-fill {
+        height: 100%;
+        border-radius: 5px;
+        animation: pg-grow 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding-right: 0.4rem;
+        color: #fff;
+        font-size: 0.7rem;
+        font-weight: 700;
+        min-width: 30px;
+    }
+    #perf-dashboard .aging-row .aging-val {
+        width: 90px;
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: var(--perf-text);
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+    }
+
+    /* Return-reasons bar list */
+    #perf-dashboard .reason-row {
+        display: flex;
+        align-items: center;
+        gap: 0.7rem;
+        margin-bottom: 0.55rem;
+    }
+    #perf-dashboard .reason-row:last-child { margin-bottom: 0; }
+    #perf-dashboard .reason-row .reason-lbl {
+        flex: 1;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--perf-text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    #perf-dashboard .reason-row .reason-lbl .num {
+        display: inline-block;
+        width: 22px; height: 22px;
+        border-radius: 50%;
+        background: #fee2e2;
+        color: #991b1b;
+        text-align: center;
+        line-height: 22px;
+        font-size: 0.7rem;
+        font-weight: 800;
+        margin-right: 0.4rem;
+    }
+    #perf-dashboard .reason-row .reason-track {
+        width: 38%;
+        height: 22px;
+        background: #f1f5f9;
+        border-radius: 5px;
+        overflow: hidden;
+    }
+    #perf-dashboard .reason-row .reason-fill {
+        height: 100%;
+        border-radius: 5px;
+        animation: pg-grow 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    #perf-dashboard .reason-row .reason-meta {
+        font-size: 0.74rem;
+        color: var(--perf-muted);
+        font-weight: 600;
+        white-space: nowrap;
+        width: 80px;
+        text-align: right;
+    }
+
+    /* Payment-mode mix donut + legend */
+    #perf-dashboard .pmix-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        align-items: center;
+    }
+    #perf-dashboard .pmix-donut {
+        position: relative;
+        width: 100%;
+        max-width: 160px;
+        margin: 0 auto;
+        aspect-ratio: 1;
+    }
+    #perf-dashboard .pmix-center {
+        position: absolute;
+        top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        text-align: center;
+        pointer-events: none;
+    }
+    #perf-dashboard .pmix-center .pmix-total {
+        font-size: 1.35rem;
+        font-weight: 800;
+        color: var(--perf-text);
+        line-height: 1;
+    }
+    #perf-dashboard .pmix-center .pmix-cap {
+        font-size: 0.66rem;
+        color: var(--perf-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-top: 0.15rem;
+    }
+    #perf-dashboard .pmix-legend {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+    }
+    #perf-dashboard .pmix-legend .pmix-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.78rem;
+    }
+    #perf-dashboard .pmix-legend .pmix-item .sw {
+        width: 10px; height: 10px;
+        border-radius: 3px;
+        flex-shrink: 0;
+    }
+    #perf-dashboard .pmix-legend .pmix-item .nm {
+        flex: 1;
+        color: var(--perf-text);
+        font-weight: 600;
+    }
+    #perf-dashboard .pmix-legend .pmix-item .pc {
+        font-weight: 700;
+        color: var(--perf-muted);
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* Compact KPI card variant for the collections row */
+    #perf-dashboard .kpi-card.compact { padding: 0.9rem 1.05rem; }
+    #perf-dashboard .kpi-card.compact .kpi-value { font-size: 1.35rem; }
+    #perf-dashboard .kpi-card.compact .kpi-icon { width: 32px; height: 32px; font-size: 0.9rem; }
 </style>
 @endpush
 
@@ -762,19 +1072,276 @@
     @endif {{-- end of Phase 1 Sales block --}}
 
     {{-- ============================================================
-         PHASE 2-4 — SCAFFOLDING PLACEHOLDERS (kept visible so the
+         PHASE 2 — COLLECTIONS & RETURNS
+         ============================================================ --}}
+    @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly)
+    @php
+        // Pull all Phase 2 datasets with safe defaults so missing data
+        // doesn't break the markup.
+        $ck = $collectionKpis ?? [
+            'collection_count' => 0, 'collection_value' => 0.0,
+            'collection_rate' => 0.0, 'outstanding' => 0.0,
+            'overdue_count' => 0, 'overdue_value' => 0.0,
+            'discount_allowed' => 0.0, 'prev_collection_value' => 0.0,
+            'growth_pct' => 0.0,
+        ];
+        $aging = $receivableAging ?? [
+            'Current' => 0.0, '1-30' => 0.0, '31-60' => 0.0,
+            '61-90' => 0.0, '90+' => 0.0, 'total' => 0.0,
+        ];
+        $rk = $returnKpis ?? [
+            'return_count' => 0, 'return_value' => 0.0, 'return_rate' => 0.0,
+            'prev_return_value' => 0.0, 'growth_pct' => 0.0, 'top_reasons' => [],
+        ];
+        $pmix = $paymentModeMix ?? [];
+
+        // Aging palette: green → yellow → orange → red → deep red (worse with age)
+        $agingMeta = [
+            'Current' => ['color' => '#10b981', 'gradient' => 'linear-gradient(90deg, #10b981, #059669)', 'label' => 'Current'],
+            '1-30'    => ['color' => '#f59e0b', 'gradient' => 'linear-gradient(90deg, #f59e0b, #d97706)', 'label' => '1–30 days'],
+            '31-60'   => ['color' => '#f97316', 'gradient' => 'linear-gradient(90deg, #f97316, #ea580c)', 'label' => '31–60 days'],
+            '61-90'   => ['color' => '#ef4444', 'gradient' => 'linear-gradient(90deg, #ef4444, #dc2626)', 'label' => '61–90 days'],
+            '90+'     => ['color' => '#b91c1c', 'gradient' => 'linear-gradient(90deg, #b91c1c, #7f1d1d)', 'label' => '90+ days'],
+        ];
+        $agingMax = max(array_values(array_filter([
+            $aging['Current'], $aging['1-30'], $aging['31-60'], $aging['61-90'], $aging['90+'],
+        ]))) ?: 1;
+
+        // Collection-rate gauge target thresholds
+        $rateClass = $ck['collection_rate'] >= 80 ? 'good' : ($ck['collection_rate'] >= 50 ? 'mid' : 'low');
+        $rateMsg   = $ck['collection_rate'] >= 80 ? 'On target' : ($ck['collection_rate'] >= 50 ? 'Below target' : 'Critical');
+
+        // Return rate severity (target < 5%)
+        $rRateClass = $rk['return_rate'] <= 2 ? 'good' : ($rk['return_rate'] <= 5 ? 'mid' : 'low');
+
+        // Payment mode palette
+        $pmixPalette = [
+            'cash'           => '#10b981',
+            'bank'           => '#4f46e5',
+            'cheque'         => '#f59e0b',
+            'mobile_banking' => '#ec4899',
+            'adjustment'     => '#64748b',
+        ];
+        $pmixTotal = array_sum(array_map(fn($p) => $p['value'], $pmix));
+    @endphp
+
+    <h3 class="section-h mt-4"><span class="bar"></span><i class="fas fa-hand-holding-usd text-success"></i> Collections &amp; Returns</h3>
+
+    {{-- ===== KPI ROW — 4 stat-tiles + gauge ===== --}}
+    <div class="row g-3 mb-3">
+        {{-- Collection Volume --}}
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="stat-tile green">
+                <div class="stat-icon"><i class="fas fa-coins"></i></div>
+                <div class="stat-lbl">Collection Volume</div>
+                <div class="stat-val mono">৳ {{ number_format($ck['collection_value'], 0) }}</div>
+                <div class="stat-sub">{{ $ck['collection_count'] }} payment{{ $ck['collection_count'] !== 1 ? 's' : '' }} received this period</div>
+                @php
+                    $cg = $ck['growth_pct'];
+                    $cgIcon = $cg > 0.5 ? 'arrow-up' : ($cg < -0.5 ? 'arrow-down' : 'minus');
+                @endphp
+                <span class="stat-delta"><i class="fas fa-{{ $cgIcon }}"></i>{{ abs($cg) }}% vs prev</span>
+            </div>
+        </div>
+
+        {{-- Collection Rate gauge --}}
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="gauge-card">
+                <div class="kpi-label text-center" style="margin-top:0.2rem;">Collection Rate</div>
+                <div class="gauge-wrap">
+                    <canvas id="collectionGauge"></canvas>
+                    <div class="gauge-readout">
+                        <div class="gauge-pct mono">{{ $ck['collection_rate'] }}<span style="font-size:1rem;">%</span></div>
+                        <div class="gauge-cap">collected</div>
+                    </div>
+                </div>
+                <div class="gauge-target">
+                    Target ≥ 80%
+                    <span class="tgt-mark {{ $rateClass }}">{{ $rateMsg }}</span>
+                </div>
+            </div>
+        </div>
+
+        {{-- My Outstanding --}}
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="stat-tile amber">
+                <div class="stat-icon"><i class="fas fa-wallet"></i></div>
+                <div class="stat-lbl">My Outstanding</div>
+                <div class="stat-val mono">৳ {{ number_format($ck['outstanding'], 0) }}</div>
+                <div class="stat-sub">Total receivable on your book (all-time)</div>
+                <span class="stat-delta"><i class="fas fa-info-circle"></i>Snapshot · live</span>
+            </div>
+        </div>
+
+        {{-- Overdue >30 days --}}
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="stat-tile red">
+                <div class="stat-icon"><i class="fas fa-exclamation-circle"></i></div>
+                <div class="stat-lbl">Overdue (&gt;30 days)</div>
+                <div class="stat-val mono">৳ {{ number_format($ck['overdue_value'], 0) }}</div>
+                <div class="stat-sub">{{ $ck['overdue_count'] }} invoice{{ $ck['overdue_count'] !== 1 ? 's' : '' }} past assumed 30-day term</div>
+                <span class="stat-delta"><i class="fas fa-clock"></i>Needs follow-up</span>
+            </div>
+        </div>
+    </div>
+
+    {{-- ===== Mid row: Return Rate tile + Return Value + Discount Allowed + Payment Mix donut ===== --}}
+    <div class="row g-3 mb-3">
+        {{-- Return Rate --}}
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="stat-tile rose">
+                <div class="stat-icon"><i class="fas fa-undo"></i></div>
+                <div class="stat-lbl">Return Rate</div>
+                <div class="stat-val mono">{{ $rk['return_rate'] }}<span style="font-size:1rem;">%</span></div>
+                <div class="stat-sub">{{ $rk['return_count'] }} return{{ $rk['return_count'] !== 1 ? 's' : '' }} this period · target &lt; 5%</div>
+                @php
+                    $rg = $rk['growth_pct'];
+                    $rgIcon = $rg < -0.5 ? 'arrow-down' : ($rg > 0.5 ? 'arrow-up' : 'minus');
+                    $rgGood = $rg < -0.5; // negative growth on returns is GOOD
+                @endphp
+                <span class="stat-delta"><i class="fas fa-{{ $rgIcon }}"></i>{{ abs($rg) }}% vs prev · {{ $rgGood ? 'improving' : 'rising' }}</span>
+            </div>
+        </div>
+
+        {{-- Return Value --}}
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="stat-tile violet">
+                <div class="stat-icon"><i class="fas fa-rotate-left"></i></div>
+                <div class="stat-lbl">Return Value</div>
+                <div class="stat-val mono">৳ {{ number_format($rk['return_value'], 0) }}</div>
+                <div class="stat-sub">Confirmed returns — revenue reversed</div>
+                <span class="stat-delta"><i class="fas fa-chart-line"></i>Excludes draft/cancelled</span>
+            </div>
+        </div>
+
+        {{-- Discount Allowed --}}
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="stat-tile indigo">
+                <div class="stat-icon"><i class="fas fa-tag"></i></div>
+                <div class="stat-lbl">Discount Allowed</div>
+                <div class="stat-val mono">৳ {{ number_format($ck['discount_allowed'], 0) }}</div>
+                <div class="stat-sub">Inline discounts on your collections</div>
+                @php
+                    $discountPctOfColl = $ck['collection_value'] > 0
+                        ? round(($ck['discount_allowed'] / $ck['collection_value']) * 100, 1)
+                        : 0.0;
+                @endphp
+                <span class="stat-delta"><i class="fas fa-percentage"></i>{{ $discountPctOfColl }}% of collections</span>
+            </div>
+        </div>
+
+        {{-- Payment Mode Mix donut --}}
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="chart-card" style="padding: 0.95rem 1.05rem;">
+                <div class="chart-title"><i class="fas fa-credit-card text-info"></i> Payment Mode Mix</div>
+                <div class="chart-sub">How your collections come in</div>
+                @if (empty($pmix) || $pmixTotal <= 0)
+                    <div class="empty-card" style="padding:1rem;">
+                        <i class="fas fa-folder-open"></i>
+                        <div style="font-size:0.8rem;">No collections yet this period.</div>
+                    </div>
+                @else
+                    <div class="pmix-grid">
+                        <div class="pmix-donut">
+                            <canvas id="pmixDonut"></canvas>
+                            <div class="pmix-center">
+                                <div class="pmix-total mono">{{ count($pmix) }}</div>
+                                <div class="pmix-cap">modes</div>
+                            </div>
+                        </div>
+                        <div class="pmix-legend">
+                            @foreach ($pmix as $p)
+                                <div class="pmix-item">
+                                    <span class="sw" style="background: {{ $pmixPalette[$p['mode']] ?? '#94a3b8' }};"></span>
+                                    <span class="nm">{{ $p['label'] }}</span>
+                                    <span class="pc">{{ $p['share'] }}%</span>
+                                </div>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
+            </div>
+        </div>
+    </div>
+
+    {{-- ===== Charts row: Receivable Aging (8) + Top Return Reasons (4) ===== --}}
+    <div class="row g-3 mb-3">
+        {{-- Receivable Aging — 5 horizontal bars (color-coded by severity) --}}
+        <div class="col-12 col-xl-8">
+            <div class="chart-card">
+                <div class="chart-title">
+                    <i class="fas fa-clock text-warning"></i> Receivable Aging — My Book
+                    <span class="ms-2" style="font-size:0.72rem; font-weight:600; color:var(--perf-muted); background:#f1f5f9; padding:0.1rem 0.5rem; border-radius:999px;">
+                        Total: ৳ {{ number_format($aging['total'], 0) }}
+                    </span>
+                </div>
+                <div class="chart-sub">Outstanding by invoice age — point-in-time snapshot of your book</div>
+                <div class="chart-wrap" style="padding-top:0.4rem;">
+                    @php $agingKeys = ['Current', '1-30', '31-60', '61-90', '90+']; @endphp
+                    @foreach ($agingKeys as $key)
+                        @php
+                            $meta = $agingMeta[$key];
+                            $val  = $aging[$key];
+                            $pct  = $agingMax > 0 ? max(3, round(($val / $agingMax) * 100, 1)) : 3;
+                            $share = $aging['total'] > 0 ? round(($val / $aging['total']) * 100, 1) : 0.0;
+                        @endphp
+                        <div class="aging-row">
+                            <div class="aging-lbl">
+                                <span class="dot" style="background: {{ $meta['color'] }};"></span>{{ $meta['label'] }}
+                            </div>
+                            <div class="aging-track">
+                                <div class="aging-fill" style="width: {{ $pct }}%; background: {{ $meta['gradient'] }};">
+                                    @if ($val > 0){{ $share }}%@endif
+                                </div>
+                            </div>
+                            <div class="aging-val">৳ {{ number_format($val, 0) }}</div>
+                        </div>
+                    @endforeach
+                </div>
+            </div>
+        </div>
+
+        {{-- Top Return Reasons --}}
+        <div class="col-12 col-xl-4">
+            <div class="chart-card">
+                <div class="chart-title"><i class="fas fa-comment-dots text-danger"></i> Top Return Reasons</div>
+                <div class="chart-sub">Coaching signal — what's coming back</div>
+                <div class="chart-wrap" style="padding-top:0.4rem;">
+                    @php $reasons = $rk['top_reasons'] ?? []; @endphp
+                    @if (empty($reasons))
+                        <div class="empty-card" style="padding:1.2rem;">
+                            <i class="fas fa-check-circle"></i>
+                            <div>No returns this period — clean!</div>
+                        </div>
+                    @else
+                        @php
+                            $maxCount = max(array_map(fn($r) => $r['count'], $reasons)) ?: 1;
+                            $reasonColors = ['#ef4444', '#f97316', '#f59e0b', '#fb923c', '#f87171'];
+                        @endphp
+                        @foreach ($reasons as $i => $r)
+                            <div class="reason-row">
+                                <div class="reason-lbl">
+                                    <span class="num">{{ $i + 1 }}</span>{{ $r['reason'] }}
+                                </div>
+                                <div class="reason-track">
+                                    <div class="reason-fill" style="width: {{ max(8, round(($r['count'] / $maxCount) * 100, 1)) }}%; background: linear-gradient(90deg, {{ $reasonColors[$i % count($reasonColors)] }}, {{ $reasonColors[($i + 1) % count($reasonColors)] }});"></div>
+                                </div>
+                                <div class="reason-meta">{{ $r['count'] }}× · ৳{{ number_format($r['value'], 0) }}</div>
+                            </div>
+                        @endforeach
+                    @endif
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @endif {{-- end of Phase 2 Collections & Returns block --}}
+
+    {{-- ============================================================
+         PHASE 3-4 — SCAFFOLDING PLACEHOLDERS (kept visible so the
          user sees what's coming next; will be filled in later phases)
          ============================================================ --}}
     @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly)
-
-    <h3 class="section-h mt-4"><span class="bar"></span><i class="fas fa-hand-holding-usd text-success"></i> Collections & Returns</h3>
-    <div class="row g-3 mb-3">
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-coins"></i><div class="title">Collection Volume</div><span class="phase-tag">Phase 2</span></div></div>
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-percentage"></i><div class="title">Collection Rate</div><span class="phase-tag">Phase 2</span></div></div>
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-wallet"></i><div class="title">My Outstanding</div><span class="phase-tag">Phase 2</span></div></div>
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-exclamation-circle"></i><div class="title">Overdue Value</div><span class="phase-tag">Phase 2</span></div></div>
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-undo"></i><div class="title">Return Rate</div><span class="phase-tag">Phase 2</span></div></div>
-    </div>
 
     <h3 class="section-h mt-3"><span class="bar"></span><i class="fas fa-user-clock text-info"></i> How You Work</h3>
     <div class="row g-3 mb-3">
@@ -794,11 +1361,11 @@
 
     <div class="text-center text-muted small mt-4 mb-3">
         <i class="fas fa-info-circle me-1"></i>
-        <strong>Phase 1 complete.</strong> Sales metrics are live. Collections, work pattern, and commission arrive in Phases 2–4.
+        <strong>Phases 1 &amp; 2 complete.</strong> Sales + Collections &amp; Returns are live. Work-pattern and commission arrive in Phases 3–4.
         @if (isset($customerPaymentsTxnType))
             <br>G12 check: <code>customer_payments.transaction_type</code>
             @if ($customerPaymentsTxnType) <span class="text-success">exists</span> @else <span class="text-warning">missing</span> @endif
-            (Phase 2 will use it for write-off metrics).
+            — used by Phase 2 to filter receive-type payments.
         @endif
     </div>
 
@@ -953,6 +1520,90 @@
             }
         });
     });
+    // ============================================================
+    // 3. Phase 2 — Collection Rate gauge (semicircular doughnut)
+    // ============================================================
+    // We use a half-doughnut (rotation -90deg, circumference 180) with two
+    // segments: the achieved % and the remainder. A needle/center readout
+    // is rendered as HTML overlay (.gauge-readout) — keeps the canvas simple.
+    const gaugeEl = document.getElementById('collectionGauge');
+    if (gaugeEl && typeof Chart !== 'undefined') {
+        const rate = Math.max(0, Math.min(100, Number(@json($ck['collection_rate'] ?? 0))));
+        // Color shifts with severity: red → amber → green
+        let gaugeColor = '#ef4444';
+        if (rate >= 80) gaugeColor = '#10b981';
+        else if (rate >= 50) gaugeColor = '#f59e0b';
+
+        new Chart(gaugeEl.getContext('2d'), {
+            type: 'doughnut',
+            data: {
+                datasets: [{
+                    data: [rate, Math.max(0.0001, 100 - rate)],
+                    backgroundColor: [gaugeColor, '#f1f5f9'],
+                    borderWidth: 0,
+                    circumference: 180,
+                    rotation: 270,
+                    cutout: '72%',
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                animation: { animateRotate: true, duration: 1100, easing: 'easeOutCubic' }
+            }
+        });
+    }
+
+    // ============================================================
+    // 4. Phase 2 — Payment Mode Mix donut
+    // ============================================================
+    const pmixEl = document.getElementById('pmixDonut');
+    const pmixData = @json($pmix ?? []);
+    const pmixPalette = @json($pmixPalette ?? [
+        'cash' => '#10b981',
+        'bank' => '#4f46e5',
+        'cheque' => '#f59e0b',
+        'mobile_banking' => '#ec4899',
+        'adjustment' => '#64748b',
+    ]);
+    if (pmixEl && pmixData.length && typeof Chart !== 'undefined') {
+        new Chart(pmixEl.getContext('2d'), {
+            type: 'doughnut',
+            data: {
+                labels: pmixData.map(p => p.label),
+                datasets: [{
+                    data: pmixData.map(p => p.value),
+                    backgroundColor: pmixData.map(p => pmixPalette[p.mode] || '#94a3b8'),
+                    borderWidth: 2,
+                    borderColor: '#fff',
+                    hoverOffset: 6,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '68%',
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                        titleFont: { size: 12, weight: '600' },
+                        bodyFont: { size: 12 },
+                        padding: 10,
+                        cornerRadius: 8,
+                        callbacks: {
+                            label: function (ctx) {
+                                const p = pmixData[ctx.dataIndex];
+                                return ' ' + p.label + ': ৳' + Number(p.value).toLocaleString() + ' (' + p.share + '%)';
+                            }
+                        }
+                    }
+                },
+                animation: { animateRotate: true, animateScale: true, duration: 900 }
+            }
+        });
+    }
 })();
 </script>
 @endpush

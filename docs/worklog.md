@@ -1023,3 +1023,42 @@ Stage Summary:
 - The dashboard now answers "How am I doing?" with: my sales volume + growth, AOV, active days, peak day, new vs repeat customers, daily trend, product-group mix, and top-5 customers. NO company-wide KPIs anywhere.
 - Super-admin switching is preserved: changing the employee <select> or period reloads all metrics for the new target+period combination.
 - Phase 2 (Collections & Returns) is next: getCollectionsKPIs, getReceivableAging, getReturnKPIs, then replace the Collections placeholder row.
+
+---
+Task ID: phase-2
+Agent: main (Super Z)
+Task: Phase 2 of User Performance Dashboard — Collection & Returns. Add 4 metric methods (getCollectionKPIs, getReceivableAging, getReturnKPIs, getPaymentModeMix) to UserPerformanceDashboardController; render the data in a visually exciting dashboard section (gradient stat-tiles, semicircular collection-rate gauge, color-coded aging bars, top return-reasons bar list, payment-mode mix donut). Phase 3-4 placeholders remain visible.
+
+Work Log:
+- Re-read schema for customer_payments (created_by, payment_date, amount, discount_amount, payment_mode, transaction_type via migration 2025_01_09_000005, is_reversed), sales_returns (created_by, return_date, total_amount, status CHECK IN ('created','confirmed','reversed'), reason via migration 2025_01_08_000003, is_reversed), sales_invoices (partitioned; due_amount, invoice_date).
+- Updated UserPerformanceDashboardController class docblock to document Phase 2 scope and query conventions: customer_payments filtered by created_by + payment_date BETWEEN; sales_returns filtered by created_by + return_date BETWEEN; outstanding/aging are point-in-time (no period filter).
+- Added getCollectionKPIs($userId, $range, $hasTxnType) — returns {collection_count, collection_value, collection_rate, outstanding, overdue_count, overdue_value, discount_allowed, prev_collection_value, growth_pct}. C1 + C2 + C3 + C4 + C7 + previous-period growth all in one method. C1 conditionally filters transaction_type='receive' when the G12 runtime check confirms the column exists. C4 (overdue) uses assumed 30-day term per schema gap G3; UI labels it "Overdue (>30 days)".
+- Added getReceivableAging($userId) — 5-bucket snapshot {Current, 1-30, 31-60, 61-90, 90+, total}. Same CASE expression as LegacyDashboardController::getReceivableAging() but with `AND created_by = $userId` filter. Point-in-time (no period filter) so the buckets always reflect the user's current book.
+- Added getReturnKPIs($userId, $range) — returns {return_count, return_value, return_rate, prev_return_value, growth_pct, top_reasons[]}. R1 = COUNT(sales_returns WHERE created_by AND period AND is_reversed=false); R2 = SUM(total_amount) WHERE same + status='confirmed' (drafts excluded); R3 = R2 / NULLIF(period sales, 0) * 100; R5 = GROUP BY COALESCE(NULLIF(TRIM(reason), ''), '(No reason given)') so null reasons bucket together (per plan's "fallback if reason is mostly null" note).
+- Added getPaymentModeMix($userId, $range) — C8 payment-mode breakdown {mode, label, count, value, share}. GROUP BY payment_mode, friendly labels for cash/bank/cheque/mobile_banking/adjustment. Used by the donut chart + legend.
+- Updated index() to call all 4 Phase 2 methods and pass $collectionKpis, $receivableAging, $returnKpis, $paymentModeMix to the view.
+- Added ~250 lines of CSS to performance.blade.php (scoped under #perf-dashboard) for Phase 2 visual components:
+  * .gauge-card — semicircular gauge container with sky-blue top strip
+  * .gauge-wrap / .gauge-readout — canvas + absolute-positioned center readout (big % + caption)
+  * .gauge-target — on-target/below-target/critical pill (.tgt-mark.good/.mid/.low)
+  * .stat-tile — gradient tile with 7 color variants (green/amber/red/rose/indigo/sky/violet), radial-gradient glow accent, hover lift
+  * .aging-row — 5-bucket horizontal bar list with colored dots, gradient fills, % inside bar, ৳ amount right-aligned
+  * .reason-row — return-reasons bar list with numbered red circle badges, gradient fills, count + ৳ value meta
+  * .pmix-grid / .pmix-donut / .pmix-center / .pmix-legend — 2-col donut + legend layout for payment-mode mix
+- Replaced Phase 2 placeholder row in performance.blade.php with two real KPI rows + 1 charts row:
+  * Row 1 (4 cols): Collection Volume (green stat-tile with growth delta) | Collection Rate gauge (semicircular doughnut + readout + target pill) | My Outstanding (amber stat-tile, live snapshot) | Overdue >30 days (red stat-tile with invoice count)
+  * Row 2 (4 cols): Return Rate (rose stat-tile, inverted growth logic — negative is good) | Return Value (violet stat-tile) | Discount Allowed (indigo stat-tile with % of collections) | Payment Mode Mix donut (Chart.js doughnut + 5-item legend)
+  * Row 3 (8+4 cols): Receivable Aging (5 animated horizontal bars, gradient green→yellow→orange→red→deep-red, total badge in title) | Top Return Reasons (5 numbered bar rows with gradient red fills, empty-state when no returns)
+- Added 80 lines of Chart.js init code:
+  * Collection Rate gauge — half-doughnut (circumference:180, rotation:270, cutout:72%), color shifts red→amber→green at 50%/80% thresholds, animateRotate 1.1s
+  * Payment Mode Mix donut — full doughnut with custom tooltip (৳ amount + % share), white borders between segments, hoverOffset 6
+- Updated Phase 3-4 footer note: "Phases 1 & 2 complete. Sales + Collections & Returns are live." Phase 3-4 scaffolding placeholders preserved (How You Work, Commission/Stock/Accuracy).
+- Verified Blade tag balance: @if 23/23, @foreach 8/8, @php 17/17, @push 2/2, @section 1/1, JS braces 69/69. Controller PHP braces 64/64. No syntax drift.
+- Empty states preserved everywhere: zero collections → empty-card inside Payment Mode Mix; zero returns → "No returns this period — clean!" empty-card; zero aging → bars render at min-width 3% (visible sliver) with no % label.
+
+Stage Summary:
+- Phase 2 ships Collections & Returns with the visual polish requested ("don't make it boring"). Every metric is per-user (created_by = $userId), partition-pruned where applicable (customer_payments.payment_date BETWEEN, sales_returns.return_date BETWEEN, sales_invoices.invoice_date BETWEEN for period-bound queries), and protected by try/catch.
+- The dashboard now answers the full sales→collection→return story per user: how much I collected (volume + growth), how effective (collection rate gauge with 80% target), what's still on my book (outstanding + aging breakdown by 5 buckets), what's overdue (count + value with 30-day assumed term), how much I discounted, how I get paid (payment-mode mix donut), my return rate (target <5%), return value, and the top 5 reasons returns happen (coaching signal).
+- Gauge + donut + animated bars + gradient stat-tiles give the section visual variety beyond the Phase 1 line+bar charts. Severity is color-coded throughout (green=good, amber=watch, red=critical) for instant scanability.
+- Super-admin switching is preserved: changing the employee <select> or period reloads all Phase 2 metrics for the new target+period combination.
+- Phase 3 (Operational Efficiency & Productivity — How You Work) is next: getVelocityKPIs, getPipelineSnapshot, getWorkPattern, getActivitySummary, then replace the How You Work placeholder row.

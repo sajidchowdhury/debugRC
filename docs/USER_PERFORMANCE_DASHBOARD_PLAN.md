@@ -476,7 +476,7 @@ private function getSalesKPIs(int $userId, array $range): array
 
 ---
 
-### Phase 2 — Collection & Returns (1 day)
+### Phase 2 — Collection & Returns (1 day) ✅ DONE
 
 **Goal:** Add the receivables and quality categories so the user sees the *full* sales story — not just what they booked, but what they collected and what came back.
 
