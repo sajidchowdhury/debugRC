@@ -763,6 +763,274 @@
     #perf-dashboard .kpi-card.compact { padding: 0.9rem 1.05rem; }
     #perf-dashboard .kpi-card.compact .kpi-value { font-size: 1.35rem; }
     #perf-dashboard .kpi-card.compact .kpi-icon { width: 32px; height: 32px; font-size: 0.9rem; }
+
+    /* ============================================================
+       PHASE 3 — How You Work visual system
+       ============================================================ */
+
+    /* Velocity tile — gradient stat with a mini progress arc */
+    #perf-dashboard .vel-tile {
+        background: var(--perf-card);
+        border: 1px solid var(--perf-border);
+        border-radius: 0.9rem;
+        padding: 1.1rem 1.25rem;
+        height: 100%;
+        position: relative;
+        overflow: hidden;
+        transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+    #perf-dashboard .vel-tile:hover {
+        transform: translateY(-3px);
+        box-shadow: var(--perf-shadow);
+    }
+    #perf-dashboard .vel-tile::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; bottom: 0;
+        width: 4px;
+        background: var(--vaccent, linear-gradient(180deg, #4f46e5, #7c3aed));
+    }
+    #perf-dashboard .vel-tile .vel-icon {
+        width: 36px; height: 36px;
+        border-radius: 0.55rem;
+        background: var(--vaccent, linear-gradient(135deg, #4f46e5, #7c3aed));
+        color: #fff;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 0.95rem;
+        margin-bottom: 0.55rem;
+        box-shadow: 0 4px 12px -3px rgba(15, 23, 42, 0.18);
+    }
+    #perf-dashboard .vel-tile .vel-label {
+        font-size: 0.74rem;
+        color: var(--perf-muted);
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    #perf-dashboard .vel-tile .vel-value {
+        font-size: 1.55rem;
+        font-weight: 800;
+        color: var(--perf-text);
+        letter-spacing: -0.02em;
+        line-height: 1.1;
+        margin-top: 0.1rem;
+    }
+    #perf-dashboard .vel-tile .vel-value .unit {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--perf-muted);
+        margin-left: 0.15rem;
+    }
+    #perf-dashboard .vel-tile .vel-sub {
+        font-size: 0.76rem;
+        color: var(--perf-muted);
+        margin-top: 0.2rem;
+    }
+    #perf-dashboard .vel-tile .vel-bar {
+        margin-top: 0.55rem;
+        height: 5px;
+        background: #f1f5f9;
+        border-radius: 3px;
+        overflow: hidden;
+    }
+    #perf-dashboard .vel-tile .vel-bar > div {
+        height: 100%;
+        background: var(--vaccent, linear-gradient(90deg, #4f46e5, #7c3aed));
+        border-radius: 3px;
+        animation: pg-grow 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+
+    /* Work-pattern histogram card */
+    #perf-dashboard .hist-card {
+        background: var(--perf-card);
+        border: 1px solid var(--perf-border);
+        border-radius: 0.9rem;
+        padding: 1.1rem 1.25rem 1rem;
+        height: 100%;
+        box-shadow: var(--perf-shadow-sm);
+    }
+    #perf-dashboard .hist-card .hist-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 0.5rem;
+    }
+    #perf-dashboard .hist-card .hist-title {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: var(--perf-text);
+        display: flex; align-items: center; gap: 0.4rem;
+    }
+    #perf-dashboard .hist-card .hist-sub {
+        font-size: 0.74rem;
+        color: var(--perf-muted);
+        margin-bottom: 0.5rem;
+    }
+    #perf-dashboard .hist-card .peak-badge {
+        background: linear-gradient(135deg, #fbbf24, #f59e0b);
+        color: #fff;
+        font-size: 0.7rem;
+        font-weight: 700;
+        padding: 0.2rem 0.55rem;
+        border-radius: 999px;
+        white-space: nowrap;
+        box-shadow: 0 4px 10px -3px rgba(245, 158, 11, 0.45);
+    }
+    #perf-dashboard .hist-card .hist-wrap {
+        position: relative;
+        height: 220px;
+    }
+
+    /* Pipeline snapshot list */
+    #perf-dashboard .pipe-item {
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        padding: 0.7rem 0.5rem;
+        border-bottom: 1px dashed #e2e8f0;
+    }
+    #perf-dashboard .pipe-item:last-child { border-bottom: 0; }
+    #perf-dashboard .pipe-item .pipe-icon {
+        width: 38px; height: 38px;
+        border-radius: 0.55rem;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 0.95rem;
+        color: #fff;
+        flex-shrink: 0;
+    }
+    #perf-dashboard .pipe-item .pipe-icon.amber { background: linear-gradient(135deg, #f59e0b, #d97706); box-shadow: 0 4px 10px -3px rgba(245, 158, 11, 0.4); }
+    #perf-dashboard .pipe-item .pipe-icon.blue  { background: linear-gradient(135deg, #3b82f6, #1d4ed8); box-shadow: 0 4px 10px -3px rgba(59, 130, 246, 0.4); }
+    #perf-dashboard .pipe-item .pipe-icon.rose  { background: linear-gradient(135deg, #f43f5e, #be123c); box-shadow: 0 4px 10px -3px rgba(244, 63, 94, 0.4); }
+    #perf-dashboard .pipe-item .pipe-icon.green { background: linear-gradient(135deg, #10b981, #047857); box-shadow: 0 4px 10px -3px rgba(16, 185, 129, 0.4); }
+    #perf-dashboard .pipe-item .pipe-info { flex: 1; min-width: 0; }
+    #perf-dashboard .pipe-item .pipe-name {
+        font-weight: 700; color: var(--perf-text);
+        font-size: 0.86rem;
+    }
+    #perf-dashboard .pipe-item .pipe-meta {
+        font-size: 0.72rem;
+        color: var(--perf-muted);
+        margin-top: 0.1rem;
+    }
+    #perf-dashboard .pipe-item .pipe-val {
+        font-weight: 800;
+        color: var(--perf-text);
+        font-size: 0.95rem;
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* Notification engagement ring */
+    #perf-dashboard .notif-card {
+        background: var(--perf-card);
+        border: 1px solid var(--perf-border);
+        border-radius: 0.9rem;
+        padding: 1.1rem 1.25rem;
+        height: 100%;
+        position: relative;
+        overflow: hidden;
+    }
+    #perf-dashboard .notif-card::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #8b5cf6, #6d28d9);
+    }
+    #perf-dashboard .notif-grid {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 1rem;
+        align-items: center;
+        margin-top: 0.3rem;
+    }
+    #perf-dashboard .notif-ring {
+        position: relative;
+        width: 92px; height: 92px;
+    }
+    #perf-dashboard .notif-ring canvas { width: 100% !important; height: 100% !important; }
+    #perf-dashboard .notif-ring .ring-center {
+        position: absolute;
+        top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        text-align: center;
+        pointer-events: none;
+    }
+    #perf-dashboard .notif-ring .ring-pct {
+        font-size: 1.3rem;
+        font-weight: 800;
+        color: var(--perf-text);
+        line-height: 1;
+    }
+    #perf-dashboard .notif-ring .ring-cap {
+        font-size: 0.62rem;
+        color: var(--perf-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-top: 0.1rem;
+    }
+    #perf-dashboard .notif-stats {
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+    }
+    #perf-dashboard .notif-stats .ns-row {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.78rem;
+        color: var(--perf-text);
+    }
+    #perf-dashboard .notif-stats .ns-row .ns-dot {
+        width: 8px; height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+    #perf-dashboard .notif-stats .ns-row .ns-num {
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        margin-left: auto;
+    }
+
+    /* Activity summary tiles — small gradient chips */
+    #perf-dashboard .act-chip {
+        border-radius: 0.75rem;
+        padding: 0.85rem 1rem;
+        color: #fff;
+        position: relative;
+        overflow: hidden;
+        height: 100%;
+    }
+    #perf-dashboard .act-chip::after {
+        content: '';
+        position: absolute;
+        top: -25px; right: -25px;
+        width: 90px; height: 90px;
+        background: radial-gradient(circle, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0) 70%);
+        border-radius: 50%;
+    }
+    #perf-dashboard .act-chip .ac-lbl {
+        font-size: 0.72rem;
+        opacity: 0.92;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    #perf-dashboard .act-chip .ac-val {
+        font-size: 1.4rem;
+        font-weight: 800;
+        line-height: 1.1;
+        margin-top: 0.1rem;
+    }
+    #perf-dashboard .act-chip .ac-sub {
+        font-size: 0.72rem;
+        opacity: 0.85;
+        margin-top: 0.15rem;
+    }
+    #perf-dashboard .act-chip.teal   { background: linear-gradient(135deg, #14b8a6, #0d9488); }
+    #perf-dashboard .act-chip.fuchsia{ background: linear-gradient(135deg, #d946ef, #a21caf); }
+    #perf-dashboard .act-chip.cyan   { background: linear-gradient(135deg, #06b6d4, #0e7490); }
 </style>
 @endpush
 
@@ -1338,18 +1606,253 @@
     @endif {{-- end of Phase 2 Collections & Returns block --}}
 
     {{-- ============================================================
-         PHASE 3-4 — SCAFFOLDING PLACEHOLDERS (kept visible so the
-         user sees what's coming next; will be filled in later phases)
+         PHASE 3 — OPERATIONAL EFFICIENCY & PRODUCTIVITY (HOW YOU WORK)
          ============================================================ --}}
     @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly)
+    @php
+        // Pull all Phase 3 datasets with safe defaults so missing data
+        // doesn't break the markup.
+        $vk = $velocityKpis ?? [
+            'avg_invoice_to_godown_hrs' => null,
+            'avg_godown_to_challan_hrs' => null,
+            'avg_invoice_to_challan_hrs' => null,
+            'same_day_dispatch_pct' => 0.0,
+            'dispatched_count' => 0, 'total_invoices' => 0,
+        ];
+        $pipe = $pipelineSnapshot ?? [
+            'stale_draft_count' => 0, 'open_pipeline_value' => 0.0,
+            'parked_sales_count' => 0, 'draft_count' => 0,
+            'confirmed_pending_dispatch' => 0,
+        ];
+        $wp = $workPattern ?? array_map(fn($h) => ['hour' => $h, 'count' => 0], range(0, 23));
+        $act = $activitySummary ?? [
+            'transactions_per_day' => 0.0, 'active_days_cross_table' => 0,
+            'total_activity' => 0, 'peak_day' => null, 'peak_day_count' => 0,
+        ];
+        $ne = $notificationEngagement ?? ['read_rate' => 0.0, 'total' => 0, 'unread' => 0, 'read' => 0];
 
-    <h3 class="section-h mt-3"><span class="bar"></span><i class="fas fa-user-clock text-info"></i> How You Work</h3>
+        // Format hours as "Xh Ym" if value present, else "—"
+        $fmtHrs = function (?float $v): string {
+            if ($v === null) return '—';
+            $h = (int) floor($v);
+            $m = (int) round(($v - $h) * 60);
+            if ($m === 60) { $h++; $m = 0; }
+            return $h . 'h ' . ($m > 0 ? $m . 'm' : '');
+        };
+
+        // Peak hour calc for work-pattern badge + histogram highlight
+        $wpCounts = array_map(fn($r) => $r['count'], $wp);
+        $wpMax = max($wpCounts) ?: 0;
+        $wpPeakHour = $wpMax > 0 ? array_keys($wpCounts, $wpMax)[0] : null;
+        $wpTotal = array_sum($wpCounts);
+        $wpPeakLabel = $wpPeakHour !== null
+            ? sprintf('%02d:00–%02d:00', $wpPeakHour, ($wpPeakHour + 1) % 24)
+            : '—';
+
+        // Velocity gradient palettes per tile
+        $velPalette = [
+            'i2g' => 'linear-gradient(135deg, #4f46e5, #7c3aed)',  // indigo→violet
+            'g2c' => 'linear-gradient(135deg, #0ea5e9, #2563eb)',  // sky→blue
+            'i2c' => 'linear-gradient(135deg, #10b981, #047857)',  // emerald
+            'sdd' => 'linear-gradient(135deg, #f59e0b, #d97706)',  // amber
+        ];
+
+        // Same-day dispatch progress % (vs target 80%)
+        $sddTarget = 80;
+        $sddProgress = min(100, ($vk['same_day_dispatch_pct'] / $sddTarget) * 100);
+
+        // Velocity progress bars: faster = better. Map hours → % (24h = 0%, 0h = 100%)
+        $velBarPct = function (?float $v) {
+            if ($v === null) return 0;
+            return max(5, min(100, 100 - ($v / 24) * 100));
+        };
+
+        // Notification read-rate ring color
+        $neColor = $ne['read_rate'] >= 70 ? '#10b981' : ($ne['read_rate'] >= 40 ? '#f59e0b' : '#ef4444');
+    @endphp
+
+    <h3 class="section-h mt-4"><span class="bar"></span><i class="fas fa-user-clock text-info"></i> How You Work</h3>
+
+    {{-- ===== Velocity KPI row — 4 tiles ===== --}}
     <div class="row g-3 mb-3">
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-stopwatch"></i><div class="title">Avg Sale Velocity</div><span class="phase-tag">Phase 3</span></div></div>
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-truck-fast"></i><div class="title">Same-Day Dispatch</div><span class="phase-tag">Phase 3</span></div></div>
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-clock-rotate-left"></i><div class="title">Work Pattern</div><span class="phase-tag">Phase 3</span></div></div>
-        <div class="col-6 col-md-4 col-xl"><div class="perf-scaffold-card"><i class="fas fa-tasks"></i><div class="title">Pipeline Snapshot</div><span class="phase-tag">Phase 3</span></div></div>
+        {{-- Invoice → Godown --}}
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="vel-tile" style="--vaccent: {{ $velPalette['i2g'] }};">
+                <div class="vel-icon"><i class="fas fa-warehouse"></i></div>
+                <div class="vel-label">Invoice → Godown</div>
+                <div class="vel-value mono">{{ $fmtHrs($vk['avg_invoice_to_godown_hrs']) }}</div>
+                <div class="vel-sub">Avg time from booking to godown-prep ready</div>
+                <div class="vel-bar"><div style="width: {{ $velBarPct($vk['avg_invoice_to_godown_hrs']) }}%;"></div></div>
+            </div>
+        </div>
+
+        {{-- Godown → Challan --}}
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="vel-tile" style="--vaccent: {{ $velPalette['g2c'] }};">
+                <div class="vel-icon"><i class="fas fa-truck-loading"></i></div>
+                <div class="vel-label">Godown → Challan</div>
+                <div class="vel-value mono">{{ $fmtHrs($vk['avg_godown_to_challan_hrs']) }}</div>
+                <div class="vel-sub">Avg time from godown-prep to dispatch</div>
+                <div class="vel-bar"><div style="width: {{ $velBarPct($vk['avg_godown_to_challan_hrs']) }}%;"></div></div>
+            </div>
+        </div>
+
+        {{-- Invoice → Challan (end-to-end velocity) --}}
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="vel-tile" style="--vaccent: {{ $velPalette['i2c'] }};">
+                <div class="vel-icon"><i class="fas fa-stopwatch"></i></div>
+                <div class="vel-label">End-to-End Velocity</div>
+                <div class="vel-value mono">{{ $fmtHrs($vk['avg_invoice_to_challan_hrs']) }}</div>
+                <div class="vel-sub">Invoice → challan issued (full cycle)</div>
+                <div class="vel-bar"><div style="width: {{ $velBarPct($vk['avg_invoice_to_challan_hrs']) }}%;"></div></div>
+            </div>
+        </div>
+
+        {{-- Same-Day Dispatch --}}
+        <div class="col-12 col-sm-6 col-xl-3">
+            <div class="vel-tile" style="--vaccent: {{ $velPalette['sdd'] }};">
+                <div class="vel-icon"><i class="fas fa-truck-fast"></i></div>
+                <div class="vel-label">Same-Day Dispatch</div>
+                <div class="vel-value mono">{{ $vk['same_day_dispatch_pct'] }}<span class="unit">%</span></div>
+                <div class="vel-sub">{{ $vk['dispatched_count'] }} of {{ $vk['total_invoices'] }} invoices dispatched same-day</div>
+                <div class="vel-bar"><div style="width: {{ $sddProgress }}%;"></div></div>
+            </div>
+        </div>
     </div>
+
+    {{-- ===== Activity summary chips row — 3 small gradient chips ===== --}}
+    <div class="row g-3 mb-3">
+        <div class="col-12 col-md-4">
+            <div class="act-chip teal">
+                <div class="ac-lbl"><i class="fas fa-bolt me-1"></i>Transactions / Day</div>
+                <div class="ac-val mono">{{ $act['transactions_per_day'] }}</div>
+                <div class="ac-sub">Avg activity intensity on days you work</div>
+            </div>
+        </div>
+        <div class="col-12 col-md-4">
+            <div class="act-chip fuchsia">
+                <div class="ac-lbl"><i class="fas fa-calendar-day me-1"></i>Active Days (cross-table)</div>
+                <div class="ac-val mono">{{ $act['active_days_cross_table'] }}</div>
+                <div class="ac-sub">{{ $act['total_activity'] }} total transactions across 6 tables</div>
+            </div>
+        </div>
+        <div class="col-12 col-md-4">
+            <div class="act-chip cyan">
+                <div class="ac-lbl"><i class="fas fa-fire me-1"></i>Peak Day</div>
+                <div class="ac-val mono">{{ $act['peak_day'] ? \Carbon\Carbon::parse($act['peak_day'])->format('M j') : '—' }}</div>
+                <div class="ac-sub">{{ $act['peak_day_count'] }} transactions — your busiest day</div>
+            </div>
+        </div>
+    </div>
+
+    {{-- ===== Charts row: Work Pattern histogram (8) + Pipeline Snapshot (4) ===== --}}
+    <div class="row g-3 mb-3">
+        {{-- Work Pattern — 24-hour histogram --}}
+        <div class="col-12 col-xl-8">
+            <div class="hist-card">
+                <div class="hist-head">
+                    <div>
+                        <div class="hist-title"><i class="fas fa-clock-rotate-left text-info"></i> Work Pattern — Hour of Day</div>
+                        <div class="hist-sub">When you do your work — 24-hour activity histogram across all tables</div>
+                    </div>
+                    @if ($wpPeakHour !== null)
+                        <span class="peak-badge"><i class="fas fa-bolt me-1"></i>Peak: {{ $wpPeakLabel }}</span>
+                    @endif
+                </div>
+                <div class="hist-wrap">
+                    <canvas id="workPatternChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        {{-- Pipeline Snapshot --}}
+        <div class="col-12 col-xl-4">
+            <div class="chart-card" style="padding: 1.1rem 1.25rem;">
+                <div class="chart-title"><i class="fas fa-tasks text-warning"></i> Pipeline Snapshot</div>
+                <div class="chart-sub">Your work-in-progress (point-in-time)</div>
+
+                <div class="pipe-item">
+                    <div class="pipe-icon amber"><i class="fas fa-file-circle-exclamation"></i></div>
+                    <div class="pipe-info">
+                        <div class="pipe-name">Stale Drafts</div>
+                        <div class="pipe-meta">Drafts older than 7 days</div>
+                    </div>
+                    <div class="pipe-val">{{ $pipe['stale_draft_count'] }}</div>
+                </div>
+
+                <div class="pipe-item">
+                    <div class="pipe-icon blue"><i class="fas fa-truck-arrow-right"></i></div>
+                    <div class="pipe-info">
+                        <div class="pipe-name">Open Pipeline</div>
+                        <div class="pipe-meta">Confirmed · awaiting dispatch</div>
+                    </div>
+                    <div class="pipe-val">৳ {{ number_format($pipe['open_pipeline_value'], 0) }}</div>
+                </div>
+
+                <div class="pipe-item">
+                    <div class="pipe-icon rose"><i class="fas fa-pause"></i></div>
+                    <div class="pipe-info">
+                        <div class="pipe-name">Parked Sales</div>
+                        <div class="pipe-meta">call_a_day = true</div>
+                    </div>
+                    <div class="pipe-val">{{ $pipe['parked_sales_count'] }}</div>
+                </div>
+
+                <div class="pipe-item">
+                    <div class="pipe-icon green"><i class="fas fa-file-pen"></i></div>
+                    <div class="pipe-info">
+                        <div class="pipe-name">All Drafts</div>
+                        <div class="pipe-meta">Total drafts on your book</div>
+                    </div>
+                    <div class="pipe-val">{{ $pipe['draft_count'] }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {{-- ===== Bottom row: Notification engagement ring ===== --}}
+    <div class="row g-3 mb-3">
+        <div class="col-12">
+            <div class="notif-card">
+                <div class="chart-title"><i class="fas fa-bell text-purple"></i> Notification Engagement</div>
+                <div class="chart-sub">How well you keep up with system alerts</div>
+                <div class="notif-grid">
+                    <div class="notif-ring">
+                        <canvas id="notifRing"></canvas>
+                        <div class="ring-center">
+                            <div class="ring-pct mono">{{ $ne['read_rate'] }}<span style="font-size:0.78rem;">%</span></div>
+                            <div class="ring-cap">read</div>
+                        </div>
+                    </div>
+                    <div class="notif-stats">
+                        <div class="ns-row">
+                            <span class="ns-dot" style="background: #10b981;"></span>
+                            Read
+                            <span class="ns-num">{{ $ne['read'] }}</span>
+                        </div>
+                        <div class="ns-row">
+                            <span class="ns-dot" style="background: #ef4444;"></span>
+                            Unread
+                            <span class="ns-num">{{ $ne['unread'] }}</span>
+                        </div>
+                        <div class="ns-row">
+                            <span class="ns-dot" style="background: #64748b;"></span>
+                            Total received
+                            <span class="ns-num">{{ $ne['total'] }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @endif {{-- end of Phase 3 How You Work block --}}
+
+    {{-- ============================================================
+         PHASE 4 — SCAFFOLDING PLACEHOLDER (kept visible so the
+         user sees what's coming next; will be filled in next phase)
+         ============================================================ --}}
+    @if (isset($targetEmployee) && $targetEmployee && !$scaffoldingOnly)
 
     <h3 class="section-h mt-3"><span class="bar"></span><i class="fas fa-bullseye text-warning"></i> Commission, Stock Discipline & Accuracy</h3>
     <div class="row g-3 mb-3">
@@ -1361,7 +1864,7 @@
 
     <div class="text-center text-muted small mt-4 mb-3">
         <i class="fas fa-info-circle me-1"></i>
-        <strong>Phases 1 &amp; 2 complete.</strong> Sales + Collections &amp; Returns are live. Work-pattern and commission arrive in Phases 3–4.
+        <strong>Phases 1, 2 &amp; 3 complete.</strong> Sales + Collections &amp; Returns + How You Work are live. Commission, stock discipline, and accuracy arrive in Phase 4.
         @if (isset($customerPaymentsTxnType))
             <br>G12 check: <code>customer_payments.transaction_type</code>
             @if ($customerPaymentsTxnType) <span class="text-success">exists</span> @else <span class="text-warning">missing</span> @endif
@@ -1603,6 +2106,151 @@
                 animation: { animateRotate: true, animateScale: true, duration: 900 }
             }
         });
+    }
+
+    // ============================================================
+    // 5. Phase 3 — Work Pattern histogram (24-bin hour-of-day)
+    // ============================================================
+    const wpEl = document.getElementById('workPatternChart');
+    const wpData = @json($wp ?? []);
+    const wpPeakHour = @json($wpPeakHour);
+    if (wpEl && typeof Chart !== 'undefined') {
+        const labels = wpData.map(d => {
+            // "09:00"
+            return String(d.hour).padStart(2, '0') + ':00';
+        });
+        const counts = wpData.map(d => Number(d.count));
+
+        // Background color array — peak hour highlighted, business hours (9-18) a brighter shade
+        const bgColors = wpData.map(d => {
+            if (wpPeakHour !== null && d.hour === wpPeakHour) return '#f59e0b';  // amber peak
+            if (d.hour >= 9 && d.hour < 18) return '#4f46e5';                    // indigo business
+            if (d.hour >= 6 && d.hour < 22) return 'rgba(79, 70, 229, 0.55)';    // soft extended
+            return 'rgba(100, 116, 139, 0.35)';                                  // off-hours muted
+        });
+        const borderColors = wpData.map(d => {
+            if (wpPeakHour !== null && d.hour === wpPeakHour) return '#d97706';
+            return 'transparent';
+        });
+
+        // Gradient fill for the bar chart area
+        const ctx = wpEl.getContext('2d');
+
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Activity Count',
+                    data: counts,
+                    backgroundColor: bgColors,
+                    borderColor: borderColors,
+                    borderWidth: 1,
+                    borderRadius: 4,
+                    maxBarThickness: 22,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                        titleFont: { size: 12, weight: '600' },
+                        bodyFont: { size: 12 },
+                        padding: 10,
+                        cornerRadius: 8,
+                        callbacks: {
+                            title: function (items) {
+                                const h = items[0].label;
+                                const nextH = String((Number(h.slice(0, 2)) + 1) % 24).padStart(2, '0') + ':00';
+                                return h + ' – ' + nextH;
+                            },
+                            label: function (ctx) {
+                                return ' ' + ctx.parsed.y + ' transactions';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: {
+                            font: { size: 9 },
+                            color: '#64748b',
+                            maxRotation: 0,
+                            autoSkip: true,
+                            maxTicksLimit: 12,
+                            callback: function (val, idx) {
+                                // Show every 3rd hour: 00, 03, 06, 09, 12, 15, 18, 21
+                                return idx % 3 === 0 ? this.getLabelForValue(val) : '';
+                            }
+                        }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: '#f1f5f9' },
+                        ticks: {
+                            font: { size: 10 },
+                            color: '#64748b',
+                            precision: 0,
+                            stepSize: Math.max(1, Math.ceil(Math.max(...counts) / 5))
+                        }
+                    }
+                },
+                animation: { duration: 900, easing: 'easeOutCubic' }
+            }
+        });
+    }
+
+    // ============================================================
+    // 6. Phase 3 — Notification engagement ring (doughnut)
+    // ============================================================
+    const neEl = document.getElementById('notifRing');
+    if (neEl && typeof Chart !== 'undefined') {
+        const rate = Math.max(0, Math.min(100, Number(@json($ne['read_rate'] ?? 0))));
+        const neColor = @json($neColor);
+        const total = Number(@json($ne['total'] ?? 0));
+
+        if (total > 0) {
+            new Chart(neEl.getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    datasets: [{
+                        data: [rate, Math.max(0.0001, 100 - rate)],
+                        backgroundColor: [neColor, '#f1f5f9'],
+                        borderWidth: 0,
+                        cutout: '72%',
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                    animation: { animateRotate: true, duration: 1100, easing: 'easeOutCubic' }
+                }
+            });
+        } else {
+            // No notifications — render empty ring outline
+            new Chart(neEl.getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    datasets: [{
+                        data: [1],
+                        backgroundColor: ['#f1f5f9'],
+                        borderWidth: 0,
+                        cutout: '72%',
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                    animation: { duration: 0 }
+                }
+            });
+        }
     }
 })();
 </script>

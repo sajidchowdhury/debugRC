@@ -518,7 +518,7 @@ private function getSalesKPIs(int $userId, array $range): array
 
 ---
 
-### Phase 3 — Operational Efficiency & Productivity (1 day)
+### Phase 3 — Operational Efficiency & Productivity (1 day) ✅ DONE
 
 **Goal:** Show the user *how they work* — sales velocity, draft discipline, work pattern, active days. This is the "modern diagram" piece the user explicitly asked for.
 

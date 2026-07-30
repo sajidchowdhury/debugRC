@@ -1062,3 +1062,42 @@ Stage Summary:
 - Gauge + donut + animated bars + gradient stat-tiles give the section visual variety beyond the Phase 1 line+bar charts. Severity is color-coded throughout (green=good, amber=watch, red=critical) for instant scanability.
 - Super-admin switching is preserved: changing the employee <select> or period reloads all Phase 2 metrics for the new target+period combination.
 - Phase 3 (Operational Efficiency & Productivity — How You Work) is next: getVelocityKPIs, getPipelineSnapshot, getWorkPattern, getActivitySummary, then replace the How You Work placeholder row.
+
+---
+Task ID: phase-3
+Agent: main (Super Z)
+Task: Phase 3 of User Performance Dashboard — Operational Efficiency & Productivity ("How You Work"). Add 5 metric methods (getVelocityKPIs, getPipelineSnapshot, getWorkPattern, getActivitySummary, getNotificationEngagement) to UserPerformanceDashboardController; render the data in a visually exciting dashboard section (gradient velocity tiles with progress bars, 3 activity chips, 24-hour work-pattern histogram with peak-hour highlight, pipeline snapshot list with icon tiles, notification engagement ring). Phase 4 placeholder preserved.
+
+Work Log:
+- Verified Phase 0/1/2 all pushed to origin/main (commits 61bee66, 5d87416, 2cca641).
+- Re-read schema for Phase 3 columns: sales_invoices (is_godown_prepared, godown_prepared_at, is_challan_issued, challan_issued_at, call_a_day, status, total_amount, created_at, created_by), sales_challans (created_by, created_at), stock_adjustments (created_by, created_at), damage_invoices (created_by, created_at), notifications (user_id, is_read, read_at). Confirmed all 6 activity tables have created_by + created_at for the cross-table UNION.
+- Updated UserPerformanceDashboardController class docblock to document Phase 3 scope and query conventions: velocity uses sales_invoices lifecycle timestamps (period-filtered by invoice_date for partition pruning); pipeline snapshot is point-in-time; work pattern is a 24-bin hour-of-day histogram UNIONed across 6 activity tables; activity summary derives cross-table active days + peak day; notification engagement uses notifications.user_id (NOT created_by).
+- Added getVelocityKPIs($userId, $range) — single-query 4-metric aggregate using PostgreSQL FILTER clauses: AVG(EXTRACT(EPOCH FROM (godown_prepared_at - created_at))/3600) FILTER (WHERE is_godown_prepared=true AND godown_prepared_at IS NOT NULL), etc. Same-day dispatch % = same-day count / dispatched count. Returns null avg hours (not 0) when no rows match — UI renders "—" per the plan's acceptance test.
+- Added getPipelineSnapshot($userId) — point-in-time (no period filter) single-query 5-metric aggregate using FILTER clauses: stale drafts (status='draft' AND created_at < CURRENT_DATE - 7 days), open pipeline value (status='confirmed' AND is_challan_issued=false SUM(total_amount)), parked sales (call_a_day=true), plus draft_count + confirmed_pending_dispatch for context.
+- Added getWorkPattern($userId, $range) — 24-bin hour-of-day histogram. Builds a raw SQL UNION ALL across 6 tables (sales_invoices, customer_payments, sales_returns, sales_challans, stock_adjustments, damage_invoices), each arm filtering by created_by + created_at BETWEEN. Returns a 24-element array always (zero-filled for empty hours). Uses DB::select with positional bindings (3 per arm × 6 arms = 18 bindings).
+- Added getActivitySummary($userId, $range) — 3 raw SQL queries: (1) peak day = per-date SUM across 6 tables ORDER BY total DESC LIMIT 1; (2) cross-table active days = COUNT(DISTINCT DATE(created_at)) across UNION; (3) total activity = SUM of per-table counts. Transactions per day = total / active days (NULLIF protection).
+- Added getNotificationEngagement($userId) — notifications table keyed by user_id (NOT created_by). COUNT(*) FILTER (WHERE is_read=true/false). Returns read_rate + total + unread + read counts.
+- Updated index() to call all 5 Phase 3 methods and pass $velocityKpis, $pipelineSnapshot, $workPattern, $activitySummary, $notificationEngagement to the view.
+- Added ~270 lines of CSS to performance.blade.php (scoped under #perf-dashboard) for Phase 3 visual components:
+  * .vel-tile — gradient stat tile with left-side accent strip, gradient icon tile, big value, contextual sub, mini progress bar
+  * .hist-card / .hist-head / .peak-badge — work-pattern histogram card with gradient peak-hour badge
+  * .pipe-item / .pipe-icon.amber/blue/rose/green — pipeline snapshot list with gradient icon tiles + dashed dividers
+  * .notif-card / .notif-grid / .notif-ring / .notif-stats — notification engagement card with doughnut ring + stats column
+  * .act-chip.teal/fuchsia/cyan — 3 small gradient chips for activity summary
+- Replaced Phase 3 placeholder row in performance.blade.php with 4 real sections:
+  * Row 1 (4 cols): Invoice → Godown (indigo→violet vel-tile with progress bar) | Godown → Challan (sky→blue) | End-to-End Velocity (emerald) | Same-Day Dispatch % (amber, progress vs 80% target). Each tile shows formatted "Xh Ym" or "—" for null.
+  * Row 2 (3 cols): Transactions/Day (teal chip) | Active Days cross-table (fuchsia chip) | Peak Day (cyan chip with Carbon-formatted date)
+  * Row 3 (8+4 cols): Work Pattern 24-hour histogram (Chart.js bar chart with peak hour highlighted amber, business hours 9-18 indigo, extended hours soft indigo, off-hours muted gray; tooltip shows hour range "09:00 – 10:00") | Pipeline Snapshot list (4 icon tiles: stale drafts amber, open pipeline blue ৳, parked sales rose, all drafts green)
+  * Row 4 (full width): Notification Engagement card (doughnut ring with center %, color shifts red→amber→green at 40/70% thresholds, side stats showing read/unread/total counts)
+- Added ~150 lines of Chart.js init code:
+  * Work Pattern histogram — 24-bar chart with conditional backgroundColor per bar (peak=amber, business=indigo, extended=soft indigo, off-hours=muted), custom tooltip showing hour range, x-axis ticks every 3 hours (00, 03, 06, 09, 12, 15, 18, 21), dynamic y-axis stepSize based on max count
+  * Notification engagement ring — doughnut with cutout 72%, color from PHP-computed $neColor (red/amber/green by threshold), empty-state rendering (gray ring when total=0)
+- Updated Phase 4 footer note: "Phases 1, 2 & 3 complete. Sales + Collections & Returns + How You Work are live. Commission, stock discipline, and accuracy arrive in Phase 4." Phase 4 scaffolding placeholders preserved.
+- Verified Blade tag balance: @if 25/25, @foreach 8/8, @php 18/18, @push 2/2, @section 1/1, {{ }} 134/134, JS braces 115/115. Controller PHP braces 98/98. No syntax drift.
+
+Stage Summary:
+- Phase 3 ships Operational Efficiency & Productivity ("How You Work") with the visual polish requested ("don't make it boring"). Every metric is per-user (created_by = $userId for activity metrics; notifications.user_id = $userId for engagement), partition-pruned where applicable (sales_invoices.invoice_date BETWEEN for velocity; created_at BETWEEN for work pattern + activity summary), and protected by try/catch with safe defaults (null hours render as "—", zero notifications render as gray empty ring, no 500 errors).
+- The dashboard now answers the "modern diagram" piece the user explicitly asked for: when you work (24-hour histogram with peak-hour callout), how fast you work (3 velocity tiles with progress bars + same-day dispatch %), what's in your pipeline (stale drafts, open value, parked sales, total drafts), how intensely you work (txns/day + cross-table active days + peak day), and how engaged you are with system alerts (notification read-rate ring).
+- Visual variety: vel-tiles (gradient strips), act-chips (small gradient blocks), histogram (multi-color bar chart), pipeline list (icon tiles with dashed dividers), notif ring (doughnut + side stats) — each row has a distinct visual character.
+- Super-admin switching is preserved: changing the employee <select> or period reloads all Phase 3 metrics for the new target+period combination. Pipeline snapshot + notification engagement are point-in-time (no period filter) so they always reflect the current state.
+- Phase 4 (Commission, Stock Discipline & Accuracy) is next: getCommissionKPIs, getStockDiscipline, getAccuracyKPIs, plus lightweight migrations G1, G2, G3 for metric accuracy.
