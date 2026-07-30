@@ -174,12 +174,12 @@ class DbSnapshotBasic extends Command
 -- It contains INSERT statements for master + config tables only.
 -- Transactional/audit/log tables are NOT included.
 --
--- Replay order is FK-safe (parents before children). We also use
--- SET session_replication_role = 'replica' to bypass FK checks during
--- restore as a belt-and-suspenders measure.
+-- Replay order is FK-safe (parents before children):
+--   branches → warehouses → employees → users → user_menu_permissions
+--   product_groups → product_categories → products
+--   banks → bank_ledger_mappings
+--   ledgers (parent_id self-FK: parents inserted before children by id ASC)
 -- ============================================================
-
-SET session_replication_role = 'replica';
 
 SQL;
     }
@@ -187,8 +187,6 @@ SQL;
     private function buildFooter(): string
     {
         return <<<SQL
-
-SET session_replication_role = 'origin';
 
 -- End of snapshot.
 SQL;
