@@ -83,6 +83,86 @@ return new class extends Migration
         return $this->hasPgPartman;
     }
 
+    /**
+     * Does a constraint (by name) exist on the given table? Uses pg_constraint
+     * introspection — works regardless of how the constraint was created.
+     *
+     * Used to guard FK re-creation (e.g. sai_stock_tx_fk) so the migration is
+     * idempotent across re-runs and partial-failure recoveries.
+     */
+    private function constraintExists(string $table, string $constraintName): bool
+    {
+        $exists = DB::selectOne(
+            "SELECT 1 FROM pg_constraint WHERE conname = ? LIMIT 1",
+            [$constraintName]
+        );
+        return $exists !== null;
+    }
+
+    /**
+     * Does an index (by name) exist? pg_indexes covers plain indexes and
+     * unique-constraint-backed indexes alike.
+     */
+    private function indexExists(string $indexName): bool
+    {
+        $exists = DB::selectOne(
+            "SELECT 1 FROM pg_indexes WHERE indexname = ? LIMIT 1",
+            [$indexName]
+        );
+        return $exists !== null;
+    }
+
+    /**
+     * Is the given table already declaratively partitioned?
+     *
+     * The original version of this migration was written to convert a
+     * NON-partitioned table into a partitioned one (rename → create
+     * partitioned → copy data → drop old). However, the base SQL files
+     * (03_stock.sql, 04_sales.sql) now create these tables ALREADY
+     * partitioned. Running the rename/recreate flow against an already-
+     * partitioned table fails at the final DROP TABLE _unpartitioned
+     * because PostgreSQL FK constraints follow their referenced table
+     * through RENAME TO — so the child-table FK silently retargets to
+     * the renamed (unpartitioned) table and blocks its drop with
+     * SQLSTATE[2BP01] "cannot drop table X_unpartitioned because other
+     * objects depend on it".
+     *
+     * When the table is already partitioned, we skip the rename/recreate
+     * flow entirely and just ensure the partitions, extra indexes, and
+     * triggers exist (all using IF NOT EXISTS so re-runs are no-ops).
+     */
+    private function isAlreadyPartitioned(string $tableName): bool
+    {
+        $row = DB::selectOne("
+            SELECT 1
+            FROM pg_partitioned_table pt
+            JOIN pg_class c ON c.oid = pt.partrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relname = ?
+              AND n.nspname = current_schema()
+            LIMIT 1
+        ", [$tableName]);
+
+        return $row !== null;
+    }
+
+    /**
+     * Does a relation (table/partition) by name exist in the current schema?
+     */
+    private function relationExists(string $name): bool
+    {
+        $row = DB::selectOne("
+            SELECT 1
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relname = ?
+              AND n.nspname = current_schema()
+            LIMIT 1
+        ", [$name]);
+
+        return $row !== null;
+    }
+
     public function up(): void
     {
         // ──────────────────────────────────────────────────────────────
@@ -112,10 +192,42 @@ return new class extends Migration
 
     private function partitionStockTransactions(): void
     {
+        // ── Step 0: Idempotency check ──
+        // 03_stock.sql already creates stock_transactions as PARTITION BY RANGE
+        // (transaction_date). The original migration was written to convert a
+        // non-partitioned table to partitioned, which is now redundant. Skip
+        // the rename/recreate flow and just ensure partitions/indexes/triggers.
+        if ($this->isAlreadyPartitioned('stock_transactions')) {
+            $this->ensureStockTransactionsPartitions();
+            $this->ensureStockTransactionsIndexes();
+            $this->ensureStockTransactionsTriggers();
+            return;
+        }
+
         // ── Step 1: Drop FKs that reference stock_transactions ──
         // Self-referential FK reversal_of_transaction_id
         DB::statement('ALTER TABLE stock_transactions DROP CONSTRAINT IF EXISTS fk_st_reversal_of');
         DB::statement('ALTER TABLE stock_transactions DROP CONSTRAINT IF EXISTS stock_transactions_reversal_of_transaction_id_foreign');
+
+        // ── Step 1.5: Drop child-table FKs that reference stock_transactions ──
+        // PostgreSQL FKs follow their referenced table through RENAME TO, so if
+        // we don't drop these here they would silently retarget to
+        // stock_transactions_unpartitioned after Step 3, blocking the DROP at
+        // Step 11 with SQLSTATE[2BP01] "cannot drop table
+        // stock_transactions_unpartitioned because other objects depend on it".
+        //
+        // The only child-table FK is sai_stock_tx_fk on stock_adjustment_items
+        // (defined in 03_stock.sql + migration 2025_08_07_000001). It is a
+        // COMPOSITE FK (stock_transaction_id, stock_transaction_date) →
+        // stock_transactions(id, transaction_date) — references the real PK of
+        // the partitioned table, so it is a valid declarative FK in PG 12+
+        // (FK-to-partitioned-table is supported when the referenced columns
+        // include the partition key). We recreate it as declarative at Step 11.5.
+        //
+        // NOTE: We do NOT need to drop idx_sai_stock_tx — it lives on
+        // stock_adjustment_items, not on stock_transactions, so it survives the
+        // rename + drop untouched.
+        DB::statement('ALTER TABLE stock_adjustment_items DROP CONSTRAINT IF EXISTS sai_stock_tx_fk');
 
         // ── Step 2: Drop indexes on old table (will be recreated on partitioned table) ──
         $stIndexes = [
@@ -324,7 +436,36 @@ return new class extends Migration
             SQL);
         }
         // ── Step 11: Drop backup table ──
+        // Now safe: sai_stock_tx_fk was dropped at Step 1.5 (no child-table FK
+        // references _unpartitioned anymore), materialized views were dropped
+        // at Step 2.5 (will be recreated at Step 13), and the self-referential
+        // FK was dropped at Step 1 (replaced by trigger at Step 9).
         DB::statement('DROP TABLE stock_transactions_unpartitioned');
+
+        // ── Step 11.5: Recreate composite FK on stock_adjustment_items ──
+        // Restore the declarative composite FK that was dropped at Step 1.5.
+        // This is the architecturally correct way to reference a RANGE-
+        // partitioned table whose PK is (id, transaction_date):
+        //
+        //   • The referenced columns (id, transaction_date) include the
+        //     partition key (transaction_date), so PG 12+ accepts this as a
+        //     declarative FK — no trigger needed.
+        //   • ON DELETE SET NULL nulls BOTH columns (composite FK semantics).
+        //   • The (NULL, NULL) pair is valid, so pre-Phase-6.2 rows that never
+        //     had a stock_transaction_id remain legal.
+        //
+        // Idempotent: guarded by constraintExists() so re-running the migration
+        // (e.g. after a partial failure) does not collide with a pre-existing
+        // sai_stock_tx_fk left by 03_stock.sql or migration 2025_08_07_000001.
+        if (! $this->constraintExists('stock_adjustment_items', 'sai_stock_tx_fk')) {
+            DB::statement(<<<'SQL'
+                ALTER TABLE stock_adjustment_items
+                ADD CONSTRAINT sai_stock_tx_fk
+                FOREIGN KEY (stock_transaction_id, stock_transaction_date)
+                REFERENCES stock_transactions(id, transaction_date)
+                ON DELETE SET NULL
+            SQL);
+        }
 
         // ── Step 12: Analyze ──
         DB::statement('ANALYZE stock_transactions');
@@ -375,12 +516,151 @@ SQL);
         SQL);
     }
 
+    /**
+     * Ensure monthly partitions + default partition exist on stock_transactions.
+     * Called when the table is already partitioned (created by 03_stock.sql).
+     * Idempotent — skips partitions that already exist.
+     */
+    private function ensureStockTransactionsPartitions(): void
+    {
+        $months = [
+            ['2025-01-01', '2025-02-01', 'stock_transactions_2025_01'],
+            ['2025-02-01', '2025-03-01', 'stock_transactions_2025_02'],
+            ['2025-03-01', '2025-04-01', 'stock_transactions_2025_03'],
+            ['2025-04-01', '2025-05-01', 'stock_transactions_2025_04'],
+            ['2025-05-01', '2025-06-01', 'stock_transactions_2025_05'],
+            ['2025-06-01', '2025-07-01', 'stock_transactions_2025_06'],
+            ['2025-07-01', '2025-08-01', 'stock_transactions_2025_07'],
+            ['2025-08-01', '2025-09-01', 'stock_transactions_2025_08'],
+            ['2025-09-01', '2025-10-01', 'stock_transactions_2025_09'],
+            ['2025-10-01', '2025-11-01', 'stock_transactions_2025_10'],
+            ['2025-11-01', '2025-12-01', 'stock_transactions_2025_11'],
+            ['2025-12-01', '2026-01-01', 'stock_transactions_2025_12'],
+        ];
+
+        foreach ($months as [$from, $to, $name]) {
+            if (! $this->relationExists($name)) {
+                DB::statement(
+                    "CREATE TABLE {$name} PARTITION OF stock_transactions
+                     FOR VALUES FROM ('{$from}') TO ('{$to}')"
+                );
+            }
+        }
+
+        if (! $this->relationExists('stock_transactions_default')) {
+            DB::statement(
+                'CREATE TABLE stock_transactions_default PARTITION OF stock_transactions DEFAULT'
+            );
+        }
+
+        // Register with pg_partman for auto-creation of future partitions.
+        // Guarded so re-runs don't fail if already registered.
+        if ($this->hasPgPartman()) {
+            try {
+                DB::statement(<<<'SQL'
+                    SELECT partman.create_parent(
+                        p_parent_table    := 'public.stock_transactions',
+                        p_control         := 'transaction_date',
+                        p_type            := 'range',
+                        p_interval        := '1 month',
+                        p_premake         := 6,
+                        p_start_partition := '2026-01-01'
+                    )
+                SQL);
+            } catch (\Throwable $e) {
+                // Already registered with pg_partman — safe to ignore.
+            }
+        }
+
+        DB::statement('SELECT setval(
+            pg_get_serial_sequence(\'stock_transactions\', \'id\'),
+            GREATEST(COALESCE((SELECT MAX(id) FROM stock_transactions), 0), 1)
+        )');
+
+        DB::statement('ANALYZE stock_transactions');
+    }
+
+    /**
+     * Ensure the extra (non-base) indexes exist on stock_transactions.
+     * 03_stock.sql already creates idx_st_date_warehouse, idx_st_product,
+     * idx_st_reference, idx_st_branch_demand. We add the rest here.
+     */
+    private function ensureStockTransactionsIndexes(): void
+    {
+        $indexes = [
+            'idx_st_reversal_of' => 'CREATE INDEX IF NOT EXISTS idx_st_reversal_of ON stock_transactions (reversal_of_transaction_id) WHERE reversal_of_transaction_id IS NOT NULL',
+            'idx_st_is_reversed' => 'CREATE INDEX IF NOT EXISTS idx_st_is_reversed ON stock_transactions (is_reversed) WHERE is_reversed = true',
+            'idx_st_reference_covering' => 'CREATE INDEX IF NOT EXISTS idx_st_reference_covering ON stock_transactions (reference_type, reference_id, transaction_date) INCLUDE (id, warehouse_id, product_id, qty, rate, created_by)',
+        ];
+        foreach ($indexes as $name => $ddl) {
+            if (! $this->indexExists($name)) {
+                DB::statement($ddl);
+            }
+        }
+    }
+
+    /**
+     * Ensure the self-referential FK trigger exists on stock_transactions.
+     * PG 12-17 does not support FK → partitioned table, so we use a
+     * constraint trigger to enforce reversal_of_transaction_id integrity.
+     */
+    private function ensureStockTransactionsTriggers(): void
+    {
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION fn_st_reversal_fk_check()
+            RETURNS trigger AS $$
+            BEGIN
+                IF NEW.reversal_of_transaction_id IS NOT NULL THEN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM stock_transactions
+                        WHERE id = NEW.reversal_of_transaction_id
+                    ) THEN
+                        RAISE EXCEPTION
+                            'Referential integrity violation: reversal_of_transaction_id=% does not exist in stock_transactions',
+                            NEW.reversal_of_transaction_id;
+                    END IF;
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        SQL);
+
+        DB::statement('DROP TRIGGER IF EXISTS trg_st_reversal_fk ON stock_transactions');
+        DB::statement(<<<'SQL'
+            CREATE CONSTRAINT TRIGGER trg_st_reversal_fk
+            AFTER INSERT ON stock_transactions
+            DEFERRABLE INITIALLY IMMEDIATE
+            FOR EACH ROW
+            WHEN (NEW.reversal_of_transaction_id IS NOT NULL)
+            EXECUTE FUNCTION fn_st_reversal_fk_check()
+        SQL);
+
+        // LISTEN/NOTIFY trigger (re-created if dropped)
+        DB::statement('DROP TRIGGER IF EXISTS trg_notify_stock_transactions ON stock_transactions');
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER trg_notify_stock_transactions
+            AFTER INSERT ON stock_transactions
+            FOR EACH ROW EXECUTE FUNCTION rcerp_notify_stock_change()
+        SQL);
+    }
+
     // ═══════════════════════════════════════════════════════════════
     //  sales_invoices partitioning
     // ═══════════════════════════════════════════════════════════════
 
     private function partitionSalesInvoices(): void
     {
+        // ── Step 0: Idempotency check ──
+        // 04_sales.sql already creates sales_invoices as PARTITION BY RANGE
+        // (invoice_date). Skip the rename/recreate flow and just ensure
+        // partitions, extra indexes, FK triggers, and RLS policies exist.
+        if ($this->isAlreadyPartitioned('sales_invoices')) {
+            $this->ensureSalesInvoicesPartitions();
+            $this->ensureSalesInvoicesIndexes();
+            $this->ensureSalesInvoicesTriggers();
+            return;
+        }
+
         // ── Step 1: Drop FKs FROM child tables → sales_invoices(id) ──
         // These must be replaced with trigger-based enforcement since
         // PG does not support FK references to partitioned tables.
@@ -841,6 +1121,240 @@ SQL);
         // No materialized views depend on sales_invoices, so no MV recreation
         // is needed here (unlike partitionStockTransactions which recreates
         // mv_product_movement_summary).
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER trg_notify_sales_invoices
+            AFTER INSERT OR UPDATE ON sales_invoices
+            FOR EACH ROW EXECUTE FUNCTION rcerp_notify_sales_invoice()
+        SQL);
+    }
+
+    /**
+     * Ensure monthly partitions + default partition exist on sales_invoices.
+     * Called when the table is already partitioned (created by 04_sales.sql).
+     * Idempotent — skips partitions that already exist.
+     */
+    private function ensureSalesInvoicesPartitions(): void
+    {
+        $months = [
+            ['2025-01-01', '2025-02-01', 'sales_invoices_2025_01'],
+            ['2025-02-01', '2025-03-01', 'sales_invoices_2025_02'],
+            ['2025-03-01', '2025-04-01', 'sales_invoices_2025_03'],
+            ['2025-04-01', '2025-05-01', 'sales_invoices_2025_04'],
+            ['2025-05-01', '2025-06-01', 'sales_invoices_2025_05'],
+            ['2025-06-01', '2025-07-01', 'sales_invoices_2025_06'],
+            ['2025-07-01', '2025-08-01', 'sales_invoices_2025_07'],
+            ['2025-08-01', '2025-09-01', 'sales_invoices_2025_08'],
+            ['2025-09-01', '2025-10-01', 'sales_invoices_2025_09'],
+            ['2025-10-01', '2025-11-01', 'sales_invoices_2025_10'],
+            ['2025-11-01', '2025-12-01', 'sales_invoices_2025_11'],
+            ['2025-12-01', '2026-01-01', 'sales_invoices_2025_12'],
+        ];
+
+        foreach ($months as [$from, $to, $name]) {
+            if (! $this->relationExists($name)) {
+                DB::statement(
+                    "CREATE TABLE {$name} PARTITION OF sales_invoices
+                     FOR VALUES FROM ('{$from}') TO ('{$to}')"
+                );
+            }
+        }
+
+        if (! $this->relationExists('sales_invoices_default')) {
+            DB::statement(
+                'CREATE TABLE sales_invoices_default PARTITION OF sales_invoices DEFAULT'
+            );
+        }
+
+        if ($this->hasPgPartman()) {
+            try {
+                DB::statement(<<<'SQL'
+                    SELECT partman.create_parent(
+                        p_parent_table    := 'public.sales_invoices',
+                        p_control         := 'invoice_date',
+                        p_type            := 'range',
+                        p_interval        := '1 month',
+                        p_premake         := 6,
+                        p_start_partition := '2026-01-01'
+                    )
+                SQL);
+            } catch (\Throwable $e) {
+                // Already registered with pg_partman — safe to ignore.
+            }
+        }
+
+        DB::statement('SELECT setval(
+            pg_get_serial_sequence(\'sales_invoices\', \'id\'),
+            GREATEST(COALESCE((SELECT MAX(id) FROM sales_invoices), 0), 1)
+        )');
+
+        DB::statement('ANALYZE sales_invoices');
+    }
+
+    /**
+     * Ensure the extra (non-base) indexes exist on sales_invoices.
+     * 04_sales.sql already creates idx_si_customer, idx_si_invoice_date,
+     * idx_si_salesman, idx_si_branch, idx_si_journal, idx_si_status.
+     * We add the rest here using IF NOT EXISTS for idempotency.
+     */
+    private function ensureSalesInvoicesIndexes(): void
+    {
+        $indexes = [
+            'idx_si_call_a_day_active' => 'CREATE INDEX IF NOT EXISTS idx_si_call_a_day_active ON sales_invoices (call_a_day) WHERE call_a_day = false',
+            'idx_si_open_invoice' => "CREATE INDEX IF NOT EXISTS idx_si_open_invoice ON sales_invoices (customer_id, due_amount, invoice_date) WHERE status='confirmed' AND is_reversed=false AND due_amount > 0",
+            'idx_si_open_by_branch' => "CREATE INDEX IF NOT EXISTS idx_si_open_by_branch ON sales_invoices (branch_id, invoice_date) WHERE status='confirmed' AND is_reversed=false AND due_amount > 0",
+            'idx_si_customer_due_covering' => "CREATE INDEX IF NOT EXISTS idx_si_customer_due_covering ON sales_invoices (customer_id, is_reversed, invoice_date) INCLUDE (id, invoice_code, total_amount, paid_amount, due_amount) WHERE due_amount > 0",
+            'idx_si_listing_covering' => "CREATE INDEX IF NOT EXISTS idx_si_listing_covering ON sales_invoices (branch_id, status, invoice_date DESC, id DESC) INCLUDE (customer_id, invoice_code, total_amount, paid_amount, due_amount, is_godown_prepared, is_challan_issued, is_reversed)",
+        ];
+
+        foreach ($indexes as $name => $ddl) {
+            if (! $this->indexExists($name)) {
+                DB::statement($ddl);
+            }
+        }
+
+        // Ensure outbound FKs from sales_invoices exist (created by 04_sales.sql
+        // but the original migration recreated them after the rename — this is
+        // the equivalent for the already-partitioned case).
+        if (! $this->constraintExists('sales_invoices', 'fk_si_customer')) {
+            DB::statement('ALTER TABLE sales_invoices ADD CONSTRAINT fk_si_customer FOREIGN KEY (customer_id) REFERENCES customers(id)');
+        }
+        if (! $this->constraintExists('sales_invoices', 'fk_si_branch')) {
+            DB::statement('ALTER TABLE sales_invoices ADD CONSTRAINT fk_si_branch FOREIGN KEY (branch_id) REFERENCES branches(id)');
+        }
+        if (! $this->constraintExists('sales_invoices', 'fk_si_journal')) {
+            DB::statement('ALTER TABLE sales_invoices ADD CONSTRAINT fk_si_journal FOREIGN KEY (journal_entry_id) REFERENCES journal_entries(id)');
+        }
+        if (! $this->constraintExists('sales_invoices', 'fk_si_cogs_journal')) {
+            DB::statement('ALTER TABLE sales_invoices ADD CONSTRAINT fk_si_cogs_journal FOREIGN KEY (cogs_journal_entry_id) REFERENCES journal_entries(id)');
+        }
+    }
+
+    /**
+     * Ensure FK-enforcement triggers + RLS + LISTEN/NOTIFY trigger exist on
+     * sales_invoices and its child tables.
+     *
+     * PG 12-17 does not support declarative FK → partitioned table, so we
+     * use constraint triggers to enforce that child rows reference a valid
+     * invoice in any partition.
+     */
+    private function ensureSalesInvoicesTriggers(): void
+    {
+        // ── updated_at trigger ──
+        DB::statement('DROP TRIGGER IF EXISTS trg_sales_invoices_updated_at ON sales_invoices');
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER trg_sales_invoices_updated_at
+            BEFORE UPDATE ON sales_invoices
+            FOR EACH ROW
+            EXECUTE FUNCTION update_updated_at_column()
+        SQL);
+
+        // ── RLS policies (re-created idempotently) ──
+        DB::statement('ALTER TABLE sales_invoices ENABLE ROW LEVEL SECURITY');
+        DB::statement('ALTER TABLE sales_invoices FORCE ROW LEVEL SECURITY');
+
+        $policies = [
+            ['rls_sales_invoices_select', 'SELECT', "current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int", null],
+            ['rls_sales_invoices_insert', 'INSERT', null, "current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int"],
+            ['rls_sales_invoices_update', 'UPDATE', "current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int", "current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int"],
+            ['rls_sales_invoices_delete', 'DELETE', "current_setting('app.is_admin', true) = 'true' OR branch_id = current_setting('app.branch_id')::int", null],
+            ['rls_sales_invoices_admin', 'ALL', "current_setting('app.is_admin', true) = 'true'", "current_setting('app.is_admin', true) = 'true'"],
+        ];
+
+        foreach ($policies as [$name, $cmd, $using, $check]) {
+            DB::statement("DROP POLICY IF EXISTS {$name} ON sales_invoices");
+            $usingClause = $using !== null ? "USING ({$using})" : '';
+            $checkClause = $check !== null ? "WITH CHECK ({$check})" : '';
+            DB::statement("CREATE POLICY {$name} ON sales_invoices FOR {$cmd} {$usingClause} {$checkClause}");
+        }
+
+        // ── FK enforcement trigger functions ──
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION fn_fk_si_check()
+            RETURNS trigger AS $$
+            DECLARE
+                fk_col text := TG_ARGV[0];
+                invoice_id_val integer;
+                invoice_exists boolean;
+            BEGIN
+                EXECUTE format('SELECT ($1).%I', fk_col) USING NEW INTO invoice_id_val;
+
+                IF invoice_id_val IS NULL THEN
+                    RETURN NEW;
+                END IF;
+
+                SELECT EXISTS (
+                    SELECT 1 FROM sales_invoices WHERE id = invoice_id_val
+                ) INTO invoice_exists;
+
+                IF NOT invoice_exists THEN
+                    RAISE EXCEPTION
+                        'Referential integrity: %=% does not exist in sales_invoices',
+                        fk_col, invoice_id_val;
+                END IF;
+
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        SQL);
+
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE FUNCTION fn_fk_si_cascade_delete()
+            RETURNS trigger AS $$
+            DECLARE
+                child_table text := TG_ARGV[0];
+                fk_col text := TG_ARGV[1];
+                invoice_id_val integer;
+            BEGIN
+                invoice_id_val := OLD.id;
+
+                EXECUTE format(
+                    'DELETE FROM %I WHERE %I = $1',
+                    child_table, fk_col
+                ) USING invoice_id_val;
+
+                RETURN OLD;
+            END;
+            $$ LANGUAGE plpgsql
+        SQL);
+
+        // ── FK-check triggers on child tables (drop+create for idempotency) ──
+        $childTriggers = [
+            ['trg_fk_sii_si',  'sales_invoice_items',       'sales_invoice_id'],
+            ['trg_fk_sid_si',  'sales_invoice_dispatchers', 'sales_invoice_id'],
+            ['trg_fk_sdis_si', 'sales_invoice_dispatches',  'sales_invoice_id'],
+            ['trg_fk_sc_si',   'sales_challans',            'sales_invoice_id'],
+            ['trg_fk_sr_si',   'sales_returns',             'sales_invoice_id'],
+            ['trg_fk_ipa_si',  'invoice_payment_allocations', 'invoice_id'],
+        ];
+        foreach ($childTriggers as [$trig, $table, $col]) {
+            DB::statement("DROP TRIGGER IF EXISTS {$trig} ON {$table}");
+            DB::statement(<<<SQL
+                CREATE CONSTRAINT TRIGGER {$trig}
+                AFTER INSERT ON {$table}
+                DEFERRABLE INITIALLY IMMEDIATE
+                FOR EACH ROW
+                EXECUTE FUNCTION fn_fk_si_check('{$col}')
+            SQL);
+        }
+
+        // ── Cascade-delete triggers on sales_invoices ──
+        $cascadeTriggers = [
+            ['trg_si_cascade_items',        'sales_invoice_items',       'sales_invoice_id'],
+            ['trg_si_cascade_dispatchers',  'sales_invoice_dispatchers', 'sales_invoice_id'],
+            ['trg_si_cascade_dispatches',   'sales_invoice_dispatches',  'sales_invoice_id'],
+        ];
+        foreach ($cascadeTriggers as [$trig, $table, $col]) {
+            DB::statement("DROP TRIGGER IF EXISTS {$trig} ON sales_invoices");
+            DB::statement(<<<SQL
+                CREATE TRIGGER {$trig}
+                AFTER DELETE ON sales_invoices
+                FOR EACH ROW
+                EXECUTE FUNCTION fn_fk_si_cascade_delete('{$table}', '{$col}')
+            SQL);
+        }
+
+        // ── LISTEN/NOTIFY trigger ──
+        DB::statement('DROP TRIGGER IF EXISTS trg_notify_sales_invoices ON sales_invoices');
         DB::statement(<<<'SQL'
             CREATE TRIGGER trg_notify_sales_invoices
             AFTER INSERT OR UPDATE ON sales_invoices
