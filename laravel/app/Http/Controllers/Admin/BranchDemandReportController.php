@@ -59,24 +59,6 @@ class BranchDemandReportController extends Controller
         $dateFrom = $request->input('from_date', now()->subDays(6)->format('Y-m-d'));
         $dateTo = $request->input('to_date', now()->format('Y-m-d'));
 
-        // Validate dates
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateFrom) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateTo)) {
-            return back()->withErrors(['error' => 'Invalid date format. Use YYYY-MM-DD.']);
-        }
-
-        if ($dateFrom > $dateTo) {
-            return back()->withErrors(['error' => 'From date must be before or equal to to date.']);
-        }
-
-        // Limit the date range to prevent excessive queries
-        $daysDiff = (int) ((strtotime($dateTo) - strtotime($dateFrom)) / 86400);
-        if ($daysDiff > 90) {
-            return back()->withErrors(['error' => 'Date range cannot exceed 90 days.']);
-        }
-
-        // Generate the report
-        $report = $this->reportService->generateDailyReport($branchId, $dateFrom, $dateTo);
-
         // Get branches for the selector (admin only)
         $branches = [];
         if ($this->currentUserIsAdmin()) {
@@ -84,6 +66,28 @@ class BranchDemandReportController extends Controller
                 ->where('is_active', true)
                 ->orderBy('branch_name')
                 ->get(['id', 'branch_code', 'branch_name']);
+        }
+
+        // Don't auto-load data — only generate report when user clicks "Run"
+        $report = null;
+        if ($request->has('run')) {
+            // Validate dates
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateFrom) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateTo)) {
+                return back()->withErrors(['error' => 'Invalid date format. Use YYYY-MM-DD.']);
+            }
+
+            if ($dateFrom > $dateTo) {
+                return back()->withErrors(['error' => 'From date must be before or equal to to date.']);
+            }
+
+            // Limit the date range to prevent excessive queries
+            $daysDiff = (int) ((strtotime($dateTo) - strtotime($dateFrom)) / 86400);
+            if ($daysDiff > 90) {
+                return back()->withErrors(['error' => 'Date range cannot exceed 90 days.']);
+            }
+
+            // Generate the report
+            $report = $this->reportService->generateDailyReport($branchId, $dateFrom, $dateTo);
         }
 
         return view('admin.branch-demands.weekly-report', [

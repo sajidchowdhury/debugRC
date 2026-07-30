@@ -49,20 +49,26 @@
         <div>
             <h1 class="h4 mb-1"><i class="fas fa-chart-line me-2"></i>Branch Demand — Weekly Audit Report</h1>
             <p class="mb-0 small opacity-75">
-                {{ $report['meta']['branch_name'] ?? 'Branch' }} &bull;
-                {{ \Carbon\Carbon::parse($report['meta']['from_date'])->format('d M Y') }} &rarr;
-                {{ \Carbon\Carbon::parse($report['meta']['to_date'])->format('d M Y') }}
-                &bull; {{ $report['meta']['days_count'] }} day(s)
+                @if($report)
+                    {{ $report['meta']['branch_name'] ?? 'Branch' }} &bull;
+                    {{ \Carbon\Carbon::parse($report['meta']['from_date'])->format('d M Y') }} &rarr;
+                    {{ \Carbon\Carbon::parse($report['meta']['to_date'])->format('d M Y') }}
+                    &bull; {{ $report['meta']['days_count'] }} day(s)
+                @else
+                    Select a date range and click Run to generate the report.
+                @endif
             </p>
         </div>
         <div class="d-flex gap-2 flex-wrap">
             <a href="{{ route('admin.branch-demands.index') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-list me-1"></i> Demands
             </a>
+            @if($report)
             <a href="{{ route('admin.branch-demands.weekly-report.export', array_filter(['branch_id' => $selectedBranchId, 'from_date' => $dateFrom, 'to_date' => $dateTo])) }}"
                class="btn btn-outline-light btn-sm">
                 <i class="fas fa-file-csv me-1"></i> Export CSV
             </a>
+            @endif
         </div>
     </header>
 
@@ -91,7 +97,7 @@
                     <input type="date" name="to_date" value="{{ $dateTo }}" class="form-control form-control-sm">
                 </div>
                 <div class="col-auto">
-                    <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-play me-1"></i> Run</button>
+                    <button type="submit" name="run" value="1" class="btn btn-primary btn-sm"><i class="fas fa-play me-1"></i> Run</button>
                 </div>
                 <div class="col-auto">
                     <a href="{{ route('admin.branch-demands.weekly-report') }}" class="btn btn-outline-secondary btn-sm">Reset</a>
@@ -100,6 +106,16 @@
         </div>
     </div>
 
+    @if(!$report)
+    {{-- Empty state — no data loaded yet --}}
+    <div class="card shadow-sm">
+        <div class="card-body text-center py-5">
+            <i class="fas fa-chart-line fa-3x text-muted mb-3"></i>
+            <h5 class="text-muted">No Report Loaded</h5>
+            <p class="text-muted small">Select a date range and click <strong>Run</strong> to generate the weekly audit report.</p>
+        </div>
+    </div>
+    @else
     {{-- Main report table --}}
     <div class="card shadow-sm mb-3">
         <div class="card-body p-0">
@@ -230,7 +246,10 @@
     </div>
     @endif
 
-    {{-- Drill-down modal --}}
+    {{-- End of @if($report) block --}}
+    @endif
+
+    {{-- Drill-down modal (always available) --}}
     <div class="modal fade" id="drillDownModal" tabindex="-1">
         <div class="modal-dialog modal-lg">
             <div class="modal-content">

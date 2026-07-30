@@ -12,7 +12,7 @@
     <div class="row mb-4">
         <div class="col-12">
             <h4 class="mb-1"><i class="fas fa-balance-scale me-2"></i>Branch Demand — Reconciliation</h4>
-            <p class="text-muted">Phase 8 — Compare demand outstanding vs branch_ledger running balance. Any discrepancy indicates a data integrity issue.</p>
+            <p class="text-muted">Compare demand outstanding vs branch_ledger running balance. Any discrepancy indicates a data integrity issue.</p>
         </div>
     </div>
 
@@ -31,13 +31,24 @@
                             <input type="date" name="date_to" class="form-control" value="{{ $dateTo }}">
                         </div>
                         <div class="col-md-2">
-                            <button type="submit" class="btn btn-primary"><i class="fas fa-filter me-1"></i>Filter</button>
+                            <button type="submit" name="run" value="1" class="btn btn-primary"><i class="fas fa-play me-1"></i> Run</button>
                         </div>
                     </form>
                 </div>
             </div>
         </div>
     </div>
+
+    @if(!$reconciliation)
+    {{-- Empty state — no data loaded yet --}}
+    <div class="card">
+        <div class="card-body text-center py-5">
+            <i class="fas fa-balance-scale fa-3x text-muted mb-3"></i>
+            <h5 class="text-muted">No Reconciliation Loaded</h5>
+            <p class="text-muted small">Select a date range and click <strong>Run</strong> to generate the reconciliation report.</p>
+        </div>
+    </div>
+    @else
 
     {{-- Reconciliation Table --}}
     <div class="row mb-4">
@@ -89,6 +100,7 @@
     </div>
 
     {{-- Anti-Gaming Flags --}}
+    @if($antiGamingFlags)
     <div class="row mb-4">
         <div class="col-12">
             <h5 class="mb-3"><i class="fas fa-flag me-1"></i>Anti-Gaming Flags</h5>
@@ -223,6 +235,9 @@
             </div>
         </div>
     </div>
+    @endif {{-- end antiGamingFlags --}}
+
+    @endif {{-- end $reconciliation --}}
 
     <div class="row mt-3">
         <div class="col-12">

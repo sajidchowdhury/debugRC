@@ -624,18 +624,23 @@ class BranchDemandController extends Controller
         $dateFrom = $request->input('date_from');
         $dateTo = $request->input('date_to');
 
-        $reconciliation = $this->auditService->getReconciliation(
-            $branchId,
-            $dateFrom,
-            $dateTo
-        );
+        // Don't auto-load data — only generate when user clicks "Run"
+        $reconciliation = null;
+        $antiGamingFlags = null;
+        if ($request->has('run')) {
+            $reconciliation = $this->auditService->getReconciliation(
+                $branchId,
+                $dateFrom,
+                $dateTo
+            );
 
-        // Get anti-gaming flags for the weekly report integration
-        $antiGamingFlags = $this->auditService->getDemandAntiGamingFlags(
-            $branchId,
-            $dateFrom,
-            $dateTo
-        );
+            // Get anti-gaming flags for the weekly report integration
+            $antiGamingFlags = $this->auditService->getDemandAntiGamingFlags(
+                $branchId,
+                $dateFrom,
+                $dateTo
+            );
+        }
 
         return view('admin.branch-demands.reconcile', [
             'reconciliation'   => $reconciliation,
