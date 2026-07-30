@@ -16,6 +16,7 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
+    ->withCommands()
     ->withMiddleware(function (Middleware $middleware): void {
         // Phase 3: Shared session bridge — sync Laravel auth from legacy PHP session.
         // This middleware runs FIRST in the web stack, before Laravel's auth.

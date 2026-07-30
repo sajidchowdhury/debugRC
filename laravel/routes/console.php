@@ -1,6 +1,5 @@
 <?php
 
-use App\Console\Commands\VerifyBranchDemandSchema;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -8,13 +7,6 @@ use Illuminate\Support\Facades\Schedule;
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
-
-// Register Branch Demand schema verification command.
-// This is the canonical way to register a Command class in Laravel 11/12
-// when ->withCommands() is not used in bootstrap/app.php.
-Artisan::starting(function ($artisan) {
-    $artisan->resolve(VerifyBranchDemandSchema::class);
-});
 
 // Phase 5: Refresh report materialized views every 5 minutes.
 Schedule::command('reports:refresh')
