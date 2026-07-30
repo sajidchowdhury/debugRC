@@ -9,59 +9,66 @@ use Illuminate\Support\Facades\File;
  * `product_catagory.sql` (filename typo is intentional — that's the actual
  * file in the repo).
  *
+ * Order of operations:
+ *   1. Create the 2 legacy product groups (China id=1, Local id=2)
+ *   2. Upsert categories from setup_category → product_categories
+ *   3. Upsert products from setup_product  → products
+ *
  * Source tables (in the legacy dump):
  *   setup_category → product_categories : id, category_name, is_active
  *   setup_product  → products           : id, product_code, product_name,
  *                                          category_id, group_id, unit,
- *                                          purchase_rate, sales_rate,
- *                                          min_stock, reorder_level, is_active
+ *                                          sales_rate, min_stock,
+ *                                          reorder_level, is_active
  *
  * Mapping notes (legacy → new):
  *   • setup_category.category     → product_categories.category_name
  *   • setup_product.code          → products.product_code
- *   • setup_product.unit_id       → products.unit (string enum):
- *       3 → 'Pcs'  (1206 rows — the overwhelming majority, remote controls)
- *       5 → 'KG'   (2 rows)
- *       6 → 'Set'  (11 rows)
- *       anything else → 'Pcs' (safe default; products.unit CHECK constraint
- *       only allows Pcs/Carton/KG/Bag/Dobe/Set)
+ *   • setup_product.unit_id       → IGNORED. All products get unit='Pcs'
+ *                                    (per user request — the vast majority
+ *                                    are remote controls anyway).
  *   • setup_product.in_service    → products.is_active (boolean):
  *       'checked' → TRUE, 'Block' → FALSE, anything else → FALSE
  *   • setup_product.safty_stock   → products.min_stock AND products.reorder_level
  *   • setup_product.sales_rate    → products.sales_rate
  *   • setup_product.wholesale_rate, vat_percentage, discount, pcs_in_cartoon
- *     → NOT carried over (no matching column in the new schema; pcs_in_cartoon
- *       should be set up later via product_uom_conversions if needed)
- *   • setup_product.group_id      → does NOT exist in legacy; defaults to 1.
- *       We auto-create a "Default" group id=1 if it doesn't already exist
- *       (some installs already have product_groups seeded from the legacy
- *       `product_groups` table — China/Local — so we use ON CONFLICT).
+ *     → NOT carried over (no matching column in the new schema).
+ *   • group_id defaults to 1 (China) — matches legacy convention.
+ *
+ *   • category_id sanitation:
+ *       - 0  → NULL (legacy uses 0 as "no category"; 0 is not in product_categories)
+ *       - id not present in product_categories → NULL (defensive — shouldn't happen
+ *         since we just imported all categories, but protects against FK violations)
+ *       - valid id → keep
+ *
+ * Failure isolation:
+ *   Each row upsert runs inside its own DB::transaction() savepoint. If one
+ *   row fails (e.g. a constraint violation), only that row is skipped —
+ *   the rest of the import continues. This prevents a single bad row from
+ *   poisoning the entire migration transaction.
  *
  * Idempotent: ON CONFLICT (id) DO UPDATE — safe to re-run.
- * Reversible: down() deletes only the rows we imported (by id range or
- *   by matching category_name in our import set). To be safe and avoid
- *   clobbering manually-created products, we only delete product rows whose
- *   id appeared in the legacy dump, and categories by name match.
+ * Reversible: down() does NOT auto-delete (rows may be referenced by
+ *   transactions). Manual cleanup only.
  */
 return new class extends Migration
 {
     /**
-     * unit_id → unit string enum mapping.
-     * Derived from the actual distribution in the legacy dump:
-     *   3 = 1206 rows (Pcs — remote controls)
-     *   5 = 2 rows    (KG)
-     *   6 = 11 rows   (Set)
-     * Any unknown unit_id falls back to 'Pcs'.
+     * The two legacy product groups. Pulled from the legacy product_groups
+     * table in osudlagb_remotecenter.sql. We hardcode them rather than
+     * parsing a second SQL file because there are only 2 and they're stable.
      */
-    private const UNIT_ID_MAP = [
-        3 => 'Pcs',
-        5 => 'KG',
-        6 => 'Set',
+    private const LEGACY_GROUPS = [
+        ['id' => 1, 'group_name' => 'China'],
+        ['id' => 2, 'group_name' => 'Local'],
     ];
 
+    /**
+     * Default group_id for imported products. The legacy setup_product table
+     * has no group_id column; legacy `products` table (different from
+     * setup_product) defaulted group_id to 1 (China). We follow that.
+     */
     private const DEFAULT_GROUP_ID = 1;
-    private const DEFAULT_GROUP_NAME = 'Default';
-    private const DEFAULT_GROUP_CODE = 'GRP-001';
 
     public function up(): void
     {
@@ -85,7 +92,7 @@ return new class extends Migration
         echo "  SQL dump: {$sqlPath}\n\n";
 
         // ── Step 1: Parse the SQL dump ──
-        echo "[1/4] CHECK — parsing SQL dump...\n";
+        echo "[1/5] CHECK — parsing SQL dump...\n";
         $sql = File::get($sqlPath);
 
         $categoryRows = $this->parseInsertTuples($sql, 'setup_category');
@@ -99,20 +106,28 @@ return new class extends Migration
             return;
         }
 
-        // ── Step 2: Ensure default product group exists ──
-        echo "[2/4] GROUP — ensuring default product group id=" . self::DEFAULT_GROUP_ID . "...\n";
-        $this->ensureDefaultGroupExists();
+        // ── Step 2: Create legacy product groups (China, Local) ──
+        echo "[2/5] GROUPS — creating legacy product groups...\n";
+        $this->ensureLegacyGroupsExist();
 
         // ── Step 3: Upsert categories ──
-        echo "[3/4] CATEGORIES — upserting product_categories...\n";
+        echo "[3/5] CATEGORIES — upserting product_categories...\n";
         [$catInserted, $catUpdated, $catSkipped] = $this->upsertCategories($categoryRows);
         echo "      • inserted : {$catInserted}\n";
         echo "      • updated  : {$catUpdated}\n";
         echo "      • skipped  : {$catSkipped}\n\n";
 
-        // ── Step 4: Upsert products ──
-        echo "[4/4] PRODUCTS — upserting products...\n";
-        [$prodInserted, $prodUpdated, $prodSkipped] = $this->upsertProducts($productRows);
+        // ── Step 4: Pre-fetch valid category IDs for FK sanitation ──
+        echo "[4/5] PREFETCH — loading valid category IDs...\n";
+        $validCategoryIds = DB::table('product_categories')
+            ->pluck('id')
+            ->map(fn($id) => (int) $id)
+            ->flip();
+        echo "      • valid category IDs : " . $validCategoryIds->count() . "\n\n";
+
+        // ── Step 5: Upsert products ──
+        echo "[5/5] PRODUCTS — upserting products (all as 'Pcs')...\n";
+        [$prodInserted, $prodUpdated, $prodSkipped] = $this->upsertProducts($productRows, $validCategoryIds);
         echo "      • inserted : {$prodInserted}\n";
         echo "      • updated  : {$prodUpdated}\n";
         echo "      • skipped  : {$prodSkipped}\n\n";
@@ -123,6 +138,9 @@ return new class extends Migration
         );
         DB::statement(
             "SELECT setval('product_categories_id_seq', GREATEST((SELECT MAX(id) FROM product_categories), 1), true)"
+        );
+        DB::statement(
+            "SELECT setval('product_groups_id_seq', GREATEST((SELECT MAX(id) FROM product_groups), 1), true)"
         );
 
         echo "  ✓ Migration complete.\n";
@@ -164,7 +182,6 @@ return new class extends Migration
 
     // ===============================================================
     // INSERT-tuple parser (phpMyAdmin format)
-    // Copied from the employee migration to keep this migration standalone.
     // ===============================================================
 
     private function parseInsertTuples(string $sql, string $table): array
@@ -330,46 +347,51 @@ return new class extends Migration
     // ===============================================================
 
     /**
-     * Make sure the default product group (id=1) exists. The product_groups
-     * table requires group_name (NOT NULL). Uses OVERRIDING SYSTEM VALUE
-     * because `id` is GENERATED ALWAYS AS IDENTITY.
+     * Ensure both legacy product groups exist: China (id=1) and Local (id=2).
+     * Uses OVERRIDING SYSTEM VALUE because `id` is GENERATED ALWAYS AS IDENTITY.
+     * ON CONFLICT (id) DO UPDATE makes it safe to re-run.
      */
-    private function ensureDefaultGroupExists(): void
+    private function ensureLegacyGroupsExist(): void
     {
-        $exists = DB::selectOne(
-            "SELECT id FROM product_groups WHERE id = ?",
-            [self::DEFAULT_GROUP_ID]
-        );
+        foreach (self::LEGACY_GROUPS as $g) {
+            try {
+                DB::transaction(function () use ($g) {
+                    $existing = DB::selectOne(
+                        "SELECT id, group_name FROM product_groups WHERE id = ?",
+                        [$g['id']]
+                    );
 
-        if ($exists) {
-            echo "      • product_groups id=" . self::DEFAULT_GROUP_ID . " already exists — skipping\n";
-            return;
+                    DB::statement(
+                        "INSERT INTO product_groups (id, group_name, description, sort_order, is_active)
+                         OVERRIDING SYSTEM VALUE
+                         VALUES (?, ?, ?, ?, true)
+                         ON CONFLICT (id) DO UPDATE
+                         SET group_name = EXCLUDED.group_name,
+                             is_active  = TRUE",
+                        [
+                            $g['id'],
+                            $g['group_name'],
+                            'Legacy group imported from osudlagb_remotecenter.sql',
+                            $g['id'], // sort_order = id, keeps China before Local
+                        ]
+                    );
+
+                    if ($existing) {
+                        echo "      • product_groups id={$g['id']} ({$g['group_name']}) — updated\n";
+                    } else {
+                        echo "      • product_groups id={$g['id']} ({$g['group_name']}) — inserted\n";
+                    }
+                });
+            } catch (\Throwable $e) {
+                echo "      ! failed to ensure group id={$g['id']} ({$g['group_name']}): "
+                   . $e->getMessage() . "\n";
+            }
         }
-
-        DB::statement(
-            "INSERT INTO product_groups (id, group_name, description, sort_order, is_active)
-             OVERRIDING SYSTEM VALUE
-             VALUES (?, ?, ?, 0, true)
-             ON CONFLICT (id) DO NOTHING",
-            [
-                self::DEFAULT_GROUP_ID,
-                self::DEFAULT_GROUP_NAME,
-                'Auto-created default group for legacy product import',
-            ]
-        );
-
-        DB::statement(
-            "SELECT setval('product_groups_id_seq', GREATEST((SELECT MAX(id) FROM product_groups), 1), true)"
-        );
-
-        echo "      • auto-created product_groups id=" . self::DEFAULT_GROUP_ID
-           . " (group_name='" . self::DEFAULT_GROUP_NAME . "')\n";
     }
 
     /**
-     * Upsert categories.
-     * Uses OVERRIDING SYSTEM VALUE because `id` is GENERATED ALWAYS AS IDENTITY.
-     * ON CONFLICT (id) DO UPDATE makes it safe to re-run.
+     * Upsert categories. Each row runs inside its own savepoint so a single
+     * failure doesn't poison the whole migration transaction.
      */
     private function upsertCategories(array $categoryRows): array
     {
@@ -386,30 +408,36 @@ return new class extends Migration
                 continue;
             }
 
-            $existing = DB::selectOne(
-                "SELECT id FROM product_categories WHERE id = ?",
-                [$id]
-            );
-
             try {
-                DB::statement(
-                    "INSERT INTO product_categories (id, category_name, description, is_active)
-                     OVERRIDING SYSTEM VALUE
-                     VALUES (?, ?, NULL, true)
-                     ON CONFLICT (id) DO UPDATE
-                     SET category_name = EXCLUDED.category_name,
-                         is_active     = TRUE",
-                    [$id, trim($name)]
-                );
+                $wasExisting = DB::transaction(function () use ($id, $name) {
+                    $existing = DB::selectOne(
+                        "SELECT id FROM product_categories WHERE id = ?",
+                        [$id]
+                    );
 
-                if ($existing) {
+                    DB::statement(
+                        "INSERT INTO product_categories (id, category_name, description, is_active)
+                         OVERRIDING SYSTEM VALUE
+                         VALUES (?, ?, NULL, true)
+                         ON CONFLICT (id) DO UPDATE
+                         SET category_name = EXCLUDED.category_name,
+                             is_active     = TRUE",
+                        [$id, trim($name)]
+                    );
+
+                    return (bool) $existing;
+                });
+
+                if ($wasExisting) {
                     $updated++;
                 } else {
                     $inserted++;
                 }
             } catch (\Throwable $e) {
                 $skipped++;
-                echo "      ! skipped category id={$id} ({$name}): " . $e->getMessage() . "\n";
+                if ($skipped <= 5) {
+                    echo "      ! skipped category id={$id} ({$name}): " . $e->getMessage() . "\n";
+                }
             }
         }
 
@@ -417,11 +445,19 @@ return new class extends Migration
     }
 
     /**
-     * Upsert products.
+     * Upsert products. Each row runs inside its own savepoint so a single
+     * failure (e.g. FK violation on category_id) doesn't poison the whole
+     * migration transaction.
      *
-     * Column mapping (see class docblock for the full table).
+     * category_id sanitation:
+     *   - 0  → NULL (legacy uses 0 as "no category")
+     *   - id not in $validCategoryIds → NULL (defensive — shouldn't happen
+     *     since we just imported all categories, but protects against FK errors)
+     *   - valid id → keep
+     *
+     * Unit: ALL products get 'Pcs' (per user request — legacy unit_id ignored).
      */
-    private function upsertProducts(array $productRows): array
+    private function upsertProducts(array $productRows, $validCategoryIds): array
     {
         $inserted = 0;
         $updated  = 0;
@@ -437,14 +473,16 @@ return new class extends Migration
                 continue;
             }
 
-            // category_id (may be NULL or invalid in legacy — fall back to NULL)
-            $categoryId = isset($row['category_id']) && $row['category_id'] !== null
+            // Sanitize category_id: 0 → NULL, invalid → NULL, valid → keep
+            $legacyCategoryId = isset($row['category_id']) && $row['category_id'] !== null
                 ? (int) $row['category_id']
                 : null;
 
-            // unit_id → unit string
-            $unitId   = isset($row['unit_id']) && $row['unit_id'] !== null ? (int) $row['unit_id'] : null;
-            $unitEnum = self::UNIT_ID_MAP[$unitId] ?? 'Pcs';
+            $categoryId = null;
+            if ($legacyCategoryId !== null && $legacyCategoryId > 0 && $validCategoryIds->has($legacyCategoryId)) {
+                $categoryId = $legacyCategoryId;
+            }
+            // else: NULL — products.category_id is nullable (ON DELETE SET NULL)
 
             // sales_rate → sales_rate (default 0)
             $salesRate = isset($row['sales_rate']) && $row['sales_rate'] !== null
@@ -462,50 +500,54 @@ return new class extends Migration
             $isActive  = (strcasecmp((string) $inService, 'checked') === 0);
 
             // created_at — prefer legacy `date` if it's a valid date, else NULL
-            // (so the column DEFAULT CURRENT_TIMESTAMP kicks in).
             $legacyDate = $row['date'] ?? null;
             $createdAt  = $this->normalizeDate($legacyDate);
 
-            $existing = DB::selectOne(
-                "SELECT id FROM products WHERE id = ?",
-                [$id]
-            );
-
             try {
-                DB::statement(
-                    "INSERT INTO products
-                        (id, product_code, product_name, category_id, group_id, unit,
-                         purchase_rate, sales_rate, min_stock, max_stock, reorder_level,
-                         product_image, is_active, condition_state, created_at, updated_at)
-                     OVERRIDING SYSTEM VALUE
-                     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 0, ?, NULL, ?, 'Good', ?, NOW())
-                     ON CONFLICT (id) DO UPDATE
-                     SET product_code  = EXCLUDED.product_code,
-                         product_name  = EXCLUDED.product_name,
-                         category_id   = EXCLUDED.category_id,
-                         group_id      = EXCLUDED.group_id,
-                         unit          = EXCLUDED.unit,
-                         sales_rate    = EXCLUDED.sales_rate,
-                         min_stock     = EXCLUDED.min_stock,
-                         reorder_level = EXCLUDED.reorder_level,
-                         is_active     = EXCLUDED.is_active,
-                         updated_at    = NOW()",
-                    [
-                        $id,
-                        trim($code),
-                        trim($name),
-                        $categoryId,
-                        self::DEFAULT_GROUP_ID,
-                        $unitEnum,
-                        $salesRate,
-                        $safetyStock,
-                        $safetyStock,
-                        $isActive,
-                        $createdAt,  // null is fine — column DEFAULT kicks in
-                    ]
-                );
+                $wasExisting = DB::transaction(function () use (
+                    $id, $code, $name, $categoryId, $salesRate, $safetyStock, $isActive, $createdAt
+                ) {
+                    $existing = DB::selectOne(
+                        "SELECT id FROM products WHERE id = ?",
+                        [$id]
+                    );
 
-                if ($existing) {
+                    DB::statement(
+                        "INSERT INTO products
+                            (id, product_code, product_name, category_id, group_id, unit,
+                             purchase_rate, sales_rate, min_stock, max_stock, reorder_level,
+                             product_image, is_active, condition_state, created_at, updated_at)
+                         OVERRIDING SYSTEM VALUE
+                         VALUES (?, ?, ?, ?, ?, 'Pcs', 0, ?, ?, 0, ?, NULL, ?, 'Good', ?, NOW())
+                         ON CONFLICT (id) DO UPDATE
+                         SET product_code  = EXCLUDED.product_code,
+                             product_name  = EXCLUDED.product_name,
+                             category_id   = EXCLUDED.category_id,
+                             group_id      = EXCLUDED.group_id,
+                             unit          = EXCLUDED.unit,
+                             sales_rate    = EXCLUDED.sales_rate,
+                             min_stock     = EXCLUDED.min_stock,
+                             reorder_level = EXCLUDED.reorder_level,
+                             is_active     = EXCLUDED.is_active,
+                             updated_at    = NOW()",
+                        [
+                            $id,
+                            trim($code),
+                            trim($name),
+                            $categoryId,             // NULL or valid id
+                            self::DEFAULT_GROUP_ID,  // 1 (China)
+                            $salesRate,
+                            $safetyStock,
+                            $safetyStock,
+                            $isActive,
+                            $createdAt,              // null is fine — column DEFAULT kicks in
+                        ]
+                    );
+
+                    return (bool) $existing;
+                });
+
+                if ($wasExisting) {
                     $updated++;
                 } else {
                     $inserted++;
@@ -560,6 +602,7 @@ return new class extends Migration
         //
         //   DELETE FROM products WHERE id <= (max legacy id you imported);
         //   DELETE FROM product_categories WHERE id <= (max legacy id);
+        //   DELETE FROM product_groups WHERE id IN (1, 2);
         //
         // This is the same conservative behaviour as the employee migration.
         echo "  ↺ No automatic rollback for product import — rows may have been referenced.\n";
