@@ -14,6 +14,22 @@ use Illuminate\Support\Facades\DB;
  *
  * The running_balance column tracks the net owed between each branch pair
  * after each transaction.
+ *
+ * MATERIALIALIZED VIEW DEPENDENCY:
+ * The materialized view mv_branch_intercompany (created by migration
+ * 2025_01_03_000001) is defined against the OLD branch_ledger schema —
+ * it references bl.amount and bl.is_settled. PostgreSQL tracks this
+ * dependency at the column level, so ALTER TABLE ... DROP COLUMN amount
+ * fails with SQLSTATE[2BP01] "cannot drop column amount of table
+ * branch_ledger because other objects depend on it: materialized view
+ * mv_branch_intercompany depends on column amount".
+ *
+ * Fix: DROP MATERIALIZED VIEW mv_branch_intercompany CASCADE before
+ * dropping the old columns, then recreate it against the NEW schema
+ * (debit/credit/is_reversed). The later migration 2026_07_30_000003
+ * performs the same drop+recreate with CREATE IF NOT EXISTS / DROP IF
+ * EXISTS, so it is fully idempotent and will be a no-op when it runs
+ * after this one.
  */
 return new class extends Migration
 {
@@ -33,6 +49,16 @@ return new class extends Migration
         ");
 
         if ((int) $hasOldSchema->cnt > 0) {
+            // ── Step 0: Drop dependent materialized view ──
+            // mv_branch_intercompany (created by migration 2025_01_03_000001)
+            // references the OLD columns (amount, is_settled) we are about to
+            // drop. PostgreSQL refuses the DROP COLUMN with SQLSTATE[2BP01]
+            // if we don't drop the MV first. We recreate it against the NEW
+            // schema (debit/credit/is_reversed) at Step 5 below.
+            //
+            // CASCADE drops the MV's unique index too (it is recreated at Step 5).
+            DB::statement("DROP MATERIALIZED VIEW IF EXISTS mv_branch_intercompany CASCADE");
+
             // Old schema exists — ALTER to add new columns
             DB::statement("ALTER TABLE branch_ledger ADD COLUMN IF NOT EXISTS debit numeric(12,2) DEFAULT 0");
             DB::statement("ALTER TABLE branch_ledger ADD COLUMN IF NOT EXISTS credit numeric(12,2) DEFAULT 0");
@@ -119,6 +145,37 @@ return new class extends Migration
             ON branch_ledger(from_branch_id, to_branch_id, transaction_date)
             WHERE is_reversed = false
         ");
+
+        // ── Step 5: Recreate mv_branch_intercompany against the NEW schema ──
+        // This view was dropped at Step 0 (if the old-schema branch ran) OR
+        // may already exist (if 2025_01_03_000001 ran after a fresh migrate:fresh
+        // and we took the else-branch above). CREATE IF NOT EXISTS handles
+        // both cases safely.
+        //
+        // Definition mirrors migration 2026_07_30_000003 (which runs later and
+        // also uses IF NOT EXISTS) — they are intentionally identical so the
+        // order of execution does not matter.
+        DB::statement(<<<'SQL'
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_branch_intercompany AS
+SELECT
+    bl.from_branch_id,
+    bl.to_branch_id,
+    fb.branch_name AS from_branch_name,
+    tb.branch_name AS to_branch_name,
+    SUM(bl.debit) AS total_debit,
+    SUM(bl.credit) AS total_credit,
+    SUM(bl.debit) - SUM(bl.credit) AS net_balance,
+    SUM(CASE WHEN NOT bl.is_reversed THEN bl.debit - bl.credit ELSE 0 END) AS outstanding_amount,
+    COUNT(*) AS entry_count
+FROM branch_ledger bl
+INNER JOIN branches fb ON fb.id = bl.from_branch_id
+INNER JOIN branches tb ON tb.id = bl.to_branch_id
+GROUP BY bl.from_branch_id, bl.to_branch_id, fb.branch_name, tb.branch_name
+SQL);
+        DB::statement(
+            'CREATE UNIQUE INDEX IF NOT EXISTS mv_branch_intercompany_from_to_idx '
+            . 'ON mv_branch_intercompany (from_branch_id, to_branch_id)'
+        );
     }
 
     public function down(): void
