@@ -24,6 +24,18 @@ class Product extends Model
 
     protected $dates = ['deleted_at'];
 
+    /**
+     * Hide internal FTS columns from JSON serialization.
+     *
+     * The `search_vector` GENERATED tsvector column is used internally by
+     * scopeSearch() for full-text lookups. Exposing it in JSON responses
+     * (e.g. DataTables AJAX) can cause serialization issues with some
+     * PDO_PGSQL driver versions that return tsvector as a non-string type.
+     * Hiding it keeps the AJAX payload lean and avoids "DataTables Ajax
+     * error" warnings triggered by malformed JSON.
+     */
+    protected $hidden = ['search_vector'];
+
     protected $fillable = [
         'product_code',
         'product_name',

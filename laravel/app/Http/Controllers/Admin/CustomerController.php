@@ -13,6 +13,7 @@ use App\Services\MasterData\CodeGenerator;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Customer master-data controller — Phase 4 + Phase 10 hardening + Customer 360 Hub.
@@ -93,6 +94,121 @@ class CustomerController extends BaseMasterDataController
             'branch.branch_name' => 'Branch Name',
             'is_active'          => 'Active',
         ];
+    }
+
+    /**
+     * Override dataTablesResponse() to add error logging + safe JSON.
+     *
+     * The base implementation returns the raw Eloquent Collection in the
+     * `data` field, which can trigger "DataTables Ajax error" if any row
+     * contains a value that fails JSON serialization (e.g. tsvector columns
+     * returned as non-string types by some PDO drivers, malformed UTF-8
+     * from legacy data, or columns added by later migrations that the
+     * model's $casts/$hidden don't account for).
+     *
+     * This override:
+     *   1. Wraps the query + serialization in try/catch.
+     *   2. On failure, logs the full exception to laravel.log with the
+     *      SQL bindings, so the actual root cause is visible to the dev.
+     *   3. Returns a JSON error response (HTTP 500) with a parseable
+     *      message — DataTables shows "Ajax error" either way, but the
+     *      logged exception tells us EXACTLY what failed.
+     *   4. Maps each Customer to a plain associative array (only the
+     *      columns DataTables needs) instead of the full Eloquent model.
+     *      This avoids any future serialization surprises from new
+     *      GENERATED columns, JSON columns, or tsvector columns.
+     */
+    protected function dataTablesResponse($query, Request $request)
+    {
+        $draw = (int) $request->input('draw', 1);
+        $start = (int) $request->input('start', 0);
+        $length = (int) $request->input('length', 25);
+        $search = $request->input('search.value', '');
+
+        try {
+            $total = $query->count();
+
+            if ($search !== '' && $this->searchFields !== []) {
+                if ($this->useFullTextSearch && method_exists($this->modelClass, 'scopeSearch')) {
+                    $query->search($search, ranked: true);
+                } else {
+                    $query->where(function ($q) use ($search) {
+                        foreach ($this->searchFields as $field) {
+                            $q->orWhere($field, 'ILIKE', "%{$search}%");
+                        }
+                    });
+                }
+            }
+
+            $filtered = $query->count();
+            $items = $query->skip($start)->take($length)->get();
+
+            // Map to plain arrays — only the columns the DataTable actually
+            // renders. This keeps the JSON payload small and avoids any
+            // serialization surprises from internal columns like search_vector.
+            $data = $items->map(function (Customer $c) {
+                return [
+                    'id'             => $c->id,
+                    'customer_code'  => $c->customer_code,
+                    'customer_name'  => $c->customer_name,
+                    'phone'          => $c->phone,
+                    'mobile'         => $c->mobile,
+                    'email'          => $c->email,
+                    'address'        => $c->address,
+                    'branch_id'      => $c->branch_id,
+                    'sales_person_id'=> $c->sales_person_id,
+                    'credit_limit'   => $c->credit_limit !== null
+                                        ? (float) $c->credit_limit
+                                        : null,
+                    'opening_balance'=> $c->opening_balance !== null
+                                        ? (float) $c->opening_balance
+                                        : null,
+                    'balance_type'   => $c->balance_type,
+                    'is_active'      => (bool) $c->is_active,
+                    'created_at'     => $c->created_at?->toIso8601String(),
+                    'updated_at'     => $c->updated_at?->toIso8601String(),
+                    'branch'         => $c->branch
+                        ? ['id' => $c->branch->id, 'branch_name' => $c->branch->branch_name]
+                        : null,
+                    'sales_person'   => $c->salesPerson
+                        ? ['id' => $c->salesPerson->id, 'name' => $c->salesPerson->name]
+                        : null,
+                ];
+            })->values();
+
+            return response()->json([
+                'draw'            => $draw,
+                'recordsTotal'    => $total,
+                'recordsFiltered' => $filtered,
+                'data'            => $data,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('CustomerController::dataTablesResponse failed', [
+                'draw'        => $draw,
+                'start'       => $start,
+                'length'      => $length,
+                'search'      => $search,
+                'user_id'     => Auth::id(),
+                'branch_id'   => session('branch_id'),
+                'is_admin'    => Auth::user()?->isAdmin(),
+                'sql'         => $query->toSql(),
+                'bindings'    => $query->getBindings(),
+                'error'       => $e->getMessage(),
+                'exception'   => get_class($e),
+                'trace'       => $e->getTraceAsString(),
+            ]);
+
+            // Return a 500 JSON response so DataTables at least gets
+            // parseable JSON (it'll still show "Ajax error", but the
+            // actual error is now in laravel.log).
+            return response()->json([
+                'draw'            => $draw,
+                'recordsTotal'    => 0,
+                'recordsFiltered' => 0,
+                'data'            => [],
+                'error'           => $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**
