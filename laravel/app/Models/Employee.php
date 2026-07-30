@@ -29,13 +29,22 @@ class Employee extends Model
     protected $fillable = [
         'employee_code',
         'name',
+        'father_name',
+        'mother_name',
+        'date_of_birth',
+        'nid',
         'role',
         'branch_id',
         'phone',
+        'mobile',
         'email',
         'photo',
         'address',
+        'designation',
+        'department',
         'salary',
+        'bank_account',
+        'blood_group',
         'joining_date',
         'is_active',
         'deleted_by',
@@ -45,6 +54,7 @@ class Employee extends Model
         'salary' => 'decimal:2',
         'is_active' => 'boolean',
         'joining_date' => 'date',
+        'date_of_birth' => 'date',
     ];
 
     // ===================== RELATIONSHIPS =====================

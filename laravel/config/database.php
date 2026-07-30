@@ -21,6 +21,29 @@ return [
             'sslmode' => 'prefer',
         ],
 
+        // MySQL Archive — read-only connection to the legacy MySQL database.
+        // Used by the migrate:legacy-employees and migrate:legacy-users Artisan
+        // commands. The MySQL archive container is optional (docker compose
+        // --profile archive). If the container is not running, the migration
+        // commands will catch the connection error gracefully.
+        'mysql_archive' => [
+            'driver' => 'mysql',
+            'host' => env('ARCHIVE_MYSQL_HOST', 'rcerp_mysql_archive'),
+            'port' => env('ARCHIVE_MYSQL_PORT', '3306'),
+            'database' => env('ARCHIVE_MYSQL_DATABASE', 'rcerp_legacy'),
+            'username' => env('ARCHIVE_MYSQL_USERNAME', 'archive_reader'),
+            'password' => env('ARCHIVE_MYSQL_PASSWORD', ''),
+            'charset' => 'utf8mb4',
+            'collation' => 'utf8mb4_general_ci',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'options' => [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES => false,
+            ],
+        ],
+
     ],
 
     'migrations' => [
