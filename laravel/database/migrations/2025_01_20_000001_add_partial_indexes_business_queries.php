@@ -97,12 +97,12 @@ return new class extends Migration
              WHERE balance > 0"
         );
 
-        // Unsettled intercompany: branch_ledger rows not yet settled
-        DB::statement(
-            "CREATE INDEX IF NOT EXISTS idx_bl_unsettled
-             ON branch_ledger (from_branch_id, to_branch_id, transaction_date)
-             WHERE is_settled = false"
-        );
+        // NOTE: idx_bl_unsettled was REMOVED here. The OLD branch_ledger
+        // schema (with is_settled) no longer exists — 02_accounting.sql
+        // now creates branch_ledger with the NEW schema (debit, credit,
+        // is_reversed). The equivalent active-ledger index is idx_bl_active,
+        // created by 02_accounting.sql itself (WHERE is_reversed = false)
+        // and re-created idempotently by migration 2026_07_29_000013.
 
         // Non-reversed journal entries (GL reports, trial balance)
         DB::statement(

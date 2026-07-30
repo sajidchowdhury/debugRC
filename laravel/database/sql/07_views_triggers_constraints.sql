@@ -175,9 +175,11 @@ CREATE INDEX IF NOT EXISTS idx_sl_outstanding
     ON supplier_ledger (supplier_id, transaction_date, balance)
     WHERE balance > 0;
 
-CREATE INDEX IF NOT EXISTS idx_bl_active
-    ON branch_ledger (from_branch_id, to_branch_id, transaction_date)
-    WHERE is_reversed = false;
+-- idx_bl_active was REMOVED from here — it depends on branch_ledger.is_reversed
+-- which doesn't exist when this SQL file runs during 2025_01_01_000001.
+-- The index is now created by 02_accounting.sql (which defines the new
+-- branch_ledger schema with is_reversed) and is also re-created idempotently
+-- by migration 2026_07_29_000013_create_branch_ledger_table.php.
 
 CREATE INDEX IF NOT EXISTS idx_je_active
     ON journal_entries (entry_date, branch_id, reference_type)

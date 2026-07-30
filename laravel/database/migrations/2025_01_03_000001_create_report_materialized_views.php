@@ -183,6 +183,15 @@ SQL);
 
         // ============================================================
         // 6. mv_branch_intercompany — Due-from/Due-to balances per branch pair
+        //
+        // NOTE: This MV references the NEW branch_ledger schema
+        // (debit / credit / is_reversed) which is created directly by
+        // 02_accounting.sql. Earlier versions of this migration referenced
+        // the OLD schema (amount, is_settled) and were later rewritten by
+        // migration 2026_07_29_000013 — that double-write is no longer
+        // needed because 02_accounting.sql now creates the NEW schema
+        // directly. CREATE MATERIALIZED VIEW IF NOT EXISTS makes this
+        // statement a no-op if 2026_07_29_000013 already ran first.
         // ============================================================
         DB::statement(<<<'SQL'
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_branch_intercompany AS
@@ -191,9 +200,10 @@ SELECT
     bl.to_branch_id,
     fb.branch_name AS from_branch_name,
     tb.branch_name AS to_branch_name,
-    SUM(bl.amount) AS total_amount,
-    SUM(CASE WHEN bl.is_settled THEN bl.amount ELSE 0 END) AS settled_amount,
-    SUM(CASE WHEN NOT bl.is_settled THEN bl.amount ELSE 0 END) AS outstanding_amount,
+    SUM(bl.debit) AS total_debit,
+    SUM(bl.credit) AS total_credit,
+    SUM(bl.debit) - SUM(bl.credit) AS net_balance,
+    SUM(CASE WHEN NOT bl.is_reversed THEN bl.debit - bl.credit ELSE 0 END) AS outstanding_amount,
     COUNT(*) AS entry_count
 FROM branch_ledger bl
 INNER JOIN branches fb ON fb.id = bl.from_branch_id

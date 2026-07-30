@@ -173,21 +173,24 @@ CREATE INDEX idx_el_employee_date ON employee_ledger(employee_id, transaction_da
 
 CREATE TABLE branch_ledger (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    transaction_date date NOT NULL,
     from_branch_id integer NOT NULL REFERENCES branches(id),
     to_branch_id integer NOT NULL REFERENCES branches(id),
-    transaction_date date NOT NULL,
-    transaction_type varchar(30) NOT NULL,
-    reference_type varchar(30),
-    reference_id integer,
-    amount numeric(15,2) DEFAULT 0,
-    description text,
+    reference_type varchar(50) NOT NULL DEFAULT 'adjustment',
+    reference_id integer DEFAULT NULL,
     journal_entry_id integer REFERENCES journal_entries(id),
-    is_settled boolean NOT NULL DEFAULT false,
-    settled_at timestamp(0),
+    debit numeric(12,2) DEFAULT 0,
+    credit numeric(12,2) DEFAULT 0,
+    running_balance numeric(12,2) DEFAULT NULL,
+    remarks text,
+    is_reversed boolean NOT NULL DEFAULT false,
+    created_by integer DEFAULT NULL,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX idx_bl_from_branch ON branch_ledger(from_branch_id);
-CREATE INDEX idx_bl_to_branch ON branch_ledger(to_branch_id);
+CREATE INDEX idx_bl_branches ON branch_ledger(from_branch_id, to_branch_id);
+CREATE INDEX idx_bl_reference ON branch_ledger(reference_type, reference_id);
+CREATE INDEX idx_bl_date ON branch_ledger(transaction_date);
+CREATE INDEX idx_bl_active ON branch_ledger(from_branch_id, to_branch_id, transaction_date) WHERE is_reversed = false;
 
 CREATE TABLE branch_cash (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
