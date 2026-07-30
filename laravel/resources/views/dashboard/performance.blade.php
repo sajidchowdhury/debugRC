@@ -1281,7 +1281,7 @@
                         </div>
                     @else
                         @php
-                            $maxRev = max(array_map(fn($g) => $g['revenue'], $pgroups)) ?: 1;
+                            $maxRev = max(array_map(fn($g) => $g['revenue'], $pgroups) + [1]) ?: 1;
                             $palette = ['#4f46e5', '#7c3aed', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#ef4444', '#14b8a6'];
                         @endphp
                         @foreach ($pgroups as $i => $g)
@@ -1371,9 +1371,12 @@
             '61-90'   => ['color' => '#ef4444', 'gradient' => 'linear-gradient(90deg, #ef4444, #dc2626)', 'label' => '61–90 days'],
             '90+'     => ['color' => '#b91c1c', 'gradient' => 'linear-gradient(90deg, #b91c1c, #7f1d1d)', 'label' => '90+ days'],
         ];
+        // Defensive: array_filter() strips 0.0 values, which can leave an empty
+        // array when the user has no outstanding receivables — max([]) would
+        // throw. Prepend a floor of 1 so the bar-width math stays safe.
         $agingMax = max(array_values(array_filter([
             $aging['Current'], $aging['1-30'], $aging['31-60'], $aging['61-90'], $aging['90+'],
-        ]))) ?: 1;
+        ], fn ($v) => $v > 0)) + [1]) ?: 1;
 
         // Collection-rate gauge target thresholds
         $rateClass = $ck['collection_rate'] >= 80 ? 'good' : ($ck['collection_rate'] >= 50 ? 'mid' : 'low');
@@ -1583,7 +1586,7 @@
                         </div>
                     @else
                         @php
-                            $maxCount = max(array_map(fn($r) => $r['count'], $reasons)) ?: 1;
+                            $maxCount = max(array_map(fn($r) => $r['count'], $reasons) + [1]) ?: 1;
                             $reasonColors = ['#ef4444', '#f97316', '#f59e0b', '#fb923c', '#f87171'];
                         @endphp
                         @foreach ($reasons as $i => $r)
@@ -1642,7 +1645,7 @@
 
         // Peak hour calc for work-pattern badge + histogram highlight
         $wpCounts = array_map(fn($r) => $r['count'], $wp);
-        $wpMax = max($wpCounts) ?: 0;
+        $wpMax = max($wpCounts + [0]) ?: 0;
         $wpPeakHour = $wpMax > 0 ? array_keys($wpCounts, $wpMax)[0] : null;
         $wpTotal = array_sum($wpCounts);
         $wpPeakLabel = $wpPeakHour !== null
