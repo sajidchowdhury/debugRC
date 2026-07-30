@@ -2063,13 +2063,9 @@
     // ============================================================
     const pmixEl = document.getElementById('pmixDonut');
     const pmixData = @json($pmix ?? []);
-    const pmixPalette = @json($pmixPalette ?? [
-        'cash' => '#10b981',
-        'bank' => '#4f46e5',
-        'cheque' => '#f59e0b',
-        'mobile_banking' => '#ec4899',
-        'adjustment' => '#64748b',
-    ]);
+    // pmixPalette is defined in the PHP block above; no inline fallback needed
+    // (Blade's json directive regex doesn't reliably handle multi-line arrays).
+    const pmixPalette = @json($pmixPalette ?? []);
     if (pmixEl && pmixData.length && typeof Chart !== 'undefined') {
         new Chart(pmixEl.getContext('2d'), {
             type: 'doughnut',
@@ -2113,7 +2109,7 @@
     // ============================================================
     const wpEl = document.getElementById('workPatternChart');
     const wpData = @json($wp ?? []);
-    const wpPeakHour = @json($wpPeakHour);
+    const wpPeakHour = @json($wpPeakHour ?? null);
     if (wpEl && typeof Chart !== 'undefined') {
         const labels = wpData.map(d => {
             // "09:00"
@@ -2210,7 +2206,7 @@
     const neEl = document.getElementById('notifRing');
     if (neEl && typeof Chart !== 'undefined') {
         const rate = Math.max(0, Math.min(100, Number(@json($ne['read_rate'] ?? 0))));
-        const neColor = @json($neColor);
+        const neColor = @json($neColor ?? '#94a3b8');
         const total = Number(@json($ne['total'] ?? 0));
 
         if (total > 0) {
