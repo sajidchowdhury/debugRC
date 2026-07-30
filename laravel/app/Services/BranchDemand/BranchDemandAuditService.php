@@ -500,7 +500,7 @@ class BranchDemandAuditService
             return DB::transaction(function () {
                 // Find journal entries linked to branch demands where Dr != Cr
                 $unbalanced = DB::table('journal_entries')
-                    ->leftJoin('journal_entry_items', 'journal_entries.id', '=', 'journal_entry_items.journal_entry_id')
+                    ->leftJoin('journal_lines', 'journal_entries.id', '=', 'journal_lines.journal_entry_id')
                     ->whereNotNull('journal_entries.id')
                     ->whereExists(function ($q) {
                         $q->selectRaw(1)
@@ -509,12 +509,12 @@ class BranchDemandAuditService
                             ->orWhereColumn('branch_demands.journal_entry_id_debtor', 'journal_entries.id');
                     })
                     ->groupBy('journal_entries.id', 'journal_entries.journal_code')
-                    ->havingRaw('ROUND(CAST(SUM(CASE WHEN journal_entry_items.debit_credit = \'debit\' THEN journal_entry_items.amount ELSE 0 END) AS numeric), 2) != ROUND(CAST(SUM(CASE WHEN journal_entry_items.debit_credit = \'credit\' THEN journal_entry_items.amount ELSE 0 END) AS numeric), 2)')
+                    ->havingRaw('ROUND(CAST(SUM(journal_lines.debit) AS numeric), 2) != ROUND(CAST(SUM(journal_lines.credit) AS numeric), 2)')
                     ->select([
                         'journal_entries.id',
                         'journal_entries.journal_code',
-                        DB::raw('SUM(CASE WHEN journal_entry_items.debit_credit = \'debit\' THEN journal_entry_items.amount ELSE 0 END) as total_debit'),
-                        DB::raw('SUM(CASE WHEN journal_entry_items.debit_credit = \'credit\' THEN journal_entry_items.amount ELSE 0 END) as total_credit'),
+                        DB::raw('SUM(journal_lines.debit) as total_debit'),
+                        DB::raw('SUM(journal_lines.credit) as total_credit'),
                     ])
                     ->get();
 
@@ -686,7 +686,7 @@ class BranchDemandAuditService
                 ->where('id', $demand->journal_entry_id)
                 ->first();
             if ($creditorJournal) {
-                $creditorJournal->items = DB::table('journal_entry_items')
+                $creditorJournal->items = DB::table('journal_lines')
                     ->where('journal_entry_id', $creditorJournal->id)
                     ->orderBy('id')
                     ->get();
@@ -697,7 +697,7 @@ class BranchDemandAuditService
                 ->where('id', $demand->journal_entry_id_debtor)
                 ->first();
             if ($debtorJournal) {
-                $debtorJournal->items = DB::table('journal_entry_items')
+                $debtorJournal->items = DB::table('journal_lines')
                     ->where('journal_entry_id', $debtorJournal->id)
                     ->orderBy('id')
                     ->get();
@@ -896,14 +896,23 @@ class BranchDemandAuditService
 
     /**
      * Get the latest running balance from branch_ledger for a debtor/creditor pair.
+     * Uses the existing branch_ledger schema (from_branch_id, to_branch_id, amount)
+     * since the migration adding running_balance/is_reversed may not be applied yet.
      */
     private function getLedgerRunningBalance(int $debtorBranchId, int $creditorBranchId)
     {
-        return DB::table('branch_ledger')
-            ->where('debtor_branch_id', $debtorBranchId)
-            ->where('creditor_branch_id', $creditorBranchId)
-            ->where('is_reversed', false)
+        $row = DB::table('branch_ledger')
+            ->where('from_branch_id', $debtorBranchId)
+            ->where('to_branch_id', $creditorBranchId)
             ->orderByDesc('id')
-            ->first(['running_balance']);
+            ->first();
+
+        // Compute running balance from sum of amounts
+        $balance = (float) DB::table('branch_ledger')
+            ->where('from_branch_id', $debtorBranchId)
+            ->where('to_branch_id', $creditorBranchId)
+            ->sum('amount');
+
+        return (object) ['running_balance' => $balance];
     }
 }

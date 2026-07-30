@@ -463,35 +463,28 @@ class BranchDemandWeeklyReportService
      */
     public function getHOBillBroughtForward(int $branchId, string $date): float
     {
-        $result = DB::table('branch_ledger')
+        // Sum all amounts before this date to compute the brought-forward balance.
+        // Uses the existing branch_ledger schema (amount, is_settled) — the
+        // migration adds running_balance/is_reversed but may not be applied yet.
+        return (float) DB::table('branch_ledger')
             ->where('from_branch_id', $branchId)
-            ->where('is_reversed', false)
             ->where('transaction_date', '<', $date)
-            ->orderByDesc('transaction_date')
-            ->orderByDesc('id')
-            ->first();
-
-        return $result ? (float) $result->running_balance : 0;
+            ->sum('amount') ?? 0;
     }
 
     /**
      * Column P: HO TOTAL BILL — Current intercompany balance.
      *
-     * The running_balance from branch_ledger for the most recent
-     * transaction up to and including this date. This represents
-     * the total amount owed to HO as of this date.
+     * The total amount owed to HO as of this date (inclusive).
+     * Computed as the sum of all branch_ledger amounts up to and
+     * including this date.
      */
     public function getHOTotalBill(int $branchId, string $date): float
     {
-        $result = DB::table('branch_ledger')
+        return (float) DB::table('branch_ledger')
             ->where('from_branch_id', $branchId)
-            ->where('is_reversed', false)
             ->where('transaction_date', '<=', $date)
-            ->orderByDesc('transaction_date')
-            ->orderByDesc('id')
-            ->first();
-
-        return $result ? (float) $result->running_balance : 0;
+            ->sum('amount') ?? 0;
     }
 
     /**
