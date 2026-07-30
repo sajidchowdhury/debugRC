@@ -675,11 +675,13 @@ SQL;
             'meta' => ['title' => 'Branch Intercompany Ledger'],
             'data' => $rows,
             'totals' => [
-                'total_amount' => $rows->sum('total_amount'),
+                'total_debit' => $rows->sum('total_debit'),
+                'total_credit' => $rows->sum('total_credit'),
+                'net_balance' => $rows->sum('net_balance'),
                 'total_outstanding' => $rows->sum('outstanding_amount'),
             ],
             'checks' => [
-                'zero_sum' => abs($rows->sum('total_amount')) < 0.01, // Intercompany should net to zero across all branches
+                'zero_sum' => abs($rows->sum('net_balance')) < 0.01, // Intercompany should net to zero across all branches
             ],
         ];
     }

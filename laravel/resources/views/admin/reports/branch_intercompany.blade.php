@@ -58,8 +58,9 @@
                         <tr>
                             <th>From Branch</th>
                             <th>To Branch</th>
-                            <th class="text-end">Total Amount</th>
-                            <th class="text-end">Settled Amount</th>
+                            <th class="text-end">Total Debit</th>
+                            <th class="text-end">Total Credit</th>
+                            <th class="text-end">Net Balance</th>
                             <th class="text-end">Outstanding</th>
                             <th class="text-center">Entries</th>
                         </tr>
@@ -69,20 +70,22 @@
                             <tr>
                                 <td><i class="fas fa-building me-1 text-muted"></i>{{ $r->from_branch_name }}</td>
                                 <td><i class="fas fa-arrow-right me-1 text-muted"></i>{{ $r->to_branch_name }}</td>
-                                <td class="text-end">{{ number_format($r->total_amount, 2) }}</td>
-                                <td class="text-end text-success">{{ number_format($r->settled_amount, 2) }}</td>
+                                <td class="text-end">{{ number_format($r->total_debit, 2) }}</td>
+                                <td class="text-end text-success">{{ number_format($r->total_credit, 2) }}</td>
+                                <td class="text-end">{{ number_format($r->net_balance, 2) }}</td>
                                 <td class="text-end {{ $r->outstanding_amount > 0 ? 'text-danger fw-semibold' : 'text-muted' }}">{{ number_format($r->outstanding_amount, 2) }}</td>
                                 <td class="text-center">{{ $r->entry_count }}</td>
                             </tr>
                         @empty
-                            <tr><td colspan="6" class="text-muted text-center py-3">No intercompany transactions.</td></tr>
+                            <tr><td colspan="7" class="text-muted text-center py-3">No intercompany transactions.</td></tr>
                         @endforelse
                     </tbody>
                     <tfoot class="table-dark fw-bold">
                         <tr>
                             <td colspan="2" class="text-end">TOTAL</td>
-                            <td class="text-end">{{ number_format($totals['total_amount'], 2) }}</td>
-                            <td class="text-end">{{ number_format($totals['total_amount'] - $totals['total_outstanding'], 2) }}</td>
+                            <td class="text-end">{{ number_format($totals['total_debit'], 2) }}</td>
+                            <td class="text-end">{{ number_format($totals['total_credit'], 2) }}</td>
+                            <td class="text-end">{{ number_format($totals['net_balance'], 2) }}</td>
                             <td class="text-end">{{ number_format($totals['total_outstanding'], 2) }}</td>
                             <td></td>
                         </tr>
