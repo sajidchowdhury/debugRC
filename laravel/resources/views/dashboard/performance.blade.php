@@ -2069,7 +2069,7 @@
         @foreach ($visibleTabs as $tabId => $tab)
             <button type="button"
                     class="perf-tab @if ($loop->first) active @endif"
-                    data-tab="{{ $tabId }}"
+                    data-tab="tab-{{ $tabId }}"
                     role="tab"
                     aria-selected="{{ $loop->first ? 'true' : 'false' }}"
                     id="perf-tab-btn-{{ $tabId }}">
@@ -3980,18 +3980,27 @@ window.initPerfDashboard = function () {
     //      avoid triggering a hashchange → switchTab loop.
     window.switchPerfTab = function (tabId, opts) {
         opts = opts || {};
+        // Normalize: accept both "sales" (bare data-tab key from
+        // $visibleTabs) and "tab-sales" (full pane ID / URL hash format).
+        // Strip leading "tab-" if present, then we always work with the
+        // full "tab-X" form internally so it matches pane IDs (which are
+        // "tab-sales", "tab-collections", etc.).
+        tabId = String(tabId || '').replace(/^tab-/, '');
+        if (!tabId) return;
+        const fullTabId = 'tab-' + tabId;
+
         const root = document.getElementById('perf-dashboard');
         if (!root) return;
-        const targetPane = root.querySelector('#' + tabId);
+        const targetPane = root.querySelector('#' + fullTabId);
         if (!targetPane) return; // tab doesn't exist for this role
 
         // 1. Toggle pane visibility.
         root.querySelectorAll('.perf-tab-pane').forEach(function (p) {
-            p.classList.toggle('active', p.id === tabId);
+            p.classList.toggle('active', p.id === fullTabId);
         });
-        // 2. Toggle tab button state.
+        // 2. Toggle tab button state. data-tab is "tab-X" (matches fullTabId).
         root.querySelectorAll('.perf-tab').forEach(function (b) {
-            const isActive = b.dataset.tab === tabId;
+            const isActive = b.dataset.tab === fullTabId;
             b.classList.toggle('active', isActive);
             b.setAttribute('aria-selected', isActive ? 'true' : 'false');
         });
@@ -4011,7 +4020,9 @@ window.initPerfDashboard = function () {
         }
 
         // 4. Persist to sessionStorage (survives AJAX refresh + reload).
-        try { sessionStorage.setItem('perf-tab', tabId); } catch (e) {}
+        //    Store the full "tab-X" form so initPerfDashboard can compare
+        //    directly against pane IDs (which are "tab-sales", etc.).
+        try { sessionStorage.setItem('perf-tab', fullTabId); } catch (e) {}
 
         // 5. Update URL hash so the tab is shareable.
         //    Non-silent mode (user clicked a tab): replaceState the hash
@@ -4026,7 +4037,7 @@ window.initPerfDashboard = function () {
         //    rather than passing just '#tab-X' so the existing query
         //    string (period, employee_id, from, to) is always preserved.
         if (window.history && window.history.replaceState) {
-            const desiredHash = '#' + tabId;
+            const desiredHash = '#' + fullTabId;
             if (window.location.hash !== desiredHash) {
                 const newUrl = window.location.pathname
                     + window.location.search
@@ -4034,7 +4045,7 @@ window.initPerfDashboard = function () {
                 window.history.replaceState(null, '', newUrl);
             }
         } else if (!opts.silent) {
-            window.location.hash = tabId;
+            window.location.hash = fullTabId;
         }
 
         // Scroll the dashboard top into view so the user sees the

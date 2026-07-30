@@ -1477,3 +1477,47 @@ Stage Summary:
 - Two-layer defense: (1) AJAX trigger handlers preserve window.location.hash in pushUrl, (2) switchPerfTab uses replaceState to restore the hash if it's ever missing (silent mode included).
 - Side benefit: every full page load now ends up with a #tab-X hash in the URL (auto-restored by switchPerfTab on init), making the dashboard state shareable and refresh-safe.
 - No backend changes — pure client-side fix in performance.blade.php.
+
+---
+Task ID: perf-tab-click-no-effect
+Agent: Main Agent
+Task: User reported "on click of Sales / Collections & Returns / Productivity / Commission & Stock nothing changes" — clicking tab buttons did not switch the visible pane. The URL hash also wasn't updating correctly.
+
+Work Log:
+- Traced the click flow:
+  1. User clicks a tab button.
+  2. Document-level click listener (L4062) reads `btn.dataset.tab`.
+  3. Calls `window.switchPerfTab(tabId)`.
+  4. switchPerfTab at L3985 (old): `root.querySelector('#' + tabId)`.
+  5. L3990 (old): `p.classList.toggle('active', p.id === tabId)`.
+  6. L3994 (old): `b.dataset.tab === tabId`.
+- Found the format mismatch bug:
+  • The Blade template at L2072 (old) rendered `data-tab="{{ $tabId }}"` where $tabId is the BARE key from $visibleTabs: "sales", "collections", "productivity", "commission", "approvals".
+  • But the pane IDs are the FULL form: "tab-sales", "tab-collections", "tab-productivity", "tab-commission", "tab-approvals".
+  • So when the click handler passed "sales" to switchPerfTab:
+    - `querySelector('#sales')` returned null (pane has id "tab-sales")
+    - The validation `if (!targetPane) return;` exited SILENTLY.
+    - Even if it had continued, `p.id === "sales"` would always be false (p.id is "tab-sales"), so NO pane would ever get the .active class.
+    - Same problem with the URL hash: `'#' + tabId` would produce "#sales", which doesn't match the regex `^#tab-[\w-]+$` used by the initPerfDashboard hash reader.
+- This was a fundamental format inconsistency between data-tab (bare: "sales") and pane IDs / URL hash / sessionStorage (full: "tab-sales"). switchPerfTab was being called with the bare form by the click handler but with the full form by initPerfDashboard (URL hash reader) — so it was broken for at least one of those callers.
+- Fix 1 (Blade, the root cause): changed L2072 to render `data-tab="tab-{{ $tabId }}"` so the data-tab attribute matches the pane ID format. Now `data-tab="tab-sales"`, `id="tab-sales"`, and `#tab-sales` are all consistent.
+- Fix 2 (JS, defensive hardening): added normalization at the top of switchPerfTab so it accepts BOTH formats:
+    tabId = String(tabId || '').replace(/^tab-/, '');
+    if (!tabId) return;
+    const fullTabId = 'tab-' + tabId;
+  Then all internal comparisons use fullTabId ("tab-sales"):
+    - `root.querySelector('#' + fullTabId)` → finds the pane
+    - `p.id === fullTabId` → matches pane IDs
+    - `b.dataset.tab === fullTabId` → matches the new data-tab format
+    - `sessionStorage.setItem('perf-tab', fullTabId)` → stores "tab-sales"
+    - `'#' + fullTabId` → "#tab-sales" matches the regex
+  This means even if some future caller passes "sales" (bare) or "tab-sales" (full), switchPerfTab handles both correctly. Eliminates the whole class of "format mismatch" bugs.
+- Verified JS syntax with `node --check` after Blade stripping. Clean exit.
+- Verified Blade directive balance is unchanged (no @if/@endif introduced).
+
+Stage Summary:
+- Fixed the "clicking tabs does nothing" bug — root cause was a format mismatch between data-tab attributes ("sales") and pane IDs ("tab-sales"). The click handler passed "sales" to switchPerfTab, which then failed to find the pane via querySelector('#sales') and exited silently.
+- Two fixes applied:
+  1. Blade: data-tab now renders as "tab-X" to match pane IDs.
+  2. JS: switchPerfTab normalizes its input (strips leading "tab-" if present, then prepends "tab-") so it works regardless of which format the caller uses. All internal comparisons now use the consistent fullTabId form.
+- Now clicking any tab correctly toggles pane visibility, updates the active button state, persists to sessionStorage, and updates the URL hash.
