@@ -293,6 +293,9 @@ Route::middleware('auth')->group(function () {
         Route::post('{user}/unlock', [UserController::class, 'unlock'])->name('unlock')->where(['user' => '[0-9]+'])->middleware('role:admin');
         Route::post('{user}/reset-password', [UserController::class, 'resetPassword'])->name('resetPassword')->where(['user' => '[0-9]+'])->middleware('role:admin');
         Route::get('{user}/security', [UserController::class, 'securityAudit'])->name('security')->where(['user' => '[0-9]+'])->middleware('role:admin');
+        // Menu permissions: admin sets per-user menu visibility
+        Route::get('{user}/menu-permissions', [UserController::class, 'menuPermissions'])->name('menu-permissions')->where(['user' => '[0-9]+'])->middleware('role:admin');
+        Route::post('{user}/menu-permissions', [UserController::class, 'updateMenuPermissions'])->name('menu-permissions.update')->where(['user' => '[0-9]+'])->middleware('role:admin');
     });
     // Read access (index, show): admin, manager
     Route::resource('admin/users', UserController::class)
@@ -644,7 +647,7 @@ Route::middleware('auth')->group(function () {
     //   warehouse_manager — Create, send, confirm receipt, view
     //   accountant — View, audit checklist, weekly report
     // ============================================================
-    Route::prefix('admin/branch-demands')->name('admin.branch-demands.')->group(function () {
+    Route::prefix('admin/branch-demands')->name('admin.branch-demands.')->middleware('menu.permission:branchdemand')->group(function () {
         // Read-only routes — accessible to all branch demand roles
         Route::get('pending', [BranchDemandController::class, 'pending'])->name('pending');
         Route::get('pending-receipt', [BranchDemandController::class, 'pendingReceipt'])->name('pending-receipt');

@@ -508,11 +508,11 @@ class BranchDemandAuditService
                             ->whereColumn('branch_demands.journal_entry_id', 'journal_entries.id')
                             ->orWhereColumn('branch_demands.journal_entry_id_debtor', 'journal_entries.id');
                     })
-                    ->groupBy('journal_entries.id', 'journal_entries.journal_code')
+                    ->groupBy('journal_entries.id', 'journal_entries.entry_no')
                     ->havingRaw('ROUND(CAST(SUM(journal_lines.debit) AS numeric), 2) != ROUND(CAST(SUM(journal_lines.credit) AS numeric), 2)')
                     ->select([
                         'journal_entries.id',
-                        'journal_entries.journal_code',
+                        'journal_entries.entry_no',
                         DB::raw('SUM(journal_lines.debit) as total_debit'),
                         DB::raw('SUM(journal_lines.credit) as total_credit'),
                     ])

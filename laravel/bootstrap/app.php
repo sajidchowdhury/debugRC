@@ -49,6 +49,8 @@ return Application::configure(basePath: dirname(__DIR__))
             // SetAppBranchId runs before route middleware and skips API requests
             // because Auth::check() is false at that point).
             'set.api.branch' => \App\Http\Middleware\SetApiBranchContext::class,
+            // Menu permission — blocks direct URL access to menus the user can't view.
+            'menu.permission' => \App\Http\Middleware\EnsureMenuPermission::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Models\Branch;
 use App\Models\Employee;
 use App\Models\User;
+use App\Services\MenuService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -405,5 +406,121 @@ class UserController extends BaseMasterDataController
             'routePrefix'    => $this->routePrefix,
             'label'          => $this->label,
         ]);
+    }
+
+    // ===================== MENU PERMISSIONS =====================
+
+    /**
+     * Show the menu permissions form for a user.
+     *
+     * Admin-only: allows setting which sidebar menus a user can see.
+     * Each menu item has can_view and can_edit toggles.
+     */
+    public function menuPermissions(int $id)
+    {
+        $user = User::with('employee.branch')->findOrFail($id);
+
+        // Admin/superadmin see all menus — no permission management needed
+        if ($user->isAdmin()) {
+            return redirect()->route('admin.users.show', $id)
+                ->with('info', 'Admin/superadmin users can see all menus by default. No permission configuration needed.');
+        }
+
+        $menuService = app(MenuService::class);
+        $allMenus = $menuService->getAllMenus();
+        $userPermissions = $menuService->getUserPermissions($id);
+
+        // Build the hierarchical menu tree with permission data
+        $menuTree = $this->buildMenuTreeWithPermissions($allMenus, $userPermissions);
+
+        return view("{$this->viewDir}.menu-permissions", [
+            'title'       => "{$user->username} — menu permissions",
+            'item'        => $user,
+            'menuTree'    => $menuTree,
+            'routePrefix' => $this->routePrefix,
+            'label'       => $this->label,
+        ]);
+    }
+
+    /**
+     * Save the menu permissions for a user.
+     */
+    public function updateMenuPermissions(Request $request, int $id)
+    {
+        $user = User::findOrFail($id);
+
+        if ($user->isAdmin()) {
+            return redirect()->route('admin.users.show', $id)
+                ->with('info', 'Admin/superadmin users can see all menus by default.');
+        }
+
+        $validated = $request->validate([
+            'permissions'           => 'array',
+            'permissions.*.menu_id' => 'required|integer|exists:menus,id',
+            'permissions.*.can_view' => 'boolean',
+            'permissions.*.can_edit' => 'boolean',
+        ]);
+
+        $menuService = app(MenuService::class);
+
+        DB::transaction(function () use ($validated, $menuService, $id) {
+            // Get all submitted menu IDs
+            $submittedMenuIds = collect($validated['permissions'] ?? [])->pluck('menu_id')->toArray();
+
+            // Delete permissions for menus not in the submitted list
+            DB::table('user_menu_permissions')
+                ->where('user_id', $id)
+                ->whereNotIn('menu_id', $submittedMenuIds)
+                ->delete();
+
+            // Upsert submitted permissions
+            foreach ($validated['permissions'] ?? [] as $perm) {
+                $menuService->setPermission(
+                    $id,
+                    (int) $perm['menu_id'],
+                    !empty($perm['can_view']),
+                    !empty($perm['can_edit'])
+                );
+            }
+        });
+
+        // Invalidate the user's menu cache
+        $menuService->invalidateUserMenuCache($id);
+
+        return redirect()->route('admin.users.menu-permissions', $id)
+            ->with('success', 'Menu permissions updated successfully.');
+    }
+
+    /**
+     * Build a hierarchical menu tree with permission data attached.
+     */
+    private function buildMenuTreeWithPermissions($allMenus, $userPermissions): array
+    {
+        $byParent = [];
+        foreach ($allMenus as $menu) {
+            $parentId = $menu->parent_id ?? 0;
+            $byParent[$parentId][] = $menu;
+        }
+
+        $buildLevel = function ($parentId) use (&$buildLevel, $byParent, $userPermissions) {
+            $items = [];
+            foreach (($byParent[$parentId] ?? []) as $menu) {
+                $perm = $userPermissions[$menu->id] ?? null;
+                $items[] = [
+                    'id'         => $menu->id,
+                    'menu_label' => $menu->menu_label,
+                    'controller' => $menu->controller,
+                    'action'     => $menu->action,
+                    'icon'       => $menu->icon,
+                    'is_active'  => $menu->is_active,
+                    'can_view'   => $perm ? $perm->can_view : false,
+                    'can_edit'   => $perm ? $perm->can_edit : false,
+                    'children'   => $buildLevel($menu->id),
+                ];
+            }
+            return $items;
+        };
+
+        return $buildLevel(0);
     }
 }

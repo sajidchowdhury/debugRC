@@ -36,6 +36,9 @@
             <a href="{{ route('admin.users.edit', $item) }}" class="btn btn-light btn-sm">
                 <i class="fas fa-pen me-1"></i> Edit
             </a>
+            <a href="{{ route('admin.users.menu-permissions', $item) }}" class="btn btn-outline-light btn-sm">
+                <i class="fas fa-bars-staggered me-1"></i> Menu Access
+            </a>
             <a href="{{ route('admin.users.security', $item) }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-shield-halved me-1"></i> Security
             </a>
