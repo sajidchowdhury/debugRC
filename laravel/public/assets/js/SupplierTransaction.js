@@ -43,6 +43,36 @@
         return u.endsWith('/') ? u : u + '/';
     }
 
+    /**
+     * Get a named route URL from ST_BOOT.routes config.
+     * Falls back to legacy URL construction if route not found.
+     */
+    function routeUrl(name, params) {
+        const routes = window.ST_BOOT?.routes || {};
+        let url = routes[name] || '';
+        if (!url) {
+            // Legacy fallback
+            const base = stBaseUrl();
+            const legacyMap = {
+                'store': base + 'SupplierTransaction/store',
+                'search': base + 'SupplierTransaction/search_supplier',
+                'get-due': base + 'SupplierTransaction/get_due',
+                'show': base + 'SupplierTransaction/details/',
+                'reverse': base + 'SupplierTransaction/reverse',
+                'index': base + 'SupplierTransaction',
+                'supplier-show': base + 'supplier/show/',
+            };
+            url = legacyMap[name] || base + 'SupplierTransaction';
+        }
+        // Replace {param} placeholders with actual values
+        if (params) {
+            Object.keys(params).forEach(key => {
+                url = url.replace('{' + key + '}', params[key]);
+            });
+        }
+        return url;
+    }
+
     function escapeHtml(s) {
         return String(s ?? '')
             .replace(/&/g, '&amp;')
@@ -136,7 +166,7 @@
             if (!val || val === 'all') params.delete(key);
         });
         const qs = params.toString();
-        const base = (window.ST_BASE || stBaseUrl()) + 'SupplierTransaction';
+        const base = routeUrl('index');
         window.history.replaceState(null, '', qs ? base + '?' + qs : base);
     }
 
@@ -160,7 +190,7 @@
                 return;
             }
             try {
-                const res = await fetch(base + 'SupplierTransaction/search_supplier?term=' + encodeURIComponent(term), {
+                const res = await fetch(routeUrl('search') + '?term=' + encodeURIComponent(term), {
                     credentials: 'same-origin',
                 });
                 const rows = await parseJsonResponse(res);
@@ -252,7 +282,7 @@
             processing: true,
             serverSide: true,
             ajax: {
-                url: base + 'SupplierTransaction' + (showReversed ? '?reversed=1' : ''),
+                url: routeUrl('index') + (showReversed ? '?reversed=1' : ''),
                 data(d) {
                     Object.assign(d, getSuppTxnFilterParams());
                     if (showReversed) {
@@ -297,7 +327,7 @@
                             ? `<div class="branch-contact"><i class="fas fa-phone"></i> ${escapeHtml(row.mobile)}</div>`
                             : '';
                         const hub = row.supplier_id
-                            ? `<div class="name"><a href="${base}supplier/show/${row.supplier_id}" class="text-decoration-none text-reset">${escapeHtml(name)}</a></div>`
+                            ? `<div class="name"><a href="${routeUrl('supplier-show', { id: String(row.supplier_id) })}" class="text-decoration-none text-reset">${escapeHtml(name)}</a></div>`
                             : `<div class="name">${escapeHtml(name)}</div>`;
                         return `<div class="branch-name-cell">
                             <div class="branch-avatar">${escapeHtml(initial)}</div>
@@ -348,7 +378,7 @@
                     className: 'text-center',
                     render(data, type, row) {
                         let html = '<div class="branch-action-bar">';
-                        html += `<a href="${base}SupplierTransaction/details/${data}" class="btn-action view" title="Details"><i class="fas fa-eye"></i></a>`;
+                        html += `<a href="${routeUrl('show', { id: String(data) })}" class="btn-action view" title="Details"><i class="fas fa-eye"></i></a>`;
                         if (!showReversed && parseInt(row.can_reverse, 10) === 1) {
                             html += `<button type="button" class="btn-action toggle-off js-supp-reverse"
                                 data-payment-id="${data}"
@@ -416,7 +446,7 @@
                     <span class="supp-txn-amount ${escapeHtml(typeCls)}">${escapeHtml(amount)}</span>
                 </div>
                 <div class="mt-2 d-flex gap-2 flex-wrap">
-                    <a href="${base}SupplierTransaction/details/${escapeHtml(id)}" class="btn btn-sm btn-outline-primary flex-fill">
+                    <a href="${routeUrl('show', { id: escapeHtml(id) })}" class="btn btn-sm btn-outline-primary flex-fill">
                         <i class="fas fa-eye me-1"></i> Details
                     </a>
                     ${canReverse ? `<button type="button" class="btn btn-sm btn-outline-danger js-supp-reverse flex-fill"
@@ -445,9 +475,9 @@
         dueSummary.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Loading payable…';
 
         try {
-            const response = await fetch(base + 'SupplierTransaction/get_due', {
+            const response = await fetch(routeUrl('get-due'), {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || window.ST_BOOT?.csrf_token || '' },
                 credentials: 'same-origin',
                 body: 'supplier_id=' + encodeURIComponent(supplierId),
             });
@@ -541,7 +571,7 @@
                 }
                 if (hubLink && hubAnchor) {
                     hubLink.classList.remove('d-none');
-                    hubAnchor.href = base + 'supplier/show/' + supplier.id;
+                    hubAnchor.href = routeUrl('supplier-show', { id: supplier.id });
                 }
             } else {
                 selectedLabel = '';
@@ -591,7 +621,7 @@
             }
 
             try {
-                const res = await fetch(base + 'SupplierTransaction/search_supplier?term=' + encodeURIComponent(term), {
+                const res = await fetch(routeUrl('search') + '?term=' + encodeURIComponent(term), {
                     credentials: 'same-origin',
                 });
                 const data = await parseJsonResponse(res);
@@ -752,7 +782,7 @@
                 }
 
                 try {
-                    const response = await fetch(base + 'SupplierTransaction/store', {
+                    const response = await fetch(form.action || routeUrl('store'), {
                         method: 'POST',
                         body: formData,
                         credentials: 'same-origin',
@@ -773,8 +803,8 @@
                         }).then(() => {
                             const pid = result.payment_id;
                             window.location.href = pid
-                                ? base + 'SupplierTransaction/details/' + pid
-                                : base + 'SupplierTransaction';
+                                ? routeUrl('show', { id: pid })
+                                : routeUrl('index');
                         });
                     } else {
                         Swal.fire('Error', result.message || 'Save failed', 'error');
@@ -796,7 +826,10 @@
     }
 
     async function reverseTransaction(id, paymentCode) {
-        const csrf = document.querySelector('input[name="csrf_token"]')?.value || '';
+        const csrf = document.querySelector('input[name="csrf_token"]')?.value
+            || document.querySelector('meta[name="csrf-token"]')?.content
+            || window.ST_BOOT?.csrf_token
+            || '';
         const { value: reason, isConfirmed } = await Swal.fire({
             title: 'Reverse payment?',
             html:
@@ -830,11 +863,10 @@
 
         try {
             const body = new URLSearchParams({
-                csrf_token: csrf,
-                id: String(id),
-                reason: reason.trim(),
+                _token: csrf,
+                reverse_reason: reason.trim(),
             });
-            const response = await fetch((window.ST_BASE || stBaseUrl()) + 'SupplierTransaction/reverse', {
+            const response = await fetch(routeUrl('reverse', { id: String(id) }), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
@@ -855,7 +887,7 @@
                     showConfirmButton: false,
                 }).then(() => {
                     const url = result.redirect_url
-                        || (window.ST_BASE || stBaseUrl()) + 'SupplierTransaction/details/' + id;
+                        || routeUrl('show', { id: String(id) });
                     window.location.href = url;
                 });
             } else {
