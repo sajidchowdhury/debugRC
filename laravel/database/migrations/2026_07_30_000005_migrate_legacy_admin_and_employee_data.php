@@ -51,8 +51,12 @@ return new class extends Migration
             throw new \RuntimeException(
                 "Cannot find admin_employee.sql. Looked in:\n"
                 . "  database/sql/admin_employee.sql\n"
-                . "  legacy/admin_employee.sql\n"
-                . "  database/legacy/admin_employee.sql"
+                . "  database/legacy/admin_employee.sql\n"
+                . "  legacy/admin_employee.sql (relative to Laravel base)\n"
+                . "  ../legacy/admin_employee.sql (Docker: /var/www/legacy/)\n"
+                . "  /var/www/legacy/admin_employee.sql (Docker absolute)\n"
+                . "\nFix: copy admin_employee.sql into one of these locations,\n"
+                . "or mount the legacy/ directory into the container."
             );
         }
 
@@ -139,14 +143,23 @@ return new class extends Migration
      * Find the legacy SQL dump. Looks in several candidate paths relative
      * to the Laravel base directory so the migration works regardless of
      * whether the user put the file under database/sql/ or legacy/.
+     *
+     * Docker note: the docker-compose.yml mounts the host ./legacy directory
+     * at /var/www/legacy (NOT /var/www/laravel/legacy), and the Laravel
+     * base_path() is /var/www/laravel — so we must also look one level
+     * UP from base_path() to find /var/www/legacy/admin_employee.sql.
      */
     private function findSqlDump(): ?string
     {
         $candidates = [
             database_path('sql/admin_employee.sql'),
-            base_path('legacy/admin_employee.sql'),
             database_path('legacy/admin_employee.sql'),
+            base_path('legacy/admin_employee.sql'),
             base_path('database/migrations/admin_employee.sql'),
+            // Docker: /var/www/legacy/admin_employee.sql
+            dirname(base_path()) . '/legacy/admin_employee.sql',
+            // Docker fallback (absolute, in case base_path resolves oddly)
+            '/var/www/legacy/admin_employee.sql',
         ];
         foreach ($candidates as $path) {
             if (is_file($path)) {
