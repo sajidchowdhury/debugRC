@@ -82,13 +82,15 @@ class Customer extends Model
      * (e.g. before migration is run).
      *
      * @param  \Illuminate\Database\Eloquent\Builder  $query
-     * @param  string  $term  Search term (plain text, no special syntax needed)
+     * @param  string|null  $term  Search term (plain text, no special syntax needed).
+     *                              Accepts null for defensive coding — null/empty
+     *                              short-circuits to an unmodified query.
      * @param  bool  $ranked  Whether to include ts_rank for ordering
      * @return \Illuminate\Database\Eloquent\Builder
      */
-    public function scopeSearch($query, string $term, bool $ranked = true)
+    public function scopeSearch($query, ?string $term, bool $ranked = true)
     {
-        if ($term === '') {
+        if ($term === null || $term === '') {
             return $query;
         }
 

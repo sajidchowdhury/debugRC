@@ -405,7 +405,8 @@ class ProductController extends BaseMasterDataController
         $draw   = (int) $request->input('draw', 1);
         $start  = (int) $request->input('start', 0);
         $length = (int) $request->input('length', 25);
-        $search = $request->input('search.value', '');
+        // Coerce to string — see BaseMasterDataController for the null-trap rationale.
+        $search = (string) ($request->input('search.value') ?? '');
 
         // Apply filters
         if ($catId = $request->input('filterCategory')) {

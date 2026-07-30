@@ -123,7 +123,11 @@ class CustomerController extends BaseMasterDataController
         $draw = (int) $request->input('draw', 1);
         $start = (int) $request->input('start', 0);
         $length = (int) $request->input('length', 25);
-        $search = $request->input('search.value', '');
+        // Coerce to string — DataTables can send search.value as null when
+        // the custom data callback in index.blade.php leaves d.search unset
+        // (empty global search input). The null !== '' guard below would
+        // otherwise pass null through to scopeSearch(), causing a TypeError.
+        $search = (string) ($request->input('search.value') ?? '');
 
         try {
             $total = $query->count();

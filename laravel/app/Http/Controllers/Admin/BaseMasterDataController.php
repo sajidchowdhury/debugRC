@@ -410,7 +410,10 @@ abstract class BaseMasterDataController extends Controller
         $draw = (int) $request->input('draw', 1);
         $start = (int) $request->input('start', 0);
         $length = (int) $request->input('length', 25);
-        $search = $request->input('search.value', '');
+        // Coerce to string — DataTables can send search.value as null when
+        // the page's custom data callback leaves d.search unset. null !== ''
+        // is true, which would pass null to scopeSearch() → TypeError.
+        $search = (string) ($request->input('search.value') ?? '');
 
         $total = $query->count();
 
