@@ -170,7 +170,7 @@ class MenuService
             'manualjournal' => 'admin.manual-journals.index',
             'accountingperiod' => $action === 'year_end' ? 'admin.accounting.year-end' : 'admin.accounting.period-close',
             'customertransaction' => 'admin.customer-payments.index',
-            'suppliertransaction' => 'admin.supplier-payments.index',
+            'suppliertransaction' => 'admin.supplier-transactions.index',
             'employeetransaction' => 'admin.employee-transactions.index',
             'reconciliation' => 'admin.reconciliation.index',
             'report' => 'admin.reports.index',
