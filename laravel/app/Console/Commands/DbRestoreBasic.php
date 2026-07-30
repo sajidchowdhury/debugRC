@@ -39,7 +39,7 @@ class DbRestoreBasic extends Command
     protected $signature = 'db:restore-basic
                             {--force : Skip confirmation prompt}
                             {--stop-on-error : Abort on first SQL error (default: continue and report)}
-                            {--verbose : Print each statement as it executes}';
+                            {--show-statements : Print each statement as it executes}';
 
     protected $description = 'Restore basic-data tables from database/sql/basic_data_snapshot.sql';
 
@@ -125,7 +125,7 @@ class DbRestoreBasic extends Command
                 $currentTable = $m[2] ?? $m[1] ?? $currentTable;
             }
 
-            if ($this->option('verbose')) {
+            if ($this->option('show-statements')) {
                 $preview = substr($stmt, 0, 120);
                 $this->line("  [" . ($i + 1) . "/{$totalStatements}] {$preview}...");
             }
