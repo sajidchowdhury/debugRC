@@ -1445,3 +1445,35 @@ Work Log:
 Stage Summary:
 - One-line root-cause fix: added the missing `$` prefix to `$loop->first` (used twice) inside the `@foreach` that renders the tab buttons. This was a regression introduced by the previous tabbed-navigation commit — the rest of that work (5-tab nav, role-gating, JS switcher, sessionStorage persistence, hash sync, Chart.js .resize() on tab show, YTD removal) is correct and intact.
 - Dashboard should now load without the 500 error. The 5-tab navigation (Sales · Collections & Returns · Productivity · Commission & Stock · Approvals) will be visible and functional.
+
+---
+Task ID: perf-tab-hash-preservation
+Agent: Main Agent
+Task: User reported "with the tab change parameter is not changing" — when switching tabs and then changing the period (or vice versa), the URL no longer reflects the active tab. The tab itself was preserved via sessionStorage, but the URL hash (#tab-X) was being wiped on every AJAX refresh, so the URL bar showed /dashboard?period=last30 with no #tab-collections even though the Collections tab was still visible. This made the dashboard state look inconsistent and unshareable.
+
+Work Log:
+- Traced the AJAX refresh flow in performance.blade.php:
+  1. User on /dashboard?period=mtd#tab-collections (URL hash set by previous tab click).
+  2. User clicks "Last 30D" period pill.
+  3. Click handler (L4186) built pushUrl = '/dashboard?period=last30' — NO hash!
+  4. refreshDashboard → AJAX fetch → swapDashboard → initPerfDashboard.
+  5. initPerfDashboard reads sessionStorage → restores 'tab-collections' internally.
+  6. switchPerfTab('tab-collections', {silent: true}) was called — but silent mode SKIPPED the URL hash update (the original code at L4018 had `if (!opts.silent && ...)` guarding the replaceState).
+  7. THEN history.pushState({...}, '', '/dashboard?period=last30') ran (in refreshDashboard at L4162) — pushing the hashless URL AFTER swapDashboard. This wiped any hash that switchPerfTab might have set.
+- Root cause: two compounding bugs:
+  (a) The three AJAX trigger handlers (period pill, employee select, custom form) built pushUrl WITHOUT appending window.location.hash.
+  (b) switchPerfTab's silent mode skipped the hash update entirely, so even if the hash had been preserved on swap, the subsequent pushState would have wiped it.
+- Fix 1 (the main fix): Updated all three AJAX trigger handlers to append the current hash to pushUrl:
+    const currentHash = window.location.hash || '';
+    const pushUrl = '{{ route("dashboard") }}' + (qs ? '?' + qs : '') + currentHash;
+  This ensures pushState preserves the #tab-X hash. Now /dashboard?period=last30#tab-collections stays in the URL bar after a period change.
+- Fix 2 (defensive safety net): Updated switchPerfTab to use replaceState to set the hash in BOTH silent and non-silent modes (was silent-only before). This handles edge cases where the hash is missing (e.g., first page load with no hash, or back/forward navigation to a hashless URL). The previous concern about "silent mode causes infinite loop with hashchange listener" was unfounded — replaceState does NOT fire hashchange, only location.hash = ... and browser navigation do. So replaceState is safe in all modes.
+- Also made the replaceState explicit: build the full URL (pathname + search + hash) rather than passing just '#tab-X' to replaceState. This guarantees the existing query string (period, employee_id, from, to) is always preserved when the hash is updated.
+- Verified JS syntax by stripping Blade directives/comments and running `node --check` on the resulting JS. Clean exit, no syntax errors.
+- Verified Blade directive balance is unchanged (same structure as before the edit, no new @if/@endif introduced).
+
+Stage Summary:
+- Fixed the "tab parameter is not changing" bug: the URL now correctly reflects both the active period AND the active tab after any AJAX refresh. Switching period/employee/custom-range while on the Collections tab now keeps #tab-collections in the URL.
+- Two-layer defense: (1) AJAX trigger handlers preserve window.location.hash in pushUrl, (2) switchPerfTab uses replaceState to restore the hash if it's ever missing (silent mode included).
+- Side benefit: every full page load now ends up with a #tab-X hash in the URL (auto-restored by switchPerfTab on init), making the dashboard state shareable and refresh-safe.
+- No backend changes — pure client-side fix in performance.blade.php.

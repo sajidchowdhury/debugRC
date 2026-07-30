@@ -4013,15 +4013,28 @@ window.initPerfDashboard = function () {
         // 4. Persist to sessionStorage (survives AJAX refresh + reload).
         try { sessionStorage.setItem('perf-tab', tabId); } catch (e) {}
 
-        // 5. Update URL hash so the tab is shareable. Silent mode skips
-        //    this to avoid a hashchange → switchTab infinite loop.
-        if (!opts.silent && window.location.hash !== '#' + tabId) {
-            // Use history.replaceState so we don't pollute the back stack.
-            if (window.history && window.history.replaceState) {
-                window.history.replaceState(null, '', '#' + tabId);
-            } else {
-                window.location.hash = tabId;
+        // 5. Update URL hash so the tab is shareable.
+        //    Non-silent mode (user clicked a tab): replaceState the hash
+        //    so URL reflects the active tab.
+        //    Silent mode (init / popstate / AJAX refresh restoration):
+        //    still restore the hash via replaceState if it's missing —
+        //    this fixes the bug where changing the period pill wiped the
+        //    #tab-X hash from the URL even though the tab was preserved
+        //    via sessionStorage. replaceState doesn't fire hashchange,
+        //    so there's no infinite loop risk.
+        //    We build the full URL (pathname + search + hash) explicitly
+        //    rather than passing just '#tab-X' so the existing query
+        //    string (period, employee_id, from, to) is always preserved.
+        if (window.history && window.history.replaceState) {
+            const desiredHash = '#' + tabId;
+            if (window.location.hash !== desiredHash) {
+                const newUrl = window.location.pathname
+                    + window.location.search
+                    + desiredHash;
+                window.history.replaceState(null, '', newUrl);
             }
+        } else if (!opts.silent) {
+            window.location.hash = tabId;
         }
 
         // Scroll the dashboard top into view so the user sees the
@@ -4174,6 +4187,8 @@ window.initPerfDashboard = function () {
     // Convert the existing <a class="btn-period" href="..."> links into
     // AJAX triggers. We preventDefault, extract the period from the
     // href's query string, fetch the fragment, swap, and pushState.
+    // The current #tab-X hash is preserved on the pushUrl so switching
+    // the period does NOT reset the active tab in the URL bar.
     document.addEventListener('click', function (e) {
         const link = e.target.closest('a.btn-period');
         if (!link) return;
@@ -4186,11 +4201,16 @@ window.initPerfDashboard = function () {
         const url = new URL(href, window.location.origin);
         const qs = url.search.replace(/^\?/, '');
         // The pushUrl should be the /dashboard?... URL (not /dashboard/fragment).
-        const pushUrl = '{{ route("dashboard") }}' + (qs ? '?' + qs : '');
+        // Preserve the active-tab hash so the URL reflects the user's
+        // current section (e.g. /dashboard?period=last30#tab-collections).
+        const currentHash = window.location.hash || '';
+        const pushUrl = '{{ route("dashboard") }}' + (qs ? '?' + qs : '') + currentHash;
         refreshDashboard(qs, pushUrl);
     });
 
     // ── Employee <select> change (super-admin only) ─────────────
+    // Preserves the active-tab hash so switching employees doesn't
+    // reset the URL to a hashless state.
     document.addEventListener('change', function (e) {
         const sel = e.target;
         if (!sel || sel.name !== 'employee_id') return;
@@ -4202,11 +4222,13 @@ window.initPerfDashboard = function () {
         params.delete('employee_id');
         if (sel.value) params.set('employee_id', sel.value);
         const qs = params.toString();
-        const pushUrl = '{{ route("dashboard") }}' + (qs ? '?' + qs : '');
+        const currentHash = window.location.hash || '';
+        const pushUrl = '{{ route("dashboard") }}' + (qs ? '?' + qs : '') + currentHash;
         refreshDashboard(qs, pushUrl);
     });
 
     // ── Custom date-range form submit ───────────────────────────
+    // Preserves the active-tab hash so the URL stays consistent.
     document.addEventListener('submit', function (e) {
         const form = e.target;
         if (!form || form.id !== 'customPeriodForm') return;
@@ -4220,7 +4242,8 @@ window.initPerfDashboard = function () {
             if (v) params.set(k, v);
         }
         const qs = params.toString();
-        const pushUrl = '{{ route("dashboard") }}' + (qs ? '?' + qs : '');
+        const currentHash = window.location.hash || '';
+        const pushUrl = '{{ route("dashboard") }}' + (qs ? '?' + qs : '') + currentHash;
         refreshDashboard(qs, pushUrl);
     });
 
