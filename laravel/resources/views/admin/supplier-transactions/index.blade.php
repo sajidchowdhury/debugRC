@@ -287,7 +287,7 @@
                         @forelse ($payments as $p)
                             <tr class="{{ $p->is_reversed ? 'table-danger' : '' }}">
                                 <td>
-                                    <a href="{{ route('admin.supplier-transactions.show', $p) }}"
+                                    <a href="{{ route('admin.supplier-transactions.show', ['supplier_transaction' => $p->id]) }}"
                                        class="fw-semibold text-decoration-none">
                                         {{ $p->payment_code }}
                                     </a>
@@ -328,7 +328,7 @@
                                     @endif
                                 </td>
                                 <td class="text-center text-nowrap">
-                                    <a href="{{ route('admin.supplier-transactions.show', $p) }}"
+                                    <a href="{{ route('admin.supplier-transactions.show', ['supplier_transaction' => $p->id]) }}"
                                        class="btn btn-sm btn-outline-secondary" title="View details">
                                         <i class="fas fa-eye"></i>
                                     </a>
@@ -369,7 +369,7 @@
         csrf_token: '{{ csrf_token() }}',
         routes: {
             'index': '{{ route("admin.supplier-transactions.index") }}',
-            'show': '{{ rtrim(route("admin.supplier-transactions.show", ["id" => "{id}"]), "}") }}'.replace('{id}', ''),
+            'show': '{{ rtrim(route("admin.supplier-transactions.show", ["supplier_transaction" => "{id}"]), "}") }}'.replace('{id}', ''),
             'reverse': '{{ route("admin.supplier-transactions.reverse", ["id" => "{id}"]) }}'.replace('{id}', ''),
             'search': '{{ route("admin.supplier-transactions.search") }}',
             'get-due': '{{ route("admin.supplier-transactions.get-due") }}',

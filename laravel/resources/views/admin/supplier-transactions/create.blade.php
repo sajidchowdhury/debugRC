@@ -338,7 +338,7 @@
         ]),
         routes: {
             'index': '{{ route("admin.supplier-transactions.index") }}',
-            'show': '{{ rtrim(route("admin.supplier-transactions.show", ["id" => "{id}"]), "}") }}'.replace('{id}', ''),
+            'show': '{{ rtrim(route("admin.supplier-transactions.show", ["supplier_transaction" => "{id}"]), "}") }}'.replace('{id}', ''),
             'store': '{{ route("admin.supplier-transactions.store") }}',
             'search': '{{ route("admin.supplier-transactions.search") }}',
             'get-due': '{{ route("admin.supplier-transactions.get-due") }}',

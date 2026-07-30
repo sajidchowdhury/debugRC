@@ -3,7 +3,6 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Traits\AuditableMasterData;
 use App\Models\Scopes\BranchScope;
 
@@ -49,13 +48,11 @@ use App\Models\Scopes\BranchScope;
  */
 class EmployeeTransaction extends Model
 {
-    use SoftDeletes, AuditableMasterData;
+    use AuditableMasterData;
 
     protected $table = 'employee_transactions';
 
     public $timestamps = true;
-
-    protected $dates = ['deleted_at'];
 
     /**
      * Valid transaction types (matches DB CHECK constraint).

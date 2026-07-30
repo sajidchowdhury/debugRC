@@ -139,7 +139,7 @@ class SupplierTransactionController extends Controller
                 ]);
             }
 
-            return redirect()->route('admin.supplier-transactions.show', $payment->id)
+            return redirect()->route('admin.supplier-transactions.show', ['supplier_transaction' => $payment->id])
                 ->with('success', $successMessage);
         } catch (\Throwable $e) {
             if ($request->expectsJson() || $request->ajax()) {
@@ -206,7 +206,7 @@ class SupplierTransactionController extends Controller
                 ]);
             }
 
-            return redirect()->route('admin.supplier-transactions.show', $payment->id)
+            return redirect()->route('admin.supplier-transactions.show', ['supplier_transaction' => $payment->id])
                 ->with('success', "Payment {$payment->payment_code} reversed. GL + ledger reversed.");
         } catch (\Throwable $e) {
             if ($request->expectsJson() || $request->ajax()) {

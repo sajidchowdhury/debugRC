@@ -103,7 +103,7 @@
                             <td><span class="md-audit-action {{ $actionCls }}">{{ $action }}</span></td>
                             <td>
                                 @if (is_numeric($recordId) && $recordId > 0)
-                                    <a href="{{ route('admin.supplier-transactions.show', (int) $recordId) }}" class="text-decoration-none">
+                                    <a href="{{ route('admin.supplier-transactions.show', ['supplier_transaction' => (int) $recordId]) }}" class="text-decoration-none">
                                         #{{ (int) $recordId }}
                                     </a>
                                     @if ($paymentCode)
