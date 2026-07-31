@@ -110,7 +110,7 @@ class MoneyTransferController extends Controller
                 ]);
             }
 
-            return redirect()->route('admin.money-transfers.show', ['money_transfer' => $transfer->id])
+            return redirect()->route('admin.money-transfers.show', ['id' => $transfer->id])
                 ->with('success', $successMessage);
         } catch (\Throwable $e) {
             if ($request->expectsJson() || $request->ajax()) {
@@ -168,7 +168,7 @@ class MoneyTransferController extends Controller
                 ]);
             }
 
-            return redirect()->route('admin.money-transfers.show', ['money_transfer' => $transfer->id])
+            return redirect()->route('admin.money-transfers.show', ['id' => $transfer->id])
                 ->with('success', "Transfer {$transfer->transfer_code} reversed. GL + bank balance restored.");
         } catch (\Throwable $e) {
             if ($request->expectsJson() || $request->ajax()) {

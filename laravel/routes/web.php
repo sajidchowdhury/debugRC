@@ -1336,9 +1336,13 @@ Route::middleware('auth')->group(function () {
         // Print transaction slip
         Route::get('{id}/slip', [EmployeeTransactionController::class, 'slip'])
             ->name('slip')->middleware('role:accountant,manager,admin');
+        // Show details — uses {id} to match reverse/slip parameter naming
+        Route::get('{id}', [EmployeeTransactionController::class, 'show'])
+            ->name('show')->middleware('role:accountant,manager,admin')
+            ->where('id', '[0-9]+');
     });
     Route::resource('admin/employee-transactions', EmployeeTransactionController::class)
-        ->only(['index', 'create', 'show'])
+        ->only(['index', 'create'])
         ->names('admin.employee-transactions')
         ->middleware('role:accountant,manager,admin');
     Route::resource('admin/employee-transactions', EmployeeTransactionController::class)
@@ -1359,9 +1363,13 @@ Route::middleware('auth')->group(function () {
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         Route::get('{id}/slip', [MoneyTransferController::class, 'slip'])
             ->name('slip')->middleware('role:accountant,manager,admin');
+        // Show details — uses {id} to match reverse/slip parameter naming
+        Route::get('{id}', [MoneyTransferController::class, 'show'])
+            ->name('show')->middleware('role:accountant,manager,admin')
+            ->where('id', '[0-9]+');
     });
     Route::resource('admin/money-transfers', MoneyTransferController::class)
-        ->only(['index', 'create', 'show'])
+        ->only(['index', 'create'])
         ->names('admin.money-transfers')
         ->middleware('role:accountant,manager,admin');
     Route::resource('admin/money-transfers', MoneyTransferController::class)

@@ -227,7 +227,7 @@
                         @forelse ($transfers as $t)
                             <tr class="{{ $t->is_reversed ? 'table-danger' : '' }}">
                                 <td>
-                                    <a href="{{ route('admin.money-transfers.show', ['money_transfer' => $t->id]) }}"
+                                    <a href="{{ route('admin.money-transfers.show', ['id' => $t->id]) }}"
                                        class="fw-semibold text-decoration-none">
                                         {{ $t->transfer_code }}
                                     </a>
@@ -277,7 +277,7 @@
                                     @endif
                                 </td>
                                 <td class="text-center text-nowrap">
-                                    <a href="{{ route('admin.money-transfers.show', ['money_transfer' => $t->id]) }}"
+                                    <a href="{{ route('admin.money-transfers.show', ['id' => $t->id]) }}"
                                        class="btn btn-sm btn-outline-secondary" title="View details">
                                         <i class="fas fa-eye"></i>
                                     </a>

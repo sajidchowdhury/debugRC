@@ -499,7 +499,7 @@
         transferCode: '{{ $transfer->transfer_code }}',
         routes: {
             'index': '{{ route("admin.money-transfers.index") }}',
-            'show': '{{ rtrim(route("admin.money-transfers.show", ["money_transfer" => "{id}"]), "}") }}'.replace('{id}', ''),
+            'show': '{{ rtrim(route("admin.money-transfers.show", ["id" => "{id}"]), "}") }}'.replace('{id}', ''),
             'reverse': '{{ url("/admin/money-transfers") }}/' + {{ $transfer->id }} + '/reverse',
             'slip': '{{ route("admin.money-transfers.slip", ["id" => "{id}"]) }}'.replace('{id}', ''),
         },
