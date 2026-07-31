@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\StoreMoneyTransferRequest;
 use App\Models\MoneyTransfer;
 use App\Services\Accounting\MoneyTransferService;
 use Illuminate\Http\Request;
@@ -65,31 +66,19 @@ class MoneyTransferController extends Controller
         ]);
     }
 
-    public function store(Request $request)
+    /**
+     * Store a new money transfer.
+     *
+     * Validation is handled by StoreMoneyTransferRequest (typed Form Request).
+     * RBAC is handled by route middleware (role:accountant,manager,admin +
+     * branch.isolation).
+     */
+    public function store(StoreMoneyTransferRequest $request)
     {
-        $validated = $request->validate([
-            'transfer_type'  => 'required|in:cash_to_bank,bank_to_cash,cash_to_cash,bank_to_bank',
-            'from_branch_id' => 'required|integer|exists:branches,id',
-            'to_branch_id'   => 'required|integer|exists:branches,id',
-            'from_bank_id'   => 'nullable|integer|exists:banks,id',
-            'to_bank_id'     => 'nullable|integer|exists:banks,id',
-            'amount'         => 'required|numeric|min:0.01',
-            'transfer_date'  => 'required|date',
-            'notes'          => 'nullable|string|max:500',
-        ]);
+        $payload = $request->toServicePayload();
 
         try {
-            $transfer = $this->service->createTransfer([
-                'transfer_type'  => $validated['transfer_type'],
-                'from_branch_id' => $validated['from_branch_id'],
-                'to_branch_id'   => $validated['to_branch_id'],
-                'from_bank_id'   => $validated['from_bank_id'] ?? null,
-                'to_bank_id'     => $validated['to_bank_id'] ?? null,
-                'amount'         => $validated['amount'],
-                'transfer_date'  => $validated['transfer_date'],
-                'notes'          => $validated['notes'] ?? '',
-                'created_by'     => auth()->id(),
-            ]);
+            $transfer = $this->service->createTransfer($payload);
 
             $typeLabels = [
                 'cash_to_bank' => 'Cash to Bank',
@@ -97,7 +86,7 @@ class MoneyTransferController extends Controller
                 'cash_to_cash' => 'Cash to Cash',
                 'bank_to_bank' => 'Bank to Bank',
             ];
-            $typeLabel = $typeLabels[$validated['transfer_type']] ?? 'Transfer';
+            $typeLabel = $typeLabels[$payload['transfer_type']] ?? 'Transfer';
 
             $successMessage = "Transfer {$transfer->transfer_code} recorded ({$typeLabel}). GL posted + bank balance updated.";
 
