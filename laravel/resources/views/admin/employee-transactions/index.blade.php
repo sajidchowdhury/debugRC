@@ -318,7 +318,7 @@
                         @forelse ($transactions as $t)
                             <tr class="{{ $t->is_reversed ? 'table-danger' : '' }}">
                                 <td>
-                                    <a href="{{ route('admin.employee-transactions.show', $t) }}"
+                                    <a href="{{ route('admin.employee-transactions.show', ['id' => $t->id]) }}"
                                        class="fw-semibold text-decoration-none">
                                         {{ $t->transaction_code }}
                                     </a>
@@ -359,7 +359,7 @@
                                     @endif
                                 </td>
                                 <td class="text-center text-nowrap">
-                                    <a href="{{ route('admin.employee-transactions.show', $t) }}"
+                                    <a href="{{ route('admin.employee-transactions.show', ['id' => $t->id]) }}"
                                        class="btn btn-sm btn-outline-secondary" title="View details">
                                         <i class="fas fa-eye"></i>
                                     </a>
@@ -400,8 +400,8 @@
         csrf_token: '{{ csrf_token() }}',
         routes: {
             'index': '{{ route("admin.employee-transactions.index") }}',
-            'show': '{{ rtrim(route("admin.employee-transactions.show", ["id" => "{id}"]), "}") }}'.replace('{id}', ''),
-            'reverse': '{{ route("admin.employee-transactions.reverse", ["id" => "{id}"]) }}'.replace('{id}', ''),
+            'show': '{{ route("admin.employee-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
+            'reverse': '{{ route("admin.employee-transactions.reverse", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
             'search': '{{ route("admin.employee-transactions.search") }}',
             'get-due': '{{ route("admin.employee-transactions.get-due") }}',
             'employee-show': '{{ url("/admin/employees") }}/',

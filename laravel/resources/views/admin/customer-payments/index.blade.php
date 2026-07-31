@@ -275,7 +275,7 @@
                         @forelse ($payments as $p)
                             <tr class="{{ $p->is_reversed ? 'table-danger' : '' }}">
                                 <td>
-                                    <a href="{{ route('admin.customer-payments.show', $p) }}"
+                                    <a href="{{ route('admin.customer-payments.show', ['id' => $p->id]) }}"
                                        class="fw-semibold text-decoration-none">
                                         {{ $p->payment_code }}
                                     </a>
@@ -316,11 +316,11 @@
                                     @endif
                                 </td>
                                 <td class="text-center text-nowrap">
-                                    <a href="{{ route('admin.customer-payments.show', $p) }}"
+                                    <a href="{{ route('admin.customer-payments.show', ['id' => $p->id]) }}"
                                        class="btn btn-sm btn-outline-secondary" title="View">
                                         <i class="fas fa-eye"></i>
                                     </a>
-                                    <a href="{{ route('admin.customer-payments.slip', $p) }}"
+                                    <a href="{{ route('admin.customer-payments.slip', ['id' => $p->id]) }}"
                                        class="btn btn-sm btn-outline-secondary" title="Print Slip" target="_blank">
                                         <i class="fas fa-receipt"></i>
                                     </a>

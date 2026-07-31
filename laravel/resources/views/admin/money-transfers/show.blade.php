@@ -57,7 +57,7 @@
             </p>
         </div>
         <div class="d-flex gap-2">
-            <a href="{{ route('admin.money-transfers.slip', $transfer->id) }}" class="btn btn-outline-light btn-sm" target="_blank">
+            <a href="{{ route('admin.money-transfers.slip', ['id' => $transfer->id]) }}" class="btn btn-outline-light btn-sm" target="_blank">
                 <i class="fas fa-print me-1"></i> Print Slip
             </a>
             <a href="{{ route('admin.money-transfers.index') }}" class="btn btn-outline-light btn-sm">
@@ -446,7 +446,7 @@
                 </div>
                 <div class="card-body d-grid gap-2">
                     {{-- Print slip --}}
-                    <a href="{{ route('admin.money-transfers.slip', $transfer->id) }}" class="btn btn-outline-primary w-100" target="_blank">
+                    <a href="{{ route('admin.money-transfers.slip', ['id' => $transfer->id]) }}" class="btn btn-outline-primary w-100" target="_blank">
                         <i class="fas fa-print me-1"></i> Print Slip
                     </a>
 
@@ -499,9 +499,9 @@
         transferCode: '{{ $transfer->transfer_code }}',
         routes: {
             'index': '{{ route("admin.money-transfers.index") }}',
-            'show': '{{ rtrim(route("admin.money-transfers.show", ["id" => "{id}"]), "}") }}'.replace('{id}', ''),
+            'show': '{{ route("admin.money-transfers.show", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
             'reverse': '{{ url("/admin/money-transfers") }}/' + {{ $transfer->id }} + '/reverse',
-            'slip': '{{ route("admin.money-transfers.slip", ["id" => "{id}"]) }}'.replace('{id}', ''),
+            'slip': '{{ route("admin.money-transfers.slip", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
         },
     };
 </script>

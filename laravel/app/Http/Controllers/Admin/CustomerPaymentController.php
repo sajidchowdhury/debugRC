@@ -174,7 +174,7 @@ class CustomerPaymentController extends Controller
                     'payment_code'       => $cached['payment_code'] ?? '',
                     'invoice_id'         => $replayInvoiceId,
                     'message'            => $cached['success_message'] ?? 'Payment already recorded (duplicate submission).',
-                    'print_receipt_url'  => route('admin.customer-payments.print-receipt', $cached['payment_id']),
+                    'print_receipt_url'  => route('admin.customer-payments.print-receipt', ['id' => $cached['payment_id']]),
                 ]);
             }
             return redirect()
@@ -266,11 +266,11 @@ class CustomerPaymentController extends Controller
                     'is_fully_paid'    => $isFullyPaid,
                     'balance_after'    => $balanceAfter,
                     'message'          => $successMessage,
-                    'print_receipt_url' => route('admin.customer-payments.print-receipt', $payment),
+                    'print_receipt_url' => route('admin.customer-payments.print-receipt', ['id' => $payment->id]),
                 ]);
             }
 
-            return redirect()->route('admin.customer-payments.show', $payment)
+            return redirect()->route('admin.customer-payments.show', ['id' => $payment->id])
                 ->with('success', $successMessage);
         } catch (\Throwable $e) {
             if ($request->expectsJson() || $request->ajax()) {
@@ -363,7 +363,7 @@ class CustomerPaymentController extends Controller
                 ]);
             }
 
-            return redirect()->route('admin.customer-payments.show', $payment)
+            return redirect()->route('admin.customer-payments.show', ['id' => $payment->id])
                 ->with('success', "Payment {$payment->payment_code} cancelled. GL + ledger reversed.");
         } catch (\Throwable $e) {
             if ($request->expectsJson() || $request->ajax()) {

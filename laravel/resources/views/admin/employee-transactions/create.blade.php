@@ -339,11 +339,11 @@
         ]),
         routes: {
             'index': '{{ route("admin.employee-transactions.index") }}',
-            'show': '{{ rtrim(route("admin.employee-transactions.show", ["id" => "{id}"]), "}") }}'.replace('{id}', ''),
+            'show': '{{ route("admin.employee-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
             'store': '{{ route("admin.employee-transactions.store") }}',
             'search': '{{ route("admin.employee-transactions.search") }}',
             'get-due': '{{ route("admin.employee-transactions.get-due") }}',
-            'reverse': '{{ route("admin.employee-transactions.reverse", ["id" => "{id}"]) }}'.replace('{id}', ''),
+            'reverse': '{{ route("admin.employee-transactions.reverse", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
             'employee-show': '{{ url("/admin/employees") }}/',
         },
     };

@@ -139,7 +139,7 @@ class EmployeeTransactionController extends Controller
                 ]);
             }
 
-            return redirect()->route('admin.employee-transactions.show', $transaction->id)
+            return redirect()->route('admin.employee-transactions.show', ['id' => $transaction->id])
                 ->with('success', $successMessage);
         } catch (\Throwable $e) {
             if ($request->expectsJson() || $request->ajax()) {
@@ -205,7 +205,7 @@ class EmployeeTransactionController extends Controller
                 ]);
             }
 
-            return redirect()->route('admin.employee-transactions.show', $transaction->id)
+            return redirect()->route('admin.employee-transactions.show', ['id' => $transaction->id])
                 ->with('success', "Transaction {$transaction->transaction_code} reversed. GL + ledger reversed.");
         } catch (\Throwable $e) {
             if ($request->expectsJson() || $request->ajax()) {

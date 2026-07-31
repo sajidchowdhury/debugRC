@@ -281,7 +281,7 @@
                                        class="btn btn-sm btn-outline-secondary" title="View details">
                                         <i class="fas fa-eye"></i>
                                     </a>
-                                    <a href="{{ route('admin.money-transfers.slip', $t->id) }}"
+                                    <a href="{{ route('admin.money-transfers.slip', ['id' => $t->id]) }}"
                                        class="btn btn-sm btn-outline-primary" title="Print slip" target="_blank">
                                         <i class="fas fa-print"></i>
                                     </a>

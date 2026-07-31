@@ -241,10 +241,10 @@
                     @endif
                 </div>
                 <div class="d-flex gap-2 mt-2 justify-content-end">
-                    <a href="{{ route('admin.customer-payments.print-receipt', $payment->id) }}" class="btn btn-outline-light btn-sm" target="_blank">
+                    <a href="{{ route('admin.customer-payments.print-receipt', ['id' => $payment->id]) }}" class="btn btn-outline-light btn-sm" target="_blank">
                         <i class="fas fa-print me-1"></i> Receipt
                     </a>
-                    <a href="{{ route('admin.customer-payments.slip', $payment) }}" class="btn btn-outline-light btn-sm" target="_blank">
+                    <a href="{{ route('admin.customer-payments.slip', ['id' => $payment->id]) }}" class="btn btn-outline-light btn-sm" target="_blank">
                         <i class="fas fa-receipt me-1"></i> Slip
                     </a>
                     <a href="{{ route('admin.customer-payments.index') }}" class="btn btn-outline-light btn-sm">
@@ -904,10 +904,10 @@
                     <h2>Actions</h2>
                 </div>
                 <div class="st-section-body d-grid gap-2">
-                    <a href="{{ route('admin.customer-payments.print-receipt', $payment->id) }}" class="btn btn-outline-primary w-100" target="_blank">
+                    <a href="{{ route('admin.customer-payments.print-receipt', ['id' => $payment->id]) }}" class="btn btn-outline-primary w-100" target="_blank">
                         <i class="fas fa-print me-1"></i> Print Receipt
                     </a>
-                    <a href="{{ route('admin.customer-payments.slip', $payment) }}" class="btn btn-outline-secondary w-100" target="_blank">
+                    <a href="{{ route('admin.customer-payments.slip', ['id' => $payment->id]) }}" class="btn btn-outline-secondary w-100" target="_blank">
                         <i class="fas fa-receipt me-1"></i> Print Slip
                     </a>
 
