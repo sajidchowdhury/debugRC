@@ -1,93 +1,207 @@
-/* Money transfers — branch-hub theme (orange) */
+/* ─────────────────────────────────────────────
+   Money Transfer Theme — Premium Design System
+   ───────────────────────────────────────────── */
 
-.money-transfer-theme {
-    --bh-primary: #e05c00;
-    --bh-secondary: #fd7e14;
-    --bh-accent: #c2410c;
+/* ─── Page Wrapper ──────────────────────────── */
+.mt-page-wrapper {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 1.5rem;
 }
 
-.money-transfer-theme .branch-hub-hero {
-    box-shadow: 0 14px 36px rgba(224, 92, 0, 0.22);
+/* ─── Color Tokens ──────────────────────────── */
+:root {
+    --mt-teal-50:  #f0fdf4;
+    --mt-teal-100: #dcfce7;
+    --mt-teal-200: #bbf7d0;
+    --mt-teal-300: #86efac;
+    --mt-teal-400: #4ade80;
+    --mt-teal-500: #22c55e;
+    --mt-teal-600: #16a34a;
+    --mt-teal-700: #15803d;
+    --mt-teal-800: #166534;
+    --mt-teal-900: #14532d;
+
+    --mt-green-50:  #ecfdf5;
+    --mt-green-100: #d1fae5;
+    --mt-green-200: #a7f3d0;
+    --mt-green-500: #10b981;
+    --mt-green-600: #059669;
+    --mt-green-700: #047857;
+    --mt-green-800: #065f46;
+
+    --mt-amber-50:  #fffbeb;
+    --mt-amber-100: #fef3c7;
+    --mt-amber-500: #f59e0b;
+    --mt-amber-700: #b45309;
+
+    --mt-blue-50:  #eff6ff;
+    --mt-blue-100: #dbeafe;
+    --mt-blue-600: #1d4ed8;
+    --mt-blue-700: #1e40af;
+
+    --mt-red-50:  #fef2f2;
+    --mt-red-100: #fee2e2;
+    --mt-red-500: #ef4444;
+    --mt-red-600: #dc2626;
+    --mt-red-700: #b91c1c;
+
+    --mt-slate-50:  #f8fafc;
+    --mt-slate-100: #f1f5f9;
+    --mt-slate-200: #e2e8f0;
+    --mt-slate-300: #cbd5e1;
+    --mt-slate-400: #94a3b8;
+    --mt-slate-500: #64748b;
+    --mt-slate-600: #475569;
+    --mt-slate-700: #334155;
+    --mt-slate-800: #1e293b;
+    --mt-slate-900: #0f172a;
 }
 
-.money-transfer-theme .branch-hub-quick a:hover {
-    border-color: #fd7e14;
-    color: #c2410c;
-    background: #fff7ed;
-}
+/* ─── Index Page Styles ─────────────────────── */
 
-.money-transfer-theme .branch-aside-tip {
-    background: #fff7ed;
-    border-color: #fed7aa;
-    color: #9a3412;
-}
-
-.money-transfer-theme .branch-form-footer .btn-primary {
-    background: linear-gradient(135deg, #fd7e14, #e05c00);
-}
-
-.mt-txn-amount {
-    font-size: 1.35rem;
-    font-weight: 700;
-    color: #fff;
-}
-
-.mt-txn-detail-grid {
+/* Stats Grid */
+.mt-stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
 }
 
-.mt-txn-detail-item {
+.mt-stat-card {
     background: #fff;
-    border: 1px solid #e8e8e8;
-    border-radius: 10px;
-    padding: 0.65rem 0.85rem;
+    border-radius: 12px;
+    padding: 1.25rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    border: 1px solid var(--mt-slate-100);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    transition: all 0.2s;
+}
+.mt-stat-card:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    transform: translateY(-2px);
+}
+.mt-stat-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+}
+.mt-stat-icon.teal { background: var(--mt-teal-50); color: var(--mt-green-700); }
+.mt-stat-icon.amber { background: var(--mt-amber-50); color: var(--mt-amber-700); }
+.mt-stat-icon.blue { background: var(--mt-blue-50); color: var(--mt-blue-600); }
+.mt-stat-icon.red { background: var(--mt-red-50); color: var(--mt-red-700); }
+
+.mt-stat-info { flex: 1; }
+.mt-stat-label { font-size: 0.75rem; color: var(--mt-slate-400); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+.mt-stat-value { font-size: 1.35rem; font-weight: 800; color: var(--mt-slate-800); margin-top: 0.15rem; }
+
+/* ─── Filter Bar ────────────────────────────── */
+.mt-filter-bar {
+    background: #fff;
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    border: 1px solid var(--mt-slate-100);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
 }
 
-.mt-txn-detail-item .label {
-    font-size: 0.7rem;
+/* ─── Table Styles ──────────────────────────── */
+.mt-table-wrap {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    border: 1px solid var(--mt-slate-100);
+    overflow: hidden;
+}
+.mt-table-wrap table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.mt-table-wrap thead th {
+    background: var(--mt-slate-50);
+    padding: 0.75rem 1rem;
+    font-size: 0.78rem;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: #6b7280;
+    letter-spacing: 0.06em;
+    color: var(--mt-slate-500);
+    border-bottom: 2px solid var(--mt-slate-200);
+    text-align: left;
 }
-
-.mt-txn-detail-item .value {
-    font-weight: 600;
-    font-size: 0.9rem;
+.mt-table-wrap tbody td {
+    padding: 0.75rem 1rem;
+    font-size: 0.88rem;
+    color: var(--mt-slate-700);
+    border-bottom: 1px solid var(--mt-slate-100);
 }
+.mt-table-wrap tbody tr:hover { background: var(--mt-slate-50); }
+.mt-table-wrap tbody tr:last-child td { border-bottom: none; }
 
-.mt-txn-reversed-banner {
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-    border-radius: 10px;
-    padding: 0.85rem 1rem;
-}
-
+/* ─── Transfer Type Pill ────────────────────── */
 .mt-txn-type-pill {
-    display: inline-block;
-    padding: 0.2rem 0.55rem;
-    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.25rem 0.65rem;
+    border-radius: 6px;
     font-size: 0.75rem;
     font-weight: 600;
-    background: #fff7ed;
-    color: #c2410c;
+    background: var(--mt-teal-50);
+    color: var(--mt-green-700);
+    border: 1px solid var(--mt-teal-200);
 }
 
-.mt-demand-preview {
-    background: #fffbeb;
-    border: 1px solid #fde68a;
-    border-radius: 10px;
-    padding: 0.85rem 1rem;
-    font-size: 0.85rem;
+/* ─── Print Slip Styles ─────────────────────── */
+@media print {
+    body * { visibility: hidden; }
+    .mt-slip, .mt-slip * { visibility: visible; }
+    .mt-slip { position: absolute; left: 0; top: 0; width: 100%; }
+    nav, .sidebar, .no-print { display: none !important; }
 }
 
-.mt-demand-preview table {
-    font-size: 0.8rem;
-    margin-bottom: 0;
+.mt-slip {
+    max-width: 720px;
+    margin: 1.5rem auto;
+    padding: 1.5rem 2rem;
+    border: 2px solid var(--mt-green-700);
+    font-family: Georgia, 'Times New Roman', serif;
+    color: #111;
 }
 
-.mt-txn-gl-table td,
-.mt-txn-ledger-table td {
-    font-size: 0.85rem;
+.mt-slip-head h2 { font-size: 1.25rem; margin-bottom: 0.25rem; }
+.mt-slip-head h3 { font-size: 1rem; font-weight: normal; margin-bottom: 0.5rem; color: var(--mt-green-700); }
+.mt-slip-code { font-family: ui-monospace, monospace; font-weight: 700; }
+.mt-slip-reversed { color: var(--mt-red-700); font-weight: 700; letter-spacing: 0.08em; }
+
+.mt-slip-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
 }
+.mt-slip-table th,
+.mt-slip-table td {
+    border: 1px solid #ccc;
+    padding: 0.45rem 0.65rem;
+    text-align: left;
+}
+.mt-slip-table .amount { font-weight: 700; font-size: 1.1rem; }
+
+.mt-slip-foot { margin-top: 2rem; font-size: 0.85rem; color: #555; }
+.mt-slip-foot .sig { margin-top: 2.5rem; }
+
+/* ─── Utility Classes ───────────────────────── */
+.mt-text-green { color: var(--mt-green-700); }
+.mt-text-red { color: var(--mt-red-700); }
+.mt-fw-700 { font-weight: 700; }
+.mt-mono { font-family: 'SF Mono', ui-monospace, monospace; }

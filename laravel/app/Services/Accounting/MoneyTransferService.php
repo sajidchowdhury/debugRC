@@ -497,9 +497,14 @@ class MoneyTransferService
      */
     private function generateTransferCode(): string
     {
-        $period = now()->format('Ymd');
-        $n = $this->documentSequence->next('money_transfer', $period);
-        return 'MT-' . $period . '-' . str_pad((string) $n, 5, '0', STR_PAD_LEFT);
+        $datePart = now()->format('Ymd');
+        return DocumentSequenceService::nextCode(
+            docType:   'money_transfer',
+            prefix:    'MT',
+            datePart:  $datePart,
+            padLength: 5,
+            periodKey: $datePart,
+        );
     }
 
     /**

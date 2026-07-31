@@ -1,5 +1,11 @@
 @extends('layouts.admin')
 
+@section('title', $title)
+
+@push('styles')
+<link rel="stylesheet" href="{{ asset('assets/css/money-transfer-theme.css') }}">
+@endpush
+
 @section('content')
 @php
     // Defaults for filter controls
@@ -309,18 +315,28 @@
 </div>
 
 @push('scripts')
+<script src="{{ asset('assets/js/MoneyTransfer.js') }}"></script>
 <script>
+window.MT_BOOT = {
+    routes: {
+        reverse: '{{ route("admin.money-transfers.reverse", ["id" => "__ID__"]) }}',
+        index: '{{ route("admin.money-transfers.index") }}',
+    }
+};
+
 $(function () {
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
 
     // Client-side DataTable for ordering and quick search on current page
-    $('#dataTable').DataTable({
-        paging: false,
-        info: false,
-        ordering: true,
-        dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
-        language: { search: 'Filter rows:', emptyTable: 'No transfers on this page.' }
-    });
+    if ($.fn.DataTable && $('#dataTable').length) {
+        $('#dataTable').DataTable({
+            paging: false,
+            info: false,
+            ordering: true,
+            dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
+            language: { search: 'Filter rows:', emptyTable: 'No transfers on this page.' }
+        });
+    }
 });
 </script>
 @endpush

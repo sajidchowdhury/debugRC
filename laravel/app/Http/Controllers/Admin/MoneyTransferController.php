@@ -96,6 +96,7 @@ class MoneyTransferController extends Controller
                     'transfer_id'   => $transfer->id,
                     'transfer_code' => $transfer->transfer_code,
                     'message'       => $successMessage,
+                    'redirect_url'  => route('admin.money-transfers.show', ['id' => $transfer->id]),
                 ]);
             }
 
