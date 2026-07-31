@@ -775,7 +775,13 @@ class CustomerPaymentService
         if ($amount < 0.01 || !$payment->bank_id) return null;
 
         // Check if the bank belongs to a different branch.
-        $bankBranchId = DB::table('banks')->where('id', $payment->bank_id)->value('branch_id');
+        // NOTE: The `banks` table does NOT have a `branch_id` column — banks
+        // are not branch-scoped in the current schema. Until branch_id is added
+        // to the banks table, intercompany settlement is not applicable.
+        $bankBranchId = null;
+        if (\Schema::hasColumn('banks', 'branch_id')) {
+            $bankBranchId = DB::table('banks')->where('id', $payment->bank_id)->value('branch_id');
+        }
 
         // If bank has no branch or same branch → no intercompany needed.
         if (!$bankBranchId || (int) $bankBranchId === $payment->branch_id) {

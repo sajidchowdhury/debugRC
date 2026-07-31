@@ -383,7 +383,7 @@
                             @foreach ($banks as $bk)
                                 <option value="{{ $bk->id }}"
                                     {{ (string) $oldBank === (string) $bk->id ? 'selected' : '' }}>
-                                    {{ $bk->bank_code }} — {{ $bk->bank_name }}
+                                    {{ $bk->bank_name }}@if (!empty($bk->account_number)) — {{ $bk->account_number }}@endif
                                 </option>
                             @endforeach
                         </select>

@@ -341,8 +341,8 @@
                                     @if ($payment->bank)
                                         <i class="fas fa-university me-1 text-muted"></i>
                                         {{ $payment->bank->bank_name }}
-                                        @if (!empty($payment->bank->bank_code))
-                                            <span class="text-muted small">({{ $payment->bank->bank_code }})</span>
+                                        @if (!empty($payment->bank->account_number))
+                                            <span class="text-muted small">({{ $payment->bank->account_number }})</span>
                                         @endif
                                         @if (!empty($payment->bank->account_no))
                                             <div class="small text-muted mt-1"><i class="fas fa-hashtag me-1"></i>A/C: {{ $payment->bank->account_no }}</div>
