@@ -172,6 +172,7 @@ class MenuService
             'customertransaction' => 'admin.customer-payments.index',
             'suppliertransaction' => 'admin.supplier-transactions.index',
             'employeetransaction' => 'admin.employee-transactions.index',
+            'moneytransfer' => 'admin.money-transfers.index',
             'reconciliation' => 'admin.reconciliation.index',
             'report' => 'admin.reports.index',
         ];

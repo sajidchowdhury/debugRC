@@ -39,6 +39,7 @@ use App\Http\Controllers\Admin\SalesChallanController;
 use App\Http\Controllers\Admin\CustomerPaymentController;
 use App\Http\Controllers\Admin\SupplierTransactionController;
 use App\Http\Controllers\Admin\EmployeeTransactionController;
+use App\Http\Controllers\Admin\MoneyTransferController;
 use App\Http\Controllers\Admin\SalesReturnController;
 use App\Http\Controllers\Admin\SalesGuideController;
 use App\Http\Controllers\Admin\GoLiveChecklistController;
@@ -1336,6 +1337,27 @@ Route::middleware('auth')->group(function () {
         ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
 
     // ============================================================
+
+    // ============================================================
+    // Phase 4 (Accounts Sub-Ledger): Money Transfers
+    // RBAC — accountant/manager/admin only.
+    // ============================================================
+    Route::prefix('admin/money-transfers')->name('admin.money-transfers.')->group(function () {
+        Route::get('audit', [MoneyTransferController::class, 'audit'])
+            ->name('audit')->middleware('role:accountant,manager,admin');
+        Route::post('{id}/reverse', [MoneyTransferController::class, 'reverse'])
+            ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+        Route::get('{id}/slip', [MoneyTransferController::class, 'slip'])
+            ->name('slip')->middleware('role:accountant,manager,admin');
+    });
+    Route::resource('admin/money-transfers', MoneyTransferController::class)
+        ->only(['index', 'create', 'show'])
+        ->names('admin.money-transfers')
+        ->middleware('role:accountant,manager,admin');
+    Route::resource('admin/money-transfers', MoneyTransferController::class)
+        ->only(['store'])
+        ->names('admin.money-transfers')
+        ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
     // Phase 8.5 + Phase 2: Sales Returns (stock IN at ORIGINAL avg_cost + GL)
     // P0-7: RBAC — create/store is salesman/manager/admin; confirm is
     // warehouse_manager/accountant/manager/admin (two-step return);
