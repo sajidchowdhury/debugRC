@@ -1257,6 +1257,8 @@ Route::middleware('auth')->group(function () {
     Route::prefix('admin/customer-payments')->name('admin.customer-payments.')->group(function () {
         Route::get('outstanding-invoices', [CustomerPaymentController::class, 'getOutstandingInvoices'])
             ->name('outstanding-invoices')->middleware('role:salesman,accountant,manager,admin');
+        Route::post('get-customer-due', [CustomerPaymentController::class, 'getCustomerDue'])
+            ->name('get-customer-due')->middleware('role:salesman,accountant,manager,admin');
         // Phase 3B: Audit logs
         Route::get('audit', [CustomerPaymentController::class, 'audit'])
             ->name('audit')->middleware('role:accountant,manager,admin');

@@ -346,6 +346,7 @@
 </div>
 
 @push('scripts')
+<link rel="stylesheet" href="/assets/css/supplier-transaction-theme.css">
 <script>
 $(function () {
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });

@@ -567,20 +567,10 @@ class SupplierTransactionService
         $amount = (float) $payment->amount;
         if ($amount < 0.01 || !$payment->bank_id) return null;
 
-        // Check if the bank belongs to a different branch.
         // NOTE: The `banks` table does NOT have a `branch_id` column — banks
-        // are not branch-scoped in the current schema. Until branch_id is added
-        // to the banks table, intercompany settlement is not applicable.
-        // This is a safe no-op: same-branch payment, no intercompany needed.
-        $bankBranchId = null;
-        if (\Schema::hasColumn('banks', 'branch_id')) {
-            $bankBranchId = DB::table('banks')->where('id', $payment->bank_id)->value('branch_id');
-        }
-
-        // If bank has no branch or same branch → no intercompany needed.
-        if (!$bankBranchId || (int) $bankBranchId === $payment->branch_id) {
-            return null;
-        }
+        // are not branch-scoped in the current schema. Intercompany settlement
+        // requires bank→branch mapping which doesn't exist yet. Skip entirely.
+        return null;
 
         $fromBranchId = $payment->branch_id;        // supplier's branch
         $toBranchId = (int) $bankBranchId;          // bank's branch

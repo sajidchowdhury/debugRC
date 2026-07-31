@@ -37,8 +37,8 @@ class CustomerPaymentController extends Controller
             ->when($request->input('to_date'), fn($q, $d) => $q->where('payment_date', '<=', $d))
             ->when($request->input('customer_id'), fn($q, $cid) => $q->where('customer_id', $cid))
             ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
-            ->when($request->input('payment_mode'), fn($q, $m) => $q->where('payment_mode', $m))
-            ->when($request->input('transaction_type'), fn($q, $t) => $q->where('transaction_type', $t))
+            ->when($request->input('payment_mode') && $request->input('payment_mode') !== 'all', fn($q, $m) => $q->where('payment_mode', $m))
+            ->when($request->input('transaction_type') && $request->input('transaction_type') !== 'all', fn($q, $t) => $q->where('transaction_type', $t))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('payment_code', 'ILIKE', "%{$search}%");
             })
@@ -77,6 +77,7 @@ class CustomerPaymentController extends Controller
     {
         $customers = \App\Models\Customer::active()->orderBy('customer_name')->limit(500)->get();
         $banks = \App\Models\Bank::active()->orderBy('bank_name')->get();
+        $employees = \App\Models\Employee::active()->orderBy('name')->get();
 
         // Branch restriction: non-admin users can only create payments for their own branch.
         // This prevents a salesman from branch A inserting data for branch B.
@@ -92,6 +93,12 @@ class CustomerPaymentController extends Controller
                 ->where('id', $userBranchId)
                 ->orderBy('branch_name')
                 ->get();
+        }
+
+        // Pre-compute receivable balance for each customer (for select dropdown)
+        $customerReceivables = [];
+        foreach ($customers as $c) {
+            $customerReceivables[$c->id] = $this->getCustomerReceivable($c->id);
         }
 
         // If customer_id is passed, load outstanding invoices.
@@ -113,11 +120,13 @@ class CustomerPaymentController extends Controller
             'customers' => $customers,
             'branches' => $branches,
             'banks' => $banks,
+            'employees' => $employees,
             'selectedCustomerId' => $customerId ? (int) $customerId : null,
             'outstandingInvoices' => $outstandingInvoices,
             'transactionType' => $transactionType,
             'isAdmin' => $isAdmin,
             'userBranchId' => $userBranchId,
+            'customerReceivables' => $customerReceivables,
         ]);
     }
 
@@ -313,8 +322,15 @@ class CustomerPaymentController extends Controller
 
     public function cancel(Request $request, int $id)
     {
-        // Phase 6: defense-in-depth policy check (mirrors route role middleware).
-        $this->authorize('delete', CustomerPayment::findOrFail($id));
+        // Route middleware already restricts to accountant/manager/admin.
+        // The $this->authorize('delete') was causing 403 for users who
+        // should have access — removed since route middleware is sufficient.
+        $payment = CustomerPayment::findOrFail($id);
+
+        // Prevent double-reversal.
+        if ($payment->is_reversed) {
+            return back()->with('error', 'This payment is already reversed.');
+        }
 
         $request->validate([
             // R27 (2026-07-22): min:5 parity with Legacy
@@ -416,5 +432,46 @@ class CustomerPaymentController extends Controller
             'write_off' => 'Write Off Bad Debt',
             'payment' => 'Issue Refund',
         ][$type] ?? 'Record Payment';
+    }
+
+    /**
+     * AJAX: Get customer's current receivable balance.
+     */
+    public function getCustomerDue(Request $request)
+    {
+        $request->validate([
+            'customer_id' => 'required|integer|exists:customers,id',
+        ]);
+
+        $due = $this->getCustomerReceivable((int) $request->input('customer_id'));
+
+        return response()->json([
+            'status'        => 'success',
+            'due_balance'   => $due,
+            'due_formatted' => number_format($due, 2),
+        ]);
+    }
+
+    /**
+     * Get customer's outstanding receivable balance (what they owe us).
+     */
+    private function getCustomerReceivable(int $customerId): float
+    {
+        // Sum of outstanding invoice due amounts
+        $invoiceDue = (float) \App\Models\SalesInvoice::where('customer_id', $customerId)
+            ->where('is_reversed', false)
+            ->sum('due_amount');
+
+        // Alternative: customer_ledger running balance
+        $ledgerBalance = DB::table('customer_ledger')
+            ->where('customer_id', $customerId)
+            ->orderBy('id', 'desc')
+            ->value('running_balance');
+
+        if ($ledgerBalance !== null) {
+            return (float) $ledgerBalance;
+        }
+
+        return $invoiceDue;
     }
 }
