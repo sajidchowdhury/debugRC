@@ -300,7 +300,7 @@
     <div class="card border-0 shadow-sm">
         <div class="card-body">
             <div class="table-responsive">
-                <table class="table table-sm table-striped table-hover align-middle mb-0" id="dataTable">
+                <table class="table table-sm table-striped table-hover align-middle mb-0" id="empTxnTable">
                     <thead class="table-light">
                         <tr>
                             <th>Code</th>
@@ -418,7 +418,7 @@ $(function () {
     // Client-side DataTable for ordering and quick search on current page.
     // Only initialize DataTable when there are actual data rows (not just the
     // empty colspan row), otherwise DataTables throws a column-count warning.
-    var $dataTable = $('#dataTable');
+    var $dataTable = $('#empTxnTable');
     var hasDataRows = $dataTable.find('tbody tr').filter(function () {
         return $(this).find('td[colspan]').length === 0;
     }).length > 0;
