@@ -1,41 +1,39 @@
 /**
- * Manual journal create + details (Phase 6A)
+ * Manual journal create + details (Phase 6)
+ *
+ * Rewritten to use Laravel named routes (via MJ_BOOT config) instead of the
+ * legacy CodeIgniter-style URLs (ManualJournal/store, ManualJournal/reverse).
+ * Matches the element IDs in resources/views/admin/manual-journals/create.blade.php
+ * and show.blade.php.
  */
 (function () {
     'use strict';
 
-    const base = (document.getElementById('base_url') || {}).value || '/';
-    const csrf = document.querySelector('[name="csrf_token"]')?.value || window.CSRF_TOKEN || '';
+    var csrf = window.MJ_BOOT?.csrf_token || document.querySelector('meta[name="csrf-token"]')?.content || '';
 
     function money(n) {
         return (Math.round(n * 100) / 100).toFixed(2);
     }
 
     function parseAmount(el) {
-        const v = parseFloat(el?.value || '0');
+        var v = parseFloat(el?.value || '0');
         return Number.isFinite(v) && v > 0 ? v : 0;
     }
 
-    function escapeHtml(s) {
-        return String(s ?? '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
-    }
-
     /* ---------- Create form ---------- */
-    const createRoot = document.getElementById('manualJournalCreate');
+    var createRoot = document.getElementById('manualJournalCreate');
     if (createRoot) {
-        const form = document.getElementById('manualJournalForm');
-        const linesBody = document.getElementById('linesBody');
-        const template = document.getElementById('lineRowTemplate');
-        const btnAdd = document.getElementById('btnAddLine');
-        const btnSubmit = document.getElementById('btnSubmit');
-        const totalDebitEl = document.getElementById('totalDebit');
-        const totalCreditEl = document.getElementById('totalCredit');
-        const balanceStatus = document.getElementById('balanceStatus');
-        const balancePreview = document.getElementById('balancePreview');
+        var form = document.getElementById('manualJournalForm');
+        var linesBody = document.getElementById('linesBody');
+        var template = document.getElementById('lineRowTemplate');
+        var btnAdd = document.getElementById('btnAddLine');
+        var btnSubmit = document.getElementById('btnSubmit');
+        var btnSaveDraft = document.getElementById('btnSaveDraft');
+        var totalDebitCell = document.getElementById('totalDebitCell');
+        var totalCreditCell = document.getElementById('totalCreditCell');
+        var balanceBadge = document.getElementById('balanceBadge');
+        var linesInput = document.getElementById('linesInput');
+        var statusInput = document.getElementById('statusInput');
 
         function addLine() {
             if (!template || !linesBody) return;
@@ -46,7 +44,7 @@
 
         function bindLineEvents(row) {
             if (!row) return;
-            row.querySelector('.mj-remove')?.addEventListener('click', () => {
+            row.querySelector('.mj-remove')?.addEventListener('click', function () {
                 if (linesBody.querySelectorAll('.mj-line-row').length <= 2) {
                     alert('At least two lines are required.');
                     return;
@@ -54,146 +52,133 @@
                 row.remove();
                 recalc();
             });
-            row.querySelectorAll('.mj-debit, .mj-credit, .mj-ledger, .mj-line-desc').forEach((el) => {
+            row.querySelectorAll('.mj-debit, .mj-credit, .mj-ledger, .mj-line-desc').forEach(function (el) {
                 el.addEventListener('input', recalc);
                 el.addEventListener('change', recalc);
             });
             row.querySelector('.mj-debit')?.addEventListener('input', function () {
                 if (parseAmount(this) > 0) {
-                    const cr = row.querySelector('.mj-credit');
+                    var cr = row.querySelector('.mj-credit');
                     if (cr) cr.value = '';
                 }
             });
             row.querySelector('.mj-credit')?.addEventListener('input', function () {
                 if (parseAmount(this) > 0) {
-                    const dr = row.querySelector('.mj-debit');
+                    var dr = row.querySelector('.mj-debit');
                     if (dr) dr.value = '';
                 }
             });
         }
 
         function collectLines() {
-            const lines = [];
-            linesBody.querySelectorAll('.mj-line-row').forEach((row) => {
-                const ledgerId = parseInt(row.querySelector('.mj-ledger')?.value || '0', 10);
-                const debit = parseAmount(row.querySelector('.mj-debit'));
-                const credit = parseAmount(row.querySelector('.mj-credit'));
-                const desc = row.querySelector('.mj-line-desc')?.value?.trim() || '';
+            var lines = [];
+            linesBody.querySelectorAll('.mj-line-row').forEach(function (row) {
+                var ledgerId = parseInt(row.querySelector('.mj-ledger')?.value || '0', 10);
+                var debit = parseAmount(row.querySelector('.mj-debit'));
+                var credit = parseAmount(row.querySelector('.mj-credit'));
+                var desc = row.querySelector('.mj-line-desc')?.value?.trim() || '';
                 if (ledgerId > 0 && (debit > 0 || credit > 0)) {
-                    lines.push({ ledger_id: ledgerId, debit, credit, description: desc });
+                    lines.push({ ledger_id: ledgerId, debit: debit, credit: credit, description: desc });
                 }
             });
             return lines;
         }
 
         function recalc() {
-            let totalDr = 0;
-            let totalCr = 0;
-            let activeLines = 0;
+            var totalDr = 0;
+            var totalCr = 0;
+            var activeLines = 0;
 
-            linesBody.querySelectorAll('.mj-line-row').forEach((row) => {
-                const dr = parseAmount(row.querySelector('.mj-debit'));
-                const cr = parseAmount(row.querySelector('.mj-credit'));
-                const ledgerId = parseInt(row.querySelector('.mj-ledger')?.value || '0', 10);
+            linesBody.querySelectorAll('.mj-line-row').forEach(function (row) {
+                var dr = parseAmount(row.querySelector('.mj-debit'));
+                var cr = parseAmount(row.querySelector('.mj-credit'));
+                var ledgerId = parseInt(row.querySelector('.mj-ledger')?.value || '0', 10);
                 totalDr += dr;
                 totalCr += cr;
                 if (ledgerId > 0 && (dr > 0 || cr > 0)) activeLines++;
-                row.classList.toggle('mj-line-error', dr > 0 && cr > 0);
             });
 
-            totalDebitEl.textContent = money(totalDr);
-            totalCreditEl.textContent = money(totalCr);
+            if (totalDebitCell) totalDebitCell.textContent = money(totalDr);
+            if (totalCreditCell) totalCreditCell.textContent = money(totalCr);
 
-            const balanced = activeLines >= 2 && Math.abs(totalDr - totalCr) < 0.005;
-            balanceStatus.textContent = balanced ? 'Balanced ✓' : 'Out of balance';
-            balanceStatus.className = 'mj-balance-badge ' + (balanced ? 'balanced' : 'unbalanced');
-            btnSubmit.disabled = !balanced;
-
-            renderPreview(totalDr, totalCr, balanced);
-        }
-
-        function renderPreview(totalDr, totalCr, balanced) {
-            if (!balancePreview) return;
-            if (!balanced) {
-                const diff = Math.abs(totalDr - totalCr);
-                balancePreview.innerHTML = '<p class="small text-danger mb-0">Difference: <strong>' + money(diff) + '</strong></p>';
-                return;
+            var balanced = activeLines >= 2 && Math.abs(totalDr - totalCr) < 0.005;
+            if (balanceBadge) {
+                balanceBadge.textContent = balanced ? 'Balanced ✓' : 'Out of balance';
+                balanceBadge.className = 'badge ' + (balanced ? 'bg-success' : 'bg-danger');
             }
-            let html = '<table class="table table-sm mb-0 acct-gl-preview-table"><thead><tr><th>Side</th><th class="text-end">Amount</th></tr></thead><tbody>';
-            html += '<tr><td>Total debits</td><td class="text-end fw-bold">' + money(totalDr) + '</td></tr>';
-            html += '<tr><td>Total credits</td><td class="text-end fw-bold">' + money(totalCr) + '</td></tr></tbody></table>';
-            balancePreview.innerHTML = html;
+            if (btnSubmit) btnSubmit.disabled = !balanced;
+
+            // Update the hidden lines input for form submission.
+            if (linesInput) {
+                linesInput.value = JSON.stringify(collectLines());
+            }
         }
 
         btnAdd?.addEventListener('click', addLine);
+
+        // Start with 2 empty lines.
         addLine();
         addLine();
 
-        form?.addEventListener('submit', async (e) => {
+        // "Save as draft" button — sets status to draft then submits.
+        btnSaveDraft?.addEventListener('click', function (e) {
             e.preventDefault();
-            if (btnSubmit.disabled) return;
+            if (statusInput) statusInput.value = 'draft';
+            // Drafts don't need to be balanced — enable submit temporarily.
+            if (btnSubmit) btnSubmit.disabled = false;
+            // Recompute lines input before submit.
+            if (linesInput) linesInput.value = JSON.stringify(collectLines());
+            if (form) form.requestSubmit(btnSubmit);
+        });
 
-            const lines = collectLines();
-            const fd = new FormData(form);
+        // "Post journal" button — ensures status is post.
+        btnSubmit?.addEventListener('click', function () {
+            if (statusInput) statusInput.value = 'post';
+            if (linesInput) linesInput.value = JSON.stringify(collectLines());
+        });
+
+        // Intercept form submit for AJAX.
+        form?.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            if (btnSubmit && btnSubmit.disabled && statusInput.value !== 'draft') return;
+
+            var lines = collectLines();
+            if (linesInput) linesInput.value = JSON.stringify(lines);
+
+            var fd = new FormData(form);
             fd.set('lines', JSON.stringify(lines));
 
-            btnSubmit.disabled = true;
-            btnSubmit.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Posting…';
+            var orig = btnSubmit?.innerHTML;
+            if (btnSubmit) {
+                btnSubmit.disabled = true;
+                btnSubmit.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Saving…';
+            }
 
             try {
-                const res = await fetch(base + 'ManualJournal/store', {
+                var res = await fetch(form.action, {
                     method: 'POST',
                     body: fd,
                     credentials: 'same-origin',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
                 });
-                const data = await res.json();
-                if (data.status === 'success' && data.redirect_url) {
-                    window.location.href = data.redirect_url;
+                var data = await res.json();
+                if (data.status === 'success') {
+                    if (data.redirect_url) {
+                        window.location.href = data.redirect_url;
+                    } else {
+                        window.location.href = window.MJ_BOOT?.routes?.index || '/admin/manual-journals';
+                    }
                     return;
                 }
-                alert(data.message || 'Could not post journal.');
+                alert(data.message || 'Could not save journal.');
             } catch (err) {
                 alert('Network error. Please try again.');
             } finally {
-                btnSubmit.disabled = false;
-                btnSubmit.innerHTML = '<i class="fas fa-check me-1"></i> Post journal';
-                recalc();
-            }
-        });
-    }
-
-    /* ---------- Details reverse ---------- */
-    const detailsRoot = document.getElementById('manualJournalDetails');
-    if (detailsRoot) {
-        detailsRoot.querySelector('.js-mj-reverse')?.addEventListener('click', async (ev) => {
-            const btn = ev.currentTarget;
-            const id = btn.getAttribute('data-id');
-            const entryNo = btn.getAttribute('data-entry-no') || '';
-            const reason = prompt('Reason for reversing ' + entryNo + ':');
-            if (!reason || !reason.trim()) return;
-
-            const fd = new FormData();
-            fd.append('csrf_token', csrf);
-            fd.append('id', id);
-            fd.append('reason', reason.trim());
-
-            btn.disabled = true;
-            try {
-                const res = await fetch(base + 'ManualJournal/reverse', {
-                    method: 'POST',
-                    body: fd,
-                    credentials: 'same-origin',
-                });
-                const data = await res.json();
-                if (data.status === 'success') {
-                    window.location.reload();
-                    return;
+                if (btnSubmit) {
+                    btnSubmit.disabled = false;
+                    btnSubmit.innerHTML = orig;
                 }
-                alert(data.message || 'Could not reverse journal.');
-            } catch (err) {
-                alert('Network error.');
-            } finally {
-                btn.disabled = false;
+                recalc();
             }
         });
     }

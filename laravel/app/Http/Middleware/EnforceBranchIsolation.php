@@ -180,6 +180,12 @@ class EnforceBranchIsolation
         if (str_contains($path, 'supplier-transactions') || str_contains($path, 'supplier-payments')) {
             return 'supplier_payments';
         }
+        if (str_contains($path, 'employee-transactions')) {
+            return 'employee_transactions';
+        }
+        if (str_contains($path, 'manual-journals')) {
+            return 'manual_journals';
+        }
         // --- Phase 1 (purchase parity) ---
         if (str_contains($path, 'purchase-orders')) {
             return 'purchase_orders';
