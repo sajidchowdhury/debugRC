@@ -26,6 +26,30 @@ class MoneyTransferController extends Controller
         private MoneyTransferService $service
     ) {}
 
+    /**
+     * Recover from PostgreSQL SQLSTATE[25P02] failed transaction.
+     *
+     * When a prior SQL error (e.g. varchar overflow) leaves the current
+     * database connection in an aborted transaction state, PostgreSQL rejects
+     * ALL subsequent queries on that connection until ROLLBACK. This method:
+     *   1. Rolls back the failed transaction
+     *   2. Purges the PDO connection from Laravel's connection pool
+     *   3. Gets a completely fresh connection
+     */
+    private function recoverFromFailedTransaction(): void
+    {
+        try {
+            DB::rollBack();
+        } catch (\Throwable $_) {
+            // Ignore — there may not be an active transaction
+        }
+
+        // Purge the connection completely — this closes the PDO and removes
+        // it from the connection manager, so the next query gets a brand-new
+        // socket to PostgreSQL.
+        DB::purge();
+    }
+
     public function index(Request $request)
     {
         $filters = [
@@ -41,11 +65,8 @@ class MoneyTransferController extends Controller
             $transfers = $this->service->getFilteredTransfers($filters, $listBranchId);
             $stats = $this->service->getStats($listBranchId);
         } catch (\Throwable $e) {
-            // If PostgreSQL transaction is in failed state (SQLSTATE 25P02),
-            // roll back and retry once with a fresh connection.
             if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
-                DB::rollBack();
-                DB::reconnect();
+                $this->recoverFromFailedTransaction();
                 $transfers = $this->service->getFilteredTransfers($filters, $listBranchId);
                 $stats = $this->service->getStats($listBranchId);
             } else {
@@ -117,6 +138,11 @@ class MoneyTransferController extends Controller
             return redirect()->route('admin.money-transfers.show', ['id' => $transfer->id])
                 ->with('success', $successMessage);
         } catch (\Throwable $e) {
+            // Recover from failed transaction state so next request works
+            if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
+                $this->recoverFromFailedTransaction();
+            }
+
             if ($request->expectsJson() || $request->ajax()) {
                 return response()->json([
                     'status'  => 'error',
@@ -149,11 +175,8 @@ class MoneyTransferController extends Controller
                 'canReverse'        => !$transfer->is_reversed,
             ]);
         } catch (\Throwable $e) {
-            // If PostgreSQL transaction is in failed state (SQLSTATE 25P02),
-            // roll back and retry once with a fresh connection.
             if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
-                DB::rollBack();
-                DB::reconnect();
+                $this->recoverFromFailedTransaction();
 
                 $transfer = MoneyTransfer::with([
                     'fromBranch', 'toBranch', 'fromBank', 'toBank',
@@ -205,6 +228,10 @@ class MoneyTransferController extends Controller
             return redirect()->route('admin.money-transfers.show', ['id' => $transfer->id])
                 ->with('success', "Transfer {$transfer->transfer_code} reversed. GL + bank balance restored.");
         } catch (\Throwable $e) {
+            if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
+                $this->recoverFromFailedTransaction();
+            }
+
             if ($request->expectsJson() || $request->ajax()) {
                 return response()->json([
                     'status'  => 'error',
@@ -217,9 +244,20 @@ class MoneyTransferController extends Controller
 
     public function slip(int $id)
     {
-        $transfer = MoneyTransfer::with([
-            'fromBranch', 'toBranch', 'fromBank', 'toBank',
-        ])->findOrFail($id);
+        try {
+            $transfer = MoneyTransfer::with([
+                'fromBranch', 'toBranch', 'fromBank', 'toBank',
+            ])->findOrFail($id);
+        } catch (\Throwable $e) {
+            if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
+                $this->recoverFromFailedTransaction();
+                $transfer = MoneyTransfer::with([
+                    'fromBranch', 'toBranch', 'fromBank', 'toBank',
+                ])->findOrFail($id);
+            } else {
+                throw $e;
+            }
+        }
 
         return view('admin.money-transfers.slip', [
             'title'    => 'Money Transfer Slip',
@@ -229,11 +267,24 @@ class MoneyTransferController extends Controller
 
     public function audit()
     {
-        $logs = DB::table('user_audit_log')
-            ->where('action', 'LIKE', 'money_transfer_%')
-            ->orderBy('created_at', 'desc')
-            ->limit(300)
-            ->get();
+        try {
+            $logs = DB::table('user_audit_log')
+                ->where('action', 'LIKE', 'money_transfer_%')
+                ->orderBy('created_at', 'desc')
+                ->limit(300)
+                ->get();
+        } catch (\Throwable $e) {
+            if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
+                $this->recoverFromFailedTransaction();
+                $logs = DB::table('user_audit_log')
+                    ->where('action', 'LIKE', 'money_transfer_%')
+                    ->orderBy('created_at', 'desc')
+                    ->limit(300)
+                    ->get();
+            } else {
+                throw $e;
+            }
+        }
 
         return view('admin.money-transfers.audit', [
             'title' => 'Money Transfer Audit Logs',
