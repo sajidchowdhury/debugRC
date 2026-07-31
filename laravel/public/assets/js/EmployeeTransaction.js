@@ -307,7 +307,8 @@
             }
 
             try {
-                const res = await fetch(route('store'), {
+                const storeUrl = form.action || route('store');
+                const res = await fetch(storeUrl, {
                     method: 'POST',
                     body: formData,
                     credentials: 'same-origin',
