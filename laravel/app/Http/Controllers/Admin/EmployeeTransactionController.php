@@ -283,16 +283,13 @@ class EmployeeTransactionController extends Controller
      */
     private function resolveIndexFilters(Request $request): array
     {
-        $today = now()->format('Y-m-d');
-
         $dateFrom = $request->input('date_from');
         $dateTo = $request->input('date_to');
 
-        // Default: today if no dates provided.
-        if (!$dateFrom && !$dateTo) {
-            $dateFrom = $today;
-            $dateTo = $today;
-        }
+        // No default date filter — show all records unless user explicitly filters.
+        // Previously defaulted to today-only which caused transactions created on
+        // other days to be hidden from the index (while stats cards showed all-time
+        // totals), making it look like no transactions existed.
 
         return [
             'date_from'        => $dateFrom,

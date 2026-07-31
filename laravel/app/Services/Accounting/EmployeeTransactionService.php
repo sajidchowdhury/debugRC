@@ -315,10 +315,10 @@ class EmployeeTransactionService
             $query->where('is_reversed', false);
         }
 
-        // Default date filter: today if no dates provided.
-        if (empty($filters['date_from']) && empty($filters['date_to']) && empty($filters['status'])) {
-            $query->where('transaction_date', now()->format('Y-m-d'));
-        }
+        // No default date filter — show all records when no dates provided.
+        // This matches the summary cards which have no date restriction,
+        // and matches the SupplierTransactionService behavior. Previously
+        // defaulted to today-only which hid transactions from other days.
 
         return $query->orderBy('transaction_date', 'desc')
             ->orderBy('id', 'desc')
