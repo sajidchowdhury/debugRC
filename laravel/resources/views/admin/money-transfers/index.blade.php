@@ -2,10 +2,6 @@
 
 @section('title', $title)
 
-@push('styles')
-<link rel="stylesheet" href="{{ asset('assets/css/money-transfer-theme.css') }}">
-@endpush
-
 @section('content')
 @php
     // Defaults for filter controls
@@ -230,7 +226,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @forelse ($transfers as $t)
+                        @foreach ($transfers as $t)
                             <tr class="{{ $t->is_reversed ? 'table-danger' : '' }}">
                                 <td>
                                     <a href="{{ route('admin.money-transfers.show', ['id' => $t->id]) }}"
@@ -293,15 +289,7 @@
                                     </a>
                                 </td>
                             </tr>
-                        @empty
-                            <tr>
-                                <td colspan="10" class="text-center text-muted py-5">
-                                    <i class="fas fa-inbox fa-2x mb-2 d-block opacity-50"></i>
-                                    No transfers found. Try adjusting filters or
-                                    <a href="{{ route('admin.money-transfers.create') }}">record a new transfer</a>.
-                                </td>
-                            </tr>
-                        @endforelse
+                        @endforeach
                     </tbody>
                 </table>
             </div>
