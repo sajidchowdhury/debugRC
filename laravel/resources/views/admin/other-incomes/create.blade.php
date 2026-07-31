@@ -55,6 +55,28 @@
     }
     .oi-section-body { padding: 1.25rem; }
 
+    /* Amount highlight card */
+    .oi-amount-card {
+        background: linear-gradient(135deg, #f0fdf4, #ecfdf5);
+        border: 1px solid #bbf7d0;
+        border-radius: 0.75rem;
+        padding: 1rem;
+        text-align: center;
+    }
+    .oi-amount-value {
+        font-size: 1.5rem;
+        font-weight: 800;
+        color: #15803d;
+        font-variant-numeric: tabular-nums;
+    }
+    .oi-amount-label {
+        font-size: 0.75rem;
+        color: #15803d;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
     /* GL Preview */
     .oi-gl-preview {
         background: #f8fafc;
@@ -123,22 +145,14 @@
         color: #fff;
         border: none;
         border-radius: 0.5rem;
-        padding: 0.55rem 1.5rem;
+        padding: 0.6rem 1.5rem;
         font-weight: 600;
-        font-size: 0.88rem;
-        transition: transform 0.15s, box-shadow 0.15s;
-        box-shadow: 0 4px 12px rgba(22,163,74,0.25);
+        font-size: 0.9rem;
+        transition: all 0.2s;
+        box-shadow: 0 4px 12px rgba(22,163,74,0.3);
     }
-    .oi-btn-submit:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 6px 16px rgba(22,163,74,0.3);
-        color: #fff;
-    }
-    .oi-btn-submit:disabled {
-        opacity: 0.65;
-        transform: none;
-        box-shadow: none;
-    }
+    .oi-btn-submit:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(22,163,74,0.4); color: #fff; }
+    .oi-btn-submit:disabled { opacity: 0.65; transform: none; box-shadow: none; }
 
     /* Info banner */
     .oi-info-banner {
@@ -155,6 +169,7 @@
         .oi-hero h1 { font-size: 1.1rem; }
         .oi-section-body { padding: 0.85rem; }
         .oi-submit-bar { position: static; border-radius: 0.75rem; }
+        .oi-amount-value { font-size: 1.25rem; }
     }
 </style>
 
@@ -166,13 +181,14 @@
                 <h1>
                     <i class="fas fa-arrow-trend-up me-2"></i>Record Other Income
                 </h1>
-                <p class="oi-subtitle mb-2">
-                    GL posting: <strong>Dr Cash/Bank · Cr Income Ledger</strong> — no entity sub-ledger.
+                <p class="oi-subtitle mb-0">
+                    <i class="fas fa-calculator me-1"></i> GL: <strong>Dr Cash/Bank · Cr Income Ledger</strong> &nbsp;·&nbsp;
+                    <i class="fas fa-book me-1"></i> No entity sub-ledger — CoA only
                 </p>
             </div>
-            <div>
+            <div class="d-flex gap-2">
                 <a href="{{ route('admin.other-incomes.index') }}" class="btn btn-outline-light btn-sm">
-                    <i class="fas fa-arrow-left me-1"></i> Back to list
+                    <i class="fas fa-arrow-left me-1"></i> Back
                 </a>
             </div>
         </div>
@@ -189,14 +205,14 @@
         </div>
     </div>
 
-    <form method="POST" action="{{ route('admin.other-incomes.store') }}" id="otherIncomeForm">
+    <form method="POST" action="{{ route('admin.other-incomes.store') }}" id="otherIncomeForm" novalidate>
         @csrf
 
-        <div class="row g-3">
-            {{-- Left: form fields --}}
+        {{-- Row 1: Income Details + Amount Card --}}
+        <div class="row g-3 mb-0">
+            {{-- Income Details section card --}}
             <div class="col-lg-8">
-                {{-- Income details section card --}}
-                <div class="oi-section-card">
+                <div class="oi-section-card h-100">
                     <div class="oi-section-header">
                         <div class="oi-section-icon" style="background:linear-gradient(135deg,#16a34a,#15803d);">
                             <i class="fas fa-sliders"></i>
@@ -206,7 +222,7 @@
                     <div class="oi-section-body">
                         <div class="row g-3">
                             {{-- Income date --}}
-                            <div class="col-md-4">
+                            <div class="col-lg-3 col-md-6">
                                 <label class="oi-form-label" for="income_date">
                                     Income Date <span class="oi-required">*</span>
                                 </label>
@@ -217,7 +233,7 @@
                             </div>
 
                             {{-- Branch --}}
-                            <div class="col-md-4">
+                            <div class="col-lg-3 col-md-6">
                                 <label class="oi-form-label" for="branch_id">
                                     Branch <span class="oi-required">*</span>
                                 </label>
@@ -235,7 +251,7 @@
                             </div>
 
                             {{-- Income ledger (from Chart of Accounts) --}}
-                            <div class="col-md-4">
+                            <div class="col-lg-3 col-md-6">
                                 <label class="oi-form-label" for="ledger_id">
                                     Income Ledger <span class="oi-required">*</span>
                                 </label>
@@ -257,7 +273,7 @@
                             </div>
 
                             {{-- Income type (optional label) --}}
-                            <div class="col-md-4">
+                            <div class="col-lg-3 col-md-6">
                                 <label class="oi-form-label" for="income_type">Income Type</label>
                                 <input type="text" id="income_type" name="income_type"
                                        class="form-control @error('income_type') is-invalid @enderror"
@@ -269,131 +285,169 @@
                                     Optional descriptive label for the income category.
                                 </div>
                             </div>
-
-                            {{-- Payment mode --}}
-                            <div class="col-md-4">
-                                <label class="oi-form-label">
-                                    Payment Mode <span class="oi-required">*</span>
-                                </label>
-                                <div class="d-flex gap-3 mt-1">
-                                    <div class="form-check">
-                                        <input type="radio" id="mode_cash" name="payment_mode" value="cash"
-                                               class="form-check-input" {{ $oldMode === 'cash' ? 'checked' : '' }} required>
-                                        <label class="form-check-label" for="mode_cash">
-                                            <i class="fas fa-money-bill me-1"></i> Cash
-                                        </label>
-                                    </div>
-                                    <div class="form-check">
-                                        <input type="radio" id="mode_bank" name="payment_mode" value="bank"
-                                               class="form-check-input" {{ $oldMode === 'bank' ? 'checked' : '' }}>
-                                        <label class="form-check-label" for="mode_bank">
-                                            <i class="fas fa-university me-1"></i> Bank
-                                        </label>
-                                    </div>
-                                </div>
-                                @error('payment_mode') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
-                            </div>
-
-                            {{-- Bank (shown only when payment_mode=bank) --}}
-                            <div class="col-md-4" id="bank_section" style="display:{{ $oldMode === 'bank' ? 'block' : 'none' }};">
-                                <label class="oi-form-label" for="bank_id">
-                                    Bank <span class="oi-required">*</span>
-                                </label>
-                                <select id="bank_id" name="bank_id"
-                                        class="form-select select2 @error('bank_id') is-invalid @enderror">
-                                    <option value="">Select bank</option>
-                                    @foreach ($banks as $bk)
-                                        <option value="{{ $bk->id }}"
-                                            {{ (string) $oldBank === (string) $bk->id ? 'selected' : '' }}>
-                                            {{ $bk->bank_code }} — {{ $bk->bank_name }}
-                                        </option>
-                                    @endforeach
-                                </select>
-                                @error('bank_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
-                            </div>
-
-                            {{-- Amount --}}
-                            <div class="col-md-4">
-                                <label class="oi-form-label" for="amount">
-                                    Amount (Tk) <span class="oi-required">*</span>
-                                </label>
-                                <input type="number" id="amount" name="amount"
-                                       class="form-control text-end @error('amount') is-invalid @enderror"
-                                       min="0.01" step="0.01" required
-                                       value="{{ $oldAmt }}"
-                                       placeholder="0.00">
-                                @error('amount') <div class="invalid-feedback">{{ $message }}</div> @enderror
-                            </div>
-
-                            {{-- Description --}}
-                            <div class="col-md-8">
-                                <label class="oi-form-label" for="description">Description</label>
-                                <textarea id="description" name="description" rows="1" class="form-control"
-                                          placeholder="Optional description or reference">{{ $oldDesc }}</textarea>
-                                @error('description') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
-                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            {{-- Right: preview & summary --}}
+            {{-- Amount Card --}}
             <div class="col-lg-4">
-                {{-- GL Preview card --}}
-                <div class="oi-section-card">
+                <div class="oi-section-card h-100">
                     <div class="oi-section-header">
-                        <div class="oi-section-icon" style="background:linear-gradient(135deg,#0f172a,#334155);">
-                            <i class="fas fa-scale-balanced"></i>
+                        <div class="oi-section-icon" style="background:linear-gradient(135deg,#15803d,#16a34a);">
+                            <i class="fas fa-taka-sign"></i>
                         </div>
-                        <h2>GL Journal Preview</h2>
-                        <span class="badge bg-success-subtle text-success ms-auto" id="glBalanceBadge">
-                            <i class="fas fa-check me-1"></i>Balanced
-                        </span>
+                        <h2>Amount</h2>
                     </div>
-                    <div class="oi-section-body">
-                        <div class="oi-gl-preview" id="glPreviewArea">
-                            <div class="oi-gl-empty">
-                                <i class="fas fa-scale-balanced"></i>
-                                <div class="small">Select head and amount to preview GL effect.</div>
+                    <div class="oi-section-body d-flex flex-column justify-content-center">
+                        <div class="oi-amount-card w-100">
+                            <div class="oi-amount-value" id="amountPreview">Tk 0.00</div>
+                            <div class="oi-amount-label">Income Amount</div>
+                        </div>
+                        <div class="mt-3">
+                            <label class="oi-form-label" for="amount">
+                                Amount (Tk) <span class="oi-required">*</span>
+                            </label>
+                            <div class="input-group">
+                                <span class="input-group-text fw-bold" style="background:#f8fafc;">Tk</span>
+                                <input type="number" id="amount" name="amount"
+                                       class="form-control text-end @error('amount') is-invalid @enderror"
+                                       min="0.01" step="0.01" required
+                                       value="{{ $oldAmt }}"
+                                       placeholder="0.00">
                             </div>
-                        </div>
-                        <div class="d-flex justify-content-between align-items-center mt-3 pt-2" style="border-top:1px solid #e2e8f0;">
-                            <span class="text-muted small">GL rule</span>
-                            <strong class="small" id="glRuleLabel">Dr Cash/Bank · Cr Income</strong>
-                        </div>
-                        <div class="d-flex justify-content-between align-items-center mt-1">
-                            <span class="text-muted small">Sub-ledger</span>
-                            <strong class="small">None — CoA only</strong>
-                        </div>
-                    </div>
-                </div>
-
-                {{-- Quick info card --}}
-                <div class="oi-section-card">
-                    <div class="oi-section-header">
-                        <div class="oi-section-icon" style="background:linear-gradient(135deg,#16a34a,#15803d);">
-                            <i class="fas fa-lightbulb"></i>
-                        </div>
-                        <h2>How It Works</h2>
-                    </div>
-                    <div class="oi-section-body">
-                        <div class="small text-muted">
-                            <p class="mb-2"><i class="fas fa-arrow-right text-success me-1"></i> <strong>Debit:</strong> Cash or Bank account receives money</p>
-                            <p class="mb-2"><i class="fas fa-arrow-left text-danger me-1"></i> <strong>Credit:</strong> Income ledger records the revenue</p>
-                            <p class="mb-0"><i class="fas fa-check text-success me-1"></i> No entity sub-ledger — only Chart of Accounts is affected</p>
+                            @error('amount') <div class="invalid-feedback">{{ $message }}</div> @enderror
                         </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        {{-- Submit bar --}}
+        {{-- Row 2: Payment Details --}}
+        <div class="oi-section-card">
+            <div class="oi-section-header">
+                <div class="oi-section-icon" style="background:linear-gradient(135deg,#2563eb,#3b82f6);">
+                    <i class="fas fa-receipt"></i>
+                </div>
+                <h2>Payment Details</h2>
+            </div>
+            <div class="oi-section-body">
+                <div class="row g-3">
+                    {{-- Payment Mode --}}
+                    <div class="col-lg-3 col-md-6">
+                        <label class="oi-form-label" for="payment_mode">
+                            Payment Mode <span class="oi-required">*</span>
+                        </label>
+                        <select id="payment_mode" name="payment_mode"
+                                class="form-select @error('payment_mode') is-invalid @enderror" required>
+                            <option value="cash" {{ $oldMode === 'cash' ? 'selected' : '' }}>💵 Cash</option>
+                            <option value="bank" {{ $oldMode === 'bank' ? 'selected' : '' }}>🏦 Bank Transfer</option>
+                            <option value="mobile_banking" {{ $oldMode === 'mobile_banking' ? 'selected' : '' }}>📱 Mobile Banking</option>
+                            <option value="cheque" {{ $oldMode === 'cheque' ? 'selected' : '' }}>📝 Cheque</option>
+                        </select>
+                        @error('payment_mode') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
+
+                    {{-- Bank --}}
+                    <div class="col-lg-3 col-md-6" id="bank_section" style="display:{{ $oldMode === 'bank' || $oldMode === 'cheque' ? 'block' : 'none' }};">
+                        <label class="oi-form-label" for="bank_id">
+                            Bank <span class="oi-required">*</span>
+                        </label>
+                        <select id="bank_id" name="bank_id"
+                                class="form-select select2 @error('bank_id') is-invalid @enderror">
+                            <option value="">Select bank</option>
+                            @foreach ($banks as $bk)
+                                <option value="{{ $bk->id }}"
+                                    {{ (string) $oldBank === (string) $bk->id ? 'selected' : '' }}>
+                                    {{ $bk->bank_name }}@if (!empty($bk->account_number)) — {{ $bk->account_number }}@endif
+                                </option>
+                            @endforeach
+                        </select>
+                        @error('bank_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
+
+                    {{-- Description --}}
+                    <div class="col-lg-6 col-md-12">
+                        <label class="oi-form-label" for="description">Description</label>
+                        <textarea id="description" name="description" rows="1" class="form-control"
+                                  placeholder="Optional description or reference">{{ $oldDesc }}</textarea>
+                        @error('description') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {{-- Row 3: GL Accounting Preview --}}
+        <div class="oi-section-card">
+            <div class="oi-section-header">
+                <div class="oi-section-icon" style="background:linear-gradient(135deg,#0f172a,#334155);">
+                    <i class="fas fa-calculator"></i>
+                </div>
+                <h2>GL Accounting Preview</h2>
+            </div>
+            <div class="oi-section-body">
+                <div class="row g-3">
+                    <div class="col-lg-7">
+                        <div class="oi-gl-preview" id="glPreviewArea">
+                            <div class="oi-gl-empty" id="glEmpty">
+                                <i class="fas fa-calculator"></i>
+                                Enter an amount to see the GL journal preview
+                            </div>
+                            <div id="glEntries" style="display:none;">
+                                <div class="oi-gl-entry oi-gl-debit">
+                                    <div>
+                                        <span class="oi-gl-label" id="glDebitLabel">Dr Cash in Hand</span>
+                                        <div class="small text-muted" id="glDebitSub">Cash/Bank receives money</div>
+                                    </div>
+                                    <span class="oi-gl-amount" id="glDebitAmount">Tk 0.00</span>
+                                </div>
+                                <div class="oi-gl-entry oi-gl-credit">
+                                    <div>
+                                        <span class="oi-gl-label" id="glCreditLabel">Cr Other Income</span>
+                                        <div class="small text-muted" id="glCreditSub">Income ledger records the revenue</div>
+                                    </div>
+                                    <span class="oi-gl-amount" id="glCreditAmount">Tk 0.00</span>
+                                </div>
+                                <div class="oi-gl-total-bar">
+                                    <span>Net Effect</span>
+                                    <span id="glNetEffect">Balanced ✓</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-5">
+                        <div class="row g-2">
+                            <div class="col-md-4">
+                                <div class="text-center p-2 rounded" style="background:#f0fdf4;">
+                                    <div class="small text-muted">GL Rule</div>
+                                    <strong class="small" id="glRuleLabel">Dr Cash/Bank · Cr Income</strong>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="text-center p-2 rounded" style="background:#fff7ed;">
+                                    <div class="small text-muted">Sub-Ledger</div>
+                                    <strong class="small" id="subLedgerLabel">None — CoA only</strong>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="text-center p-2 rounded" style="background:#eff6ff;">
+                                    <div class="small text-muted">Bank Book</div>
+                                    <strong class="small" id="bankBookLabel">Increase (if bank)</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {{-- Submit Bar --}}
         <div class="oi-submit-bar">
             <a href="{{ route('admin.other-incomes.index') }}" class="btn btn-outline-secondary">
                 <i class="fas fa-times me-1"></i> Cancel
             </a>
             <button type="submit" class="oi-btn-submit" id="submitBtn">
-                <i class="fas fa-check me-1"></i>
+                <i class="fas fa-floppy-disk me-1"></i>
                 <span id="submitLabel">Save Income</span>
             </button>
         </div>
@@ -419,7 +473,7 @@
 <script>
 $(function () {
     var $form        = $('#otherIncomeForm');
-    var $mode        = $('input[name="payment_mode"]');
+    var $mode        = $('#payment_mode');
     var $bankSection = $('#bank_section');
     var $bankId      = $('#bank_id');
     var $amount      = $('#amount');
@@ -427,14 +481,30 @@ $(function () {
 
     // GL preview elements
     var $glPreview   = $('#glPreviewArea');
-    var $glBadge     = $('#glBalanceBadge');
+    var $glEmpty     = $('#glEmpty');
+    var $glEntries   = $('#glEntries');
+    var $glDebitLabel   = $('#glDebitLabel');
+    var $glDebitSub     = $('#glDebitSub');
+    var $glDebitAmount  = $('#glDebitAmount');
+    var $glCreditLabel  = $('#glCreditLabel');
+    var $glCreditSub    = $('#glCreditSub');
+    var $glCreditAmount = $('#glCreditAmount');
+    var $glNetEffect    = $('#glNetEffect');
+    var $glRuleLabel    = $('#glRuleLabel');
+    var $subLedgerLabel = $('#subLedgerLabel');
+    var $bankBookLabel  = $('#bankBookLabel');
+    var $amountPreview  = $('#amountPreview');
 
     // Payment mode toggle
-    function toggleBankSection() {
-        var mode = $('input[name="payment_mode"]:checked').val();
-        if (mode === 'bank') {
+    function syncBankVisibility() {
+        var mode = $mode.val();
+        if (mode === 'bank' || mode === 'cheque') {
             $bankSection.show();
-            $bankId.prop('required', true);
+            if (mode === 'bank') {
+                $bankId.prop('required', true);
+            } else {
+                $bankId.prop('required', false);
+            }
         } else {
             $bankSection.hide();
             $bankId.prop('required', false);
@@ -443,54 +513,63 @@ $(function () {
         updateGLPreview();
     }
 
-    $mode.on('change', toggleBankSection);
+    $mode.on('change', syncBankVisibility);
 
     // Live GL preview update
     function updateGLPreview() {
         var amount = parseFloat($amount.val()) || 0;
-        var mode = $('input[name="payment_mode"]:checked').val();
+        var mode = $mode.val();
         var ledgerName = $ledgerId.find('option:selected').text();
         var bankName = $bankId.find('option:selected').text();
 
+        // Update amount preview card
+        $amountPreview.text('Tk ' + numberFormat(amount));
+
         if (amount <= 0) {
-            $glPreview.html(
-                '<div class="oi-gl-empty">' +
-                '<i class="fas fa-scale-balanced"></i>' +
-                '<div class="small">Enter an amount to see the GL journal preview.</div>' +
-                '</div>'
-            );
-            $glBadge.html('<i class="fas fa-check me-1"></i>Balanced').removeClass('bg-danger-subtle text-danger').addClass('bg-success-subtle text-success');
+            $glEmpty.show();
+            $glEntries.hide();
             return;
         }
 
+        $glEmpty.hide();
+        $glEntries.show();
+
         // Determine Dr label (Cash or Bank)
         var drLabel = 'Cash in Hand';
+        var drSub = 'Cash balance increases';
+        var bankBookText = 'No change';
         if (mode === 'bank') {
             drLabel = (bankName && bankName !== 'Select bank') ? 'Bank — ' + bankName : 'Bank Account';
+            drSub = 'Bank balance increases';
+            bankBookText = 'Increase';
+        } else if (mode === 'cheque') {
+            drLabel = (bankName && bankName !== 'Select bank') ? 'Bank — ' + bankName : 'Bank Account';
+            drSub = 'Bank balance increases (on clearance)';
+            bankBookText = 'Increase (on clearance)';
+        } else if (mode === 'mobile_banking') {
+            drLabel = 'Mobile Banking';
+            drSub = 'Mobile balance increases';
+            bankBookText = 'Increase';
         }
 
         // Determine Cr label (selected income ledger)
         var crLabel = (ledgerName && ledgerName !== 'Select income ledger') ? ledgerName : 'Other Income';
 
-        var html = '';
-        // Debit entry
-        html += '<div class="oi-gl-entry oi-gl-debit">' +
-                '<div class="oi-gl-label"><i class="fas fa-arrow-right me-1"></i>' + drLabel + '</div>' +
-                '<div class="oi-gl-amount">Tk ' + numberFormat(amount) + '</div>' +
-                '</div>';
-        // Credit entry
-        html += '<div class="oi-gl-entry oi-gl-credit">' +
-                '<div class="oi-gl-label"><i class="fas fa-arrow-left me-1"></i>' + crLabel + '</div>' +
-                '<div class="oi-gl-amount">Tk ' + numberFormat(amount) + '</div>' +
-                '</div>';
-        // Total bar
-        html += '<div class="oi-gl-total-bar">' +
-                '<span>Dr Total: ' + numberFormat(amount) + '</span>' +
-                '<span>Cr Total: ' + numberFormat(amount) + '</span>' +
-                '</div>';
+        // Update GL entries
+        $glDebitLabel.text('Dr ' + drLabel);
+        $glDebitSub.text(drSub);
+        $glDebitAmount.text('Tk ' + numberFormat(amount));
 
-        $glPreview.html(html);
-        $glBadge.html('<i class="fas fa-check me-1"></i>Balanced').removeClass('bg-danger-subtle text-danger').addClass('bg-success-subtle text-success');
+        $glCreditLabel.text('Cr ' + crLabel);
+        $glCreditSub.text('Income ledger records the revenue');
+        $glCreditAmount.text('Tk ' + numberFormat(amount));
+
+        $glNetEffect.text('Balanced ✓');
+
+        // Update side info
+        $glRuleLabel.text('Dr Cash/Bank · Cr Income');
+        $subLedgerLabel.text('None — CoA only');
+        $bankBookLabel.text(bankBookText);
     }
 
     function numberFormat(num) {
@@ -507,7 +586,7 @@ $(function () {
         e.preventDefault();
 
         var amount = parseFloat($amount.val()) || 0;
-        var mode = $('input[name="payment_mode"]:checked').val();
+        var mode = $mode.val();
         var ledgerName = $ledgerId.find('option:selected').text();
 
         if (amount <= 0) {
@@ -523,7 +602,7 @@ $(function () {
         Swal.fire({
             icon: 'question',
             title: 'Record this other income?',
-            html: '<p class="text-muted small mb-2">This will post a GL journal entry (Dr ' + (mode === 'bank' ? 'Bank' : 'Cash') + ', Cr ' + ledgerName + ').</p>' +
+            html: '<p class="text-muted small mb-2">This will post a GL journal entry (Dr ' + (mode === 'bank' || mode === 'cheque' ? 'Bank' : mode === 'mobile_banking' ? 'Mobile' : 'Cash') + ', Cr ' + ledgerName + ').</p>' +
                   '<p class="small"><strong>Amount:</strong> Tk ' + numberFormat(amount) + '</p>',
             showCancelButton: true,
             confirmButtonText: '<i class="fas fa-check"></i> Save Income',
@@ -532,6 +611,9 @@ $(function () {
             reverseButtons: true,
         }).then(function (result) {
             if (result.isConfirmed) {
+                var $btn = $('#submitBtn');
+                $btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin me-1"></i> Saving…');
+
                 $.ajax({
                     url: $form.attr('action'),
                     method: 'POST',
@@ -545,11 +627,13 @@ $(function () {
                                 timer: 2000,
                                 showConfirmButton: false
                             }).then(function () {
-                                var redirectUrl = resp.redirect || '{{ route("admin.other-incomes.index") }}';
+                                // Redirect to the show page of the newly created income
+                                var redirectUrl = resp.redirect_url || resp.redirect || '{{ route("admin.other-incomes.index") }}';
                                 window.location.href = redirectUrl;
                             });
                         } else {
                             Swal.fire('Error', resp.message || 'Failed to save.', 'error');
+                            $btn.prop('disabled', false).html('<i class="fas fa-floppy-disk me-1"></i> <span id="submitLabel">Save Income</span>');
                         }
                     },
                     error: function (xhr) {
@@ -566,6 +650,7 @@ $(function () {
                             var msg = xhr.responseJSON && xhr.responseJSON.message ? xhr.responseJSON.message : 'An error occurred.';
                             Swal.fire('Error', msg, 'error');
                         }
+                        $btn.prop('disabled', false).html('<i class="fas fa-floppy-disk me-1"></i> <span id="submitLabel">Save Income</span>');
                     }
                 });
             }
@@ -573,7 +658,7 @@ $(function () {
     });
 
     // Initialize
-    toggleBankSection();
+    syncBankVisibility();
     updateGLPreview();
 });
 </script>

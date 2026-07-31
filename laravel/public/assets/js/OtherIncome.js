@@ -51,15 +51,19 @@
             }
             const body = new URLSearchParams({ id: String(id), reason, csrf_token: csrf() });
             try {
-                const res = await fetch(b + 'OtherIncome/reverse', {
+                // Use the Laravel route from OI_BOOT instead of legacy URL
+                const reverseUrl = window.OI_BOOT?.routes?.reverse
+                    ? window.OI_BOOT.routes.reverse.replace('{id}', String(id))
+                    : b + 'admin/other-incomes/' + id + '/reverse';
+                const res = await fetch(reverseUrl, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-TOKEN': csrf() },
                     body: body.toString(),
                 });
                 const data = await parseJson(res);
                 if (data.status === 'success') {
                     Swal.fire('Reversed', data.message, 'success').then(() => {
-                        window.location.href = data.redirect_url || (b + 'OtherIncome/details/' + id);
+                        window.location.href = data.redirect_url || (b + 'admin/other-incomes/' + id);
                     });
                 } else {
                     Swal.fire('Error', data.message || 'Could not reverse', 'error');
@@ -81,7 +85,9 @@
         });
 
         initIndex(b);
-        initCreate(b);
+        // NOTE: initCreate() removed — the blade template's inline JS handles
+        // form submission with the correct Laravel route.  The old initCreate()
+        // used a legacy URL (OtherIncome/store) which caused HTTP 404.
     });
 
     function initIndex(b) {
@@ -102,64 +108,6 @@
             order: [[0, 'desc']],
             columnDefs: [{ orderable: false, targets: -1 }],
             language: { emptyTable: 'No other incomes for selected filters', search: 'Quick search:' },
-        });
-    }
-
-    function initCreate(b) {
-        const form = document.getElementById('otherIncomeForm');
-        if (!form) return;
-
-        const preview = document.getElementById('accounting_preview');
-        const amountEl = document.getElementById('amount');
-        const ledgerEl = document.getElementById('ledger_id');
-        const bankSection = document.getElementById('bank_section');
-
-        document.querySelectorAll('input[name="payment_mode"]').forEach((r) => {
-            r.addEventListener('change', () => {
-                if (bankSection) bankSection.style.display = r.value === 'bank' ? 'block' : 'none';
-                updatePreview();
-            });
-        });
-        [amountEl, ledgerEl].forEach((el) => el?.addEventListener('input', updatePreview));
-        [amountEl, ledgerEl].forEach((el) => el?.addEventListener('change', updatePreview));
-
-        function updatePreview() {
-            if (!preview) return;
-            const amt = parseFloat(amountEl?.value) || 0;
-            const head = ledgerEl?.selectedOptions?.[0]?.text || 'Income head';
-            const mode = document.querySelector('input[name="payment_mode"]:checked')?.value || 'cash';
-            if (amt <= 0 || !ledgerEl?.value) {
-                preview.innerHTML = '<p class="text-muted small mb-0">Select head and amount to preview GL effect.</p>';
-                return;
-            }
-            const cashBank = mode === 'bank' ? 'Bank' : 'Cash';
-            preview.innerHTML = `<table class="table table-sm mb-0"><thead><tr><th>Account</th><th class="text-end">Dr</th><th class="text-end">Cr</th></tr></thead><tbody>
-                <tr><td>${esc(cashBank)}</td><td class="text-end fw-bold">${amt.toFixed(2)}</td><td class="text-end">—</td></tr>
-                <tr><td>${esc(head)}</td><td class="text-end">—</td><td class="text-end fw-bold">${amt.toFixed(2)}</td></tr>
-            </tbody></table>`;
-        }
-
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const btn = form.querySelector('button[type="submit"]');
-            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Saving…'; }
-            const fd = new FormData(form);
-            if (!fd.has('csrf_token')) fd.append('csrf_token', csrf());
-            try {
-                const res = await fetch(b + 'OtherIncome/store', { method: 'POST', body: fd });
-                const data = await parseJson(res);
-                if (data.status === 'success') {
-                    Swal.fire({ title: 'Saved', text: data.message, icon: 'success', timer: 1600 }).then(() => {
-                        window.location.href = data.redirect_url || (b + 'OtherIncome');
-                    });
-                } else {
-                    Swal.fire('Error', data.message || 'Failed', 'error');
-                    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check me-1"></i> Save Income'; }
-                }
-            } catch (err) {
-                Swal.fire('Network Error', 'Please try again.', 'error');
-                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check me-1"></i> Save Income'; }
-            }
         });
     }
 })();
