@@ -78,6 +78,15 @@ class AppServiceProvider extends ServiceProvider
             \App\Models\CustomerPayment::class,
             \App\Policies\CustomerPaymentPolicy::class
         );
+        // Phase 1 (Accounts Sub-Ledger): Supplier Transaction policy —
+        // defense-in-depth behind the role: middleware on
+        // admin/supplier-transactions routes. Mirrors the role matrix
+        // exactly (accountant/manager/admin for all actions; branch
+        // isolation stays as route middleware + BranchScope).
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\SupplierPayment::class,
+            \App\Policies\SupplierTransactionPolicy::class
+        );
         // Phase 1 (Stock Adjustment plan): StockAdjustment policy — defense-in-depth
         // behind the role: middleware on admin/stock-adjustments routes. Mirrors
         // the role matrix exactly (admin/accountant write; manager read-only).

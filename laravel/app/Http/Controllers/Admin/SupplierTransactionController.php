@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\StoreSupplierTransactionRequest;
 use App\Models\SupplierPayment;
 use App\Services\Accounting\SupplierTransactionService;
 use Illuminate\Http\Request;
@@ -103,38 +104,19 @@ class SupplierTransactionController extends Controller
 
     /**
      * Store a new supplier payment.
+     *
+     * Validation is handled by StoreSupplierTransactionRequest (typed Form
+     * Request). RBAC is handled by route middleware (role:accountant,
+     * manager,admin + branch.isolation); SupplierTransactionPolicy is the
+     * defense-in-depth layer.
      */
-    public function store(Request $request)
+    public function store(StoreSupplierTransactionRequest $request)
     {
-        $validated = $request->validate([
-            'supplier_id'       => 'required|integer|exists:suppliers,id',
-            'branch_id'         => 'required|integer|exists:branches,id',
-            'bank_id'           => 'nullable|integer|exists:banks,id',
-            'payment_mode'      => 'required|in:cash,bank,mobile_banking,cheque,adjustment',
-            'transaction_type'  => 'required|in:payment,advance,receive',
-            'amount'            => 'required|numeric|min:0.01',
-            'discount_amount'   => 'nullable|numeric|min:0',
-            'payment_date'      => 'required|date',
-            'reference_no'      => 'nullable|string|max:100',
-            'collected_by'      => 'nullable|integer|exists:employees,id',
-            'notes'             => 'nullable|string|max:500',
-        ]);
+        $payload = $request->toServicePayload();
+        $transactionType = $payload['transaction_type'];
 
         try {
-            $payment = $this->service->createPayment([
-                'supplier_id'      => $validated['supplier_id'],
-                'branch_id'        => $validated['branch_id'],
-                'bank_id'          => $validated['bank_id'] ?? null,
-                'payment_mode'     => $validated['payment_mode'],
-                'transaction_type' => $validated['transaction_type'],
-                'amount'           => $validated['amount'],
-                'discount_amount'  => $validated['discount_amount'] ?? 0,
-                'payment_date'     => $validated['payment_date'],
-                'reference_no'     => $validated['reference_no'] ?? null,
-                'collected_by'     => $validated['collected_by'] ?? null,
-                'notes'            => $validated['notes'] ?? '',
-                'created_by'       => auth()->id(),
-            ]);
+            $payment = $this->service->createPayment($payload);
 
             $typeMessages = [
                 'payment' => "Payment {$payment->payment_code} recorded. GL posted (Dr AP / Cr Bank/Cash) + supplier ledger updated.",
@@ -142,7 +124,7 @@ class SupplierTransactionController extends Controller
                 'receive' => "Credit receive {$payment->payment_code} recorded. GL posted (Dr Inventory / Cr AP) + supplier ledger updated.",
             ];
 
-            $successMessage = $typeMessages[$validated['transaction_type']] ?? $typeMessages['payment'];
+            $successMessage = $typeMessages[$transactionType] ?? $typeMessages['payment'];
 
             if ($request->expectsJson() || $request->ajax()) {
                 return response()->json([

@@ -222,14 +222,36 @@ class SupplierTransactionService
                 );
             }
 
-            // 2. Reverse intercompany GL + linked sub-ledger.
-            if ($payment->intercompany_journal_entry_id) {
+            // 2. Reverse ALL intercompany GL entries for this payment.
+            //    postIntercompanySettlement() posts TWO entries (creditor at
+            //    the bank's branch + debtor at the payment's branch), both
+            //    tagged reference_type='supplier_payment_intercompany'. Only
+            //    the debtor id is stored in intercompany_journal_entry_id, so
+            //    we reverse by reference lookup to catch both (and any future
+            //    siblings). Idempotent: skip entries already reversed.
+            $intercompanyJeIds = DB::table('journal_entries')
+                ->where('reference_type', 'supplier_payment_intercompany')
+                ->where('reference_id', $paymentId)
+                ->where('is_reversed', false)
+                ->pluck('id');
+
+            foreach ($intercompanyJeIds as $icJeId) {
                 $this->journalReversal->reverseByJournalEntry(
-                    $payment->intercompany_journal_entry_id,
+                    (int) $icJeId,
                     $reversedBy,
                     "Supplier payment reversal: {$reason}"
                 );
             }
+
+            // Also reverse the branch_ledger obligation row.
+            DB::table('branch_ledger')
+                ->where('reference_type', 'supplier_payment')
+                ->where('reference_id', $paymentId)
+                ->where('is_reversed', false)
+                ->update([
+                    'is_reversed' => true,
+                    'updated_at'  => now(),
+                ]);
 
             // 3. Reverse GRN allocations.
             $allocations = DB::table('supplier_payment_settlements')
@@ -558,72 +580,169 @@ class SupplierTransactionService
     /**
      * Post intercompany settlement for cross-branch bank-mode payments.
      *
-     * When a bank belongs to a different branch than the payment's branch,
-     * we need intercompany journal entries + branch_ledger entry.
-     * Mirrors the CustomerPaymentService::postIntercompanySettlement pattern.
+     * When a supplier payment is recorded at Branch A but the bank belongs
+     * to Branch B, Branch A used Branch B's bank to pay the supplier — so
+     * Branch A owes Branch B the payment amount. This posts two balanced
+     * intercompany journal entries (mirrors BranchIntercompanyService):
+     *
+     *   Creditor JE (at bank's branch / Branch B):
+     *     Dr interbranch_receivable (Due from Branches)   amount
+     *        Cr bank-ledger (the bank that funded it)      amount
+     *
+     *   Debtor JE (at payment's branch / Branch A):
+     *     Dr bank-ledger (clearing — nets the main GL bank credit)  amount
+     *        Cr interbranch_payable (Due to Branches)               amount
+     *
+     * Net effect on the shared bank-ledger: main GL Cr amount + creditor
+     * Cr amount + debtor Dr amount = net Cr amount (matches the bank book
+     * decrease from syncBankBalance). interbranch_receivable (asset) ↑ at
+     * Branch B and interbranch_payable (liability) ↑ at Branch A — the
+     * interbranch obligation. A branch_ledger row tracks the obligation
+     * for cross-branch reconciliation.
+     *
+     * Returns the debtor JE id (stored in supplier_payments.
+     * intercompany_journal_entry_id for the show page). The creditor JE is
+     * linked by reference_type='supplier_payment_intercompany' and is
+     * reversed alongside the debtor in reversePayment().
+     *
+     * Skips (returns null) when:
+     *   - amount < 0.01 or no bank_id
+     *   - bank has no branch_id (NULL = shared / head-office bank)
+     *   - bank's branch == payment's branch (same branch, no intercompany)
+     *   - interbranch ledgers not configured (logs a warning)
      */
     private function postIntercompanySettlement(SupplierPayment $payment, int $createdBy): ?int
     {
         $amount = (float) $payment->amount;
-        if ($amount < 0.01 || !$payment->bank_id) return null;
+        if ($amount < 0.01 || !$payment->bank_id) {
+            return null;
+        }
 
-        // NOTE: The `banks` table does NOT have a `branch_id` column — banks
-        // are not branch-scoped in the current schema. Intercompany settlement
-        // requires bank→branch mapping which doesn't exist yet. Skip entirely.
-        return null;
+        // Load the bank with its branch_id (added by migration
+        // 2026_08_06_000001_add_branch_id_to_banks). NULL = shared bank.
+        $bank = Bank::find($payment->bank_id);
+        if (!$bank) {
+            return null;
+        }
+        $bankBranchId = $bank->branch_id ? (int) $bank->branch_id : null;
+        if (!$bankBranchId) {
+            // Shared / head-office bank — no intercompany needed.
+            return null;
+        }
 
-        $fromBranchId = $payment->branch_id;        // supplier's branch
-        $toBranchId = (int) $bankBranchId;          // bank's branch
+        $fromBranchId = (int) $payment->branch_id;   // payment's branch (debtor)
+        $toBranchId = $bankBranchId;                  // bank's branch (creditor)
 
-        $dueToLedgerId = $this->journalPosting->lookupLedgerByNature('interbranch_payable');
+        // Same branch — no intercompany needed.
+        if ($toBranchId === $fromBranchId) {
+            return null;
+        }
+
+        // Resolve interbranch ledgers (seeded L-0105 / L-0303).
         $dueFromLedgerId = $this->journalPosting->lookupLedgerByNature('interbranch_receivable');
-
-        if (!$dueToLedgerId || !$dueFromLedgerId) {
+        $dueToLedgerId = $this->journalPosting->lookupLedgerByNature('interbranch_payable');
+        if (!$dueFromLedgerId || !$dueToLedgerId) {
             Log::warning('Intercompany ledgers not configured, skipping supplier settlement', [
-                'payment_id' => $payment->id,
+                'payment_id'      => $payment->id,
+                'payment_code'    => $payment->payment_code,
+                'from_branch_id'  => $fromBranchId,
+                'to_branch_id'    => $toBranchId,
             ]);
             return null;
         }
 
-        // From-branch: Dr Due-to-Branch / Cr Due-from-Branch
-        $journalEntryId = $this->journalPosting->createJournalEntry([
-            'entry_date' => $payment->payment_date->format('Y-m-d'),
-            'reference_type' => 'supplier_payment',
-            'reference_id' => $payment->id,
-            'branch_id' => $fromBranchId,
-            'description' => 'Intercompany settlement — Supplier payment ' . $payment->payment_code,
-            'source' => 'supplier_payment_intercompany',
-            'created_by' => $createdBy,
+        // Resolve the bank's mapped ledger (falls back to cash_bank nature).
+        $bankLedgerId = $this->resolveCreditLedger($payment);
+
+        $entryDate = $payment->payment_date->format('Y-m-d');
+        $paymentCode = $payment->payment_code;
+
+        // 1. Creditor journal (at the bank's branch):
+        //    Dr interbranch_receivable / Cr bank-ledger
+        //    "Branch B's bank funded Branch A's supplier payment; Branch B
+        //     is now owed amount by Branch A."
+        $creditorJeId = $this->journalPosting->createJournalEntry([
+            'entry_date'     => $entryDate,
+            'reference_type' => 'supplier_payment_intercompany',
+            'reference_id'   => $payment->id,
+            'branch_id'      => $toBranchId,
+            'description'    => "Intercompany — Supplier payment {$paymentCode} (bank at branch {$toBranchId})",
+            'source'         => 'supplier_payment_intercompany',
+            'created_by'     => $createdBy,
         ], [
             [
-                'ledger_id' => $dueToLedgerId,
-                'debit' => $amount, 'credit' => 0,
-                'memo' => 'Bank payment at branch ' . $toBranchId . ' — ' . $payment->payment_code,
+                'ledger_id' => $dueFromLedgerId,
+                'debit'     => $amount,
+                'credit'    => 0,
+                'memo'      => "Due from branch {$fromBranchId} — supplier payment {$paymentCode}",
             ],
             [
-                'ledger_id' => $dueFromLedgerId,
-                'debit' => 0, 'credit' => $amount,
-                'memo' => 'Supplier payment from branch ' . $fromBranchId . ' — ' . $payment->payment_code,
+                'ledger_id' => $bankLedgerId,
+                'debit'     => 0,
+                'credit'    => $amount,
+                'memo'      => "Bank funded supplier payment {$paymentCode} for branch {$fromBranchId}",
             ],
         ]);
 
-        // Record in branch_ledger.
-        DB::table('branch_ledger')->insert([
-            'transaction_date' => $payment->payment_date->format('Y-m-d'),
-            'from_branch_id' => $fromBranchId,
-            'to_branch_id' => $toBranchId,
-            'reference_type' => 'supplier_payment',
-            'reference_id' => $payment->id,
-            'debit' => $amount,
-            'credit' => 0,
-            'remarks' => 'Supplier payment ' . $payment->payment_code . ' — bank at different branch',
-            'journal_entry_id' => $journalEntryId,
-            'is_reversed' => false,
-            'created_by' => $createdBy,
-            'created_at' => now(),
+        // 2. Debtor journal (at the payment's branch):
+        //    Dr bank-ledger / Cr interbranch_payable
+        //    "Branch A's supplier was paid using Branch B's bank; Branch A
+        //     owes Branch B amount." The Dr bank-ledger nets the main GL's
+        //     Cr bank-ledger at Branch A, so the shared bank-ledger control
+        //     account still reconciles to the bank book.
+        $debtorJeId = $this->journalPosting->createJournalEntry([
+            'entry_date'     => $entryDate,
+            'reference_type' => 'supplier_payment_intercompany',
+            'reference_id'   => $payment->id,
+            'branch_id'      => $fromBranchId,
+            'description'    => "Intercompany — Supplier payment {$paymentCode} (paid from branch {$fromBranchId})",
+            'source'         => 'supplier_payment_intercompany',
+            'created_by'     => $createdBy,
+        ], [
+            [
+                'ledger_id' => $bankLedgerId,
+                'debit'     => $amount,
+                'credit'    => 0,
+                'memo'      => "Bank clearing — supplier payment {$paymentCode} via branch {$toBranchId} bank",
+            ],
+            [
+                'ledger_id' => $dueToLedgerId,
+                'debit'     => 0,
+                'credit'    => $amount,
+                'memo'      => "Due to branch {$toBranchId} — supplier payment {$paymentCode}",
+            ],
         ]);
 
-        return $journalEntryId;
+        // 3. Record the interbranch obligation in branch_ledger.
+        DB::table('branch_ledger')->insert([
+            'transaction_date' => $entryDate,
+            'from_branch_id'   => $fromBranchId,
+            'to_branch_id'     => $toBranchId,
+            'reference_type'   => 'supplier_payment',
+            'reference_id'     => $payment->id,
+            'debit'            => $amount,
+            'credit'           => 0,
+            'remarks'          => "Supplier payment {$paymentCode} — bank at branch {$toBranchId}",
+            'journal_entry_id' => $debtorJeId,
+            'is_reversed'      => false,
+            'created_by'       => $createdBy,
+            'created_at'       => now(),
+        ]);
+
+        Log::info('Supplier payment intercompany settlement posted', [
+            'payment_id'       => $payment->id,
+            'payment_code'     => $paymentCode,
+            'from_branch_id'   => $fromBranchId,
+            'to_branch_id'     => $toBranchId,
+            'amount'           => $amount,
+            'creditor_je_id'   => $creditorJeId,
+            'debtor_je_id'     => $debtorJeId,
+        ]);
+
+        // Return the debtor JE id (primary, stored in intercompany_journal_entry_id).
+        // The creditor JE is linked by reference and reversed alongside in
+        // reversePayment().
+        return $debtorJeId;
     }
 
     // ============================================================

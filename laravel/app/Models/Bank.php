@@ -34,6 +34,7 @@ class Bank extends Model
         'balance',
         'is_active',
         'ledger_id',
+        'branch_id',
         'created_by',
         'deleted_by',
     ];
@@ -41,6 +42,7 @@ class Bank extends Model
     protected $casts = [
         'balance' => 'decimal:2',
         'is_active' => 'boolean',
+        'branch_id' => 'integer',
     ];
 
     public function ledger(): \Illuminate\Database\Eloquent\Relations\BelongsTo
@@ -51,6 +53,16 @@ class Bank extends Model
     public function ledgerMapping(): \Illuminate\Database\Eloquent\Relations\HasOne
     {
         return $this->hasOne(BankLedgerMapping::class, 'bank_id');
+    }
+
+    /**
+     * The company branch this bank belongs to (NULL = shared / head-office).
+     * Used by SupplierTransactionService::postIntercompanySettlement() to
+     * detect cross-branch bank-mode payments and post intercompany entries.
+     */
+    public function branch(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(Branch::class, 'branch_id');
     }
 
     public function scopeActive(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder

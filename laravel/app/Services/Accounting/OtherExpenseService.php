@@ -324,8 +324,11 @@ class OtherExpenseService
 
         $delta = $amount * $direction;
 
+        // FIX: banks table column is `balance` (numeric(18,2)), NOT
+        // `current_balance`. The previous query referenced a non-existent
+        // column and would throw a PostgreSQL error at runtime.
         DB::table('banks')->where('id', $bankId)->update([
-            'current_balance' => DB::raw("GREATEST(0, current_balance + {$delta})"),
+            'balance' => DB::raw("GREATEST(0, balance + {$delta})"),
             'updated_at' => now(),
         ]);
 
