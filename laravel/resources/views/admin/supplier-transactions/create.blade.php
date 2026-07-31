@@ -344,7 +344,7 @@
         ]),
         routes: {
             'index': '{{ route("admin.supplier-transactions.index") }}',
-            'show': '{{ route("admin.supplier-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'show': '{{ route("admin.supplier-transactions.show", ["supplier_transaction" => "__ID__"]) }}'.replace('__ID__', '{id}'),
             'store': '{{ route("admin.supplier-transactions.store") }}',
             'search': '{{ route("admin.supplier-transactions.search") }}',
             'get-due': '{{ route("admin.supplier-transactions.get-due") }}',

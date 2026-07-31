@@ -63,7 +63,7 @@
             </p>
         </div>
         <div class="d-flex gap-2">
-            <a href="{{ route('admin.supplier-transactions.slip', $payment->id) }}" class="btn btn-outline-light btn-sm" target="_blank">
+            <a href="{{ route('admin.supplier-transactions.slip', ['id' => $payment->id]) }}" class="btn btn-outline-light btn-sm" target="_blank">
                 <i class="fas fa-print me-1"></i> Print Slip
             </a>
             <a href="{{ route('admin.supplier-transactions.index') }}" class="btn btn-outline-light btn-sm">
@@ -666,7 +666,7 @@
                 </div>
                 <div class="card-body d-grid gap-2">
                     {{-- Print slip (dedicated print view) --}}
-                    <a href="{{ route('admin.supplier-transactions.slip', $payment->id) }}" class="btn btn-outline-primary w-100" target="_blank">
+                    <a href="{{ route('admin.supplier-transactions.slip', ['id' => $payment->id]) }}" class="btn btn-outline-primary w-100" target="_blank">
                         <i class="fas fa-print me-1"></i> Print Slip
                     </a>
 
@@ -700,7 +700,7 @@
         paymentCode: '{{ $payment->payment_code }}',
         routes: {
             'index': '{{ route("admin.supplier-transactions.index") }}',
-            'show': '{{ route("admin.supplier-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'show': '{{ route("admin.supplier-transactions.show", ["supplier_transaction" => "__ID__"]) }}'.replace('__ID__', '{id}'),
             'reverse': '{{ route("admin.supplier-transactions.reverse", ["id" => "{id}"]) }}'.replace('{id}', ''),
             'slip': '{{ route("admin.supplier-transactions.slip", ["id" => "{id}"]) }}'.replace('{id}', ''),
             'supplier-show': '{{ url("/admin/suppliers") }}/',

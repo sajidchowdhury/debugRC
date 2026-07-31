@@ -171,17 +171,17 @@ class SupplierTransactionController extends Controller
     /**
      * Show payment details with sub-ledger and GL journal.
      */
-    public function show(int $id)
+    public function show(int $supplier_transaction)
     {
         $payment = SupplierPayment::with([
             'supplier', 'branch', 'bank', 'collectedBy',
             'journalEntry.lines.ledger',
             'intercompanyJournalEntry.lines.ledger',
-        ])->findOrFail($id);
+        ])->findOrFail($supplier_transaction);
 
         $supplierLedgerEntries = DB::table('supplier_ledger')
             ->where('reference_type', 'supplier_payment')
-            ->where('reference_id', $id)
+            ->where('reference_id', $supplier_transaction)
             ->orderBy('id')
             ->get();
 
