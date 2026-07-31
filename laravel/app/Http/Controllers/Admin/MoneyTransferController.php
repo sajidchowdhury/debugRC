@@ -26,30 +26,6 @@ class MoneyTransferController extends Controller
         private MoneyTransferService $service
     ) {}
 
-    /**
-     * Recover from PostgreSQL SQLSTATE[25P02] failed transaction.
-     *
-     * When a prior SQL error (e.g. varchar overflow) leaves the current
-     * database connection in an aborted transaction state, PostgreSQL rejects
-     * ALL subsequent queries on that connection until ROLLBACK. This method:
-     *   1. Rolls back the failed transaction
-     *   2. Purges the PDO connection from Laravel's connection pool
-     *   3. Gets a completely fresh connection
-     */
-    private function recoverFromFailedTransaction(): void
-    {
-        try {
-            DB::rollBack();
-        } catch (\Throwable $_) {
-            // Ignore — there may not be an active transaction
-        }
-
-        // Purge the connection completely — this closes the PDO and removes
-        // it from the connection manager, so the next query gets a brand-new
-        // socket to PostgreSQL.
-        DB::purge();
-    }
-
     public function index(Request $request)
     {
         $filters = [
@@ -60,19 +36,8 @@ class MoneyTransferController extends Controller
         ];
 
         $listBranchId = $this->resolveListBranchId();
-
-        try {
-            $transfers = $this->service->getFilteredTransfers($filters, $listBranchId);
-            $stats = $this->service->getStats($listBranchId);
-        } catch (\Throwable $e) {
-            if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
-                $this->recoverFromFailedTransaction();
-                $transfers = $this->service->getFilteredTransfers($filters, $listBranchId);
-                $stats = $this->service->getStats($listBranchId);
-            } else {
-                throw $e;
-            }
-        }
+        $transfers = $this->service->getFilteredTransfers($filters, $listBranchId);
+        $stats = $this->service->getStats($listBranchId);
 
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
         $banks = \App\Models\Bank::active()->orderBy('bank_name')->get();
@@ -138,11 +103,6 @@ class MoneyTransferController extends Controller
             return redirect()->route('admin.money-transfers.show', ['id' => $transfer->id])
                 ->with('success', $successMessage);
         } catch (\Throwable $e) {
-            // Recover from failed transaction state so next request works
-            if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
-                $this->recoverFromFailedTransaction();
-            }
-
             if ($request->expectsJson() || $request->ajax()) {
                 return response()->json([
                     'status'  => 'error',
@@ -155,51 +115,24 @@ class MoneyTransferController extends Controller
 
     public function show(int $id)
     {
-        try {
-            $transfer = MoneyTransfer::with([
-                'fromBranch', 'toBranch', 'fromBank', 'toBank',
-                'journalEntry.lines.ledger',
-                'intercompanyJournalEntry.lines.ledger',
-            ])->findOrFail($id);
+        $transfer = MoneyTransfer::with([
+            'fromBranch', 'toBranch', 'fromBank', 'toBank',
+            'journalEntry.lines.ledger',
+            'intercompanyJournalEntry.lines.ledger',
+        ])->findOrFail($id);
 
-            $cashLedgerEntries = DB::table('cash_ledger')
-                ->where('reference_type', 'money_transfer')
-                ->where('reference_id', $id)
-                ->orderBy('id')
-                ->get();
+        $cashLedgerEntries = DB::table('cash_ledger')
+            ->where('reference_type', 'money_transfer')
+            ->where('reference_id', $id)
+            ->orderBy('id')
+            ->get();
 
-            return view('admin.money-transfers.show', [
-                'title'             => 'Transfer — ' . $transfer->transfer_code,
-                'transfer'          => $transfer,
-                'cashLedgerEntries' => $cashLedgerEntries,
-                'canReverse'        => !$transfer->is_reversed,
-            ]);
-        } catch (\Throwable $e) {
-            if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
-                $this->recoverFromFailedTransaction();
-
-                $transfer = MoneyTransfer::with([
-                    'fromBranch', 'toBranch', 'fromBank', 'toBank',
-                    'journalEntry.lines.ledger',
-                    'intercompanyJournalEntry.lines.ledger',
-                ])->findOrFail($id);
-
-                $cashLedgerEntries = DB::table('cash_ledger')
-                    ->where('reference_type', 'money_transfer')
-                    ->where('reference_id', $id)
-                    ->orderBy('id')
-                    ->get();
-
-                return view('admin.money-transfers.show', [
-                    'title'             => 'Transfer — ' . $transfer->transfer_code,
-                    'transfer'          => $transfer,
-                    'cashLedgerEntries' => $cashLedgerEntries,
-                    'canReverse'        => !$transfer->is_reversed,
-                ]);
-            }
-
-            throw $e;
-        }
+        return view('admin.money-transfers.show', [
+            'title'             => 'Transfer — ' . $transfer->transfer_code,
+            'transfer'          => $transfer,
+            'cashLedgerEntries' => $cashLedgerEntries,
+            'canReverse'        => !$transfer->is_reversed,
+        ]);
     }
 
     public function reverse(Request $request, int $id)
@@ -228,10 +161,6 @@ class MoneyTransferController extends Controller
             return redirect()->route('admin.money-transfers.show', ['id' => $transfer->id])
                 ->with('success', "Transfer {$transfer->transfer_code} reversed. GL + bank balance restored.");
         } catch (\Throwable $e) {
-            if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
-                $this->recoverFromFailedTransaction();
-            }
-
             if ($request->expectsJson() || $request->ajax()) {
                 return response()->json([
                     'status'  => 'error',
@@ -244,20 +173,9 @@ class MoneyTransferController extends Controller
 
     public function slip(int $id)
     {
-        try {
-            $transfer = MoneyTransfer::with([
-                'fromBranch', 'toBranch', 'fromBank', 'toBank',
-            ])->findOrFail($id);
-        } catch (\Throwable $e) {
-            if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
-                $this->recoverFromFailedTransaction();
-                $transfer = MoneyTransfer::with([
-                    'fromBranch', 'toBranch', 'fromBank', 'toBank',
-                ])->findOrFail($id);
-            } else {
-                throw $e;
-            }
-        }
+        $transfer = MoneyTransfer::with([
+            'fromBranch', 'toBranch', 'fromBank', 'toBank',
+        ])->findOrFail($id);
 
         return view('admin.money-transfers.slip', [
             'title'    => 'Money Transfer Slip',
@@ -267,24 +185,11 @@ class MoneyTransferController extends Controller
 
     public function audit()
     {
-        try {
-            $logs = DB::table('user_audit_log')
-                ->where('action', 'LIKE', 'money_transfer_%')
-                ->orderBy('created_at', 'desc')
-                ->limit(300)
-                ->get();
-        } catch (\Throwable $e) {
-            if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
-                $this->recoverFromFailedTransaction();
-                $logs = DB::table('user_audit_log')
-                    ->where('action', 'LIKE', 'money_transfer_%')
-                    ->orderBy('created_at', 'desc')
-                    ->limit(300)
-                    ->get();
-            } else {
-                throw $e;
-            }
-        }
+        $logs = DB::table('user_audit_log')
+            ->where('action', 'LIKE', 'money_transfer_%')
+            ->orderBy('created_at', 'desc')
+            ->limit(300)
+            ->get();
 
         return view('admin.money-transfers.audit', [
             'title' => 'Money Transfer Audit Logs',

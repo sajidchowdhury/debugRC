@@ -4,7 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use App\Traits\AuditableMasterData;
-use App\Models\Scopes\BranchScope;
+use App\Models\Scopes\MoneyTransferBranchScope;
 
 /**
  * Money Transfer — Phase 4 (Accounts Sub-Ledger).
@@ -76,7 +76,7 @@ class MoneyTransfer extends Model
 
     protected static function booted(): void
     {
-        static::addGlobalScope(new BranchScope);
+        static::addGlobalScope(new MoneyTransferBranchScope);
     }
 
     public function fromBranch(): \Illuminate\Database\Eloquent\Relations\BelongsTo

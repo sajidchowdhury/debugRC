@@ -55,25 +55,6 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        // PostgreSQL 25P02 — failed transaction recovery.
-        // When a prior SQL error (e.g. varchar overflow) leaves the DB
-        // connection in an aborted transaction state, PostgreSQL rejects ALL
-        // subsequent queries on that connection until ROLLBACK. This can
-        // happen in middleware, service providers, or controllers — so we
-        // catch it globally, purge the poisoned connection, and retry the
-        // request once with a fresh connection.
-        $exceptions->render(function (\Illuminate\Database\QueryException $e, \Illuminate\Http\Request $request) {
-            $msg = $e->getMessage();
-            if (str_contains($msg, '25P02') || str_contains($msg, 'failed sql transaction')) {
-                try { \Illuminate\Support\Facades\DB::rollBack(); } catch (\Throwable $_) {}
-                \Illuminate\Support\Facades\DB::purge();
-
-                // Retry the same request once — the fresh connection will work.
-                $retry = app()->handle($request);
-                return $retry;
-            }
-        });
-
         // Phase 3 (Stock Take plan): render the outbound-freeze block as a
         // clear 422 — JSON for API/AJAX callers, a redirect-back-with-error
         // for web. This is registered globally so EVERY outbound service
