@@ -83,7 +83,7 @@
     {{-- Stats cards: 7 cards --}}
     <div class="row g-3 mb-3">
         <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
+            <div class="card border-0 shadow-sm h-100 supp-txn-stat-card">
                 <div class="card-body d-flex align-items-center">
                     <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
                          style="width:48px;height:48px;background:#0d9488;">
@@ -97,7 +97,7 @@
             </div>
         </div>
         <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
+            <div class="card border-0 shadow-sm h-100 supp-txn-stat-card">
                 <div class="card-body d-flex align-items-center">
                     <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
                          style="width:48px;height:48px;background:#059669;">
@@ -111,7 +111,7 @@
             </div>
         </div>
         <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
+            <div class="card border-0 shadow-sm h-100 supp-txn-stat-card">
                 <div class="card-body d-flex align-items-center">
                     <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
                          style="width:48px;height:48px;background:#0d9488;">
@@ -125,7 +125,7 @@
             </div>
         </div>
         <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
+            <div class="card border-0 shadow-sm h-100 supp-txn-stat-card">
                 <div class="card-body d-flex align-items-center">
                     <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
                          style="width:48px;height:48px;background:#7c3aed;">
@@ -139,7 +139,7 @@
             </div>
         </div>
         <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
+            <div class="card border-0 shadow-sm h-100 supp-txn-stat-card">
                 <div class="card-body d-flex align-items-center">
                     <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
                          style="width:48px;height:48px;background:#64748b;">
@@ -153,10 +153,10 @@
             </div>
         </div>
         <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
+            <div class="card border-0 shadow-sm h-100 supp-txn-stat-card">
                 <div class="card-body d-flex align-items-center">
                     <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
-                         style="width:48px;height:48px;background:#2563eb;">
+                         style="width:48px;height:48px;background:#0ea5e9;">
                         <i class="fas fa-university"></i>
                     </div>
                     <div>
@@ -167,7 +167,7 @@
             </div>
         </div>
         <div class="col-sm-6 col-lg">
-            <div class="card border-0 shadow-sm h-100">
+            <div class="card border-0 shadow-sm h-100 supp-txn-stat-card">
                 <div class="card-body d-flex align-items-center">
                     <div class="rounded-3 d-flex align-items-center justify-content-center me-3 text-white"
                          style="width:48px;height:48px;background:#dc2626;">

@@ -315,9 +315,9 @@ class SupplierTransactionService
             $query->where('is_reversed', false);
         }
 
-        // Default date filter: today if no dates provided.
+        // Default date filter: last 30 days if no dates provided.
         if (empty($filters['date_from']) && empty($filters['date_to']) && empty($filters['status'])) {
-            $query->where('payment_date', now()->format('Y-m-d'));
+            $query->where('payment_date', '>=', now()->subDays(30)->format('Y-m-d'));
         }
 
         return $query->orderBy('payment_date', 'desc')

@@ -67,6 +67,12 @@
     padding: 1rem;
     margin-bottom: 0.75rem;
     box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+    transition: box-shadow 0.2s, transform 0.15s;
+}
+
+.supp-txn-mobile-card:hover {
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+    transform: translateY(-1px);
 }
 
 .supp-txn-mobile-card.reversed {
@@ -85,6 +91,11 @@
     border: 1px solid #e2e8f0;
     border-radius: 12px;
     padding: 0.85rem 1rem;
+    transition: border-color 0.2s;
+}
+
+.supp-txn-detail-item:hover {
+    border-color: #cbd5e1;
 }
 
 .supp-txn-detail-item .label {
@@ -142,87 +153,21 @@
     color: #9a3412;
 }
 
-.supp-txn-supplier-picker {
-    display: flex;
-    gap: 0.5rem;
-    align-items: flex-start;
+/* Index page stat cards — premium hover */
+.supp-txn-stat-card {
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.supp-txn-stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
 }
 
-.supp-txn-search-input:focus {
-    border-color: #c2410c;
-    box-shadow: 0 0 0 3px rgba(194, 65, 12, 0.15);
+/* Table row hover */
+#dataTable tbody tr {
+    transition: background 0.15s;
 }
-
-.supp-txn-search-input.is-locked {
-    background: #f8fafc;
-    cursor: default;
-}
-
-.supp-txn-suggest-list {
-    display: none;
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 100%;
-    z-index: 1060;
-    max-height: 280px;
-    overflow-y: auto;
-    background: #fff;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
-    margin-top: 4px;
-}
-
-.supp-txn-suggest-list.show {
-    display: block;
-}
-
-.supp-txn-suggest-item {
-    display: block;
-    width: 100%;
-    text-align: left;
-    border: none;
-    background: #fff;
-    padding: 0.65rem 0.9rem;
-    border-bottom: 1px solid #f1f5f9;
-}
-
-.supp-txn-suggest-item:hover {
-    background: #fff7ed;
-}
-
-.supp-txn-suggest-item .suggest-title {
-    font-weight: 600;
-    font-size: 0.92rem;
-    display: block;
-}
-
-.supp-txn-suggest-item .suggest-meta {
-    font-size: 0.78rem;
-    color: #64748b;
-    display: block;
-}
-
-.supp-txn-suggest-empty {
-    padding: 0.75rem 0.9rem;
-    color: #64748b;
-    font-size: 0.85rem;
-}
-
-.supp-txn-recents {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-}
-
-.supp-txn-recents.is-hidden {
-    display: none;
-}
-
-.supp-txn-recents .btn {
-    font-size: 0.78rem;
-    padding: 0.2rem 0.55rem;
+#dataTable tbody tr:hover {
+    background: #f8fafc !important;
 }
 
 /* Suggest dropdown (used by Blade views — mirrors .supp-txn-suggest-list) */
@@ -276,4 +221,9 @@
     padding: 0.75rem 0.9rem;
     color: #64748b;
     font-size: 0.85rem;
+}
+
+/* Select2 supplier option styling */
+.select2-container--bootstrap-5 .select2-selection__rendered {
+    font-size: 0.9rem;
 }

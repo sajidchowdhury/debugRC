@@ -547,6 +547,14 @@
         const suggestBox = document.getElementById('suppTxnSupplierSuggestions');
         const supplierIdInput = document.getElementById('supplier_id');
         const changeBtn = document.getElementById('suppTxnChangeSupplier');
+
+        // If the search input doesn't exist (new select2-based form), return a stub.
+        if (!searchInput) {
+            return {
+                getLabel: () => 'Supplier',
+                init() {},
+            };
+        }
         const hubLink = document.getElementById('suppTxnSupplierHubLink');
         const hubAnchor = document.getElementById('suppTxnSupplierHubAnchor');
         const recentsBox = document.getElementById('suppTxnSupplierRecents');
@@ -763,8 +771,8 @@
                 e.preventDefault();
 
                 if (!supplierIdInput?.value) {
-                    Swal.fire('Supplier required', 'Search and select a supplier.', 'warning');
-                    document.getElementById('suppTxnSupplierSearch')?.focus();
+                    Swal.fire('Supplier required', 'Please select a supplier.', 'warning');
+                    supplierIdInput?.focus();
                     return;
                 }
 

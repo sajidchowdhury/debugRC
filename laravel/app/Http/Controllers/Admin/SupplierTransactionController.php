@@ -73,26 +73,24 @@ class SupplierTransactionController extends Controller
         $banks = \App\Models\Bank::active()->orderBy('bank_name')->get();
         $employees = \App\Models\Employee::active()->orderBy('name')->get();
 
-        // Branch restriction: non-admin users can only create payments for their own branch.
+        // Pre-compute payable balance for each supplier (for select dropdown)
+        $supplierPayables = [];
+        foreach ($suppliers as $s) {
+            $supplierPayables[$s->id] = $this->service->getSupplierDue($s->id);
+        }
+
+        // Branch restriction: non-admin users get their own branch auto-selected.
         $user = auth()->user();
         $userBranchId = (int) (session('branch_id') ?? ($user ? $user->getBranchId() : 0));
         $isAdmin = $user && $user->isAdmin();
-
-        if ($isAdmin) {
-            $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
-        } else {
-            // Non-admin: only their own branch
-            $branches = \App\Models\Branch::active()
-                ->where('id', $userBranchId)
-                ->orderBy('branch_name')
-                ->get();
-        }
+        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
         return view('admin.supplier-transactions.create', [
             'title'              => $this->getTitleForType($transactionType),
             'transactionType'    => $transactionType,
             'preselectSupplier'  => $preselectSupplier,
             'suppliers'          => $suppliers,
+            'supplierPayables'   => $supplierPayables,
             'branches'           => $branches,
             'banks'              => $banks,
             'employees'          => $employees,
