@@ -400,8 +400,8 @@
         csrf_token: '{{ csrf_token() }}',
         routes: {
             'index': '{{ route("admin.employee-transactions.index") }}',
-            'show': '{{ route("admin.employee-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
-            'reverse': '{{ route("admin.employee-transactions.reverse", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
+            'show': '{{ route("admin.employee-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'reverse': '{{ route("admin.employee-transactions.reverse", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
             'search': '{{ route("admin.employee-transactions.search") }}',
             'get-due': '{{ route("admin.employee-transactions.get-due") }}',
             'employee-show': '{{ url("/admin/employees") }}/',

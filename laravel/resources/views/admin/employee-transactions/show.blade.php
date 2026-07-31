@@ -526,9 +526,9 @@
         transactionCode: '{{ $transaction->transaction_code }}',
         routes: {
             'index': '{{ route("admin.employee-transactions.index") }}',
-            'show': '{{ route("admin.employee-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
-            'reverse': '{{ route("admin.employee-transactions.reverse", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
-            'slip': '{{ route("admin.employee-transactions.slip", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
+            'show': '{{ route("admin.employee-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'reverse': '{{ route("admin.employee-transactions.reverse", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'slip': '{{ route("admin.employee-transactions.slip", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
             'employee-show': '{{ url("/admin/employees") }}/',
         },
     };
@@ -566,7 +566,7 @@ $(function () {
             if (result.isConfirmed && result.value) {
                 // Submit via AJAX
                 $.ajax({
-                    url: '/admin/employee-transactions/' + window.ET_BOOT.transactionId + '/reverse?XTransformPort=' + window.ET_BOOT.baseUrl.split('/').pop(),
+                    url: '/admin/employee-transactions/' + window.ET_BOOT.transactionId + '/reverse',
                     method: 'POST',
                     data: {
                         _token: window.ET_BOOT.csrf_token,

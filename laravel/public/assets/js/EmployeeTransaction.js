@@ -22,17 +22,16 @@
         adjustment: 'Adjustment',
     };
 
-
     let empTable = null;
 
-    function etBaseUrl() {
-        if (window.ET_BOOT?.baseUrl) {
-            const u = window.ET_BOOT.baseUrl;
-            return u.endsWith('/') ? u : u + '/';
+    /** Resolve a named route from ET_BOOT.routes, with optional ID substitution. */
+    function route(name, id) {
+        const r = window.ET_BOOT?.routes?.[name];
+        if (!r) return '';
+        if (id !== undefined) {
+            return r.replace('{id}', id);
         }
-        const el = document.getElementById('base_url');
-        const u = el ? el.value : '/';
-        return u.endsWith('/') ? u : u + '/';
+        return r;
     }
 
     function escapeHtml(s) {
@@ -67,9 +66,6 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-        const base = etBaseUrl();
-        window.ET_BASE = base;
-
         document.body.addEventListener('click', (e) => {
             const btn = e.target.closest('.js-emp-reverse');
             if (!btn) return;
@@ -84,7 +80,7 @@
                 '<p class="text-muted text-center py-4 mb-0">No transactions found.</p>';
         }
 
-        if (document.getElementById('empTxnFilterForm') && window.showReversed) {
+        if (document.getElementById('empTxnFilterForm') && window.ET_BOOT?.showReversed) {
             const statusField = document.querySelector('#empTxnFilterForm [name="status"]');
             if (statusField) {
                 statusField.value = 'reversed';
@@ -93,7 +89,7 @@
         }
 
         if (document.getElementById('employeeTransactionForm')) {
-            initCreateForm(base);
+            initCreateForm();
         }
 
         $(window).on('resize', () => {
@@ -130,7 +126,6 @@
             return;
         }
 
-        const base = window.ET_BASE || etBaseUrl();
         let html = '';
 
         table.rows({ page: 'current' }).every(function () {
@@ -138,7 +133,7 @@
             if (!row) return;
             const $tr = $(row);
             const id = $tr.find('.js-emp-reverse').data('paymentId')
-                || $tr.find('a[href*="details/"]').attr('href')?.split('/').pop();
+                || $tr.find('a[href*="employee-transactions/"]').attr('href')?.split('/').pop();
             const code = $tr.find('.branch-code-pill').text().trim();
             const name = $tr.find('.branch-name-cell .name').text().trim();
             const typePill = $tr.find('.emp-txn-type-pill');
@@ -147,7 +142,7 @@
             const amount = $tr.find('.emp-txn-amount').text().trim();
             const date = $tr.find('td:first small').text().trim();
             const mode = $tr.find('td').eq(5).text().trim();
-            const canReverse = !window.showReversed && $tr.find('.js-emp-reverse').length > 0;
+            const canReverse = !window.ET_BOOT?.showReversed && $tr.find('.js-emp-reverse').length > 0;
 
             html += `<article class="emp-txn-mobile-card${$tr.hasClass('table-secondary') ? ' reversed' : ''}">
                 <div class="d-flex justify-content-between gap-2">
@@ -160,7 +155,7 @@
                     <span class="emp-txn-amount ${escapeHtml(typeCls)}">${escapeHtml(amount)}</span>
                 </div>
                 <div class="mt-2 d-flex gap-2">
-                    <a href="${base}EmployeeTransaction/details/${id}" class="btn btn-sm btn-outline-primary flex-fill">Details</a>
+                    <a href="${route('show', id)}" class="btn btn-sm btn-outline-primary flex-fill">Details</a>
                     ${canReverse ? `<button type="button" class="btn btn-sm btn-outline-danger js-emp-reverse flex-fill"
                         data-payment-id="${id}" data-payment-code="${escapeHtml(code)}">Reverse</button>` : ''}
                 </div>
@@ -174,17 +169,16 @@
         const container = document.getElementById('empTxnCards');
         const tbody = document.querySelector('#empTxnTable tbody');
         if (!container || !tbody || window.innerWidth >= 768) return;
-        const base = window.ET_BASE || etBaseUrl();
         let html = '';
         tbody.querySelectorAll('tr').forEach((tr) => {
             const revBtn = tr.querySelector('.js-emp-reverse');
-            const id = revBtn?.dataset.paymentId || tr.querySelector('a[href*="details/"]')?.href?.split('/').pop() || '';
+            const id = revBtn?.dataset.paymentId || tr.querySelector('a[href*="employee-transactions/"]')?.href?.split('/').pop() || '';
             const code = tr.querySelector('.branch-code-pill')?.textContent?.trim() || '';
-            const canReverse = !window.showReversed && !!revBtn;
+            const canReverse = !window.ET_BOOT?.showReversed && !!revBtn;
             html += `<article class="emp-txn-mobile-card">
                 <div class="branch-code-pill">${escapeHtml(code)}</div>
                 <div class="mt-2 d-flex gap-2">
-                    <a href="${base}EmployeeTransaction/details/${id}" class="btn btn-sm btn-outline-primary">Details</a>
+                    <a href="${route('show', id)}" class="btn btn-sm btn-outline-primary">Details</a>
                     ${canReverse ? `<button type="button" class="btn btn-sm btn-outline-danger js-emp-reverse" data-payment-id="${id}" data-payment-code="${escapeHtml(code)}">Reverse</button>` : ''}
                 </div>
             </article>`;
@@ -192,7 +186,7 @@
         container.innerHTML = html;
     }
 
-    function initCreateForm(base) {
+    function initCreateForm() {
         const form = document.getElementById('employeeTransactionForm');
         const modeSelect = document.getElementById('payment_mode');
         const bankSection = document.getElementById('bank_section');
@@ -274,9 +268,13 @@
             dueSummary.classList.remove('d-none');
             dueSummary.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Loading balance…';
             try {
-                const res = await fetch(base + 'EmployeeTransaction/get_due', {
+                const res = await fetch(route('get-due'), {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || document.querySelector('input[name="_token"]')?.value || '',
+                    },
                     credentials: 'same-origin',
                     body: 'employee_id=' + encodeURIComponent(eid),
                 });
@@ -309,7 +307,7 @@
             }
 
             try {
-                const res = await fetch(base + 'EmployeeTransaction/store', {
+                const res = await fetch(route('store'), {
                     method: 'POST',
                     body: formData,
                     credentials: 'same-origin',
@@ -321,8 +319,8 @@
                         .then(() => {
                             const tid = result.transaction_id || result.payment_id;
                             window.location.href = tid
-                                ? base + 'EmployeeTransaction/details/' + tid
-                                : base + 'EmployeeTransaction';
+                                ? route('show', tid)
+                                : route('index');
                         });
                 } else {
                     Swal.fire('Error', result.message || 'Save failed', 'error');
@@ -342,7 +340,7 @@
     }
 
     async function reverseTransaction(id, paymentCode) {
-        const csrf = document.querySelector('input[name="csrf_token"]')?.value || '';
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || document.querySelector('input[name="_token"]')?.value || '';
         const { value: reason, isConfirmed } = await Swal.fire({
             title: 'Reverse transaction?',
             html:
@@ -371,8 +369,8 @@
         Swal.fire({ title: 'Reversing…', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
         try {
-            const body = new URLSearchParams({ csrf_token: csrf, id: String(id), reason: reason.trim() });
-            const res = await fetch((window.ET_BASE || etBaseUrl()) + 'EmployeeTransaction/reverse', {
+            const body = new URLSearchParams({ _token: csrf, id: String(id), reason: reason.trim() });
+            const res = await fetch(route('reverse', id), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
@@ -386,8 +384,7 @@
             if (result.status === 'success') {
                 Swal.fire({ icon: 'success', title: 'Reversed', text: result.message, timer: 2000, showConfirmButton: false })
                     .then(() => {
-                        window.location.href = result.redirect_url
-                            || (window.ET_BASE || etBaseUrl()) + 'EmployeeTransaction/details/' + id;
+                        window.location.href = result.redirect_url || route('show', id);
                     });
             } else {
                 Swal.fire('Reversal failed', result.message || 'Could not reverse', 'error');

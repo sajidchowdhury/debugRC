@@ -345,11 +345,11 @@
         glLabels: @json($glLabelsData),
         routes: {
             'index': '{{ route("admin.employee-transactions.index") }}',
-            'show': '{{ route("admin.employee-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
+            'show': '{{ route("admin.employee-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
             'store': '{{ route("admin.employee-transactions.store") }}',
             'search': '{{ route("admin.employee-transactions.search") }}',
             'get-due': '{{ route("admin.employee-transactions.get-due") }}',
-            'reverse': '{{ route("admin.employee-transactions.reverse", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
+            'reverse': '{{ route("admin.employee-transactions.reverse", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
             'employee-show': '{{ url("/admin/employees") }}/',
         },
     };
