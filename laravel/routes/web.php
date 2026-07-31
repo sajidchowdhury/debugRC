@@ -1275,14 +1275,14 @@ Route::middleware('auth')->group(function () {
             ->name('slip')->middleware('role:salesman,accountant,manager,admin');
     });
     // store carries branch_id in the request body → branch.isolation
+    Route::prefix('admin/customer-payments')->name('admin.customer-payments.')->group(function () {
+        Route::post('/', [CustomerPaymentController::class, 'store'])
+            ->name('store')->middleware(['role:salesman,accountant,manager,admin', 'branch.isolation']);
+    });
     Route::resource('admin/customer-payments', CustomerPaymentController::class)
         ->only(['index', 'create'])
         ->names('admin.customer-payments')
         ->middleware('role:salesman,accountant,manager,admin');
-    Route::resource('admin/customer-payments', CustomerPaymentController::class)
-        ->only(['store'])
-        ->names('admin.customer-payments')
-        ->middleware(['role:salesman,accountant,manager,admin', 'branch.isolation']);
     // Show route AFTER resource so create/edit routes match first; no ->where() constraint
     // so route() helper works with placeholder values in JS config
     Route::get('admin/customer-payments/{id}', [CustomerPaymentController::class, 'show'])
@@ -1301,6 +1301,9 @@ Route::middleware('auth')->group(function () {
             ->name('get-due')->middleware('role:accountant,manager,admin');
         Route::get('search', [SupplierTransactionController::class, 'searchSupplier'])
             ->name('search')->middleware('role:accountant,manager,admin');
+        // Store — explicit POST to avoid Route::resource() split naming issues
+        Route::post('/', [SupplierTransactionController::class, 'store'])
+            ->name('store')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         // Payment reverse — accountant, manager, admin
         Route::post('{id}/reverse', [SupplierTransactionController::class, 'reverse'])
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
@@ -1312,10 +1315,6 @@ Route::middleware('auth')->group(function () {
         ->only(['index', 'create'])
         ->names('admin.supplier-transactions')
         ->middleware('role:accountant,manager,admin');
-    Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
-        ->only(['store'])
-        ->names('admin.supplier-transactions')
-        ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
     // Show route AFTER resource so create/edit routes match first; no ->where() constraint
     // so route() helper works with placeholder values in JS config
     Route::get('admin/supplier-transactions/{id}', [SupplierTransactionController::class, 'show'])
@@ -1334,6 +1333,9 @@ Route::middleware('auth')->group(function () {
             ->name('get-due')->middleware('role:accountant,manager,admin');
         Route::get('search', [EmployeeTransactionController::class, 'searchEmployee'])
             ->name('search')->middleware('role:accountant,manager,admin');
+        // Store — explicit POST to avoid Route::resource() split naming issues
+        Route::post('/', [EmployeeTransactionController::class, 'store'])
+            ->name('store')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         // Transaction reverse — accountant, manager, admin
         Route::post('{id}/reverse', [EmployeeTransactionController::class, 'reverse'])
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
@@ -1345,10 +1347,6 @@ Route::middleware('auth')->group(function () {
         ->only(['index', 'create'])
         ->names('admin.employee-transactions')
         ->middleware('role:accountant,manager,admin');
-    Route::resource('admin/employee-transactions', EmployeeTransactionController::class)
-        ->only(['store'])
-        ->names('admin.employee-transactions')
-        ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
     // Show route AFTER resource so create/edit routes match first; no ->where() constraint
     // so route() helper works with placeholder values in JS config
     Route::get('admin/employee-transactions/{id}', [EmployeeTransactionController::class, 'show'])
@@ -1364,6 +1362,9 @@ Route::middleware('auth')->group(function () {
     Route::prefix('admin/money-transfers')->name('admin.money-transfers.')->group(function () {
         Route::get('audit', [MoneyTransferController::class, 'audit'])
             ->name('audit')->middleware('role:accountant,manager,admin');
+        // Store — explicit POST to avoid Route::resource() split naming issues
+        Route::post('/', [MoneyTransferController::class, 'store'])
+            ->name('store')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         Route::post('{id}/reverse', [MoneyTransferController::class, 'reverse'])
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         Route::get('{id}/slip', [MoneyTransferController::class, 'slip'])
@@ -1373,10 +1374,6 @@ Route::middleware('auth')->group(function () {
         ->only(['index', 'create'])
         ->names('admin.money-transfers')
         ->middleware('role:accountant,manager,admin');
-    Route::resource('admin/money-transfers', MoneyTransferController::class)
-        ->only(['store'])
-        ->names('admin.money-transfers')
-        ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
     // Show route AFTER resource so create/edit routes match first; no ->where() constraint
     // so route() helper works with placeholder values in JS config
     Route::get('admin/money-transfers/{id}', [MoneyTransferController::class, 'show'])
@@ -1390,6 +1387,9 @@ Route::middleware('auth')->group(function () {
     Route::prefix('admin/other-incomes')->name('admin.other-incomes.')->group(function () {
         Route::get('audit', [OtherIncomeController::class, 'audit'])
             ->name('audit')->middleware('role:accountant,manager,admin');
+        // Store — explicit POST to avoid Route::resource() split naming issues
+        Route::post('/', [OtherIncomeController::class, 'store'])
+            ->name('store')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         Route::post('{id}/reverse', [OtherIncomeController::class, 'reverse'])
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         Route::get('{id}/slip', [OtherIncomeController::class, 'slip'])
@@ -1399,10 +1399,6 @@ Route::middleware('auth')->group(function () {
         ->only(['index', 'create'])
         ->names('admin.other-incomes')
         ->middleware('role:accountant,manager,admin');
-    Route::resource('admin/other-incomes', OtherIncomeController::class)
-        ->only(['store'])
-        ->names('admin.other-incomes')
-        ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
     // Show route AFTER resource so create/edit routes match first; no ->where() constraint
     // so route() helper works with placeholder values in JS config
     Route::get('admin/other-incomes/{id}', [OtherIncomeController::class, 'show'])
@@ -1416,6 +1412,9 @@ Route::middleware('auth')->group(function () {
     Route::prefix('admin/other-expenses')->name('admin.other-expenses.')->group(function () {
         Route::get('audit', [OtherExpenseController::class, 'audit'])
             ->name('audit')->middleware('role:accountant,manager,admin');
+        // Store — explicit POST to avoid Route::resource() split naming issues
+        Route::post('/', [OtherExpenseController::class, 'store'])
+            ->name('store')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         Route::post('{id}/reverse', [OtherExpenseController::class, 'reverse'])
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         Route::get('{id}/slip', [OtherExpenseController::class, 'slip'])
@@ -1425,10 +1424,6 @@ Route::middleware('auth')->group(function () {
         ->only(['index', 'create'])
         ->names('admin.other-expenses')
         ->middleware('role:accountant,manager,admin');
-    Route::resource('admin/other-expenses', OtherExpenseController::class)
-        ->only(['store'])
-        ->names('admin.other-expenses')
-        ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
     // Show route AFTER resource so create/edit routes match first; no ->where() constraint
     // so route() helper works with placeholder values in JS config
     Route::get('admin/other-expenses/{id}', [OtherExpenseController::class, 'show'])
