@@ -218,7 +218,7 @@
     <div class="card border-0 shadow-sm">
         <div class="card-body">
             <div class="table-responsive">
-                <table class="table table-sm table-striped table-hover align-middle mb-0" id="dataTable">
+                <table class="table table-sm table-striped table-hover align-middle mb-0" id="oeTable">
                     <thead class="table-light">
                         <tr>
                             <th>Code</th>
@@ -296,19 +296,28 @@
     </div>
 </div>
 
+{{-- Boot config for OtherExpense.js --}}
+<script>
+    window.OE_BOOT = {
+        baseUrl: '{{ url("/") }}/',
+        csrf_token: '{{ csrf_token() }}',
+        showReversed: {{ $showReversed ? 'true' : 'false' }},
+        routes: {
+            'index': '{{ route("admin.other-expenses.index") }}',
+            'show': '{{ route("admin.other-expenses.show", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'reverse': '{{ route("admin.other-expenses.reverse", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'slip': '{{ route("admin.other-expenses.slip", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+        },
+    };
+</script>
+
 @push('scripts')
+<script src="/assets/js/OtherExpense.js?v={{ filemtime(public_path('assets/js/OtherExpense.js')) }}"></script>
 <script>
 $(function () {
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
-
-    // Client-side DataTable for ordering and quick search on current page
-    $('#dataTable').DataTable({
-        paging: false,
-        info: false,
-        ordering: true,
-        dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
-        language: { search: 'Filter rows:', emptyTable: 'No expenses on this page.' }
-    });
+    // DataTable initialization is handled by OtherExpense.js initIndex()
+    // to avoid "Cannot reinitialise DataTable" and "Incorrect column count" warnings.
 });
 </script>
 @endpush

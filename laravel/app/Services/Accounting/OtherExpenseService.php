@@ -181,7 +181,7 @@ class OtherExpenseService
         $query = OtherExpense::with(['branch', 'bank'])
             ->when($filters['date_from'] ?? null, fn($q, $d) => $q->where('expense_date', '>=', $d))
             ->when($filters['date_to'] ?? null, fn($q, $d) => $q->where('expense_date', '<=', $d))
-            ->when($filters['payment_mode'] ?? null, fn($q, $m) => $q->where('payment_mode', $m))
+            ->when(($filters['payment_mode'] ?? null) && $filters['payment_mode'] !== 'all', fn($q, $m) => $q->where('payment_mode', $m))
             ->when($filters['expense_type'] ?? null, fn($q, $t) => $q->where('expense_type', $t))
             ->when($filters['branch_id'] ?? null, fn($q, $bid) => $q->where('branch_id', $bid))
             ->when($filters['search'] ?? null, function ($q, $search) {
@@ -218,8 +218,8 @@ class OtherExpenseService
         return [
             'total'        => (clone $baseQuery)->count(),
             'total_amount' => (float) (clone $baseQuery)->where('is_reversed', false)->sum('amount'),
-            'cash'         => (float) (clone $baseQuery)->where('is_reversed', false)->where('payment_mode', 'cash')->sum('amount'),
-            'bank'         => (float) (clone $baseQuery)->where('is_reversed', false)->where('payment_mode', 'bank')->sum('amount'),
+            'cash_total'   => (float) (clone $baseQuery)->where('is_reversed', false)->where('payment_mode', 'cash')->sum('amount'),
+            'bank_total'   => (float) (clone $baseQuery)->where('is_reversed', false)->where('payment_mode', 'bank')->sum('amount'),
             'reversed'     => (clone $baseQuery)->where('is_reversed', true)->count(),
             'today'        => (float) (clone $baseQuery)->where('is_reversed', false)
                 ->where('expense_date', now()->format('Y-m-d'))
