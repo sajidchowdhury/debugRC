@@ -410,7 +410,7 @@
 </script>
 
 @push('scripts')
-<script src="/assets/js/EmployeeTransaction.js"></script>
+<script src="/assets/js/EmployeeTransaction.js?v={{ filemtime(public_path('assets/js/EmployeeTransaction.js')) }}"></script>
 <script>
 $(function () {
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });

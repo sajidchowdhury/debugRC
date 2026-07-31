@@ -582,8 +582,8 @@
 </script>
 
 @push('scripts')
-<link rel="stylesheet" href="/assets/css/supplier-transaction-theme.css">
-<script src="/assets/js/SupplierTransaction.js"></script>
+<link rel="stylesheet" href="/assets/css/supplier-transaction-theme.css?v={{ filemtime(public_path('assets/css/supplier-transaction-theme.css')) }}">
+<script src="/assets/js/SupplierTransaction.js?v={{ filemtime(public_path('assets/js/SupplierTransaction.js')) }}"></script>
 <script>
 $(function () {
     $('.select2').select2({

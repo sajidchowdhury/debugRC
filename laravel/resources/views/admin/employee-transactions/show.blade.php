@@ -631,7 +631,7 @@
 </script>
 
 @push('scripts')
-<script src="/assets/js/EmployeeTransaction.js"></script>
+<script src="/assets/js/EmployeeTransaction.js?v={{ filemtime(public_path('assets/js/EmployeeTransaction.js')) }}"></script>
 <script>
 $(function () {
     // ====== Reverse transaction (SweetAlert2 prompt for reason — required) ======

@@ -669,8 +669,8 @@
 </script>
 
 @push('scripts')
-<link rel="stylesheet" href="/assets/css/employee-transaction-theme.css">
-<script src="/assets/js/EmployeeTransaction.js"></script>
+<link rel="stylesheet" href="/assets/css/employee-transaction-theme.css?v={{ filemtime(public_path('assets/css/employee-transaction-theme.css')) }}">
+<script src="/assets/js/EmployeeTransaction.js?v={{ filemtime(public_path('assets/js/EmployeeTransaction.js')) }}"></script>
 <script>
 $(function () {
     var $form          = $('#employeeTransactionForm');
