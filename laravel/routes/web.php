@@ -1271,10 +1271,6 @@ Route::middleware('auth')->group(function () {
         // Phase 3B: Print payment slip (voucher)
         Route::get('{id}/slip', [CustomerPaymentController::class, 'slip'])
             ->name('slip')->middleware('role:salesman,accountant,manager,admin');
-        // Show details — uses {id} to match cancel/slip/print-receipt parameter naming
-        Route::get('{id}', [CustomerPaymentController::class, 'show'])
-            ->name('show')->middleware('role:salesman,accountant,manager,admin')
-            ->where('id', '[0-9]+');
     });
     // store carries branch_id in the request body → branch.isolation
     Route::resource('admin/customer-payments', CustomerPaymentController::class)
@@ -1285,6 +1281,11 @@ Route::middleware('auth')->group(function () {
         ->only(['store'])
         ->names('admin.customer-payments')
         ->middleware(['role:salesman,accountant,manager,admin', 'branch.isolation']);
+    // Show route AFTER resource so create/edit routes match first; no ->where() constraint
+    // so route() helper works with placeholder values in JS config
+    Route::get('admin/customer-payments/{id}', [CustomerPaymentController::class, 'show'])
+        ->name('admin.customer-payments.show')
+        ->middleware('role:salesman,accountant,manager,admin');
 
     // ============================================================
     // Phase 1 (Accounts Sub-Ledger): Supplier Transactions
@@ -1304,10 +1305,6 @@ Route::middleware('auth')->group(function () {
         // Print payment slip
         Route::get('{id}/slip', [SupplierTransactionController::class, 'slip'])
             ->name('slip')->middleware('role:accountant,manager,admin');
-        // Show details — uses {id} to match reverse/slip parameter naming
-        Route::get('{id}', [SupplierTransactionController::class, 'show'])
-            ->name('show')->middleware('role:accountant,manager,admin')
-            ->where('id', '[0-9]+');
     });
     Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
         ->only(['index', 'create'])
@@ -1317,6 +1314,11 @@ Route::middleware('auth')->group(function () {
         ->only(['store'])
         ->names('admin.supplier-transactions')
         ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+    // Show route AFTER resource so create/edit routes match first; no ->where() constraint
+    // so route() helper works with placeholder values in JS config
+    Route::get('admin/supplier-transactions/{id}', [SupplierTransactionController::class, 'show'])
+        ->name('admin.supplier-transactions.show')
+        ->middleware('role:accountant,manager,admin');
 
     // ============================================================
     // Phase 2 (Accounts Sub-Ledger): Employee Transactions
@@ -1336,10 +1338,6 @@ Route::middleware('auth')->group(function () {
         // Print transaction slip
         Route::get('{id}/slip', [EmployeeTransactionController::class, 'slip'])
             ->name('slip')->middleware('role:accountant,manager,admin');
-        // Show details — uses {id} to match reverse/slip parameter naming
-        Route::get('{id}', [EmployeeTransactionController::class, 'show'])
-            ->name('show')->middleware('role:accountant,manager,admin')
-            ->where('id', '[0-9]+');
     });
     Route::resource('admin/employee-transactions', EmployeeTransactionController::class)
         ->only(['index', 'create'])
@@ -1349,6 +1347,11 @@ Route::middleware('auth')->group(function () {
         ->only(['store'])
         ->names('admin.employee-transactions')
         ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+    // Show route AFTER resource so create/edit routes match first; no ->where() constraint
+    // so route() helper works with placeholder values in JS config
+    Route::get('admin/employee-transactions/{id}', [EmployeeTransactionController::class, 'show'])
+        ->name('admin.employee-transactions.show')
+        ->middleware('role:accountant,manager,admin');
 
     // ============================================================
 
@@ -1363,10 +1366,6 @@ Route::middleware('auth')->group(function () {
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         Route::get('{id}/slip', [MoneyTransferController::class, 'slip'])
             ->name('slip')->middleware('role:accountant,manager,admin');
-        // Show details — uses {id} to match reverse/slip parameter naming
-        Route::get('{id}', [MoneyTransferController::class, 'show'])
-            ->name('show')->middleware('role:accountant,manager,admin')
-            ->where('id', '[0-9]+');
     });
     Route::resource('admin/money-transfers', MoneyTransferController::class)
         ->only(['index', 'create'])
@@ -1376,6 +1375,11 @@ Route::middleware('auth')->group(function () {
         ->only(['store'])
         ->names('admin.money-transfers')
         ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+    // Show route AFTER resource so create/edit routes match first; no ->where() constraint
+    // so route() helper works with placeholder values in JS config
+    Route::get('admin/money-transfers/{id}', [MoneyTransferController::class, 'show'])
+        ->name('admin.money-transfers.show')
+        ->middleware('role:accountant,manager,admin');
     // Phase 8.5 + Phase 2: Sales Returns (stock IN at ORIGINAL avg_cost + GL)
     // P0-7: RBAC — create/store is salesman/manager/admin; confirm is
     // warehouse_manager/accountant/manager/admin (two-step return);
