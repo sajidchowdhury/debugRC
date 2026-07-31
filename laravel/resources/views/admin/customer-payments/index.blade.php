@@ -351,13 +351,22 @@ $(function () {
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
 
     // DataTables on visible rows only (server-side pagination handles page size).
-    $('#dataTable').DataTable({
-        paging: false,
-        info: false,
-        ordering: true,
-        dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
-        language: { search: 'Filter rows:', emptyTable: 'No payments on this page.' }
-    });
+    // Only initialize DataTable when there are actual data rows (not just the
+    // empty colspan row), otherwise DataTables throws a column-count warning.
+    var $dataTable = $('#dataTable');
+    var hasDataRows = $dataTable.find('tbody tr').filter(function () {
+        return $(this).find('td[colspan]').length === 0;
+    }).length > 0;
+
+    if (hasDataRows) {
+        $dataTable.DataTable({
+            paging: false,
+            info: false,
+            ordering: true,
+            dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
+            language: { search: 'Filter rows:', emptyTable: 'No payments on this page.' }
+        });
+    }
 });
 </script>
 @endpush

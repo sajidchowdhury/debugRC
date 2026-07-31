@@ -1302,10 +1302,12 @@ Route::middleware('auth')->group(function () {
     Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
         ->only(['index', 'create', 'show'])
         ->names('admin.supplier-transactions')
+        ->parameter('supplier_transaction', 'id')
         ->middleware('role:accountant,manager,admin');
     Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
         ->only(['store'])
         ->names('admin.supplier-transactions')
+        ->parameter('supplier_transaction', 'id')
         ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
 
     // ============================================================

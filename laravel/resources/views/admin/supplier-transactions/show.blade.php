@@ -700,7 +700,7 @@
         paymentCode: '{{ $payment->payment_code }}',
         routes: {
             'index': '{{ route("admin.supplier-transactions.index") }}',
-            'show': '{{ rtrim(route("admin.supplier-transactions.show", ["supplier_transaction" => "{id}"]), "}") }}'.replace('{id}', ''),
+            'show': '{{ route("admin.supplier-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
             'reverse': '{{ route("admin.supplier-transactions.reverse", ["id" => "{id}"]) }}'.replace('{id}', ''),
             'slip': '{{ route("admin.supplier-transactions.slip", ["id" => "{id}"]) }}'.replace('{id}', ''),
             'supplier-show': '{{ url("/admin/suppliers") }}/',

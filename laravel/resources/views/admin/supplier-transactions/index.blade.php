@@ -287,7 +287,7 @@
                         @forelse ($payments as $p)
                             <tr class="{{ $p->is_reversed ? 'table-danger' : '' }}">
                                 <td>
-                                    <a href="{{ route('admin.supplier-transactions.show', ['supplier_transaction' => $p->id]) }}"
+                                    <a href="{{ route('admin.supplier-transactions.show', ['id' => $p->id]) }}"
                                        class="fw-semibold text-decoration-none">
                                         {{ $p->payment_code }}
                                     </a>
@@ -328,7 +328,7 @@
                                     @endif
                                 </td>
                                 <td class="text-center text-nowrap">
-                                    <a href="{{ route('admin.supplier-transactions.show', ['supplier_transaction' => $p->id]) }}"
+                                    <a href="{{ route('admin.supplier-transactions.show', ['id' => $p->id]) }}"
                                        class="btn btn-sm btn-outline-secondary" title="View details">
                                         <i class="fas fa-eye"></i>
                                     </a>
@@ -369,7 +369,7 @@
         csrf_token: '{{ csrf_token() }}',
         routes: {
             'index': '{{ route("admin.supplier-transactions.index") }}',
-            'show': '{{ rtrim(route("admin.supplier-transactions.show", ["supplier_transaction" => "{id}"]), "}") }}'.replace('{id}', ''),
+            'show': '{{ route("admin.supplier-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
             'reverse': '{{ route("admin.supplier-transactions.reverse", ["id" => "{id}"]) }}'.replace('{id}', ''),
             'search': '{{ route("admin.supplier-transactions.search") }}',
             'get-due': '{{ route("admin.supplier-transactions.get-due") }}',
@@ -385,14 +385,23 @@
 $(function () {
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
 
-    // Client-side DataTable for ordering and quick search on current page
-    $('#dataTable').DataTable({
-        paging: false,
-        info: false,
-        ordering: true,
-        dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
-        language: { search: 'Filter rows:', emptyTable: 'No payments on this page.' }
-    });
+    // Client-side DataTable for ordering and quick search on current page.
+    // Only initialize DataTable when there are actual data rows (not just the
+    // empty colspan row), otherwise DataTables throws a column-count warning.
+    var $dataTable = $('#dataTable');
+    var hasDataRows = $dataTable.find('tbody tr').filter(function () {
+        return $(this).find('td[colspan]').length === 0;
+    }).length > 0;
+
+    if (hasDataRows) {
+        $dataTable.DataTable({
+            paging: false,
+            info: false,
+            ordering: true,
+            dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
+            language: { search: 'Filter rows:', emptyTable: 'No payments on this page.' }
+        });
+    }
 });
 </script>
 @endpush

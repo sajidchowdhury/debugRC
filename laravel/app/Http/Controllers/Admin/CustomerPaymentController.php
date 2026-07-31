@@ -76,8 +76,23 @@ class CustomerPaymentController extends Controller
     public function create(Request $request)
     {
         $customers = \App\Models\Customer::active()->orderBy('customer_name')->limit(500)->get();
-        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
         $banks = \App\Models\Bank::active()->orderBy('bank_name')->get();
+
+        // Branch restriction: non-admin users can only create payments for their own branch.
+        // This prevents a salesman from branch A inserting data for branch B.
+        $user = auth()->user();
+        $userBranchId = (int) (session('branch_id') ?? ($user ? $user->getBranchId() : 0));
+        $isAdmin = $user && $user->isAdmin();
+
+        if ($isAdmin) {
+            $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
+        } else {
+            // Non-admin: only their own branch
+            $branches = \App\Models\Branch::active()
+                ->where('id', $userBranchId)
+                ->orderBy('branch_name')
+                ->get();
+        }
 
         // If customer_id is passed, load outstanding invoices.
         $outstandingInvoices = collect();
@@ -101,6 +116,8 @@ class CustomerPaymentController extends Controller
             'selectedCustomerId' => $customerId ? (int) $customerId : null,
             'outstandingInvoices' => $outstandingInvoices,
             'transactionType' => $transactionType,
+            'isAdmin' => $isAdmin,
+            'userBranchId' => $userBranchId,
         ]);
     }
 

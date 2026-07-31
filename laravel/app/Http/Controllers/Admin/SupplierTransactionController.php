@@ -70,9 +70,23 @@ class SupplierTransactionController extends Controller
         $transactionType = $request->input('transaction_type', 'payment');
 
         $suppliers = \App\Models\Supplier::active()->orderBy('supplier_name')->limit(500)->get();
-        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
         $banks = \App\Models\Bank::active()->orderBy('bank_name')->get();
         $employees = \App\Models\Employee::active()->orderBy('name')->get();
+
+        // Branch restriction: non-admin users can only create payments for their own branch.
+        $user = auth()->user();
+        $userBranchId = (int) (session('branch_id') ?? ($user ? $user->getBranchId() : 0));
+        $isAdmin = $user && $user->isAdmin();
+
+        if ($isAdmin) {
+            $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
+        } else {
+            // Non-admin: only their own branch
+            $branches = \App\Models\Branch::active()
+                ->where('id', $userBranchId)
+                ->orderBy('branch_name')
+                ->get();
+        }
 
         return view('admin.supplier-transactions.create', [
             'title'              => $this->getTitleForType($transactionType),
@@ -84,6 +98,8 @@ class SupplierTransactionController extends Controller
             'employees'          => $employees,
             'glPreviewLabels'    => $this->service->getGlPreviewLabels(),
             'today'              => now()->format('Y-m-d'),
+            'isAdmin'            => $isAdmin,
+            'userBranchId'       => $userBranchId,
         ]);
     }
 
@@ -139,7 +155,7 @@ class SupplierTransactionController extends Controller
                 ]);
             }
 
-            return redirect()->route('admin.supplier-transactions.show', ['supplier_transaction' => $payment->id])
+            return redirect()->route('admin.supplier-transactions.show', ['id' => $payment->id])
                 ->with('success', $successMessage);
         } catch (\Throwable $e) {
             if ($request->expectsJson() || $request->ajax()) {
@@ -206,7 +222,7 @@ class SupplierTransactionController extends Controller
                 ]);
             }
 
-            return redirect()->route('admin.supplier-transactions.show', ['supplier_transaction' => $payment->id])
+            return redirect()->route('admin.supplier-transactions.show', ['id' => $payment->id])
                 ->with('success', "Payment {$payment->payment_code} reversed. GL + ledger reversed.");
         } catch (\Throwable $e) {
             if ($request->expectsJson() || $request->ajax()) {

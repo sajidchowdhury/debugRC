@@ -5,7 +5,7 @@
     $today      = now()->format('Y-m-d');
     $oldDate    = old('payment_date', $today);
     $oldSupp    = old('supplier_id', $preselectSupplier->id ?? null);
-    $oldBr      = old('branch_id', session('branch_id'));
+    $oldBr      = old('branch_id', $userBranchId ?? session('branch_id'));
     $oldBank    = old('bank_id');
     $oldMode    = old('payment_mode', $transactionType === 'receive' ? 'adjustment' : 'cash');
     $oldType    = old('transaction_type', $transactionType ?? 'payment');
@@ -144,8 +144,11 @@
                             Branch <span class="text-danger">*</span>
                         </label>
                         <select id="branch_id" name="branch_id"
-                                class="form-select select2 @error('branch_id') is-invalid @enderror" required>
-                            <option value="">Select branch</option>
+                                class="form-select select2 @error('branch_id') is-invalid @enderror"
+                                {{ !($isAdmin ?? false) ? 'disabled' : '' }} required>
+                            @if (($isAdmin ?? false))
+                                <option value="">Select branch</option>
+                            @endif
                             @foreach ($branches as $b)
                                 <option value="{{ $b->id }}"
                                     {{ (string) $oldBr === (string) $b->id ? 'selected' : '' }}>
@@ -154,6 +157,9 @@
                             @endforeach
                         </select>
                         @error('branch_id') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                        @if (!($isAdmin ?? false))
+                            <input type="hidden" name="branch_id" value="{{ $oldBr }}">
+                        @endif
                     </div>
 
                     <div class="col-md-4" id="paymentModeField">
@@ -338,7 +344,7 @@
         ]),
         routes: {
             'index': '{{ route("admin.supplier-transactions.index") }}',
-            'show': '{{ rtrim(route("admin.supplier-transactions.show", ["supplier_transaction" => "{id}"]), "}") }}'.replace('{id}', ''),
+            'show': '{{ route("admin.supplier-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
             'store': '{{ route("admin.supplier-transactions.store") }}',
             'search': '{{ route("admin.supplier-transactions.search") }}',
             'get-due': '{{ route("admin.supplier-transactions.get-due") }}',
