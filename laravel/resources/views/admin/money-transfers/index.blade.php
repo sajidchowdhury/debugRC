@@ -210,7 +210,7 @@
     <div class="card border-0 shadow-sm">
         <div class="card-body">
             <div class="table-responsive">
-                <table class="table table-sm table-striped table-hover align-middle mb-0" id="dataTable">
+                <table class="table table-sm table-striped table-hover align-middle mb-0" id="mtTable">
                     <thead class="table-light">
                         <tr>
                             <th>Code</th>
@@ -315,14 +315,17 @@ window.MT_BOOT = {
 $(function () {
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
 
-    // Client-side DataTable for ordering and quick search on current page
-    if ($.fn.DataTable && $('#dataTable').length) {
-        $('#dataTable').DataTable({
-            paging: false,
-            info: false,
-            ordering: true,
-            dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
-            language: { search: 'Filter rows:', emptyTable: 'No transfers on this page.' }
+    // DataTable initialization — only if the table exists and has data rows
+    var $mtTable = $('#mtTable');
+    if ($mtTable.length && $mtTable.find('tbody tr td:not([colspan])').length) {
+        if ($.fn.DataTable.isDataTable('#mtTable')) {
+            $mtTable.DataTable().destroy();
+        }
+        $mtTable.DataTable({
+            pageLength: 25,
+            order: [[0, 'desc']],
+            columnDefs: [{ orderable: false, targets: -1 }],
+            language: { emptyTable: 'No transfers for selected filters', search: 'Quick search:' },
         });
     }
 });

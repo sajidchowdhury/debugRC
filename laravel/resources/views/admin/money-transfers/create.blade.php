@@ -16,10 +16,7 @@
         'cash_to_bank' => [
             'icon' => 'fa-university',
             'label' => 'Cash to Bank',
-            'gradient' => 'linear-gradient(135deg,#0d9488,#059669)',
             'gl_info' => 'Dr Bank · Cr Cash',
-            'submit_label' => 'Record Transfer',
-            'submit_icon' => 'fa-floppy-disk',
             'hint' => 'Deposit cash into a bank account. Debits bank, credits cash in hand.',
             'show_from_bank' => false,
             'show_to_bank' => true,
@@ -27,10 +24,7 @@
         'bank_to_cash' => [
             'icon' => 'fa-money-bill',
             'label' => 'Bank to Cash',
-            'gradient' => 'linear-gradient(135deg,#0d9488,#059669)',
             'gl_info' => 'Dr Cash · Cr Bank',
-            'submit_label' => 'Record Transfer',
-            'submit_icon' => 'fa-floppy-disk',
             'hint' => 'Withdraw cash from a bank account. Debits cash in hand, credits bank.',
             'show_from_bank' => true,
             'show_to_bank' => false,
@@ -38,21 +32,15 @@
         'cash_to_cash' => [
             'icon' => 'fa-money-bill-transfer',
             'label' => 'Cash to Cash',
-            'gradient' => 'linear-gradient(135deg,#0d9488,#059669)',
             'gl_info' => 'Dr Cash (to branch) · Cr Cash (from branch)',
-            'submit_label' => 'Record Transfer',
-            'submit_icon' => 'fa-floppy-disk',
-            'hint' => 'Transfer cash between branches. Requires cross-branch. Debits cash at destination, credits cash at source.',
+            'hint' => 'Transfer cash between branches. Debits cash at destination, credits cash at source.',
             'show_from_bank' => false,
             'show_to_bank' => false,
         ],
         'bank_to_bank' => [
             'icon' => 'fa-exchange-alt',
             'label' => 'Bank to Bank',
-            'gradient' => 'linear-gradient(135deg,#0d9488,#059669)',
             'gl_info' => 'Dr Bank (to) · Cr Bank (from)',
-            'submit_label' => 'Record Transfer',
-            'submit_icon' => 'fa-floppy-disk',
             'hint' => 'Transfer between bank accounts. Debits destination bank, credits source bank. Both must differ.',
             'show_from_bank' => true,
             'show_to_bank' => true,
@@ -61,106 +49,13 @@
     $cfg = $typeConfig[$oldType] ?? $typeConfig['cash_to_bank'];
 @endphp
 
-<style>
-    .mt-create-page { --mt-primary: #0d9488; --mt-primary-dark: #059669; }
-
-    .mt-hero {
-        background: linear-gradient(135deg, var(--mt-primary), var(--mt-primary-dark));
-        border-radius: 1rem;
-        padding: 1.5rem 1.75rem;
-        color: #fff;
-        box-shadow: 0 8px 32px rgba(13,148,136,0.18);
-        margin-bottom: 1.5rem;
-    }
-    .mt-hero h1 { font-size: 1.35rem; font-weight: 700; margin-bottom: 0.15rem; }
-    .mt-hero .mt-subtitle { font-size: 0.82rem; opacity: 0.85; }
-
-    .mt-section-card {
-        background: #fff;
-        border: 1px solid #e2e8f0;
-        border-radius: 0.875rem;
-        box-shadow: 0 1px 4px rgba(15,23,42,0.04);
-        margin-bottom: 1.25rem;
-        overflow: hidden;
-        transition: box-shadow 0.2s;
-    }
-    .mt-section-card:hover { box-shadow: 0 4px 16px rgba(15,23,42,0.07); }
-    .mt-section-header {
-        background: #f8fafc;
-        border-bottom: 1px solid #e2e8f0;
-        padding: 0.75rem 1.25rem;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }
-    .mt-section-header h2 { font-size: 0.88rem; font-weight: 700; margin: 0; color: #0f172a; }
-    .mt-section-header .mt-section-icon {
-        width: 32px; height: 32px; border-radius: 8px;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 0.85rem; color: #fff;
-    }
-    .mt-section-body { padding: 1.25rem; }
-
-    .mt-type-grid {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 0.75rem;
-    }
-    .mt-type-btn {
-        display: flex; flex-direction: column; align-items: center; gap: 0.4rem;
-        padding: 0.85rem 0.5rem; border: 2px solid #e2e8f0; border-radius: 0.75rem;
-        background: #fff; cursor: pointer; transition: all 0.2s; text-align: center;
-    }
-    .mt-type-btn:hover { border-color: #0d9488; background: #f0fdfa; }
-    .mt-type-btn.active { border-color: #0d9488; background: #f0fdfa; box-shadow: 0 2px 8px rgba(13,148,136,0.12); }
-    .mt-type-btn .mt-type-icon {
-        width: 38px; height: 38px; border-radius: 10px;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 1rem; background: #f1f5f9; color: #64748b;
-    }
-    .mt-type-btn.active .mt-type-icon { background: #0d9488; color: #fff; }
-    .mt-type-btn .mt-type-label { font-size: 0.78rem; font-weight: 600; color: #475569; }
-    .mt-type-btn.active .mt-type-label { color: #0d9488; }
-    .mt-type-btn .mt-type-gl { font-size: 0.68rem; color: #94a3b8; }
-    .mt-type-btn.active .mt-type-gl { color: #047857; }
-
-    .mt-amount-card {
-        background: linear-gradient(135deg, var(--mt-primary), var(--mt-primary-dark));
-        border-radius: 0.875rem;
-        padding: 1.5rem;
-        color: #fff;
-        text-align: center;
-        box-shadow: 0 8px 24px rgba(13,148,136,0.2);
-    }
-    .mt-amount-card .mt-amount-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.85; }
-    .mt-amount-card .mt-amount-input {
-        font-size: 2rem; font-weight: 800; font-variant-numeric: tabular-nums;
-        background: transparent; border: none; color: #fff; text-align: center;
-        width: 100%; outline: none; line-height: 1.1;
-    }
-    .mt-amount-card .mt-amount-input::placeholder { color: rgba(255,255,255,0.4); }
-    .mt-amount-card .mt-amount-meta { font-size: 0.78rem; opacity: 0.8; margin-top: 0.25rem; }
-
-    .mt-gl-table th {
-        font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em;
-        color: #64748b; font-weight: 600;
-    }
-    .mt-gl-table td { font-size: 0.88rem; }
-    .mt-gl-table .debit-col { color: #0d9488; font-weight: 600; }
-    .mt-gl-table .credit-col { color: #dc2626; font-weight: 600; }
-
-    @media (max-width: 768px) {
-        .mt-type-grid { grid-template-columns: repeat(2, 1fr); }
-    }
-</style>
-
-<div class="mt-create-page">
-
+<div class="container-fluid py-2">
     {{-- Hero header --}}
-    <header class="mt-hero d-flex flex-wrap justify-content-between align-items-center gap-3" id="heroHeader">
+    <header class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 p-3 rounded-3 text-white"
+            style="background: linear-gradient(135deg,#0d9488,#059669);">
         <div>
-            <h1><i class="fas fa-exchange-alt me-2"></i>{{ $title }}</h1>
-            <p class="mt-subtitle mb-0">
+            <h1 class="h4 mb-1"><i class="fas fa-exchange-alt me-2"></i>{{ $title }}</h1>
+            <p class="mb-0 small opacity-75">
                 GL posting: <strong id="heroGl">{{ $cfg['gl_info'] }}</strong> + cash/bank ledger updates.
             </p>
         </div>
@@ -184,18 +79,21 @@
         @csrf
 
         {{-- Transfer type selector --}}
-        <div class="mt-section-card">
-            <div class="mt-section-header">
-                <span class="mt-section-icon" style="background:#0d9488;"><i class="fas fa-sliders"></i></span>
-                <h2>Select Transfer Type</h2>
+        <div class="card border-0 shadow-sm mb-3">
+            <div class="card-header bg-white">
+                <h2 class="h6 mb-0"><i class="fas fa-sliders me-1 text-success"></i> Select Transfer Type</h2>
             </div>
-            <div class="mt-section-body">
-                <div class="mt-type-grid" id="typeGrid">
+            <div class="card-body">
+                <div class="row g-2" id="typeGrid">
                     @foreach($typeConfig as $type => $tc)
-                    <div class="mt-type-btn {{ $oldType === $type ? 'active' : '' }}" data-type="{{ $type }}" onclick="selectType('{{ $type }}')">
-                        <div class="mt-type-icon"><i class="fas {{ $tc['icon'] }}"></i></div>
-                        <div class="mt-type-label">{{ $tc['label'] }}</div>
-                        <div class="mt-type-gl">{{ $tc['gl_info'] }}</div>
+                    <div class="col-6 col-md-3">
+                        <div class="card border {{ $oldType === $type ? 'border-success bg-success-subtle' : '' }} h-100 mt-type-btn" data-type="{{ $type }}" onclick="selectType('{{ $type }}')" style="cursor:pointer;">
+                            <div class="card-body text-center py-3">
+                                <i class="fas {{ $tc['icon'] }} fa-lg {{ $oldType === $type ? 'text-success' : 'text-muted' }}"></i>
+                                <div class="fw-semibold mt-1 {{ $oldType === $type ? 'text-success' : '' }}">{{ $tc['label'] }}</div>
+                                <div class="small text-muted">{{ $tc['gl_info'] }}</div>
+                            </div>
+                        </div>
                     </div>
                     @endforeach
                 </div>
@@ -207,17 +105,15 @@
             </div>
         </div>
 
-        <div class="row g-4">
+        <div class="row g-3">
             {{-- Left column --}}
             <div class="col-lg-8">
-
                 {{-- Transfer details card --}}
-                <div class="mt-section-card">
-                    <div class="mt-section-header">
-                        <span class="mt-section-icon" style="background:#059669;"><i class="fas fa-route"></i></span>
-                        <h2>Transfer Details</h2>
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white">
+                        <h2 class="h6 mb-0"><i class="fas fa-route me-1 text-success"></i> Transfer Details</h2>
                     </div>
-                    <div class="mt-section-body">
+                    <div class="card-body">
                         <div class="row g-3">
                             <div class="col-md-4">
                                 <label class="form-label small" for="from_branch_id">
@@ -297,6 +193,17 @@
                                 @error('transfer_date') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
 
+                            <div class="col-md-4">
+                                <label class="form-label small" for="amount">
+                                    Amount (Tk) <span class="text-danger">*</span>
+                                </label>
+                                <input type="number" id="amount" name="amount"
+                                       class="form-control @error('amount') is-invalid @enderror"
+                                       min="0.01" step="0.01" required
+                                       value="{{ $oldAmt }}" placeholder="0.00">
+                                @error('amount') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                            </div>
+
                             <div class="col-12">
                                 <label class="form-label small" for="notes">Notes</label>
                                 <textarea id="notes" name="notes" rows="2" class="form-control"
@@ -308,17 +215,16 @@
                 </div>
 
                 {{-- GL Accounting Preview card --}}
-                <div class="mt-section-card">
-                    <div class="mt-section-header">
-                        <span class="mt-section-icon" style="background:#1d4ed8;"><i class="fas fa-scale-balanced"></i></span>
-                        <h2>GL Journal Preview</h2>
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white d-flex align-items-center">
+                        <h2 class="h6 mb-0"><i class="fas fa-scale-balanced me-1 text-primary"></i> GL Journal Preview</h2>
                         <span class="badge bg-success-subtle text-success ms-auto" id="glBalanceBadge">
                             <i class="fas fa-check me-1"></i>Balanced
                         </span>
                     </div>
-                    <div class="mt-section-body">
+                    <div class="card-body">
                         <div class="table-responsive">
-                            <table class="table table-sm table-bordered align-middle mb-0 mt-gl-table" id="glPreviewTable">
+                            <table class="table table-sm table-bordered align-middle mb-0" id="glPreviewTable">
                                 <thead class="table-light">
                                     <tr>
                                         <th style="width:5%;">#</th>
@@ -376,34 +282,32 @@
 
             {{-- Right column --}}
             <div class="col-lg-4">
-                <div class="mt-amount-card mb-4">
-                    <div class="mt-amount-label">Transfer Amount</div>
-                    <input type="number" id="amount" name="amount"
-                           class="mt-amount-input @error('amount') is-invalid @enderror"
-                           min="0.01" step="0.01" required
-                           value="{{ $oldAmt }}"
-                           placeholder="0.00">
-                    @error('amount') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
-                    <div class="mt-amount-meta" id="amountSub">
-                        @if(in_array($oldType, ['cash_to_bank', 'bank_to_bank']))
-                            Debit (increase bank balance)
-                        @else
-                            Credit (decrease bank balance)
-                        @endif
+                {{-- Amount summary card --}}
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-body text-center p-4 rounded-3 text-white" style="background: linear-gradient(135deg,#0d9488,#059669);">
+                        <div class="small text-uppercase opacity-75 mb-1">Transfer Amount</div>
+                        <div class="h2 fw-bold mb-1" id="amountDisplay">Tk 0.00</div>
+                        <div class="small opacity-75" id="amountSub">
+                            @if(in_array($oldType, ['cash_to_bank', 'bank_to_bank']))
+                                Debit (increase bank balance)
+                            @else
+                                Credit (decrease bank balance)
+                            @endif
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
 
         {{-- Submit --}}
-        <div class="mt-section-card" style="margin-top:1rem;">
-            <div class="mt-section-body d-flex gap-2 justify-content-end">
+        <div class="card border-0 shadow-sm mb-3">
+            <div class="card-body d-flex gap-2 justify-content-end">
                 <a href="{{ route('admin.money-transfers.index') }}" class="btn btn-outline-secondary">
                     <i class="fas fa-times me-1"></i> Cancel
                 </a>
                 <button type="submit" class="btn btn-success" id="submitBtn">
                     <i class="fas fa-floppy-disk me-1"></i>
-                    <span id="submitLabel">{{ $cfg['submit_label'] }}</span>
+                    <span id="submitLabel">Record Transfer</span>
                 </button>
             </div>
         </div>
@@ -420,6 +324,7 @@ $(function () {
     var $fromBankId  = $('#from_bank_id');
     var $toBankId    = $('#to_bank_id');
     var $amount      = $('#amount');
+
     var $fromBranch  = $('#from_branch_id');
     var $toBranch    = $('#to_branch_id');
 
@@ -432,6 +337,8 @@ $(function () {
     var $bankBookLabel   = $('#bankBookLabel');
     var $heroGl      = $('#heroGl');
     var $typeHint    = $('#typeHintText');
+    var $amountDisplay = $('#amountDisplay');
+    var $amountSub   = $('#amountSub');
 
     var typeConfigs = {
         cash_to_bank: {
@@ -473,9 +380,13 @@ $(function () {
     function applyTypeConfig(type) {
         var cfg = typeConfigs[type] || typeConfigs.cash_to_bank;
 
-        // Active state
-        $('.mt-type-btn').removeClass('active');
-        $('.mt-type-btn[data-type="' + type + '"]').addClass('active');
+        // Active state on type cards
+        $('.mt-type-btn').removeClass('border-success bg-success-subtle').addClass('');
+        $('.mt-type-btn').find('.fa-lg').removeClass('text-success').addClass('text-muted');
+        $('.mt-type-btn').find('.fw-semibold').removeClass('text-success');
+        $('.mt-type-btn[data-type="' + type + '"]').addClass('border-success bg-success-subtle');
+        $('.mt-type-btn[data-type="' + type + '"]').find('.fa-lg').removeClass('text-muted').addClass('text-success');
+        $('.mt-type-btn[data-type="' + type + '"]').find('.fw-semibold').addClass('text-success');
 
         // Hero
         $heroGl.text(cfg.gl_info);
@@ -487,6 +398,7 @@ $(function () {
         $glRuleLabel.text(cfg.gl_info);
         $cashLedgerLabel.text(cfg.cash_ledger);
         $bankBookLabel.text(cfg.bank_book);
+        $amountSub.text(cfg.bank_book);
 
         // Show/hide bank fields
         if (cfg.show_from_bank) {
@@ -518,6 +430,9 @@ $(function () {
         var type = $typeInput.val();
         var cfg = typeConfigs[type] || typeConfigs.cash_to_bank;
         var amount = parseFloat($amount.val()) || 0;
+
+        // Update amount display
+        $amountDisplay.text('Tk ' + numberFormat(amount));
 
         $glBody.empty();
 
@@ -557,11 +472,11 @@ $(function () {
 
         $glBody.append(
             '<tr><td>1</td><td><span class="fw-semibold">' + drLabel + '</span> <span class="badge bg-success-subtle text-success ms-1">Dr</span></td>' +
-            '<td class="text-end fw-semibold debit-col">' + numberFormat(amount) + '</td><td class="text-end text-muted">&mdash;</td></tr>'
+            '<td class="text-end fw-semibold text-danger">' + numberFormat(amount) + '</td><td class="text-end text-muted">&mdash;</td></tr>'
         );
         $glBody.append(
             '<tr><td>2</td><td><span class="fw-semibold">' + crLabel + '</span> <span class="badge bg-danger-subtle text-danger ms-1">Cr</span></td>' +
-            '<td class="text-end text-muted">&mdash;</td><td class="text-end fw-semibold credit-col">' + numberFormat(amount) + '</td></tr>'
+            '<td class="text-end text-muted">&mdash;</td><td class="text-end fw-semibold text-success">' + numberFormat(amount) + '</td></tr>'
         );
 
         $glTotalDr.text(numberFormat(amount));
@@ -608,7 +523,7 @@ $(function () {
                         text: resp.message || 'Money transfer recorded successfully.',
                         confirmButtonColor: '#059669',
                         timer: 2000,
-                    }).then(() => {
+                    }).then(function() {
                         window.location.href = resp.redirect_url || '{{ route("admin.money-transfers.index") }}';
                     });
                 } else {
