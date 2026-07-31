@@ -40,6 +40,8 @@ use App\Http\Controllers\Admin\CustomerPaymentController;
 use App\Http\Controllers\Admin\SupplierTransactionController;
 use App\Http\Controllers\Admin\EmployeeTransactionController;
 use App\Http\Controllers\Admin\MoneyTransferController;
+use App\Http\Controllers\Admin\OtherIncomeController;
+use App\Http\Controllers\Admin\OtherExpenseController;
 use App\Http\Controllers\Admin\SalesReturnController;
 use App\Http\Controllers\Admin\SalesGuideController;
 use App\Http\Controllers\Admin\GoLiveChecklistController;
@@ -1379,6 +1381,58 @@ Route::middleware('auth')->group(function () {
     // so route() helper works with placeholder values in JS config
     Route::get('admin/money-transfers/{id}', [MoneyTransferController::class, 'show'])
         ->name('admin.money-transfers.show')
+        ->middleware('role:accountant,manager,admin');
+
+    // ============================================================
+    // Phase 5 (Accounts Sub-Ledger): Other Incomes
+    // RBAC — accountant/manager/admin only.
+    // ============================================================
+    Route::prefix('admin/other-incomes')->name('admin.other-incomes.')->group(function () {
+        Route::get('audit', [OtherIncomeController::class, 'audit'])
+            ->name('audit')->middleware('role:accountant,manager,admin');
+        Route::post('{id}/reverse', [OtherIncomeController::class, 'reverse'])
+            ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+        Route::get('{id}/slip', [OtherIncomeController::class, 'slip'])
+            ->name('slip')->middleware('role:accountant,manager,admin');
+    });
+    Route::resource('admin/other-incomes', OtherIncomeController::class)
+        ->only(['index', 'create'])
+        ->names('admin.other-incomes')
+        ->middleware('role:accountant,manager,admin');
+    Route::resource('admin/other-incomes', OtherIncomeController::class)
+        ->only(['store'])
+        ->names('admin.other-incomes')
+        ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+    // Show route AFTER resource so create/edit routes match first; no ->where() constraint
+    // so route() helper works with placeholder values in JS config
+    Route::get('admin/other-incomes/{id}', [OtherIncomeController::class, 'show'])
+        ->name('admin.other-incomes.show')
+        ->middleware('role:accountant,manager,admin');
+
+    // ============================================================
+    // Phase 5 (Accounts Sub-Ledger): Other Expenses
+    // RBAC — accountant/manager/admin only.
+    // ============================================================
+    Route::prefix('admin/other-expenses')->name('admin.other-expenses.')->group(function () {
+        Route::get('audit', [OtherExpenseController::class, 'audit'])
+            ->name('audit')->middleware('role:accountant,manager,admin');
+        Route::post('{id}/reverse', [OtherExpenseController::class, 'reverse'])
+            ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+        Route::get('{id}/slip', [OtherExpenseController::class, 'slip'])
+            ->name('slip')->middleware('role:accountant,manager,admin');
+    });
+    Route::resource('admin/other-expenses', OtherExpenseController::class)
+        ->only(['index', 'create'])
+        ->names('admin.other-expenses')
+        ->middleware('role:accountant,manager,admin');
+    Route::resource('admin/other-expenses', OtherExpenseController::class)
+        ->only(['store'])
+        ->names('admin.other-expenses')
+        ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+    // Show route AFTER resource so create/edit routes match first; no ->where() constraint
+    // so route() helper works with placeholder values in JS config
+    Route::get('admin/other-expenses/{id}', [OtherExpenseController::class, 'show'])
+        ->name('admin.other-expenses.show')
         ->middleware('role:accountant,manager,admin');
     // Phase 8.5 + Phase 2: Sales Returns (stock IN at ORIGINAL avg_cost + GL)
     // P0-7: RBAC — create/store is salesman/manager/admin; confirm is

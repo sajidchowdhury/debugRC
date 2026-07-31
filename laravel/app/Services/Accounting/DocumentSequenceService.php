@@ -118,6 +118,33 @@ class DocumentSequenceService
     }
 
     /**
+     * Convenience wrapper: generate a code with default date/period settings.
+     *
+     * Usage: $this->sequenceService->next('ET')
+     *   → "ET-2026-00001"
+     *
+     * @param string $prefix The code prefix (e.g., 'ET', 'OI', 'OE')
+     * @param string $datePart Optional date part (default: current year)
+     * @return string The generated document code
+     */
+    public function next(string $prefix, string $datePart = ''): string
+    {
+        if ($datePart === '') {
+            $datePart = now()->format('Y');
+        }
+
+        $docType = strtolower($prefix);
+
+        return self::nextCode(
+            docType: $docType,
+            prefix: $prefix,
+            datePart: $datePart,
+            padLength: 5,
+            periodKey: $datePart,
+        );
+    }
+
+    /**
      * Compute a deterministic signed int4 hash for the advisory lock key.
      *
      * Uses CRC32 to produce a 32-bit value, then converts to signed integer

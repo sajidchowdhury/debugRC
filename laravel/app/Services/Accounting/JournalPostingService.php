@@ -256,6 +256,33 @@ class JournalPostingService
     }
 
     /**
+     * Convenience wrapper: post a journal entry from a single array.
+     *
+     * Accepts the same structure as createJournalEntry() but with `lines`
+     * embedded in the entry array. This is the preferred call format for
+     * business modules (employee transactions, money transfers, etc.).
+     *
+     * @param array $data {
+     *     entry_date: string (Y-m-d),
+     *     reference_type: string,
+     *     reference_id: int,
+     *     branch_id: int,
+     *     description: string,
+     *     source: string,
+     *     created_by: int|null,
+     *     lines: array of { ledger_id: int, debit: float, credit: float, memo: string|null },
+     * }
+     * @return int The journal_entry_id.
+     */
+    public function postJournalEntry(array $data): int
+    {
+        $lines = $data['lines'] ?? [];
+        unset($data['lines']);
+
+        return $this->createJournalEntry($data, $lines);
+    }
+
+    /**
      * Validate that the posting date falls within an open accounting period.
      *
      * P2-1: Admin bypass — when config('accounting.period_close_admin_override')
