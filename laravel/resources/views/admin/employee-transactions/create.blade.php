@@ -324,11 +324,16 @@
 </div>
 
 {{-- Boot config for EmployeeTransaction.js --}}
+@php
+    $preselectEmployeeData = $preselectEmployee
+        ? ['id' => $preselectEmployee->id, 'name' => $preselectEmployee->name, 'employee_code' => $preselectEmployee->employee_code ?? '', 'mobile' => $preselectEmployee->mobile ?? null]
+        : null;
+@endphp
 <script>
     window.ET_BOOT = {
         baseUrl: '{{ url("/") }}/',
         csrf_token: '{{ csrf_token() }}',
-        preselectEmployee: @json($preselectEmployee ? ['id' => $preselectEmployee->id, 'name' => $preselectEmployee->name, 'employee_code' => $preselectEmployee->employee_code ?? '', 'mobile' => $preselectEmployee->mobile ?? null] : null),
+        preselectEmployee: @json($preselectEmployeeData),
         glLabels: @json($glPreviewLabels ?? [
             'advance' => 'Dr Employee Payable · Cr Bank/Cash',
             'loan' => 'Dr Employee Payable · Cr Bank/Cash',
