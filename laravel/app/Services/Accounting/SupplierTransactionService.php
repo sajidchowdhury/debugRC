@@ -244,13 +244,15 @@ class SupplierTransactionService
             }
 
             // Also reverse the branch_ledger obligation row.
+            // NOTE: branch_ledger has NO updated_at column (only created_at),
+            // so we set only is_reversed. See migration 2026_07_29_000013
+            // _create_branch_ledger_table.php for the schema.
             DB::table('branch_ledger')
                 ->where('reference_type', 'supplier_payment')
                 ->where('reference_id', $paymentId)
                 ->where('is_reversed', false)
                 ->update([
                     'is_reversed' => true,
-                    'updated_at'  => now(),
                 ]);
 
             // 3. Reverse GRN allocations.
