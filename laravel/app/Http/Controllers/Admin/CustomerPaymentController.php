@@ -313,10 +313,17 @@ class CustomerPaymentController extends Controller
             ->orderBy('id')
             ->get();
 
+        // Compute customer's current AR balance (what they owe us)
+        $customerDue = 0;
+        if ($payment->customer) {
+            $customerDue = (float) \App\Models\CustomerLedger::getBalance($payment->customer_id);
+        }
+
         return view('admin.customer-payments.show', [
             'title' => 'Payment ' . $payment->payment_code,
             'payment' => $payment,
             'customerLedgerEntries' => $customerLedgerEntries,
+            'customerDue' => $customerDue,
         ]);
     }
 
