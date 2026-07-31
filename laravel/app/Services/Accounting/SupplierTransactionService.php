@@ -302,8 +302,8 @@ class SupplierTransactionService
             ->when($filters['date_to'] ?? null, fn($q, $d) => $q->where('payment_date', '<=', $d))
             ->when($filters['supplier_id'] ?? null, fn($q, $sid) => $q->where('supplier_id', $sid))
             ->when($filters['branch_id'] ?? null, fn($q, $bid) => $q->where('branch_id', $bid))
-            ->when($filters['payment_mode'] ?? null, fn($q, $m) => $q->where('payment_mode', $m))
-            ->when($filters['transaction_type'] ?? null, fn($q, $t) => $q->where('transaction_type', $t))
+            ->when(($filters['payment_mode'] ?? null) && $filters['payment_mode'] !== 'all', fn($q, $m) => $q->where('payment_mode', $m))
+            ->when(($filters['transaction_type'] ?? null) && $filters['transaction_type'] !== 'all', fn($q, $t) => $q->where('transaction_type', $t))
             ->when($filters['search'] ?? null, function ($q, $search) {
                 $q->where('payment_code', 'ILIKE', "%{$search}%");
             });
