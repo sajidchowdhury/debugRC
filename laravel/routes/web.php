@@ -1257,14 +1257,14 @@ Route::middleware('auth')->group(function () {
     Route::prefix('admin/customer-payments')->name('admin.customer-payments.')->group(function () {
         Route::get('outstanding-invoices', [CustomerPaymentController::class, 'getOutstandingInvoices'])
             ->name('outstanding-invoices')->middleware('role:salesman,accountant,manager,admin');
-        Route::post('get-customer-due', [CustomerPaymentController::class, 'getCustomerDue'])
+        Route::get('get-customer-due', [CustomerPaymentController::class, 'getCustomerDue'])
             ->name('get-customer-due')->middleware('role:salesman,accountant,manager,admin');
         // Phase 3B: Audit logs
         Route::get('audit', [CustomerPaymentController::class, 'audit'])
             ->name('audit')->middleware('role:accountant,manager,admin');
         // Payment reverse — accountant, manager, admin (legacy reverse_payment)
         Route::post('{id}/cancel', [CustomerPaymentController::class, 'cancel'])
-            ->name('cancel')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+            ->name('cancel')->middleware(['role:accountant,manager,admin']);
         // P1-6: Print payment receipt
         Route::get('{id}/print-receipt', [CustomerPaymentController::class, 'printReceipt'])
             ->name('print-receipt')->middleware('role:salesman,accountant,manager,admin');
@@ -1295,19 +1295,21 @@ Route::middleware('auth')->group(function () {
         Route::get('search', [SupplierTransactionController::class, 'searchSupplier'])
             ->name('search')->middleware('role:accountant,manager,admin');
         // Payment reverse — accountant, manager, admin
-        Route::post('{supplier_transaction}/reverse', [SupplierTransactionController::class, 'reverse'])
+        Route::post('{id}/reverse', [SupplierTransactionController::class, 'reverse'])
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         // Print payment slip
-        Route::get('{supplier_transaction}/slip', [SupplierTransactionController::class, 'slip'])
+        Route::get('{id}/slip', [SupplierTransactionController::class, 'slip'])
             ->name('slip')->middleware('role:accountant,manager,admin');
     });
     Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
         ->only(['index', 'create', 'show'])
         ->names('admin.supplier-transactions')
+        ->parameter('supplier_transaction', 'id')
         ->middleware('role:accountant,manager,admin');
     Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
         ->only(['store'])
         ->names('admin.supplier-transactions')
+        ->parameter('supplier_transaction', 'id')
         ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
 
     // ============================================================
