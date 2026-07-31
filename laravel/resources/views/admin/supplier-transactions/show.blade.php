@@ -918,9 +918,9 @@
         paymentCode: '{{ $payment->payment_code }}',
         routes: {
             'index': '{{ route("admin.supplier-transactions.index") }}',
-            'show': '{{ route("admin.supplier-transactions.show", ["supplier_transaction" => "__ID__"]) }}'.replace('__ID__', '{id}'),
-            'reverse': '{{ route("admin.supplier-transactions.reverse", ["supplier_transaction" => "__ID__"]) }}'.replace('__ID__', '{id}'),
-            'slip': '{{ route("admin.supplier-transactions.slip", ["supplier_transaction" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'show': '{{ route("admin.supplier-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'reverse': '{{ route("admin.supplier-transactions.reverse", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'slip': '{{ route("admin.supplier-transactions.slip", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
             'supplier-show': '{{ url("/admin/suppliers") }}/',
         },
     };
