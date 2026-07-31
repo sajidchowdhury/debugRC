@@ -328,20 +328,21 @@
     $preselectEmployeeData = $preselectEmployee
         ? ['id' => $preselectEmployee->id, 'name' => $preselectEmployee->name, 'employee_code' => $preselectEmployee->employee_code ?? '', 'mobile' => $preselectEmployee->mobile ?? null]
         : null;
+    $glLabelsData = $glPreviewLabels ?? [
+        'advance' => 'Dr Employee Payable · Cr Bank/Cash',
+        'loan' => 'Dr Employee Payable · Cr Bank/Cash',
+        'salary' => 'Dr Salary Expense · Cr Bank/Cash',
+        'repayment' => 'Dr Bank/Cash · Cr Employee Payable',
+        'deduction' => 'Dr Salary Expense · Cr Employee Payable',
+        'adjustment' => 'Dr/Cr varies by context',
+    ];
 @endphp
 <script>
     window.ET_BOOT = {
         baseUrl: '{{ url("/") }}/',
         csrf_token: '{{ csrf_token() }}',
         preselectEmployee: @json($preselectEmployeeData),
-        glLabels: @json($glPreviewLabels ?? [
-            'advance' => 'Dr Employee Payable · Cr Bank/Cash',
-            'loan' => 'Dr Employee Payable · Cr Bank/Cash',
-            'salary' => 'Dr Salary Expense · Cr Bank/Cash',
-            'repayment' => 'Dr Bank/Cash · Cr Employee Payable',
-            'deduction' => 'Dr Salary Expense · Cr Employee Payable',
-            'adjustment' => 'Dr/Cr varies by context',
-        ]),
+        glLabels: @json($glLabelsData),
         routes: {
             'index': '{{ route("admin.employee-transactions.index") }}',
             'show': '{{ route("admin.employee-transactions.show", ["id" => "__ID__"]) }}'.replace('__ID__', ''),
