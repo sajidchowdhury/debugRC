@@ -155,7 +155,7 @@ class SupplierTransactionController extends Controller
                 ]);
             }
 
-            return redirect()->route('admin.supplier-transactions.show', ['id' => $payment->id])
+            return redirect()->route('admin.supplier-transactions.show', ['supplier_transaction' => $payment->id])
                 ->with('success', $successMessage);
         } catch (\Throwable $e) {
             if ($request->expectsJson() || $request->ajax()) {
@@ -199,7 +199,7 @@ class SupplierTransactionController extends Controller
     /**
      * Reverse a supplier payment.
      */
-    public function reverse(Request $request, int $id)
+    public function reverse(Request $request, int $supplier_transaction)
     {
         $request->validate([
             'reverse_reason' => 'required|string|min:3|max:500',
@@ -207,7 +207,7 @@ class SupplierTransactionController extends Controller
 
         try {
             $payment = $this->service->reversePayment(
-                $id,
+                $supplier_transaction,
                 auth()->id(),
                 $request->input('reverse_reason')
             );
@@ -222,7 +222,7 @@ class SupplierTransactionController extends Controller
                 ]);
             }
 
-            return redirect()->route('admin.supplier-transactions.show', ['id' => $payment->id])
+            return redirect()->route('admin.supplier-transactions.show', ['supplier_transaction' => $payment->id])
                 ->with('success', "Payment {$payment->payment_code} reversed. GL + ledger reversed.");
         } catch (\Throwable $e) {
             if ($request->expectsJson() || $request->ajax()) {
@@ -238,11 +238,11 @@ class SupplierTransactionController extends Controller
     /**
      * Print a payment slip.
      */
-    public function slip(int $id)
+    public function slip(int $supplier_transaction)
     {
         $payment = SupplierPayment::with([
             'supplier', 'branch', 'bank', 'collectedBy',
-        ])->findOrFail($id);
+        ])->findOrFail($supplier_transaction);
 
         return view('admin.supplier-transactions.slip', [
             'title'    => 'Supplier Payment Slip',

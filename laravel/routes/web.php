@@ -1293,21 +1293,19 @@ Route::middleware('auth')->group(function () {
         Route::get('search', [SupplierTransactionController::class, 'searchSupplier'])
             ->name('search')->middleware('role:accountant,manager,admin');
         // Payment reverse — accountant, manager, admin
-        Route::post('{id}/reverse', [SupplierTransactionController::class, 'reverse'])
+        Route::post('{supplier_transaction}/reverse', [SupplierTransactionController::class, 'reverse'])
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         // Print payment slip
-        Route::get('{id}/slip', [SupplierTransactionController::class, 'slip'])
+        Route::get('{supplier_transaction}/slip', [SupplierTransactionController::class, 'slip'])
             ->name('slip')->middleware('role:accountant,manager,admin');
     });
     Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
         ->only(['index', 'create', 'show'])
         ->names('admin.supplier-transactions')
-        ->parameter('supplier_transaction', 'id')
         ->middleware('role:accountant,manager,admin');
     Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
         ->only(['store'])
         ->names('admin.supplier-transactions')
-        ->parameter('supplier_transaction', 'id')
         ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
 
     // ============================================================
