@@ -315,10 +315,8 @@ class SupplierTransactionService
             $query->where('is_reversed', false);
         }
 
-        // Default date filter: last 30 days if no dates provided.
-        if (empty($filters['date_from']) && empty($filters['date_to']) && empty($filters['status'])) {
-            $query->where('payment_date', '>=', now()->subDays(30)->format('Y-m-d'));
-        }
+        // No default date filter — show all records when no dates provided.
+        // This matches the summary cards which have no date restriction.
 
         return $query->orderBy('payment_date', 'desc')
             ->orderBy('id', 'desc')

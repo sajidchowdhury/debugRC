@@ -227,3 +227,31 @@
 .select2-container--bootstrap-5 .select2-selection__rendered {
     font-size: 0.9rem;
 }
+
+/* Select2 dropdown item text color fix (white-on-white issue) */
+.select2-container--bootstrap-5 .select2-results__option {
+    color: #0f172a !important;
+    background: #fff !important;
+}
+.select2-container--bootstrap-5 .select2-results__option--highlighted {
+    color: #fff !important;
+    background: #0d9488 !important;
+}
+.select2-container--bootstrap-5 .select2-results__option--selected {
+    color: #0f172a !important;
+    background: #f0fdf4 !important;
+    font-weight: 600;
+}
+.select2-container--bootstrap-5 .select2-results__option--selected.select2-results__option--highlighted {
+    color: #fff !important;
+    background: #0d9488 !important;
+}
+.select2-container--bootstrap-5 .select2-dropdown {
+    background: #fff !important;
+    border-color: #e2e8f0 !important;
+}
+.select2-container--bootstrap-5 .select2-search--dropdown .select2-search__field {
+    color: #0f172a !important;
+    background: #f8fafc !important;
+    border-color: #e2e8f0 !important;
+}
