@@ -73,7 +73,8 @@
         });
 
         const txnTable = document.getElementById('empTxnTable');
-        if (txnTable && txnTable.querySelector('tbody tr')) {
+        const hasDataRows = txnTable && txnTable.querySelector('tbody tr td:not([colspan])');
+        if (hasDataRows) {
             initIndexTable();
         } else if (document.getElementById('empTxnCards')) {
             document.getElementById('empTxnCards').innerHTML =
