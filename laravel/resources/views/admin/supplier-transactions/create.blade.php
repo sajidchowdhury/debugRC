@@ -46,6 +46,17 @@
         ],
     ];
     $cfg = $typeConfig[$oldType] ?? $typeConfig['payment'];
+
+    // Pre-compute data for @json() directives (avoids commas inside @json()
+    // which breaks Laravel's compileJson() — it uses explode(',', $expression, 2))
+    $preselectSupplierData = $preselectSupplier
+        ? ['id' => $preselectSupplier->id, 'supplier_name' => $preselectSupplier->supplier_name, 'supplier_code' => $preselectSupplier->supplier_code ?? '', 'mobile' => $preselectSupplier->mobile ?? null]
+        : null;
+    $glLabels = $glPreviewLabels ?? [
+        'payment' => 'Dr AP · Cr Bank/Cash',
+        'advance' => 'Dr AP · Cr Bank/Cash',
+        'receive' => 'Dr Inventory · Cr AP',
+    ];
 @endphp
 
 <div class="container-fluid py-2">
@@ -336,12 +347,8 @@
     window.ST_BOOT = {
         baseUrl: '{{ url("/") }}/',
         csrf_token: '{{ csrf_token() }}',
-        preselectSupplier: @json($preselectSupplier ? ['id' => $preselectSupplier->id, 'supplier_name' => $preselectSupplier->supplier_name, 'supplier_code' => $preselectSupplier->supplier_code ?? '', 'mobile' => $preselectSupplier->mobile ?? null] : null),
-        glLabels: @json($glPreviewLabels ?? [
-            'payment' => 'Dr AP · Cr Bank/Cash',
-            'advance' => 'Dr AP · Cr Bank/Cash',
-            'receive' => 'Dr Inventory · Cr AP',
-        ]),
+        preselectSupplier: @json($preselectSupplierData),
+        glLabels: @json($glLabels),
         routes: {
             'index': '{{ route("admin.supplier-transactions.index") }}',
             'show': '{{ route("admin.supplier-transactions.show", ["supplier_transaction" => "__ID__"]) }}'.replace('__ID__', '{id}'),
