@@ -36,8 +36,22 @@ class MoneyTransferController extends Controller
         ];
 
         $listBranchId = $this->resolveListBranchId();
-        $transfers = $this->service->getFilteredTransfers($filters, $listBranchId);
-        $stats = $this->service->getStats($listBranchId);
+
+        try {
+            $transfers = $this->service->getFilteredTransfers($filters, $listBranchId);
+            $stats = $this->service->getStats($listBranchId);
+        } catch (\Throwable $e) {
+            // If PostgreSQL transaction is in failed state (SQLSTATE 25P02),
+            // roll back and retry once with a fresh connection.
+            if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
+                DB::rollBack();
+                DB::reconnect();
+                $transfers = $this->service->getFilteredTransfers($filters, $listBranchId);
+                $stats = $this->service->getStats($listBranchId);
+            } else {
+                throw $e;
+            }
+        }
 
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
         $banks = \App\Models\Bank::active()->orderBy('bank_name')->get();
@@ -115,24 +129,54 @@ class MoneyTransferController extends Controller
 
     public function show(int $id)
     {
-        $transfer = MoneyTransfer::with([
-            'fromBranch', 'toBranch', 'fromBank', 'toBank',
-            'journalEntry.lines.ledger',
-            'intercompanyJournalEntry.lines.ledger',
-        ])->findOrFail($id);
+        try {
+            $transfer = MoneyTransfer::with([
+                'fromBranch', 'toBranch', 'fromBank', 'toBank',
+                'journalEntry.lines.ledger',
+                'intercompanyJournalEntry.lines.ledger',
+            ])->findOrFail($id);
 
-        $cashLedgerEntries = DB::table('cash_ledger')
-            ->where('reference_type', 'money_transfer')
-            ->where('reference_id', $id)
-            ->orderBy('id')
-            ->get();
+            $cashLedgerEntries = DB::table('cash_ledger')
+                ->where('reference_type', 'money_transfer')
+                ->where('reference_id', $id)
+                ->orderBy('id')
+                ->get();
 
-        return view('admin.money-transfers.show', [
-            'title'             => 'Transfer — ' . $transfer->transfer_code,
-            'transfer'          => $transfer,
-            'cashLedgerEntries' => $cashLedgerEntries,
-            'canReverse'        => !$transfer->is_reversed,
-        ]);
+            return view('admin.money-transfers.show', [
+                'title'             => 'Transfer — ' . $transfer->transfer_code,
+                'transfer'          => $transfer,
+                'cashLedgerEntries' => $cashLedgerEntries,
+                'canReverse'        => !$transfer->is_reversed,
+            ]);
+        } catch (\Throwable $e) {
+            // If PostgreSQL transaction is in failed state (SQLSTATE 25P02),
+            // roll back and retry once with a fresh connection.
+            if (str_contains($e->getMessage(), '25P02') || str_contains($e->getMessage(), 'failed sql transaction')) {
+                DB::rollBack();
+                DB::reconnect();
+
+                $transfer = MoneyTransfer::with([
+                    'fromBranch', 'toBranch', 'fromBank', 'toBank',
+                    'journalEntry.lines.ledger',
+                    'intercompanyJournalEntry.lines.ledger',
+                ])->findOrFail($id);
+
+                $cashLedgerEntries = DB::table('cash_ledger')
+                    ->where('reference_type', 'money_transfer')
+                    ->where('reference_id', $id)
+                    ->orderBy('id')
+                    ->get();
+
+                return view('admin.money-transfers.show', [
+                    'title'             => 'Transfer — ' . $transfer->transfer_code,
+                    'transfer'          => $transfer,
+                    'cashLedgerEntries' => $cashLedgerEntries,
+                    'canReverse'        => !$transfer->is_reversed,
+                ]);
+            }
+
+            throw $e;
+        }
     }
 
     public function reverse(Request $request, int $id)
