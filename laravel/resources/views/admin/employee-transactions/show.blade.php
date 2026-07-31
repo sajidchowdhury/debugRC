@@ -66,7 +66,7 @@
                 {!! $typeBadge() !!}
             </h1>
             <p class="mb-0 small opacity-75">
-                @if ($transaction->employee){{ $transaction->employee->employee_name }}@endif
+                @if ($transaction->employee){{ $transaction->employee->name }}@endif
                 @if ($transaction->branch) · {{ $transaction->branch->branch_name }}@endif
                 · {{ \Carbon\Carbon::parse($transaction->transaction_date)->format('d M Y') }}
             </p>
@@ -140,7 +140,7 @@
                         <dt class="col-sm-3 text-muted">Employee</dt>
                         <dd class="col-sm-9">
                             @if ($transaction->employee)
-                                <strong>{{ $transaction->employee->employee_name }}</strong>
+                                <strong>{{ $transaction->employee->name }}</strong>
                                 <span class="text-muted">({{ $transaction->employee->employee_code }})</span>
                             @else
                                 <span class="text-muted">—</span>

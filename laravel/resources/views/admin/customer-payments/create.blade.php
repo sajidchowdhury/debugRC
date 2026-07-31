@@ -245,10 +245,10 @@
                         <select id="collected_by" name="collected_by"
                                 class="form-select select2 @error('collected_by') is-invalid @enderror">
                             <option value="">Select employee</option>
-                            @foreach (\App\Models\Employee::active()->orderBy('employee_name')->get() as $emp)
+                            @foreach (\App\Models\Employee::active()->orderBy('name')->get() as $emp)
                                 <option value="{{ $emp->id }}"
                                     {{ (string) old('collected_by') === (string) $emp->id ? 'selected' : '' }}>
-                                    {{ $emp->employee_code }} — {{ $emp->employee_name }}
+                                    {{ $emp->employee_code }} — {{ $emp->name }}
                                 </option>
                             @endforeach
                         </select>

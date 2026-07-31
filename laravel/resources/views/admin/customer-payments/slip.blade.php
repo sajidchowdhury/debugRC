@@ -63,7 +63,7 @@
         @if ($payment->collectedBy)
             <div>
                 <div class="meta-label">Collected By</div>
-                <div class="meta-value">{{ $payment->collectedBy->employee_name ?? '—' }}</div>
+                <div class="meta-value">{{ $payment->collectedBy->name ?? '—' }}</div>
             </div>
         @endif
     </div>

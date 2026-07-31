@@ -231,7 +231,7 @@
                         @foreach ($employees as $e)
                             <option value="{{ $e->id }}"
                                 {{ (string) $filters['employee_id'] === (string) $e->id ? 'selected' : '' }}>
-                                {{ $e->employee_code }} — {{ $e->employee_name }}
+                                {{ $e->employee_code }} — {{ $e->name }}
                             </option>
                         @endforeach
                     </select>
@@ -331,7 +331,7 @@
                                 </td>
                                 <td>
                                     @if ($t->employee)
-                                        <span class="fw-semibold">{{ $t->employee->employee_name }}</span>
+                                        <span class="fw-semibold">{{ $t->employee->name }}</span>
                                         <div class="small text-muted">{{ $t->employee->employee_code }}</div>
                                     @else
                                         <span class="text-muted">—</span>

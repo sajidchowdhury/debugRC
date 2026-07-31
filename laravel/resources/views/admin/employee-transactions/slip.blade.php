@@ -34,7 +34,7 @@
         </div>
         <div>
             <div class="meta-label">Employee</div>
-            <div class="meta-value">{{ $transaction->employee?->employee_name ?? '—' }}</div>
+            <div class="meta-value">{{ $transaction->employee?->name ?? '—' }}</div>
         </div>
         <div class="text-end">
             <div class="meta-label">Payment Mode</div>

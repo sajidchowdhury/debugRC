@@ -920,8 +920,8 @@
                                 <strong>
                                     @if ($submitterUser)
                                         {{ $submitterUser->username }}
-                                        @if ($submitterUser->employee?->employee_name)
-                                            <span class="text-muted small">({{ $submitterUser->employee->employee_name }})</span>
+                                        @if ($submitterUser->employee?->name)
+                                            <span class="text-muted small">({{ $submitterUser->employee->name }})</span>
                                         @endif
                                     @else
                                         <span class="text-muted">user #{{ $session->submitted_by }}</span>
@@ -943,8 +943,8 @@
                                 <strong>
                                     @if ($approverUser)
                                         {{ $approverUser->username }}
-                                        @if ($approverUser->employee?->employee_name)
-                                            <span class="text-muted small">({{ $approverUser->employee->employee_name }})</span>
+                                        @if ($approverUser->employee?->name)
+                                            <span class="text-muted small">({{ $approverUser->employee->name }})</span>
                                         @endif
                                     @else
                                         <span class="text-muted">user #{{ $session->approved_by }}</span>

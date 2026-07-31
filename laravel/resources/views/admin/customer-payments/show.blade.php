@@ -197,7 +197,7 @@
                             <dt class="col-sm-3 text-muted">Collected by</dt>
                             <dd class="col-sm-9">
                                 <span class="badge bg-secondary-subtle text-secondary">
-                                    <i class="fas fa-user me-1"></i>{{ $payment->collectedBy->employee_name }}
+                                    <i class="fas fa-user me-1"></i>{{ $payment->collectedBy->name }}
                                 </span>
                                 @if ($payment->collectedBy->employee_code)
                                     <span class="small text-muted ms-1">{{ $payment->collectedBy->employee_code }}</span>

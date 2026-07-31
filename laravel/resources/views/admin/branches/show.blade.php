@@ -205,7 +205,7 @@
                         <ul class="list-group list-group-flush">
                             @foreach ($employees as $emp)
                                 <li class="list-group-item px-0">
-                                    <div class="fw-semibold">{{ $emp->name ?? $emp->employee_name ?? ('#' . $emp->id) }}</div>
+                                    <div class="fw-semibold">{{ $emp->name ?? $emp->name ?? ('#' . $emp->id) }}</div>
                                     @if (!empty($emp->employee_code))
                                         <div class="small text-muted">{{ $emp->employee_code }}</div>
                                     @endif
