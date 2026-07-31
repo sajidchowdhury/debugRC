@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\StoreEmployeeTransactionRequest;
 use App\Models\EmployeeTransaction;
 use App\Services\Accounting\EmployeeTransactionService;
 use Illuminate\Http\Request;
@@ -92,32 +93,19 @@ class EmployeeTransactionController extends Controller
 
     /**
      * Store a new employee transaction.
+     *
+     * Validation is handled by StoreEmployeeTransactionRequest (typed Form
+     * Request). RBAC is handled by route middleware (role:accountant,
+     * manager,admin + branch.isolation); EmployeeTransactionPolicy is the
+     * defense-in-depth layer.
      */
-    public function store(Request $request)
+    public function store(StoreEmployeeTransactionRequest $request)
     {
-        $validated = $request->validate([
-            'employee_id'       => 'required|integer|exists:employees,id',
-            'branch_id'         => 'required|integer|exists:branches,id',
-            'bank_id'           => 'nullable|integer|exists:banks,id',
-            'payment_mode'      => 'required|in:cash,bank,mobile_banking,cheque,adjustment',
-            'transaction_type'  => 'required|in:advance,loan,repayment,salary,deduction,adjustment',
-            'amount'            => 'required|numeric|min:0.01',
-            'description'       => 'nullable|string|max:500',
-            'collected_by'      => 'nullable|integer|exists:employees,id',
-        ]);
+        $payload = $request->toServicePayload();
+        $transactionType = $payload['transaction_type'];
 
         try {
-            $transaction = $this->service->createTransaction([
-                'employee_id'      => $validated['employee_id'],
-                'branch_id'        => $validated['branch_id'],
-                'bank_id'          => $validated['bank_id'] ?? null,
-                'payment_mode'     => $validated['payment_mode'],
-                'transaction_type' => $validated['transaction_type'],
-                'amount'           => $validated['amount'],
-                'description'      => $validated['description'] ?? '',
-                'collected_by'     => $validated['collected_by'] ?? null,
-                'created_by'       => auth()->id(),
-            ]);
+            $transaction = $this->service->createTransaction($payload);
 
             $typeMessages = [
                 'advance'    => "Advance {$transaction->transaction_code} recorded. GL posted (Dr Employee Payable / Cr Bank/Cash) + employee ledger updated.",
@@ -128,7 +116,7 @@ class EmployeeTransactionController extends Controller
                 'adjustment' => "Adjustment {$transaction->transaction_code} recorded. GL posted + employee ledger updated.",
             ];
 
-            $successMessage = $typeMessages[$validated['transaction_type']] ?? $typeMessages['advance'];
+            $successMessage = $typeMessages[$transactionType] ?? $typeMessages['advance'];
 
             if ($request->expectsJson() || $request->ajax()) {
                 return response()->json([
@@ -160,6 +148,7 @@ class EmployeeTransactionController extends Controller
         $transaction = EmployeeTransaction::with([
             'employee', 'branch', 'bank', 'collectedBy',
             'journalEntry.lines.ledger',
+            'intercompanyJournalEntry.lines.ledger',
         ])->findOrFail($id);
 
         $employeeLedgerEntries = DB::table('employee_ledger')

@@ -59,6 +59,14 @@ class EmployeeTransactionService
      */
     public const INFLOW_TYPES = ['repayment', 'deduction'];
 
+    /**
+     * Transaction types whose GL includes a Cash/Bank line.
+     * Used to decide whether to sync the bank balance + post intercompany.
+     * 'deduction' is EXCLUDED because its GL is Dr Salary Expense / Cr
+     * Employee Payable — no cash/bank movement.
+     */
+    public const BANK_INVOLVED_TYPES = ['advance', 'loan', 'salary', 'repayment', 'adjustment'];
+
     // ============================================================
     // CREATE + CONFIRM (single-step, like legacy)
     // ============================================================
@@ -128,31 +136,44 @@ class EmployeeTransactionService
             // 4. Post employee_ledger entry.
             $this->postEmployeeLedgerForType($transaction, $journalEntryId, (int) ($data['created_by'] ?? 0));
 
-            // 5. Update transaction with journal_entry_id.
+            // 5. Intercompany settlement (if bank-mode + cross-branch + bank-involved type).
+            //    'deduction' is excluded — its GL has no bank line.
+            $intercompanyJournalId = null;
+            if ($transaction->isBankMode() && in_array($transactionType, self::BANK_INVOLVED_TYPES)) {
+                $intercompanyJournalId = $this->postIntercompanySettlement($transaction, (int) ($data['created_by'] ?? 0));
+            }
+
+            // 6. Update transaction with journal_entry_id + intercompany_journal_entry_id.
             DB::table('employee_transactions')
                 ->where('id', $transactionId)
                 ->update([
                     'journal_entry_id' => $journalEntryId,
+                    'intercompany_journal_entry_id' => $intercompanyJournalId,
                     'updated_at' => now(),
                 ]);
 
-            // 6. Sync bank balance (if bank mode).
-            if ($transaction->isBankMode() && $transaction->bank_id) {
+            // 7. Sync bank balance (if bank mode AND the GL has a bank/cash line).
+            //    'deduction' type is EXCLUDED — its GL is Dr Salary Expense /
+            //    Cr Employee Payable with NO bank/cash line, so the bank
+            //    balance must NOT change.
+            if ($transaction->isBankMode() && $transaction->bank_id && in_array($transactionType, self::BANK_INVOLVED_TYPES)) {
                 $this->syncBankBalance($transaction->bank_id, $amount, $transactionType);
             }
 
-            // 7. Audit log.
+            // 8. Audit log.
             $this->logAudit('employee_transaction_created', (int) ($data['created_by'] ?? 0), $transactionId, [
                 'transaction_code' => $transactionCode,
                 'transaction_type' => $transactionType,
                 'amount'           => $amount,
                 'employee_id'      => $employeeId,
                 'journal_entry_id' => $journalEntryId,
+                'intercompany_journal_entry_id' => $intercompanyJournalId,
             ]);
 
             return EmployeeTransaction::with([
                 'employee', 'branch', 'bank',
                 'journalEntry.lines.ledger',
+                'intercompanyJournalEntry.lines.ledger',
             ])->find($transactionId);
         });
     }
@@ -193,7 +214,39 @@ class EmployeeTransactionService
                 );
             }
 
-            // 2. Mark transaction as reversed.
+            // 2. Reverse ALL intercompany GL entries for this transaction.
+            //    postIntercompanySettlement() posts TWO entries (creditor at
+            //    the bank's branch + debtor at the transaction's branch), both
+            //    tagged reference_type='employee_transaction_intercompany'.
+            //    Only the debtor id is stored in intercompany_journal_entry_id,
+            //    so we reverse by reference lookup to catch both. Idempotent:
+            //    skip entries already reversed.
+            $intercompanyJeIds = DB::table('journal_entries')
+                ->where('reference_type', 'employee_transaction_intercompany')
+                ->where('reference_id', $transactionId)
+                ->where('is_reversed', false)
+                ->pluck('id');
+
+            foreach ($intercompanyJeIds as $icJeId) {
+                $this->journalReversal->reverseByJournalEntry(
+                    (int) $icJeId,
+                    $reversedBy,
+                    "Employee transaction reversal: {$reason}"
+                );
+            }
+
+            // Also reverse the branch_ledger obligation row.
+            // NOTE: branch_ledger has NO updated_at column (only created_at),
+            // so we set only is_reversed.
+            DB::table('branch_ledger')
+                ->where('reference_type', 'employee_transaction')
+                ->where('reference_id', $transactionId)
+                ->where('is_reversed', false)
+                ->update([
+                    'is_reversed' => true,
+                ]);
+
+            // 3. Mark transaction as reversed.
             DB::table('employee_transactions')
                 ->where('id', $transactionId)
                 ->update([
@@ -204,17 +257,20 @@ class EmployeeTransactionService
                     'updated_at'     => now(),
                 ]);
 
-            // 3. Undo bank balance sync.
-            if ($transaction->isBankMode() && $transaction->bank_id) {
+            // 4. Undo bank balance sync — only for types that had a bank sync
+            //    on create (BANK_INVOLVED_TYPES). 'deduction' never touched
+            //    the bank, so there's nothing to undo.
+            $txnType = $transaction->transaction_type ?? 'advance';
+            if ($transaction->isBankMode() && $transaction->bank_id && in_array($txnType, self::BANK_INVOLVED_TYPES)) {
                 $this->syncBankBalance(
                     $transaction->bank_id,
                     (float) $transaction->amount,
-                    $transaction->transaction_type ?? 'advance',
+                    $txnType,
                     undo: true
                 );
             }
 
-            // 4. Audit log.
+            // 5. Audit log.
             $this->logAudit('employee_transaction_reversed', $reversedBy, $transactionId, [
                 'transaction_code' => $transaction->transaction_code,
                 'reason'           => $reason,
@@ -533,6 +589,198 @@ class EmployeeTransactionService
             'journal_entry_id' => $journalEntryId,
             'created_by'       => $createdBy,
         ]);
+    }
+
+    // ============================================================
+    // INTERCOMPANY SETTLEMENT
+    // ============================================================
+
+    /**
+     * Post intercompany settlement for cross-branch bank-mode employee transactions.
+     *
+     * When an employee transaction is recorded at Branch A but the bank belongs
+     * to Branch B, the interbranch obligation must be tracked. The accounting
+     * direction depends on whether money flowed OUT or IN:
+     *
+     * OUTFLOW types (advance/loan/salary/adjustment) — bank DECREASES:
+     *   Branch A used Branch B's bank to pay the employee → Branch A owes Branch B.
+     *   Creditor JE (at bank's branch / Branch B):
+     *     Dr interbranch_receivable (Due from Branches)   amount
+     *        Cr bank-ledger (the bank that funded it)      amount
+     *   Debtor JE (at transaction's branch / Branch A):
+     *     Dr bank-ledger (clearing — nets the main GL bank credit)  amount
+     *        Cr interbranch_payable (Due to Branches)               amount
+     *
+     * INFLOW type (repayment) — bank INCREASES:
+     *   Branch A's employee repaid into Branch B's bank → Branch B owes Branch A.
+     *   Creditor JE (at transaction's branch / Branch A):
+     *     Dr interbranch_receivable (Due from Branches)   amount
+     *        Cr bank-ledger (clearing — nets the main GL bank debit)   amount
+     *   Debtor JE (at bank's branch / Branch B):
+     *     Dr bank-ledger (the bank that received the funds)  amount
+     *        Cr interbranch_payable (Due to Branches)         amount
+     *
+     * Net bank-ledger effect in both cases: main GL ± amount + creditor ± amount
+     * + debtor ∓ amount = net ± amount (matches the bank book change from
+     * syncBankBalance). interbranch_receivable (asset) ↑ at the creditor branch
+     * and interbranch_payable (liability) ↑ at the debtor branch.
+     *
+     * Returns the debtor JE id (stored in employee_transactions.
+     * intercompany_journal_entry_id for the show page). The creditor JE is
+     * linked by reference_type='employee_transaction_intercompany' and is
+     * reversed alongside the debtor in reverseTransaction().
+     *
+     * Skips (returns null) when:
+     *   - amount < 0.01 or no bank_id
+     *   - bank has no branch_id (NULL = shared / head-office bank)
+     *   - bank's branch == transaction's branch (same branch, no intercompany)
+     *   - interbranch ledgers not configured (logs a warning)
+     */
+    private function postIntercompanySettlement(EmployeeTransaction $transaction, int $createdBy): ?int
+    {
+        $amount = (float) $transaction->amount;
+        if ($amount < 0.01 || !$transaction->bank_id) {
+            return null;
+        }
+
+        // Load the bank with its branch_id (added by migration
+        // 2026_08_06_000001_add_branch_id_to_banks). NULL = shared bank.
+        $bank = Bank::find($transaction->bank_id);
+        if (!$bank) {
+            return null;
+        }
+        $bankBranchId = $bank->branch_id ? (int) $bank->branch_id : null;
+        if (!$bankBranchId) {
+            // Shared / head-office bank — no intercompany needed.
+            return null;
+        }
+
+        $txnBranchId = (int) $transaction->branch_id;  // transaction's branch
+        $bankBranchId2 = $bankBranchId;                 // bank's branch
+
+        // Same branch — no intercompany needed.
+        if ($bankBranchId2 === $txnBranchId) {
+            return null;
+        }
+
+        // Resolve interbranch ledgers (seeded L-0105 / L-0303).
+        $dueFromLedgerId = $this->journalPosting->lookupLedgerByNature('interbranch_receivable');
+        $dueToLedgerId = $this->journalPosting->lookupLedgerByNature('interbranch_payable');
+        if (!$dueFromLedgerId || !$dueToLedgerId) {
+            Log::warning('Intercompany ledgers not configured, skipping employee settlement', [
+                'transaction_id'   => $transaction->id,
+                'transaction_code' => $transaction->transaction_code,
+                'txn_branch_id'    => $txnBranchId,
+                'bank_branch_id'   => $bankBranchId2,
+            ]);
+            return null;
+        }
+
+        // Resolve the bank's mapped ledger (falls back to cash_bank nature).
+        $bankLedgerId = $transaction->isOutflow()
+            ? $this->resolveCreditLedger($transaction)
+            : $this->resolveDebitLedger($transaction);
+        if (!$bankLedgerId) {
+            Log::warning('Could not resolve bank ledger for employee intercompany settlement', [
+                'transaction_id' => $transaction->id,
+            ]);
+            return null;
+        }
+
+        $entryDate = $transaction->transaction_date
+            ? ($transaction->transaction_date instanceof \Carbon\Carbon
+                ? $transaction->transaction_date->format('Y-m-d')
+                : date('Y-m-d', strtotime((string) $transaction->transaction_date)))
+            : now()->format('Y-m-d');
+        $txnCode = $transaction->transaction_code;
+        $isOutflow = $transaction->isOutflow();
+
+        // For OUTFLOW: creditor = bank's branch, debtor = transaction's branch
+        // For INFLOW:  creditor = transaction's branch, debtor = bank's branch
+        $creditorBranchId = $isOutflow ? $bankBranchId2 : $txnBranchId;
+        $debtorBranchId   = $isOutflow ? $txnBranchId   : $bankBranchId2;
+
+        // 1. Creditor journal:
+        //    Dr interbranch_receivable / Cr bank-ledger
+        $creditorJeId = $this->journalPosting->createJournalEntry([
+            'entry_date'     => $entryDate,
+            'reference_type' => 'employee_transaction_intercompany',
+            'reference_id'   => $transaction->id,
+            'branch_id'      => $creditorBranchId,
+            'description'    => "Intercompany — Employee transaction {$txnCode} (bank at branch {$bankBranchId2})",
+            'source'         => 'employee_transaction_intercompany',
+            'created_by'     => $createdBy,
+        ], [
+            [
+                'ledger_id' => $dueFromLedgerId,
+                'debit'     => $amount,
+                'credit'    => 0,
+                'memo'      => "Due from branch {$debtorBranchId} — employee transaction {$txnCode}",
+            ],
+            [
+                'ledger_id' => $bankLedgerId,
+                'debit'     => 0,
+                'credit'    => $amount,
+                'memo'      => ($isOutflow ? 'Bank funded' : 'Bank received') . " employee transaction {$txnCode} for branch {$debtorBranchId}",
+            ],
+        ]);
+
+        // 2. Debtor journal:
+        //    Dr bank-ledger / Cr interbranch_payable
+        $debtorJeId = $this->journalPosting->createJournalEntry([
+            'entry_date'     => $entryDate,
+            'reference_type' => 'employee_transaction_intercompany',
+            'reference_id'   => $transaction->id,
+            'branch_id'      => $debtorBranchId,
+            'description'    => "Intercompany — Employee transaction {$txnCode} (paid from branch {$txnBranchId})",
+            'source'         => 'employee_transaction_intercompany',
+            'created_by'     => $createdBy,
+        ], [
+            [
+                'ledger_id' => $bankLedgerId,
+                'debit'     => $amount,
+                'credit'    => 0,
+                'memo'      => "Bank clearing — employee transaction {$txnCode} via branch {$creditorBranchId} bank",
+            ],
+            [
+                'ledger_id' => $dueToLedgerId,
+                'debit'     => 0,
+                'credit'    => $amount,
+                'memo'      => "Due to branch {$creditorBranchId} — employee transaction {$txnCode}",
+            ],
+        ]);
+
+        // 3. Record the interbranch obligation in branch_ledger.
+        //    For OUTFLOW: from_branch = debtor (txn branch), to_branch = creditor (bank branch)
+        //    For INFLOW:  from_branch = debtor (bank branch), to_branch = creditor (txn branch)
+        DB::table('branch_ledger')->insert([
+            'transaction_date' => $entryDate,
+            'from_branch_id'   => $debtorBranchId,
+            'to_branch_id'     => $creditorBranchId,
+            'reference_type'   => 'employee_transaction',
+            'reference_id'     => $transaction->id,
+            'debit'            => $amount,
+            'credit'           => 0,
+            'remarks'          => "Employee transaction {$txnCode} — bank at branch {$bankBranchId2}",
+            'journal_entry_id' => $debtorJeId,
+            'is_reversed'      => false,
+            'created_by'       => $createdBy,
+            'created_at'       => now(),
+        ]);
+
+        Log::info('Employee transaction intercompany settlement posted', [
+            'transaction_id'   => $transaction->id,
+            'transaction_code' => $txnCode,
+            'txn_branch_id'    => $txnBranchId,
+            'bank_branch_id'   => $bankBranchId2,
+            'amount'           => $amount,
+            'direction'        => $isOutflow ? 'outflow' : 'inflow',
+            'creditor_je_id'   => $creditorJeId,
+            'debtor_je_id'     => $debtorJeId,
+        ]);
+
+        // Return the debtor JE id (primary, stored in intercompany_journal_entry_id).
+        return $debtorJeId;
     }
 
     // ============================================================

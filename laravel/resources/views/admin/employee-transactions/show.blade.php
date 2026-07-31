@@ -305,6 +305,102 @@
                 </div>
             @endif
 
+            {{-- Intercompany GL Journal card --}}
+            @if ($transaction->intercompanyJournalEntry)
+                @php
+                    $icje        = $transaction->intercompanyJournalEntry;
+                    $icTotalDr   = 0;
+                    $icTotalCr   = 0;
+                    foreach ($icje->lines as $line) {
+                        $icTotalDr += (float) $line->debit;
+                        $icTotalCr += (float) $line->credit;
+                    }
+                @endphp
+                <div class="card border-0 shadow-sm mb-3">
+                    <div class="card-header bg-white">
+                        <h2 class="h6 mb-0">
+                            <i class="fas fa-right-left me-1 text-info"></i> Intercompany GL Journal
+                            @if ($icje->is_reversed)
+                                <span class="badge bg-danger-subtle text-danger ms-1">
+                                    <i class="fas fa-rotate-left me-1"></i>Reversed
+                                </span>
+                            @endif
+                        </h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="row mb-3 g-2">
+                            <div class="col-md-4">
+                                <div class="small text-muted">JE #</div>
+                                <span class="badge bg-secondary-subtle text-secondary">{{ $icje->entry_no }}</span>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="small text-muted">Date</div>
+                                <div>{{ \Carbon\Carbon::parse($icje->entry_date)->format('d M Y') }}</div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="small text-muted">Description</div>
+                                <div>{{ $icje->description ?: '—' }}</div>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Ledger</th>
+                                        <th class="text-end">Debit (Tk)</th>
+                                        <th class="text-end">Credit (Tk)</th>
+                                        <th>Memo</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @forelse ($icje->lines as $line)
+                                        <tr>
+                                            <td>
+                                                @if ($line->ledger)
+                                                    <span class="fw-semibold">{{ $line->ledger->ledger_name }}</span>
+                                                    @if (!empty($line->ledger->ledger_code))
+                                                        <div class="small text-muted">{{ $line->ledger->ledger_code }}</div>
+                                                    @endif
+                                                @else
+                                                    <span class="text-muted">Ledger #{{ $line->ledger_id }}</span>
+                                                @endif
+                                            </td>
+                                            <td class="text-end">
+                                                @if ((float) $line->debit > 0)
+                                                    {{ number_format((float) $line->debit, 2) }}
+                                                @else
+                                                    <span class="text-muted">—</span>
+                                                @endif
+                                            </td>
+                                            <td class="text-end">
+                                                @if ((float) $line->credit > 0)
+                                                    {{ number_format((float) $line->credit, 2) }}
+                                                @else
+                                                    <span class="text-muted">—</span>
+                                                @endif
+                                            </td>
+                                            <td class="small text-muted">{{ $line->memo ?: '—' }}</td>
+                                        </tr>
+                                    @empty
+                                        <tr>
+                                            <td colspan="4" class="text-center text-muted py-3">No lines.</td>
+                                        </tr>
+                                    @endforelse
+                                </tbody>
+                                <tfoot>
+                                    <tr class="table-light fw-bold">
+                                        <td class="text-end">Total</td>
+                                        <td class="text-end text-success">{{ number_format($icTotalDr, 2) }}</td>
+                                        <td class="text-end text-danger">{{ number_format($icTotalCr, 2) }}</td>
+                                        <td></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            @endif
+
             {{-- Employee Ledger Entries card --}}
             @if ($employeeLedgerEntries->isNotEmpty())
                 <div class="card border-0 shadow-sm mb-3">

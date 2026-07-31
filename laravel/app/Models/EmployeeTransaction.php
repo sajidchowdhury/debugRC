@@ -40,6 +40,7 @@ use App\Models\Scopes\BranchScope;
  * @property string|null $description
  * @property int|null $collected_by
  * @property int|null $journal_entry_id
+ * @property int|null $intercompany_journal_entry_id
  * @property bool $is_reversed
  * @property string|null $reversed_at
  * @property int|null $reversed_by
@@ -80,7 +81,7 @@ class EmployeeTransaction extends Model
     protected $fillable = [
         'transaction_code', 'transaction_date', 'employee_id', 'branch_id',
         'payment_mode', 'bank_id', 'transaction_type', 'amount', 'description',
-        'collected_by', 'journal_entry_id',
+        'collected_by', 'journal_entry_id', 'intercompany_journal_entry_id',
         'is_reversed', 'reversed_at', 'reversed_by', 'reverse_reason',
         'created_by',
     ];
@@ -95,6 +96,7 @@ class EmployeeTransaction extends Model
         'bank_id' => 'integer',
         'collected_by' => 'integer',
         'journal_entry_id' => 'integer',
+        'intercompany_journal_entry_id' => 'integer',
         'created_by' => 'integer',
         'reversed_by' => 'integer',
     ];
@@ -126,6 +128,18 @@ class EmployeeTransaction extends Model
     public function journalEntry(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'journal_entry_id');
+    }
+
+    /**
+     * Intercompany journal entry (cross-branch bank-mode settlement).
+     * Populated by EmployeeTransactionService::postIntercompanySettlement()
+     * when an employee transaction uses a bank that belongs to a different
+     * branch. NULL for cash-mode, same-branch, shared-bank, or deduction
+     * (non-cash) transactions.
+     */
+    public function intercompanyJournalEntry(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'intercompany_journal_entry_id');
     }
 
     // ============================================================
