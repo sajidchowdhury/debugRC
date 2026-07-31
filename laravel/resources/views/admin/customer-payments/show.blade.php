@@ -941,7 +941,7 @@
         paymentCode: '{{ $payment->payment_code }}',
         routes: {
             'index': '{{ route("admin.customer-payments.index") }}',
-            'show': '{{ route("admin.customer-payments.show", ["customer_payment" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'show': '{{ route("admin.customer-payments.show", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
             'cancel': '{{ route("admin.customer-payments.cancel", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
         },
     };

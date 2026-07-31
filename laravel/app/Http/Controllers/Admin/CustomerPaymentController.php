@@ -178,7 +178,7 @@ class CustomerPaymentController extends Controller
                 ]);
             }
             return redirect()
-                ->route('admin.customer-payments.show', ['customer_payment' => $cached['payment_id']])
+                ->route('admin.customer-payments.show', ['id' => $cached['payment_id']])
                 ->with('success', $cached['success_message'])
                 ->with('warning', 'Duplicate submission detected — returning the original result. No new payment was created.');
         }

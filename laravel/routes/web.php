@@ -1271,10 +1271,14 @@ Route::middleware('auth')->group(function () {
         // Phase 3B: Print payment slip (voucher)
         Route::get('{id}/slip', [CustomerPaymentController::class, 'slip'])
             ->name('slip')->middleware('role:salesman,accountant,manager,admin');
+        // Show details — uses {id} to match cancel/slip/print-receipt parameter naming
+        Route::get('{id}', [CustomerPaymentController::class, 'show'])
+            ->name('show')->middleware('role:salesman,accountant,manager,admin')
+            ->where('id', '[0-9]+');
     });
     // store carries branch_id in the request body → branch.isolation
     Route::resource('admin/customer-payments', CustomerPaymentController::class)
-        ->only(['index', 'create', 'show'])
+        ->only(['index', 'create'])
         ->names('admin.customer-payments')
         ->middleware('role:salesman,accountant,manager,admin');
     Route::resource('admin/customer-payments', CustomerPaymentController::class)
@@ -1300,16 +1304,18 @@ Route::middleware('auth')->group(function () {
         // Print payment slip
         Route::get('{id}/slip', [SupplierTransactionController::class, 'slip'])
             ->name('slip')->middleware('role:accountant,manager,admin');
+        // Show details — uses {id} to match reverse/slip parameter naming
+        Route::get('{id}', [SupplierTransactionController::class, 'show'])
+            ->name('show')->middleware('role:accountant,manager,admin')
+            ->where('id', '[0-9]+');
     });
     Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
-        ->only(['index', 'create', 'show'])
+        ->only(['index', 'create'])
         ->names('admin.supplier-transactions')
-        ->parameter('supplier_transaction', 'id')
         ->middleware('role:accountant,manager,admin');
     Route::resource('admin/supplier-transactions', SupplierTransactionController::class)
         ->only(['store'])
         ->names('admin.supplier-transactions')
-        ->parameter('supplier_transaction', 'id')
         ->middleware(['role:accountant,manager,admin', 'branch.isolation']);
 
     // ============================================================

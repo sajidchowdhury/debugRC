@@ -232,7 +232,7 @@
                     @endif
                 </div>
                 <div class="d-flex gap-2 mt-2 justify-content-end">
-                    <a href="{{ route('admin.supplier-transactions.slip', ['supplier_transaction' => $payment->id]) }}" class="btn btn-outline-light btn-sm" target="_blank">
+                    <a href="{{ route('admin.supplier-transactions.slip', ['id' => $payment->id]) }}" class="btn btn-outline-light btn-sm" target="_blank">
                         <i class="fas fa-print me-1"></i> Print
                     </a>
                     <a href="{{ route('admin.supplier-transactions.index') }}" class="btn btn-outline-light btn-sm">
@@ -884,7 +884,7 @@
                     <h2>Actions</h2>
                 </div>
                 <div class="st-section-body d-grid gap-2">
-                    <a href="{{ route('admin.supplier-transactions.slip', ['supplier_transaction' => $payment->id]) }}" class="btn btn-outline-primary w-100" target="_blank">
+                    <a href="{{ route('admin.supplier-transactions.slip', ['id' => $payment->id]) }}" class="btn btn-outline-primary w-100" target="_blank">
                         <i class="fas fa-print me-1"></i> Print Slip
                     </a>
 
