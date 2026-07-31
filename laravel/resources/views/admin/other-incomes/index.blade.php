@@ -25,8 +25,11 @@
     // Payment mode badge helper
     $modeBadge = function (string $mode): string {
         return [
-            'cash' => '<span class="badge bg-secondary"><i class="fas fa-money-bill me-1"></i>Cash</span>',
-            'bank' => '<span class="badge bg-primary"><i class="fas fa-university me-1"></i>Bank</span>',
+            'cash'            => '<span class="badge bg-secondary"><i class="fas fa-money-bill me-1"></i>Cash</span>',
+            'bank'            => '<span class="badge bg-primary"><i class="fas fa-university me-1"></i>Bank</span>',
+            'mobile_banking' => '<span class="badge bg-info"><i class="fas fa-mobile-screen me-1"></i>Mobile</span>',
+            'cheque'          => '<span class="badge bg-warning text-dark"><i class="fas fa-money-check me-1"></i>Cheque</span>',
+            'adjustment'      => '<span class="badge bg-dark"><i class="fas fa-sliders me-1"></i>Adjustment</span>',
         ][$mode] ?? '<span class="badge bg-light text-dark">' . e($mode) . '</span>';
     };
 @endphp
@@ -216,7 +219,7 @@
     <div class="card border-0 shadow-sm">
         <div class="card-body">
             <div class="table-responsive">
-                <table class="table table-sm table-striped table-hover align-middle mb-0" id="dataTable">
+                <table class="table table-sm table-striped table-hover align-middle mb-0" id="oiTable">
                     <thead class="table-light">
                         <tr>
                             <th>Code</th>
@@ -294,19 +297,28 @@
     </div>
 </div>
 
+{{-- Boot config for OtherIncome.js --}}
+<script>
+    window.OI_BOOT = {
+        baseUrl: '{{ url("/") }}/',
+        csrf_token: '{{ csrf_token() }}',
+        showReversed: {{ $showReversed ? 'true' : 'false' }},
+        routes: {
+            'index': '{{ route("admin.other-incomes.index") }}',
+            'show': '{{ route("admin.other-incomes.show", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'reverse': '{{ route("admin.other-incomes.reverse", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+            'slip': '{{ route("admin.other-incomes.slip", ["id" => "__ID__"]) }}'.replace('__ID__', '{id}'),
+        },
+    };
+</script>
+
 @push('scripts')
+<script src="/assets/js/OtherIncome.js?v={{ filemtime(public_path('assets/js/OtherIncome.js')) }}"></script>
 <script>
 $(function () {
     $('.select2').select2({ theme: 'bootstrap-5', width: '100%' });
-
-    // Client-side DataTable for ordering and quick search on current page
-    $('#dataTable').DataTable({
-        paging: false,
-        info: false,
-        ordering: true,
-        dom: '<"row mb-2"<"col-md-6"f><"col-md-6 text-end"l>>rt',
-        language: { search: 'Filter rows:', emptyTable: 'No other incomes on this page.' }
-    });
+    // DataTable initialization is handled by OtherIncome.js initIndex()
+    // to avoid "Cannot reinitialise DataTable" and "Incorrect column count" warnings.
 });
 </script>
 @endpush

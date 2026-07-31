@@ -85,85 +85,23 @@
     });
 
     function initIndex(b) {
-        const tableEl = document.getElementById('incomeTable');
+        const tableEl = document.getElementById('oiTable');
         if (!tableEl || typeof $ === 'undefined' || !$.fn.DataTable) return;
 
-        const showReversed = !!window.showReversed;
-        const today = new Date().toISOString().split('T')[0];
-        if (showReversed) {
-            const fs = document.getElementById('filterStatus');
-            if (fs) { fs.value = 'reversed'; fs.disabled = true; }
+        // Only initialize DataTable on the Blade-rendered table if there are data rows
+        const hasDataRows = tableEl.querySelector('tbody tr td:not([colspan])');
+        if (!hasDataRows) return;
+
+        // Destroy any existing DataTable instance
+        if ($.fn.DataTable.isDataTable('#oiTable')) {
+            $('#oiTable').DataTable().destroy();
         }
 
-        const table = $('#incomeTable').DataTable({
-            processing: true,
-            serverSide: true,
-            ajax: {
-                url: b + 'OtherIncome' + (showReversed ? '?reversed=1' : ''),
-                data(d) {
-                    d.fromDate = $('#fromDate').val();
-                    d.toDate = $('#toDate').val();
-                    d.filterLedger = $('#filterLedger').val();
-                    d.filterPaymentMode = $('#filterPaymentMode').val();
-                    d.filterStatus = $('#filterStatus').val();
-                    if (showReversed) d.reversedMode = 'only_reversed';
-                },
-            },
+        const dt = $('#oiTable').DataTable({
             pageLength: 25,
             order: [[0, 'desc']],
-            dom: '<"branch-dt-toolbar"lf>Brt<"branch-dt-footer"ip>',
-            buttons: ['copy', 'excel', 'pdf'],
-            drawCallback() { renderCards(this.api()); },
-            columns: [
-                { data: 'income_date', render: (d) => new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) },
-                { data: 'income_code' },
-                { data: 'ledger_name' },
-                { data: 'amount', className: 'text-end fw-bold', render: (d) => 'Tk ' + parseFloat(d || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 }) },
-                { data: null, render: (_d, _t, row) => row.payment_mode === 'bank' ? esc(row.bank_name || 'Bank') : 'Cash' },
-                { data: 'is_reversed', render: (d) => d == 1
-                    ? '<span class="branch-status-pill inactive"><span class="dot"></span> Reversed</span>'
-                    : '<span class="branch-status-pill active"><span class="dot"></span> Active</span>' },
-                { data: 'id', orderable: false, className: 'text-center', render: (id, _t, row) => {
-                    let h = '<a href="' + b + 'OtherIncome/details/' + id + '" class="btn-action view"><i class="fas fa-eye"></i></a>';
-                    if (!showReversed && row.is_reversed == 0) {
-                        h += ' <button type="button" class="btn-action toggle-off js-oi-reverse-index" data-income-id="' + id + '" data-income-code="' + esc(row.income_code || '') + '"><i class="fas fa-undo"></i></button>';
-                    }
-                    return h;
-                }},
-            ],
-        });
-
-        tableEl.addEventListener('click', (e) => {
-            const btn = e.target.closest('.js-oi-reverse-index');
-            if (btn) reverseIncome(btn.dataset.incomeId, btn.dataset.incomeCode);
-        });
-
-        $('#filterLedger, #filterPaymentMode, #filterStatus, #fromDate, #toDate').on('change', () => table.ajax.reload());
-        $('#clearFilters').on('click', () => {
-            $('#filterLedger, #filterPaymentMode, #filterStatus').val('');
-            $('#fromDate, #toDate').val(today);
-            table.ajax.reload();
-        });
-    }
-
-    function renderCards(api) {
-        const c = document.getElementById('incomeCards');
-        if (!c || window.innerWidth >= 768) { if (c) c.innerHTML = ''; return; }
-        const b = baseUrl();
-        const showReversed = !!window.showReversed;
-        const data = api.rows({ page: 'current' }).data();
-        let html = data.length ? '' : '<div class="text-center text-muted py-4">No records for selected filters.</div>';
-        data.each((row) => {
-            const amt = 'Tk ' + parseFloat(row.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
-            let actions = '<a href="' + b + 'OtherIncome/details/' + row.id + '" class="btn-action view">View</a>';
-            if (!showReversed && row.is_reversed == 0) {
-                actions += ' <button type="button" class="btn-action toggle-off js-oi-reverse-index" data-income-id="' + row.id + '" data-income-code="' + esc(row.income_code || '') + '"><i class="fas fa-undo"></i></button>';
-            }
-            html += `<article class="cust-txn-mobile-card"><strong>${esc(row.income_code)}</strong> · ${amt}<div class="mt-2 small">${esc(row.ledger_name)}</div><div class="mt-2">${actions}</div></article>`;
-        });
-        c.innerHTML = html;
-        c.querySelectorAll('.js-oi-reverse-index').forEach((btn) => {
-            btn.addEventListener('click', () => reverseIncome(btn.dataset.incomeId, btn.dataset.incomeCode));
+            columnDefs: [{ orderable: false, targets: -1 }],
+            language: { emptyTable: 'No other incomes for selected filters', search: 'Quick search:' },
         });
     }
 

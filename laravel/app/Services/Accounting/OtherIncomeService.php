@@ -181,7 +181,7 @@ class OtherIncomeService
         $query = OtherIncome::with(['branch', 'bank'])
             ->when($filters['date_from'] ?? null, fn($q, $d) => $q->where('income_date', '>=', $d))
             ->when($filters['date_to'] ?? null, fn($q, $d) => $q->where('income_date', '<=', $d))
-            ->when($filters['payment_mode'] ?? null, fn($q, $m) => $q->where('payment_mode', $m))
+            ->when(($filters['payment_mode'] ?? null) && $filters['payment_mode'] !== 'all', fn($q, $m) => $q->where('payment_mode', $m))
             ->when($filters['income_type'] ?? null, fn($q, $t) => $q->where('income_type', $t))
             ->when($filters['branch_id'] ?? null, fn($q, $bid) => $q->where('branch_id', $bid))
             ->when($filters['search'] ?? null, function ($q, $search) {
