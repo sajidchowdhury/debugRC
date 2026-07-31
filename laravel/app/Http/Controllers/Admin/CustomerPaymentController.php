@@ -454,24 +454,38 @@ class CustomerPaymentController extends Controller
 
     /**
      * Get customer's outstanding receivable balance (what they owe us).
+     *
+     * Uses the customer_ledger SUM(debit-credit) for non-reversed entries,
+     * which is the same computation as CustomerLedger::getBalance().
+     * Falls back to outstanding invoice due_amount sum if no ledger rows exist.
      */
     private function getCustomerReceivable(int $customerId): float
     {
-        // Sum of outstanding invoice due amounts
-        $invoiceDue = (float) \App\Models\SalesInvoice::where('customer_id', $customerId)
-            ->where('is_reversed', false)
-            ->sum('due_amount');
-
-        // Alternative: customer_ledger running balance
-        $ledgerBalance = DB::table('customer_ledger')
+        // Primary: customer_ledger balance (debit - credit for non-reversed)
+        $ledgerBalance = (float) DB::table('customer_ledger')
             ->where('customer_id', $customerId)
-            ->orderBy('id', 'desc')
-            ->value('running_balance');
+            ->where('is_reversed', false)
+            ->selectRaw('COALESCE(SUM(debit) - SUM(credit), 0) AS balance')
+            ->value('balance');
 
-        if ($ledgerBalance !== null) {
-            return (float) $ledgerBalance;
+        // If ledger has entries, return that balance
+        if ($ledgerBalance > 0.001 || $ledgerBalance < -0.001) {
+            return abs($ledgerBalance);
         }
 
-        return $invoiceDue;
+        // Check if any ledger rows exist at all (zero balance is valid)
+        $hasLedgerRows = DB::table('customer_ledger')
+            ->where('customer_id', $customerId)
+            ->where('is_reversed', false)
+            ->exists();
+
+        if ($hasLedgerRows) {
+            return 0.0; // Truly zero balance
+        }
+
+        // Fallback: sum of outstanding invoice due amounts
+        return (float) \App\Models\SalesInvoice::where('customer_id', $customerId)
+            ->where('is_reversed', false)
+            ->sum('due_amount');
     }
 }
