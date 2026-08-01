@@ -262,6 +262,10 @@ CREATE TABLE manual_journals (
     status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','posted','reversed')),
     journal_entry_id integer REFERENCES journal_entries(id),
     created_by integer,
+    reversed_by integer,
+    reversed_at timestamp(0),
+    reverse_reason varchar(500),
+    deleted_at timestamp(0),
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT manual_journals_code_unique UNIQUE (journal_code)
@@ -289,6 +293,9 @@ CREATE INDEX idx_mjl_journal ON manual_journal_lines(manual_journal_id);
 CREATE INDEX idx_mjl_journal_status ON manual_journal_lines(manual_journal_id, status);
 CREATE INDEX idx_mjl_ledger ON manual_journal_lines(ledger_id);
 
+-- Phase 1.3: Enable pgcrypto for digest() (SHA-256 hashing in audit trigger)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- Phase 1.3: Immutable financial audit log
 CREATE TABLE financial_audit_log (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -299,7 +306,7 @@ CREATE TABLE financial_audit_log (
     after_data      JSONB,
     changed_columns TEXT[],
     performed_by    VARCHAR(100),
-    session_user    VARCHAR(100),
+    db_session_user VARCHAR(100),
     branch_id       INTEGER,
     transaction_id  XID,
     request_path    VARCHAR(500),
@@ -372,7 +379,7 @@ BEGIN
     SELECT row_hash INTO _prev_hash FROM financial_audit_log ORDER BY id DESC LIMIT 1;
     IF _prev_hash IS NULL THEN _prev_hash := '0000000000000000000000000000000000000000000000000000000000000000'; END IF;
     _row_hash := encode(digest(_prev_hash || TG_TABLE_NAME || _op || _record_id::TEXT || COALESCE(_after::TEXT, _before::TEXT), 'sha256'), 'hex');
-    INSERT INTO financial_audit_log (table_name, operation, record_id, before_data, after_data, changed_columns, performed_by, session_user, branch_id, transaction_id, request_path, request_ip, request_id, prev_hash, row_hash)
+    INSERT INTO financial_audit_log (table_name, operation, record_id, before_data, after_data, changed_columns, performed_by, db_session_user, branch_id, transaction_id, request_path, request_ip, request_id, prev_hash, row_hash)
     VALUES (TG_TABLE_NAME, _op, _record_id, _before, _after, _changed, _performed_by, _session_user, _branch_id, xmin, _request_path, _request_ip, _request_id, _prev_hash, _row_hash);
     IF _op = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
 END;
@@ -391,8 +398,16 @@ CREATE TRIGGER trg_audit_other_expenses AFTER INSERT OR UPDATE OR DELETE ON othe
 CREATE TRIGGER trg_audit_employee_transactions AFTER INSERT OR UPDATE OR DELETE ON employee_transactions FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
 
 -- Phase 1.3: Make financial_audit_log immutable (no UPDATE/DELETE)
-REVOKE UPDATE, DELETE ON financial_audit_log FROM PUBLIC;
-REVOKE UPDATE, DELETE ON financial_audit_log FROM postgres;
+-- Role-safe: only revoke from roles that exist
+DO $$ BEGIN
+    EXECUTE 'REVOKE UPDATE, DELETE ON financial_audit_log FROM PUBLIC';
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'postgres') THEN
+        EXECUTE 'REVOKE UPDATE, DELETE ON financial_audit_log FROM postgres';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'remote_center') THEN
+        EXECUTE 'REVOKE UPDATE, DELETE ON financial_audit_log FROM remote_center';
+    END IF;
+END $$;
 
 -- Phase 1.3: Chain verification view
 CREATE OR REPLACE VIEW v_financial_audit_chain_verification AS
