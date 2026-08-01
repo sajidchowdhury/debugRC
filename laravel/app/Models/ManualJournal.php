@@ -20,7 +20,8 @@ use App\Models\Scopes\BranchScope;
  *
  * The actual GL journal entry is stored in journal_entries (linked via
  * journal_entry_id). The manual_journals row is the "header" — the lines
- * live on journal_lines (linked to the journal_entry_id).
+ * live on manual_journal_lines (for draft + posted persistence) and are
+ * mirrored to journal_lines when posted to GL (linked to the journal_entry_id).
  *
  * @property int $id
  * @property string $journal_code
@@ -88,6 +89,15 @@ class ManualJournal extends Model
     public function createdBy(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /**
+     * Manual journal lines (draft + posted persistence).
+     * Phase 1.1: Lines are stored in manual_journal_lines for both draft and posted journals.
+     */
+    public function lines(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(ManualJournalLine::class, 'manual_journal_id');
     }
 
     // ============================================================

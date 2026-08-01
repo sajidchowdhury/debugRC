@@ -1442,6 +1442,8 @@ Route::middleware('auth')->group(function () {
             ->name('store')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         Route::post('{id}/reverse', [ManualJournalController::class, 'reverse'])
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+        Route::post('{id}/post', [ManualJournalController::class, 'post'])
+            ->name('post')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
     });
     Route::resource('admin/manual-journals', ManualJournalController::class)
         ->only(['index', 'create'])

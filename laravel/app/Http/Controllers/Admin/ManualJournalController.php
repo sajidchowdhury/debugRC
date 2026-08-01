@@ -10,14 +10,20 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Manual Journal Controller — Phase 6 (Accounts Sub-Ledger).
+ * Manual Journal Controller — Phase 1.1 (Core Foundation Hardening).
  *
- * Handles manual journal entries: list, create, show, reverse, audit.
+ * Handles manual journal entries: list, create, show, post, reverse, audit.
  *
  * Lifecycle: draft → posted → reversed
- *   - create with status=draft: saves header + totals only (no GL)
+ *   - create with status=draft: saves header + lines (no GL posting)
  *   - create with status=post:  saves + posts GL immediately
+ *   - post (draft → posted):    reads draft lines, validates, posts to GL
  *   - reverse: reverses the linked GL entry + marks manual journal reversed
+ *
+ * Phase 1.1 Changes:
+ *   - Added post() method for draft-to-post workflow
+ *   - show() now loads manual_journal_lines for draft journals
+ *   - Draft journals show their lines + a "Post" button
  *
  * Dr = Cr is enforced by the service. Period validation on posting.
  * No entity_type/entity_id on lines (accountant's choice).
@@ -126,20 +132,55 @@ class ManualJournalController extends Controller
     }
 
     /**
-     * Show journal details with GL lines.
+     * Show journal details with GL lines (for posted) or draft lines (for draft).
      */
     public function show(int $id)
     {
         $journal = ManualJournal::with([
             'branch', 'createdBy',
             'journalEntry.lines.ledger',
+            'lines.ledger',  // Phase 1.1: draft lines
         ])->findOrFail($id);
 
         return view('admin.manual-journals.show', [
             'title'   => 'Manual Journal — ' . $journal->journal_code,
             'journal' => $journal,
             'canReverse' => $journal->isPosted(),
+            'canPost'    => $journal->isDraft(),  // Phase 1.1: show Post button for drafts
         ]);
+    }
+
+    /**
+     * Post a draft manual journal to the GL.
+     *
+     * Phase 1.1: Draft-to-post workflow. Reads draft lines from manual_journal_lines,
+     * validates Dr=Cr, posts to GL, marks lines as posted.
+     */
+    public function post(Request $request, int $id)
+    {
+        try {
+            $journal = $this->service->postJournal($id, auth()->id());
+
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'status'       => 'success',
+                    'message'      => "Manual journal {$journal->journal_code} posted to GL successfully.",
+                    'journal_id'   => $journal->id,
+                    'journal_code' => $journal->journal_code,
+                ]);
+            }
+
+            return redirect()->route('admin.manual-journals.show', ['id' => $journal->id])
+                ->with('success', "Manual journal {$journal->journal_code} posted to GL successfully.");
+        } catch (\Throwable $e) {
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => $e->getMessage(),
+                ], 400);
+            }
+            return back()->with('error', $e->getMessage());
+        }
     }
 
     /**

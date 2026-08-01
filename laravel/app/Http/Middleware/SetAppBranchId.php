@@ -62,6 +62,16 @@ class SetAppBranchId
                 $safeIsAdmin  = $isAdmin === 'true' ? 'true' : 'false';
                 DB::unprepared("SET app.branch_id = {$safeBranchId}");
                 DB::unprepared("SET app.is_admin = {$safeIsAdmin}");
+
+                // Phase 1.3: Set request context for financial audit trail triggers.
+                // These GUCs are read by fn_financial_audit_trigger() to capture
+                // the request path, IP, and request ID in the audit log.
+                $safePath = addcslashes($request->path() ?? '', "'\\");
+                $safeIp   = addcslashes($request->ip() ?? '', "'\\");
+                $safeRid  = addcslashes($request->header('X-Request-ID') ?? ($request->input('request_id') ?? uniqid('req_', true)), "'\\");
+                DB::unprepared("SET app.request_path = '{$safePath}'");
+                DB::unprepared("SET app.request_ip = '{$safeIp}'");
+                DB::unprepared("SET app.request_id = '{$safeRid}'");
             } catch (\Throwable $e) {
                 // If GUC doesn't exist yet (migration not run), silently skip.
                 // This allows code deployment before migration.

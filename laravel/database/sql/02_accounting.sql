@@ -269,6 +269,139 @@ CREATE TABLE manual_journals (
 CREATE INDEX idx_mj_branch_date ON manual_journals(branch_id, journal_date);
 CREATE INDEX idx_mj_journal ON manual_journals(journal_entry_id);
 
+-- Phase 1.1: manual_journal_lines table (draft line persistence)
+CREATE TABLE manual_journal_lines (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    manual_journal_id integer NOT NULL REFERENCES manual_journals(id) ON DELETE CASCADE,
+    ledger_id integer NOT NULL,
+    debit numeric(15,2) NOT NULL DEFAULT 0,
+    credit numeric(15,2) NOT NULL DEFAULT 0,
+    description varchar(500),
+    status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','posted')),
+    journal_line_id integer,
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT mjl_debit_non_negative CHECK (debit >= 0),
+    CONSTRAINT mjl_credit_non_negative CHECK (credit >= 0),
+    CONSTRAINT mjl_not_both_zero CHECK (debit > 0 OR credit > 0)
+);
+CREATE INDEX idx_mjl_journal ON manual_journal_lines(manual_journal_id);
+CREATE INDEX idx_mjl_journal_status ON manual_journal_lines(manual_journal_id, status);
+CREATE INDEX idx_mjl_ledger ON manual_journal_lines(ledger_id);
+
+-- Phase 1.3: Immutable financial audit log
+CREATE TABLE financial_audit_log (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    table_name      VARCHAR(64) NOT NULL,
+    operation       VARCHAR(6)  NOT NULL CHECK (operation IN ('INSERT','UPDATE','DELETE')),
+    record_id       BIGINT NOT NULL,
+    before_data     JSONB,
+    after_data      JSONB,
+    changed_columns TEXT[],
+    performed_by    VARCHAR(100),
+    session_user    VARCHAR(100),
+    branch_id       INTEGER,
+    transaction_id  XID,
+    request_path    VARCHAR(500),
+    request_ip      VARCHAR(45),
+    request_id      VARCHAR(100),
+    prev_hash       VARCHAR(64),
+    row_hash        VARCHAR(64),
+    created_at      TIMESTAMP(0) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_fal_table_record ON financial_audit_log(table_name, record_id);
+CREATE INDEX idx_fal_operation ON financial_audit_log(operation);
+CREATE INDEX idx_fal_performed_by ON financial_audit_log(performed_by);
+CREATE INDEX idx_fal_branch ON financial_audit_log(branch_id);
+CREATE INDEX idx_fal_created_at ON financial_audit_log(created_at);
+CREATE INDEX idx_fal_table_op ON financial_audit_log(table_name, operation);
+
+-- Phase 1.3: Audit trigger function
+CREATE OR REPLACE FUNCTION fn_financial_audit_trigger()
+RETURNS TRIGGER AS $$
+DECLARE
+    _prev_hash VARCHAR(64);
+    _row_hash  VARCHAR(64);
+    _before    JSONB;
+    _after     JSONB;
+    _changed   TEXT[];
+    _col       TEXT;
+    _op        VARCHAR(6);
+    _record_id BIGINT;
+    _branch_id INTEGER;
+    _performed_by VARCHAR(100);
+    _session_user VARCHAR(100);
+    _request_path VARCHAR(500);
+    _request_ip   VARCHAR(45);
+    _request_id   VARCHAR(100);
+BEGIN
+    _op := TG_OP;
+    IF _op = 'DELETE' THEN
+        _record_id := OLD.id;
+        _before := to_jsonb(OLD);
+        _after := NULL;
+        _changed := ARRAY[]::TEXT[];
+    ELSIF _op = 'INSERT' THEN
+        _record_id := NEW.id;
+        _before := NULL;
+        _after := to_jsonb(NEW);
+        _changed := ARRAY[]::TEXT[];
+    ELSE
+        _record_id := NEW.id;
+        _before := to_jsonb(OLD);
+        _after := to_jsonb(NEW);
+        _changed := ARRAY[]::TEXT[];
+        FOR _col IN
+            SELECT key FROM jsonb_object_keys(_before) AS key
+            WHERE (_before->>key) IS DISTINCT FROM (_after->>key)
+        LOOP
+            _changed := array_append(_changed, _col);
+        END LOOP;
+    END IF;
+    _branch_id := NULL;
+    IF _op = 'DELETE' THEN
+        IF OLD.branch_id IS NOT NULL THEN _branch_id := OLD.branch_id; END IF;
+    ELSE
+        IF NEW.branch_id IS NOT NULL THEN _branch_id := NEW.branch_id; END IF;
+    END IF;
+    _session_user := session_user;
+    _performed_by := current_user;
+    BEGIN _request_path := current_setting('app.request_path', true); EXCEPTION WHEN OTHERS THEN _request_path := NULL; END;
+    BEGIN _request_ip := current_setting('app.request_ip', true); EXCEPTION WHEN OTHERS THEN _request_ip := NULL; END;
+    BEGIN _request_id := current_setting('app.request_id', true); EXCEPTION WHEN OTHERS THEN _request_id := NULL; END;
+    SELECT row_hash INTO _prev_hash FROM financial_audit_log ORDER BY id DESC LIMIT 1;
+    IF _prev_hash IS NULL THEN _prev_hash := '0000000000000000000000000000000000000000000000000000000000000000'; END IF;
+    _row_hash := encode(digest(_prev_hash || TG_TABLE_NAME || _op || _record_id::TEXT || COALESCE(_after::TEXT, _before::TEXT), 'sha256'), 'hex');
+    INSERT INTO financial_audit_log (table_name, operation, record_id, before_data, after_data, changed_columns, performed_by, session_user, branch_id, transaction_id, request_path, request_ip, request_id, prev_hash, row_hash)
+    VALUES (TG_TABLE_NAME, _op, _record_id, _before, _after, _changed, _performed_by, _session_user, _branch_id, xmin, _request_path, _request_ip, _request_id, _prev_hash, _row_hash);
+    IF _op = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Phase 1.3: Attach audit triggers to financial tables
+CREATE TRIGGER trg_audit_journal_entries AFTER INSERT OR UPDATE OR DELETE ON journal_entries FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_journal_lines AFTER INSERT OR UPDATE OR DELETE ON journal_lines FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_manual_journals AFTER INSERT OR UPDATE OR DELETE ON manual_journals FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_manual_journal_lines AFTER INSERT OR UPDATE OR DELETE ON manual_journal_lines FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_customer_payments AFTER INSERT OR UPDATE OR DELETE ON customer_payments FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_supplier_payments AFTER INSERT OR UPDATE OR DELETE ON supplier_payments FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_money_transfers AFTER INSERT OR UPDATE OR DELETE ON money_transfers FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_other_incomes AFTER INSERT OR UPDATE OR DELETE ON other_incomes FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_other_expenses AFTER INSERT OR UPDATE OR DELETE ON other_expenses FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_employee_transactions AFTER INSERT OR UPDATE OR DELETE ON employee_transactions FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+
+-- Phase 1.3: Make financial_audit_log immutable (no UPDATE/DELETE)
+REVOKE UPDATE, DELETE ON financial_audit_log FROM PUBLIC;
+REVOKE UPDATE, DELETE ON financial_audit_log FROM postgres;
+
+-- Phase 1.3: Chain verification view
+CREATE OR REPLACE VIEW v_financial_audit_chain_verification AS
+SELECT id, table_name, operation, record_id, prev_hash, row_hash,
+    CASE WHEN id = 1 THEN prev_hash = '0000000000000000000000000000000000000000000000000000000000000000'
+         ELSE prev_hash = LAG(row_hash) OVER (ORDER BY id) END AS chain_valid,
+    created_at
+FROM financial_audit_log ORDER BY id;
+
 CREATE TABLE schema_migrations (
     filename varchar(255) NOT NULL PRIMARY KEY,
     applied_at timestamp(0) DEFAULT CURRENT_TIMESTAMP

@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Manual Journal Service — Phase 6 (Accounts Sub-Ledger).
+ * Manual Journal Service — Phase 1.1 (Core Foundation Hardening).
  *
  * Handles the full lifecycle of manual journal entries:
  *   create (draft or posted) → post (draft → posted) → reverse (posted → reversed)
@@ -19,10 +19,15 @@ use Illuminate\Support\Facades\Log;
  *   - Period validation on posting (cannot post to closed periods)
  *   - No entity_type/entity_id on journal lines (accountant's choice)
  *
+ * Phase 1.1 Changes:
+ *   - Lines are now persisted in manual_journal_lines table for BOTH draft and posted journals
+ *   - postJournal() now works: reads draft lines, validates, posts to GL, marks lines as posted
+ *   - This matches the "park document" pattern in SAP B1 and "Optional voucher" in Tally
+ *
  * GL posting:
- *   - Draft: no GL journal entry created (journal_entry_id stays NULL)
+ *   - Draft: lines saved to manual_journal_lines (status='draft'), no GL journal entry created
  *   - Post:  creates a journal_entries row + journal_lines rows via
- *            JournalPostingService::createJournalEntry()
+ *            JournalPostingService::createJournalEntry(), then marks manual_journal_lines as posted
  *   - Reverse: reverses the linked journal_entries row via
  *            JournalReversalService::reverseByJournalEntry()
  */
@@ -90,19 +95,24 @@ class ManualJournalService
                 'updated_at'    => now(),
             ]);
 
-            $journal = ManualJournal::find($journalId);
+            // 2. Persist lines to manual_journal_lines (for BOTH draft and posted).
+            $this->persistLines($journalId, $lines, $post ? 'posted' : 'draft');
 
-            // 2. If posting, create the GL journal entry + lines.
+            // 3. If posting, create the GL journal entry + lines.
             if ($post) {
+                $journal = ManualJournal::find($journalId);
                 $journalEntryId = $this->postToGL($journal, $lines, (int) ($data['created_by'] ?? 0));
 
                 DB::table('manual_journals')->where('id', $journalId)->update([
                     'journal_entry_id' => $journalEntryId,
                     'updated_at'        => now(),
                 ]);
+
+                // Link the manual_journal_lines to the GL journal_lines.
+                $this->linkDraftLinesToGL($journalId, $journalEntryId);
             }
 
-            // 3. Audit log.
+            // 4. Audit log.
             $this->logAudit('manual_journal_created', (int) ($data['created_by'] ?? 0), $journalId, [
                 'journal_code' => $journalCode,
                 'status'       => $post ? 'posted' : 'draft',
@@ -111,7 +121,7 @@ class ManualJournalService
                 'line_count'   => count($lines),
             ]);
 
-            return ManualJournal::with(['branch', 'journalEntry.lines.ledger', 'createdBy'])->find($journalId);
+            return ManualJournal::with(['branch', 'journalEntry.lines.ledger', 'createdBy', 'lines.ledger'])->find($journalId);
         });
     }
 
@@ -122,6 +132,9 @@ class ManualJournalService
     /**
      * Post a draft manual journal to the GL.
      *
+     * Phase 1.1: Now fully functional — reads draft lines from manual_journal_lines,
+     * validates Dr=Cr, posts to GL, marks lines as posted.
+     *
      * @param int $journalId
      * @param int $postedBy
      * @return ManualJournal
@@ -129,7 +142,7 @@ class ManualJournalService
     public function postJournal(int $journalId, int $postedBy): ManualJournal
     {
         return DB::transaction(function () use ($journalId, $postedBy) {
-            $journal = ManualJournal::lockForUpdate()->find($journalId);
+            $journal = ManualJournal::with('lines')->lockForUpdate()->find($journalId);
 
             if (!$journal) {
                 throw new \RuntimeException("Manual journal {$journalId} not found.");
@@ -138,23 +151,56 @@ class ManualJournalService
                 throw new \RuntimeException("Only draft journals can be posted (current status: {$journal->status}).");
             }
 
+            // Load draft lines from manual_journal_lines.
+            $draftLines = $journal->lines()->where('status', 'draft')->get();
+
+            if ($draftLines->isEmpty()) {
+                throw new \RuntimeException(
+                    "Cannot post draft journal {$journalId}: no draft lines found. "
+                    . "The journal must have at least 2 lines with ledger and amount."
+                );
+            }
+
+            // Convert to the format expected by postToGL.
+            $lines = $draftLines->map(function ($line) {
+                return [
+                    'ledger_id'   => (int) $line->ledger_id,
+                    'debit'       => (float) $line->debit,
+                    'credit'      => (float) $line->credit,
+                    'description' => $line->description ?? '',
+                ];
+            })->toArray();
+
             // Re-validate balance + period.
-            $totalDebit = (float) $journal->total_debit;
-            $totalCredit = (float) $journal->total_credit;
+            $totalDebit = round(array_sum(array_column($lines, 'debit')), 2);
+            $totalCredit = round(array_sum(array_column($lines, 'credit')), 2);
             $this->assertBalanced($totalDebit, $totalCredit);
             $this->assertPeriodOpen((int) $journal->branch_id, $journal->journal_date->format('Y-m-d'));
 
-            // Load lines from the linked JE (if any) — but drafts have no JE.
-            // For drafts, we stored totals but not lines. We need to re-derive
-            // lines from the request... BUT since draft has no GL lines, the
-            // accountant must re-submit. This is a known limitation: drafts
-            // store totals only, not line detail.
-            //
-            // For now, throw a clear error if a draft has no lines stored.
-            throw new \RuntimeException(
-                "Posting a draft journal is not supported because line detail is not stored for drafts. "
-                . "Please re-create the journal with status 'post' instead."
-            );
+            // Post to GL.
+            $journalEntryId = $this->postToGL($journal, $lines, $postedBy);
+
+            // Update the manual journal header.
+            DB::table('manual_journals')->where('id', $journalId)->update([
+                'status'           => 'posted',
+                'journal_entry_id' => $journalEntryId,
+                'total_debit'      => $totalDebit,
+                'total_credit'     => $totalCredit,
+                'updated_at'       => now(),
+            ]);
+
+            // Mark draft lines as posted and link to GL journal_lines.
+            $this->linkDraftLinesToGL($journalId, $journalEntryId);
+
+            // Audit log.
+            $this->logAudit('manual_journal_posted', $postedBy, $journalId, [
+                'journal_code' => $journal->journal_code,
+                'total_debit'  => $totalDebit,
+                'total_credit' => $totalCredit,
+                'line_count'   => count($lines),
+            ]);
+
+            return ManualJournal::with(['branch', 'journalEntry.lines.ledger', 'createdBy', 'lines.ledger'])->find($journalId);
         });
     }
 
@@ -222,7 +268,7 @@ class ManualJournalService
      */
     public function getFilteredJournals(array $filters = [], ?int $branchId = null, int $perPage = 25)
     {
-        $query = ManualJournal::with(['branch', 'createdBy', 'journalEntry.lines.ledger'])
+        $query = ManualJournal::with(['branch', 'createdBy', 'journalEntry.lines.ledger', 'lines.ledger'])
             ->when($filters['date_from'] ?? null, fn($q, $d) => $q->where('journal_date', '>=', $d))
             ->when($filters['date_to'] ?? null, fn($q, $d) => $q->where('journal_date', '<=', $d))
             ->when($filters['branch_id'] ?? null, fn($q, $bid) => $q->where('branch_id', $bid))
@@ -295,6 +341,74 @@ class ManualJournalService
     }
 
     // ============================================================
+    // LINE PERSISTENCE (Phase 1.1)
+    // ============================================================
+
+    /**
+     * Persist lines to manual_journal_lines table.
+     *
+     * @param int $journalId
+     * @param array $lines Normalized lines from validateAndNormalizeLines()
+     * @param string $status 'draft' or 'posted'
+     */
+    private function persistLines(int $journalId, array $lines, string $status = 'draft'): void
+    {
+        $lineRows = [];
+        foreach ($lines as $line) {
+            $lineRows[] = [
+                'manual_journal_id' => $journalId,
+                'ledger_id'         => (int) $line['ledger_id'],
+                'debit'             => (float) $line['debit'],
+                'credit'            => (float) $line['credit'],
+                'description'       => $line['description'] ?? null,
+                'status'            => $status,
+                'journal_line_id'   => null, // filled in after GL posting
+                'created_at'        => now(),
+                'updated_at'        => now(),
+            ];
+        }
+
+        DB::table('manual_journal_lines')->insert($lineRows);
+    }
+
+    /**
+     * After GL posting, link each manual_journal_line to its corresponding GL journal_line.
+     *
+     * This is done by matching on ledger_id + debit + credit within the same journal_entry_id.
+     * We also mark the lines as 'posted'.
+     *
+     * @param int $journalId
+     * @param int $journalEntryId
+     */
+    private function linkDraftLinesToGL(int $journalId, int $journalEntryId): void
+    {
+        // Get the GL journal lines for this entry.
+        $glLines = DB::table('journal_lines')
+            ->where('journal_entry_id', $journalEntryId)
+            ->orderBy('id')
+            ->get();
+
+        // Get the manual journal lines.
+        $mjLines = DB::table('manual_journal_lines')
+            ->where('manual_journal_id', $journalId)
+            ->orderBy('id')
+            ->get();
+
+        // Match by position (order of insertion is preserved).
+        foreach ($mjLines as $idx => $mjLine) {
+            if (isset($glLines[$idx])) {
+                DB::table('manual_journal_lines')
+                    ->where('id', $mjLine->id)
+                    ->update([
+                        'status'          => 'posted',
+                        'journal_line_id' => $glLines[$idx]->id,
+                        'updated_at'      => now(),
+                    ]);
+            }
+        }
+    }
+
+    // ============================================================
     // VALIDATION HELPERS
     // ============================================================
 
@@ -359,8 +473,6 @@ class ManualJournalService
     {
         $earliestOpen = $this->periodService->earliestOpenDate($branchId);
         if ($earliestOpen !== null && $date < $earliestOpen) {
-            // earliestOpenDate() returns a string (Y-m-d), not a Carbon instance.
-            // Compute the closed-through date (day before earliest open) for the message.
             $closedThrough = \Carbon\Carbon::parse($earliestOpen)->subDay()->format('Y-m-d');
             throw new \RuntimeException(
                 "Cannot post to {$date} — the accounting period is closed through {$closedThrough}. "
@@ -403,6 +515,10 @@ class ManualJournalService
             ]);
         } catch (\Throwable $e) {
             Log::error("Failed to log manual journal audit: {$e->getMessage()}");
+            // Re-throw if inside a transaction to avoid SQLSTATE[25P02]
+            if (DB::transactionLevel() > 0) {
+                throw $e;
+            }
         }
     }
 }

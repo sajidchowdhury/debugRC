@@ -11,6 +11,15 @@
             $jeTotalCr += (float) $line->credit;
         }
     }
+
+    // Phase 1.1: Draft lines from manual_journal_lines
+    $draftLines = $journal->lines;
+    $draftTotalDr = 0;
+    $draftTotalCr = 0;
+    foreach ($draftLines as $dl) {
+        $draftTotalDr += (float) $dl->debit;
+        $draftTotalCr += (float) $dl->credit;
+    }
 @endphp
 
 <div class="container-fluid py-2">
@@ -26,7 +35,12 @@
             <a href="{{ route('admin.manual-journals.index') }}" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-arrow-left me-1"></i> Back
             </a>
-            @if ($canReverse)
+            @if ($canPost ?? false)
+                <button type="button" class="btn btn-success btn-sm" id="postBtn">
+                    <i class="fas fa-check me-1"></i> Post to GL
+                </button>
+            @endif
+            @if ($canReverse ?? false)
                 <button type="button" class="btn btn-danger btn-sm" id="reverseBtn">
                     <i class="fas fa-rotate-left me-1"></i> Reverse
                 </button>
@@ -72,7 +86,95 @@
         </div>
     </div>
 
-    {{-- GL Journal Entry card --}}
+    {{-- Draft Lines card (Phase 1.1) — shown for draft journals --}}
+    @if ($journal->isDraft() && $draftLines->isNotEmpty())
+        <div class="card border-0 shadow-sm mb-3">
+            <div class="card-header bg-white">
+                <h2 class="h6 mb-0">
+                    <i class="fas fa-list me-1 text-warning"></i> Draft Lines
+                    <span class="badge bg-warning-subtle text-warning ms-1">Not yet posted to GL</span>
+                </h2>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Ledger</th>
+                                <th class="text-end">Debit (Tk)</th>
+                                <th class="text-end">Credit (Tk)</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach ($draftLines as $line)
+                                <tr>
+                                    <td>
+                                        @if ($line->ledger)
+                                            <span class="fw-semibold">{{ $line->ledger->ledger_name }}</span>
+                                            @if (!empty($line->ledger->ledger_code))
+                                                <div class="small text-muted">{{ $line->ledger->ledger_code }}</div>
+                                            @endif
+                                        @else
+                                            <span class="text-muted">Ledger #{{ $line->ledger_id }}</span>
+                                        @endif
+                                    </td>
+                                    <td class="text-end">
+                                        @if ((float) $line->debit > 0)
+                                            {{ number_format((float) $line->debit, 2) }}
+                                        @else
+                                            <span class="text-muted">—</span>
+                                        @endif
+                                    </td>
+                                    <td class="text-end">
+                                        @if ((float) $line->credit > 0)
+                                            {{ number_format((float) $line->credit, 2) }}
+                                        @else
+                                            <span class="text-muted">—</span>
+                                        @endif
+                                    </td>
+                                    <td class="small text-muted">{{ $line->description ?: '—' }}</td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                        <tfoot>
+                            <tr class="table-light fw-bold">
+                                <td class="text-end">Total</td>
+                                <td class="text-end text-success">{{ number_format($draftTotalDr, 2) }}</td>
+                                <td class="text-end text-danger">{{ number_format($draftTotalCr, 2) }}</td>
+                                <td>
+                                    @php $diff = abs($draftTotalDr - $draftTotalCr); @endphp
+                                    @if ($diff < 0.01)
+                                        <span class="badge bg-success"><i class="fas fa-check me-1"></i>Balanced</span>
+                                    @else
+                                        <span class="badge bg-danger"><i class="fas fa-exclamation-triangle me-1"></i>Out of balance ({{ number_format($diff, 2) }})</span>
+                                    @endif
+                                </td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+            @if ($journal->isDraft())
+                <div class="card-footer bg-white d-flex justify-content-between align-items-center">
+                    <span class="small text-muted">
+                        <i class="fas fa-info-circle me-1"></i>
+                        This journal is a draft. Lines are saved but not yet posted to the General Ledger.
+                        @if (abs($draftTotalDr - $draftTotalCr) >= 0.01)
+                            <strong class="text-warning">Debits must equal credits before posting.</strong>
+                        @endif
+                    </span>
+                    @if (abs($draftTotalDr - $draftTotalCr) < 0.01)
+                        <button type="button" class="btn btn-success btn-sm" id="postBtnFooter">
+                            <i class="fas fa-check me-1"></i> Post to GL
+                        </button>
+                    @endif
+                </div>
+            @endif
+        </div>
+    @endif
+
+    {{-- GL Journal Entry card — shown for posted/reversed journals --}}
     @if ($je)
         <div class="card border-0 shadow-sm mb-3">
             <div class="card-header bg-white">
@@ -140,11 +242,11 @@
                 </div>
             </div>
         </div>
-    @else
+    @elseif (!$journal->isDraft() || $draftLines->isEmpty())
         <div class="card border-0 shadow-sm mb-3">
             <div class="card-body text-center text-muted py-4">
                 <i class="fas fa-info-circle me-1"></i>
-                This journal is a draft — no GL entry has been posted yet.
+                This journal has no GL entry and no draft lines.
             </div>
         </div>
     @endif
@@ -158,6 +260,7 @@
         entryNo: '{{ $je?->entry_no ?? '' }}',
         routes: {
             'reverse': '{{ route("admin.manual-journals.reverse", ["id" => $journal->id]) }}',
+            'post': '{{ route("admin.manual-journals.post", ["id" => $journal->id]) }}',
             'index': '{{ route("admin.manual-journals.index") }}',
         },
     };
@@ -166,6 +269,46 @@
 @push('scripts')
 <script>
 $(function () {
+    // Post draft to GL
+    function handlePost() {
+        Swal.fire({
+            icon: 'question',
+            title: 'Post this journal to GL?',
+            html: '<p class="text-muted small mb-2">This will post the draft journal entry to the General Ledger. '
+                + 'Debits must equal credits. This action cannot be undone.</p>',
+            showCancelButton: true,
+            confirmButtonText: '<i class="fas fa-check"></i> Post to GL',
+            cancelButtonText: 'Cancel',
+            confirmButtonColor: '#198754',
+            reverseButtons: true,
+        }).then(function (result) {
+            if (result.isConfirmed) {
+                $.ajax({
+                    url: window.MJ_BOOT.routes.post,
+                    method: 'POST',
+                    data: { _token: window.MJ_BOOT.csrf_token },
+                    success: function (resp) {
+                        if (resp.status === 'success') {
+                            Swal.fire({ icon: 'success', title: 'Posted!', text: resp.message, timer: 2000, showConfirmButton: false })
+                                .then(function () { location.reload(); });
+                        } else {
+                            Swal.fire('Error', resp.message || 'Failed to post.', 'error');
+                        }
+                    },
+                    error: function (xhr) {
+                        Swal.fire('Error', xhr.responseJSON?.message || 'An error occurred.', 'error');
+                    }
+                });
+            }
+        });
+    }
+
+    $('#postBtn, #postBtnFooter').on('click', function (e) {
+        e.preventDefault();
+        handlePost();
+    });
+
+    // Reverse posted journal
     $('#reverseBtn').on('click', function (e) {
         e.preventDefault();
         Swal.fire({
