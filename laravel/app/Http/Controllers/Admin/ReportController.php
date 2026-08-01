@@ -201,7 +201,7 @@ class ReportController extends Controller
     }
 
     /**
-     * Cash Flow Statement.
+     * Cash Flow Statement (Indirect Method — Xero-style).
      */
     public function cashFlow(Request $request)
     {
@@ -210,7 +210,91 @@ class ReportController extends Controller
 
         $report = $this->reportService->cashFlow($data['from'], $data['to'], $branchId);
 
+        // CSV export
+        if ($request->query('export') === 'csv') {
+            return $this->exportCashFlowCsv($report);
+        }
+
         return view('admin.reports.cash_flow', $report);
+    }
+
+    /**
+     * Export Cash Flow Statement as CSV download.
+     */
+    private function exportCashFlowCsv(array $report): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        $filename = 'cash_flow_' . $report['meta']['from_date'] . '_to_' . $report['meta']['to_date'] . '.csv';
+        $headers = [
+            'Content-Type' => 'text/csv; charset=utf-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        ];
+
+        return response()->streamDownload(function () use ($report) {
+            $fh = fopen('php://output', 'w');
+            // BOM for Excel
+            fprintf($fh, chr(0xEF) . chr(0xBB) . chr(0xBF));
+
+            $op = $report['sections']['operating'];
+            $inv = $report['sections']['investing'];
+            $fin = $report['sections']['financing'];
+
+            // Title
+            fputcsv($fh, ['Cash Flow Statement (Indirect Method)']);
+            fputcsv($fh, ['Period', $report['meta']['from_date'] . ' to ' . $report['meta']['to_date']]);
+            fputcsv($fh, []);
+
+            // Operating Activities
+            fputcsv($fh, ['CASH FLOW FROM OPERATING ACTIVITIES', 'Amount (Tk)']);
+            fputcsv($fh, ['Net Profit (from P&L)', number_format($op['net_profit'], 2)]);
+            fputcsv($fh, ['(+) Depreciation & Amortization', number_format($op['depreciation'], 2)]);
+            fputcsv($fh, ['Changes in Working Capital:']);
+            foreach ($op['wc_adjustments'] as $wc) {
+                $direction = $wc->change >= 0 ? 'Increase' : 'Decrease';
+                fputcsv($fh, ['    ' . $direction . ' in ' . $wc->label, number_format($wc->adjustment, 2)]);
+            }
+            fputcsv($fh, ['Total Working Capital Adjustments', number_format($op['wc_adjustment_total'], 2)]);
+            fputcsv($fh, ['Net Cash from Operating Activities', number_format($op['net'], 2)]);
+            fputcsv($fh, []);
+
+            // Investing Activities
+            fputcsv($fh, ['CASH FLOW FROM INVESTING ACTIVITIES', 'Amount (Tk)']);
+            foreach ($inv['rows'] as $row) {
+                $label = $row->net_amount < 0 ? 'Purchase of ' . $row->ledger_name : 'Sale of ' . $row->ledger_name;
+                fputcsv($fh, ['    ' . $label, number_format($row->net_amount, 2)]);
+            }
+            if ($inv['rows']->isEmpty()) {
+                fputcsv($fh, ['    (No investing activity in this period)', '0.00']);
+            }
+            fputcsv($fh, ['Net Cash from Investing Activities', number_format($inv['net'], 2)]);
+            fputcsv($fh, []);
+
+            // Financing Activities
+            fputcsv($fh, ['CASH FLOW FROM FINANCING ACTIVITIES', 'Amount (Tk)']);
+            foreach ($fin['rows'] as $row) {
+                $label = $row->net_amount > 0 ? 'Proceeds from ' . $row->ledger_name : 'Repayment of ' . $row->ledger_name;
+                fputcsv($fh, ['    ' . $label, number_format($row->net_amount, 2)]);
+            }
+            if ($fin['rows']->isEmpty()) {
+                fputcsv($fh, ['    (No financing activity in this period)', '0.00']);
+            }
+            fputcsv($fh, ['Net Cash from Financing Activities', number_format($fin['net'], 2)]);
+            fputcsv($fh, []);
+
+            // Net Cash Movement
+            fputcsv($fh, ['NET CASH MOVEMENT', 'Amount (Tk)']);
+            fputcsv($fh, ['Opening Cash Balance', number_format($report['totals']['cash_opening'], 2)]);
+            fputcsv($fh, ['Net Increase / (Decrease) in Cash', number_format($report['totals']['net_cash_change'], 2)]);
+            fputcsv($fh, ['Closing Cash Balance', number_format($report['totals']['cash_closing'], 2)]);
+            fputcsv($fh, []);
+
+            // Integrity check
+            fputcsv($fh, ['INTEGRITY CHECK']);
+            fputcsv($fh, ['GL Cash Movement', number_format($report['totals']['net_cash_movement'], 2)]);
+            fputcsv($fh, ['Plug Difference', number_format($report['totals']['plug_difference'], 2)]);
+            fputcsv($fh, ['Reconciled', $report['checks']['plugs_to_gl_cash'] ? 'YES' : 'NO']);
+
+            fclose($fh);
+        }, $filename, $headers);
     }
 
     /**

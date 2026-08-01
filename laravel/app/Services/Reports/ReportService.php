@@ -565,45 +565,211 @@ SQL;
      */
     public function cashFlow(Carbon $fromDate, Carbon $toDate, ?int $branchId = null): array
     {
-        // Simplified indirect method:
-        // 1. Net profit (from P&L)
-        // 2. +/- changes in AR, AP, inventory (working capital)
-        // 3. +/- investing activities (asset purchases)
-        // 4. +/- financing activities (equity, loans)
-        // 5. Net change in cash = GL cash/bank movement (plug)
+        // ────────────────────────────────────────────────────────────────
+        // Cash Flow Statement — Indirect Method (Xero-style)
+        // ────────────────────────────────────────────────────────────────
+        // Section 1: Operating Activities
+        //   Starts from Net Profit, adds back non-cash items (depreciation),
+        //   adjusts for working-capital changes (AR, AP, Inventory, Employee Payable).
+        // Section 2: Investing Activities
+        //   Net movement in non-current asset ledgers (Fixed Assets, etc.)
+        // Section 3: Financing Activities
+        //   Net movement in long-term liability & equity ledgers (loans, owner's equity)
+        //   Excludes Retained Earnings (already captured via net profit).
+        // Section 4: Net Cash Movement
+        //   Opening cash + (Operating + Investing + Financing) = Closing cash
+        //   Reconciled against actual GL cash/bank movement (integrity check).
+        // ────────────────────────────────────────────────────────────────
 
+        $openingDate = (clone $fromDate)->subDay();
+
+        // ── 1. Net Profit from P&L ──────────────────────────────────────
         $pl = $this->profitAndLoss($fromDate, $toDate, $branchId);
         $netProfit = $pl['totals']['net_profit'];
 
-        // Working capital changes: compare opening vs closing balances.
-        $openingDate = (clone $fromDate)->subDay();
+        // ── 2. Depreciation (non-cash expense to add back) ──────────────
+        $depSql = <<<SQL
+SELECT
+    l.id, l.ledger_code, l.ledger_name,
+    COALESCE(SUM(jl.debit), 0) AS debit,
+    COALESCE(SUM(jl.credit), 0) AS credit,
+    COALESCE(SUM(jl.debit) - SUM(jl.credit), 0) AS net_amount
+FROM ledgers l
+LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
+LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
+    AND COALESCE(je.is_reversed, false) = false
+    AND je.entry_date BETWEEN ? AND ?
+WHERE l.is_active = true
+    AND l.ledger_nature = 'operating_expense'
+    AND (l.ledger_name ILIKE '%depreciation%' OR l.ledger_name ILIKE '%amortisation%' OR l.ledger_name ILIKE '%amortization%')
+SQL;
+        $depParams = [$fromDate, $toDate];
+        if ($branchId) {
+            $depSql .= ' AND (je.branch_id = ? OR je.branch_id IS NULL)';
+            $depParams[] = $branchId;
+        }
+        $depSql .= ' GROUP BY l.id, l.ledger_code, l.ledger_name ORDER BY l.ledger_name';
+
+        $depRows = collect(DB::select($depSql, $depParams))->filter(fn($r) => abs($r->net_amount) > 0.005)->values();
+        $depreciation = $depRows->sum('net_amount'); // debit balance = expense, add back
+
+        // ── 3. Working capital changes (opening vs closing balances) ────
+        //    For each working-capital ledger, calculate:
+        //      opening = balance as of day before from_date
+        //      closing = balance as of to_date
+        //      change  = closing - opening
+        //    Adjustment logic (indirect method):
+        //      AR increase  → cash outflow (subtract)
+        //      AP increase  → cash inflow  (add)
+        //      INV increase → cash outflow (subtract)
+        //      Employee Payable increase → cash inflow (add)
         $wcSql = <<<SQL
 SELECT
-    l.account_type,
-    l.ledger_nature,
-    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit - jl.credit ELSE 0 END), 0) AS opening_balance,
-    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit - jl.credit ELSE 0 END), 0) AS closing_balance
+    l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature,
+    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit - jl.credit ELSE 0 END), 0)
+        + CASE WHEN l.normal_balance = 'debit' THEN COALESCE(l.opening_balance, 0) ELSE 0 END
+        AS opening_balance,
+    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit - jl.credit ELSE 0 END), 0)
+        + CASE WHEN l.normal_balance = 'debit' THEN COALESCE(l.opening_balance, 0) ELSE 0 END
+        AS closing_balance
 FROM ledgers l
 LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
 LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
 WHERE l.is_active = true
-    AND l.ledger_nature IN ('ar', 'ap', 'inventory')
+    AND l.ledger_nature IN ('ar', 'ap', 'inventory', 'employee_payable')
 SQL;
-        $params = [$openingDate, $toDate];
+        $wcParams = [$openingDate, $toDate];
         if ($branchId) {
             $wcSql .= ' AND (je.branch_id = ? OR je.branch_id IS NULL)';
-            $params[] = $branchId;
-            $params[] = $branchId;
+            $wcParams[] = $branchId;
+            $wcParams[] = $branchId;
         }
-        $wcSql .= ' GROUP BY l.account_type, l.ledger_nature';
+        $wcSql .= ' GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature, l.normal_balance, l.opening_balance ORDER BY l.ledger_name';
 
-        $wcRows = collect(DB::select($wcSql, $params));
-        $arChange = $wcRows->where('ledger_nature', 'ar')->sum(fn($r) => $r->closing_balance - $r->opening_balance);
-        $apChange = $wcRows->where('ledger_nature', 'ap')->sum(fn($r) => $r->closing_balance - $r->opening_balance);
-        $invChange = $wcRows->where('ledger_nature', 'inventory')->sum(fn($r) => $r->closing_balance - $r->opening_balance);
+        $wcRows = collect(DB::select($wcSql, $wcParams));
 
-        // Cash/bank movement (the plug).
-        $cashSql = <<<SQL
+        // Build individual working-capital adjustment lines
+        $wcAdjustments = [];
+        $wcAdjustmentTotal = 0;
+
+        $wcMapping = [
+            'ar'              => ['label' => 'Accounts Receivable',        'sign' => -1],  // Asset: increase = outflow
+            'inventory'        => ['label' => 'Inventory / Stock',          'sign' => -1],  // Asset: increase = outflow
+            'ap'              => ['label' => 'Accounts Payable',           'sign' => +1],  // Liability: increase = inflow
+            'employee_payable' => ['label' => 'Employee Payable',          'sign' => +1],  // Liability: increase = inflow
+        ];
+
+        foreach ($wcMapping as $nature => $cfg) {
+            $rows = $wcRows->where('ledger_nature', $nature);
+            $opening = $rows->sum('opening_balance');
+            $closing = $rows->sum('closing_balance');
+            $change = $closing - $opening;
+            $adjustment = $change * $cfg['sign']; // cash effect
+
+            $wcAdjustments[] = (object) [
+                'nature'        => $nature,
+                'label'         => $cfg['label'],
+                'opening'       => $opening,
+                'closing'       => $closing,
+                'change'        => $change,
+                'adjustment'    => $adjustment,
+                'detail_rows'   => $rows->values(),
+            ];
+            $wcAdjustmentTotal += $adjustment;
+        }
+
+        $operatingCash = $netProfit + $depreciation + $wcAdjustmentTotal;
+
+        // ── 4. Investing Activities ─────────────────────────────────────
+        //    Non-current asset ledgers (parent = Fixed Assets, L-0200)
+        //    Debit movement = purchase (cash outflow, negative)
+        //    Credit movement = sale/disposal (cash inflow, positive)
+        $invSql = <<<SQL
+SELECT
+    l.id, l.ledger_code, l.ledger_name,
+    COALESCE(SUM(jl.debit), 0) AS debit,
+    COALESCE(SUM(jl.credit), 0) AS credit,
+    COALESCE(SUM(jl.credit) - SUM(jl.debit), 0) AS net_amount
+FROM ledgers l
+LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
+LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
+    AND COALESCE(je.is_reversed, false) = false
+    AND je.entry_date BETWEEN ? AND ?
+WHERE l.is_active = true
+    AND l.account_type = 'Asset'
+    AND l.parent_id IN (SELECT id FROM ledgers WHERE ledger_code = 'L-0200')
+    AND l.ledger_nature NOT IN ('cash_bank', 'ar', 'inventory', 'interbranch_receivable')
+SQL;
+        $invParams = [$fromDate, $toDate];
+        if ($branchId) {
+            $invSql .= ' AND (je.branch_id = ? OR je.branch_id IS NULL)';
+            $invParams[] = $branchId;
+        }
+        $invSql .= ' GROUP BY l.id, l.ledger_code, l.ledger_name ORDER BY l.ledger_name';
+
+        $investingRows = collect(DB::select($invSql, $invParams))->filter(fn($r) => abs($r->net_amount) > 0.005)->values();
+        // net_amount = credit - debit → positive = cash inflow from sale, negative = cash outflow from purchase
+        $investingCash = $investingRows->sum('net_amount');
+
+        // ── 5. Financing Activities ─────────────────────────────────────
+        //    Long-term liability ledgers + equity ledgers (excl. retained earnings)
+        //    Credit movement = cash inflow (loan received, capital introduced)
+        //    Debit movement = cash outflow (loan repaid, drawings)
+        $finSql = <<<SQL
+SELECT
+    l.id, l.ledger_code, l.ledger_name, l.ledger_nature,
+    COALESCE(SUM(jl.debit), 0) AS debit,
+    COALESCE(SUM(jl.credit), 0) AS credit,
+    COALESCE(SUM(jl.credit) - SUM(jl.debit), 0) AS net_amount
+FROM ledgers l
+LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
+LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
+    AND COALESCE(je.is_reversed, false) = false
+    AND je.entry_date BETWEEN ? AND ?
+WHERE l.is_active = true
+    AND (
+        l.parent_id IN (SELECT id FROM ledgers WHERE ledger_code = 'L-0400')
+        OR (l.account_type = 'Equity' AND l.ledger_nature NOT IN ('retained_earnings')
+            AND l.parent_id IN (SELECT id FROM ledgers WHERE ledger_code = 'L-0500'))
+    )
+SQL;
+        $finParams = [$fromDate, $toDate];
+        if ($branchId) {
+            $finSql .= ' AND (je.branch_id = ? OR je.branch_id IS NULL)';
+            $finParams[] = $branchId;
+        }
+        $finSql .= ' GROUP BY l.id, l.ledger_code, l.ledger_name, l.ledger_nature ORDER BY l.ledger_name';
+
+        $financingRows = collect(DB::select($finSql, $finParams))->filter(fn($r) => abs($r->net_amount) > 0.005)->values();
+        // net_amount = credit - debit → positive = inflow, negative = outflow
+        $financingCash = $financingRows->sum('net_amount');
+
+        // ── 6. Cash/bank opening & closing balances ─────────────────────
+        $cashBalSql = <<<SQL
+SELECT
+    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit - jl.credit ELSE 0 END), 0)
+        + SUM(CASE WHEN l.normal_balance = 'debit' THEN COALESCE(l.opening_balance, 0) ELSE 0 END)
+        AS opening_balance,
+    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit - jl.credit ELSE 0 END), 0)
+        + SUM(CASE WHEN l.normal_balance = 'debit' THEN COALESCE(l.opening_balance, 0) ELSE 0 END)
+        AS closing_balance
+FROM ledgers l
+LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
+LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
+WHERE l.is_active = true AND l.ledger_nature = 'cash_bank'
+SQL;
+        $cashBalParams = [$openingDate, $toDate];
+        if ($branchId) {
+            $cashBalSql .= ' AND (je.branch_id = ? OR je.branch_id IS NULL)';
+            $cashBalParams[] = $branchId;
+            $cashBalParams[] = $branchId;
+        }
+        $cashBalRow = DB::select($cashBalSql, $cashBalParams)[0];
+        $cashOpening = (float) ($cashBalRow->opening_balance ?? 0);
+        $cashClosing = (float) ($cashBalRow->closing_balance ?? 0);
+
+        // Period cash movement from GL
+        $cashMovSql = <<<SQL
 SELECT
     COALESCE(SUM(jl.debit - jl.credit), 0) AS cash_movement
 FROM ledgers l
@@ -611,14 +777,17 @@ JOIN journal_lines jl ON jl.ledger_id = l.id
 JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
 WHERE l.ledger_nature = 'cash_bank' AND je.entry_date BETWEEN ? AND ?
 SQL;
-        $cashParams = [$fromDate, $toDate];
+        $cashMovParams = [$fromDate, $toDate];
         if ($branchId) {
-            $cashSql .= ' AND je.branch_id = ?';
-            $cashParams[] = $branchId;
+            $cashMovSql .= ' AND je.branch_id = ?';
+            $cashMovParams[] = $branchId;
         }
-        $cashMovement = (float) (DB::select($cashSql, $cashParams)[0]->cash_movement ?? 0);
+        $cashMovement = (float) (DB::select($cashMovSql, $cashMovParams)[0]->cash_movement ?? 0);
 
-        $operatingCash = $netProfit - $arChange + $apChange - $invChange;
+        // ── 7. Net cash movement & reconciliation ────────────────────────
+        $netCashChange = $operatingCash + $investingCash + $financingCash;
+        $calculatedClosing = $cashOpening + $netCashChange;
+        $plugDifference = $cashMovement - $netCashChange;
 
         return [
             'meta' => [
@@ -629,21 +798,38 @@ SQL;
             ],
             'sections' => [
                 'operating' => [
-                    'label' => 'Operating Activities',
+                    'label' => 'Cash Flow from Operating Activities',
                     'net_profit' => $netProfit,
-                    'ar_change' => $arChange,
-                    'ap_change' => $apChange,
-                    'inv_change' => $invChange,
+                    'depreciation' => $depreciation,
+                    'dep_rows' => $depRows,
+                    'wc_adjustments' => $wcAdjustments,
+                    'wc_adjustment_total' => $wcAdjustmentTotal,
                     'net' => $operatingCash,
+                ],
+                'investing' => [
+                    'label' => 'Cash Flow from Investing Activities',
+                    'rows' => $investingRows,
+                    'net' => $investingCash,
+                ],
+                'financing' => [
+                    'label' => 'Cash Flow from Financing Activities',
+                    'rows' => $financingRows,
+                    'net' => $financingCash,
                 ],
             ],
             'totals' => [
-                'net_cash_movement' => $cashMovement,
                 'operating_cash' => $operatingCash,
-                'plug_difference' => $cashMovement - $operatingCash,
+                'investing_cash' => $investingCash,
+                'financing_cash' => $financingCash,
+                'net_cash_change' => $netCashChange,
+                'cash_opening' => $cashOpening,
+                'cash_closing' => $cashClosing,
+                'net_cash_movement' => $cashMovement,
+                'plug_difference' => $plugDifference,
             ],
             'checks' => [
-                'plugs_to_gl_cash' => abs($cashMovement - $operatingCash) < 0.01,
+                'plugs_to_gl_cash' => abs($plugDifference) < 0.01,
+                'closing_matches' => abs($calculatedClosing - $cashClosing) < 0.01,
             ],
         ];
     }
