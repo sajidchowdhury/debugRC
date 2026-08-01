@@ -16,16 +16,9 @@ use Illuminate\Support\Facades\DB;
  *     (e.g., France FEC, Germany GoBD)
  *
  * Also creates PostgreSQL triggers for the core financial tables:
- *   - journal_entries
- *   - journal_lines
- *   - manual_journals
- *   - manual_journal_lines
- *   - customer_payments
- *   - supplier_payments
- *   - money_transfers
- *   - other_incomes
- *   - other_expenses
- *   - employee_transactions
+ *   - journal_entries, journal_lines, manual_journals, manual_journal_lines
+ *   - customer_payments, supplier_payments, money_transfers
+ *   - other_incomes, other_expenses, employee_transactions
  *
  * Each trigger captures INSERT/UPDATE/DELETE and writes to financial_audit_log.
  * The table is truly immutable: REVOKE UPDATE/DELETE from ALL roles.
@@ -34,6 +27,21 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // ============================================================
+        // 0. Cleanup partial artifacts from failed prior runs
+        // ============================================================
+        $tables = [
+            'journal_entries', 'journal_lines', 'manual_journals', 'manual_journal_lines',
+            'customer_payments', 'supplier_payments', 'money_transfers',
+            'other_incomes', 'other_expenses', 'employee_transactions',
+        ];
+        foreach ($tables as $table) {
+            DB::statement("DROP TRIGGER IF EXISTS trg_audit_{$table} ON {$table}");
+        }
+        DB::statement('DROP VIEW IF EXISTS v_financial_audit_chain_verification');
+        DB::statement('DROP FUNCTION IF EXISTS fn_financial_audit_trigger()');
+        DB::statement('DROP TABLE IF EXISTS financial_audit_log');
+
         // ============================================================
         // 1. Create the financial_audit_log table
         // ============================================================
@@ -47,7 +55,7 @@ CREATE TABLE financial_audit_log (
     after_data      JSONB,
     changed_columns TEXT[],
     performed_by    VARCHAR(100),
-    db_session_user    VARCHAR(100),
+    db_session_user VARCHAR(100),
     branch_id       INTEGER,
     transaction_id  XID,
     request_path    VARCHAR(500),
@@ -74,10 +82,25 @@ SQL);
 
         // ============================================================
         // 2. Make the table immutable: REVOKE UPDATE/DELETE from ALL
+        //    Uses DO block with dynamic SQL to skip roles that don't exist
         // ============================================================
-        DB::statement('REVOKE UPDATE, DELETE ON financial_audit_log FROM PUBLIC');
-        DB::statement('REVOKE UPDATE, DELETE ON financial_audit_log FROM postgres');
-        DB::statement('REVOKE UPDATE, DELETE ON financial_audit_log FROM remote_center');
+        DB::statement(<<<'SQL'
+DO $$
+BEGIN
+    -- Revoke from PUBLIC (always works — affects all current/future roles)
+    EXECUTE 'REVOKE UPDATE, DELETE ON financial_audit_log FROM PUBLIC';
+
+    -- Revoke from specific roles only if they exist
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'postgres') THEN
+        EXECUTE 'REVOKE UPDATE, DELETE ON financial_audit_log FROM postgres';
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'remote_center') THEN
+        EXECUTE 'REVOKE UPDATE, DELETE ON financial_audit_log FROM remote_center';
+    END IF;
+END
+$$
+SQL);
 
         // ============================================================
         // 3. Create the trigger function that logs mutations
