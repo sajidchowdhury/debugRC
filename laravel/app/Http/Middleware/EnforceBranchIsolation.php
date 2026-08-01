@@ -229,6 +229,19 @@ class EnforceBranchIsolation
         if (str_contains($path, 'branch-demands')) {
             return null; // Skip — cross-branch demands need special handling
         }
+        // --- Phase 4 (Money Transfers): cross-branch by nature (from_branch_id +
+        // to_branch_id). Skip single-branch_id inference — the controller
+        // authorizes based on the user being from/to branch.
+        if (str_contains($path, 'money-transfers')) {
+            return null;
+        }
+        // --- Phase 4 (Other Incomes / Other Expenses): single branch_id ---
+        if (str_contains($path, 'other-incomes')) {
+            return 'other_incomes';
+        }
+        if (str_contains($path, 'other-expenses')) {
+            return 'other_expenses';
+        }
         return null;
     }
 
