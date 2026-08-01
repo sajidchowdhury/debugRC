@@ -43,6 +43,8 @@ class ReportService
         // opening_credit).  This ensures that a ledger with an opening
         // balance but no prior-period journal entries still shows the correct
         // opening figure.
+        //
+        // Phase 4.1 revision 2: Tally-style format with parent group name.
         $sql = <<<SQL
 SELECT
     l.id AS ledger_id,
@@ -55,6 +57,8 @@ SELECT
     l.is_control_account,
     l.control_account_type,
     l.opening_balance,
+    -- Parent group name (for the "Parent Group" column)
+    p.ledger_name AS parent_group,
     -- Has children? (group header vs posting account)
     EXISTS(SELECT 1 FROM ledgers child WHERE child.parent_id = l.id AND child.is_active = true) AS has_children,
     -- Opening: include the fiscal-year opening_balance on the normal side
@@ -75,6 +79,7 @@ SELECT
         + CASE WHEN COALESCE(l.normal_balance, 'debit') = 'credit' THEN COALESCE(l.opening_balance, 0) ELSE 0 END
         AS closing_credit
 FROM ledgers l
+LEFT JOIN ledgers p ON p.id = l.parent_id AND p.is_active = true
 LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
 LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
 WHERE l.is_active = true
@@ -93,7 +98,7 @@ SQL;
             $params[] = $branchId;
         }
 
-        $sql .= " GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature, l.normal_balance, l.parent_id, l.is_control_account, l.control_account_type, l.opening_balance";
+        $sql .= " GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature, l.normal_balance, l.parent_id, l.is_control_account, l.control_account_type, l.opening_balance, p.ledger_name";
         $sql .= " ORDER BY CASE l.account_type WHEN 'Asset' THEN 1 WHEN 'Liability' THEN 2 WHEN 'Equity' THEN 3 WHEN 'Income' THEN 4 WHEN 'Expense' THEN 5 ELSE 0 END, l.ledger_code ASC";
 
         $rows = collect(DB::select($sql, $params));
