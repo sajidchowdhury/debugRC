@@ -369,12 +369,11 @@ BEGIN
         END LOOP;
         _xmin := NEW.xmin;
     END IF;
-    _branch_id := NULL;
-    IF _op = 'DELETE' THEN
-        IF OLD.branch_id IS NOT NULL THEN _branch_id := OLD.branch_id; END IF;
-    ELSE
-        IF NEW.branch_id IS NOT NULL THEN _branch_id := NEW.branch_id; END IF;
-    END IF;
+    -- Get branch_id from the JSONB representation (works for tables without branch_id column)
+    _branch_id := COALESCE(
+        (_after ->> 'branch_id')::INTEGER,
+        (_before ->> 'branch_id')::INTEGER
+    );
     _session_user := session_user;
     _performed_by := current_user;
     BEGIN _request_path := current_setting('app.request_path', true); EXCEPTION WHEN OTHERS THEN _request_path := NULL; END;
