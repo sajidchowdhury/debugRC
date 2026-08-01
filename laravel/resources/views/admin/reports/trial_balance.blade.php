@@ -194,11 +194,11 @@
     {{-- Sub-ledger reconciliation detail (collapsible) --}}
     @if (!empty($checks['subledger_reconciliation']))
     <div class="mt-3">
-        <a class="text-muted small" data-bs-toggle="collapse" href="#subledgerRecon" role="button" aria-expanded="false">
+        <button class="btn btn-sm btn-outline-secondary mb-2" type="button" data-bs-toggle="collapse" data-bs-target="#subledgerRecon" aria-expanded="false" aria-controls="subledgerRecon">
             <i class="fas fa-link me-1"></i> Sub-Ledger Reconciliation Details
             <i class="fas fa-chevron-down ms-1"></i>
-        </a>
-        <div class="collapse mt-2" id="subledgerRecon">
+        </button>
+        <div class="collapse" id="subledgerRecon">
             <div class="card border-0 shadow-sm">
                 <div class="card-body p-0">
                     <table class="table table-sm table-hover mb-0">
@@ -243,7 +243,7 @@
 </div>
 
 {{-- Print styles --}}
-@push('styles')
+@section('head_meta')
 <style>
 @media print {
     .card { border: 1px solid #ddd !important; }
@@ -254,5 +254,5 @@
     .table-dark td, .table-dark th { background: #333 !important; color: #fff !important; -webkit-print-color-adjust: exact; }
 }
 </style>
-@endpush
+@endsection
 @endsection

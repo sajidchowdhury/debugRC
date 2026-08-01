@@ -293,28 +293,93 @@ SQL, [$toDate]);
     }
 
     /**
-     * Profit & Loss — income vs expense by ledger nature.
+     * Profit & Loss — multi-step format (Xero-style).
+     *
+     * Structure:
+     *   1. Revenue                     (sales_revenue, other_income, transport_revenue, inventory_surplus)
+     *   2. Less: Cost of Goods Sold    (cogs)
+     *   3. = Gross Profit
+     *   4. Less: Operating Expenses    (operating_expense, inventory_shrinkage, damage_loss, salary_expense)
+     *   5. = Operating Income (EBIT)
+     *   6. Less: Finance Costs         (finance_cost)
+     *   7. = Net Income Before Tax
+     *   8. = Net Income (After Tax)    [placeholder for tax — no tax ledger yet]
+     *
+     * Contra-revenue accounts (sales_return, sales_discount) reduce Revenue.
+     * Each section shows individual ledger lines with net amounts.
      *
      * @return array{ meta: array, sections: array, totals: array }
      */
     public function profitAndLoss(Carbon $fromDate, Carbon $toDate, ?int $branchId = null, ?Carbon $compareFrom = null, ?Carbon $compareTo = null): array
     {
+        // ── Section definitions (Xero multi-step) ────────────────────────
         $sections = [
-            'revenue' => ['label' => 'Revenue', 'natures' => ['sales_revenue', 'other_income', 'inventory_surplus', 'sales_return', 'sales_discount'], 'sort' => 10],
-            'cost_of_sales' => ['label' => 'Cost of Goods Sold', 'natures' => ['cogs'], 'sort' => 20],
-            'operating_expenses' => ['label' => 'Operating Expenses', 'natures' => ['operating_expense', 'inventory_shrinkage', 'damage_loss', 'manual_adjustment'], 'sort' => 30],
-            'payroll' => ['label' => 'Payroll & Salaries', 'natures' => ['payroll_expense'], 'sort' => 40],
-            'depreciation' => ['label' => 'Depreciation & Amortization', 'natures' => ['depreciation'], 'sort' => 50],
-            'finance' => ['label' => 'Finance Costs', 'natures' => ['finance_cost'], 'sort' => 60],
-            'other' => ['label' => 'Other Income / (Expense)', 'natures' => ['other_income_nature', 'other_expense_nature'], 'sort' => 70],
+            'revenue' => [
+                'label'       => 'Revenue',
+                'natures'     => ['sales_revenue', 'other_income', 'transport_revenue', 'inventory_surplus'],
+                'contra'      => ['sales_return', 'sales_discount'],  // Reduce revenue
+                'sort'        => 10,
+                'is_subtotal' => false,
+            ],
+            'cost_of_sales' => [
+                'label'       => 'Cost of Goods Sold',
+                'natures'     => ['cogs'],
+                'sort'        => 20,
+                'is_subtotal' => false,
+            ],
+            'gross_profit' => [
+                'label'       => 'Gross Profit',
+                'sort'        => 25,
+                'is_subtotal' => true,
+            ],
+            'operating_expenses' => [
+                'label'       => 'Operating Expenses',
+                'natures'     => ['operating_expense', 'inventory_shrinkage', 'damage_loss', 'salary_expense'],
+                'sort'        => 30,
+                'is_subtotal' => false,
+            ],
+            'operating_income' => [
+                'label'       => 'Operating Income',
+                'sort'        => 35,
+                'is_subtotal' => true,
+            ],
+            'finance_costs' => [
+                'label'       => 'Finance Costs',
+                'natures'     => ['finance_cost'],
+                'sort'        => 40,
+                'is_subtotal' => false,
+            ],
+            'net_income_before_tax' => [
+                'label'       => 'Net Income Before Tax',
+                'sort'        => 45,
+                'is_subtotal' => true,
+            ],
+            'net_income' => [
+                'label'       => 'Net Income',
+                'sort'        => 50,
+                'is_subtotal' => true,
+            ],
         ];
 
         $result = [];
         $totalRevenue = 0;
         $totalCogs = 0;
-        $totalExpenses = 0;
+        $totalOpex = 0;
+        $totalFinance = 0;
 
+        // ── Fetch data for each data section ─────────────────────────────
         foreach ($sections as $key => $section) {
+            if ($section['is_subtotal']) {
+                continue; // Subtotals are computed later
+            }
+
+            $allNatures = array_merge($section['natures'] ?? [], $section['contra'] ?? []);
+            if (empty($allNatures)) {
+                continue;
+            }
+
+            $placeholders = implode(',', array_fill(0, count($allNatures), '?'));
+
             $sql = <<<SQL
 SELECT
     l.id, l.ledger_code, l.ledger_name, l.ledger_nature,
@@ -326,51 +391,97 @@ LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
 LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
     AND COALESCE(je.is_reversed, false) = false
     AND je.entry_date BETWEEN ? AND ?
-WHERE l.is_active = true AND l.ledger_nature IN (?
+WHERE l.is_active = true AND l.deleted_at IS NULL AND l.ledger_nature IN ({$placeholders})
 SQL;
-            $params = [$fromDate, $toDate];
-            $natures = $section['natures'];
-            $params = array_merge($params, $natures);
-            $sql .= str_repeat(',?', count($natures) - 1) . ')';
+
+            $params = array_merge([$fromDate, $toDate], $allNatures);
 
             if ($branchId) {
                 $sql .= ' AND (je.branch_id = ? OR je.branch_id IS NULL)';
                 $params[] = $branchId;
             }
-            $sql .= ' GROUP BY l.id, l.ledger_code, l.ledger_name, l.ledger_nature ORDER BY l.ledger_name';
+            $sql .= ' GROUP BY l.id, l.ledger_code, l.ledger_name, l.ledger_nature ORDER BY l.ledger_code ASC';
 
             $rows = collect(DB::select($sql, $params))->filter(fn($r) => abs($r->net_amount) > 0.005)->values();
-            $sectionTotal = $rows->sum('net_amount');
 
+            // Contra-revenue items reduce the section total
+            $sectionTotal = 0;
+            foreach ($rows as $row) {
+                if (in_array($row->ledger_nature, $section['contra'] ?? [])) {
+                    $sectionTotal += $row->net_amount; // Contra items are already negative for revenue
+                } else {
+                    $sectionTotal += $row->net_amount;
+                }
+            }
+
+            // Accumulate totals
             if ($key === 'revenue') $totalRevenue = $sectionTotal;
             if ($key === 'cost_of_sales') $totalCogs = $sectionTotal;
-            if (in_array($key, ['operating_expenses', 'payroll', 'depreciation', 'finance'])) $totalExpenses += $sectionTotal;
+            if ($key === 'operating_expenses') $totalOpex = $sectionTotal;
+            if ($key === 'finance_costs') $totalFinance = $sectionTotal;
 
             $result[$key] = [
                 'label' => $section['label'],
-                'sort' => $section['sort'],
-                'rows' => $rows,
+                'sort'  => $section['sort'],
+                'rows'  => $rows,
                 'total' => $sectionTotal,
             ];
         }
 
+        // ── Compute subtotals ────────────────────────────────────────────
         $grossProfit = $totalRevenue - $totalCogs;
-        $netProfit = $grossProfit - $totalExpenses;
+        $operatingIncome = $grossProfit - $totalOpex;
+        $netIncomeBeforeTax = $operatingIncome - $totalFinance;
+        $netIncome = $netIncomeBeforeTax; // No tax ledger yet
+
+        $result['gross_profit'] = [
+            'label' => 'Gross Profit',
+            'sort'  => 25,
+            'rows'  => collect(),
+            'total' => $grossProfit,
+        ];
+        $result['operating_income'] = [
+            'label' => 'Operating Income',
+            'sort'  => 35,
+            'rows'  => collect(),
+            'total' => $operatingIncome,
+        ];
+        $result['net_income_before_tax'] = [
+            'label' => 'Net Income Before Tax',
+            'sort'  => 45,
+            'rows'  => collect(),
+            'total' => $netIncomeBeforeTax,
+        ];
+        $result['net_income'] = [
+            'label' => 'Net Income',
+            'sort'  => 50,
+            'rows'  => collect(),
+            'total' => $netIncome,
+        ];
+
+        // ── Margin calculations ──────────────────────────────────────────
+        $grossMargin = $totalRevenue > 0 ? ($grossProfit / $totalRevenue) * 100 : 0;
+        $netMargin = $totalRevenue > 0 ? ($netIncome / $totalRevenue) * 100 : 0;
 
         return [
             'meta' => [
-                'title' => 'Profit & Loss Statement',
+                'title'     => 'Profit & Loss Statement',
                 'from_date' => $fromDate->format('Y-m-d'),
-                'to_date' => $toDate->format('Y-m-d'),
+                'to_date'   => $toDate->format('Y-m-d'),
                 'branch_id' => $branchId,
             ],
             'sections' => $result,
             'totals' => [
-                'revenue' => $totalRevenue,
-                'cogs' => $totalCogs,
-                'gross_profit' => $grossProfit,
-                'operating_expenses' => $totalExpenses,
-                'net_profit' => $netProfit,
+                'revenue'               => $totalRevenue,
+                'cogs'                  => $totalCogs,
+                'gross_profit'          => $grossProfit,
+                'operating_expenses'    => $totalOpex,
+                'operating_income'      => $operatingIncome,
+                'finance_costs'         => $totalFinance,
+                'net_income_before_tax' => $netIncomeBeforeTax,
+                'net_income'            => $netIncome,
+                'gross_margin_pct'      => round($grossMargin, 1),
+                'net_margin_pct'        => round($netMargin, 1),
             ],
         ];
     }
@@ -379,6 +490,8 @@ SQL;
      * Balance Sheet — Assets = Liabilities + Equity as of date.
      * Income/Expense balances roll into equity (unclosed current-period result).
      *
+     * Phase 4.2: Added opening_balance, deleted_at filter, parent_group.
+     *
      * @return array{ meta: array, assets: \Illuminate\Support\Collection, liabilities: \Illuminate\Support\Collection, equity: \Illuminate\Support\Collection, totals: array, checks: array }
      */
     public function balanceSheet(Carbon $asOfDate, ?int $branchId = null, bool $includeZero = false): array
@@ -386,23 +499,26 @@ SQL;
         $sql = <<<SQL
 SELECT
     l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature,
+    l.normal_balance, l.opening_balance,
+    p.ledger_name AS parent_group,
     COALESCE(SUM(jl.debit), 0) AS total_debit,
     COALESCE(SUM(jl.credit), 0) AS total_credit,
     COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0) AS net_debit,
     COALESCE(SUM(jl.credit), 0) - COALESCE(SUM(jl.debit), 0) AS net_credit
 FROM ledgers l
+LEFT JOIN ledgers p ON p.id = l.parent_id AND p.is_active = true
 LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
 LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
     AND COALESCE(je.is_reversed, false) = false
     AND je.entry_date <= ?
-WHERE l.is_active = true
+WHERE l.is_active = true AND l.deleted_at IS NULL
 SQL;
         $params = [$asOfDate];
         if ($branchId) {
             $sql .= ' AND (je.branch_id = ? OR je.branch_id IS NULL)';
             $params[] = $branchId;
         }
-        $sql .= ' GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature ORDER BY l.ledger_name';
+        $sql .= ' GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature, l.normal_balance, l.opening_balance, p.ledger_name ORDER BY l.ledger_code ASC';
 
         $rows = collect(DB::select($sql, $params));
 
