@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -26,8 +27,8 @@ return new class extends Migration
             $table->id();
             $table->unsignedBigInteger('manual_journal_id')->index();
             $table->unsignedBigInteger('ledger_id')->index();
-            $table->unsignedDecimal('debit', 15, 2)->default(0);
-            $table->unsignedDecimal('credit', 15, 2)->default(0);
+            $table->decimal('debit', 15, 2)->default(0);
+            $table->decimal('credit', 15, 2)->default(0);
             $table->string('description', 500)->nullable();
             $table->string('status', 20)->default('draft')
                 ->comment('draft, posted — tracks whether this line has been posted to GL');
