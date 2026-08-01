@@ -585,7 +585,7 @@ SQL;
 
         // ── 1. Net Profit from P&L ──────────────────────────────────────
         $pl = $this->profitAndLoss($fromDate, $toDate, $branchId);
-        $netProfit = $pl['totals']['net_profit'];
+        $netProfit = $pl['totals']['net_income'] ?? $pl['totals']['net_profit'] ?? 0;
 
         // ── 2. Depreciation (non-cash expense to add back) ──────────────
         $depSql = <<<SQL
@@ -599,7 +599,7 @@ LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
 LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
     AND COALESCE(je.is_reversed, false) = false
     AND je.entry_date BETWEEN ? AND ?
-WHERE l.is_active = true
+WHERE l.is_active = true AND l.deleted_at IS NULL
     AND l.ledger_nature = 'operating_expense'
     AND (l.ledger_name ILIKE '%depreciation%' OR l.ledger_name ILIKE '%amortisation%' OR l.ledger_name ILIKE '%amortization%')
 SQL;
@@ -635,7 +635,7 @@ SELECT
 FROM ledgers l
 LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
 LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
-WHERE l.is_active = true
+WHERE l.is_active = true AND l.deleted_at IS NULL
     AND l.ledger_nature IN ('ar', 'ap', 'inventory', 'employee_payable')
 SQL;
         $wcParams = [$openingDate, $toDate];
@@ -695,9 +695,9 @@ LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
 LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
     AND COALESCE(je.is_reversed, false) = false
     AND je.entry_date BETWEEN ? AND ?
-WHERE l.is_active = true
+WHERE l.is_active = true AND l.deleted_at IS NULL
     AND l.account_type = 'Asset'
-    AND l.parent_id IN (SELECT id FROM ledgers WHERE ledger_code = 'L-0200')
+    AND l.parent_id IN (SELECT id FROM ledgers WHERE ledger_code = 'L-0200' AND deleted_at IS NULL)
     AND l.ledger_nature NOT IN ('cash_bank', 'ar', 'inventory', 'interbranch_receivable')
 SQL;
         $invParams = [$fromDate, $toDate];
@@ -726,11 +726,11 @@ LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
 LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
     AND COALESCE(je.is_reversed, false) = false
     AND je.entry_date BETWEEN ? AND ?
-WHERE l.is_active = true
+WHERE l.is_active = true AND l.deleted_at IS NULL
     AND (
-        l.parent_id IN (SELECT id FROM ledgers WHERE ledger_code = 'L-0400')
+        l.parent_id IN (SELECT id FROM ledgers WHERE ledger_code = 'L-0400' AND deleted_at IS NULL)
         OR (l.account_type = 'Equity' AND l.ledger_nature NOT IN ('retained_earnings')
-            AND l.parent_id IN (SELECT id FROM ledgers WHERE ledger_code = 'L-0500'))
+            AND l.parent_id IN (SELECT id FROM ledgers WHERE ledger_code = 'L-0500' AND deleted_at IS NULL))
     )
 SQL;
         $finParams = [$fromDate, $toDate];
@@ -756,7 +756,7 @@ SELECT
 FROM ledgers l
 LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
 LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
-WHERE l.is_active = true AND l.ledger_nature = 'cash_bank'
+WHERE l.is_active = true AND l.deleted_at IS NULL AND l.ledger_nature = 'cash_bank'
 SQL;
         $cashBalParams = [$openingDate, $toDate];
         if ($branchId) {
@@ -775,7 +775,7 @@ SELECT
 FROM ledgers l
 JOIN journal_lines jl ON jl.ledger_id = l.id
 JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
-WHERE l.ledger_nature = 'cash_bank' AND je.entry_date BETWEEN ? AND ?
+WHERE l.ledger_nature = 'cash_bank' AND l.deleted_at IS NULL AND je.entry_date BETWEEN ? AND ?
 SQL;
         $cashMovParams = [$fromDate, $toDate];
         if ($branchId) {
