@@ -36,6 +36,7 @@ class MoneyTransferController extends Controller
         ];
 
         $listBranchId = $this->resolveListBranchId();
+
         $transfers = $this->service->getFilteredTransfers($filters, $listBranchId);
         $stats = $this->service->getStats($listBranchId);
 
@@ -115,24 +116,28 @@ class MoneyTransferController extends Controller
 
     public function show(int $id)
     {
-        $transfer = MoneyTransfer::with([
-            'fromBranch', 'toBranch', 'fromBank', 'toBank',
-            'journalEntry.lines.ledger',
-            'intercompanyJournalEntry.lines.ledger',
-        ])->findOrFail($id);
+        try {
+            $transfer = MoneyTransfer::with([
+                'fromBranch', 'toBranch', 'fromBank', 'toBank',
+                'journalEntry.lines.ledger',
+                'intercompanyJournalEntry.lines.ledger',
+            ])->findOrFail($id);
 
-        $cashLedgerEntries = DB::table('cash_ledger')
-            ->where('reference_type', 'money_transfer')
-            ->where('reference_id', $id)
-            ->orderBy('id')
-            ->get();
+            $cashLedgerEntries = DB::table('cash_ledger')
+                ->where('reference_type', 'money_transfer')
+                ->where('reference_id', $id)
+                ->orderBy('id')
+                ->get();
 
-        return view('admin.money-transfers.show', [
-            'title'             => 'Transfer — ' . $transfer->transfer_code,
-            'transfer'          => $transfer,
-            'cashLedgerEntries' => $cashLedgerEntries,
-            'canReverse'        => !$transfer->is_reversed,
-        ]);
+            return view('admin.money-transfers.show', [
+                'title'             => 'Transfer — ' . $transfer->transfer_code,
+                'transfer'          => $transfer,
+                'cashLedgerEntries' => $cashLedgerEntries,
+                'canReverse'        => !$transfer->is_reversed,
+            ]);
+        } catch (\Throwable $e) {
+            throw $e;
+        }
     }
 
     public function reverse(Request $request, int $id)

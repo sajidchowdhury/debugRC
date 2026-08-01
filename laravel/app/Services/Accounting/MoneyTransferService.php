@@ -461,6 +461,11 @@ class MoneyTransferService
                 'created_by'     => $data['created_by'] ?? null,
             ]);
         } catch (\Throwable $e) {
+            // CRITICAL: Re-throw if inside a DB::transaction(), because a
+            // swallowed SQL error leaves PostgreSQL in an aborted state (25P02).
+            if (DB::transactionLevel() > 0) {
+                throw $e;
+            }
             Log::warning('Intercompany settlement failed for money transfer', [
                 'transfer_id' => $transferId,
                 'error'       => $e->getMessage(),
@@ -548,14 +553,23 @@ class MoneyTransferService
     {
         try {
             DB::table('user_audit_log')->insert([
-                'user_id'    => $userId,
-                'action'     => $action,
-                'record_id'  => $recordId,
-                'details'    => json_encode($details),
-                'ip_address' => request()->ip(),
-                'created_at' => now(),
+                'user_id'       => $userId ?: null,
+                'action'        => $action,
+                'target_user_id' => null,
+                'branch_id'     => (int) (session('branch_id') ?? 0) ?: null,
+                'record_id'     => $recordId,
+                'details'       => json_encode($details),
+                'ip_address'    => request()?->ip(),
+                'user_agent'    => request()?->userAgent() ? mb_substr(request()->userAgent(), 0, 255) : null,
+                'created_at'    => now(),
             ]);
         } catch (\Throwable $e) {
+            // CRITICAL: Re-throw if inside a DB::transaction(), because a
+            // swallowed SQL error leaves PostgreSQL in an aborted state (25P02).
+            // Only swallow if we are NOT inside a transaction.
+            if (DB::transactionLevel() > 0) {
+                throw $e;
+            }
             Log::warning('Audit log failed for money transfer', [
                 'action' => $action, 'error' => $e->getMessage(),
             ]);
