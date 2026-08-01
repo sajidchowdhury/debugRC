@@ -123,6 +123,7 @@ DECLARE
     _request_path VARCHAR(500);
     _request_ip   VARCHAR(45);
     _request_id   VARCHAR(100);
+    _xmin      XID;
 BEGIN
     _op := TG_OP;
 
@@ -132,11 +133,13 @@ BEGIN
         _before := to_jsonb(OLD);
         _after := NULL;
         _changed := ARRAY[]::TEXT[];
+        _xmin := OLD.xmin;
     ELSIF _op = 'INSERT' THEN
         _record_id := NEW.id;
         _before := NULL;
         _after := to_jsonb(NEW);
         _changed := ARRAY[]::TEXT[];
+        _xmin := NEW.xmin;
     ELSE -- UPDATE
         _record_id := NEW.id;
         _before := to_jsonb(OLD);
@@ -149,6 +152,7 @@ BEGIN
         LOOP
             _changed := array_append(_changed, _col);
         END LOOP;
+        _xmin := NEW.xmin;
     END IF;
 
     -- Get branch_id from the row if available
@@ -215,7 +219,7 @@ BEGIN
         TG_TABLE_NAME, _op, _record_id,
         _before, _after, _changed,
         _performed_by, _session_user, _branch_id,
-        xmin,
+        _xmin,
         _request_path, _request_ip, _request_id,
         _prev_hash, _row_hash
     );

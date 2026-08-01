@@ -341,6 +341,7 @@ DECLARE
     _request_path VARCHAR(500);
     _request_ip   VARCHAR(45);
     _request_id   VARCHAR(100);
+    _xmin      XID;
 BEGIN
     _op := TG_OP;
     IF _op = 'DELETE' THEN
@@ -348,11 +349,13 @@ BEGIN
         _before := to_jsonb(OLD);
         _after := NULL;
         _changed := ARRAY[]::TEXT[];
+        _xmin := OLD.xmin;
     ELSIF _op = 'INSERT' THEN
         _record_id := NEW.id;
         _before := NULL;
         _after := to_jsonb(NEW);
         _changed := ARRAY[]::TEXT[];
+        _xmin := NEW.xmin;
     ELSE
         _record_id := NEW.id;
         _before := to_jsonb(OLD);
@@ -364,6 +367,7 @@ BEGIN
         LOOP
             _changed := array_append(_changed, _col);
         END LOOP;
+        _xmin := NEW.xmin;
     END IF;
     _branch_id := NULL;
     IF _op = 'DELETE' THEN
@@ -380,7 +384,7 @@ BEGIN
     IF _prev_hash IS NULL THEN _prev_hash := '0000000000000000000000000000000000000000000000000000000000000000'; END IF;
     _row_hash := encode(digest(_prev_hash || TG_TABLE_NAME || _op || _record_id::TEXT || COALESCE(_after::TEXT, _before::TEXT), 'sha256'), 'hex');
     INSERT INTO financial_audit_log (table_name, operation, record_id, before_data, after_data, changed_columns, performed_by, db_session_user, branch_id, transaction_id, request_path, request_ip, request_id, prev_hash, row_hash)
-    VALUES (TG_TABLE_NAME, _op, _record_id, _before, _after, _changed, _performed_by, _session_user, _branch_id, xmin, _request_path, _request_ip, _request_id, _prev_hash, _row_hash);
+    VALUES (TG_TABLE_NAME, _op, _record_id, _before, _after, _changed, _performed_by, _session_user, _branch_id, _xmin, _request_path, _request_ip, _request_id, _prev_hash, _row_hash);
     IF _op = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
