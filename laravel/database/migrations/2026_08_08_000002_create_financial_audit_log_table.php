@@ -47,7 +47,7 @@ CREATE TABLE financial_audit_log (
     after_data      JSONB,
     changed_columns TEXT[],
     performed_by    VARCHAR(100),
-    session_user    VARCHAR(100),
+    db_session_user    VARCHAR(100),
     branch_id       INTEGER,
     transaction_id  XID,
     request_path    VARCHAR(500),
@@ -184,7 +184,7 @@ BEGIN
     INSERT INTO financial_audit_log (
         table_name, operation, record_id,
         before_data, after_data, changed_columns,
-        performed_by, session_user, branch_id,
+        performed_by, db_session_user, branch_id,
         transaction_id,
         request_path, request_ip, request_id,
         prev_hash, row_hash
