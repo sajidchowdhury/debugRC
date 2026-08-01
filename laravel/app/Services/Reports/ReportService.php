@@ -24,37 +24,25 @@ class ReportService
      * Trial Balance — opening, period, closing per ledger.
      * Verifies total debits = total credits.
      *
+     * Phase 4.1 fixes:
+     *   - Includes l.opening_balance from the ledgers table (fiscal year start carry-forward)
+     *   - Uses l.normal_balance to compute net opening/closing balance on the correct side
+     *   - Excludes group-header ledgers (those with children) from data rows
+     *   - Supports branch_id filtering for multi-branch reporting
+     *   - Adds comprehensive integrity checks (opening+period=closing, sub-ledger reconciliation)
+     *   - Returns hierarchy info (parent_id, has_children) for tree display
+     *
      * @return array{ meta: array, data: \Illuminate\Support\Collection, totals: array, checks: array }
      */
-    public function trialBalance(Carbon $fromDate, Carbon $toDate, ?string $accountType = null, bool $includeZero = false): array
+    public function trialBalance(Carbon $fromDate, Carbon $toDate, ?string $accountType = null, bool $includeZero = false, ?int $branchId = null): array
     {
-        $query = DB::table('ledgers as l')
-            ->leftJoin('journal_lines as jl', 'jl.ledger_id', '=', 'l.id')
-            ->leftJoin('journal_entries as je', function ($join) {
-                $join->on('je.id', '=', 'jl.journal_entry_id')
-                     ->where('je.is_reversed', false);
-            })
-            ->where('l.is_active', true)
-            ->when($accountType, fn($q) => $q->where('l.account_type', $accountType))
-            ->groupBy('l.id', 'l.ledger_code', 'l.ledger_name', 'l.account_type', 'l.ledger_nature')
-            ->orderByRaw("CASE l.account_type WHEN 'Asset' THEN 1 WHEN 'Liability' THEN 2 WHEN 'Equity' THEN 3 WHEN 'Income' THEN 4 WHEN 'Expense' THEN 5 ELSE 0 END")
-            ->orderBy('l.ledger_name')
-            ->select([
-                'l.id as ledger_id',
-                'l.ledger_code',
-                'l.ledger_name',
-                'l.account_type',
-                'l.ledger_nature',
-                DB::raw("COALESCE(SUM(CASE WHEN je.entry_date < ? THEN jl.debit ELSE 0 END), 0) AS opening_debit", [$fromDate]),
-                DB::raw("COALESCE(SUM(CASE WHEN je.entry_date < ? THEN jl.credit ELSE 0 END), 0) AS opening_credit", [$fromDate]),
-                DB::raw("COALESCE(SUM(CASE WHEN je.entry_date BETWEEN ? AND ? THEN jl.debit ELSE 0 END), 0) AS period_debit", [$fromDate, $toDate]),
-                DB::raw("COALESCE(SUM(CASE WHEN je.entry_date BETWEEN ? AND ? THEN jl.credit ELSE 0 END), 0) AS period_credit", [$fromDate, $toDate]),
-                DB::raw("COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit ELSE 0 END), 0) AS closing_debit", [$toDate]),
-                DB::raw("COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.credit ELSE 0 END), 0) AS closing_credit", [$toDate]),
-            ]);
-
-        // Note: Laravel's DB::raw with bound params inside SELECT doesn't work cleanly.
-        // Use a raw SQL statement instead for reliability.
+        // ── Core SQL ──────────────────────────────────────────────────────
+        // The opening_balance column on ledgers stores the fiscal-year-start
+        // carry-forward.  We add it to the opening Dr/Cr depending on the
+        // account's normal_balance side (debit → opening_debit, credit →
+        // opening_credit).  This ensures that a ledger with an opening
+        // balance but no prior-period journal entries still shows the correct
+        // opening figure.
         $sql = <<<SQL
 SELECT
     l.id AS ledger_id,
@@ -62,61 +50,241 @@ SELECT
     l.ledger_name,
     l.account_type,
     l.ledger_nature,
-    COALESCE(SUM(CASE WHEN je.entry_date < ? THEN jl.debit ELSE 0 END), 0) AS opening_debit,
-    COALESCE(SUM(CASE WHEN je.entry_date < ? THEN jl.credit ELSE 0 END), 0) AS opening_credit,
+    l.normal_balance,
+    l.parent_id,
+    l.is_control_account,
+    l.control_account_type,
+    l.opening_balance,
+    -- Has children? (group header vs posting account)
+    EXISTS(SELECT 1 FROM ledgers child WHERE child.parent_id = l.id AND child.is_active = true) AS has_children,
+    -- Opening: include the fiscal-year opening_balance on the normal side
+    COALESCE(SUM(CASE WHEN je.entry_date < ? THEN jl.debit ELSE 0 END), 0)
+        + CASE WHEN COALESCE(l.normal_balance, 'debit') = 'debit' THEN COALESCE(l.opening_balance, 0) ELSE 0 END
+        AS opening_debit,
+    COALESCE(SUM(CASE WHEN je.entry_date < ? THEN jl.credit ELSE 0 END), 0)
+        + CASE WHEN COALESCE(l.normal_balance, 'debit') = 'credit' THEN COALESCE(l.opening_balance, 0) ELSE 0 END
+        AS opening_credit,
+    -- Period movement
     COALESCE(SUM(CASE WHEN je.entry_date BETWEEN ? AND ? THEN jl.debit ELSE 0 END), 0) AS period_debit,
     COALESCE(SUM(CASE WHEN je.entry_date BETWEEN ? AND ? THEN jl.credit ELSE 0 END), 0) AS period_credit,
-    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit ELSE 0 END), 0) AS closing_debit,
-    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.credit ELSE 0 END), 0) AS closing_credit
+    -- Closing: include opening_balance on the normal side
+    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.debit ELSE 0 END), 0)
+        + CASE WHEN COALESCE(l.normal_balance, 'debit') = 'debit' THEN COALESCE(l.opening_balance, 0) ELSE 0 END
+        AS closing_debit,
+    COALESCE(SUM(CASE WHEN je.entry_date <= ? THEN jl.credit ELSE 0 END), 0)
+        + CASE WHEN COALESCE(l.normal_balance, 'debit') = 'credit' THEN COALESCE(l.opening_balance, 0) ELSE 0 END
+        AS closing_credit
 FROM ledgers l
 LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
 LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
 WHERE l.is_active = true
+  AND l.deleted_at IS NULL
 SQL;
 
         $params = [$fromDate, $fromDate, $fromDate, $toDate, $fromDate, $toDate, $toDate, $toDate];
+
         if ($accountType) {
             $sql .= ' AND l.account_type = ?';
             $params[] = $accountType;
         }
-        $sql .= " GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature";
-        $sql .= " ORDER BY CASE l.account_type WHEN 'Asset' THEN 1 WHEN 'Liability' THEN 2 WHEN 'Equity' THEN 3 WHEN 'Income' THEN 4 WHEN 'Expense' THEN 5 ELSE 0 END, l.ledger_name ASC";
+
+        if ($branchId) {
+            $sql .= ' AND (je.branch_id = ? OR je.branch_id IS NULL)';
+            $params[] = $branchId;
+        }
+
+        $sql .= " GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature, l.normal_balance, l.parent_id, l.is_control_account, l.control_account_type, l.opening_balance";
+        $sql .= " ORDER BY CASE l.account_type WHEN 'Asset' THEN 1 WHEN 'Liability' THEN 2 WHEN 'Equity' THEN 3 WHEN 'Income' THEN 4 WHEN 'Expense' THEN 5 ELSE 0 END, l.ledger_code ASC";
 
         $rows = collect(DB::select($sql, $params));
 
+        // ── Compute net balances using normal_balance ─────────────────────
+        $rows = $rows->map(function ($r) {
+            $nb = $r->normal_balance ?? 'debit';
+
+            // Opening net balance
+            $openingNet = round($r->opening_debit - $r->opening_credit, 2);
+            if ($nb === 'debit') {
+                $r->opening_balance = abs($openingNet);
+                $r->opening_side    = $openingNet >= 0 ? 'Dr' : 'Cr';
+            } else {
+                $r->opening_balance = abs(-$openingNet);
+                $r->opening_side    = $openingNet <= 0 ? 'Cr' : 'Dr';
+            }
+
+            // Closing net balance
+            $closingNet = round($r->closing_debit - $r->closing_credit, 2);
+            if ($nb === 'debit') {
+                $r->closing_balance = abs($closingNet);
+                $r->closing_side    = $closingNet >= 0 ? 'Dr' : 'Cr';
+            } else {
+                $r->closing_balance = abs(-$closingNet);
+                $r->closing_side    = $closingNet <= 0 ? 'Cr' : 'Dr';
+            }
+
+            // Verify: opening + period_debit - period_credit = closing
+            $expectedClosing = round($r->opening_debit - $r->opening_credit + $r->period_debit - $r->period_credit, 2);
+            $actualClosing   = round($r->closing_debit - $r->closing_credit, 2);
+            $r->balance_check = abs($expectedClosing - $actualClosing) < 0.01;
+
+            return $r;
+        });
+
+        // ── Filter out group-header ledgers (those with children) ─────────
+        // Group headers are structural accounts that should not receive
+        // journal lines directly.  Their subtotals are computed by the view.
+        $postingRows = $rows->filter(fn($r) => !$r->has_children);
+
+        // ── Filter zero-balance accounts ──────────────────────────────────
         if (!$includeZero) {
-            $rows = $rows->filter(fn($r) =>
+            $postingRows = $postingRows->filter(fn($r) =>
                 abs($r->opening_debit) > 0.005 || abs($r->opening_credit) > 0.005 ||
                 abs($r->period_debit) > 0.005 || abs($r->period_credit) > 0.005 ||
                 abs($r->closing_debit) > 0.005 || abs($r->closing_credit) > 0.005
             )->values();
+        } else {
+            $postingRows = $postingRows->values();
         }
 
+        // ── Totals (only posting accounts) ────────────────────────────────
         $totals = [
-            'opening_debit' => $rows->sum('opening_debit'),
-            'opening_credit' => $rows->sum('opening_credit'),
-            'period_debit' => $rows->sum('period_debit'),
-            'period_credit' => $rows->sum('period_credit'),
-            'closing_debit' => $rows->sum('closing_debit'),
-            'closing_credit' => $rows->sum('closing_credit'),
+            'opening_debit'  => $postingRows->sum('opening_debit'),
+            'opening_credit' => $postingRows->sum('opening_credit'),
+            'period_debit'   => $postingRows->sum('period_debit'),
+            'period_credit'  => $postingRows->sum('period_credit'),
+            'closing_debit'  => $postingRows->sum('closing_debit'),
+            'closing_credit' => $postingRows->sum('closing_credit'),
         ];
+
+        // ── Integrity checks ─────────────────────────────────────────────
+        $checks = [
+            'opening_balanced' => abs($totals['opening_debit'] - $totals['opening_credit']) < 0.01,
+            'period_balanced'  => abs($totals['period_debit'] - $totals['period_credit']) < 0.01,
+            'closing_balanced' => abs($totals['closing_debit'] - $totals['closing_credit']) < 0.01,
+            'opening_diff'     => round($totals['opening_debit'] - $totals['opening_credit'], 2),
+            'period_diff'      => round($totals['period_debit'] - $totals['period_credit'], 2),
+            'closing_diff'     => round($totals['closing_debit'] - $totals['closing_credit'], 2),
+        ];
+
+        // Check: opening + period = closing for every account
+        $balanceCheckFails = $postingRows->filter(fn($r) => !$r->balance_check)->count();
+        $checks['all_accounts_balance'] = $balanceCheckFails === 0;
+        $checks['balance_check_fails']  = $balanceCheckFails;
+
+        // Sub-ledger reconciliation for control accounts
+        $subledgerChecks = $this->trialBalanceSubledgerCheck($fromDate, $toDate, $branchId);
+        $checks['subledger_reconciliation'] = $subledgerChecks;
+
+        // Orphaned journal lines check
+        $orphaned = DB::selectOne(<<<SQL
+SELECT COUNT(*) AS cnt FROM journal_lines jl
+WHERE NOT EXISTS (SELECT 1 FROM ledgers l WHERE l.id = jl.ledger_id AND l.is_active = true AND l.deleted_at IS NULL)
+SQL);
+        $checks['orphaned_journal_lines'] = (int) $orphaned->cnt;
 
         return [
             'meta' => [
-                'title' => 'Trial Balance',
-                'from_date' => $fromDate->format('Y-m-d'),
-                'to_date' => $toDate->format('Y-m-d'),
+                'title'        => 'Trial Balance',
+                'from_date'    => $fromDate->format('Y-m-d'),
+                'to_date'      => $toDate->format('Y-m-d'),
                 'account_type' => $accountType,
                 'include_zero' => $includeZero,
+                'branch_id'    => $branchId,
             ],
-            'data' => $rows,
+            'data'   => $postingRows,
             'totals' => $totals,
-            'checks' => [
-                'opening_balanced' => abs($totals['opening_debit'] - $totals['opening_credit']) < 0.01,
-                'period_balanced' => abs($totals['period_debit'] - $totals['period_credit']) < 0.01,
-                'closing_balanced' => abs($totals['closing_debit'] - $totals['closing_credit']) < 0.01,
-            ],
+            'checks' => $checks,
         ];
+    }
+
+    /**
+     * Sub-ledger reconciliation for control accounts.
+     * Compares the GL balance with the sub-ledger balance for AR, AP, and Employee Payable.
+     */
+    private function trialBalanceSubledgerCheck(Carbon $fromDate, Carbon $toDate, ?int $branchId = null): array
+    {
+        $checks = [];
+        $branchFilter = $branchId ? ' AND cl.branch_id = ' . (int) $branchId : '';
+
+        // AR reconciliation: GL balance vs customer_ledger sub-ledger
+        // AR is a debit-normal account: GL balance = debit - credit
+        $arGl = DB::selectOne(<<<SQL
+SELECT COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0) AS gl_balance
+FROM journal_lines jl
+JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
+JOIN ledgers l ON l.id = jl.ledger_id AND l.ledger_nature = 'ar'
+WHERE je.entry_date <= ?
+SQL, [$toDate]);
+
+        $arSub = DB::selectOne(<<<SQL
+SELECT COALESCE(SUM(cl.debit), 0) - COALESCE(SUM(cl.credit), 0) AS sub_balance
+FROM customer_ledger cl
+WHERE cl.transaction_date <= ? {$branchFilter}
+SQL, [$toDate]);
+
+        $arGlBal  = round((float) ($arGl->gl_balance ?? 0), 2);
+        $arSubBal = round((float) ($arSub->sub_balance ?? 0), 2);
+        $checks['ar'] = [
+            'label'        => 'Accounts Receivable',
+            'gl_balance'   => $arGlBal,
+            'sub_balance'  => $arSubBal,
+            'difference'   => round($arGlBal - $arSubBal, 2),
+            'reconciled'   => abs($arGlBal - $arSubBal) < 0.01,
+        ];
+
+        // AP reconciliation: GL balance vs supplier_ledger sub-ledger
+        // AP is a credit-normal account: GL balance = credit - debit
+        $apGl = DB::selectOne(<<<SQL
+SELECT COALESCE(SUM(jl.credit), 0) - COALESCE(SUM(jl.debit), 0) AS gl_balance
+FROM journal_lines jl
+JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
+JOIN ledgers l ON l.id = jl.ledger_id AND l.ledger_nature = 'ap'
+WHERE je.entry_date <= ?
+SQL, [$toDate]);
+
+        $apSub = DB::selectOne(<<<SQL
+SELECT COALESCE(SUM(sl.credit), 0) - COALESCE(SUM(sl.debit), 0) AS sub_balance
+FROM supplier_ledger sl
+WHERE sl.transaction_date <= ? {$branchFilter}
+SQL, [$toDate]);
+
+        $apGlBal  = round((float) ($apGl->gl_balance ?? 0), 2);
+        $apSubBal = round((float) ($apSub->sub_balance ?? 0), 2);
+        $checks['ap'] = [
+            'label'        => 'Accounts Payable',
+            'gl_balance'   => $apGlBal,
+            'sub_balance'  => $apSubBal,
+            'difference'   => round($apGlBal - $apSubBal, 2),
+            'reconciled'   => abs($apGlBal - $apSubBal) < 0.01,
+        ];
+
+        // Employee Payable reconciliation: GL balance vs employee_ledger sub-ledger
+        // Employee Payable is a credit-normal account: GL balance = credit - debit
+        $epGl = DB::selectOne(<<<SQL
+SELECT COALESCE(SUM(jl.credit), 0) - COALESCE(SUM(jl.debit), 0) AS gl_balance
+FROM journal_lines jl
+JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
+JOIN ledgers l ON l.id = jl.ledger_id AND l.ledger_nature = 'employee_payable'
+WHERE je.entry_date <= ?
+SQL, [$toDate]);
+
+        $epSub = DB::selectOne(<<<SQL
+SELECT COALESCE(SUM(el.credit), 0) - COALESCE(SUM(el.debit), 0) AS sub_balance
+FROM employee_ledger el
+WHERE el.transaction_date <= ? {$branchFilter}
+SQL, [$toDate]);
+
+        $epGlBal  = round((float) ($epGl->gl_balance ?? 0), 2);
+        $epSubBal = round((float) ($epSub->sub_balance ?? 0), 2);
+        $checks['employee_payable'] = [
+            'label'        => 'Employee Payable',
+            'gl_balance'   => $epGlBal,
+            'sub_balance'  => $epSubBal,
+            'difference'   => round($epGlBal - $epSubBal, 2),
+            'reconciled'   => abs($epGlBal - $epSubBal) < 0.01,
+        ];
+
+        return $checks;
     }
 
     /**

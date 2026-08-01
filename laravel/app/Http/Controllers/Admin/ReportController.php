@@ -12,6 +12,7 @@ use App\Services\Reports\DamageReportService;
 use App\Services\Accounting\JournalPostingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Report Controller — Phase 5.
@@ -53,14 +54,123 @@ class ReportController extends Controller
         $data = $this->parseDateRange($request);
         $accountType = $request->input('account_type');
         $includeZero = $request->boolean('include_zero');
+        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
 
         $report = $this->reportService->trialBalance(
-            $data['from'], $data['to'], $accountType, $includeZero
+            $data['from'], $data['to'], $accountType, $includeZero, $branchId
         );
+
+        // CSV export
+        if ($request->input('export') === 'csv') {
+            return $this->exportTrialBalanceCsv($report);
+        }
+
+        // Branch list for filter dropdown
+        $branches = DB::table('branches')->where('is_active', true)->orderBy('branch_name')->get(['id', 'branch_name']);
 
         return view('admin.reports.trial_balance', array_merge($report, [
             'accountTypes' => ['Asset', 'Liability', 'Equity', 'Income', 'Expense'],
+            'branches'     => $branches,
         ]));
+    }
+
+    /**
+     * Export Trial Balance as CSV download.
+     */
+    private function exportTrialBalanceCsv(array $report): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        $filename = 'Trial_Balance_' . $report['meta']['from_date'] . '_to_' . $report['meta']['to_date'];
+
+        $headers = [
+            'Content-Type'        => 'text/csv; charset=utf-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '.csv"',
+        ];
+
+        return response()->stream(function () use ($report) {
+            $output = fopen('php://output', 'w');
+
+            // BOM for Excel UTF-8
+            fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
+
+            // Header
+            fputcsv($output, ['Trial Balance Report']);
+            fputcsv($output, ['Period: ' . $report['meta']['from_date'] . ' to ' . $report['meta']['to_date']]);
+            if ($report['meta']['branch_id']) {
+                fputcsv($output, ['Branch ID: ' . $report['meta']['branch_id']]);
+            }
+            fputcsv($output, ['Generated: ' . now()->format('Y-m-d H:i:s')]);
+            fputcsv($output, []);
+
+            // Column headers
+            fputcsv($output, [
+                'Code', 'Ledger Name', 'Type', 'Nature', 'Normal Balance',
+                'Opening Dr', 'Opening Cr', 'Opening Balance', 'Opening Side',
+                'Period Dr', 'Period Cr',
+                'Closing Dr', 'Closing Cr', 'Closing Balance', 'Closing Side',
+            ]);
+
+            // Data rows
+            foreach ($report['data'] as $row) {
+                fputcsv($output, [
+                    $row->ledger_code,
+                    $row->ledger_name,
+                    $row->account_type,
+                    $row->ledger_nature ?? '',
+                    $row->normal_balance ?? 'debit',
+                    number_format($row->opening_debit, 2, '.', ''),
+                    number_format($row->opening_credit, 2, '.', ''),
+                    number_format($row->opening_balance, 2, '.', ''),
+                    $row->opening_side,
+                    number_format($row->period_debit, 2, '.', ''),
+                    number_format($row->period_credit, 2, '.', ''),
+                    number_format($row->closing_debit, 2, '.', ''),
+                    number_format($row->closing_credit, 2, '.', ''),
+                    number_format($row->closing_balance, 2, '.', ''),
+                    $row->closing_side,
+                ]);
+            }
+
+            // Totals
+            fputcsv($output, []);
+            $t = $report['totals'];
+            fputcsv($output, [
+                'GRAND TOTAL', '', '', '', '',
+                number_format($t['opening_debit'], 2, '.', ''),
+                number_format($t['opening_credit'], 2, '.', ''),
+                '', '',
+                number_format($t['period_debit'], 2, '.', ''),
+                number_format($t['period_credit'], 2, '.', ''),
+                number_format($t['closing_debit'], 2, '.', ''),
+                number_format($t['closing_credit'], 2, '.', ''),
+                '', '',
+            ]);
+
+            // Integrity checks
+            fputcsv($output, []);
+            fputcsv($output, ['INTEGRITY CHECKS']);
+            $c = $report['checks'];
+            fputcsv($output, ['Opening balanced', $c['opening_balanced'] ? 'YES' : 'NO', 'Diff: ' . $c['opening_diff']]);
+            fputcsv($output, ['Period balanced', $c['period_balanced'] ? 'YES' : 'NO', 'Diff: ' . $c['period_diff']]);
+            fputcsv($output, ['Closing balanced', $c['closing_balanced'] ? 'YES' : 'NO', 'Diff: ' . $c['closing_diff']]);
+            fputcsv($output, ['All accounts balance', $c['all_accounts_balance'] ? 'YES' : 'NO', 'Fails: ' . $c['balance_check_fails']]);
+            fputcsv($output, ['Orphaned journal lines', (string) $c['orphaned_journal_lines']]);
+
+            if (!empty($c['subledger_reconciliation'])) {
+                fputcsv($output, []);
+                fputcsv($output, ['SUB-LEDGER RECONCILIATION']);
+                foreach ($c['subledger_reconciliation'] as $key => $sl) {
+                    fputcsv($output, [
+                        $sl['label'],
+                        $sl['reconciled'] ? 'RECONCILED' : 'OUT OF BALANCE',
+                        'GL: ' . number_format($sl['gl_balance'], 2),
+                        'Sub: ' . number_format($sl['sub_balance'], 2),
+                        'Diff: ' . number_format($sl['difference'], 2),
+                    ]);
+                }
+            }
+
+            fclose($output);
+        }, 200, $headers);
     }
 
     /**
