@@ -505,15 +505,16 @@ class ConsolidationService
     public function getConsolidatedTrialBalance(string $fromDate, string $toDate, ?int $companyId = null): array
     {
         // Build the branch filter based on company
+        // SQL has 5 placeholders: 4 CASE WHEN + 1 LATERAL cr.period_to
         $branchFilter = '';
-        $params = [$fromDate, $toDate, $fromDate, $toDate, $fromDate, $toDate];
+        $params = [$fromDate, $toDate, $fromDate, $toDate];
 
         if ($companyId) {
             $branchIds = Company::find($companyId)?->branches()->pluck('id')->toArray() ?? [];
             if (!empty($branchIds)) {
                 $placeholders = implode(',', array_fill(0, count($branchIds), '?'));
                 $branchFilter = "AND je.branch_id IN ({$placeholders})";
-                $params = array_merge([$fromDate, $toDate, $fromDate, $toDate, $fromDate, $toDate], $branchIds);
+                $params = array_merge([$fromDate, $toDate, $fromDate, $toDate], $branchIds);
             }
         }
 

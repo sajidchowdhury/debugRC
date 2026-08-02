@@ -48,7 +48,7 @@
                     <label class="form-label small mb-1">Company</label>
                     <select name="company_id" class="form-select form-select-sm">
                         <option value="">All companies</option>
-                        @foreach(\App\Models\ConsolidationCompany::active()->orderBy('company_code')->get() as $c)
+                        @foreach(\App\Models\Company::active()->orderBy('company_code')->get() as $c)
                             <option value="{{ $c->id }}" @selected((string) old('company_id', request('company_id', $meta['company_id'] ?? '')) === (string) $c->id)>
                                 {{ $c->company_name }} ({{ $c->company_code }})
                             </option>
