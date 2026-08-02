@@ -175,8 +175,8 @@ class MenuService
             'moneytransfer' => 'admin.money-transfers.index',
             'reconciliation' => 'admin.reconciliation.index',
             'report' => 'admin.reports.index',
-            'budget' => 'admin.budgets.index',
-            'dimension' => 'admin.dimensions.index',
+            'budget' => $this->resolveBudgetRoute($action),
+            'dimension' => $this->resolveDimensionRoute($action),
         ];
 
         $routeName = $routeMap[$controller] ?? null;
@@ -209,6 +209,35 @@ class MenuService
         ];
 
         return $actionMap[strtolower($action)] ?? 'admin.branch-demands.index';
+    }
+
+    /**
+     * Resolve the Budget action to a Laravel named route.
+     * Phase 6 — supports budget list and variance report.
+     */
+    private function resolveBudgetRoute(string $action): string
+    {
+        $actionMap = [
+            'index'    => 'admin.budgets.index',
+            'variance' => 'admin.budgets.variance',
+        ];
+
+        return $actionMap[strtolower($action)] ?? 'admin.budgets.index';
+    }
+
+    /**
+     * Resolve the Dimension action to a Laravel named route.
+     * Phase 6 — supports dimensions list, segment P&L, and segment BS.
+     */
+    private function resolveDimensionRoute(string $action): string
+    {
+        $actionMap = [
+            'index'       => 'admin.dimensions.index',
+            'segment_pnl' => 'admin.dimensions.segment-pnl',
+            'segment_bs'  => 'admin.dimensions.segment-bs',
+        ];
+
+        return $actionMap[strtolower($action)] ?? 'admin.dimensions.index';
     }
 
     /**
