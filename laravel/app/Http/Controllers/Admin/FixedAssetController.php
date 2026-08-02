@@ -417,12 +417,13 @@ class FixedAssetController extends Controller
     /**
      * Post a single depreciation schedule.
      */
-    public function postSingleDepreciation(AssetDepreciationSchedule $schedule)
+    public function postSingleDepreciation(int $schedule)
     {
         try {
-            $this->depreciationService->postDepreciation($schedule);
+            $scheduleModel = AssetDepreciationSchedule::findOrFail($schedule);
+            $this->depreciationService->postDepreciation($scheduleModel);
 
-            return back()->with('success', "Depreciation schedule #{$schedule->id} posted successfully.");
+            return back()->with('success', "Depreciation schedule #{$scheduleModel->id} posted successfully.");
         } catch (\Throwable $e) {
             return back()->with('error', 'Failed to post: ' . $e->getMessage());
         }
@@ -431,20 +432,21 @@ class FixedAssetController extends Controller
     /**
      * Reverse a posted depreciation schedule.
      */
-    public function reverseDepreciation(Request $request, AssetDepreciationSchedule $schedule)
+    public function reverseDepreciation(Request $request, int $schedule)
     {
         $validated = $request->validate([
             'reason' => 'required|string|max:500',
         ]);
 
         try {
+            $scheduleModel = AssetDepreciationSchedule::findOrFail($schedule);
             $this->depreciationService->reverseDepreciation(
-                $schedule,
+                $scheduleModel,
                 Auth::id(),
                 $validated['reason']
             );
 
-            return back()->with('success', "Depreciation schedule #{$schedule->id} reversed successfully.");
+            return back()->with('success', "Depreciation schedule #{$scheduleModel->id} reversed successfully.");
         } catch (\Throwable $e) {
             return back()->with('error', 'Failed to reverse: ' . $e->getMessage());
         }
@@ -551,13 +553,14 @@ class FixedAssetController extends Controller
     /**
      * Show a disposal detail.
      */
-    public function showDisposal(AssetDisposal $disposal)
+    public function showDisposal(int $disposal)
     {
-        $disposal->load(['fixedAsset', 'fixedAsset.branch', 'proceedsLedger', 'gainLossLedger', 'journalEntry', 'creator']);
+        $disposalModel = AssetDisposal::findOrFail($disposal);
+        $disposalModel->load(['fixedAsset', 'fixedAsset.branch', 'proceedsLedger', 'gainLossLedger', 'journalEntry', 'creator']);
 
         return view('admin.fixed-assets.disposal-show', [
-            'title' => "Disposal {$disposal->disposal_code} — Remote Center ERP",
-            'disposal' => $disposal,
+            'title' => "Disposal {$disposalModel->disposal_code} — Remote Center ERP",
+            'disposal' => $disposalModel,
         ]);
     }
 }

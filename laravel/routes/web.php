@@ -1760,6 +1760,8 @@ Route::middleware('auth')->group(function () {
         Route::post('post-depreciation', [FixedAssetController::class, 'postDepreciation'])->name('post-depreciation');
         Route::get('disposals', [FixedAssetController::class, 'disposals'])->name('disposals');
         Route::get('disposals/{disposal}', [FixedAssetController::class, 'showDisposal'])->name('show-disposal');
+        Route::patch('schedules/{schedule}/post', [FixedAssetController::class, 'postSingleDepreciation'])->name('post-single-depreciation');
+        Route::patch('schedules/{schedule}/reverse', [FixedAssetController::class, 'reverseDepreciation'])->name('reverse-depreciation');
 
         // Parameterized routes (wildcard) — MUST be last
         Route::get('{fixedAsset}', [FixedAssetController::class, 'show'])->name('show');
@@ -1767,8 +1769,6 @@ Route::middleware('auth')->group(function () {
         Route::put('{fixedAsset}', [FixedAssetController::class, 'update'])->name('update');
         Route::get('{fixedAsset}/dispose', [FixedAssetController::class, 'showDisposalForm'])->name('dispose-form');
         Route::post('{fixedAsset}/dispose', [FixedAssetController::class, 'storeDisposal'])->name('store-disposal');
-        Route::patch('schedules/{schedule}/post', [FixedAssetController::class, 'postSingleDepreciation'])->name('post-single-depreciation');
-        Route::patch('schedules/{schedule}/reverse', [FixedAssetController::class, 'reverseDepreciation'])->name('reverse-depreciation');
     });
     Route::get('admin/fixed-assets', [FixedAssetController::class, 'index'])
         ->name('admin.fixed-assets.index')
