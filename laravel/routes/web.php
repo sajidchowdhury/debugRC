@@ -58,6 +58,7 @@ use App\Http\Controllers\Admin\BudgetController;
 use App\Http\Controllers\Admin\DimensionController;
 use App\Http\Controllers\Admin\FiscalYearController;
 use App\Http\Controllers\Admin\ConsolidationController;
+use App\Http\Controllers\Admin\BankReconciliationController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -1724,7 +1725,27 @@ Route::middleware('auth')->group(function () {
         ->middleware('role:accountant,manager,admin');
 
     // ============================================================
-    // Phase 1E (Task 31): SSE (Server-Sent Events) for LISTEN/NOTIFY
+    // Phase 9.3: Bank Reconciliation
+    // ============================================================
+    Route::prefix('admin/bank-reconciliation')->name('admin.bank-reconciliation.')->middleware('role:accountant,manager,admin')->group(function () {
+        // Static routes first (before parameterized)
+        Route::get('create', [BankReconciliationController::class, 'create'])->name('create');
+        Route::post('/', [BankReconciliationController::class, 'store'])->name('store');
+        Route::get('import-statement', [BankReconciliationController::class, 'importStatementPage'])->name('import-statement-page');
+        Route::get('unreconciled', [BankReconciliationController::class, 'unreconciled'])->name('unreconciled');
+
+        // Parameterized routes (wildcard) — MUST be last
+        Route::get('{bankReconciliation}', [BankReconciliationController::class, 'show'])->name('show');
+        Route::post('{bankReconciliation}/import-statement', [BankReconciliationController::class, 'importStatement'])->name('import-statement');
+        Route::post('{bankReconciliation}/auto-match', [BankReconciliationController::class, 'autoMatch'])->name('auto-match');
+        Route::post('{bankReconciliation}/manual-match', [BankReconciliationController::class, 'manualMatch'])->name('manual-match');
+        Route::post('{bankReconciliation}/unmatch', [BankReconciliationController::class, 'unmatch'])->name('unmatch');
+        Route::patch('{bankReconciliation}/complete', [BankReconciliationController::class, 'complete'])->name('complete');
+        Route::patch('{bankReconciliation}/reverse', [BankReconciliationController::class, 'reverse'])->name('reverse');
+    });
+    Route::get('admin/bank-reconciliation', [BankReconciliationController::class, 'index'])
+        ->name('admin.bank-reconciliation.index')
+        ->middleware('role:accountant,manager,admin');
     // Real-time event streaming from PostgreSQL → Redis → Browser
     // ============================================================
     Route::prefix('sse')->name('sse.')->group(function () {

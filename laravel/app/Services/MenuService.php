@@ -179,6 +179,7 @@ class MenuService
             'dimension' => $this->resolveDimensionRoute($action),
             'fiscalyear' => $this->resolveFiscalYearRoute($action),
             'consolidation' => $this->resolveConsolidationRoute($action),
+            'bankreconciliation' => $this->resolveBankReconciliationRoute($action),
         ];
 
         $routeName = $routeMap[$controller] ?? null;
@@ -273,6 +274,21 @@ class MenuService
         ];
 
         return $actionMap[strtolower($action)] ?? 'admin.consolidation.index';
+    }
+
+    /**
+     * Resolve the Bank Reconciliation action to a Laravel named route.
+     * Phase 9.3 — supports reconciliation runs, import, and unreconciled entries.
+     */
+    private function resolveBankReconciliationRoute(string $action): string
+    {
+        $actionMap = [
+            'index'            => 'admin.bank-reconciliation.index',
+            'import_statement' => 'admin.bank-reconciliation.import-statement-page',
+            'unreconciled'     => 'admin.bank-reconciliation.unreconciled',
+        ];
+
+        return $actionMap[strtolower($action)] ?? 'admin.bank-reconciliation.index';
     }
 
     /**
