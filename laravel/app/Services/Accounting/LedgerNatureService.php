@@ -160,6 +160,37 @@ class LedgerNatureService
             'description' => 'Bank charges, interest',
             'used_by' => 'Financial expense entries',
         ],
+        // Phase 8: Elimination natures for consolidation
+        'elimination_receivable' => [
+            'account_type' => 'Asset',
+            'normal_balance' => 'debit',
+            'description' => 'Elimination receivable (contra to interbranch_receivable)',
+            'used_by' => 'Consolidation elimination — balance sheet',
+        ],
+        'elimination_payable' => [
+            'account_type' => 'Liability',
+            'normal_balance' => 'credit',
+            'description' => 'Elimination payable (contra to interbranch_payable)',
+            'used_by' => 'Consolidation elimination — balance sheet',
+        ],
+        'elimination_revenue' => [
+            'account_type' => 'Equity',
+            'normal_balance' => 'credit',
+            'description' => 'Elimination revenue (contra to intercompany revenue)',
+            'used_by' => 'Consolidation elimination — income statement',
+        ],
+        'elimination_cogs' => [
+            'account_type' => 'Equity',
+            'normal_balance' => 'debit',
+            'description' => 'Elimination COGS (contra to intercompany COGS)',
+            'used_by' => 'Consolidation elimination — income statement',
+        ],
+        'elimination_investment' => [
+            'account_type' => 'Equity',
+            'normal_balance' => 'credit',
+            'description' => 'Elimination investment (contra to investment in subsidiary)',
+            'used_by' => 'Consolidation elimination — investment',
+        ],
     ];
 
     /**

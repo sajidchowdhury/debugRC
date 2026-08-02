@@ -26,6 +26,7 @@ class Branch extends Model
     protected $fillable = [
         'branch_code',
         'branch_name',
+        'company_id',
         'address',
         'phone',
         'email',
@@ -37,6 +38,11 @@ class Branch extends Model
     protected $casts = [
         'is_active' => 'boolean',
     ];
+
+    public function company(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(Company::class, 'company_id');
+    }
 
     public function employees(): \Illuminate\Database\Eloquent\Relations\HasMany
     {

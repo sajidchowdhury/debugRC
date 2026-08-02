@@ -57,6 +57,7 @@ use App\Http\Controllers\Admin\ShadowModeController;
 use App\Http\Controllers\Admin\BudgetController;
 use App\Http\Controllers\Admin\DimensionController;
 use App\Http\Controllers\Admin\FiscalYearController;
+use App\Http\Controllers\Admin\ConsolidationController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -1683,6 +1684,38 @@ Route::middleware('auth')->group(function () {
     });
     Route::get('admin/fiscal-years', [FiscalYearController::class, 'index'])
         ->name('admin.fiscal-years.index')
+        ->middleware('role:accountant,manager,admin');
+
+    // Phase 8: Intercompany & Consolidation
+    // RBAC — accountant/manager/admin for consolidation management
+    Route::prefix('admin/consolidation')->name('admin.consolidation.')->middleware('role:accountant,manager,admin')->group(function () {
+        // Consolidation runs
+        Route::get('create', [ConsolidationController::class, 'create'])->name('create');
+        Route::post('/', [ConsolidationController::class, 'store'])->name('store');
+        Route::get('{consolidationRun}', [ConsolidationController::class, 'show'])->name('show');
+        Route::post('{consolidationRun}/post', [ConsolidationController::class, 'post'])->name('post');
+        Route::post('{consolidationRun}/reverse', [ConsolidationController::class, 'reverse'])->name('reverse');
+        Route::delete('{consolidationRun}', [ConsolidationController::class, 'destroy'])->name('destroy');
+
+        // Consolidated financial statements
+        Route::get('consolidated-tb', [ConsolidationController::class, 'consolidatedTrialBalance'])->name('consolidated-tb');
+        Route::get('consolidated-bs', [ConsolidationController::class, 'consolidatedBalanceSheet'])->name('consolidated-bs');
+        Route::get('consolidated-pnl', [ConsolidationController::class, 'consolidatedProfitAndLoss'])->name('consolidated-pnl');
+
+        // Intercompany reconciliation
+        Route::get('reconciliation', [ConsolidationController::class, 'intercompanyReconciliation'])->name('reconciliation');
+
+        // Elimination rules
+        Route::get('rules', [ConsolidationController::class, 'rulesIndex'])->name('rules');
+        Route::post('rules', [ConsolidationController::class, 'rulesStore'])->name('rules.store');
+        Route::post('rules/{rule}/toggle', [ConsolidationController::class, 'rulesToggle'])->name('rules.toggle');
+
+        // Companies
+        Route::get('companies', [ConsolidationController::class, 'companiesIndex'])->name('companies');
+        Route::post('companies', [ConsolidationController::class, 'companiesStore'])->name('companies.store');
+    });
+    Route::get('admin/consolidation', [ConsolidationController::class, 'index'])
+        ->name('admin.consolidation.index')
         ->middleware('role:accountant,manager,admin');
 
     // ============================================================

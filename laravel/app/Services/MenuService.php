@@ -178,6 +178,7 @@ class MenuService
             'budget' => $this->resolveBudgetRoute($action),
             'dimension' => $this->resolveDimensionRoute($action),
             'fiscalyear' => $this->resolveFiscalYearRoute($action),
+            'consolidation' => $this->resolveConsolidationRoute($action),
         ];
 
         $routeName = $routeMap[$controller] ?? null;
@@ -253,6 +254,25 @@ class MenuService
         ];
 
         return $actionMap[strtolower($action)] ?? 'admin.fiscal-years.index';
+    }
+
+    /**
+     * Resolve the Consolidation action to a Laravel named route.
+     * Phase 8 — supports consolidation runs, reports, rules, companies.
+     */
+    private function resolveConsolidationRoute(string $action): string
+    {
+        $actionMap = [
+            'index'            => 'admin.consolidation.index',
+            'consolidated_tb'  => 'admin.consolidation.consolidated-tb',
+            'consolidated_bs'  => 'admin.consolidation.consolidated-bs',
+            'consolidated_pnl' => 'admin.consolidation.consolidated-pnl',
+            'reconciliation'   => 'admin.consolidation.reconciliation',
+            'rules'            => 'admin.consolidation.rules',
+            'companies'        => 'admin.consolidation.companies',
+        ];
+
+        return $actionMap[strtolower($action)] ?? 'admin.consolidation.index';
     }
 
     /**
