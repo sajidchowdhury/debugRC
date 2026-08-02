@@ -56,6 +56,7 @@ use App\Http\Controllers\Admin\SystemHealthController;
 use App\Http\Controllers\Admin\ShadowModeController;
 use App\Http\Controllers\Admin\BudgetController;
 use App\Http\Controllers\Admin\DimensionController;
+use App\Http\Controllers\Admin\FiscalYearController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -1660,6 +1661,28 @@ Route::middleware('auth')->group(function () {
     });
     Route::get('admin/dimensions', [DimensionController::class, 'index'])
         ->name('admin.dimensions.index')
+        ->middleware('role:accountant,manager,admin');
+
+    // ============================================================
+    // Phase 7: Enhanced Period & Fiscal Year Controls
+    // RBAC — accountant/manager/admin for fiscal year management
+    // ============================================================
+
+    // Fiscal Years
+    Route::prefix('admin/fiscal-years')->name('admin.fiscal-years.')->middleware('role:accountant,manager,admin')->group(function () {
+        Route::get('close-log', [FiscalYearController::class, 'closeLog'])->name('close-log');
+        Route::get('create', [FiscalYearController::class, 'create'])->name('create');
+        Route::post('/', [FiscalYearController::class, 'store'])->name('store');
+        Route::get('{fiscalYear}', [FiscalYearController::class, 'show'])->name('show');
+        Route::post('{fiscalYear}/activate', [FiscalYearController::class, 'activate'])->name('activate');
+        Route::post('{fiscalYear}/close', [FiscalYearController::class, 'close'])->name('close');
+        Route::post('{fiscalYear}/lock', [FiscalYearController::class, 'lock'])->name('lock');
+        // Period operations
+        Route::post('periods/{period}/close', [FiscalYearController::class, 'closePeriod'])->name('periods.close');
+        Route::post('periods/{period}/reopen', [FiscalYearController::class, 'reopenPeriod'])->name('periods.reopen');
+    });
+    Route::get('admin/fiscal-years', [FiscalYearController::class, 'index'])
+        ->name('admin.fiscal-years.index')
         ->middleware('role:accountant,manager,admin');
 
     // ============================================================

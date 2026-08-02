@@ -177,6 +177,7 @@ class MenuService
             'report' => 'admin.reports.index',
             'budget' => $this->resolveBudgetRoute($action),
             'dimension' => $this->resolveDimensionRoute($action),
+            'fiscalyear' => $this->resolveFiscalYearRoute($action),
         ];
 
         $routeName = $routeMap[$controller] ?? null;
@@ -238,6 +239,20 @@ class MenuService
         ];
 
         return $actionMap[strtolower($action)] ?? 'admin.dimensions.index';
+    }
+
+    /**
+     * Resolve the Fiscal Year action to a Laravel named route.
+     * Phase 7 — supports fiscal year list, close log.
+     */
+    private function resolveFiscalYearRoute(string $action): string
+    {
+        $actionMap = [
+            'index'     => 'admin.fiscal-years.index',
+            'close_log' => 'admin.fiscal-years.close-log',
+        ];
+
+        return $actionMap[strtolower($action)] ?? 'admin.fiscal-years.index';
     }
 
     /**
