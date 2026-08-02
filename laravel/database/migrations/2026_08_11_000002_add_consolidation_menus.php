@@ -101,41 +101,53 @@ return new class extends Migration
 
     /**
      * Grant can_view and can_edit for all new consolidation menus to the superadmin user.
+     * Follows the same pattern as Phase 6 menu migration:
+     *   1. Find superadmin employee (role='superadmin' or employee_code='E0001')
+     *   2. Find the user linked via users.employee_id
+     *   3. Upsert permissions using ON CONFLICT for idempotency
      */
     private function grantSuperadminPermissions(): void
     {
-        // Find superadmin user (role='superadmin' or employee_code='E0001')
-        $superadmin = DB::table('users')
-            ->join('employees', 'employees.user_id', '=', 'users.id')
-            ->where(function ($q) {
-                $q->where('employees.role', 'superadmin')
-                  ->orWhere('employees.employee_code', 'E0001');
-            })
-            ->select('users.id')
+        // Step 1: Find superadmin employee
+        $superAdminEmp = DB::table('employees')
+            ->where('role', 'superadmin')
             ->first();
 
-        if (!$superadmin) {
+        if (!$superAdminEmp) {
+            $superAdminEmp = DB::table('employees')
+                ->where('employee_code', 'E0001')
+                ->first();
+        }
+
+        if (!$superAdminEmp) {
             return;
         }
 
-        // Get all consolidation menus
+        // Step 2: Find user linked to this employee (users.employee_id → employees.id)
+        $user = DB::table('users')
+            ->where('employee_id', $superAdminEmp->id)
+            ->first();
+
+        if (!$user) {
+            return;
+        }
+
+        // Step 3: Get all consolidation menus and grant permissions
         $menus = DB::table('menus')
             ->where('controller', 'consolidation')
             ->get();
 
+        $pdo = DB::connection()->getPdo();
+
         foreach ($menus as $menu) {
-            DB::table('user_menu_permissions')->upsert(
-                [
-                    'user_id' => $superadmin->id,
-                    'menu_id' => $menu->id,
-                    'can_view' => true,
-                    'can_edit' => true,
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ],
-                ['user_id', 'menu_id'],
-                ['can_view' => true, 'can_edit' => true, 'updated_at' => now()]
-            );
+            $pdo->exec("
+                INSERT INTO user_menu_permissions (user_id, menu_id, can_view, can_edit, created_at, updated_at)
+                VALUES ({$user->id}, {$menu->id}, TRUE, TRUE, NOW(), NOW())
+                ON CONFLICT (user_id, menu_id) DO UPDATE
+                SET can_view   = TRUE,
+                    can_edit   = TRUE,
+                    updated_at = NOW()
+            ");
         }
     }
 
