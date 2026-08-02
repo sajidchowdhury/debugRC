@@ -197,41 +197,22 @@ return new class extends Migration
             $table->index('is_elimination', 'idx_ledgers_elimination');
         });
 
-        // ── 7. Add source='elimination' to journal_entries check ────
-        // The existing source column check constraint may not include 'elimination'.
-        // We drop and recreate the constraint if it exists.
-        // PostgreSQL doesn't support ALTER CONSTRAINT, so we drop and recreate.
-        $hasSourceCheck = DB::selectOne("
-            SELECT COUNT(*) as cnt FROM information_schema.check_constraints cc
-            JOIN information_schema.table_constraints tc ON tc.constraint_name = cc.constraint_name
+        // ── 7. Drop source CHECK constraint on journal_entries ──────
+        // The source column is used as a free-form categorization tag by many
+        // services (sales_invoice, customer_payment, money_transfer, branch_demand,
+        // damage, stock_take, warehouse_transfer, employee_transaction, etc.)
+        // A CHECK constraint is too restrictive — it blocks new source values
+        // from being added without a migration.  We drop it so that
+        // source='elimination' (and any future source) works without constraint issues.
+        $constraints = DB::select("
+            SELECT tc.constraint_name
+            FROM information_schema.table_constraints tc
             WHERE tc.table_name = 'journal_entries'
               AND tc.constraint_type = 'CHECK'
-              AND cc.check_clause LIKE '%source%'
+              AND tc.constraint_name LIKE '%source%'
         ");
-
-        if ($hasSourceCheck && (int) $hasSourceCheck->cnt > 0) {
-            // Find and drop the existing source check constraint
-            $constraints = DB::select("
-                SELECT tc.constraint_name
-                FROM information_schema.table_constraints tc
-                WHERE tc.table_name = 'journal_entries'
-                  AND tc.constraint_type = 'CHECK'
-                  AND tc.constraint_name LIKE '%source%'
-            ");
-            foreach ($constraints as $c) {
-                DB::statement("ALTER TABLE journal_entries DROP CONSTRAINT IF EXISTS {$c->constraint_name}");
-            }
-            // Recreate with 'elimination' included
-            DB::statement("
-                ALTER TABLE journal_entries ADD CONSTRAINT journal_entries_source_check
-                CHECK (source IN ('manual','auto','reversal','system','year_end_close','elimination'))
-            ");
-        } else {
-            // No existing constraint — just add one
-            DB::statement("
-                ALTER TABLE journal_entries ADD CONSTRAINT journal_entries_source_check
-                CHECK (source IN ('manual','auto','reversal','system','year_end_close','elimination'))
-            ");
+        foreach ($constraints as $c) {
+            DB::statement("ALTER TABLE journal_entries DROP CONSTRAINT IF EXISTS {$c->constraint_name}");
         }
 
         // ── 8. Seed elimination ledger accounts ──────────────────────
