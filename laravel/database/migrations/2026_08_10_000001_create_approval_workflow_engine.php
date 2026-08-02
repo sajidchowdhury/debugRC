@@ -27,7 +27,7 @@ return new class extends Migration
             $table->id();
             $table->string('name', 100);                    // e.g. "Manual Journal Approval"
             $table->string('entity_type', 50);              // e.g. "manual_journal", "stock_adjustment"
-            $table->unsignedDecimal('min_amount', 15, 2)->default(0); // Only require approval above this amount
+            $table->decimal('min_amount', 15, 2)->default(0); // Only require approval above this amount
             $table->boolean('is_active')->default(true);
             $table->unsignedSmallInteger('requires_approval_levels')->default(1); // How many levels
             $table->string('branch_id')->nullable();        // null = all branches
