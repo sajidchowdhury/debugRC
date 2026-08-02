@@ -135,20 +135,18 @@ return new class extends Migration
             JOIN ledgers l ON l.id = bl.ledger_id
             LEFT JOIN LATERAL (
                 SELECT SUM(
-                    CASE l2.normal_balance
+                    CASE l.normal_balance
                         WHEN 'debit'  THEN jl2.debit  - jl2.credit
                         WHEN 'credit' THEN jl2.credit - jl2.debit
                     END
                 ) AS actual_amount
                 FROM journal_lines jl2
                 JOIN journal_entries je2 ON je2.id = jl2.journal_entry_id
-                JOIN ledgers l2 ON l2.id = jl2.ledger_id
                 WHERE jl2.ledger_id = bl.ledger_id
                   AND je2.is_reversed = false
                   AND EXTRACT(YEAR FROM je2.entry_date)::text = b.fiscal_year
                   AND EXTRACT(MONTH FROM je2.entry_date) = bl.period
                   AND (b.branch_id IS NULL OR je2.branch_id = b.branch_id)
-                  AND jl2.deleted_at IS NULL
             ) actual ON true
             WHERE b.deleted_at IS NULL
               AND l.deleted_at IS NULL
