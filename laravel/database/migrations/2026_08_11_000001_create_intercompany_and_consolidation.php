@@ -236,19 +236,18 @@ return new class extends Migration
         }
 
         // Consolidation runs and elimination entries are admin-only
+        // Uses the same RLS pattern as the rest of the project:
+        //   current_setting('app.is_admin', true) = 'true'
+        // The middleware (SetAppBranchId) sets app.is_admin based on the
+        // authenticated user's isAdmin() check, so no need to query the
+        // users table here (which doesn't even have a 'role' column).
         foreach (['consolidation_runs', 'elimination_entries', 'elimination_rules'] as $tbl) {
             DB::statement("ALTER TABLE {$tbl} ENABLE ROW LEVEL SECURITY");
             DB::statement("ALTER TABLE {$tbl} FORCE ROW LEVEL SECURITY");
             DB::statement("
                 CREATE POLICY {$tbl}_admin_policy ON {$tbl}
-                USING (
-                    current_setting('app.is_admin', true) = 'true'
-                    OR EXISTS (
-                        SELECT 1 FROM users u
-                        WHERE u.id = current_setting('app.branch_id', true)::int
-                        AND u.role IN ('admin', 'superadmin', 'manager', 'accountant')
-                    )
-                )
+                USING (current_setting('app.is_admin', true) = 'true')
+                WITH CHECK (current_setting('app.is_admin', true) = 'true')
             ");
         }
 
