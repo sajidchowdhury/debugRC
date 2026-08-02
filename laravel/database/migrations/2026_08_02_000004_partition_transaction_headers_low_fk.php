@@ -444,6 +444,13 @@ return new class extends Migration
                 WITH CHECK (current_setting('app.is_admin', true) = 'true')
         SQL);
 
+        // Recreate financial audit trigger
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER trg_audit_money_transfers
+                AFTER INSERT OR UPDATE OR DELETE ON money_transfers
+                FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger()
+        SQL);
+
         DB::statement('DROP TABLE money_transfers_unpartitioned');
         $this->registerPartman('money_transfers', 'transfer_date', '2027-01-01');
         DB::statement('ANALYZE money_transfers');
@@ -562,6 +569,13 @@ return new class extends Migration
                 WITH CHECK (current_setting('app.is_admin', true) = 'true')
         SQL);
 
+        // Recreate financial audit trigger
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER trg_audit_employee_transactions
+                AFTER INSERT OR UPDATE OR DELETE ON employee_transactions
+                FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger()
+        SQL);
+
         DB::statement('DROP TABLE employee_transactions_unpartitioned');
         $this->registerPartman('employee_transactions', 'transaction_date', '2027-01-01');
         DB::statement('ANALYZE employee_transactions');
@@ -672,6 +686,13 @@ return new class extends Migration
                 WITH CHECK (current_setting('app.is_admin', true) = 'true')
         SQL);
 
+        // Recreate financial audit trigger
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER trg_audit_other_incomes
+                AFTER INSERT OR UPDATE OR DELETE ON other_incomes
+                FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger()
+        SQL);
+
         DB::statement('DROP TABLE other_incomes_unpartitioned');
         $this->registerPartman('other_incomes', 'income_date', '2027-01-01');
         DB::statement('ANALYZE other_incomes');
@@ -780,6 +801,13 @@ return new class extends Migration
             CREATE POLICY rls_other_expenses_admin ON other_expenses
                 FOR ALL USING (current_setting('app.is_admin', true) = 'true')
                 WITH CHECK (current_setting('app.is_admin', true) = 'true')
+        SQL);
+
+        // Recreate financial audit trigger
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER trg_audit_other_expenses
+                AFTER INSERT OR UPDATE OR DELETE ON other_expenses
+                FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger()
         SQL);
 
         DB::statement('DROP TABLE other_expenses_unpartitioned');
@@ -918,6 +946,16 @@ return new class extends Migration
             CREATE TRIGGER trg_notify_sales_returns
                 AFTER INSERT OR UPDATE ON sales_returns
                 FOR EACH ROW EXECUTE FUNCTION trg_notify_sales_returns()
+        SQL);
+
+        // Recreate trigger-based FK: sales_returns.sales_invoice_id → sales_invoices(id)
+        // sales_invoices is already partitioned, so this FK must be trigger-based.
+        // The function fn_fk_si_check() already exists from the original partitioning migration.
+        DB::statement(<<<'SQL'
+            CREATE CONSTRAINT TRIGGER trg_fk_sr_si
+                AFTER INSERT OR UPDATE ON sales_returns
+                FROM sales_invoices
+                FOR EACH ROW EXECUTE FUNCTION fn_fk_si_check('sales_invoice_id')
         SQL);
 
         // RLS
@@ -1596,6 +1634,13 @@ return new class extends Migration
             CREATE POLICY rls_manual_journals_admin ON manual_journals
                 FOR ALL USING (current_setting('app.is_admin', true) = 'true')
                 WITH CHECK (current_setting('app.is_admin', true) = 'true')
+        SQL);
+
+        // Recreate financial audit trigger
+        DB::statement(<<<'SQL'
+            CREATE TRIGGER trg_audit_manual_journals
+                AFTER INSERT OR UPDATE OR DELETE ON manual_journals
+                FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger()
         SQL);
 
         DB::statement('DROP TABLE manual_journals_unpartitioned');
