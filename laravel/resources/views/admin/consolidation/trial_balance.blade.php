@@ -211,28 +211,17 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach($checks as $key => $value)
+                        @foreach($checks as $check)
                         <tr>
-                            <td>{{ ucwords(str_replace('_', ' ', $key)) }}</td>
+                            <td>{{ $check['label'] }}</td>
                             <td class="text-center">
-                                @if(is_bool($value))
-                                    <span class="badge {{ $value ? 'bg-success' : 'bg-danger' }}">
-                                        <i class="fas fa-{{ $value ? 'check' : 'times' }}"></i>
-                                        {{ $value ? 'Pass' : 'Fail' }}
-                                    </span>
-                                @else
-                                    <span class="badge {{ abs($value) < 0.01 ? 'bg-success' : 'bg-danger' }}">
-                                        <i class="fas fa-{{ abs($value) < 0.01 ? 'check' : 'times' }}"></i>
-                                        {{ abs($value) < 0.01 ? 'Pass' : 'Fail' }}
-                                    </span>
-                                @endif
+                                <span class="badge {{ $check['passed'] ? 'bg-success' : 'bg-danger' }}">
+                                    <i class="fas fa-{{ $check['passed'] ? 'check' : 'times' }}"></i>
+                                    {{ $check['passed'] ? 'Pass' : 'Fail' }}
+                                </span>
                             </td>
                             <td class="text-end">
-                                @if(is_bool($value))
-                                    {{ $value ? 'Yes' : 'No' }}
-                                @else
-                                    {{ number_format(abs($value), 2) }}
-                                @endif
+                                {{ $check['detail'] }}
                             </td>
                         </tr>
                         @endforeach
