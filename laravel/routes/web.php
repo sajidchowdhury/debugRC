@@ -59,6 +59,7 @@ use App\Http\Controllers\Admin\DimensionController;
 use App\Http\Controllers\Admin\FiscalYearController;
 use App\Http\Controllers\Admin\ConsolidationController;
 use App\Http\Controllers\Admin\BankReconciliationController;
+use App\Http\Controllers\Admin\FixedAssetController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -1745,6 +1746,32 @@ Route::middleware('auth')->group(function () {
     });
     Route::get('admin/bank-reconciliation', [BankReconciliationController::class, 'index'])
         ->name('admin.bank-reconciliation.index')
+        ->middleware('role:accountant,manager,admin');
+
+    // ============================================================
+    // Phase 9.4: Fixed Asset & Depreciation
+    // ============================================================
+    Route::prefix('admin/fixed-assets')->name('admin.fixed-assets.')->middleware('role:accountant,manager,admin')->group(function () {
+        // Static routes first (before parameterized)
+        Route::get('create', [FixedAssetController::class, 'create'])->name('create');
+        Route::post('/', [FixedAssetController::class, 'store'])->name('store');
+        Route::get('depreciation', [FixedAssetController::class, 'depreciation'])->name('depreciation');
+        Route::post('generate-depreciation', [FixedAssetController::class, 'generateDepreciation'])->name('generate-depreciation');
+        Route::post('post-depreciation', [FixedAssetController::class, 'postDepreciation'])->name('post-depreciation');
+        Route::get('disposals', [FixedAssetController::class, 'disposals'])->name('disposals');
+        Route::get('disposals/{disposal}', [FixedAssetController::class, 'showDisposal'])->name('show-disposal');
+
+        // Parameterized routes (wildcard) — MUST be last
+        Route::get('{fixedAsset}', [FixedAssetController::class, 'show'])->name('show');
+        Route::get('{fixedAsset}/edit', [FixedAssetController::class, 'edit'])->name('edit');
+        Route::put('{fixedAsset}', [FixedAssetController::class, 'update'])->name('update');
+        Route::get('{fixedAsset}/dispose', [FixedAssetController::class, 'showDisposalForm'])->name('dispose-form');
+        Route::post('{fixedAsset}/dispose', [FixedAssetController::class, 'storeDisposal'])->name('store-disposal');
+        Route::patch('schedules/{schedule}/post', [FixedAssetController::class, 'postSingleDepreciation'])->name('post-single-depreciation');
+        Route::patch('schedules/{schedule}/reverse', [FixedAssetController::class, 'reverseDepreciation'])->name('reverse-depreciation');
+    });
+    Route::get('admin/fixed-assets', [FixedAssetController::class, 'index'])
+        ->name('admin.fixed-assets.index')
         ->middleware('role:accountant,manager,admin');
     // Real-time event streaming from PostgreSQL → Redis → Browser
     // ============================================================

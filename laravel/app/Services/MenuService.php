@@ -180,6 +180,7 @@ class MenuService
             'fiscalyear' => $this->resolveFiscalYearRoute($action),
             'consolidation' => $this->resolveConsolidationRoute($action),
             'bankreconciliation' => $this->resolveBankReconciliationRoute($action),
+            'fixedasset' => $this->resolveFixedAssetRoute($action),
         ];
 
         $routeName = $routeMap[$controller] ?? null;
@@ -289,6 +290,21 @@ class MenuService
         ];
 
         return $actionMap[strtolower($action)] ?? 'admin.bank-reconciliation.index';
+    }
+
+    /**
+     * Resolve the Fixed Asset action to a Laravel named route.
+     * Phase 9.4 — supports asset register, depreciation, disposals.
+     */
+    private function resolveFixedAssetRoute(string $action): string
+    {
+        $actionMap = [
+            'index'        => 'admin.fixed-assets.index',
+            'depreciation' => 'admin.fixed-assets.depreciation',
+            'disposals'    => 'admin.fixed-assets.disposals',
+        ];
+
+        return $actionMap[strtolower($action)] ?? 'admin.fixed-assets.index';
     }
 
     /**

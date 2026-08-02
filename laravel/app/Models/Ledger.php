@@ -169,6 +169,11 @@ class Ledger extends Model
             'operating_expense' => ['account_type' => 'Expense',   'normal_balance' => 'debit'],
             'salary_expense'    => ['account_type' => 'Expense',   'normal_balance' => 'debit'],
             'finance_cost'      => ['account_type' => 'Expense',   'normal_balance' => 'debit'],
+            // Phase 9.4: Fixed Asset & Depreciation natures
+            'accumulated_depreciation' => ['account_type' => 'Asset',    'normal_balance' => 'credit'],
+            'depreciation_expense' => ['account_type' => 'Expense',   'normal_balance' => 'debit'],
+            'gain_on_disposal'  => ['account_type' => 'Income',    'normal_balance' => 'credit'],
+            'loss_on_disposal'  => ['account_type' => 'Expense',   'normal_balance' => 'debit'],
         ];
     }
 

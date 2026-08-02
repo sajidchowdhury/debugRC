@@ -191,6 +191,31 @@ class LedgerNatureService
             'description' => 'Elimination investment (contra to investment in subsidiary)',
             'used_by' => 'Consolidation elimination — investment',
         ],
+        // Phase 9.4: Fixed Asset & Depreciation natures
+        'accumulated_depreciation' => [
+            'account_type' => 'Asset',
+            'normal_balance' => 'credit',
+            'description' => 'Accumulated depreciation (contra-asset)',
+            'used_by' => 'Fixed asset depreciation posting',
+        ],
+        'depreciation_expense' => [
+            'account_type' => 'Expense',
+            'normal_balance' => 'debit',
+            'description' => 'Depreciation expense',
+            'used_by' => 'Fixed asset depreciation posting',
+        ],
+        'gain_on_disposal' => [
+            'account_type' => 'Income',
+            'normal_balance' => 'credit',
+            'description' => 'Gain on asset disposal',
+            'used_by' => 'Fixed asset disposal — sale above book value',
+        ],
+        'loss_on_disposal' => [
+            'account_type' => 'Expense',
+            'normal_balance' => 'debit',
+            'description' => 'Loss on asset disposal',
+            'used_by' => 'Fixed asset disposal — sale below book value or write-off',
+        ],
     ];
 
     /**
