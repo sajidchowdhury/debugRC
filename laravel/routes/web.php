@@ -1707,7 +1707,7 @@ Route::middleware('auth')->group(function () {
         // Elimination rules
         Route::get('rules', [ConsolidationController::class, 'rulesIndex'])->name('rules');
         Route::post('rules', [ConsolidationController::class, 'rulesStore'])->name('rules.store');
-        Route::post('rules/{rule}/toggle', [ConsolidationController::class, 'rulesToggle'])->name('rules.toggle');
+        Route::patch('rules/{rule}/toggle', [ConsolidationController::class, 'rulesToggle'])->name('rules.toggle');
 
         // Companies
         Route::get('companies', [ConsolidationController::class, 'companiesIndex'])->name('companies');
