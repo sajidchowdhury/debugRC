@@ -1692,10 +1692,9 @@ Route::middleware('auth')->group(function () {
         // Consolidation runs
         Route::get('create', [ConsolidationController::class, 'create'])->name('create');
         Route::post('/', [ConsolidationController::class, 'store'])->name('store');
-        Route::get('{consolidationRun}', [ConsolidationController::class, 'show'])->name('show');
-        Route::post('{consolidationRun}/post', [ConsolidationController::class, 'post'])->name('post');
-        Route::post('{consolidationRun}/reverse', [ConsolidationController::class, 'reverse'])->name('reverse');
-        Route::delete('{consolidationRun}', [ConsolidationController::class, 'destroy'])->name('destroy');
+
+        // ── Static routes MUST come before the {consolidationRun} wildcard ──
+        // Otherwise Laravel matches {consolidationRun}='consolidated-tb' etc.
 
         // Consolidated financial statements
         Route::get('consolidated-tb', [ConsolidationController::class, 'consolidatedTrialBalance'])->name('consolidated-tb');
@@ -1713,6 +1712,12 @@ Route::middleware('auth')->group(function () {
         // Companies
         Route::get('companies', [ConsolidationController::class, 'companiesIndex'])->name('companies');
         Route::post('companies', [ConsolidationController::class, 'companiesStore'])->name('companies.store');
+
+        // ── Parameterized routes (wildcard) — MUST be last ──
+        Route::get('{consolidationRun}', [ConsolidationController::class, 'show'])->name('show');
+        Route::post('{consolidationRun}/post', [ConsolidationController::class, 'post'])->name('post');
+        Route::post('{consolidationRun}/reverse', [ConsolidationController::class, 'reverse'])->name('reverse');
+        Route::delete('{consolidationRun}', [ConsolidationController::class, 'destroy'])->name('destroy');
     });
     Route::get('admin/consolidation', [ConsolidationController::class, 'index'])
         ->name('admin.consolidation.index')
