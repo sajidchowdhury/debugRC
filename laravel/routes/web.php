@@ -339,6 +339,15 @@ Route::middleware('auth')->group(function () {
     Route::get('admin/reconciliation/refresh', [ReconciliationController::class, 'refresh'])->name('admin.reconciliation.refresh');
     Route::get('admin/reconciliation/section/{sectionId}', [ReconciliationController::class, 'section'])->name('admin.reconciliation.section');
 
+    // Phase 5: Approval Workflow
+    Route::prefix('admin/approvals')->name('admin.approvals.')->middleware('role:accountant,manager,admin')->group(function () {
+        Route::get('/', [ApprovalController::class, 'queue'])->name('queue');
+        Route::post('{id}/approve', [ApprovalController::class, 'approve'])->name('approve')->middleware('role:manager,admin');
+        Route::post('{id}/reject', [ApprovalController::class, 'reject'])->name('reject')->middleware('role:manager,admin');
+        Route::get('workflows', [ApprovalController::class, 'workflows'])->name('workflows');
+        Route::post('workflows/{id}', [ApprovalController::class, 'updateWorkflow'])->name('workflows.update')->middleware('role:admin');
+    });
+
     // Financial reports (18 reports)
     Route::prefix('admin/reports')->name('admin.reports.')->group(function () {
         // Finance & Control
@@ -1444,6 +1453,13 @@ Route::middleware('auth')->group(function () {
             ->name('reverse')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         Route::post('{id}/post', [ManualJournalController::class, 'post'])
             ->name('post')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+        // Phase 5: Approval workflow
+        Route::post('{id}/submit', [ManualJournalController::class, 'submitForApproval'])
+            ->name('submit')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
+        Route::post('{id}/approve', [ManualJournalController::class, 'approve'])
+            ->name('approve')->middleware(['role:manager,admin']);
+        Route::post('{id}/reject', [ManualJournalController::class, 'reject'])
+            ->name('reject')->middleware(['role:manager,admin']);
     });
     Route::resource('admin/manual-journals', ManualJournalController::class)
         ->only(['index', 'create'])

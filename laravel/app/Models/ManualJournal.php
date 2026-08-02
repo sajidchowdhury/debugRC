@@ -10,7 +10,8 @@ use App\Models\Scopes\BranchScope;
  * Manual Journal — Phase 6 (Accounts Sub-Ledger).
  *
  * Accountants' custom journal entries with user-defined lines. Lifecycle:
- *   draft → posted → reversed
+ *   draft → submitted → approved → posted → reversed
+ *               └── rejected (must resubmit)
  *
  * Unlike the other money modules (supplier/employee/etc.), manual journals:
  *   - Have NO entity_type/entity_id on the lines (accountant picks ledgers)
@@ -30,7 +31,7 @@ use App\Models\Scopes\BranchScope;
  * @property string|null $description
  * @property string $total_debit
  * @property string $total_credit
- * @property string $status draft|posted|reversed
+ * @property string $status draft|submitted|approved|posted|reversed|rejected
  * @property int|null $journal_entry_id
  * @property int|null $created_by
  * @property int|null $reversed_by
@@ -48,7 +49,7 @@ class ManualJournal extends Model
     /**
      * Valid status values (matches DB CHECK constraint).
      */
-    public const STATUSES = ['draft', 'posted', 'reversed'];
+    public const STATUSES = ['draft', 'submitted', 'approved', 'posted', 'reversed', 'rejected'];
 
     protected static function booted(): void
     {
@@ -59,6 +60,8 @@ class ManualJournal extends Model
         'journal_code', 'journal_date', 'branch_id', 'description',
         'total_debit', 'total_credit', 'status', 'journal_entry_id',
         'created_by', 'reversed_by', 'reversed_at', 'reverse_reason',
+        'submitted_by', 'submitted_at', 'approved_by', 'approved_at',
+        'approval_comments', 'rejected_by', 'rejected_at',
     ];
 
     protected $casts = [
@@ -66,10 +69,16 @@ class ManualJournal extends Model
         'total_debit'   => 'decimal:2',
         'total_credit'  => 'decimal:2',
         'reversed_at'   => 'datetime',
+        'submitted_at'  => 'datetime',
+        'approved_at'   => 'datetime',
+        'rejected_at'   => 'datetime',
         'branch_id'     => 'integer',
         'journal_entry_id' => 'integer',
         'created_by'    => 'integer',
         'reversed_by'   => 'integer',
+        'submitted_by'  => 'integer',
+        'approved_by'   => 'integer',
+        'rejected_by'   => 'integer',
     ];
 
     // ============================================================
@@ -133,6 +142,16 @@ class ManualJournal extends Model
         return $this->status === 'draft';
     }
 
+    public function isSubmitted(): bool
+    {
+        return $this->status === 'submitted';
+    }
+
+    public function isApproved(): bool
+    {
+        return $this->status === 'approved';
+    }
+
     public function isPosted(): bool
     {
         return $this->status === 'posted';
@@ -143,12 +162,49 @@ class ManualJournal extends Model
         return $this->status === 'reversed';
     }
 
+    public function isRejected(): bool
+    {
+        return $this->status === 'rejected';
+    }
+
     public function getStatusBadge(): string
     {
         return [
-            'draft'    => '<span class="badge bg-secondary"><i class="fas fa-pen me-1"></i>Draft</span>',
-            'posted'   => '<span class="badge bg-success"><i class="fas fa-check me-1"></i>Posted</span>',
-            'reversed' => '<span class="badge bg-danger"><i class="fas fa-rotate-left me-1"></i>Reversed</span>',
+            'draft'     => '<span class="badge bg-secondary"><i class="fas fa-pen me-1"></i>Draft</span>',
+            'submitted' => '<span class="badge bg-warning text-dark"><i class="fas fa-clock me-1"></i>Pending Approval</span>',
+            'approved'  => '<span class="badge bg-info"><i class="fas fa-thumbs-up me-1"></i>Approved</span>',
+            'posted'    => '<span class="badge bg-success"><i class="fas fa-check me-1"></i>Posted</span>',
+            'reversed'  => '<span class="badge bg-danger"><i class="fas fa-rotate-left me-1"></i>Reversed</span>',
+            'rejected'  => '<span class="badge bg-danger"><i class="fas fa-times me-1"></i>Rejected</span>',
         ][$this->status] ?? '<span class="badge bg-light text-dark">' . e($this->status) . '</span>';
+    }
+
+    /**
+     * Get the latest approval request for this journal (if any).
+     */
+    public function approvalRequest()
+    {
+        return \App\Models\ApprovalRequest::where('entity_type', 'manual_journal')
+            ->where('entity_id', $this->id)
+            ->latest()
+            ->first();
+    }
+
+    /**
+     * Check if this journal can be submitted for approval.
+     */
+    public function canBeSubmitted(): bool
+    {
+        return $this->isDraft() || $this->isRejected();
+    }
+
+    /**
+     * Check if this journal can be posted.
+     * If an approval workflow applies, must be 'approved' first.
+     * If no workflow applies, 'draft' can still be posted directly.
+     */
+    public function canBePosted(): bool
+    {
+        return $this->isApproved() || $this->isDraft();
     }
 }

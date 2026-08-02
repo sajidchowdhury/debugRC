@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreManualJournalRequest;
 use App\Models\ManualJournal;
 use App\Services\Accounting\ManualJournalService;
+use App\Services\Approval\ApprovalService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -31,7 +32,8 @@ use Illuminate\Support\Facades\DB;
 class ManualJournalController extends Controller
 {
     public function __construct(
-        private ManualJournalService $service
+        private ManualJournalService $service,
+        private ApprovalService $approvalService
     ) {}
 
     /**
@@ -142,11 +144,18 @@ class ManualJournalController extends Controller
             'lines.ledger',  // Phase 1.1: draft lines
         ])->findOrFail($id);
 
+        // Approval workflow info
+        $approvalRequest = $journal->approvalRequest();
+        $approvalHistory = $this->approvalService->getApprovalHistory('manual_journal', $journal->id);
+
         return view('admin.manual-journals.show', [
             'title'   => 'Manual Journal — ' . $journal->journal_code,
             'journal' => $journal,
             'canReverse' => $journal->isPosted(),
-            'canPost'    => $journal->isDraft(),  // Phase 1.1: show Post button for drafts
+            'canPost'    => $journal->canBePosted(),
+            'canSubmit'  => $journal->canBeSubmitted(),
+            'approvalRequest' => $approvalRequest,
+            'approvalHistory' => $approvalHistory,
         ]);
     }
 
@@ -217,6 +226,96 @@ class ManualJournalController extends Controller
                     'message' => $e->getMessage(),
                 ], 400);
             }
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Submit a manual journal for approval.
+     * If no approval workflow applies, auto-approves and allows posting.
+     */
+    public function submitForApproval(Request $request, int $id)
+    {
+        $journal = ManualJournal::findOrFail($id);
+
+        if (!$journal->canBeSubmitted()) {
+            return back()->with('error', "This journal cannot be submitted for approval (current status: {$journal->status}).");
+        }
+
+        try {
+            $result = $this->approvalService->submitForApproval(
+                'manual_journal',
+                $journal->id,
+                (float) $journal->total_debit,
+                $journal->branch_id
+            );
+
+            if ($result['auto_approved']) {
+                // No workflow applies — auto-approve
+                $journal->update(['status' => 'approved', 'approved_by' => auth()->id(), 'approved_at' => now()]);
+                return redirect()->route('admin.manual-journals.show', ['id' => $journal->id])
+                    ->with('success', "Manual journal {$journal->journal_code} auto-approved (no approval workflow applies). You can now post it.");
+            }
+
+            return redirect()->route('admin.manual-journals.show', ['id' => $journal->id])
+                ->with('success', "Manual journal {$journal->journal_code} submitted for approval. Awaiting review.");
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Approve a pending approval request.
+     */
+    public function approve(Request $request, int $id)
+    {
+        $request->validate([
+            'comments' => 'nullable|string|max:500',
+        ]);
+
+        $approvalRequest = \App\Models\ApprovalRequest::where('entity_type', 'manual_journal')
+            ->where('entity_id', $id)
+            ->where('status', 'pending')
+            ->firstOrFail();
+
+        try {
+            $result = $this->approvalService->approve($approvalRequest, $request->input('comments'));
+
+            if (!$result['success']) {
+                return back()->with('error', $result['message']);
+            }
+
+            return redirect()->route('admin.manual-journals.show', ['id' => $id])
+                ->with('success', $result['message']);
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Reject a pending approval request.
+     */
+    public function reject(Request $request, int $id)
+    {
+        $request->validate([
+            'reason' => 'required|string|min:3|max:500',
+        ]);
+
+        $approvalRequest = \App\Models\ApprovalRequest::where('entity_type', 'manual_journal')
+            ->where('entity_id', $id)
+            ->where('status', 'pending')
+            ->firstOrFail();
+
+        try {
+            $result = $this->approvalService->reject($approvalRequest, $request->input('reason'));
+
+            if (!$result['success']) {
+                return back()->with('error', $result['message']);
+            }
+
+            return redirect()->route('admin.manual-journals.show', ['id' => $id])
+                ->with('success', $result['message']);
+        } catch (\Throwable $e) {
             return back()->with('error', $e->getMessage());
         }
     }
