@@ -87,10 +87,19 @@ return new class extends Migration
             $table->timestamps();
             $table->softDeletes();
 
-            $table->unique(['dimension_id', 'code', 'deleted_at'], 'uq_dv_dim_code');
             $table->index(['dimension_id', 'is_active'], 'idx_dv_dim_active');
             $table->index('branch_id');
         });
+
+        // Partial unique index: prevents duplicate active codes within a dimension.
+        // Standard UNIQUE(dimension_id, code, deleted_at) fails on PostgreSQL because
+        // NULL != NULL, so two rows with the same (dimension_id, code) and deleted_at=NULL
+        // would both be allowed. A partial index WHERE deleted_at IS NULL solves this.
+        DB::statement("
+            CREATE UNIQUE INDEX uq_dv_dim_code_active
+            ON dimension_values (dimension_id, code)
+            WHERE deleted_at IS NULL
+        ");
 
         // ── 5. Add dimension_value_id to journal_lines ──────────────────
         Schema::table('journal_lines', function (Blueprint $table) {
@@ -240,7 +249,10 @@ return new class extends Migration
 
     public function down(): void
     {
-        // Drop view first
+        // Drop partial unique index first
+        DB::statement("DROP INDEX IF EXISTS uq_dv_dim_code_active");
+
+        // Drop view
         DB::statement("DROP VIEW IF EXISTS budget_vs_actual");
 
         // Drop RLS
