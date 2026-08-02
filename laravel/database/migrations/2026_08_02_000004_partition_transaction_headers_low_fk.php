@@ -394,6 +394,9 @@ return new class extends Migration
             ORDER BY transfer_date, id
         SQL);
 
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
+
         $this->fixSequence('money_transfers');
 
         // Recreate indexes
@@ -520,6 +523,9 @@ return new class extends Migration
             ORDER BY transaction_date, id
         SQL);
 
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
+
         $this->fixSequence('employee_transactions');
 
         DB::statement('CREATE INDEX idx_et_employee ON employee_transactions (employee_id)');
@@ -640,6 +646,9 @@ return new class extends Migration
             ORDER BY income_date, id
         SQL);
 
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
+
         $this->fixSequence('other_incomes');
 
         DB::statement('CREATE INDEX idx_oi_journal ON other_incomes (journal_entry_id)');
@@ -756,6 +765,9 @@ return new class extends Migration
             FROM other_expenses_unpartitioned
             ORDER BY expense_date, id
         SQL);
+
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
 
         $this->fixSequence('other_expenses');
 
@@ -899,6 +911,9 @@ return new class extends Migration
             FROM sales_returns_unpartitioned
             ORDER BY return_date, id
         SQL);
+
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
 
         $this->fixSequence('sales_returns');
 
@@ -1082,6 +1097,9 @@ return new class extends Migration
             ORDER BY receive_date, id
         SQL);
 
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
+
         $this->fixSequence('purchase_receives');
 
         // Recreate indexes
@@ -1220,6 +1238,9 @@ return new class extends Migration
             FROM purchase_returns_unpartitioned
             ORDER BY return_date, id
         SQL);
+
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
 
         $this->fixSequence('purchase_returns');
 
@@ -1405,6 +1426,9 @@ return new class extends Migration
             ORDER BY damage_date, id
         SQL);
 
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
+
         $this->fixSequence('damage_invoices');
 
         // Recreate indexes
@@ -1581,6 +1605,9 @@ return new class extends Migration
             FROM manual_journals_unpartitioned
             ORDER BY journal_date, id
         SQL);
+
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
 
         $this->fixSequence('manual_journals');
 

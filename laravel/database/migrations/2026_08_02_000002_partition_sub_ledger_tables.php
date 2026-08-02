@@ -581,6 +581,12 @@ return new class extends Migration
             ORDER BY transaction_date, id
         SQL);
 
+        // ── Flush deferred FK triggers before creating indexes ──
+        // DEFERRABLE INITIALLY DEFERRED constraints leave pending trigger events
+        // after the INSERT, which blocks CREATE INDEX with:
+        //   "cannot CREATE INDEX because it has pending trigger events"
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
+
         // ── Fix sequence ──
         $this->fixSequence('customer_ledger');
 
@@ -760,6 +766,9 @@ return new class extends Migration
             ORDER BY transaction_date, id
         SQL);
 
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
+
         // ── Fix sequence ──
         $this->fixSequence('supplier_ledger');
 
@@ -928,6 +937,9 @@ return new class extends Migration
             ORDER BY transaction_date, id
         SQL);
 
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
+
         // ── Fix sequence ──
         $this->fixSequence('employee_ledger');
 
@@ -1076,6 +1088,9 @@ return new class extends Migration
             FROM cash_ledger_unpartitioned
             ORDER BY transaction_date, id
         SQL);
+
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
 
         // ── Fix sequence ──
         $this->fixSequence('cash_ledger');
@@ -1227,6 +1242,9 @@ return new class extends Migration
             FROM branch_ledger_unpartitioned
             ORDER BY transaction_date, id
         SQL);
+
+        // ── Flush deferred FK triggers before creating indexes ──
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
 
         // ── Fix sequence ──
         $this->fixSequence('branch_ledger');
