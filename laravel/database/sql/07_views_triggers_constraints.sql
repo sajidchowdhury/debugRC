@@ -370,6 +370,10 @@ CREATE INDEX IF NOT EXISTS idx_st_created_at_brin
     WITH (pages_per_range = 64);
 
 -- 4. AUDIT & LOG TABLES — pure append-only, never updated
+-- NOTE: user_audit_log and journal_posting_logs BRIN indexes are now created
+-- in the base SQL files (06_payment_and_misc.sql, 02_accounting.sql) as part
+-- of Phase 10.1 partitioning. The IF NOT EXISTS guards here are kept for
+-- backward compatibility with databases that have not yet been partitioned.
 CREATE INDEX IF NOT EXISTS idx_ual_created_at_brin
     ON user_audit_log USING BRIN (created_at)
     WITH (pages_per_range = 64);
