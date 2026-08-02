@@ -129,6 +129,7 @@ class JournalPostingService
                 'entity_type' => $line['entity_type'] ?? null,
                 'entity_id' => $line['entity_id'] ?? null,
                 'memo' => $line['memo'] ?? null,
+                'dimension_value_id' => $line['dimension_value_id'] ?? null,
             ];
         }
         DB::table('journal_lines')->insert($lineRows);

@@ -54,6 +54,8 @@ use App\Http\Controllers\Admin\ArchiveController;
 use App\Http\Controllers\Admin\GlobalAuditController;
 use App\Http\Controllers\Admin\SystemHealthController;
 use App\Http\Controllers\Admin\ShadowModeController;
+use App\Http\Controllers\Admin\BudgetController;
+use App\Http\Controllers\Admin\DimensionController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -1621,6 +1623,44 @@ Route::middleware('auth')->group(function () {
     Route::get('admin/system-health', [SystemHealthController::class, 'index'])
         ->name('admin.system-health.index')
         ->middleware('role:admin');
+
+    // ============================================================
+    // Phase 6: Budgeting & Cost Centers
+    // RBAC — accountant/manager/admin for budget management
+    // ============================================================
+
+    // Budgets
+    Route::prefix('admin/budgets')->name('admin.budgets.')->middleware('role:accountant,manager,admin')->group(function () {
+        Route::get('variance', [BudgetController::class, 'varianceReport'])->name('variance');
+        Route::get('export-csv', [BudgetController::class, 'exportCsv'])->name('export-csv');
+        Route::get('create', [BudgetController::class, 'create'])->name('create');
+        Route::post('/', [BudgetController::class, 'store'])->name('store');
+        Route::get('{budget}', [BudgetController::class, 'show'])->name('show');
+        Route::get('{budget}/edit', [BudgetController::class, 'edit'])->name('edit');
+        Route::put('{budget}', [BudgetController::class, 'update'])->name('update');
+        Route::patch('{budget}/activate', [BudgetController::class, 'activate'])->name('activate');
+        Route::patch('{budget}/close', [BudgetController::class, 'close'])->name('close');
+        Route::patch('{budget}/cancel', [BudgetController::class, 'cancel'])->name('cancel');
+    });
+    Route::get('admin/budgets', [BudgetController::class, 'index'])
+        ->name('admin.budgets.index')
+        ->middleware('role:accountant,manager,admin');
+
+    // Dimensions & Cost Centers
+    Route::prefix('admin/dimensions')->name('admin.dimensions.')->middleware('role:accountant,manager,admin')->group(function () {
+        Route::get('segment-pnl', [DimensionController::class, 'segmentPnl'])->name('segment-pnl');
+        Route::get('segment-bs', [DimensionController::class, 'segmentBs'])->name('segment-bs');
+        Route::get('create', [DimensionController::class, 'create'])->name('create');
+        Route::post('/', [DimensionController::class, 'store'])->name('store');
+        Route::get('{dimension}', [DimensionController::class, 'show'])->name('show');
+        Route::get('{dimension}/edit', [DimensionController::class, 'edit'])->name('edit');
+        Route::put('{dimension}', [DimensionController::class, 'update'])->name('update');
+        Route::post('{dimension}/values', [DimensionController::class, 'storeValue'])->name('store-value');
+        Route::patch('{dimension}/values/{value}/toggle', [DimensionController::class, 'toggleValue'])->name('toggle-value');
+    });
+    Route::get('admin/dimensions', [DimensionController::class, 'index'])
+        ->name('admin.dimensions.index')
+        ->middleware('role:accountant,manager,admin');
 
     // ============================================================
     // Phase 1E (Task 31): SSE (Server-Sent Events) for LISTEN/NOTIFY

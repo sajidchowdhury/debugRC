@@ -175,6 +175,8 @@ class MenuService
             'moneytransfer' => 'admin.money-transfers.index',
             'reconciliation' => 'admin.reconciliation.index',
             'report' => 'admin.reports.index',
+            'budget' => 'admin.budgets.index',
+            'dimension' => 'admin.dimensions.index',
         ];
 
         $routeName = $routeMap[$controller] ?? null;
