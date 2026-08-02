@@ -214,7 +214,7 @@ class FixedAssetController extends Controller
             $projectedDepreciation = $this->depreciationService->getProjectedDepreciation($fixedAsset, 12);
         }
 
-        return view('admin.fixed-assets.show', [
+        return view('admin.fixed_assets.show', [
             'title' => "Asset {$fixedAsset->asset_code} — Remote Center ERP",
             'asset' => $fixedAsset,
             'projectedDepreciation' => $projectedDepreciation,
@@ -254,7 +254,7 @@ class FixedAssetController extends Controller
             ->orderBy('ledger_code')
             ->get();
 
-        return view('admin.fixed-assets.edit', [
+        return view('admin.fixed_assets.edit', [
             'title' => "Edit Asset {$fixedAsset->asset_code} — Remote Center ERP",
             'asset' => $fixedAsset,
             'branches' => $branches,
@@ -343,7 +343,7 @@ class FixedAssetController extends Controller
         $postedCount = AssetDepreciationSchedule::where('status', 'posted')->count();
         $pendingAmount = AssetDepreciationSchedule::where('status', 'pending')->sum('depreciation_amount');
 
-        return view('admin.fixed-assets.depreciation', [
+        return view('admin.fixed_assets.depreciation', [
             'title' => 'Asset Depreciation — Remote Center ERP',
             'schedules' => $schedules,
             'branches' => $branches,
@@ -474,7 +474,7 @@ class FixedAssetController extends Controller
         $totalGains = AssetDisposal::where('gain_loss_type', 'gain')->sum('gain_loss_amount');
         $totalLosses = AssetDisposal::where('gain_loss_type', 'loss')->sum('gain_loss_amount');
 
-        return view('admin.fixed-assets.disposals', [
+        return view('admin.fixed_assets.disposals', [
             'title' => 'Asset Disposals — Remote Center ERP',
             'disposals' => $disposals,
             'totalProceeds' => $totalProceeds,
@@ -512,7 +512,7 @@ class FixedAssetController extends Controller
             ->orderBy('ledger_code')
             ->get();
 
-        return view('admin.fixed-assets.dispose', [
+        return view('admin.fixed_assets.dispose', [
             'title' => "Dispose Asset {$fixedAsset->asset_code} — Remote Center ERP",
             'asset' => $fixedAsset,
             'cashBankLedgers' => $cashBankLedgers,
@@ -558,7 +558,7 @@ class FixedAssetController extends Controller
         $disposalModel = AssetDisposal::findOrFail($disposal);
         $disposalModel->load(['fixedAsset', 'fixedAsset.branch', 'proceedsLedger', 'gainLossLedger', 'journalEntry', 'creator']);
 
-        return view('admin.fixed-assets.disposal-show', [
+        return view('admin.fixed_assets.disposal-show', [
             'title' => "Disposal {$disposalModel->disposal_code} — Remote Center ERP",
             'disposal' => $disposalModel,
         ]);
