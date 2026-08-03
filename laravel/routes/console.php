@@ -40,3 +40,15 @@ Schedule::command('stock:reconcile-drift')
     ->runInBackground()
     ->name('stock-reconcile-drift')
     ->description('Detect warehouse_stock ↔ stock_transactions drift and alert admins');
+
+// Phase 10.1 — Phase 7.3: Export archived partitions to Parquet quarterly.
+// Runs at 04:30 on the first day of Jan/Apr/Jul/Oct (offset 30 min after the
+// 04:00 pg_cron consolidation job so exports operate on already-consolidated
+// partitions). NB: Laravel's ->quarterly() runs at 00:00 — we use an explicit
+// cron expression to control the 04:30 timing.
+Schedule::command('partition:export-parquet')
+    ->cron('30 4 1 1,4,7,10 *')
+    ->withoutOverlapping()
+    ->runInBackground()
+    ->name('partition-export-parquet')
+    ->description('Export archived partitions to Parquet cold storage (quarterly)');
