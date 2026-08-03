@@ -121,7 +121,12 @@ AI_CONTEXT/
 - **Phase 4 — Coding Standards & Conventions:** ✅ Complete (`coding/` — coding-standards,
   service-layer-conventions, model-conventions, request-validation, testing-standards,
   config-driven-rules, error-handling).
-- **Phases 5–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 5 — Security, Auth & RBAC:** ✅ Complete (`security/` — auth-and-sessions,
+  rbac-roles-permissions, credential-versioning, password-policy, audit-trails,
+  system-policy-compliance, branch-context-security, api-security).
+  ⚠️ Safety-critical — pending review by the production-credential owner (see
+  `IMPLEMENTATION_PLAN.md` §5 Review gates).
+- **Phases 6–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
