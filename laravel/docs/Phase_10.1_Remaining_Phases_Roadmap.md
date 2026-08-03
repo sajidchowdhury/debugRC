@@ -78,17 +78,18 @@ These 9 issues must be addressed **before or during** the remaining phases. Phas
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Phase 5 — Multi-FK Transaction Headers   🚧 IN PROGRESS   3-5 days      │
+│ Phase 5 — Multi-FK Transaction Headers   ✅ DONE (code-complete)        │
 │   Partition 6 tables: customer_payments, supplier_payments,            │
 │   sales_challans, warehouse_transfers, stock_adjustments,              │
 │   stock_take_sessions                                                  │
 │   Convert 11 child-table FKs to trigger-based (revised from 8 after    │
 │   schema audit — see §4.1.1)                                           │
+│   ⚠️ Retention deferred to Phase 7.1; EXPLAIN ANALYZE pending staging  │
 └─────────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Phase 6 — Journal Entries + Journal Lines     Duration: 5-7 days        │
+│ Phase 6 — Journal Entries + Journal Lines  🚧 IN PROGRESS  5-7 days     │
 │   6.1  Staging replica                                                  │
 │   6.2  Add entry_date column to journal_lines + backfill               │
 │   6.3  Partition journal_entries by entry_date                         │
@@ -164,13 +165,13 @@ Each task is independently reversible:
 
 ---
 
-## 4. Phase 5 — Multi-FK Transaction Header Partitioning  🚧 IN PROGRESS
+## 4. Phase 5 — Multi-FK Transaction Header Partitioning  ✅ DONE (code-complete)
 
 **Goal**: Partition the 6 transaction header tables that have 1–2 FK children each.
 **Duration**: 3–5 days
 **Risk**: MEDIUM
 **Prerequisite**: Phase 0 complete (especially 0.5 — pg_partman maintenance cron must be running).
-**Status**: 🚧 **IN PROGRESS** — schema audit complete (see §4.1.1), migration file `2026_08_20_000001` being authored.
+**Status**: ✅ **DONE (code-complete)** — migration `2026_08_20_000001` authored and committed (commit `eda3104`). Two DoD items remain operational: (a) retention for the 6 new parents is deferred to Phase 7.1 by design; (b) `EXPLAIN ANALYZE` partition-pruning validation requires a staging database and is tracked as a deploy-time gate.
 
 ### 4.1 Tables and children
 
@@ -229,12 +230,13 @@ Per-table: `DETACH PARTITION` all children, `INSERT INTO <table>_rollback SELECT
 
 ---
 
-## 5. Phase 6 — Journal Entries + Journal Lines (Critical)
+## 5. Phase 6 — Journal Entries + Journal Lines (Critical)  🚧 IN PROGRESS
 
 **Goal**: Partition `journal_entries` by `entry_date` and `journal_lines` by denormalized `entry_date`. Convert the remaining 13 child-table FKs to trigger-based. Enable partition-wise joins.
 **Duration**: 5–7 days
 **Risk**: **CRITICAL** — `journal_entries` has 27+ child tables; getting this wrong breaks the entire accounting system.
 **Prerequisite**: Phase 0 (especially B4, B5, B8) + Phase 5 complete. Extensive staging testing mandatory.
+**Status**: 🚧 **IN PROGRESS** — writing the 4 Phase 6 migrations (`2026_08_22_000001` … `000004`) and updating `JournalPostingService::createJournalEntry()` to set `entry_date` on each line. Pre-flight staging validation (§5.1) and production cutover (§5.9) remain operational gates.
 
 ### 5.1 Pre-flight (Day 1)
 
@@ -742,16 +744,16 @@ The original plan's risk register (§16) is still valid. Add these new risks dis
 - [ ] `EXPLAIN ANALYZE` on a date-range query shows partition pruning. — **PENDING staging validation** (requires running the migration against a staging DB).
 
 ### Phase 6 — Done when:
-- [ ] `journal_lines` has a non-null `entry_date` column, backfilled, with sync trigger.
-- [ ] `journal_entries` is partitioned by `entry_date`, monthly, with default + pre2026 + 2026 + 2027-01..06 partitions.
-- [ ] `journal_lines` is partitioned by `entry_date` with IDENTICAL boundaries to `journal_entries`.
-- [ ] BRIN indexes on `entry_date` for both tables (including partial BRIN for `is_reversed = false`).
-- [ ] All 15 Batch B–G child FKs to `journal_entries` are trigger-based.
-- [ ] `JournalPostingService::createJournalEntry()` sets `entry_date` on each line.
-- [ ] All other writers of `journal_lines` audited and updated.
-- [ ] `EXPLAIN ANALYZE` on the Trial Balance query shows "Partitioned Join" and runs < 500ms.
-- [ ] Full integration test suite passes.
-- [ ] 24h production monitoring shows no errors.
+- [x] `journal_lines` has a non-null `entry_date` column, backfilled, with sync trigger. — migration `2026_08_22_000001` adds the column, backfills in 100k-row chunks, drops the DEFAULT, creates `fn_jl_sync_entry_date()` + `trg_jl_sync_entry_date`.
+- [x] `journal_entries` is partitioned by `entry_date`, monthly, with default + pre2026 + 2026 + 2027-01..06 partitions. — migration `2026_08_22_000002` creates `pre2026` + 12 monthly 2026 + 6 monthly 2027-01..06 + `_default` partitions with `PK(id, entry_date)` + `UNIQUE(entry_no, entry_date)`.
+- [x] `journal_lines` is partitioned by `entry_date` with IDENTICAL boundaries to `journal_entries`. — migration `2026_08_22_000003` creates the same partition boundaries (required for partition-wise joins).
+- [x] BRIN indexes on `entry_date` for both tables (including partial BRIN for `is_reversed = false`). — migration `2026_08_22_000004` adds `idx_je_entry_date_brin`, `idx_je_created_at_brin`, `idx_je_active_entry_date_brin` (partial), `idx_jl_entry_date_brin` (all `pages_per_range=32`).
+- [x] All 15 Batch B–G child FKs to `journal_entries` are trigger-based. — **Schema audit found 21 FK columns across 15 tables** (5 more than the original plan's 16). See migration `2026_08_22_000004` FK_MAP docblock for the 8 deviations documented.
+- [x] `JournalPostingService::createJournalEntry()` sets `entry_date` on each line. — added `'entry_date' => $entryDate` to the `$lineRows` array (line 126).
+- [x] All other writers of `journal_lines` audited and updated. — ManualJournalService, BankReconciliationService, ConsolidationService, DepreciationService all call `JournalPostingService::createJournalEntry()` and inherit the fix. The `trg_jl_sync_entry_date` trigger catches any direct INSERTs that bypass the service.
+- [ ] `EXPLAIN ANALYZE` on the Trial Balance query shows "Partitioned Join" and runs < 500ms. — **PENDING staging validation** (requires running the 4 migrations against a staging DB with `enable_partitionwise_join=on`).
+- [ ] Full integration test suite passes. — **PENDING staging validation**.
+- [ ] 24h production monitoring shows no errors. — **PENDING production cutover** (roadmap §5.9).
 
 ### Phase 7 — Done when:
 - [ ] Every partitioned table has a retention row in `partman.part_config` (84 or 36 months).
@@ -784,11 +786,11 @@ The original plan's risk register (§16) is still valid. Add these new risks dis
 | `database/migrations/2026_08_15_000005_schedule_partman_maintenance.php` | 0.5, 0.6 | partman cron + archive schema |
 | `database/migrations/2026_08_15_000007_set_partitioning_gucs.php` | 0.7 | enable_partitionwise_join + max_locks |
 | `database/migrations/2026_08_20_000001_partition_transaction_headers_multi_fk.php` | 5 | ✅ CREATED — 6 tables partitioned + 11 child FK conversions to trigger-based (revised from 8 after schema audit; see §4.1.1). 1252 lines. |
-| `database/migrations/2026_08_22_000001_add_entry_date_to_journal_lines.php` | 6.2 | Denormalize entry_date |
-| `database/migrations/2026_08_22_000002_partition_journal_entries.php` | 6.3 | Partition journal_entries |
-| `database/migrations/2026_08_22_000003_partition_journal_lines.php` | 6.4 | Partition journal_lines |
-| `database/migrations/2026_08_22_000004_convert_journal_entry_fks_batch_b_to_g.php` | 6.6 | 15 child FKs → trigger-based |
-| `app/Services/Accounting/JournalPostingService.php` | 6.7 | Set entry_date on lines (EDIT) |
+| `database/migrations/2026_08_22_000001_add_entry_date_to_journal_lines.php` | 6.2 | ✅ CREATED — adds `entry_date` column + backfill + sync trigger (171 lines) |
+| `database/migrations/2026_08_22_000002_partition_journal_entries.php` | 6.3 | ✅ CREATED — partitions `journal_entries` by `entry_date` (663 lines) |
+| `database/migrations/2026_08_22_000003_partition_journal_lines.php` | 6.4 | ✅ CREATED — partitions `journal_lines` by `entry_date` with identical boundaries (762 lines) |
+| `database/migrations/2026_08_22_000004_convert_journal_entry_fks_batch_b_to_g.php` | 6.6 | ✅ CREATED — BRIN indexes + 21 FK conversions across 15 tables (487 lines) |
+| `app/Services/Accounting/JournalPostingService.php` | 6.7 | ✅ EDITED — sets `entry_date` on each line in `createJournalEntry()` |
 | `database/migrations/2026_08_25_000001_complete_retention_configs.php` | 7.1 | Retention for all remaining tables |
 | `database/migrations/2026_08_25_000002_create_archival_procedures.php` | 7.2 | archive_partition() + restore_partition() |
 | `app/Console/Commands/ExportArchivedPartitionsToParquet.php` | 7.3 | Parquet export command |

@@ -123,6 +123,7 @@ class JournalPostingService
         foreach ($lines as $line) {
             $lineRows[] = [
                 'journal_entry_id' => $journalEntryId,
+                'entry_date' => $entryDate,   // Phase 6.2: denormalized for partition-wise joins
                 'ledger_id' => (int) $line['ledger_id'],
                 'debit' => (float) ($line['debit'] ?? 0),
                 'credit' => (float) ($line['credit'] ?? 0),
