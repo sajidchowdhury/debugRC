@@ -303,7 +303,45 @@ AI_CONTEXT/
   to GL; intercompany posting pairs affect branch-level TB + `branch_ledger` running balance;
   demand fulfillment moves stock + posts GL; repricing posts GL adjustments). See
   `IMPLEMENTATION_PLAN.md` §5 Review gates.
-- **Phases 14–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 14 — Approval Workflow & Compliance:** ✅ Complete
+  (`workflows/approval-workflow.md` new + `security/system-policy-compliance.md` re-audited +
+  expanded from 418→702 lines). **Two parallel, non-intersecting approval patterns** documented.
+  **Pattern A — generic configurable engine** (migration `2026_08_10_000001`): 4 tables
+  (`approval_workflows` + `approval_steps` + `approval_requests` + `approval_actions`) + 4 models +
+  `ApprovalService` 407L crown jewel (9 methods: `getRequiredWorkflow`, `submitForApproval`,
+  `approve` with multi-level `current_level` advancement, `reject`, `cancel` DEAD CODE G14,
+  `getPendingQueueForUser` with SoD `requested_by != user->id` exclusion, `getApprovalHistory`,
+  private `updateEntityStatus` ONLY implements `manual_journal` case, private `notifyApprovers` +
+  `notifyRequester` DEAD CODE G4) + `ApprovalController` 124L (5 actions, NO FormRequests G3) +
+  2 blade views + seeded default "Manual Journal Approval" workflow with 2 levels (manager L1 +
+  admin L2). **Pattern B — entity-specific maker-checker columns** (3 older migrations): each of
+  `stock_adjustments` / `stock_take_sessions` / `damage_invoices` has its OWN `submitted_by/at` +
+  `approved_by/at` + `approval_comments` columns + expanded `status` CHECK + own service
+  `submit()/approve()/reject()` methods + own config layer (`config/stock_adjustment.php` 8 knobs
+  file-backed, `stock_take_policies` DB table 4 keys runtime-configurable, `config/damage.php`
+  hybrid). SoD enforced at 10 sites (services throw + `DamagePolicy` returns false/403);
+  auto-approve shortcuts bypass SoD by design below thresholds (stock adj <1000 Tk, damage <5000 Tk
+  by admin/manager, manual journal when no workflow matches). 5 Mermaid state machines
+  (`ApprovalRequest` 4-state, `ManualJournal` 6-state, `StockAdjustment` 6-state,
+  `StockTakeSession` 7-state, `Damage` 6-state) + 2 sequence diagrams. **system-policy re-audit:**
+  26-item verification table (13 CONFIRMED, 4 CHANGED/PARTIAL, 7 NEW); fixed 2 incorrect Phase 5
+  claims (§4 "all users see banner" → only admin page G14; §9 "UserAuditLogger invoked" → service
+  writes directly via `DB::table` G16); added `§7.10` `validatePeriod` consumer verbatim +
+  `§7.11` compliance matrix (`system_policies` fails 2/2 applicable checks: audit trigger G10 +
+  RLS G9). **16 approval gaps** (4 CRITICAL: G1 generic engine used by 1 entity only, G2
+  `ManualJournalService::postJournal` throws on `approved` status dead-ending the workflow, G4
+  notification dispatch dead code — 4 event names not in `NotificationRule::EVENTS`, G7 DDL stale;
+  7 HIGH: G3 no FormRequests, G5 no branch.isolation, G6 entity_id not FK, G8 branch_id string
+  not integer, G11 no menu entry, G12 no fn_financial_audit_trigger, G15 no RLS; 4 MEDIUM + 1 LOW).
+  **16 system-policy gaps** (G1-G8 existing reconfirmed + G9 NO RLS HIGH, G10 no audit trigger
+  MEDIUM, G11 DDL stale MEDIUM, G12 PG trigger `rcerp_notify_system_policy` dead in practice
+  MEDIUM — fires on `mode` change but service never UPDATEs `mode`, G13 INVESTIGATION mode has NO
+  business-logic consumer HIGH — effectively a no-op, G14 no global banner LOW, G15
+  `period_close_override` action not in audit-trails.md LOW, G16 writeAuditLog bypasses
+  UserAuditLogger LOW). ⚠️ **Business-critical — pending compliance review** (approval gates
+  themselves don't post GL but gate entities that do; INVESTIGATION mode is documented as a freeze
+  switch but currently does nothing). See `IMPLEMENTATION_PLAN.md` §5 Review gates.
+- **Phases 15–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
