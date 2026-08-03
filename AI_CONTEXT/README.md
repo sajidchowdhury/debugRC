@@ -155,7 +155,21 @@ AI_CONTEXT/
   `AuditableMasterData` trait dead for StockAdjustment/StockTake services.
   ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** before Canonical status (see
   `IMPLEMENTATION_PLAN.md` §5 Review gates).
-- **Phases 9–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 9 — Purchasing (Procure-to-Pay):** ✅ Complete (`purchasing/` — purchase-order,
+  purchase-receive, purchase-return, purchase-audit). PO is a draft document (NO stock/GL);
+  GRN is the economic event (atomic stock IN + Dr `inventory` / Cr `ap` + `supplier_ledger`
+  credit + PO `received_qty` auto-flip); return reverses at ORIGINAL receive rate (not current
+  `avg_cost`); Phase 5 `Good`/`Damage` condition (Damage skips stock movement, still posts GL);
+  BUG-5 active-returns guard blocks GRN cancel; 3-layer audit infrastructure (hash-chain
+  `financial_audit_log` PARTIAL coverage — only `supplier_payments`; `user_audit_log` FULL via
+  `UserAuditLogger` but `AuditableMasterData` trait BYPASSED by `DB::table()` writes; 12-section
+  `PurchaseAuditService` health-check on-demand only). Documents 18 gaps including 4 CRITICAL:
+  `purchase_receives.paid_amount` column missing (breaks `SupplierTransactionService::allocateToGRN`),
+  no `Purchase*Policy` classes, no `fn_financial_audit_trigger` on purchase tables,
+  `AuditableMasterData` trait bypassed by raw `DB::table()` writes.
+  ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** before Canonical status (see
+  `IMPLEMENTATION_PLAN.md` §5 Review gates).
+- **Phases 10–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
