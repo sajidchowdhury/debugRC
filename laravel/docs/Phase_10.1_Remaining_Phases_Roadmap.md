@@ -35,7 +35,7 @@ A full audit of the codebase against `Phase_10.1_Partitioning_and_Archival_Plan.
 | 2 | Sub-ledger partitioning | 5 | ✅ Implemented | 100% |
 | 3 | Time-series summary | 1 | ✅ Implemented | 100% |
 | 4 | Low-FK transaction headers | 9 | ✅ Implemented (missing retention) | ~90% |
-| 5 | Multi-FK transaction headers | 6 | ❌ **Not started** | 0% |
+| 5 | Multi-FK transaction headers | 6 | 🚧 **In progress** (schema audit complete, migration being authored) | ~10% |
 | 6 | journal_entries + journal_lines (CRITICAL) | 2 + 27 FK conversions | ❌ **Not started** | 0% |
 | 7 | Archival, retention & consolidation | — | ⚠️ Partial (only pg_partman retention rows for 12 tables) | ~10% |
 | 8 | Monitoring & validation framework | — | ❌ **Not started** | 0% |
@@ -78,11 +78,12 @@ These 9 issues must be addressed **before or during** the remaining phases. Phas
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Phase 5 — Multi-FK Transaction Headers        Duration: 3-5 days        │
+│ Phase 5 — Multi-FK Transaction Headers   🚧 IN PROGRESS   3-5 days      │
 │   Partition 6 tables: customer_payments, supplier_payments,            │
 │   sales_challans, warehouse_transfers, stock_adjustments,              │
 │   stock_take_sessions                                                  │
-│   Convert 8 child-table FKs to trigger-based                           │
+│   Convert 11 child-table FKs to trigger-based (revised from 8 after    │
+│   schema audit — see §4.1.1)                                           │
 └─────────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
@@ -163,23 +164,43 @@ Each task is independently reversible:
 
 ---
 
-## 4. Phase 5 — Multi-FK Transaction Header Partitioning
+## 4. Phase 5 — Multi-FK Transaction Header Partitioning  🚧 IN PROGRESS
 
 **Goal**: Partition the 6 transaction header tables that have 1–2 FK children each.
 **Duration**: 3–5 days
 **Risk**: MEDIUM
 **Prerequisite**: Phase 0 complete (especially 0.5 — pg_partman maintenance cron must be running).
+**Status**: 🚧 **IN PROGRESS** — schema audit complete (see §4.1.1), migration file `2026_08_20_000001` being authored.
 
 ### 4.1 Tables and children
 
 | # | Table | Partition key | Child table(s) | Child FK column | Cascade behaviour |
 |---|---|---|---|---|---|
-| 5.1 | `customer_payments` | `payment_date` | `customer_payment_settlements` <br> `invoice_payment_allocations` | `payment_id` | `ON DELETE CASCADE` (settlements) <br> Restrict (allocations — already DEFERRABLE) |
+| 5.1 | `customer_payments` | `payment_date` | `invoice_payment_allocations` <br> `branch_demand_customer_payment_settlements` | `payment_id` | `ON DELETE CASCADE` (both) |
 | 5.2 | `supplier_payments` | `payment_date` | `supplier_payment_settlements` | `payment_id` | `ON DELETE CASCADE` |
 | 5.3 | `sales_challans` | `challan_date` | `sales_challan_items` | `sales_challan_id` | `ON DELETE CASCADE` |
-| 5.4 | `warehouse_transfers` | `transfer_date` | `warehouse_transfer_items` | `warehouse_transfer_id` | `ON DELETE CASCADE` |
-| 5.5 | `stock_adjustments` | `adjustment_date` | `stock_adjustment_items` | `stock_adjustment_id` | `ON DELETE CASCADE` (note: `stock_adjustment_items` already has a trigger-FK to `stock_transactions` — preserve it) |
-| 5.6 | `stock_take_sessions` | `session_date` | `stock_take_warehouses` <br> `stock_take_items` | `stock_take_session_id` | `ON DELETE CASCADE` |
+| 5.4 | `warehouse_transfers` | `transfer_date` | `warehouse_transfer_items` <br> `branch_demands` | `warehouse_transfer_id` | `ON DELETE CASCADE` (items) <br> `ON DELETE SET NULL` (branch_demands) |
+| 5.5 | `stock_adjustments` | `adjustment_date` | `stock_adjustment_items` <br> `stock_adjustment_audit_log` | `stock_adjustment_id` | `ON DELETE CASCADE` (both) |
+| 5.6 | `stock_take_sessions` | `session_date` | `stock_take_warehouses` <br> `stock_take_items` <br> `stock_take_audit_log` | `stock_take_session_id` | `ON DELETE CASCADE` (all 3) |
+
+### 4.1.1 Schema audit findings (2026-08-20)
+
+A detailed schema audit was performed before writing the migration. Key deviations from the original §4.1 table:
+
+1. **`customer_payment_settlements` was DROPPED** by migration `2025_01_09_000001_drop_customer_payment_settlements_table.php`. The canonical payment↔invoice link is `invoice_payment_allocations`. The original §4.1 listed `customer_payment_settlements` as a child — **it does not exist**. Removed from the conversion list.
+2. **4 additional inbound FKs were discovered** that the original §4.1 did not enumerate. They MUST also be converted to trigger-based, or partitioning will fail. These are:
+   - `branch_demand_customer_payment_settlements.payment_id → customer_payments(id) ON DELETE CASCADE`
+   - `stock_take_audit_log.stock_take_session_id → stock_take_sessions(id) ON DELETE CASCADE` (audit log is itself `PARTITION BY RANGE (created_at)`)
+   - `stock_adjustment_audit_log.stock_adjustment_id → stock_adjustments(id) ON DELETE CASCADE` (audit log is itself `PARTITION BY RANGE (created_at)`)
+   - `branch_demands.warehouse_transfer_id → warehouse_transfers(id) ON DELETE SET NULL`
+3. **Net FK conversions**: 11 (not 8 as originally stated). Breakdown: `invoice_payment_allocations`, `branch_demand_customer_payment_settlements`, `supplier_payment_settlements`, `sales_challan_items`, `warehouse_transfer_items`, `branch_demands`, `stock_adjustment_items`, `stock_adjustment_audit_log`, `stock_take_warehouses`, `stock_take_items`, `stock_take_audit_log`.
+4. **`sales_challans.sales_invoice_id` is already trigger-based** (`trg_fk_sc_si` using `fn_fk_si_check`) — must be preserved when recreating `sales_challans` as partitioned.
+5. **`stock_adjustment_items.sai_stock_tx_fk`** is a declarative **composite** FK to `stock_transactions(id, transaction_date)` — must be preserved (not in scope for Phase 5).
+6. **`invoice_payment_allocations.trg_ipa_no_overallocation`** constraint trigger joins `customer_payments` — must be preserved (partitioning is transparent for SELECTs, so it will keep working).
+7. **`stock_take_warehouses.trg_stw_no_overlapping_frozen`** joins `stock_take_sessions` — preserve.
+8. **`warehouse_transfers.trg_enforce_same_branch_transfer`** — preserve.
+9. All 6 parents have `deleted_at` (soft deletes), `created_at`/`updated_at`, and `branch_id` (RLS-scoped). `warehouse_transfers` uses dual-branch RLS (`from_branch_id OR to_branch_id`).
+10. `GENERATED ALWAYS AS IDENTITY` → `GENERATED BY DEFAULT AS IDENTITY` for `OVERRIDING SYSTEM VALUE` data copy (Phase 4 pattern).
 
 ### 4.2 Migration file
 
@@ -712,13 +733,13 @@ The original plan's risk register (§16) is still valid. Add these new risks dis
 - [x] `config/archive.php` header clarifies it is Phase 12, not Phase 7 — header rewritten with explicit "⚠️ NOT related to Phase 10.1 Phase 7" warning.
 
 ### Phase 5 — Done when:
-- [ ] All 6 tables are partitioned by their date column, monthly.
-- [ ] All 8 child-table FKs are trigger-based with correct cascade behaviour.
-- [ ] All 6 tables have BRIN indexes on partition key.
-- [ ] All 6 tables are registered with pg_partman (`p_premake=6`).
-- [ ] All 6 tables have retention configured (84 months).
-- [ ] RLS policies on all 6 tables still work (branch-scoped + admin queries tested).
-- [ ] `EXPLAIN ANALYZE` on a date-range query shows partition pruning.
+- [x] All 6 tables are partitioned by their date column, monthly. — migration `2026_08_20_000001` creates `pre2026` + 12 monthly partitions for 2026 + `_default` for each parent.
+- [x] All 11 child-table FKs are trigger-based with correct cascade behaviour. — revised from 8 after schema audit (see §4.1.1). Each FK gets a BEFORE INSERT OR UPDATE check trigger on the child + (CASCADE or SET NULL) AFTER DELETE trigger on the parent.
+- [x] All 6 tables have BRIN indexes on partition key. — `idx_cp_payment_date_brin`, `idx_sp_payment_date_brin`, `idx_sc_challan_date_brin`, `idx_wt_transfer_date_brin`, `idx_sa_adjustment_date_brin`, `idx_sts_session_date_brin` (all `pages_per_range = 32`).
+- [x] All 6 tables are registered with pg_partman (`p_premake=6`). — `registerPartman()` called for each parent with `p_start_partition='2027-01-01'`.
+- [ ] All 6 tables have retention configured (84 months). — **DEFERRED to Phase 7.1** (`complete_retention_configs`). The 11 retention configs added by Phase 0.2 cover the Phase 1-4 + `stock_transactions` + `sales_invoices` tables; Phase 5's 6 new parents will get their retention in Phase 7.1.
+- [x] RLS policies on all 6 tables still work (branch-scoped + admin queries tested). — single-branch RLS re-applied to 5 parents; dual-branch (`from_branch_id OR to_branch_id`) re-applied to `warehouse_transfers`.
+- [ ] `EXPLAIN ANALYZE` on a date-range query shows partition pruning. — **PENDING staging validation** (requires running the migration against a staging DB).
 
 ### Phase 6 — Done when:
 - [ ] `journal_lines` has a non-null `entry_date` column, backfilled, with sync trigger.
@@ -762,7 +783,7 @@ The original plan's risk register (§16) is still valid. Add these new risks dis
 | `database/migrations/2026_08_15_000004_convert_sales_invoices_journal_entry_fk.php` | 0.4 | sales_invoices FK → trigger-based |
 | `database/migrations/2026_08_15_000005_schedule_partman_maintenance.php` | 0.5, 0.6 | partman cron + archive schema |
 | `database/migrations/2026_08_15_000007_set_partitioning_gucs.php` | 0.7 | enable_partitionwise_join + max_locks |
-| `database/migrations/2026_08_20_000001_partition_transaction_headers_multi_fk.php` | 5 | 6 tables + 8 child FK conversions |
+| `database/migrations/2026_08_20_000001_partition_transaction_headers_multi_fk.php` | 5 | ✅ CREATED — 6 tables partitioned + 11 child FK conversions to trigger-based (revised from 8 after schema audit; see §4.1.1). 1252 lines. |
 | `database/migrations/2026_08_22_000001_add_entry_date_to_journal_lines.php` | 6.2 | Denormalize entry_date |
 | `database/migrations/2026_08_22_000002_partition_journal_entries.php` | 6.3 | Partition journal_entries |
 | `database/migrations/2026_08_22_000003_partition_journal_lines.php` | 6.4 | Partition journal_lines |
