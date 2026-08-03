@@ -335,7 +335,7 @@ return new class extends Migration
             DB::statement('CREATE SCHEMA IF NOT EXISTS partman');
         }
 
-        // Group A — 0 FK children
+        // Group A — tables with no inbound FKs (except money_transfers, which has 1)
         $this->partitionMoneyTransfers();
         $this->partitionEmployeeTransactions();
         $this->partitionOtherIncomes();
@@ -358,6 +358,29 @@ return new class extends Migration
         if ($this->isAlreadyPartitioned('money_transfers')) {
             return;
         }
+
+        // ── Convert inbound FK to trigger-based BEFORE partitioning ──
+        // branch_demand_money_transfer_settlements.transfer_id → money_transfers(id)
+        // ON DELETE CASCADE (created in migration 2026_07_29_000014).
+        // money_transfers is about to become partitioned with PK(id, transfer_date),
+        // so a declarative FK on (transfer_id) alone is impossible — convert to a
+        // trigger-based FK (existence check + cascade delete), matching the pattern
+        // used by the Group B tables below. The declarative constraint currently
+        // targets the soon-to-be-renamed money_transfers (tracked by OID), so it
+        // would block the later DROP TABLE money_transfers_unpartitioned with
+        // SQLSTATE 2BP01 unless we drop it first.
+        $this->dropFkConstraint(
+            'branch_demand_money_transfer_settlements',
+            'branch_demand_money_transfer_settlements_transfer_id_fkey'
+        );
+        $this->createTriggerFkCheck(
+            'branch_demand_money_transfer_settlements', 'transfer_id', 'money_transfers',
+            'trg_fk_bdmts_mt_check', 'trg_bdmts_mt_fk_check'
+        );
+        $this->createTriggerFkCascadeDelete(
+            'branch_demand_money_transfer_settlements', 'transfer_id', 'money_transfers',
+            'trg_fk_mt_cascade_bdmts', 'trg_mt_cascade_bdmts'
+        );
 
         $this->dropIndexesExceptPK('money_transfers');
         $this->dropRlsPolicies('money_transfers');
@@ -1826,6 +1849,30 @@ return new class extends Migration
              "CREATE POLICY rls_money_transfers_admin ON money_transfers FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true')"],
             ["CREATE TRIGGER trg_money_transfers_updated_at BEFORE UPDATE ON money_transfers FOR EACH ROW EXECUTE FUNCTION trg_money_transfers_updated_at()"]
         );
+
+        // ── Restore declarative FK + drop trigger-based FK created in up() ──
+        // After rollback, money_transfers is a flat table with PK(id), so a
+        // declarative FK on (transfer_id) is valid again. Drop the trigger-based
+        // FK objects created in partitionMoneyTransfers() and re-add the original
+        // declarative constraint (guarded with IF NOT EXISTS for idempotency).
+        DB::statement("DROP TRIGGER IF EXISTS trg_bdmts_mt_fk_check ON branch_demand_money_transfer_settlements");
+        DB::statement("DROP TRIGGER IF EXISTS trg_mt_cascade_bdmts ON money_transfers");
+        DB::statement("DROP FUNCTION IF EXISTS trg_fk_bdmts_mt_check()");
+        DB::statement("DROP FUNCTION IF EXISTS trg_fk_mt_cascade_bdmts()");
+        DB::statement(<<<'SQL'
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'branch_demand_money_transfer_settlements_transfer_id_fkey'
+                ) THEN
+                    ALTER TABLE branch_demand_money_transfer_settlements
+                        ADD CONSTRAINT branch_demand_money_transfer_settlements_transfer_id_fkey
+                        FOREIGN KEY (transfer_id) REFERENCES money_transfers(id)
+                        ON DELETE CASCADE;
+                END IF;
+            END $$;
+        SQL);
     }
 
     private function rollbackEmployeeTransactions(): void
