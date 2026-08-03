@@ -53,6 +53,7 @@ use App\Http\Controllers\Admin\SystemPolicyController;
 use App\Http\Controllers\Admin\ArchiveController;
 use App\Http\Controllers\Admin\GlobalAuditController;
 use App\Http\Controllers\Admin\SystemHealthController;
+use App\Http\Controllers\Admin\System\PartitionHealthController;
 use App\Http\Controllers\Admin\ShadowModeController;
 use App\Http\Controllers\Admin\BudgetController;
 use App\Http\Controllers\Admin\DimensionController;
@@ -1626,6 +1627,16 @@ Route::middleware('auth')->group(function () {
     // System health monitoring dashboard.
     Route::get('admin/system-health', [SystemHealthController::class, 'index'])
         ->name('admin.system-health.index')
+        ->middleware('role:admin');
+
+    // Phase 10.1 — Phase 8.4: Partition health monitoring dashboard.
+    // Surfaces alerts from partition_health_alerts (Phase 8.3), per-table
+    // partition counts, pg_partman config, largest partitions, stale VACUUM
+    // stats, default-partition row counts, missing future partitions, and
+    // unused BRIN indexes. Defensive: renders even if Phase 8 SQL objects
+    // don't exist yet.
+    Route::get('admin/system/partition-health', [PartitionHealthController::class, 'index'])
+        ->name('admin.system.partition-health')
         ->middleware('role:admin');
 
     // ============================================================

@@ -52,3 +52,23 @@ Schedule::command('partition:export-parquet')
     ->runInBackground()
     ->name('partition-export-parquet')
     ->description('Export archived partitions to Parquet cold storage (quarterly)');
+
+// Phase 10.1 — Phase 8.7: Verify partition-wise joins weekly (Mondays 05:00).
+// Runs EXPLAIN ANALYZE on the JE↔JL join, asserts a partition-wise join node
+// appears in the plan. Alerts if partition-wise joins silently stop working.
+Schedule::command('partition:verify-join')
+    ->weeklyOn(1, '05:00')
+    ->withoutOverlapping()
+    ->runInBackground()
+    ->name('partition-verify-join')
+    ->description('Verify partition-wise joins are working (weekly)');
+
+// Phase 10.1 — Phase 8.8: Measure partition query performance weekly (Mondays 05:30).
+// Runs the 10 plan §12.1 queries, persists results, alerts on target breaches.
+// Offset 30 min after the verify-join job so they don't overlap.
+Schedule::command('partition:measure-perf')
+    ->weeklyOn(1, '05:30')
+    ->withoutOverlapping()
+    ->runInBackground()
+    ->name('partition-measure-perf')
+    ->description('Measure partition query performance vs targets (weekly)');
