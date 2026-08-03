@@ -169,7 +169,32 @@ AI_CONTEXT/
   `AuditableMasterData` trait bypassed by raw `DB::table()` writes.
   ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** before Canonical status (see
   `IMPLEMENTATION_PLAN.md` §5 Review gates).
-- **Phases 10–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 10 — Sales (Order-to-Cash):** ✅ Complete (`sales/` — sales-overview, sales-invoice,
+  sales-challan, sales-cart, sales-return, commission, transport-cost, sales-audit). Decoupled
+  revenue recognition (invoice finalize: Dr AR / Cr Revenue) vs stock movement (challan issue:
+  Dr COGS / Cr Inventory at current avg_cost); 3-step godown workflow (blank-godown → godown
+  prep → challan issue); Phase-6 transport-edit deferred-GL workflow (snapshot + sub-ledger at
+  godown, GL at issue, cascade-restore on cancel); per-user × per-customer × per-branch JSONB
+  draft cart (R6 3-col unique key); sales return at ORIGINAL avg_cost (snapshot from challan's
+  stock_transactions.rate — preserves cost integrity); Phase 5 Good/Damage condition (Damage
+  skips stock, creates linked damage write-offs via `DamageService::confirmDamage(force_confirm=true)`);
+  `SalesReturnReversalGuard` stock-shortage pre-check; 4-type commission rule engine
+  (flat/tiered/product_group/target_bonus) with GiST EXCLUDE constraint; 3-layer audit
+  infrastructure (hash-chain `financial_audit_log` PARTIAL coverage — only `customer_payments`;
+  `user_audit_log` FULL via `SalesAuditLogger` but `AuditableMasterData` trait BYPASSED by
+  `DB::table()` writes; 3-section `ReportController::computeSalesAuditChecks` on-demand only —
+  gap vs `PurchaseAuditService`'s 12 sections). Documents 6 CRITICAL gaps including:
+  `customers.shop_name` column MISSING (breaks cart AJAX — runtime SQLSTATE[42703]);
+  `SalesInvoiceApiController::update` doesn't pass items[] (mobile API edit broken);
+  `StockAvailabilityService` references nonexistent status `'challan_completed'`; DDL
+  `04_sales.sql` stale (8+ columns + `sales_challan_items` table exist only in migrations);
+  entire commission auto-calc pipeline is DEAD CODE (`calculateOnAllocation`/`reverseOnReturn`/
+  `reverseOnPaymentReversal`/`markAsPaid` never called) + `confirmPeriod` calls non-existent
+  `postCommissionExpense()` method + `commission_expense`/`commission_payable` natures NOT
+  registered.
+  ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** before Canonical status (see
+  `IMPLEMENTATION_PLAN.md` §5 Review gates).
+- **Phases 11–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
