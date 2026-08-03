@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\DB;
  * Tables (in order):
  *   1. customer_ledger   — partition by transaction_date (0 FK children, RLS)
  *   2. supplier_ledger   — partition by transaction_date (0 FK children, RLS)
- *   3. employee_ledger   — partition by transaction_date (0 FK children, RLS)
+ *   3. employee_ledger   — partition by transaction_date (1 FK child: damage_invoices.employee_ledger_entry_id, RLS)
  *   4. cash_ledger       — partition by transaction_date (0 FK children, RLS)
  *   5. branch_ledger     — partition by transaction_date (0 FK children, RLS dual-branch)
  *
@@ -1000,6 +1000,21 @@ return new class extends Migration
                 )
         SQL);
 
+        // ── Drop inbound FK from damage_invoices BEFORE dropping old table ──
+        // damage_invoices.employee_ledger_entry_id → employee_ledger(id) was created
+        // in migration 2026_01_04_000001 (declarative FK). After the RENAME above,
+        // this FK now targets employee_ledger_unpartitioned (FKs track by OID, not
+        // name), so DROP TABLE would fail with SQLSTATE 2BP01 unless we drop the
+        // dependent constraint first. The FK is later recreated as a trigger-based
+        // FK in migration 2026_08_02_000004 (the new partitioned employee_ledger
+        // has PK(id, transaction_date), so a declarative FK on (id) alone is
+        // impossible). IF EXISTS keeps this idempotent and lets 000004's own
+        // dropFkConstraint() be a safe no-op.
+        DB::statement(
+            'ALTER TABLE damage_invoices ' .
+            'DROP CONSTRAINT IF EXISTS damage_invoices_employee_ledger_entry_id_foreign'
+        );
+
         // ── Drop old table ──
         DB::statement('DROP TABLE employee_ledger_unpartitioned');
 
@@ -1020,6 +1035,12 @@ return new class extends Migration
         // ── Analyze ──
         DB::statement('ANALYZE employee_ledger');
     }
+
+    // NOTE: employee_ledger is the only sub-ledger with an inbound FK. The
+    // declarative FK damage_invoices.employee_ledger_entry_id → employee_ledger(id)
+    // is dropped in partitionEmployeeLedger() and recreated (as a trigger-based FK)
+    // in migration 2026_08_02_000004. customer/supplier/cash/branch ledgers have
+    // zero inbound FKs, so their DROP TABLE ..._unpartitioned succeeds directly.
 
     // ═══════════════════════════════════════════════════════════════
     //  4. cash_ledger
@@ -1587,6 +1608,25 @@ return new class extends Migration
                 "CREATE POLICY rls_employee_ledger_admin ON employee_ledger FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true')",
             ]
         );
+
+        // ── Restore declarative FK dropped in partitionEmployeeLedger() ──
+        // After rollback, employee_ledger is a flat table with PK(id), so a
+        // declarative FK is valid again. Guarded with a DO block so this is
+        // idempotent (safe whether or not 000004's down() already recreated it).
+        DB::statement(<<<'SQL'
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'damage_invoices_employee_ledger_entry_id_foreign'
+                ) THEN
+                    ALTER TABLE damage_invoices
+                        ADD CONSTRAINT damage_invoices_employee_ledger_entry_id_foreign
+                        FOREIGN KEY (employee_ledger_entry_id) REFERENCES employee_ledger(id)
+                        ON DELETE NO ACTION;
+                END IF;
+            END $$;
+        SQL);
     }
 
     private function rollbackCashLedger(): void
