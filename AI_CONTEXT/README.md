@@ -194,7 +194,34 @@ AI_CONTEXT/
   registered.
   ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** before Canonical status (see
   `IMPLEMENTATION_PLAN.md` §5 Review gates).
-- **Phases 11–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 11 — Fixed Assets:** ✅ Complete (`finance/fixed-assets.md` — register, depreciation,
+  disposal). 3 tables (`fixed_assets`, `asset_depreciation_schedules`, `asset_disposals`) +
+  3 models + 2 services (`DepreciationService` 587L, `AssetDisposalService` 276L) + 1
+  controller (12 actions) + 2 migrations. 3 depreciation methods (straight-line monthly
+  `(cost−salvage)/months`, declining-balance `NBV×annual_rate/12`, units-of-production
+  per-unit); salvage-value floor guard clamps depreciation at `NBV=salvage`; NBV ≤ salvage
+  flips status to `fully_depreciated`. Disposal posts Dr acc-dep + Dr cash (proceeds) /
+  Cr asset-cost (full) + Cr gain (proceeds>NBV) OR Dr loss (proceeds<NBV); 4 disposal types
+  (sale/write_off/scrap/donation) all follow same GL path; gain/loss = proceeds − NBV.
+  Period-close enforced indirectly via `JournalPostingService::validatePeriod`; reversals
+  bypass period close via `skip_period_check=true`. 9 seeded ledgers (L-0200..L-0250,
+  L-0804, L-0903, L-0904) + 4 ledger natures (`accumulated_depreciation`,
+  `depreciation_expense`, `gain_on_disposal`, `loss_on_disposal`). Documents 30 gaps
+  including 5 CRITICAL: G1 RLS admin-only (entire subsystem non-functional for
+  accountants/managers — contradicts route middleware), G7 `fn_financial_audit_trigger`
+  NOT attached to any of 3 tables (recurring cross-phase gap), G13 `postDepreciation` NOT
+  wrapped in `DB::transaction` (partial-failure window), G15 asset cost/salvage/useful_life
+  editable after first depreciation (silent distortion), G25 cross-branch asset creation
+  (no `branch_id` access check, `EnforceBranchIsolation` doesn't cover fixed-assets URI).
+  Also: no FormRequests (G2), no Policy (G3), no `config/fixed_assets.php` (G4),
+  race-prone `disposal_code` generation (G5), no artisan command/scheduled monthly job
+  (G8), disposal reversal hard-DELETEs the record breaking append-only audit (G9),
+  concurrent schedule generation creates duplicates (G12), disposal of fully-depreciated
+  asset generates loss=salvage (G16), disposal reversal does NOT restore force-reversed
+  pending schedules (G19), `BranchScope` not applied to child models (G30).
+  ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** before Canonical status (see
+  `IMPLEMENTATION_PLAN.md` §5 Review gates).
+- **Phases 12–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
