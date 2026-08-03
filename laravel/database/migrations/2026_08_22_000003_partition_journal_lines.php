@@ -445,6 +445,33 @@ return new class extends Migration
         DB::statement('DROP VIEW IF EXISTS v_journal_entries_with_lines');
 
         // ============================================================
+        // 0b. Drop 5 ADDITIONAL dependent views / materialized views
+        //     that reference journal_lines by OID. These were recreated
+        //     by migration 000002 (step 13a) after journal_entries was
+        //     partitioned — but they ALL also JOIN journal_lines, so
+        //     they now depend on journal_lines by OID and would block
+        //     DROP TABLE journal_lines_unpartitioned with the SAME
+        //     SQLSTATE 2BP01 dependency error:
+        //       - mv_ledger_balances              (materialized view)
+        //       - mv_journal_entry_summary        (materialized view)
+        //       - budget_vs_actual                (view)
+        //       - mv_consolidated_trial_balance   (materialized view)
+        //       - v_unreconciled_bank_entries     (view)
+        //     Each is recreated in step 11a after the new partitioned
+        //     journal_lines is in place. After 000003 completes, BOTH
+        //     journal_entries and journal_lines are partitioned by
+        //     entry_date, enabling partition-wise joins (when
+        //     enable_partitionwise_join=on, set by Phase 0.7).
+        //     CASCADE handles any downstream dependents (none today
+        //     per scope audit, but future-proofs the drop).
+        // ============================================================
+        DB::statement('DROP MATERIALIZED VIEW IF EXISTS mv_ledger_balances CASCADE');
+        DB::statement('DROP MATERIALIZED VIEW IF EXISTS mv_journal_entry_summary CASCADE');
+        DB::statement('DROP VIEW IF EXISTS budget_vs_actual CASCADE');
+        DB::statement('DROP MATERIALIZED VIEW IF EXISTS mv_consolidated_trial_balance CASCADE');
+        DB::statement('DROP VIEW IF EXISTS v_unreconciled_bank_entries CASCADE');
+
+        // ============================================================
         // 1. Drop triggers ON journal_lines (the table being renamed).
         //    These follow the table through the rename but the renamed
         //    table is dropped at the end — we recreate them on the new
@@ -760,6 +787,209 @@ return new class extends Migration
             FROM journal_entries je
             JOIN journal_lines jl ON jl.journal_entry_id = je.id
             LEFT JOIN ledgers l ON l.id = jl.ledger_id
+        SQL);
+
+        // ============================================================
+        // 11a. Recreate the 5 dependent views / materialized views
+        //      dropped in step 0b. CREATE statements are copied
+        //      VERBATIM from their original migrations (same as
+        //      migration 000002 step 13a):
+        //        - mv_ledger_balances            (2025_01_03_000001:30-51)
+        //        - mv_journal_entry_summary      (2025_01_03_000001:155-177)
+        //        - budget_vs_actual              (2026_08_10_000002:118-162)
+        //        - mv_consolidated_trial_balance (2026_08_11_000001:464-503)
+        //        - v_unreconciled_bank_entries   (2026_08_12_000001:185-222)
+        //      None schema-qualify journal_lines (or journal_entries),
+        //      so they resolve to the NEW partitioned parents by name
+        //      at query time. CREATE MATERIALIZED VIEW populates the
+        //      MV with data immediately (WITH DATA default). The 8
+        //      indexes (3+4+1) are recreated right after each MV.
+        //      All 5 are mutually independent (no inter-view deps).
+        // ============================================================
+
+        // ── mv_ledger_balances ──────────────────────────────────────
+        DB::statement(<<<'SQL'
+            CREATE MATERIALIZED VIEW IF NOT EXISTS mv_ledger_balances AS
+            SELECT
+                l.id AS ledger_id,
+                l.ledger_code,
+                l.ledger_name,
+                l.account_type,
+                l.ledger_nature,
+                l.is_control_account,
+                l.is_active,
+                l.parent_id,
+                COALESCE(SUM(jl.debit), 0) AS total_debit,
+                COALESCE(SUM(jl.credit), 0) AS total_credit,
+                COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0) AS net_debit,
+                COUNT(jl.id) AS line_count,
+                MAX(je.entry_date) AS last_entry_date
+            FROM ledgers l
+            LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
+            LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
+            GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature,
+                     l.is_control_account, l.is_active, l.parent_id
+        SQL);
+        DB::statement('CREATE UNIQUE INDEX IF NOT EXISTS mv_ledger_balances_ledger_id_idx ON mv_ledger_balances (ledger_id)');
+        DB::statement('CREATE INDEX IF NOT EXISTS mv_ledger_balances_account_type_idx ON mv_ledger_balances (account_type)');
+        DB::statement('CREATE INDEX IF NOT EXISTS mv_ledger_balances_nature_idx ON mv_ledger_balances (ledger_nature)');
+
+        // ── mv_journal_entry_summary ────────────────────────────────
+        DB::statement(<<<'SQL'
+            CREATE MATERIALIZED VIEW IF NOT EXISTS mv_journal_entry_summary AS
+            SELECT
+                je.id AS journal_entry_id,
+                je.entry_no,
+                je.entry_date,
+                je.reference_type,
+                je.reference_id,
+                je.branch_id,
+                je.description,
+                je.is_reversed,
+                je.created_by,
+                je.created_at,
+                b.branch_name,
+                COALESCE(SUM(jl.debit), 0) AS total_debit,
+                COALESCE(SUM(jl.credit), 0) AS total_credit,
+                COUNT(jl.id) AS line_count
+            FROM journal_entries je
+            LEFT JOIN journal_lines jl ON jl.journal_entry_id = je.id
+            LEFT JOIN branches b ON b.id = je.branch_id
+            GROUP BY je.id, je.entry_no, je.entry_date, je.reference_type, je.reference_id,
+                     je.branch_id, je.description, je.is_reversed, je.created_by, je.created_at, b.branch_name
+        SQL);
+        DB::statement('CREATE UNIQUE INDEX IF NOT EXISTS mv_journal_entry_summary_je_id_idx ON mv_journal_entry_summary (journal_entry_id)');
+        DB::statement('CREATE INDEX IF NOT EXISTS mv_journal_entry_summary_date_idx ON mv_journal_entry_summary (entry_date)');
+        DB::statement('CREATE INDEX IF NOT EXISTS mv_journal_entry_summary_branch_idx ON mv_journal_entry_summary (branch_id)');
+        DB::statement('CREATE INDEX IF NOT EXISTS mv_journal_entry_summary_ref_idx ON mv_journal_entry_summary (reference_type, reference_id)');
+
+        // ── budget_vs_actual ────────────────────────────────────────
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE VIEW budget_vs_actual AS
+            SELECT
+                bl.id AS budget_line_id,
+                b.id AS budget_id,
+                b.name AS budget_name,
+                b.fiscal_year,
+                b.branch_id AS budget_branch_id,
+                bl.ledger_id,
+                l.ledger_code,
+                l.ledger_name,
+                l.account_type,
+                l.normal_balance,
+                bl.period,
+                bl.amount AS budget_amount,
+                COALESCE(actual.actual_amount, 0) AS actual_amount,
+                bl.amount - COALESCE(actual.actual_amount, 0) AS variance_amount,
+                CASE
+                    WHEN bl.amount = 0 THEN NULL
+                    ELSE ROUND(
+                        ((bl.amount - COALESCE(actual.actual_amount, 0)) / bl.amount) * 100,
+                        2
+                    )
+                END AS variance_percent
+            FROM budget_lines bl
+            JOIN budgets b ON b.id = bl.budget_id
+            JOIN ledgers l ON l.id = bl.ledger_id
+            LEFT JOIN LATERAL (
+                SELECT SUM(
+                    CASE l.normal_balance
+                        WHEN 'debit'  THEN jl2.debit  - jl2.credit
+                        WHEN 'credit' THEN jl2.credit - jl2.debit
+                    END
+                ) AS actual_amount
+                FROM journal_lines jl2
+                JOIN journal_entries je2 ON je2.id = jl2.journal_entry_id
+                WHERE jl2.ledger_id = bl.ledger_id
+                  AND je2.is_reversed = false
+                  AND EXTRACT(YEAR FROM je2.entry_date)::text = b.fiscal_year
+                  AND EXTRACT(MONTH FROM je2.entry_date) = bl.period
+                  AND (b.branch_id IS NULL OR je2.branch_id = b.branch_id)
+            ) actual ON true
+            WHERE b.deleted_at IS NULL
+              AND l.deleted_at IS NULL
+        SQL);
+
+        // ── mv_consolidated_trial_balance ───────────────────────────
+        DB::statement(<<<'SQL'
+            CREATE MATERIALIZED VIEW IF NOT EXISTS mv_consolidated_trial_balance AS
+            SELECT
+                l.id AS ledger_id,
+                l.ledger_code,
+                l.ledger_name,
+                l.account_type,
+                l.ledger_nature,
+                l.normal_balance,
+                l.is_elimination,
+                -- Aggregate across all branches
+                COALESCE(SUM(jl.debit), 0) AS total_debit,
+                COALESCE(SUM(jl.credit), 0) AS total_credit,
+                -- Elimination adjustment (from elimination entries)
+                COALESCE(elim.elim_debit, 0) AS elimination_debit,
+                COALESCE(elim.elim_credit, 0) AS elimination_credit,
+                -- Consolidated (net of elimination)
+                COALESCE(SUM(jl.debit), 0) - COALESCE(elim.elim_debit, 0) AS consolidated_debit,
+                COALESCE(SUM(jl.credit), 0) - COALESCE(elim.elim_credit, 0) AS consolidated_credit
+            FROM ledgers l
+            LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
+            LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
+                AND COALESCE(je.is_reversed, false) = false
+                AND je.source != 'elimination'
+            LEFT JOIN LATERAL (
+                SELECT
+                    SUM(elim_jl.debit) AS elim_debit,
+                    SUM(elim_jl.credit) AS elim_credit
+                FROM elimination_entries ee
+                JOIN consolidation_runs cr ON cr.id = ee.consolidation_run_id
+                JOIN journal_entries elim_je ON elim_je.id = ee.journal_entry_id
+                JOIN journal_lines elim_jl ON elim_jl.journal_entry_id = elim_je.id
+                WHERE elim_jl.ledger_id = l.id
+                  AND cr.status = 'posted'
+                  AND COALESCE(elim_je.is_reversed, false) = false
+            ) elim ON TRUE
+            WHERE l.is_active = true
+            GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature,
+                     l.normal_balance, l.is_elimination, elim.elim_debit, elim.elim_credit
+        SQL);
+        DB::statement('CREATE UNIQUE INDEX IF NOT EXISTS mv_ctb_ledger_idx ON mv_consolidated_trial_balance (ledger_id)');
+
+        // ── v_unreconciled_bank_entries ─────────────────────────────
+        DB::statement(<<<'SQL'
+            CREATE OR REPLACE VIEW v_unreconciled_bank_entries AS
+            SELECT
+                jl.id AS journal_line_id,
+                jl.journal_entry_id,
+                je.entry_no,
+                je.entry_date,
+                je.description AS entry_description,
+                je.source AS entry_source,
+                je.reference_type,
+                je.reference_id,
+                jl.ledger_id,
+                jl.debit,
+                jl.credit,
+                jl.memo,
+                jl.is_bank_reconciled,
+                l.ledger_code,
+                l.ledger_name,
+                b.id AS bank_id,
+                b.bank_name,
+                b.account_number,
+                blm.bank_id AS mapping_bank_id,
+                je.branch_id,
+                br.branch_name
+            FROM journal_lines jl
+            JOIN journal_entries je ON je.id = jl.journal_entry_id
+            JOIN ledgers l ON l.id = jl.ledger_id
+            LEFT JOIN bank_ledger_mappings blm ON blm.ledger_id = l.id
+            LEFT JOIN banks b ON b.id = blm.bank_id
+            LEFT JOIN branches br ON br.id = je.branch_id
+            WHERE jl.is_bank_reconciled = false
+              AND COALESCE(je.is_reversed, false) = false
+              AND blm.bank_id IS NOT NULL
+              AND l.deleted_at IS NULL
+              AND l.is_active = true
+            ORDER BY je.entry_date, je.entry_no
         SQL);
 
         // ============================================================
