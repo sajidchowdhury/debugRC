@@ -179,6 +179,28 @@ return new class extends Migration
 
     private function dropIndexesExceptPK(string $tableName): void
     {
+        // ── First, drop UNIQUE / EXCLUDE constraints ──
+        // These constraints own a backing index that CANNOT be dropped directly
+        // via DROP INDEX — PostgreSQL raises SQLSTATE 2BP01 ("cannot drop index
+        // ... because constraint ... requires it"). We must DROP CONSTRAINT
+        // instead; the backing index is removed automatically. PK constraints
+        // (contype='p') are preserved — the old table (renamed later) carries
+        // its PK until it is dropped wholesale at the end of partitioning.
+        $constraints = DB::select("
+            SELECT c.conname
+            FROM pg_constraint c
+            JOIN pg_class cl ON cl.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = cl.relnamespace
+            WHERE cl.relname = ?
+              AND n.nspname = current_schema()
+              AND c.contype IN ('u', 'x')
+        ", [$tableName]);
+
+        foreach ($constraints as $c) {
+            DB::statement("ALTER TABLE {$tableName} DROP CONSTRAINT IF EXISTS {$c->conname}");
+        }
+
+        // ── Then drop any remaining standalone indexes (excluding PK backing index) ──
         $indexes = DB::select("
             SELECT indexname
             FROM pg_indexes
