@@ -36,6 +36,30 @@ use Illuminate\Support\Facades\Log;
  */
 return new class extends Migration
 {
+    /**
+     * Disable Laravel's default per-migration transaction wrapping.
+     *
+     * ALTER SYSTEM is one of the PostgreSQL statements that CANNOT run
+     * inside a transaction block (alongside VACUUM, CREATE INDEX
+     * CONCURRENTLY, REINDEX, CLUSTER, CREATE/DROP DATABASE). When Laravel
+     * wraps up()/down() in BEGIN...COMMIT, the first ALTER SYSTEM fails
+     * with "ALTER SYSTEM cannot run inside a transaction block", which
+     * ABORTS the transaction. Every subsequent statement — including the
+     * verification SELECT at the end of up() — then fails with the
+     * cascading SQLSTATE 25P02 "current transaction is aborted, commands
+     * ignored until end of transaction block". The try/catch blocks below
+     * are powerless because catching the exception does not un-abort the
+     * transaction; only COMMIT/ROLLBACK can, and Laravel only does that
+     * at the end of up().
+     *
+     * Setting $withinTransaction = false makes the migrator run up()/down()
+     * without a wrapping transaction, so each DB::statement executes as an
+     * autocommit statement. The existing try/catch blocks then correctly
+     * isolate per-statement failures (e.g. permission denied for non-
+     * superuser roles) without cascading.
+     */
+    public $withinTransaction = false;
+
     public function up(): void
     {
         $settings = [
