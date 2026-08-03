@@ -341,7 +341,65 @@ AI_CONTEXT/
   UserAuditLogger LOW). ⚠️ **Business-critical — pending compliance review** (approval gates
   themselves don't post GL but gate entities that do; INVESTIGATION mode is documented as a freeze
   switch but currently does nothing). See `IMPLEMENTATION_PLAN.md` §5 Review gates.
-- **Phases 15–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 15 — Notifications & Realtime:** ✅ Complete
+  (`architecture/realtime-events.md` expanded from 365→1197 lines + `workflows/notification-workflow.md`
+  NEW 1629 lines). Two interlocking halves of the realtime stack. **Realtime pipeline**
+  (`architecture/realtime-events.md`): 3-hop transport — PostgreSQL `LISTEN/NOTIFY` (10 trigger
+  functions across 3 migrations calling shared `rcerp_notify()` helper with canonical
+  `{table, action, id, branch_id, changes, triggered_at}` payload) → PHP long-running worker
+  (`ListenNotifyWorker` 293L, dedicated raw PDO, `pgsqlGetNotify()` non-blocking poll every 100ms,
+  60s heartbeat to Redis `rcerp:listen_notify:heartbeat` key TTL 120s, supervised ONLY by
+  `docker-compose` `rcerp_listen_notify` container `restart: unless-stopped` — NOT scheduled by
+  Laravel cron, NO in-repo supervisor/systemd config) → Redis Lists (`rcerp:sse:global` TTL 600s
+  trim 500, `rcerp:sse:branch:{id}` TTL 600s trim 200, `rcerp:sse:user:{id}` DEAD QUEUE G1) +
+  Pub/Sub (`rcerp:sse:pubsub:global` fire-and-forget) → SSE controller (`SseController` 312L,
+  `/sse/events` text/event-stream polling 3 queues RPOP every 100ms, 30s heartbeat, 300s max
+  connection → reconnect, branch filter at L148, `/sse/status` JSON). 10 channels classified into
+  3 classes (5 notification-mapped via `CHANNEL_EVENT_MAP` → `forwardToNotificationService`,
+  4 SSE-only refresh signals, 1 emit-only `rcerp_notification_dispatched` to prevent infinite loop).
+  Client `notification.js` 319L with 11 EventSource listeners + custom Bootstrap toast + 30s AJAX
+  polling fallback; page-specific listeners in `damages/index` + `damages/show` blade. 7 Mermaid
+  diagrams (architecture flowchart, end-to-end sequence, bell toast flow, worker lifecycle state).
+  **20 realtime gaps** (2 CRITICAL: G1 per-user Redis queue dead code — polled every 100ms but
+  NEVER written by any code path, prior Phase 1 doc's claim was false; G2 partition migration
+  `2026_08_02_000004` regresses LISTEN/NOTIFY trigger payload to `{action, id}` only — breaks
+  branch-scoped SSE delivery + notification body + branch isolation when partitioning enabled;
+  5 HIGH: G3 DDL stale, G4 worker not scheduled by Laravel cron + no in-repo supervisor/systemd
+  config, G5 no RLS on 3 notification tables, G6 `fn_financial_audit_trigger` NOT attached to
+  8/10 monitored tables; 6 MEDIUM + 7 LOW). **Notification system** (`workflows/notification-workflow.md`):
+  rule-based, DB-driven, multi-recipient dispatcher layered on Laravel's `Notification` framework.
+  `NotificationService` 262L crown jewel — `EVENT_META` (17 events with icon/color/title) +
+  `dispatch()` (rule lookup → `resolveRecipients()` → `$user->notify(new ERPNotification(...))`
+  via database channel → `times_fired++` → `emitNotify('rcerp_notification_dispatched')` for SSE
+  toast) + `resolveRecipients()` 9-way match expression (6 global + 3 context-aware + 1
+  specific_user, de-duped by user ID, base scope `is_active=true AND deleted_at IS NULL`).
+  `ERPNotification` 67L `ShouldQueue` database-channel-only. `NotificationRule` 177L (EVENTS 14 +
+  RECIPIENTS 10 + CHANNELS database-only + CONTEXT_AWARE_RECIPIENTS 3, SoftDeletes) +
+  `NotificationRuleRecipient` 65L pivot (F-18b multi-recipient). `NotificationController` 248L
+  (rule CRUD admin-only via `role:admin` + `view-notification-rules` Gate; bell/inbox/AJAX all
+  auth users; NO `updateRule` method G8). 4 migrations + `NotificationRuleSeeder` 158L (11 default
+  rules). 22-event catalogue (9 ACTIVE, 8 dead config G4, 4 dead approval code reaffirming Phase
+  14 G4, 1 dead-in-practice system_policy_change). 10-recipient-type catalogue with verbatim
+  resolution logic. 17-row dispatch call-site map (16 direct PHP + 1 worker-forwarded site with
+  5 channel mappings). 7 Mermaid diagrams (end-to-end sequence, recipient resolution flowchart,
+  rule lifecycle state, double-dispatch problem flowchart). **18 notification gaps** (3 CRITICAL:
+  G1 DOUBLE DISPATCH on 4 events — `sales_finalize`/`challan_create`/`payment_receive`/`return_created`
+  fire BOTH direct PHP + worker-forwarded paths producing duplicate admin notifications + inflated
+  `times_fired`; G2 WRONG EVENT FORWARDED on UPDATE — `rcerp_sales_return` static map always
+  forwards as `return_created` even on confirm/reverse UPDATE producing spurious "return created"
+  toasts; G3 WORKER-FORWARDED EVENTS HAVE NO `$context` — context-aware recipient types
+  `warehouse_manager_of_branch`/`salesman_of_invoice`/`invoice_creator` silently resolve empty
+  on the worker path, only `admin` resolves; 6 HIGH: G4 8 dead-config events (godown_create/
+  soft_delete/accounts_entry declared but never dispatched; branch_demand_created seeder rule but
+  BranchDemandService doesn't dispatch; system_policy_change forwarded but not in EVENTS;
+  damage_invoice_submitted/approved/rejected dispatched but not in EVENTS so no rule can be
+  created), G5 no RLS, G6 no audit trigger, G7 DDL stale (legacy notifications schema in baseline),
+  G8 no FormRequest + no updateRule route, G9 no sidebar menu entry; 6 MEDIUM + 3 LOW).
+  Recommended single fix for G1-G3: remove the 5 `CHANNEL_EVENT_MAP` entries so
+  `forwardToNotificationService` becomes a no-op (DB trigger still fires `pg_notify` for SSE
+  refresh via `publishToRedis` which is unaffected). NOT SAFETY-CRITICAL (no GL posting) but
+  business-critical (drives operational visibility).
+- **Phases 16–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
