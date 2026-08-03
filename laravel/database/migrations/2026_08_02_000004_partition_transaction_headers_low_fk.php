@@ -221,6 +221,45 @@ return new class extends Migration
     }
 
     /**
+     * Drop the FK constraint on a specific (table, column) pair, regardless of
+     * its name. Returns the constraint name if found and dropped, null if none.
+     *
+     * This is naming-convention-agnostic: it works whether the constraint was
+     * auto-named by PostgreSQL ({table}_{column}_fkey, used by raw SQL
+     * REFERENCES) or explicitly named by Laravel ($table->foreign('col',
+     * 'custom_name')) or by ADD CONSTRAINT name FOREIGN KEY.
+     *
+     * Used in Group B inbound-FK conversion to avoid fragility from hardcoded
+     * constraint names that may not match the actual schema — the child tables
+     * (sales_return_items, purchase_receive_items, etc.) were created with raw
+     * SQL REFERENCES, so PostgreSQL auto-named them _fkey, NOT _foreign (Laravel
+     * convention). Hardcoding _foreign names caused silent no-ops (IF EXISTS
+     * guard) that left the real _fkey constraints blocking DROP TABLE.
+     */
+    private function dropFkByColumn(string $table, string $column): ?string
+    {
+        $row = DB::selectOne("
+            SELECT c.conname
+            FROM pg_constraint c
+            JOIN pg_class cl ON cl.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = cl.relnamespace
+            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+            WHERE cl.relname = ?
+              AND n.nspname = current_schema()
+              AND c.contype = 'f'
+              AND a.attname = ?
+              AND array_length(c.conkey, 1) = 1
+            LIMIT 1
+        ", [$table, $column]);
+
+        if ($row) {
+            DB::statement("ALTER TABLE {$table} DROP CONSTRAINT IF EXISTS {$row->conname}");
+            return $row->conname;
+        }
+        return null;
+    }
+
+    /**
      * Create a trigger-based FK check function + trigger for a child→parent reference.
      * Replaces declarative FK when the parent is partitioned.
      */
@@ -369,9 +408,9 @@ return new class extends Migration
         // targets the soon-to-be-renamed money_transfers (tracked by OID), so it
         // would block the later DROP TABLE money_transfers_unpartitioned with
         // SQLSTATE 2BP01 unless we drop it first.
-        $this->dropFkConstraint(
+        $this->dropFkByColumn(
             'branch_demand_money_transfer_settlements',
-            'branch_demand_money_transfer_settlements_transfer_id_fkey'
+            'transfer_id'
         );
         $this->createTriggerFkCheck(
             'branch_demand_money_transfer_settlements', 'transfer_id', 'money_transfers',
@@ -884,7 +923,7 @@ return new class extends Migration
 
         // ── Convert inbound FKs to trigger-based BEFORE partitioning ──
         // 1. sales_return_items.sales_return_id → sales_returns(id) ON DELETE CASCADE
-        $this->dropFkConstraint('sales_return_items', 'sales_return_items_sales_return_id_foreign');
+        $this->dropFkByColumn('sales_return_items', 'sales_return_id');
         $this->createTriggerFkCheck(
             'sales_return_items', 'sales_return_id', 'sales_returns',
             'trg_fk_sri_sr_check', 'trg_sri_sr_fk_check'
@@ -895,10 +934,18 @@ return new class extends Migration
         );
 
         // 2. damage_invoices.sales_return_id → sales_returns(id) ON DELETE SET NULL
-        $this->dropFkConstraint('damage_invoices', 'fk_dmg_sales_return');
+        $this->dropFkByColumn('damage_invoices', 'sales_return_id');
         $this->createTriggerFkSetNull(
             'damage_invoices', 'sales_return_id', 'sales_returns',
             'trg_fk_sr_setnull_dmg', 'trg_sr_setnull_dmg'
+        );
+
+        // 3. commission_entries.sales_return_id → sales_returns(id) ON DELETE SET NULL
+        // (created in migration 2025_01_22_000001 via raw SQL REFERENCES → auto-named _fkey)
+        $this->dropFkByColumn('commission_entries', 'sales_return_id');
+        $this->createTriggerFkSetNull(
+            'commission_entries', 'sales_return_id', 'sales_returns',
+            'trg_fk_sr_setnull_ce', 'trg_sr_setnull_ce'
         );
 
         // ── Partition sales_returns ──
@@ -1061,7 +1108,7 @@ return new class extends Migration
 
         // ── Convert inbound FKs to trigger-based ──
         // 1. purchase_receive_items.purchase_receive_id → purchase_receives(id) ON DELETE CASCADE
-        $this->dropFkConstraint('purchase_receive_items', 'purchase_receive_items_purchase_receive_id_foreign');
+        $this->dropFkByColumn('purchase_receive_items', 'purchase_receive_id');
         $this->createTriggerFkCheck(
             'purchase_receive_items', 'purchase_receive_id', 'purchase_receives',
             'trg_fk_pri_pr_check', 'trg_pri_pr_fk_check'
@@ -1072,14 +1119,14 @@ return new class extends Migration
         );
 
         // 2. purchase_returns.purchase_receive_id → purchase_receives(id)
-        $this->dropFkConstraint('purchase_returns', 'purchase_returns_purchase_receive_id_foreign');
+        $this->dropFkByColumn('purchase_returns', 'purchase_receive_id');
         $this->createTriggerFkCheck(
             'purchase_returns', 'purchase_receive_id', 'purchase_receives',
             'trg_fk_prtn_pr_check', 'trg_prtn_pr_fk_check'
         );
 
         // 3. supplier_payment_settlements.purchase_receive_id → purchase_receives(id)
-        $this->dropFkConstraint('supplier_payment_settlements', 'supplier_payment_settlements_purchase_receive_id_foreign');
+        $this->dropFkByColumn('supplier_payment_settlements', 'purchase_receive_id');
         $this->createTriggerFkCheck(
             'supplier_payment_settlements', 'purchase_receive_id', 'purchase_receives',
             'trg_fk_sps_pr_check', 'trg_sps_pr_fk_check'
@@ -1217,7 +1264,7 @@ return new class extends Migration
         }
 
         // Convert inbound FK to trigger-based
-        $this->dropFkConstraint('purchase_return_items', 'purchase_return_items_purchase_return_id_foreign');
+        $this->dropFkByColumn('purchase_return_items', 'purchase_return_id');
         $this->createTriggerFkCheck(
             'purchase_return_items', 'purchase_return_id', 'purchase_returns',
             'trg_fk_prti_prtn_check', 'trg_prti_prtn_fk_check'
@@ -1359,7 +1406,7 @@ return new class extends Migration
 
         // ── Convert inbound FKs to trigger-based ──
         // 1. damage_invoice_items.damage_invoice_id → damage_invoices(id) ON DELETE CASCADE
-        $this->dropFkConstraint('damage_invoice_items', 'damage_invoice_items_damage_invoice_id_foreign');
+        $this->dropFkByColumn('damage_invoice_items', 'damage_invoice_id');
         $this->createTriggerFkCheck(
             'damage_invoice_items', 'damage_invoice_id', 'damage_invoices',
             'trg_fk_dii_dmg_check', 'trg_dii_dmg_fk_check'
@@ -1370,7 +1417,7 @@ return new class extends Migration
         );
 
         // 2. damage_attachments.damage_invoice_id → damage_invoices(id) ON DELETE CASCADE
-        $this->dropFkConstraint('damage_attachments', 'damage_attachments_damage_invoice_id_foreign');
+        $this->dropFkByColumn('damage_attachments', 'damage_invoice_id');
         $this->createTriggerFkCheck(
             'damage_attachments', 'damage_invoice_id', 'damage_invoices',
             'trg_fk_da_dmg_check', 'trg_da_dmg_fk_check'
@@ -1381,7 +1428,7 @@ return new class extends Migration
         );
 
         // 3. sales_return_items.damage_invoice_id → damage_invoices(id) ON DELETE SET NULL
-        $this->dropFkConstraint('sales_return_items', 'fk_sri_damage_invoice');
+        $this->dropFkByColumn('sales_return_items', 'damage_invoice_id');
         $this->createTriggerFkSetNull(
             'sales_return_items', 'damage_invoice_id', 'damage_invoices',
             'trg_fk_dmg_setnull_sri', 'trg_dmg_setnull_sri'
@@ -1389,7 +1436,7 @@ return new class extends Migration
 
         // ── Also convert damage_invoices.employee_ledger_entry_id → employee_ledger(id) ──
         // employee_ledger is now partitioned (Phase 2), so this FK must be trigger-based
-        $this->dropFkConstraint('damage_invoices', 'damage_invoices_employee_ledger_entry_id_foreign');
+        $this->dropFkByColumn('damage_invoices', 'employee_ledger_entry_id');
         $this->createTriggerFkCheck(
             'damage_invoices', 'employee_ledger_entry_id', 'employee_ledger',
             'trg_fk_dmg_el_check', 'trg_dmg_el_fk_check'
@@ -1582,7 +1629,7 @@ return new class extends Migration
         }
 
         // Convert inbound FK to trigger-based
-        $this->dropFkConstraint('manual_journal_lines', 'manual_journal_lines_manual_journal_id_foreign');
+        $this->dropFkByColumn('manual_journal_lines', 'manual_journal_id');
         $this->createTriggerFkCheck(
             'manual_journal_lines', 'manual_journal_id', 'manual_journals',
             'trg_fk_mjl_mj_check', 'trg_mjl_mj_fk_check'
