@@ -3,8 +3,8 @@
 > **Document type:** Master roadmap (living document)
 > **Project:** RC_ERP_v2 — Remote Center ERP (Laravel 12 + PostgreSQL 16 + Redis)
 > **Repository:** `debugRC/` (cloned from `github.com/sajidchowdhury/debugRC`)
-> **Status:** Phases 0–11 COMPLETE. Phase 12 (Budgeting, Dimensions & Cost Centers) pending commission.
-> **Last updated:** Phase 11 complete
+> **Status:** Phases 0–12 COMPLETE. Phase 13 (Consolidation, Intercompany & Branch Demand) pending commission.
+> **Last updated:** Phase 12 complete
 
 ---
 
@@ -639,7 +639,7 @@ Phase 8  — Inventory                                    [x] Complete
 Phase 9  — Purchasing (Procure-to-Pay)                  [x] Complete
 Phase 10 — Sales (Order-to-Cash)                        [x] Complete
 Phase 11 — Fixed Assets                                 [x] Complete
-Phase 12 — Budgeting, Dimensions & Cost Centers         [ ] Not Started
+Phase 12 — Budgeting, Dimensions & Cost Centers         [x] Complete
 Phase 13 — Consolidation, Intercompany & Branch Demand  [ ] Not Started
 Phase 14 — Approval Workflow & Compliance               [ ] Not Started
 Phase 15 — Notifications & Realtime                     [ ] Not Started

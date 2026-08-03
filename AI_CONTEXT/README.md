@@ -221,7 +221,31 @@ AI_CONTEXT/
   pending schedules (G19), `BranchScope` not applied to child models (G30).
   ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** before Canonical status (see
   `IMPLEMENTATION_PLAN.md` §5 Review gates).
-- **Phases 12–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 12 — Budgeting, Dimensions & Cost Centers:** ✅ Complete (`finance/budgeting.md`,
+  `finance/dimensions-cost-centers.md`). Budgeting: 4-state lifecycle (draft→active→closed/
+  cancelled), spreadsheet grid entry (ledgers × periods), `budget_vs_actual` SQL VIEW with
+  LATERAL join on `journal_lines` (variance = budget − actual), analytical-only (NO GL posting).
+  Dimensions: 5 type enum (cost_center/profit_center/department/project/location — "cost center"
+  is a dimension TYPE, not a separate table), `journal_lines.dimension_value_id` nullable FK
+  (plumbed but NOT wired — G4), segment P&L (revenue−contra−COGS−OpEx buckets via
+  `ledger_nature`), segment BS (point-in-time cumulative by account_type), orthogonal to ledgers.
+  2 migrations create 4 tables + the `dimension_value_id` column + `budget_vs_actual` view +
+  RLS on `budgets`/`dimension_values` + seed 3 dimensions + 5 dept values. Documents 58 gaps
+  (30 budgeting + 28 dimensions) including 8 CRITICAL: budgeting G1 (free-text `fiscal_year`
+  breaks variance for "2026-27" format), G2 (no fiscal-period integration + assumes Jan-Dec),
+  G3 (audit trigger NOT attached), G20 (`checkBudgetControl` is DEAD CODE — no caller); dimensions
+  G1 (`BranchScope` on `DimensionValue` excludes NULL-branch values — non-admins cannot see
+  seeded dept values), G2 (audit trigger NOT attached), G3 (DDL stale — `dimension_value_id`
+  not in `02_accounting.sql`), G4 (NO business module passes `dimension_value_id` — segment
+  reports always return 0). Also: no FormRequests, no Policies, no per-action role
+  differentiation, no MV for segment reporting, `reverseJournalEntry` does NOT propagate
+  `dimension_value_id` (dimensions G14 — segment reports double-count reversed postings),
+  `manual_journal_lines` has no `dimension_value_id` column (G8), no artisan/scheduler,
+  `budgets` RLS has no `WITH CHECK` (G8), `budget_lines` RLS NOT enabled (G4), duplicate-active
+  budget check buggy (G5 — allows company-wide + branch-specific to coexist).
+  ⚠️ Budgeting: NOT SAFETY-CRITICAL (analytical-only, no GL posting). Dimensions: NOT
+  SAFETY-CRITICAL (read-only reporting + master-data CRUD).
+- **Phases 13–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
