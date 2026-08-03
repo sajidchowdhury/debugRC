@@ -66,7 +66,7 @@ These 9 issues must be addressed **before or during** the remaining phases. Phas
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Phase 0 — Regression & Blocker Fixes          Duration: 2-3 days        │
+│ Phase 0 — Regression & Blocker Fixes  ✅ DONE  Duration: 2-3 days        │
 │   B1 orphaned pg_partman row for financial_audit_log                    │
 │   B2 + B3 add missing retention for 11 tables                          │
 │   B4 convert 14 child FKs to journal_entries → trigger-based (BATCH A)  │
@@ -129,12 +129,15 @@ These 9 issues must be addressed **before or during** the remaining phases. Phas
 
 ---
 
-## 3. Phase 0 — Regression & Blocker Fixes (MUST DO FIRST)
+## 3. Phase 0 — Regression & Blocker Fixes (MUST DO FIRST) ✅ DONE
 
 **Goal**: Clear the 9 audit findings so that Phases 5–8 can proceed without hidden landmines.
 **Duration**: 2–3 days
 **Risk**: LOW (each fix is small and reversible)
 **Prerequisite**: None — this is the prerequisite for everything else.
+**Status**: ✅ **IMPLEMENTED** — commit `a715c48` (2026-08-15). 5 migrations + 1 config edit.
+
+> **Implementation notes**: Tasks 0.3 and 0.4 were combined into a single migration (`000003`) for cleanliness — it converts all 15 FKs (14 Batch-A tables + sales_invoices × 2 columns) in one pass. Tasks 0.5 and 0.6 were combined into migration `000004` (partman cron + archive schema). The migration also handles `journal_posting_logs` (Phase 1 partitioned table whose FK to `journal_entries` was still declarative) — 15 tables total, not 14. Each FK conversion preserves the original ON DELETE behaviour (CASCADE / SET NULL / RESTRICT) via appropriate parent-side triggers.
 
 ### 3.1 Tasks
 
@@ -698,15 +701,15 @@ The original plan's risk register (§16) is still valid. Add these new risks dis
 
 ## 11. Definition of Done — Per Phase Checklist
 
-### Phase 0 — Done when:
-- [ ] `financial_audit_log` is partitioned again (or its orphaned partman row is removed with a documented decision).
-- [ ] All 11 missing retention configs are set in `partman.part_config`.
-- [ ] All 14 Batch-A child FKs to `journal_entries` are trigger-based.
-- [ ] `sales_invoices.journal_entry_id` FK is trigger-based.
-- [ ] `pg_partman.run_maintenance_proc()` runs daily via pg_cron.
-- [ ] `archive` schema exists.
-- [ ] `enable_partitionwise_join = on` and `max_locks_per_transaction = 256` in postgresql.conf.
-- [ ] `config/archive.php` header clarifies it is Phase 12, not Phase 7.
+### Phase 0 — Done when: ✅ ALL COMPLETE
+- [x] `financial_audit_log` is partitioned again — migration `2026_08_15_000001` re-applies RANGE(created_at) monthly partitioning + BRIN + pg_partman + 84-month retention. Cleans up orphaned `partman.part_config` row. Preserves hash-chain trigger + verification view.
+- [x] All 11 missing retention configs are set in `partman.part_config` — migration `2026_08_15_000002` sets 84-month retention for 9 Phase 4 tables + `stock_transactions` + `sales_invoices`.
+- [x] All 15 child FKs to `journal_entries` are trigger-based (14 Batch-A + `journal_posting_logs` + `sales_invoices` × 2) — migration `2026_08_15_000003`. Each gets a BEFORE INSERT OR UPDATE check trigger + cascade/set-null/restrict parent trigger.
+- [x] `sales_invoices.journal_entry_id` + `cogs_journal_entry_id` FKs are trigger-based — included in migration `000003`.
+- [x] `pg_partman.run_maintenance_proc()` runs daily via pg_cron at 02:00 — migration `2026_08_15_000004`. Handles both pg_partman 4.x (`run_maintenance()`) and 5.x (`run_maintenance_proc()`).
+- [x] `archive` schema exists — created explicitly in migration `000004` with USAGE grants for `remote_center` + `postgres` roles.
+- [x] `enable_partitionwise_join = on` and `max_locks_per_transaction = 256` — migration `2026_08_15_000005` uses `ALTER SYSTEM SET` with graceful fallback. Also sets `enable_partitionwise_aggregate = on`. Note: `max_locks_per_transaction` requires PostgreSQL restart to take effect.
+- [x] `config/archive.php` header clarifies it is Phase 12, not Phase 7 — header rewritten with explicit "⚠️ NOT related to Phase 10.1 Phase 7" warning.
 
 ### Phase 5 — Done when:
 - [ ] All 6 tables are partitioned by their date column, monthly.
