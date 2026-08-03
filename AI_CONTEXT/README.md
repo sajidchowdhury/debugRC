@@ -118,7 +118,10 @@ AI_CONTEXT/
   organizational-structure, core-workflows, business-rules-catalog).
 - **Phase 3 — Database Design:** ✅ Complete (`database/` — schema-overview, er-diagrams,
   migrations-conventions, triggers-views-constraints, partitioning, etl-legacy-migration).
-- **Phases 4–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 4 — Coding Standards & Conventions:** ✅ Complete (`coding/` — coding-standards,
+  service-layer-conventions, model-conventions, request-validation, testing-standards,
+  config-driven-rules, error-handling).
+- **Phases 5–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
