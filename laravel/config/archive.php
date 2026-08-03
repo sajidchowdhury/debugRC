@@ -1,14 +1,29 @@
 <?php
 
 /**
- * Archive Configuration — Phase 12.
+ * Archive Configuration — Phase 12 (Legacy MySQL Anti-Corruption Layer).
  *
- * Configuration for the legacy MySQL archive (Anti-Corruption Layer).
- * The legacy database is READ-ONLY — Laravel never writes to it.
+ * ⚠️  NOT related to Phase 10.1 Phase 7 (PostgreSQL Partition Archival).
  *
- * The Archive Layer connects to the legacy MySQL, translates data into
- * Laravel DTOs, and isolates all legacy-specific logic. Laravel controllers
- * never know legacy table names or column names.
+ * This config is for the LEGACY MySQL read-only archive — the Anti-Corruption
+ * Layer that lets Laravel read historical data from the old MySQL database
+ * during the migration period. It is completely separate from the PostgreSQL
+ * partition archival system defined in Phase_10.1_Partitioning_and_Archival_Plan.md.
+ *
+ * Phase 10.1 Phase 7 (PostgreSQL partition archival) uses:
+ *   - The `archive` PostgreSQL schema (created by migration
+ *     2026_08_15_000004_schedule_partman_maintenance_and_create_archive_schema.php)
+ *   - pg_partman retention configs in `partman.part_config`
+ *   - Parquet/DuckDB cold-storage export (Phase 7.3)
+ *   - Partition consolidation cron (Phase 7.4)
+ *
+ * This config does NOT control any of those. Do not confuse the two.
+ *
+ * The Legacy MySQL Archive Layer:
+ *   - Connects to the legacy MySQL, translates data into Laravel DTOs,
+ *     and isolates all legacy-specific logic. Laravel controllers never
+ *     know legacy table names or column names.
+ *   - The legacy database is READ-ONLY — Laravel never writes to it.
  *
  * Future: the MySQL connection can be replaced by SQL dump, data warehouse,
  * object storage, or reporting database — only this config + the repository
