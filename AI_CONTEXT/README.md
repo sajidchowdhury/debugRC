@@ -140,7 +140,22 @@ AI_CONTEXT/
   `reverse()` crash) and the customer-payment intercompany dead-code regression.
   ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** before Canonical status (see
   `IMPLEMENTATION_PLAN.md` §5 Review gates).
-- **Phases 8–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 8 — Inventory:** ✅ Complete (`inventory/` — stock-costing, stock-ledger,
+  warehouse-stock, stock-take, stock-adjustment, damage, warehouse-transfer, uom-conversion,
+  stock-verification). Moving-average cost derivation (linking `docs/migration/avg_cost_rule.md`);
+  `stock_transactions` reference_type matrix (11 DB-CHECK + 3 app-only `demand_*` values);
+  per-warehouse avg_cost granularity; `StockService::applyTransaction()` canonical entry point;
+  `warehouse_stock` derived snapshot (SSOT = ledger); 7-state stock-take machine + freeze
+  mechanism; 6-state stock-adjustment + damage machines with maker-checker; same-branch-only
+  warehouse transfers (dead `postIntercompanyGL`); UoM conversion (Phase 5, only stock-adjustment
+  has UOM columns); distributed stock verification (Stock Take + Reconciliation + console
+  commands — no single `StockVerification*` feature). Documents 16 gaps including the
+  `inventory_revaluation` unregistered nature, stale `reference_type` DB CHECK, dead
+  `postIntercompanyGL`, no RLS on `warehouse_stock`/`stock_transactions`, and
+  `AuditableMasterData` trait dead for StockAdjustment/StockTake services.
+  ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** before Canonical status (see
+  `IMPLEMENTATION_PLAN.md` §5 Review gates).
+- **Phases 9–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
