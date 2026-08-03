@@ -112,7 +112,11 @@ AI_CONTEXT/
 
 - **Phase 0 — Foundation & Entry Points:** ✅ Complete (this file, `PROJECT_OVERVIEW.md`,
   `GLOSSARY.md`, `changelog/CHANGELOG.md`, and the `IMPLEMENTATION_PLAN.md` roadmap).
-- **Phases 1–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 1 — Architecture:** ✅ Complete (`architecture/` — high-level-architecture,
+  layered-design, module-map, branch-isolation-rls, realtime-events, partitioning-archival).
+- **Phase 2 — Business Domain:** ✅ Complete (`business/` — business-model,
+  organizational-structure, core-workflows, business-rules-catalog).
+- **Phases 3–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 

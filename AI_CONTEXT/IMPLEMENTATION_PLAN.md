@@ -3,8 +3,8 @@
 > **Document type:** Master roadmap (living document)
 > **Project:** RC_ERP_v2 — Remote Center ERP (Laravel 12 + PostgreSQL 16 + Redis)
 > **Repository:** `debugRC/` (cloned from `github.com/sajidchowdhury/debugRC`)
-> **Status:** Phases 0–1 COMPLETE. Phase 2 (Business Domain) pending commission.
-> **Last updated:** Phase 1 complete
+> **Status:** Phases 0–2 COMPLETE. Phase 3 (Database Design) pending commission.
+> **Last updated:** Phase 2 complete
 
 ---
 
@@ -629,7 +629,7 @@ progress · `[x]` Complete.
 ```
 Phase 0  — Foundation & Entry Points                    [x] Complete
 Phase 1  — Architecture                                 [x] Complete
-Phase 2  — Business Domain                              [ ] Not Started
+Phase 2  — Business Domain                              [x] Complete
 Phase 3  — Database Design                              [ ] Not Started
 Phase 4  — Coding Standards & Conventions               [ ] Not Started
 Phase 5  — Security, Auth & RBAC                        [ ] Not Started
