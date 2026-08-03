@@ -126,7 +126,13 @@ AI_CONTEXT/
   system-policy-compliance, branch-context-security, api-security).
   ⚠️ Safety-critical — pending review by the production-credential owner (see
   `IMPLEMENTATION_PLAN.md` §5 Review gates).
-- **Phases 6–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 6 — Accounting Engine:** ✅ Complete (`accounting/` — chart-of-accounts,
+  journal-posting-rules, subledger-reconciliation, reversal-vs-cancellation,
+  fiscal-year-period-close, running-balance, financial-audit-log).
+  ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** before Canonical status (see
+  `IMPLEMENTATION_PLAN.md` §5 Review gates). `journal-posting-rules.md` supersedes
+  `docs/migration/journal_posting_rules.md`.
+- **Phases 7–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
