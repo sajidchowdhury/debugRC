@@ -1613,6 +1613,77 @@ return new class extends Migration
                 WITH CHECK (current_setting('app.is_admin', true) = 'true')
         SQL);
 
+        // ── Recreate damage_attachments RLS policies against the NEW partitioned
+        //    damage_invoices BEFORE dropping the old table ──
+        // damage_attachments has no branch_id column — its 4 RLS policies
+        // (select/insert/update/delete) JOIN through damage_invoices via an
+        // EXISTS subquery. PostgreSQL tracks this as an OID dependency: when
+        // damage_invoices was renamed to damage_invoices_unpartitioned, those
+        // policies now depend on the OLD table (by OID), blocking DROP TABLE
+        // with SQLSTATE 2BP01. We must drop the old policies (releasing the
+        // dependency) and recreate them against the new partitioned
+        // damage_invoices (which already exists above). The admin policy
+        // doesn't reference damage_invoices but is recreated for consistency.
+        // (Policy definitions match migration 2026_01_03_000001 exactly.)
+        $this->dropRlsPolicies('damage_attachments');
+        DB::statement(<<<'SQL'
+            CREATE POLICY rls_damage_attachments_select ON damage_attachments FOR SELECT
+                USING (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR EXISTS (
+                        SELECT 1 FROM damage_invoices di
+                        WHERE di.id = damage_attachments.damage_invoice_id
+                          AND di.branch_id = current_setting('app.branch_id')::int
+                    )
+                )
+        SQL);
+        DB::statement(<<<'SQL'
+            CREATE POLICY rls_damage_attachments_insert ON damage_attachments FOR INSERT
+                WITH CHECK (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR EXISTS (
+                        SELECT 1 FROM damage_invoices di
+                        WHERE di.id = damage_attachments.damage_invoice_id
+                          AND di.branch_id = current_setting('app.branch_id')::int
+                    )
+                )
+        SQL);
+        DB::statement(<<<'SQL'
+            CREATE POLICY rls_damage_attachments_update ON damage_attachments FOR UPDATE
+                USING (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR EXISTS (
+                        SELECT 1 FROM damage_invoices di
+                        WHERE di.id = damage_attachments.damage_invoice_id
+                          AND di.branch_id = current_setting('app.branch_id')::int
+                    )
+                )
+                WITH CHECK (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR EXISTS (
+                        SELECT 1 FROM damage_invoices di
+                        WHERE di.id = damage_attachments.damage_invoice_id
+                          AND di.branch_id = current_setting('app.branch_id')::int
+                    )
+                )
+        SQL);
+        DB::statement(<<<'SQL'
+            CREATE POLICY rls_damage_attachments_delete ON damage_attachments FOR DELETE
+                USING (
+                    current_setting('app.is_admin', true) = 'true'
+                    OR EXISTS (
+                        SELECT 1 FROM damage_invoices di
+                        WHERE di.id = damage_attachments.damage_invoice_id
+                          AND di.branch_id = current_setting('app.branch_id')::int
+                    )
+                )
+        SQL);
+        DB::statement(<<<'SQL'
+            CREATE POLICY rls_damage_attachments_admin ON damage_attachments FOR ALL
+                USING (current_setting('app.is_admin', true) = 'true')
+                WITH CHECK (current_setting('app.is_admin', true) = 'true')
+        SQL);
+
         DB::statement('DROP TABLE damage_invoices_unpartitioned');
         $this->registerPartman('damage_invoices', 'damage_date', '2027-01-01');
         DB::statement('ANALYZE damage_invoices');
