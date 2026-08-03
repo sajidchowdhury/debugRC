@@ -132,7 +132,15 @@ AI_CONTEXT/
   ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** before Canonical status (see
   `IMPLEMENTATION_PLAN.md` §5 Review gates). `journal-posting-rules.md` supersedes
   `docs/migration/journal_posting_rules.md`.
-- **Phases 7–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 7 — Accounting Transactions:** ✅ Complete (`accounting/` — money-transfers,
+  employee-transactions, supplier-transactions, customer-payments, other-income-expense,
+  manual-journals, bank-reconciliation). Per-transaction: lifecycle, Dr/Cr matrix, reversal
+  cascade, validation, edge cases, accountant review checklist. Documents 14 gaps including
+  critical bank-reconciliation issues (admin-only RLS, non-posting adjustment JE, latent
+  `reverse()` crash) and the customer-payment intercompany dead-code regression.
+  ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** before Canonical status (see
+  `IMPLEMENTATION_PLAN.md` §5 Review gates).
+- **Phases 8–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
