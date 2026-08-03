@@ -252,10 +252,22 @@ ROLLBACK;
 --    Attempts to insert a journal_line with a non-existent journal_entry_id.
 --    Expected: ERROR — the trigger-based FK check blocks it.
 --    This proves referential integrity survived the partitioning.
+--
+--    AFTER HOTFIX-9 (migration 2026_08_29_000001): the error should be a
+--    clean 'FK violation: journal_entries(id=99999999) not found for
+--    journal_lines.journal_entry_id' (SQLSTATE 23503).
+--
+--    BEFORE HOTFIX-9: the error was a confusing 'moving row to another
+--    partition during a BEFORE FOR EACH ROW trigger is not supported'
+--    (SQLSTATE 0A000) — the sync trigger set entry_date=NULL, which would
+--    re-route the row, crashing before the FK guard could fire. If you
+--    still see 0A000, HOTFIX-9 has not been applied.
 -- ────────────────────────────────────────────────────────────────────────────
 \echo '── O. TRIGGER-BASED FK GUARD TEST ──────────────────────────────────────'
 \echo 'Attempts insert with non-existent journal_entry_id (99999999).'
-\echo 'Expected: ERROR (trigger blocks it). Safe — wrapped in BEGIN/ROLLBACK.'
+\echo 'Expected (post-HOTFIX-9): ERROR 23503 "FK violation: journal_entries(id=...) not found".'
+\echo 'Expected (pre-HOTFIX-9):  ERROR 0A000 "moving row to another partition..." (bug).'
+\echo 'Safe — wrapped in BEGIN/ROLLBACK.'
 BEGIN;
 SET app.is_admin = 'true';
 INSERT INTO journal_lines (journal_entry_id, ledger_id, entry_date, debit, credit)
@@ -267,8 +279,8 @@ VALUES (
     0.00
 );
 ROLLBACK;
-\echo '↑ If you saw an ERROR above (FK violation / trigger exception), the guard works.'
-\echo '   This proves the trigger-based FK replacement is enforcing referential integrity.'
+\echo '↑ GOOD: SQLSTATE 23503 "FK violation: journal_entries(id=...) not found" → guard works.'
+\echo '  BAD:  SQLSTATE 0A000 "moving row to another partition..." → apply HOTFIX-9 (migration 2026_08_29_000001).'
 \echo ''
 
 \echo '═══════════════════════════════════════════════════════════════════════════'
