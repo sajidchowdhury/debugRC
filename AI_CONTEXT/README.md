@@ -116,7 +116,9 @@ AI_CONTEXT/
   layered-design, module-map, branch-isolation-rls, realtime-events, partitioning-archival).
 - **Phase 2 — Business Domain:** ✅ Complete (`business/` — business-model,
   organizational-structure, core-workflows, business-rules-catalog).
-- **Phases 3–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 3 — Database Design:** ✅ Complete (`database/` — schema-overview, er-diagrams,
+  migrations-conventions, triggers-views-constraints, partitioning, etl-legacy-migration).
+- **Phases 4–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
