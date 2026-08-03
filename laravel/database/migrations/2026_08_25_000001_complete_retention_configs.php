@@ -132,6 +132,27 @@ return new class extends Migration
 
     public function up(): void
     {
+        // Guard: skip if pg_partman is not installed. The partitioning migrations
+        // (000001-000004, 2026_08_20_000001, 2026_08_22_*) register tables with
+        // pg_partman only when the extension is available; if it's absent,
+        // partman.part_config doesn't exist and this UPDATE would throw
+        // SQLSTATE 42P01. Partitioning still works without pg_partman — only
+        // automatic maintenance (retention/detachment) is disabled.
+        $partmanInstalled = DB::selectOne("
+            SELECT EXISTS (
+                SELECT 1 FROM pg_extension WHERE extname = 'pg_partman'
+            ) AS installed
+        ")->installed ?? false;
+
+        if (! $partmanInstalled) {
+            Log::warning(
+                'pg_partman extension not installed — skipping retention config '
+                . '(migration 2026_08_25_000001, Phase 7.1). Partitioning still '
+                . 'works; only automatic maintenance (retention/detachment) is disabled.'
+            );
+            return;
+        }
+
         foreach (self::RETENTION_CONFIGS as $table => $months) {
             $target = "{$months} months";
 
@@ -180,6 +201,17 @@ return new class extends Migration
 
     public function down(): void
     {
+        // Guard: skip if pg_partman is not installed (mirrors up()).
+        $partmanInstalled = DB::selectOne("
+            SELECT EXISTS (
+                SELECT 1 FROM pg_extension WHERE extname = 'pg_partman'
+            ) AS installed
+        ")->installed ?? false;
+
+        if (! $partmanInstalled) {
+            return;
+        }
+
         // Reverse: clear retention config for every table we touched.
         // We only clear tables whose retention matches one of our target
         // values, to avoid wiping any future custom configs.

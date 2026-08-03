@@ -153,45 +153,74 @@ return new class extends Migration
         // parent's children — useful to show "last created: <date>" in the
         // dashboard even when the deficit is 0.
         // ============================================================
-        DB::statement(<<<'SQL'
-            CREATE OR REPLACE VIEW v_missing_future_partitions AS
-            WITH partman_parents AS (
-                SELECT pc.parent_table,
-                       c.oid AS parent_oid
-                  FROM partman.part_config pc
-                  JOIN pg_class c        ON c.relname = pc.parent_table
-                  JOIN pg_namespace n    ON n.oid = c.relnamespace
-                 WHERE n.nspname = 'public'
-            ),
-            children AS (
-                SELECT pp.parent_table,
-                       pp.parent_oid,
-                       c.relname AS child_name,
-                       (regexp_match(
-                           pg_get_expr(c.relpartbound, c.oid),
-                           'FROM \(''([0-9]{4}-[0-9]{2}-[0-9]{2})''\)'
-                       ))[1]::DATE AS bound_start
-                  FROM partman_parents pp
-                  JOIN pg_inherits i ON i.inhparent = pp.parent_oid
-                  JOIN pg_class c    ON c.oid = i.inhrelid
-            ),
-            agg AS (
-                SELECT parent_table,
-                       count(*) FILTER (
-                           WHERE bound_start > (CURRENT_DATE + INTERVAL '3 months')::DATE
-                       ) AS future_count,
-                       max(bound_start) AS last_partition_date
-                  FROM children
-                 GROUP BY parent_table
-            )
-            SELECT parent_table AS parent,
-                   last_partition_date,
-                   future_count AS months_ahead,
-                   (3 - future_count) AS missing_count
-              FROM agg
-             WHERE future_count < 3
-             ORDER BY parent_table;
-        SQL);
+        // Guard: this view's CTE references partman.part_config. PostgreSQL
+        // validates view queries at CREATE VIEW time (unlike PL/pgSQL function
+        // bodies, which are lazy-parsed). If pg_partman isn't installed, the
+        // CREATE VIEW would throw SQLSTATE 42P01. When pg_partman is absent,
+        // create a stub view with matching column names/types (zero rows) so
+        // the dashboard controller's SELECT doesn't fail with "relation does
+        // not exist".
+        $partmanInstalled = DB::selectOne("
+            SELECT EXISTS (
+                SELECT 1 FROM pg_extension WHERE extname = 'pg_partman'
+            ) AS installed
+        ")->installed ?? false;
+
+        if ($partmanInstalled) {
+            DB::statement(<<<'SQL'
+                CREATE OR REPLACE VIEW v_missing_future_partitions AS
+                WITH partman_parents AS (
+                    SELECT pc.parent_table,
+                           c.oid AS parent_oid
+                      FROM partman.part_config pc
+                      JOIN pg_class c        ON c.relname = pc.parent_table
+                      JOIN pg_namespace n    ON n.oid = c.relnamespace
+                     WHERE n.nspname = 'public'
+                ),
+                children AS (
+                    SELECT pp.parent_table,
+                           pp.parent_oid,
+                           c.relname AS child_name,
+                           (regexp_match(
+                               pg_get_expr(c.relpartbound, c.oid),
+                               'FROM \(''([0-9]{4}-[0-9]{2}-[0-9]{2})''\)'
+                           ))[1]::DATE AS bound_start
+                      FROM partman_parents pp
+                      JOIN pg_inherits i ON i.inhparent = pp.parent_oid
+                      JOIN pg_class c    ON c.oid = i.inhrelid
+                ),
+                agg AS (
+                    SELECT parent_table,
+                           count(*) FILTER (
+                               WHERE bound_start > (CURRENT_DATE + INTERVAL '3 months')::DATE
+                           ) AS future_count,
+                           max(bound_start) AS last_partition_date
+                      FROM children
+                     GROUP BY parent_table
+                )
+                SELECT parent_table AS parent,
+                       last_partition_date,
+                       future_count AS months_ahead,
+                       (3 - future_count) AS missing_count
+                  FROM agg
+                 WHERE future_count < 3
+                 ORDER BY parent_table;
+            SQL);
+        } else {
+            Log::warning(
+                'pg_partman not installed — v_missing_future_partitions created '
+                . 'as empty stub (migration 2026_08_28_000004). The dashboard '
+                . 'will show no future-partition deficits.'
+            );
+            DB::statement(<<<'SQL'
+                CREATE OR REPLACE VIEW v_missing_future_partitions AS
+                SELECT NULL::TEXT AS parent,
+                       NULL::DATE AS last_partition_date,
+                       NULL::INT   AS months_ahead,
+                       NULL::INT   AS missing_count
+                 WHERE FALSE
+            SQL);
+        }
 
         // ============================================================
         // 5. v_catalog_bloat
