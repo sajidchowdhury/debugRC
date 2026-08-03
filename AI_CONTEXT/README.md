@@ -245,7 +245,65 @@ AI_CONTEXT/
   budget check buggy (G5 — allows company-wide + branch-specific to coexist).
   ⚠️ Budgeting: NOT SAFETY-CRITICAL (analytical-only, no GL posting). Dimensions: NOT
   SAFETY-CRITICAL (read-only reporting + master-data CRUD).
-- **Phases 13–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 13 — Consolidation, Intercompany & Branch Demand:** ✅ Complete
+  (`finance/consolidation-intercompany.md`, `finance/branch-demand.md`). Two interlocking
+  subsystems. **Consolidation:** 3-state run lifecycle (draft→posted→reversed, NO reopen),
+  `EliminationRule` 5-type enum (balance/revenue/investment/dividend/custom), per-branch-pair
+  elimination from `branch_ledger` (balance-type) + per-ledger aggregate from `journal_lines`
+  (aggregate-type, uses `min(debitNet, creditNet)` to avoid over-elimination — BR14), 5 seeded
+  elimination contra ledgers (L-0106, L-0304, L-0403, L-0504, L-0404 all marked
+  `is_elimination=true`), `mv_consolidated_trial_balance` MV refreshed on every post/reverse.
+  **Intercompany posting pairs:** dual-JE pattern (creditor: Dr `interbranch_receivable` /
+  Cr `inventory`; debtor: Dr `inventory` / Cr `interbranch_payable`) + `branch_ledger` mirror
+  pair (debtor debit + creditor credit, shared `running_balance`). 6 intercompany posting
+  sites catalogued (BranchDemand ✓, FIFO settlement DEAD CODE, MoneyTransfer silently skips
+  on unregistered `'intercompany'` nature, SupplierTransaction ✓, EmployeeTransaction ✓,
+  WarehouseTransfer DEAD CODE with inverted Dr/Cr). **Branch Demand:** 4-state lifecycle
+  (pending→received→reversed|rejected, NO reopen) with Phase 5 receipt gate (reversal blocked
+  until `received_at IS NOT NULL`); 7 services (5,652 LOC: `BranchDemandService` 1012L +
+  `BranchDemandShadowService` 535L + `BranchDemandRepricingService` 785L +
+  `BranchDemandAuditService` 955L + `BranchDemandAuditLogger` 171L +
+  `BranchDemandWeeklyReportService` 1076L + `BranchIntercompanyService` 1128L); 5 demand
+  tables + `branch_ledger` sub-ledger + `branch_demand_audit_log` (11-value action enum) +
+  2 shadow tables; web (28 routes) + API v1 (14 endpoints); repricing posts dual GL adjustment
+  pair (positive: Dr receivable/Cr inventory on supplier; negative: Dr inventory/Cr receivable)
+  with append-only `branch_demand_repricing` audit row; FIFO settlement (oldest demand first,
+  per-demand `settleAmount = min(outstanding, remainingAmount)`, single GL per batch Dr
+  `interbranch_payable` / Cr `cash_bank`); shadow mode 3-state (off/passive/active) with
+  7-consecutive-zero-diff-day cutover readiness; 3 anti-gaming flags (`catalog_below_locked`,
+  `sales_below_cost` — references nonexistent `sales_items` table G17, `stale_outstanding`);
+  6-checklist audit + per-demand audit + branch-pair reconciliation; 25-column weekly report
+  replicating "MAIN BILL SHIT1.xlsx" Excel sheet. Documents 50 gaps (22 consolidation +
+  28 branch-demand) including 13 CRITICAL: consolidation G1 (`ConsolidationService` BYPASSES
+  `JournalPostingService` for elimination JE creation + reversal — no Dr=Cr validation,
+  no period-close, no `journal_posting_logs`), G2 (FIFO demand-settlement feature is DEAD
+  CODE — `settleFromCustomerPayment` / `settleFromMoneyTransfer` / `fifoSettleDemands` have
+  NO caller), G3 (RLS admin-only on `consolidation_runs` / `elimination_entries` /
+  `elimination_rules` / `companies` — accountants and managers blocked, mirrors Phase 11
+  fixed-assets G1), G4 (`fn_financial_audit_trigger` NOT attached to 7 in-scope tables),
+  G5 (DDL stale — consolidation tables + `mv_consolidated_trial_balance` missing from
+  `database/sql/*.sql`); branch-demand G1 (`CustomerPaymentService::postIntercompanySettlement`
+  early-returns null because `banks` has no `branch_id` column), G2
+  (`MoneyTransferService::postIntercompanySettlement` uses unregistered `'intercompany'`
+  nature + never calls `settleFromMoneyTransfer`), G3 (`shadow_cutover_log` schema mismatch
+  — INSERT will fail `SQLSTATE[42703]`), G4 (`BranchDemandShadowService::compareOperation`
+  has NO caller — shadow mode plumbed but NOT WIRED), G5 (DDL stale — `branch_demand*` +
+  shadow tables missing from `database/sql/*.sql`), G6 (`fn_financial_audit_trigger` NOT
+  attached to ANY `branch_demand*` table or `branch_ledger`), G7 (`'branch_demand_created'`
+  notification registered but NEVER dispatched — supplier branch not notified of new demands),
+  G8 (NO RLS on 5 branch_demand-related tables — cross-branch data leakage risk). Also:
+  `WarehouseTransferService::postIntercompanyGL` is DEAD CODE with fossilized bugs (dropped
+  `branch_ledger` columns + inverted Dr/Cr — G10 in consolidation); `BranchDemandRepricing`
+  stores only `creditor_je_id` not `debtor_je_id` (G12); `BranchDemandAuditService::
+  getSalesBelowLockedCost` references nonexistent tables `sales_items`+`sales` (G17);
+  weekly report `profit` column excludes demand COGS (G19); `reverseDemand` uses
+  `JournalPostingService::reverseJournalEntry` directly, not `JournalReversalService` for
+  cascade (G13 — explicit two-step pattern with separate `reverseLedgerByReference`).
+  ⚠️ **SAFETY-CRITICAL — pending accountant sign-off** for both files (elimination JEs post
+  to GL; intercompany posting pairs affect branch-level TB + `branch_ledger` running balance;
+  demand fulfillment moves stock + posts GL; repricing posts GL adjustments). See
+  `IMPLEMENTATION_PLAN.md` §5 Review gates.
+- **Phases 14–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
