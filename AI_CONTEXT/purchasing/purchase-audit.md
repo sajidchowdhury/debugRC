@@ -410,6 +410,13 @@ purchase tables are NOT in the hash chain.
 1. **G1 — `paid_amount` column missing on `purchase_receives`.** Affects the audit of GRN
    payment allocation: `SupplierTransactionService::allocateToGRN` throws at runtime, so the
    payment-allocation audit trail is never built. CRITICAL.
+
+   > ✅ RESOLVED (PURCHASING-1) — Migration `2026_09_03_000001_add_paid_amount_to_purchase_receives.php`
+   > adds `paid_amount numeric(14,2) DEFAULT 0` to `purchase_receives` (after `total_amount`),
+   > mirroring `sales_invoices.paid_amount`. A partial index `idx_pr_paid WHERE paid_amount > 0`
+   > powers the "partially-paid GRNs" audit view cheaply. DDL refreshed in `05_purchase.sql`.
+   > `SupplierTransactionService::allocateToGRN` (+) and `reversePayment` (GREATEST(0, … - N))
+   > now succeed — the supplier-payment-against-GRN workflow is unblocked. Closes G-024 + G-025.
 2. **G2 — No `Purchase*Policy` classes.** Per-row audit gating is impossible. The audit team
    cannot answer "show me all GRNs created by user X that were confirmed by user Y" without a
    policy layer. CRITICAL for compliance.
@@ -420,6 +427,13 @@ purchase tables are NOT in the hash chain.
    `purchase_receives`, `purchase_receive_items`, `purchase_returns`, `purchase_return_items`)
    have no trigger. Direct DB mutations are invisible to the forensic hash chain. CRITICAL —
    forensic audit gap.
+
+   > ✅ RESOLVED (PURCHASING-1) — Migration `2026_09_03_000002_attach_financial_audit_trigger_to_purchase_tables.php`
+   > attaches `trg_audit_<table>` AFTER INSERT OR UPDATE OR DELETE on all 6 purchase tables.
+   > Pattern mirrors SALES-3 (`2026_09_01_000002`) and FINANCE-1 (`2026_09_01_000003`):
+   > DROP IF EXISTS + CREATE (idempotent). DDL refreshed at the bottom of `05_purchase.sql`
+   > via a `DO $$ … $$` block. `supplier_payments` is intentionally excluded — it already
+   > had the trigger. Closes G-030 + G-031 + G-032.
 4. **G4 — `AuditableMasterData` trait bypassed by `DB::table()` writes.** The trait is `use`d
    on all 4 models but never fires because the services use raw queries. The `master_data_*`
    rows are NEVER written through the canonical path. The audit team is likely unaware of this

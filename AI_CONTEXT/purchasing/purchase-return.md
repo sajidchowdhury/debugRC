@@ -386,6 +386,12 @@ return $this->journalPosting->createJournalEntry([
 2. **G3 — `fn_financial_audit_trigger` NOT attached to `purchase_returns`.** The hash-chained
    immutable audit log does not cover purchase returns. Direct `DB::table('purchase_returns')`
    mutations bypass the hash chain. CRITICAL — forensic gap.
+
+   > ✅ RESOLVED (PURCHASING-1) — Migration `2026_09_03_000002_attach_financial_audit_trigger_to_purchase_tables.php`
+   > attaches `trg_audit_purchase_returns` AFTER INSERT OR UPDATE OR DELETE. Same migration also
+   > attaches to `purchase_orders`, `purchase_order_items`, `purchase_receives`,
+   > `purchase_receive_items`, `purchase_return_items`. DDL refreshed at the bottom of
+   > `database/sql/05_purchase.sql`. Closes G-032.
 3. **G4 — `AuditableMasterData` trait bypassed by `DB::table()` writes.** `createReturn`,
    `confirmReturn`, and `cancelReturn` all use raw `DB::table(…)` queries. The trait never
    fires. Only `UserAuditLogger::log()` captures the mutation. CRITICAL — silent audit gap.

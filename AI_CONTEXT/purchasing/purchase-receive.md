@@ -394,6 +394,13 @@ return $this->journalPosting->createJournalEntry([
    update this column. NO migration adds it. Any supplier payment allocated against a GRN throws
    `SQLSTATE[42703]: Undefined column: paid_amount`. **CRITICAL** — the supplier-payment-against-
    GRN workflow is broken.
+
+   > ✅ RESOLVED (PURCHASING-1) — Migration `2026_09_03_000001_add_paid_amount_to_purchase_receives.php`
+   > adds `paid_amount numeric(14,2) DEFAULT 0` to `purchase_receives`. Partial index
+   > `idx_pr_paid WHERE paid_amount > 0` powers the audit checklist's "partially-paid GRNs" view.
+   > DDL in `database/sql/05_purchase.sql` refreshed to match. Closes G-025 (and G-024 from
+   > purchase-audit.md). `SupplierTransactionService` code is unchanged — its `DB::raw('paid_amount + N')`
+   > and `DB::raw('GREATEST(0, paid_amount - N)')` now resolve successfully at runtime.
 2. **G2 — No `PurchaseReceivePolicy` class.** RBAC relies solely on route middleware + RLS.
    Per-row policy gates are impossible. CRITICAL for compliance.
 
@@ -401,6 +408,12 @@ return $this->journalPosting->createJournalEntry([
 3. **G3 — `fn_financial_audit_trigger` NOT attached to `purchase_receives`.** The hash-chained
    immutable audit log covers only `supplier_payments` of the purchase ecosystem. Direct
    `DB::table('purchase_receives')` mutations bypass the hash chain. CRITICAL — forensic gap.
+
+   > ✅ RESOLVED (PURCHASING-1) — Migration `2026_09_03_000002_attach_financial_audit_trigger_to_purchase_tables.php`
+   > attaches `trg_audit_purchase_receives` AFTER INSERT OR UPDATE OR DELETE. Same migration
+   > also attaches to `purchase_orders`, `purchase_order_items`, `purchase_receive_items`,
+   > `purchase_returns`, `purchase_return_items`. DDL refreshed at the bottom of
+   > `database/sql/05_purchase.sql`. Closes G-031.
 4. **G4 — `AuditableMasterData` trait bypassed by `DB::table()` writes.** `createReceive`,
    `confirmReceive`, and `cancelReceive` all use raw `DB::table(…)` queries. Eloquent events
    never fire. The `master_data_*` audit rows are NEVER written through the canonical path —

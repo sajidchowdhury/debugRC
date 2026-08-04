@@ -55,6 +55,10 @@ CREATE TABLE purchase_receives (
     discount_amount numeric(14,2) DEFAULT 0,
     tax_amount numeric(14,2) DEFAULT 0,
     total_amount numeric(14,2) DEFAULT 0,
+    -- paid_amount: accumulated supplier-payment allocations (G-024/G-025).
+    -- Mirrors sales_invoices.paid_amount layout. Maintained by
+    -- SupplierTransactionService::allocateToGRN (+) / reversePayment (-).
+    paid_amount numeric(14,2) DEFAULT 0,
     status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','cancelled')),
     journal_entry_id integer REFERENCES journal_entries(id),
     is_reversed boolean NOT NULL DEFAULT false,
@@ -73,6 +77,9 @@ CREATE INDEX idx_pr_branch ON purchase_receives(branch_id);
 CREATE INDEX idx_pr_journal ON purchase_receives(journal_entry_id);
 CREATE INDEX idx_pr_reversed ON purchase_receives(is_reversed, reversed_at);
 CREATE INDEX idx_pr_status ON purchase_receives(status);
+-- Partial index — only GRNs with at least one supplier-payment allocation.
+-- Powers the audit checklist's "partially-paid GRNs" view cheaply.
+CREATE INDEX IF NOT EXISTS idx_pr_paid ON purchase_receives(paid_amount) WHERE paid_amount > 0;
 
 CREATE TABLE purchase_receive_items (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -164,3 +171,45 @@ CREATE INDEX idx_ipa_payment ON invoice_payment_allocations(payment_id);
 -- Over-allocation trigger: prevents SUM(allocated_amount) > invoice total_amount.
 -- See migration 2025_01_21_000003 for the full trigger + function definition.
 -- Requires: CREATE EXTENSION IF NOT EXISTS btree_gist; (handled by 2025_01_21_000003)
+
+-- ============================================================
+-- Hash-chained audit triggers (PURCHASING-1, G-030/G-031/G-032)
+-- ============================================================
+-- Attached to all 6 purchase tables by migration
+-- 2026_09_03_000002_attach_financial_audit_trigger_to_purchase_tables.php.
+--
+-- The fn_financial_audit_trigger() function (defined in 02_accounting.sql:381-443)
+-- writes an immutable, hash-chained row to financial_audit_log on every
+-- INSERT / UPDATE / DELETE. This closes the forensic gap where direct
+-- DB::table('purchase_*') mutations bypassed the hash chain.
+--
+-- Trigger names follow the convention trg_audit_<table>. Each is
+-- AFTER INSERT OR UPDATE OR DELETE FOR EACH ROW.
+--
+-- NOTE: supplier_payments already has the trigger (set up by 06_payment_and_misc.sql).
+-- It is intentionally NOT re-attached here.
+--
+-- The attachments below are idempotent (DROP IF EXISTS + CREATE), so re-applying
+-- 05_purchase.sql on a database that already has them is a safe no-op.
+DO $$
+DECLARE
+    t text;
+    trg text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY[
+        'purchase_orders',
+        'purchase_order_items',
+        'purchase_receives',
+        'purchase_receive_items',
+        'purchase_returns',
+        'purchase_return_items'
+    ] LOOP
+        trg := 'trg_audit_' || t;
+        EXECUTE format('DROP TRIGGER IF EXISTS %I ON %I', trg, t);
+        EXECUTE format(
+            'CREATE TRIGGER %I AFTER INSERT OR UPDATE OR DELETE ON %I '
+            'FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger()',
+            trg, t
+        );
+    END LOOP;
+END $$;
