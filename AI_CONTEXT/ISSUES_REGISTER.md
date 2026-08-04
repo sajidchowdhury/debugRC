@@ -19,18 +19,18 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | Severity | Count | Blocks cutover? |
 |---|---|---|
 | CRITICAL | 76 | Yes — all of them |
-| HIGH | 95 | Most |
-| MEDIUM | 75 | Some |
-| LOW | 70 | No |
+| HIGH | 93 | Most |
+| MEDIUM | 67 | Some |
+| LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **318** | |
-| _of which resolved_ | 39 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **306** | |
+| _of which resolved_ | 51 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
 | Sector | Open issues |
 |---|---|
-| api | 47 |
+| api | 35 |
 | architecture | 19 |
 | finance | 69 |
 | purchasing | 24 |
@@ -147,8 +147,8 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-081 | G7 | CRITICAL | workflows | workflows/approval-workflow.md:9 | — | G7 DDL stale) mean the approval subsystem is only partially production-ready.) | DDL drift | H1 | open | — |
 | G-082 | G2 | HIGH | api | api/api-conventions.md:698 | — | G2 \| HIGH \| 3 of 15 controllers hand-roll the response array instead of using a `JsonResource` (Branch, Dashboard, Lookup, Commission). Br… | — | H2 | open | — |
 | G-083 | G3 | HIGH | api | api/api-overview.md:573 | — | G3 \| HIGH \| ZERO tests for 8 of 14 modules: Sales Cart, Sales Invoices, Sales Challans, Sales Returns, Customer Payments, Commission, Ware… | test debt | H2 | open | — |
-| G-084 | G4 | HIGH | api | api/api-conventions.md:700 | — | G4 \| HIGH \| `CommissionApiController::listRules` does NOT clamp `per_page` to 100. OOM risk. \| Add `min((int) $request->input('per_page',… | — | H2 | open | — |
-| G-085 | G4 | HIGH | api | api/api-modules.md:722 | — | G4 \| HIGH \| `CommissionApiController::listRules` does not clamp `per_page` (OOM risk). \| Add `min((int) ..., 100)`. \| | — | H2 | open | — |
+| G-084 | G4 | HIGH | api | api/api-conventions.md:700 | — | G4 \| HIGH \| `CommissionApiController::listRules` does NOT clamp `per_page` to 100. OOM risk. \| Add `min((int) $request->input('per_page',… | — | H2 | resolved | 1a36086 |
+| G-085 | G4 | HIGH | api | api/api-modules.md:722 | — | G4 \| HIGH \| `CommissionApiController::listRules` does not clamp `per_page` (OOM risk). \| Add `min((int) ..., 100)`. \| | — | H2 | resolved | 1a36086 |
 | G-086 | G6 | HIGH | api | api/api-modules.md:724 | — | G6 \| HIGH \| Role-gate inconsistency: Sales Cart/Invoices/Returns/Payments write endpoints have NO route-level `api.auth:role` gate. \| Add… | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-087 | G6 | HIGH | api | api/api-overview.md:576 | — | G6 \| HIGH \| Role-gate inconsistency: write endpoints on Sales Cart/Invoices/Returns/Payments rely ONLY on the controller's `SalesAccess::a… | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-088 | G7 | HIGH | api | api/api-conventions.md:703 | — | G7 \| HIGH \| Idempotency implemented on only 3 of ~14 transactional write endpoints. See §11.3. \| Add `idempotency_token` to the 6 endpoin… | — | H2 | open | — |
@@ -257,20 +257,20 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-191 | G4 | MEDIUM | api | api/api-overview.md:574 | — | G4 \| MEDIUM \| Token length inconsistency: `User::generateApiToken()` uses `Str::random(60)`, `GenerateApiToken` command uses `Str::random(… | — | H2 | open | — |
 | G-192 | G4 | MEDIUM | api | api/api-reference-index.md:266 | — | G4 \| MEDIUM \| `API_REFERENCE.md`'s intro (line 8) says "14 endpoints" — false. \| Update to "100 endpoints" (or the current count) after t… | — | H2 | open | — |
 | G-193 | G5 | MEDIUM | api | api/api-conventions.md:701 | — | G5 \| MEDIUM \| Search param name drift: `q` (Branches, Stock Take) vs `search` (Sales, Stock Adjustment, Branch Demand). \| Pick `search` (… | — | H2 | open | — |
-| G-194 | G5 | MEDIUM | api | api/api-modules.md:723 | — | G5 \| MEDIUM \| `BranchDemandApiTest` hand-rolls token issuance 16× instead of using `IssuesApiTokens`. \| Refactor to use the helper. \| | test debt | H3 | open | — |
-| G-195 | G5 | MEDIUM | api | api/api-overview.md:575 | — | G5 \| MEDIUM \| `BranchDemandApiTest` hand-rolls token issuance 16× instead of using the `IssuesApiTokens` helper that the 5 other API test … | test debt | H3 | open | — |
+| G-194 | G5 | MEDIUM | api | api/api-modules.md:723 | — | G5 \| MEDIUM \| `BranchDemandApiTest` hand-rolls token issuance 16× instead of using `IssuesApiTokens`. \| Refactor to use the helper. \| | test debt | H3 | resolved | 78ca013 |
+| G-195 | G5 | MEDIUM | api | api/api-overview.md:575 | — | G5 \| MEDIUM \| `BranchDemandApiTest` hand-rolls token issuance 16× instead of using the `IssuesApiTokens` helper that the 5 other API test … | test debt | H3 | resolved | 78ca013 |
 | G-196 | G6 | MEDIUM | api | api/api-conventions.md:702 | — | G6 \| MEDIUM \| No sort convention. No endpoint accepts `?sort=field` or `?order=asc`. All list endpoints hard-code `orderBy('created_at', '… | — | H2 | open | — |
 | G-197 | G8 | MEDIUM | api | api/api-conventions.md:704 | — | G8 \| MEDIUM \| No ETag / conditional-GET support on read endpoints. Mobile clients re-download full lists on every poll. \| Add `ETag` + `I… | — | H2 | open | — |
 | G-198 | G8 | MEDIUM | api | api/api-modules.md:726 | — | G8 \| MEDIUM \| No API test verifies `set.api.branch` enforces RLS for the 4 protected modules. \| Add a `test_non_admin_cannot_see_other_br… | cutover, RLS audit | H1 | resolved | d617c14 |
 | G-199 | G8 | MEDIUM | api | api/api-overview.md:578 | — | G8 \| MEDIUM \| No API test verifies the `set.api.branch` middleware actually enforces RLS for any of the 4 RLS-protected modules. Cross-bra… | cutover, RLS audit | H1 | resolved | d617c14 |
 | G-200 | G9 | MEDIUM | api | api/api-conventions.md:705 | — | G9 \| MEDIUM \| No `Accept` negotiation. API always returns JSON regardless of `Accept` header. A future `v2` cannot be selected via `Accept… | — | H2 | open | — |
-| G-201 | G9 | MEDIUM | api | api/api-modules.md:727 | — | G9 \| MEDIUM \| `ApiRateLimitTest` does not verify the 30 req/min transactional write cap. \| Add a `test_write_endpoint_enforces_30_per_min… | test debt | H3 | open | — |
-| G-202 | G9 | MEDIUM | api | api/api-overview.md:579 | — | G9 \| MEDIUM \| `ApiRateLimitTest` verifies the 60-req/min branches cap and the 120-req/min dashboard cap, but NOT the 30-req/min transactio… | test debt | H3 | open | — |
-| G-203 | G11 | MEDIUM | api | api/api-modules.md:729 | — | G11 \| MEDIUM \| No API tests for idempotency replay. \| Add `test_finalize_with_same_idempotency_token_returns_idempotent_replay`. \| | test debt | H3 | open | — |
-| G-204 | G11 | MEDIUM | api | api/api-overview.md:581 | — | G11 \| MEDIUM \| No API tests for idempotency (G7 endpoints). The `Cache::get/put` replay path is never exercised in tests. \| Add a `test_f… | test debt | H3 | open | — |
+| G-201 | G9 | MEDIUM | api | api/api-modules.md:727 | — | G9 \| MEDIUM \| `ApiRateLimitTest` does not verify the 30 req/min transactional write cap. \| Add a `test_write_endpoint_enforces_30_per_min… | test debt | H3 | resolved | a04b3a6 |
+| G-202 | G9 | MEDIUM | api | api/api-overview.md:579 | — | G9 \| MEDIUM \| `ApiRateLimitTest` verifies the 60-req/min branches cap and the 120-req/min dashboard cap, but NOT the 30-req/min transactio… | test debt | H3 | resolved | a04b3a6 |
+| G-203 | G11 | MEDIUM | api | api/api-modules.md:729 | — | G11 \| MEDIUM \| No API tests for idempotency replay. \| Add `test_finalize_with_same_idempotency_token_returns_idempotent_replay`. \| | test debt | H3 | resolved | a04b3a6 |
+| G-204 | G11 | MEDIUM | api | api/api-overview.md:581 | — | G11 \| MEDIUM \| No API tests for idempotency (G7 endpoints). The `Cache::get/put` replay path is never exercised in tests. \| Add a `test_f… | test debt | H3 | resolved | a04b3a6 |
 | G-205 | G12 | MEDIUM | api | api/api-conventions.md:708 | — | G12 \| MEDIUM \| Every controller's `catch (\Throwable)` returns `e->getMessage()` raw. With `APP_DEBUG=true`, the framework's 500 handler l… | — | H2 | open | — |
-| G-206 | G12 | MEDIUM | api | api/api-modules.md:730 | — | G12 \| MEDIUM \| `POST /branch-demands/{id}/reprice` has only a validation-path test. \| Add a happy-path test. \| | test debt | H3 | open | — |
-| G-207 | G12 | MEDIUM | api | api/api-overview.md:582 | — | G12 \| MEDIUM \| `POST /branch-demands/{id}/reprice` has only a validation-path test, no happy-path test. \| Add a `test_reprice_demand_happ… | test debt | H3 | open | — |
+| G-206 | G12 | MEDIUM | api | api/api-modules.md:730 | — | G12 \| MEDIUM \| `POST /branch-demands/{id}/reprice` has only a validation-path test. \| Add a happy-path test. \| | test debt | H3 | resolved | a04b3a6 |
+| G-207 | G12 | MEDIUM | api | api/api-overview.md:582 | — | G12 \| MEDIUM \| `POST /branch-demands/{id}/reprice` has only a validation-path test, no happy-path test. \| Add a `test_reprice_demand_happ… | test debt | H3 | resolved | a04b3a6 |
 | G-208 | G14 | MEDIUM | api | api/api-conventions.md:710 | — | G14 \| MEDIUM \| 6 of 14 modules use inline `$request->validate([...])` instead of a FormRequest class. The 422 shape is identical, but the … | — | H2 | open | — |
 | G-209 | G14 | MEDIUM | api | api/api-overview.md:584 | — | G14 \| MEDIUM \| No CORS config (`config/cors.php` absent). Browser SPA consumers will hit Laravel 11's default CORS, which blocks credentia… | — | H2 | open | — |
 | G-210 | G15 | MEDIUM | api | api/api-overview.md:585 | — | G15 \| MEDIUM \| No `Accept` negotiation. The API ignores `Accept` headers and always returns JSON. A future `v2` cannot be selected via `Ac… | — | H2 | open | — |
@@ -323,8 +323,8 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-257 | G5 | LOW | api | api/api-reference-index.md:267 | — | G5 \| LOW \| No CI check for documentation drift. A developer can add an endpoint and skip `API_REFERENCE.md` without any signal. \| Add the… | — | H3 | open | — |
 | G-258 | G6 | LOW | api | api/api-reference-index.md:268 | — | G6 \| LOW \| `API_REFERENCE.md` and `ApiDocController::endpoints()` are maintained independently — double the drift surface. \| Generate bot… | API Phase 17 | H4 | open | — |
 | G-259 | G10 | LOW | api | api/api-conventions.md:706 | — | G10 \| LOW \| No `application/problem+json` (RFC 7807) error shape. The `{message, errors}` shape is a Laravel convention, not a standard. \… | — | H4 | open | — |
-| G-260 | G10 | LOW | api | api/api-modules.md:728 | — | G10 \| LOW \| `ApiDocTest` asserts `"Endpoints (14)"` but the page shows 23 cards. \| Update the assertion. \| | notifications phase | H3 | open | — |
-| G-261 | G10 | LOW | api | api/api-overview.md:580 | — | G10 \| LOW \| `ApiDocTest` asserts the string `"Endpoints (14)"` on the docs page, but the page actually shows 23 cards. The test is stale a… | DDL drift | H3 | open | — |
+| G-260 | G10 | LOW | api | api/api-modules.md:728 | — | G10 \| LOW \| `ApiDocTest` asserts `"Endpoints (14)"` but the page shows 23 cards. \| Update the assertion. \| | notifications phase | H3 | resolved | 78ca013 |
+| G-261 | G10 | LOW | api | api/api-overview.md:580 | — | G10 \| LOW \| `ApiDocTest` asserts the string `"Endpoints (14)"` on the docs page, but the page actually shows 23 cards. The test is stale a… | DDL drift | H3 | resolved | 78ca013 |
 | G-262 | G11 | LOW | api | api/api-conventions.md:707 | — | G11 \| LOW \| No `Sunset` / `Deprecation` header machinery for graceful endpoint deprecation. \| Add a `Deprecation` middleware when v2 ship… | cutover, RLS audit | H4 | open | — |
 | G-263 | G13 | LOW | api | api/api-conventions.md:709 | — | G13 \| LOW \| Timestamp format inconsistency: some Resources use `->toIso8601String()` (microseconds + `Z`), others use `->toDateTimeString(… | — | H4 | open | — |
 | G-264 | G13 | LOW | api | api/api-modules.md:731 | — | G13 \| LOW \| Commission module has NO web mirror AND no API tests — 8 endpoints untested on both surfaces. \| Add `CommissionApiTest.php`. … | test debt | H3 | open | — |
