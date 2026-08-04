@@ -4,12 +4,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Response;
+use Illuminate\Routing\Route;
+use Illuminate\Support\Facades\Route as RouteFacade;
 
 /**
  * Phase 18 — Interactive API documentation page.
  *
  * Serves a self-contained HTML page at GET /api/docs that lists every
- * /api/v1/* endpoint (14 routes in total) with:
+ * /api/v1/* endpoint (100 routes in total) with:
  *   - HTTP method + URL
  *   - Description
  *   - Required role (admin / any authenticated)
@@ -44,22 +46,139 @@ class ApiDocController extends Controller
     }
 
     /**
-     * The complete list of /api/v1/* endpoints exposed by this app.
+     * The complete list of /api/v1/* endpoint cards rendered on the docs page.
      *
-     * Each entry has:
-     *   - method       HTTP verb (GET/POST/PUT/DELETE)
-     *   - path         URL path (relative to /api/v1)
-     *   - description  Human-readable description
-     *   - role         Required role (null = any authenticated user)
-     *   - params       Query parameters (array of name => description)
-     *   - body         Request body JSON schema (null for GET/DELETE)
-     *   - response     Response JSON schema (string)
-     *   - example      Example response JSON (string)
-     *   - errors       Array of error codes + descriptions
+     * GENERATED REFLECTIVELY from `routes/api.php` (G2 fix — closes the
+     * 77% drift gap where the old hardcoded `endpoints()` listed only 23
+     * of 100 routes). Every registered v1 route now produces a card, so
+     * the page can never drift behind the route registry again.
+     *
+     * Rich metadata (description / params / body / response / errors) is
+     * merged from `catalogue()` for the endpoints that have hand-written
+     * docs. The remaining endpoints render a minimal card (method + path
+     * + role + a "see Controller@method" pointer) — full docs for those
+     * live in `laravel/docs/api/API_REFERENCE.md`.
      *
      * @return array<int, array<string,mixed>>
      */
     private function endpoints(): array
+    {
+        // Index the hand-written catalogue by "METHOD PATH" for O(1) lookup.
+        $indexed = [];
+        foreach ($this->catalogue() as $entry) {
+            $key = strtoupper((string) $entry['method']) . ' ' . (string) $entry['path'];
+            $indexed[$key] = $entry;
+        }
+
+        $endpoints = [];
+
+        /** @var Route $route */
+        foreach (RouteFacade::getRoutes() as $route) {
+            $uri = $route->uri();
+            if (! str_starts_with($uri, 'api/v1/')) {
+                continue;
+            }
+
+            $path = '/' . substr($uri, strlen('api/v1/'));
+            $role = $this->deriveRoleFromMiddleware($route->gatherMiddleware());
+            $methods = array_diff($route->methods(), ['HEAD', 'OPTIONS']);
+            $controllerLabel = $this->shortControllerLabel($route->getActionName());
+
+            foreach ($methods as $method) {
+                $key = strtoupper($method) . ' ' . $path;
+                $meta = $indexed[$key] ?? [];
+
+                $endpoints[] = [
+                    'method'      => strtoupper($method),
+                    'path'        => $path,
+                    'description' => $meta['description']
+                        ?? $this->deriveDescription($method, $controllerLabel),
+                    'role'        => $meta['role'] ?? $role,
+                    'params'      => $meta['params'] ?? [],
+                    'body'        => $meta['body'] ?? null,
+                    'response'    => $meta['response'] ?? null,
+                    'example'     => $meta['example'] ?? null,
+                    'errors'      => $meta['errors']
+                        ?? ['401' => 'Missing or invalid Bearer token.'],
+                ];
+            }
+        }
+
+        return $endpoints;
+    }
+
+    /**
+     * Extract the required role(s) from a route's gathered middleware stack.
+     *
+     * Looks for `api.auth:role1,role2,...` (the per-route role gate added
+     * by the Security/RLS cluster). Returns null when no role gate is
+     * applied — the outer group-level `api.auth` still requires a valid
+     * Bearer token, but any authenticated user may call the endpoint.
+     *
+     * @param  array<int, mixed>  $middleware
+     */
+    private function deriveRoleFromMiddleware(array $middleware): ?string
+    {
+        foreach ($middleware as $m) {
+            if (is_string($m) && str_starts_with($m, 'api.auth:')) {
+                $roles = substr($m, strlen('api.auth:'));
+                return $roles === '' ? null : $roles;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Shorten a controller@method action name for display.
+     *
+     * "App\Http\Controllers\Api\V1\BranchApiController@index"
+     *   → "BranchApiController@index"
+     */
+    private function shortControllerLabel(string $actionName): string
+    {
+        if (str_contains($actionName, '@')) {
+            $parts = explode('\\', $actionName);
+            return (string) end($parts);
+        }
+        return $actionName;
+    }
+
+    /**
+     * Derive a minimal description for endpoints without a catalogue entry.
+     *
+     * The verb heuristic (GET→read, POST→create/action, PUT→update,
+     * DELETE→delete) gives the reader a hint; the `Controller@method`
+     * pointer lets them jump to the source for the full contract.
+     */
+    private function deriveDescription(string $method, string $controllerLabel): string
+    {
+        $verb = match (strtolower($method)) {
+            'get'    => 'Read / list',
+            'post'   => 'Create / action',
+            'put'    => 'Update',
+            'delete' => 'Delete / deactivate',
+            default  => 'Action',
+        };
+        return "{$verb} endpoint — see {$controllerLabel}.";
+    }
+
+    /**
+     * Hand-written rich metadata for the most-documented endpoints.
+     *
+     * Each entry is keyed implicitly by its `method` + `path` (assembled
+     * by `endpoints()` into the lookup index). Endpoints NOT listed here
+     * render a minimal card via the `deriveDescription()` fallback —
+     * full docs for those live in `laravel/docs/api/API_REFERENCE.md`.
+     *
+     * To document a new endpoint in full: add an entry here with the same
+     * `method` + `path` the route registers. The drift-guard test
+     * (`test_api_docs_card_count_matches_v1_route_count`) ensures the
+     * page count always equals the live v1 route count, so the catalogue
+     * can never silently go stale again.
+     *
+     * @return array<int, array<string,mixed>>
+     */
+    private function catalogue(): array
     {
         return [
             // ---------- Branches ----------

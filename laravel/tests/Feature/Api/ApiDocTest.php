@@ -14,7 +14,9 @@ use Tests\TestCase;
  *
  * Covers:
  *   - GET /api/docs returns 200 + HTML.
- *   - The docs page lists all 23 documented /api/v1/* endpoint cards.
+ *   - The docs page lists all /api/v1/* endpoint cards (reflectively
+ *     generated — count always matches the live route registry).
+ *   - Drift guard: card count on the page == v1 route count (G2 fix).
  *   - The docs page contains a Bearer-token input for the Try-It panel.
  *   - `php artisan api:token {username}` issues a working token.
  *   - `php artisan api:token {username}` fails with exit code 1 for unknown users.
@@ -43,7 +45,10 @@ class ApiDocTest extends TestCase
         $body = $response->getContent();
         $this->assertNotEmpty($body, 'Docs page body is empty.');
 
-        // Each of the 14 endpoints must appear in the page (method + path).
+        // Each of the 14 originally-documented endpoints must still appear
+        // in the page (method + path). The other 86 endpoints (added in
+        // Phase 8/9/10/Task 37 + later) are also present but not enumerated
+        // here — the count assertion below + the drift-guard test cover them.
         $endpoints = [
             ['GET',    '/branches'],
             ['GET',    '/branches/{id}'],
@@ -75,10 +80,58 @@ class ApiDocTest extends TestCase
         }
 
         // The total count of endpoint cards must be displayed in the heading.
-        // G10 fix: was 'Endpoints (14)' (stale Phase 13 count). The ApiDocController
-        // renders {$count} = count($endpoints array) = 23 cards (Phase 8/9/10/Task 37
-        // added 9 more). Update when endpoints() catalogue changes.
-        $this->assertStringContainsString('Endpoints (23)', $body);
+        // G2 fix: the count is now GENERATED REFLECTIVELY from routes/api.php
+        // via ApiDocController::endpoints(), so it always equals the live v1
+        // route count. We compute the expected count from the route registry
+        // instead of hardcoding — this is also the drift guard: if anyone
+        // reverts to a hardcoded list, this assertion breaks.
+        $expectedCount = 0;
+        foreach (\Illuminate\Support\Facades\Route::getRoutes() as $route) {
+            $uri = $route->uri();
+            if (! str_starts_with($uri, 'api/v1/')) {
+                continue;
+            }
+            $expectedCount += count(array_diff($route->methods(), ['HEAD', 'OPTIONS']));
+        }
+        $this->assertGreaterThan(0, $expectedCount, 'No v1 routes registered — route registry is empty.');
+        $this->assertStringContainsString("Endpoints ({$expectedCount})", $body);
+    }
+
+    /**
+     * Drift guard (G2): the number of endpoint cards rendered on /api/docs
+     * MUST equal the number of registered /api/v1/* routes. This catches
+     * any future regression that re-hardcodes the endpoint list.
+     */
+    public function test_api_docs_card_count_matches_v1_route_count(): void
+    {
+        $response = $this->get('/api/docs');
+        $response->assertOk();
+        $body = $response->getContent();
+        $this->assertNotEmpty($body);
+
+        $v1RouteCount = 0;
+        foreach (\Illuminate\Support\Facades\Route::getRoutes() as $route) {
+            $uri = $route->uri();
+            if (! str_starts_with($uri, 'api/v1/')) {
+                continue;
+            }
+            $v1RouteCount += count(array_diff($route->methods(), ['HEAD', 'OPTIONS']));
+        }
+
+        $this->assertGreaterThan(0, $v1RouteCount);
+
+        // The heading shows the exact count.
+        $this->assertStringContainsString("Endpoints ({$v1RouteCount})", $body);
+
+        // Each card has a Try-it button whose data-path is the route path.
+        // Counting data-path attributes == counting cards.
+        $cardCount = preg_match_all('/data-path="\/[^"]+"/', $body);
+        $this->assertSame($v1RouteCount, $cardCount, sprintf(
+            'Docs page card count (%d) does not match v1 route count (%d). ' .
+            'The ApiDocController::endpoints() reflective generation may have drifted.',
+            $cardCount,
+            $v1RouteCount,
+        ));
     }
 
     public function test_api_docs_page_has_bearer_token_input(): void
