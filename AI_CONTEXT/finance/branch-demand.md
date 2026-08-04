@@ -1367,6 +1367,23 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 - **Fix:** add a `rejection_reason` text column + `rejected_at` / `rejected_by` columns (mirror
   the `reverse_*` pattern).
 
+#### G29 — **CRITICAL** — `BranchDemandRepricingService::getOutOfRangeSales` selects nonexistent `sii.total` column
+
+- **Evidence:** `app/Services/BranchDemand/BranchDemandRepricingService.php:705` — the
+  `getOutOfRangeSales()` repricing-audit query does `->select([..., 'sii.total'])` against
+  `sales_invoice_items as sii`. The table has NO `total` column — the correct column is `amount`
+  (confirmed: `app/Models/SalesInvoiceItem.php:16` documents `@property string $amount GENERATED:
+  qty × rate`; `$fillable` + `$casts` list `amount`, not `total`). The query throws
+  `SQLSTATE[42703]: column "sii.total" does not exist` the first time the out-of-range-sales /
+  repricing audit report is invoked. Discovered during G18 triage — G18 speculated
+  `BranchDemandWeeklyReportService` used a wrong column (that was a false positive; `sii.amount`
+  IS correct there); G18's mention of "sii.total" pointed at THIS adjacent bug in the repricing
+  service. Filed as a new row (G-357) in `ISSUES_REGISTER.md` — manually appended, NOT via
+  `extract_issues_register.js` re-run (re-running would re-sort G29 into the finance-CRITICAL
+  block and shift all subsequent G-XXX IDs, breaking references in TRIAGE_FINANCE_UNKNOWN.md).
+- **Fix:** change `'sii.total'` → `'sii.amount'` at
+  `BranchDemandRepricingService.php:705`.
+
 ---
 
 ## 12. Lifecycle walkthroughs

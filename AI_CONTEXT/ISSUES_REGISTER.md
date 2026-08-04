@@ -18,12 +18,12 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | Severity | Count | Blocks cutover? |
 |---|---|---|
-| CRITICAL | 82 | Yes — all of them |
+| CRITICAL | 83 | Yes — all of them |
 | HIGH | 118 | Most |
 | MEDIUM | 77 | Some |
 | LOW | 70 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **348** | |
+| **TOTAL open** | **349** | |
 | _of which resolved_ | 8 | (kept for traceability, excluded from counts above) |
 
 ### By sector
@@ -32,7 +32,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 |---|---|
 | api | 51 |
 | architecture | 20 |
-| finance | 81 |
+| finance | 82 |
 | purchasing | 28 |
 | reports | 80 |
 | sales | 39 |
@@ -420,6 +420,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-354 | G28 | MEDIUM | finance | finance/branch-demand.md:1362 | app/Services/BranchDemand/BranchDemandService.php:626-630 | #### G28 — `BranchDemandService::rejectDemand` appends `"[Rejected: {reason}]"` to notes via text concatenation | — | H2 | open | — |
 | G-355 | G28 | MEDIUM | finance | finance/fixed-assets.md:163 | — | BR24 \| **Accumulated depreciation ledger** is read from `asset.dep_ledger_id` (REQUIRED at asset creation). No nature-based fallback. ⚠️ **… | notifications phase | H2 | open | — |
 | G-356 | G29 | HIGH | finance | finance/budgeting.md:81 | — | **G29:** `EnforceBranchIsolation::inferTableFromUri` does NOT include `budgets`. Cross-branch | cutover, RLS audit | H2 | open | — |
+| G-357 | G29 | CRITICAL | finance | finance/branch-demand.md:1370 | app/Services/BranchDemand/BranchDemandRepricingService.php:705 | #### G29 — **CRITICAL** — `BranchDemandRepricingService::getOutOfRangeSales:705` selects nonexistent `sii.total` (should be `sii.amount`); throws SQLSTATE 42703 — crashes repricing audit at runtime. Discovered during G18 triage. Manually filed — not yet re-extracted. | repricing audit | H1 | open | — |
 
 ## Cross-reference matrix — gaps cited in multiple files
 
