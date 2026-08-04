@@ -121,7 +121,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-055 | G1 | CRITICAL | sales | sales/commission.md:326 | — | **G1 (CRITICAL)** — `CommissionService::confirmPeriod` calls non-existent | — | H1 | resolved | 3f35e77 |
 | G-056 | G1 | CRITICAL | sales | sales/sales-cart.md:207 | — | **G1 (CRITICAL)** — `customers.shop_name` column referenced by `getCustomerDetails` (L487), | — | H1 | resolved | 3f35e77 |
 | G-057 | G1 | CRITICAL | sales | sales/sales-overview.md:280 | — | **G1 (CRITICAL)** — `customers.shop_name` column referenced but NEVER created by any migration. | DDL drift | H1 | resolved | 3f35e77 |
-| G-058 | G2 | CRITICAL | sales | sales/commission.md:329 | — | **G2 (CRITICAL)** — Entire commission auto-calc pipeline is DEAD CODE. | — | H1 | open | — |
+| G-058 | G2 | CRITICAL | sales | sales/commission.md:329 | — | **G2 (CRITICAL)** — Entire commission auto-calc pipeline is DEAD CODE. | — | H1 | resolved | 2f686c0 |
 | G-059 | G2 | CRITICAL | sales | sales/sales-invoice.md:392 | — | **G2 (CRITICAL)** — `SalesInvoiceApiController::update` doesn't pass `items[]`, always fails | — | H1 | resolved | 3f35e77 |
 | G-060 | G2 | CRITICAL | sales | sales/sales-overview.md:283 | — | **G2 (CRITICAL)** — `SalesInvoiceApiController::update` doesn't pass `items[]`, always fails | — | H1 | resolved | 3f35e77 |
 | G-061 | G3 | CRITICAL | sales | sales/commission.md:334 | — | **G3 (CRITICAL)** — `LedgerNatureService` has NO `commission_expense` or `commission_payable` | — | H1 | resolved | 3f35e77 |

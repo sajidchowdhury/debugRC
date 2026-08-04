@@ -332,8 +332,10 @@ return $this->journalPosting->createJournalEntry([
    method explicitly works around this by querying `user_audit_log` for `action='return_confirmed'`.
 6. **AuditableMasterData bypass** — the trait is `use`d on `SalesReturn` but bypassed by
    `DB::table('sales_returns')->insertGetId()` in `createReturn`.
-7. **`reverseReturn` does NOT call `CommissionService::reverseOnReturn`** — commission reversal
-   on sales return is DEAD CODE (see `commission.md` gap G2).
+7. **`confirmReturn` now calls `CommissionService::reverseOnReturn`** (SALES-2, commit
+   2f686c0) — commission reversal on sales return is WIRED. The call is non-blocking
+   (try/catch) so a commission failure never aborts the return confirmation.
+   (Previously DEAD CODE — gap G2 in `commission.md`, now resolved.)
 8. **No `cancelled` status** — a `created` return can be abandoned by simply not confirming it
   (no explicit cancel). Stale `created` returns are inert (they reserve returnable qty but post
   nothing). There is no cleanup job for stale `created` returns.
@@ -367,15 +369,15 @@ return $this->journalPosting->createJournalEntry([
 - [ ] The `SalesReturnReversalGuard` stock pre-check is sufficient to prevent negative stock on
       reversal.
 - [ ] The `AuditableMasterData` bypass gap — confirm the audit team is aware.
-- [ ] The commission reversal dead code (gap G2 in `commission.md`) — confirm whether commission
-      should be reversed on sales return.
+- [x] The commission reversal wiring (gap G2 in `commission.md`) — RESOLVED in SALES-2
+      (commit 2f686c0). `confirmReturn` now calls `reverseOnReturn` (non-blocking).
 
 ## 13. Cross-references
 
 - `sales-overview.md` — module map.
 - `sales-invoice.md` — parent invoice.
 - `sales-challan.md` — provides the `original_cost` snapshot.
-- `commission.md` — `reverseOnReturn` is DEAD CODE (gap G2).
+- `commission.md` — `reverseOnReturn` is WIRED (gap G2 resolved in SALES-2, commit 2f686c0).
 - `../inventory/stock-costing.md` §7.4-7.5 — rate semantics (original cost preservation).
 - `../inventory/stock-ledger.md` — `reference_type='sales_return'`.
 - `../inventory/damage.md` — sales-return-linked auto damage write-off.

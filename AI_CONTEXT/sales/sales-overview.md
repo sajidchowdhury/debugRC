@@ -175,8 +175,9 @@ in the sibling docs). RBAC for the other 4 modules relies solely on route `role:
   raw writes in the sales services).
 - **MUST NOT** assume `financial_audit_log` covers sales tables (gap G4 — only `customer_payments`
   is covered).
-- **MUST NOT** auto-calculate commission on invoice creation (only on payment allocation — and
-  even that is dead code, gap G2 in `commission.md`).
+- **MUST NOT** auto-calculate commission on invoice creation (only on payment allocation —
+  now WIRED via `CustomerPaymentService::confirmPayment → calculateOnAllocation`, gap G2
+  resolved in SALES-2).
 
 ## 7. Module map
 
@@ -205,8 +206,8 @@ graph TD
     Return --> ReturnItems
     Return -->|createLinkedDamageWriteOffs| DamageInvoices[damage_invoices<br/>Phase 8]
     Payment --> Allocations
-    Allocations -->|calculateOnAllocation DEAD CODE G2| Commission
-    Return -->|reverseOnReturn DEAD CODE G2| Commission
+    Allocations -->|calculateOnAllocation WIRED SALES-2| Commission
+    Return -->|reverseOnReturn WIRED SALES-2| Commission
     Invoice --> CustomerLedger
     Payment --> CustomerLedger
     Return --> CustomerLedger
@@ -220,9 +221,9 @@ graph TD
 | Invoice | Challan | `prepareGodown` → `issueChallan` | warehouse_id assignment; stock OUT (qty=-X); GL Dr COGS / Cr Inventory; transport adjustment GL (if godown edited transport) |
 | Challan | Invoice | `cancelChallan` | reverse COGS GL + transport adjustment GL (cascade); restore invoice transport snapshot; reset invoice to draft |
 | Invoice | Return | `SalesReturnService::create` + `confirm` | stock IN at ORIGINAL avg_cost; GL Dr AR / Cr Sales Return + Dr Inv / Cr COGS |
-| Invoice | Commission | (DEAD — should be `CustomerPaymentService::confirmPayment → calculateOnAllocation`) | one `commission_entries` row per payment allocation |
-| Return | Commission | (DEAD — should be `SalesReturnService::confirm → reverseOnReturn`) | negative `commission_entries` row proportional to return_amount / invoice_total |
-| Commission | GL | (DEAD — `confirmPeriod` crashes at G1) | per-salesman Dr Commission Expense / Cr Employee Payable (natures NOT registered — G3) |
+| Invoice | Commission | `CustomerPaymentService::confirmPayment → calculateOnAllocation` (WIRED SALES-2) | one `commission_entries` row per payment allocation |
+| Return | Commission | `SalesReturnService::confirmReturn → reverseOnReturn` (WIRED SALES-2) | negative `commission_entries` row proportional to return_amount / invoice_total |
+| Commission | GL | `confirmPeriod` (WORKING — G1 fixed 3f35e77) | per-salesman Dr Commission Expense / Cr Employee Payable (natures registered — G3 fixed 3f35e77) |
 
 ## 8. Shared infrastructure
 
@@ -306,10 +307,11 @@ sibling docs:
    migrations (`sales_challan_items`, `is_blank_godown_printed`, `call_a_day`, `ordered_qty`,
    `dispatched_qty`, `cogs_amount`, `reason`, `sales_invoice_item_id`, `damage_invoice_id`).
    Documented across the relevant sibling docs.
-6. **Commission G1+G2+G3 (CRITICAL)** — `CommissionService::confirmPeriod` calls non-existent
-   `postCommissionExpense()` method; the entire auto-calc pipeline (`calculateOnAllocation`,
-   `reverseOnReturn`, `reverseOnPaymentReversal`, `markAsPaid`) is dead code; `commission_expense`
-   and `commission_payable` ledger natures are not registered. Documented in `commission.md`.
+6. **Commission G1+G2+G3 (CRITICAL — ALL RESOLVED)** — G1 (`postCommissionExpense` missing)
+   + G3 (`commission_expense`/`commission_payable` natures not registered) resolved in commit
+   3f35e77 (SALES-1). G2 (auto-calc pipeline dead code — `calculateOnAllocation`,
+   `reverseOnReturn`, `reverseOnPaymentReversal`, `markAsPaid` never called) resolved in commit
+   2f686c0 (SALES-2). Documented in `commission.md`.
 
 ## 10. Edge cases (cross-cutting)
 
