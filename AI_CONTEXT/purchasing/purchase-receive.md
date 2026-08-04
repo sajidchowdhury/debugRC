@@ -396,6 +396,8 @@ return $this->journalPosting->createJournalEntry([
    GRN workflow is broken.
 2. **G2 — No `PurchaseReceivePolicy` class.** RBAC relies solely on route middleware + RLS.
    Per-row policy gates are impossible. CRITICAL for compliance.
+
+   > ✅ RESOLVED in commit 1ccc5b6 — Policy class `App\Policies\PurchaseReceivePolicy` created + registered in `AppServiceProvider::boot()`. Mirrors existing `role:` middleware exactly (defense-in-depth — no behavior change). Methods: view/create/confirm/cancel/delete/getPoDetails/export/audit.
 3. **G3 — `fn_financial_audit_trigger` NOT attached to `purchase_receives`.** The hash-chained
    immutable audit log covers only `supplier_payments` of the purchase ecosystem. Direct
    `DB::table('purchase_receives')` mutations bypass the hash chain. CRITICAL — forensic gap.

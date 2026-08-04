@@ -18,13 +18,13 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | Severity | Count | Blocks cutover? |
 |---|---|---|
-| CRITICAL | 83 | Yes — all of them |
-| HIGH | 118 | Most |
+| CRITICAL | 79 | Yes — all of them |
+| HIGH | 112 | Most |
 | MEDIUM | 77 | Some |
 | LOW | 70 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **349** | |
-| _of which resolved_ | 8 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **339** | |
+| _of which resolved_ | 18 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -32,10 +32,10 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 |---|---|
 | api | 51 |
 | architecture | 20 |
-| finance | 82 |
-| purchasing | 28 |
+| finance | 80 |
+| purchasing | 24 |
 | reports | 80 |
-| sales | 39 |
+| sales | 35 |
 | security | 15 |
 | workflows | 34 |
 
@@ -89,10 +89,10 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-023 | G13 | CRITICAL | finance | finance/fixed-assets.md:772 | — | **G13 (CRITICAL):** `postDepreciation` is NOT wrapped in `DB::transaction`. If the asset update fails (e.g., RLS WITH CHECK), the JE is alre… | cutover, RLS audit | H1 | open | — |
 | G-024 | G1 | CRITICAL | purchasing | purchasing/purchase-audit.md:410 | — | **G1 — `paid_amount` column missing on `purchase_receives`.** Affects the audit of GRN | — | H1 | open | — |
 | G-025 | G1 | CRITICAL | purchasing | purchasing/purchase-receive.md:392 | — | **G1 — `purchase_receives.paid_amount` column referenced but never created.** | — | H1 | open | — |
-| G-026 | G2 | CRITICAL | purchasing | purchasing/purchase-audit.md:413 | — | **G2 — No `Purchase*Policy` classes.** Per-row audit gating is impossible. The audit team | cutover, RLS audit | H1 | open | — |
-| G-027 | G2 | CRITICAL | purchasing | purchasing/purchase-order.md:269 | — | **G2 — No `PurchaseOrderPolicy` class.** RBAC relies solely on route `role:` middleware + RLS. | cutover, RLS audit | H1 | open | — |
-| G-028 | G2 | CRITICAL | purchasing | purchasing/purchase-receive.md:397 | — | **G2 — No `PurchaseReceivePolicy` class.** RBAC relies solely on route middleware + RLS. | cutover, RLS audit | H1 | open | — |
-| G-029 | G2 | CRITICAL | purchasing | purchasing/purchase-return.md:382 | — | **G2 — No `PurchaseReturnPolicy` class.** RBAC relies solely on route middleware + RLS. | cutover, RLS audit | H1 | open | — |
+| G-026 | G2 | CRITICAL | purchasing | purchasing/purchase-audit.md:413 | — | **G2 — No `Purchase*Policy` classes.** Per-row audit gating is impossible. The audit team | cutover, RLS audit | H1 | resolved | 1ccc5b6 |
+| G-027 | G2 | CRITICAL | purchasing | purchasing/purchase-order.md:269 | — | **G2 — No `PurchaseOrderPolicy` class.** RBAC relies solely on route `role:` middleware + RLS. | cutover, RLS audit | H1 | resolved | 1ccc5b6 |
+| G-028 | G2 | CRITICAL | purchasing | purchasing/purchase-receive.md:397 | — | **G2 — No `PurchaseReceivePolicy` class.** RBAC relies solely on route middleware + RLS. | cutover, RLS audit | H1 | resolved | 1ccc5b6 |
+| G-029 | G2 | CRITICAL | purchasing | purchasing/purchase-return.md:382 | — | **G2 — No `PurchaseReturnPolicy` class.** RBAC relies solely on route middleware + RLS. | cutover, RLS audit | H1 | resolved | 1ccc5b6 |
 | G-030 | G3 | CRITICAL | purchasing | purchasing/purchase-audit.md:416 | — | **G3 — `fn_financial_audit_trigger` NOT attached to purchase tables.** Only `supplier_payments` | audit-trail phase | H1 | open | — |
 | G-031 | G3 | CRITICAL | purchasing | purchasing/purchase-receive.md:399 | — | **G3 — `fn_financial_audit_trigger` NOT attached to `purchase_receives`.** The hash-chained | audit-trail phase | H1 | open | — |
 | G-032 | G3 | CRITICAL | purchasing | purchasing/purchase-return.md:384 | — | **G3 — `fn_financial_audit_trigger` NOT attached to `purchase_returns`.** The hash-chained | audit-trail phase | H1 | open | — |
@@ -164,13 +164,13 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-098 | G7 | HIGH | finance | finance/fixed-assets.md:173 | — | BR29 \| **`fn_financial_audit_trigger` MUST NOT be attached to any fixed-asset table.** ⚠️ **G7 — only `journal_entries`/`journal_lines` are… | audit-trail phase | H1 | open | — |
 | G-099 | G8 | HIGH | finance | finance/consolidation-intercompany.md:707 | — | #### G8 — `ConsolidationService::postEliminationEntry` does NOT set `dimension_value_id` on `journal_lines` | GL posting | H2 | open | — |
 | G-100 | G8 | HIGH | finance | finance/fixed-assets.md:771 | — | **G8 (MAJOR):** No artisan command, no scheduled job. The accountant MUST manually click both buttons every month. | — | H2 | open | — |
-| G-101 | G9 | HIGH | finance | finance/branch-demand.md:1190 | — | #### G9 — NO `BranchDemandPolicy.php` exists | cutover, RLS audit | H2 | open | — |
+| G-101 | G9 | HIGH | finance | finance/branch-demand.md:1190 | — | #### G9 — NO `BranchDemandPolicy.php` exists | cutover, RLS audit | H2 | resolved | 1ccc5b6 |
 | G-102 | G9 | HIGH | finance | finance/consolidation-intercompany.md:718 | — | #### G9 — `MoneyTransferService::postIntercompanySettlement` uses non-registered `'intercompany'` nature → silently skips | — | H2 | open | — |
 | G-103 | G9 | HIGH | finance | finance/fixed-assets.md:898 | — | **G9 (MAJOR):** `DELETE FROM asset_disposals` destroys the audit trail. The disposal record vanishes; only the GL reversal JE remains, with … | notifications phase | H2 | open | — |
 | G-104 | G10 | HIGH | finance | finance/consolidation-intercompany.md:734 | — | #### G10 — `WarehouseTransferService::postIntercompanyGL` is DEAD CODE with fossilized bugs | — | H2 | open | — |
 | G-105 | G11 | HIGH | finance | finance/consolidation-intercompany.md:750 | app/Http/Middleware/EnforceBranchIsolation.php:165-246 | #### G11 — `EnforceBranchIsolation::inferTableFromUri` does NOT cover consolidation / warehouse-transfers / elimination-rules / companies UR… | cutover, RLS audit | H2 | resolved | `68a9672` |
 | G-106 | G12 | HIGH | finance | finance/consolidation-intercompany.md:775 | routes/web.php:1733 | #### G12 — NO BranchScope on `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `Company` models | cutover, RLS audit | H2 | open | — |
-| G-107 | G13 | HIGH | finance | finance/consolidation-intercompany.md:789 | — | #### G13 — NO Policy classes for `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `MoneyTransfer` / `WarehouseTransfer` / `Comp… | cutover, RLS audit | H2 | open | — |
+| G-107 | G13 | HIGH | finance | finance/consolidation-intercompany.md:789 | — | #### G13 — NO Policy classes for `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `MoneyTransfer` / `WarehouseTransfer` / `Comp… | cutover, RLS audit | H2 | resolved | 1ccc5b6 |
 | G-108 | G14 | HIGH | finance | finance/consolidation-intercompany.md:801 | — | #### G14 — `BranchIntercompanyService::reverseLedgerByReference` inserts reversal rows with `journal_entry_id = null` | GL posting | H2 | open | — |
 | G-109 | G14 | HIGH | finance | finance/fixed-assets.md:174 | — | BR30 \| **DepreciationService and AssetDisposalService MUST call `JournalPostingService::reverseJournalEntry` directly** (NOT `JournalRevers… | notifications phase | H2 | open | — |
 | G-110 | G15 | HIGH | finance | finance/consolidation-intercompany.md:816 | — | #### G15 — `ConsolidationService::calculateBalanceElimination` queries `branch_ledger` WITHOUT joining `journal_entries` to filter by `is_re… | GL posting | H2 | open | — |
@@ -218,15 +218,15 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-152 | G23 | HIGH | reports | reports/csv-export.md:885 | — | **G23** \| **HIGH** \| `PurchaseOrderController::export:211-263` — opens `php://output` at L239, the comment at L240 says "BOM for Excel" bu… | reports phase | H2 | open | — |
 | G-153 | G24 | HIGH | reports | reports/csv-export.md:886 | — | **G24** \| **HIGH** \| `BudgetController::exportCsv:288-307` — opens `php://output` at L289, immediately calls `fputcsv($file, [...])` at L2… | reports phase | H2 | open | — |
 | G-154 | G5 | HIGH | sales | sales/sales-audit.md:354 | — | **G5 (MAJOR)** — Sales audit checklist has only **3 sections** vs `PurchaseAuditService`'s | — | H2 | open | — |
-| G-155 | G6 | HIGH | sales | sales/sales-cart.md:212 | — | **G6 (MAJOR)** — No `SalesDraftCartPolicy` class. RBAC via route middleware + RLS only. | cutover, RLS audit | H1 | open | — |
-| G-156 | G6 | HIGH | sales | sales/sales-challan.md:336 | — | **G6 (MAJOR)** — No `SalesChallanPolicy` class. RBAC via route middleware + RLS only. | cutover, RLS audit | H1 | open | — |
-| G-157 | G6 | HIGH | sales | sales/sales-return.md:323 | — | **G6 (MAJOR)** — No `SalesReturnPolicy` class. RBAC via route middleware + RLS only. | cutover, RLS audit | H1 | open | — |
+| G-155 | G6 | HIGH | sales | sales/sales-cart.md:212 | — | **G6 (MAJOR)** — No `SalesDraftCartPolicy` class. RBAC via route middleware + RLS only. | cutover, RLS audit | H1 | resolved | 1ccc5b6 |
+| G-156 | G6 | HIGH | sales | sales/sales-challan.md:336 | — | **G6 (MAJOR)** — No `SalesChallanPolicy` class. RBAC via route middleware + RLS only. | cutover, RLS audit | H1 | resolved | 1ccc5b6 |
+| G-157 | G6 | HIGH | sales | sales/sales-return.md:323 | — | **G6 (MAJOR)** — No `SalesReturnPolicy` class. RBAC via route middleware + RLS only. | cutover, RLS audit | H1 | resolved | 1ccc5b6 |
 | G-158 | G7 | HIGH | sales | sales/commission.md:339 | — | **G7 (MAJOR)** — No `config/commission.php` — no knobs for commission batch minimum, max | — | H2 | open | — |
 | G-159 | G8 | HIGH | sales | sales/commission.md:341 | — | **G8 (MAJOR)** — No materialized view for commission summaries. `getSalesmanSummary` and | — | H2 | open | — |
 | G-160 | G8 | HIGH | sales | sales/sales-invoice.md:400 | — | **G8 (MAJOR)** — `sales_invoice_items.condition_state` column exists but is NEVER used at the | — | H2 | open | — |
 | G-161 | G9 | HIGH | sales | sales/sales-audit.md:360 | — | **G9 (MAJOR)** — `SalesInvoiceController::auditTrail` inlines its own action list that | — | H2 | open | — |
 | G-162 | G10 | HIGH | sales | sales/commission.md:344 | — | **G10 (MAJOR)** — Commission API read endpoints (`listRules`, `showRule`, `listEntries`, | — | H2 | open | — |
-| G-163 | G11 | HIGH | sales | sales/commission.md:347 | — | **G11 (MAJOR)** — No `CommissionPolicy` class. Per-row policy gates (e.g. "a salesman can | cutover, RLS audit | H2 | open | — |
+| G-163 | G11 | HIGH | sales | sales/commission.md:347 | — | **G11 (MAJOR)** — No `CommissionPolicy` class. Per-row policy gates (e.g. "a salesman can | cutover, RLS audit | H2 | resolved | 1ccc5b6 |
 | G-164 | G12 | HIGH | sales | sales/commission.md:349 | — | **G12 (MAJOR)** — No web UI for commission rule management. Commission rules can ONLY be | — | H2 | open | — |
 | G-165 | G12 | HIGH | sales | sales/sales-invoice.md:402 | — | **G12 (MAJOR)** — `sales_invoices.salesman_id` has NO FK to `employees(id)`. Orphan | — | H2 | open | — |
 | G-166 | G13 | HIGH | sales | sales/sales-invoice.md:404 | routes/api.php:173,175,178 | **G13 (MAJOR)** — API v1 routes have NO role middleware on invoice store/update/cancel — | cutover, RLS audit | H2 | resolved | `b3a9fd7` |

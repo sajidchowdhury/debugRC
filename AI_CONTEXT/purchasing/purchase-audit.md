@@ -413,6 +413,8 @@ purchase tables are NOT in the hash chain.
 2. **G2 — No `Purchase*Policy` classes.** Per-row audit gating is impossible. The audit team
    cannot answer "show me all GRNs created by user X that were confirmed by user Y" without a
    policy layer. CRITICAL for compliance.
+
+   > ✅ RESOLVED in commit 1ccc5b6 — Cluster-level gap closed by creating the 3 purchasing policies: `App\Policies\PurchaseOrderPolicy`, `App\Policies\PurchaseReceivePolicy`, `App\Policies\PurchaseReturnPolicy` (all registered in `AppServiceProvider::boot()`). Each policy includes an `audit()` method mirroring the `role:admin,manager,accountant` middleware on the per-module audit routes. The `PurchaseAuditController` checklist (admin/purchase-audit) has no underlying model — it remains route-middleware-only (`role:admin,manager,accountant`) since there's no `PurchaseAudit` model to bind a policy to. See G-027/G-028/G-029 for the per-model policies.
 3. **G3 — `fn_financial_audit_trigger` NOT attached to purchase tables.** Only `supplier_payments`
    is hash-chain-audited. The 6 core purchase tables (`purchase_orders`, `purchase_order_items`,
    `purchase_receives`, `purchase_receive_items`, `purchase_returns`, `purchase_return_items`)

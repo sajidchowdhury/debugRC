@@ -321,6 +321,8 @@ return $this->journalPosting->createJournalEntry([
 2. **G5 (CRITICAL)** — DDL `04_sales.sql` is stale: `cogs_amount`, `reason`,
    `sales_invoice_item_id`, `damage_invoice_id` exist only in migrations.
 3. **G6 (MAJOR)** — No `SalesReturnPolicy` class. RBAC via route middleware + RLS only.
+
+   > ✅ RESOLVED in commit 1ccc5b6 — Policy class `App\Policies\SalesReturnPolicy` created + registered in `AppServiceProvider::boot()`. Mirrors existing `role:` middleware exactly (defense-in-depth — no behavior change). Methods: viewAny/view/create/confirm/reverse/delete/reversePreview/getInvoiceDetails/searchInvoices/summary/export/audit/printSlip. Splits `viewAny()` (index: `salesman,accountant,warehouse_manager,manager,admin`) from `view()` (show: `accountant,warehouse_manager,manager,admin`) to mirror the divergent route middleware exactly.
 4. **G13 (MAJOR)** — API v1 routes have NO role middleware on return store/confirm/reverse —
    only `api.auth` (token). Any authenticated API user can create/confirm/reverse returns.
 

@@ -1199,6 +1199,8 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 - **Fix:** create `BranchDemandPolicy` with `view/create/send/confirmReceipt/reverse/reprice/
   delete/reject` methods. Wire `$this->authorize(...)` calls in the controller.
 
+> ✅ RESOLVED in commit 1ccc5b6 — Policy class `App\Policies\BranchDemandPolicy` created + registered in `AppServiceProvider::boot()`. Mirrors existing `role:` middleware exactly (defense-in-depth — no behavior change). Methods: view/create/send/confirmReceipt/reject/reverse/reprice/delete/audit/reconcile. The cross-branch in-controller check (`from_branch_id !== $branchId && $to_branch_id !== $branchId`) stays as controller logic (request-context, not model-context). Controller `$this->authorize()` wiring is a separate follow-up.
+
 #### G10 — `CustomerPaymentService::postIntercompanySettlement` dead-code below `return null;` references nonexistent `branch_ledger` columns
 
 - **Evidence:** `app/Services/Sales/CustomerPaymentService.php:808-815` — if `banks.branch_id`

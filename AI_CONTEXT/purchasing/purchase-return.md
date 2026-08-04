@@ -381,6 +381,8 @@ return $this->journalPosting->createJournalEntry([
 
 1. **G2 — No `PurchaseReturnPolicy` class.** RBAC relies solely on route middleware + RLS.
    Per-row policy gates are impossible. CRITICAL for compliance.
+
+   > ✅ RESOLVED in commit 1ccc5b6 — Policy class `App\Policies\PurchaseReturnPolicy` created + registered in `AppServiceProvider::boot()`. Mirrors existing `role:` middleware exactly (defense-in-depth — no behavior change). Methods: view/create/confirm/cancel/delete/getReceiveDetails/searchReceives/summary/export/slip/audit.
 2. **G3 — `fn_financial_audit_trigger` NOT attached to `purchase_returns`.** The hash-chained
    immutable audit log does not cover purchase returns. Direct `DB::table('purchase_returns')`
    mutations bypass the hash chain. CRITICAL — forensic gap.

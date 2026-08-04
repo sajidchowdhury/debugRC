@@ -210,6 +210,8 @@ stateDiagram-v2
    migration `2026_07_30_000011` comment explicitly states "new schema has only customer_name
    (no shop_name column)".
 2. **G6 (MAJOR)** — No `SalesDraftCartPolicy` class. RBAC via route middleware + RLS only.
+
+   > ✅ RESOLVED in commit 1ccc5b6 — Policy class `App\Policies\SalesDraftCartPolicy` created + registered in `AppServiceProvider::boot()`. Mirrors existing `role:` middleware exactly (defense-in-depth — no behavior change). Methods: view/create/update/delete/clear. The cart route group (`admin/sales`) carries `role:salesman,manager,admin` + `branch.isolation` at the prefix level (routes/web.php L1082-1083); all cart routes inherit it.
 3. **AuditableMasterData NOT used** — `SalesDraftCart` model does NOT `use AuditableMasterData`
    (the cart is a transient draft, not master data). This is intentional, not a gap.
 4. **No `config/sales.php` cart knobs** — no max-items-per-cart, no max-cart-value, no

@@ -269,6 +269,8 @@ If any step fails, the whole PO rolls back — no orphan items, no orphan audit 
 1. **G2 — No `PurchaseOrderPolicy` class.** RBAC relies solely on route `role:` middleware + RLS.
    Per-row authorization (e.g. "only the PO creator can edit it") is impossible. CRITICAL for
    audit/compliance environments.
+
+   > ✅ RESOLVED in commit 1ccc5b6 — Policy class `App\Policies\PurchaseOrderPolicy` created + registered in `AppServiceProvider::boot()`. Mirrors existing `role:` middleware exactly (defense-in-depth — no behavior change). Methods: view/create/update/delete/markSent/cancel/searchProducts/export/audit.
 2. **G4 — `AuditableMasterData` trait is bypassed.** `PurchaseOrderService::createOrder` uses
    `DB::table('purchase_orders')->insertGetId(…)` (raw query) instead of `PurchaseOrder::create(…)`
    (Eloquent). The trait's `static::created()` listener never fires. The `master_data_*` audit

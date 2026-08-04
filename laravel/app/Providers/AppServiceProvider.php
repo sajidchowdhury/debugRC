@@ -121,5 +121,83 @@ class AppServiceProvider extends ServiceProvider
             \App\Models\DamageInvoice::class,
             \App\Policies\DamagePolicy::class
         );
+
+        // ============================================================
+        // Session 3 — Sub-problem B (Security/RLS cluster):
+        // 13 new Policy classes for the 10 ISSUES_REGISTER rows G-026,
+        // G-027, G-028, G-029, G-101, G-107 (6-model cluster),
+        // G-155, G-156, G-157, G-163. Each policy mirrors the existing
+        // route `role:` middleware EXACTLY (defense-in-depth — no
+        // behavior change). Controller `$this->authorize()` wiring is
+        // a separate follow-up session. See each policy's class
+        // docblock for the full role-matrix reference.
+        // ============================================================
+
+        // Purchasing cluster (G-026 covered by the 3 policies below —
+        // the cluster-level gap "No Purchase*Policy classes" is closed
+        // by these + each policy's audit() method).
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\PurchaseOrder::class,
+            \App\Policies\PurchaseOrderPolicy::class
+        );
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\PurchaseReceive::class,
+            \App\Policies\PurchaseReceivePolicy::class
+        );
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\PurchaseReturn::class,
+            \App\Policies\PurchaseReturnPolicy::class
+        );
+
+        // Finance cluster — Branch Demand (G-101).
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\BranchDemand::class,
+            \App\Policies\BranchDemandPolicy::class
+        );
+
+        // Finance cluster — Consolidation / Intercompany (G-107 covers
+        // 6 models — one gap row for the entire cluster).
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\ConsolidationRun::class,
+            \App\Policies\ConsolidationRunPolicy::class
+        );
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\EliminationRule::class,
+            \App\Policies\EliminationRulePolicy::class
+        );
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\EliminationEntry::class,
+            \App\Policies\EliminationEntryPolicy::class
+        );
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\MoneyTransfer::class,
+            \App\Policies\MoneyTransferPolicy::class
+        );
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\WarehouseTransfer::class,
+            \App\Policies\WarehouseTransferPolicy::class
+        );
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\Company::class,
+            \App\Policies\CompanyPolicy::class
+        );
+
+        // Sales cluster (G-155, G-156, G-157, G-163).
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\SalesDraftCart::class,
+            \App\Policies\SalesDraftCartPolicy::class
+        );
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\SalesChallan::class,
+            \App\Policies\SalesChallanPolicy::class
+        );
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\SalesReturn::class,
+            \App\Policies\SalesReturnPolicy::class
+        );
+        \Illuminate\Support\Facades\Gate::policy(
+            \App\Models\CommissionEntry::class,
+            \App\Policies\CommissionEntryPolicy::class
+        );
     }
 }

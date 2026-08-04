@@ -334,6 +334,8 @@ return $this->journalPosting->createJournalEntry([
 3. **G5 (CRITICAL)** — `sales_challan_items` table is NOT in `04_sales.sql` DDL — created only
    by migration `2025_01_08_000005`.
 4. **G6 (MAJOR)** — No `SalesChallanPolicy` class. RBAC via route middleware + RLS only.
+
+   > ✅ RESOLVED in commit 1ccc5b6 — Policy class `App\Policies\SalesChallanPolicy` created + registered in `AppServiceProvider::boot()`. Mirrors existing `role:` middleware exactly (defense-in-depth — no behavior change). Methods: viewAny/view/listDispatchers/blankGodownForm/storeBlankGodown/godown/storeGodown/challanForm/issueChallan/create/cancel/delete/print/exportCsv. Splits `viewAny()` (index: `warehouse_manager,dispatcher,manager,admin`) from `view()` (show: `accountant,warehouse_manager,manager,admin`) to mirror the divergent route middleware exactly.
 5. **G18 (MINOR)** — `sales_challans.transport_name` / `transport_phone` / `vehicle_number` /
    `driver_name` are free-text fields — no `transport_vendors` master table. Typos fragment
    reporting.

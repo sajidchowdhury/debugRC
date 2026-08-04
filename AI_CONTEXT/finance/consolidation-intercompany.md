@@ -798,6 +798,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 - **Fix:** create `ConsolidationRunPolicy` with `view/create/post/reverse/destroy` methods. The
   controller would call `$this->authorize('post', $run)` etc.
 
+> ✅ RESOLVED in commit 1ccc5b6 — All 6 policy classes created + registered in `AppServiceProvider::boot()`: `App\Policies\ConsolidationRunPolicy`, `App\Policies\EliminationRulePolicy`, `App\Policies\EliminationEntryPolicy`, `App\Policies\MoneyTransferPolicy`, `App\Policies\WarehouseTransferPolicy`, `App\Policies\CompanyPolicy`. Each mirrors existing route `role:` middleware exactly (defense-in-depth — no behavior change). The `admin/consolidation` route group carries `role:accountant,manager,admin` at the prefix level (routes/web.php L1733); the `admin/money-transfers` routes carry `role:accountant,manager,admin` inline; `admin/warehouse-transfers` routes have NO explicit `role:` middleware — `WarehouseTransferPolicy` mirrors the intended matrix per `AI_CONTEXT/inventory/warehouse-transfer.md` §4 (`role:admin,manager,warehouse_manager`). Controller `$this->authorize()` wiring is a separate follow-up.
+
 #### G14 — `BranchIntercompanyService::reverseLedgerByReference` inserts reversal rows with `journal_entry_id = null`
 
 - **Severity:** MAJOR.
