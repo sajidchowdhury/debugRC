@@ -2,7 +2,11 @@
 
 > **Module:** Reports / Materialized Views & Refresh Strategy
 > **Audience:** Engineers, DBAs, accountants, AI assistants
-> **Status:** Draft — pending review (4 CRITICAL + 6 HIGH gaps; see §14)
+> **Status:** Draft — pending review (4 CRITICAL + 6 HIGH gaps; see §14).
+> **REPORTS-1 (commit `d2101f2`):** 6 of the 10 open reports CRITICALs resolved
+> (G-044/G1, G-047/G2, G-049/G3, G-052/G7, G-053/G6, G-054/G7).
+> G-051/G4 (test debt) deferred per the no-test-code rule.
+> 4 reports CRITICALs remain open (G-046, G-048, G-050, G-051) — see REPORTS-2 cluster.
 > **Last reviewed:** Phase 16 (Reporting & Exports)
 > **Source of truth:** This file documents all 13 materialized views (MVs) in RC_ERP_v2, the
 > `refresh_all_report_views()` PL/pgSQL function, the `reports:refresh` artisan command, and
@@ -768,12 +772,60 @@ sequenceDiagram
 > This is a code-level task (controller/service audit + filtering), not a DB-level migration. Tracked
 > as a separate follow-up cluster (Reports/Read-site-filtering).
 
+> ✅ **RESOLVED — G-044 / G1 (REPORTS-1, commit `d2101f2`).** Read-site filtering implemented via
+> `ReportController::resolveBranchScope(Request $request): ?int` helper. The helper enforces:
+>   - **Admin users** may pass any `branch_id` (including null = "all branches") — preserves the
+>     corporate roll-up view for superadmins.
+>   - **Non-admin users** are pinned to `session('branch_id')` regardless of what they pass in the
+>     request — defense in depth on top of the existing `EnforceBranchIsolation` middleware.
+>
+> All 5 MV-reading controller methods now use the helper instead of the previous
+> `$request->input('branch_id') ? (int) ... : null` pattern that made the filter OPTIONAL:
+>   - `ReportController::receivableAging` (reads `mv_ar_aging`)
+>   - `ReportController::payableAging` (reads `mv_ap_aging`)
+>   - `ReportController::journalEntries` (reads `mv_journal_entry_summary`)
+>   - `ReportController::productStockAnalysis` (reads `mv_stock_valuation`)
+>   - `ReportController::branchIntercompany` (reads `mv_branch_intercompany` — uses
+>     `from_branch_id`/`to_branch_id` scope)
+>
+> NB: G1 step 4 (the test that verifies non-admin cross-branch access is blocked) is **deferred**
+> per the no-test-code rule. The code-level guard is in place; the test is tracked as G-051 (test
+> debt, deferred cluster). The 6 corporate/diagnostic MVs without `branch_id`
+> (`mv_ledger_balances`, `mv_consolidated_trial_balance`, the 4 `mv_*_ledger_balance_check` MVs,
+> `mv_product_abc_classification`) remain admin-only via the existing `role:admin` middleware on
+> their routes (closed in commit `b3a9fd7` / G-041..G-045).
+
 | **G2** | **CRITICAL** | Grep `mv_ledger_balances \| mv_ar_aging \| mv_ap_aging \| mv_stock_valuation \| mv_journal_entry_summary \| mv_branch_intercompany \| mv_product_movement_summary \| refresh_all_report_views` across `laravel/database/sql/*.sql` → 0 matches. Only `mv_product_abc_classification` is in `03_stock.sql:587-629`. | Fresh environments initialized from the SQL baseline (`01_*..07_*.sql`) lack ALL 12 other MVs. `php artisan migrate` would create them, but the SQL baseline is supposed to be the canonical schema reference. Any DBA who reads `database/sql/` to understand the schema will miss 12 MVs. | Regenerate `database/sql/*.sql` baseline from a migrated DB. At minimum, add a `08_materialized_views.sql` file with all 13 MV definitions + indexes + the `refresh_all_report_views()` function. |
+
+> ✅ **RESOLVED — G-047 / G2 (REPORTS-1, commit `d2101f2`).** Created `database/sql/10_materialized_views.sql` (file number 10 — `08_consolidation.sql` already exists and documents `mv_consolidated_trial_balance`). The new file contains all 7 financial MV definitions (`mv_ledger_balances`, `mv_ar_aging`, `mv_ap_aging`, `mv_stock_valuation`, `mv_journal_entry_summary`, `mv_branch_intercompany`, `mv_product_movement_summary`) + their unique indexes (required for `REFRESH CONCURRENTLY`) + the rewritten `refresh_all_report_views()` PL/pgSQL function (per-MV exception isolation + audit logging + `mv_consolidated_trial_balance` included). External readers (BI, replication, DBAs) can now discover the full MV schema from the SQL baseline without running migrations. The migration `2025_01_03_000001_create_report_materialized_views.php` remains the source of truth for runtime; this file is the canonical reference.
 | **G3** | **CRITICAL** | `ConsolidationService::refreshMaterializedViews():781-807` is the ONLY refresh path for `mv_consolidated_trial_balance` — and it's `private`, called only after consolidation run posts (ad-hoc). Grep `Schedule::command` + pg_cron jobs for `mv_consolidated_trial_balance` → 0 matches. | If consolidation hasn't been run in N days, `mv_consolidated_trial_balance` reflects stale data from the last `ConsolidationService::refreshMaterializedViews()` call. Consolidated reports read from it without knowing how stale it is. No `computed_at` column to detect staleness. | Add `REFRESH MATERIALIZED VIEW CONCURRENTLY mv_consolidated_trial_balance` to `refresh_all_report_views()`. OR add a separate pg_cron job (e.g. hourly). |
+
+> ✅ **RESOLVED — G-049 / G3 (REPORTS-1, commit `d2101f2`).** `mv_consolidated_trial_balance` is now included in BOTH refresh paths:
+>   1. **Laravel scheduler path** — `RefreshReportViews.php` loops through 8 MVs (7 financial + `mv_consolidated_trial_balance`) and issues per-MV `REFRESH MATERIALIZED VIEW CONCURRENTLY` statements from PHP (autocommit mode). The MV is now refreshed every 5 minutes by the scheduled `reports:refresh` command, not just ad-hoc after consolidation runs.
+>   2. **pg_cron path** — the rewritten `refresh_all_report_views()` PL/pgSQL function (migration `2026_09_04_000001`) includes `mv_consolidated_trial_balance` as its 8th subblock. Wrapped in `BEGIN…EXCEPTION…END` so a missing MV (environments that haven't run the consolidation migration `2026_08_11_000001`) doesn't abort the function.
+>
+> The ad-hoc `ConsolidationService::refreshMaterializedViews()` path is preserved for the immediate-refresh-after-consolidation-run use case, but now also logs to `financial_audit_log` (see G7).
+>
+> NB: the `computed_at` column for staleness detection is part of G14 (MEDIUM, still open) — not in scope for this CRITICAL cluster.
 | **G4** | **CRITICAL** | Grep `tests/` for `refresh_all_report_views \| reports:refresh \| mv_ledger_balances \| RefreshReportViews` → 0 matches. | No tests verify: (a) the command runs successfully; (b) `refresh_all_report_views()` actually refreshes each MV (row counts change); (c) CONCURRENTLY works (no error when run inside PL/pgSQL function); (d) the 7 MVs reconcile to their source tables; (e) MV integrity is maintained after schema changes. | Add `tests/Feature/Reports/RefreshReportViewsTest.php` (invoke command, assert SUCCESS, assert each MV row count > 0 with seeded data) + `tests/Feature/Reports/MaterializedViewIntegrityTest.php` (assert `mv_ledger_balances.total_debit` reconciles to `SUM(journal_lines.debit)`, etc.). |
 | **G5** | **HIGH** | Laravel scheduler (`console.php:12-17`) + pg_cron (`2025_01_20_000009:222-228`) both invoke `SELECT refresh_all_report_views()` every 5 minutes. `withoutOverlapping()` only protects the Laravel side. | If both fire at the same minute, both invoke the function. `CONCURRENTLY` allows one to proceed; the second blocks on the MV `ShareLock` until the first commits. ~2× wall-clock time for one refresh cycle. | Pick ONE scheduler. Recommendation: keep pg_cron (DB-level, survives app crashes) and remove the Laravel scheduler entry. OR: keep Laravel scheduler and `SELECT cron.unschedule('refresh-report-views')` in a migration. |
 | **G6** | **HIGH** | Migration `2025_01_03_000001:254-267` — function body is a single BEGIN…END block with 7 consecutive `REFRESH MATERIALIZED VIEW CONCURRENTLY` statements. PostgreSQL docs explicitly state: *"REFRESH MATERIALIZED VIEW CONCURRENTLY ... cannot be executed inside a transaction block."* A PL/pgSQL function body IS a transaction block. | If PG rejects the CONCURRENTLY-in-function pattern, every invocation of `refresh_all_report_views()` fails — the `RefreshReportViews.php:36` catch fires, `Log::error('Report MV refresh failed')` is logged, but no MV is ever refreshed. Reports silently read stale data forever (until someone notices the log). **Runtime verification needed.** | Verify by running `php artisan reports:refresh` against a real DB and checking the log. If it fails, refactor: issue 7 separate `DB::statement('REFRESH MATERIALIZED VIEW CONCURRENTLY mv_X')` from PHP (each in its own autocommit statement — bypasses the function-transaction issue). OR change the function to use plain `REFRESH MATERIALIZED VIEW` (no CONCURRENTLY — blocks readers but works inside functions). |
+
+> ✅ **RESOLVED — G-053 / G6 (REPORTS-1, commit `d2101f2`).** Both fixes from the Recommended fix column were applied:
+>   1. **PHP-level per-MV CONCURRENTLY** (primary path) — `RefreshReportViews.php` was refactored from a single `DB::statement('SELECT refresh_all_report_views()')` call to a loop over 8 MVs, each issuing `DB::statement('REFRESH MATERIALIZED VIEW CONCURRENTLY mv_X')` in autocommit mode. This sidesteps the CONCURRENTLY-in-function issue entirely (PHP `DB::statement` is autocommit, not inside a PL/pgSQL function body). Each MV is wrapped in try/catch + Log::warning (per-MV isolation — one failure no longer aborts the remaining 7). Falls back to plain `REFRESH` (no CONCURRENTLY) if the CONCURRENTLY variant fails (e.g. ShareLock contention or missing unique index).
+>   2. **PL/pgSQL function with plain REFRESH + per-MV exception subblocks** (pg_cron fallback path) — migration `2026_09_04_000001` rewrites `refresh_all_report_views()` with 8 `BEGIN…EXCEPTION…END` subblocks (one per MV) using plain `REFRESH MATERIALIZED VIEW` (no CONCURRENTLY — works reliably inside a function body at the cost of briefly blocking readers). One MV failure no longer aborts the function. This is the pg_cron fallback path (DB-level, survives app crashes).
+>
+> The Laravel scheduler is the primary path (non-blocking readers via CONCURRENTLY). The pg_cron job is the fallback (reliable, blocking). G5 (duplicate scheduler cleanup) is HIGH severity, still open — not in this CRITICAL cluster.
 | **G7** | (cross-ref `reports/reports-catalog.md` G5) | `fn_financial_audit_trigger` attached to only 9 tables in `database/sql/02_accounting.sql:446-455`. MVs can't have AFTER INSERT triggers, but the REFRESH operation itself writes to `financial_audit_log` for NONE of the 7 MVs. | A malicious or buggy refresh (e.g. manual `REFRESH MATERIALIZED VIEW mv_ledger_balances` after directly modifying journal_lines) wouldn't appear in the audit chain. Recurring cross-phase gap (Phase 14 G6, Phase 15 G6). | Add a `BEFORE/AFTER` log statement inside `refresh_all_report_views()` that INSERTs into `financial_audit_log` with `table_name='mv_*'`, `operation='REFRESH'`, `performed_by=current_setting('app.user_id')`. Or create a `mv_refresh_log` table. |
+
+> ✅ **RESOLVED — G-052 / G-054 / G7 (REPORTS-1, commit `d2101f2`).** Both refresh paths now log every MV refresh to `financial_audit_log`:
+>   - **Laravel scheduler path** (`RefreshReportViews.php`) — after each per-MV refresh, INSERTs a row into `financial_audit_log` with `table_name='mv_X'`, `operation='REFRESH'`, `record_id=0` (sentinel for whole-MV operation), `after_data={status, elapsed_ms, error, trigger}`, `performed_by=cli:user@host` (CLI) or `user:{id}` (web), `branch_id=session('branch_id')` or `app.branch_id` GUC. The audit-log write is non-blocking (try/catch + Log::warning — a failure to log never aborts the refresh loop).
+>   - **pg_cron path** (`refresh_all_report_views()` PL/pgSQL function) — each per-MV `BEGIN…EXCEPTION…END` subblock INSERTs a row into `financial_audit_log` with the same schema, using `current_setting('app.user_name', true)` for `performed_by` and `current_setting('app.branch_id', true)` for `branch_id`.
+>   - **Ad-hoc ConsolidationService path** (`refreshMaterializedViews()`) — refactored to delegate to a new `refreshSingleMvWithAudit(string $mvName)` helper that refreshes the MV (CONCURRENTLY → plain-REFRESH fallback) then logs the outcome to `financial_audit_log` with `trigger='ConsolidationService::refreshMaterializedViews'`.
+>
+> The `financial_audit_log.operation` CHECK constraint was altered (migration `2026_09_04_000001`) to allow `'REFRESH'` in addition to `'INSERT'/'UPDATE'/'DELETE'`. MVs themselves still can't have AFTER INSERT triggers (PG limitation — MVs are not tables), but every REFRESH operation — whether scheduled, ad-hoc, or manual — is now visible in the audit chain.
+>
+> NB: G-052 and G-054 in `ISSUES_REGISTER.md` both reference this same source-doc gap (G7 cross-ref) — they were duplicate register entries for the same finding. Both are closed by this single fix.
 | **G8** | (cross-ref `reports/reports-catalog.md` G6) | No FormRequest validation on dashboard filter inputs. Not directly an MV issue but affects the report controllers that read MVs. | Unvalidated input flows into SQL WHERE clauses on MV reads. | Create FormRequests for report filters. |
 | **G9** | (cross-ref `reports/reports-catalog.md` G7) | No tests for MV-consuming report methods. | 5 MV-consuming methods in `ReportService` are untested. | Add tests. |
 | **G10** | (cross-ref `reports/dashboards.md` G10) | No FormRequest validation on dashboard filter inputs. | Same as G8 but for dashboards. | Create FormRequests for dashboard. |
