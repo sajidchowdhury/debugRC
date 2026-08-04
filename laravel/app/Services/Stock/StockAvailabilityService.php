@@ -27,6 +27,13 @@ use Illuminate\Support\Facades\DB;
  * JOIN queries on sales_invoice_dispatches + sales_invoices during cart
  * validation. Cache is invalidated by SalesInvoiceService + SalesChallanService
  * whenever the pipeline changes (finalize, edit, cancel, challan issue/cancel).
+ *
+ * G3 fix (2026-09-01): the sales-pipeline filter previously excluded
+ * `si.status = 'challan_completed'`, but `sales_invoices.status` has no such
+ * value (CHECK is draft/confirmed/cancelled/reversed). The nonexistent value
+ * was a harmless no-op (whereNotIn never matched it) — the real "fully
+ * dispatched" exclusion is the `sid.ordered_qty > sid.dispatched_qty` filter.
+ * The status filter now excludes only `['reversed', 'cancelled']`.
  */
 class StockAvailabilityService
 {
@@ -138,7 +145,7 @@ class StockAvailabilityService
             ->join('sales_invoices as si', function ($join) {
                 $join->on('si.id', '=', 'sid.sales_invoice_id')
                      ->where('si.is_reversed', false)
-                     ->whereNotIn('si.status', ['challan_completed', 'reversed', 'cancelled']);
+                     ->whereNotIn('si.status', ['reversed', 'cancelled']);
             })
             ->where('sid.product_id', $productId)
             ->where('si.branch_id', $branchId)
@@ -183,7 +190,7 @@ class StockAvailabilityService
             ->join('sales_invoices as si', function ($join) {
                 $join->on('si.id', '=', 'sid.sales_invoice_id')
                      ->where('si.is_reversed', false)
-                     ->whereNotIn('si.status', ['challan_completed', 'reversed', 'cancelled']);
+                     ->whereNotIn('si.status', ['reversed', 'cancelled']);
             })
             ->where('sid.product_id', $productId)
             ->where('sid.warehouse_id', $warehouseId)
@@ -262,7 +269,7 @@ class StockAvailabilityService
                     ->join('sales_invoices as si', 'si.id', '=', 'sid.sales_invoice_id')
                     ->whereRaw('sid.ordered_qty > sid.dispatched_qty')
                     ->where('si.is_reversed', false)
-                    ->whereNotIn('si.status', ['challan_completed', 'reversed', 'cancelled'])
+                    ->whereNotIn('si.status', ['reversed', 'cancelled'])
                     ->where('si.branch_id', $branchId)
                     ->whereNotNull('sid.product_id')
                     ->select('sid.product_id', DB::raw('SUM(sid.ordered_qty - sid.dispatched_qty) AS pending_qty'))
@@ -348,7 +355,7 @@ class StockAvailabilityService
                     ->join('sales_invoices as si', 'si.id', '=', 'sid.sales_invoice_id')
                     ->whereRaw('sid.ordered_qty > sid.dispatched_qty')
                     ->where('si.is_reversed', false)
-                    ->whereNotIn('si.status', ['challan_completed', 'reversed', 'cancelled'])
+                    ->whereNotIn('si.status', ['reversed', 'cancelled'])
                     ->where('si.branch_id', $branchId)
                     ->whereNotNull('sid.product_id')
                     ->select('sid.product_id', DB::raw('SUM(sid.ordered_qty - sid.dispatched_qty) AS pending_qty'))
@@ -488,7 +495,7 @@ class StockAvailabilityService
             ->join('sales_invoices as si', function ($join) {
                 $join->on('si.id', '=', 'sid.sales_invoice_id')
                      ->where('si.is_reversed', false)
-                     ->whereNotIn('si.status', ['challan_completed', 'reversed', 'cancelled']);
+                     ->whereNotIn('si.status', ['reversed', 'cancelled']);
             })
             ->whereIn('sid.product_id', $productIds)
             ->whereIn('sid.warehouse_id', $warehouseIds)

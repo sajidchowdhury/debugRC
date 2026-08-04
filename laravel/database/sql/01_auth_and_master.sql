@@ -199,6 +199,7 @@ CREATE TABLE customers (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     customer_code varchar(30) NOT NULL,
     customer_name varchar(200) NOT NULL,
+    shop_name varchar(200),  -- G1 fix (2026-09-01): business/shop display name; backfilled from customer_name. See migration 2026_09_01_000001.
     phone varchar(30),
     mobile varchar(30),
     email varchar(100),

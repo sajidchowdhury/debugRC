@@ -136,14 +136,39 @@ class SalesInvoiceApiController extends Controller
      * Update a draft invoice (recalculates totals + GL).
      *
      * PUT /api/v1/sales/invoices/{id}
+     *
+     * G2 fix (2026-09-01): the previous version validated only
+     * discount/transport/notes/is_soft_hold and never passed `items[]` to
+     * SalesInvoiceService::updateInvoice — which then threw
+     * "Cannot update: items list is empty." on every call (mobile invoice
+     * edit was broken). The endpoint now accepts the full item list
+     * (product_id + qty + rate per line) plus the credit-limit-override +
+     * dispatcher fields the service reads, mirroring the web update flow.
      */
     public function update(Request $request, int $id): JsonResponse
     {
         $validated = $request->validate([
-            'discount_amount' => 'nullable|numeric|min:0',
-            'transport_cost'  => 'nullable|numeric|min:0',
-            'notes'           => 'nullable|string|max:1000',
-            'is_soft_hold'    => 'nullable|boolean',
+            // Line items — REQUIRED (the service throws if empty).
+            'items'                 => 'required|array|min:1',
+            'items.*.product_id'    => 'required|integer|exists:products,id',
+            'items.*.qty'           => 'required|numeric|min:0.01',
+            'items.*.rate'          => 'required|numeric|min:0',
+            'items.*.condition_state' => 'nullable|string|in:Good,Damage',
+
+            // Header-level fields the service consumes.
+            'invoice_date'          => 'nullable|date',
+            'discount_amount'       => 'nullable|numeric|min:0',
+            'transport_cost'        => 'nullable|numeric|min:0',
+            'notes'                 => 'nullable|string|max:1000',
+            'is_soft_hold'          => 'nullable|boolean',
+
+            // Credit-limit override (parity with FinalizeInvoiceRequest).
+            'credit_limit_override' => 'nullable|boolean',
+            'override_reason'       => 'nullable|string|min:10|max:500',
+
+            // Dispatchers to (re)assign after edit (old dispatchers are cleared).
+            'dispatcher_ids'        => 'nullable|array',
+            'dispatcher_ids.*'      => 'integer|exists:employees,id',
         ]);
 
         $invoice = SalesInvoice::findOrFail($id);

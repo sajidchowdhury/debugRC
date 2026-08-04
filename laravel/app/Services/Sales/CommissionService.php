@@ -669,13 +669,18 @@ class CommissionService
                     continue;
                 }
 
-                // Post GL: Dr Commission Expense / Cr Employee Payable
+                // Post GL: Dr Commission Expense / Cr Commission Payable
+                // G1 fix (2026-09-01): postCommissionExpense now exists on
+                // JournalPostingService (was BadMethodCallException). G3 fix:
+                // commission_expense + commission_payable natures now registered.
                 $salesman = Employee::find($salesmanId);
                 $je = $this->journalPosting->postCommissionExpense([
-                    'amount' => $netCommission,
+                    'amount'        => $netCommission,
                     'salesman_name' => $salesman?->name ?? "Employee #{$salesmanId}",
-                    'period' => $period,
-                    'description' => "Commission for {$period} — {$salesman?->name}",
+                    'salesman_id'   => (int) $salesmanId,
+                    'period'        => $period,
+                    'description'   => "Commission for {$period} — {$salesman?->name}",
+                    'created_by'    => $confirmedBy,
                 ]);
 
                 $journalEntryId = $je->id;

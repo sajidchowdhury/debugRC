@@ -285,6 +285,102 @@ class JournalPostingService
     }
 
     /**
+     * Post commission expense GL entry: Dr commission_expense / Cr commission_payable.
+     *
+     * Called by CommissionService::confirmPeriod at period-end to recognize the
+     * commission liability for a salesman's net confirmed entries.
+     *
+     * Requires the `commission_expense` (Dr, Expense) and `commission_payable`
+     * (Cr, Liability) ledger natures to be registered in LedgerNatureService
+     * (EXTENDED_NATURES) AND resolved to active ledgers in the chart of
+     * accounts. Without both, the posting throws with an actionable message
+     * (rather than the previous BadMethodCallException — sales G1).
+     *
+     * A negative net commission (return reversals exceed earnings for the
+     * period) swaps Dr/Cr: Dr commission_payable / Cr commission_expense,
+     * reducing both the liability and the expense.
+     *
+     * @param array $data {
+     *     amount: float (net commission — may be negative for net-reversal periods),
+     *     salesman_name: string (for the line memo),
+     *     period: string (e.g. '2025-01' — used in description + reference),
+     *     description: string,
+     *     salesman_id: int|null (used as reference_id for traceability),
+     *     branch_id: int|null (defaults null → skips per-branch period check;
+     *         commission confirmation is an admin action that may span branches),
+     *     created_by: int|null,
+     * }
+     * @return object { id: int } The new journal_entry_id, wrapped to match
+     *     the `$je->id` access pattern in CommissionService::confirmPeriod.
+     * @throws \RuntimeException If a commission ledger nature is not registered
+     *     or resolves to no active ledger, or if the JE fails Dr=Cr / balance
+     *     validation (delegated to createJournalEntry).
+     */
+    public function postCommissionExpense(array $data): object
+    {
+        $amount       = (float) ($data['amount'] ?? 0);
+        $period       = (string) ($data['period'] ?? now()->format('Y-m'));
+        $description  = $data['description'] ?? "Commission for {$period}";
+        $salesmanName = $data['salesman_name'] ?? '';
+        $salesmanId   = $data['salesman_id'] ?? null;
+        $branchId     = $data['branch_id'] ?? null;
+        $createdBy    = $data['created_by'] ?? null;
+
+        $expenseLedgerId = $this->lookupLedgerByNature('commission_expense');
+        $payableLedgerId = $this->lookupLedgerByNature('commission_payable');
+
+        if ($expenseLedgerId === null) {
+            throw new \RuntimeException(
+                "Cannot post commission expense: no active ledger with nature 'commission_expense'. "
+                . "Register the ledger in the chart of accounts (ledger_nature='commission_expense', is_active=true). "
+                . "See LedgerNatureService::EXTENDED_NATURES."
+            );
+        }
+        if ($payableLedgerId === null) {
+            throw new \RuntimeException(
+                "Cannot post commission expense: no active ledger with nature 'commission_payable'. "
+                . "Register the ledger in the chart of accounts (ledger_nature='commission_payable', is_active=true). "
+                . "See LedgerNatureService::EXTENDED_NATURES."
+            );
+        }
+
+        $absAmount = abs($amount);
+        $memoExpense = "Commission expense — {$salesmanName} ({$period})";
+        $memoPayable = "Commission payable — {$salesmanName} ({$period})";
+
+        // Net-negative period (returns exceed earnings): reduce the liability
+        // and the expense instead of accruing more.
+        $lines = $amount >= 0
+            ? [
+                ['ledger_id' => $expenseLedgerId, 'debit' => $absAmount, 'credit' => 0,          'memo' => $memoExpense],
+                ['ledger_id' => $payableLedgerId, 'debit' => 0,          'credit' => $absAmount, 'memo' => $memoPayable],
+            ]
+            : [
+                ['ledger_id' => $payableLedgerId, 'debit' => $absAmount, 'credit' => 0,          'memo' => "Commission reversal — {$salesmanName} ({$period})"],
+                ['ledger_id' => $expenseLedgerId, 'debit' => 0,          'credit' => $absAmount, 'memo' => "Commission reversal — {$salesmanName} ({$period})"],
+            ];
+
+        $entry = [
+            'entry_date'   => now()->format('Y-m-d'),
+            'reference_type' => 'commission_period',
+            'reference_id' => (int) ($salesmanId ?? 0),
+            'branch_id'    => $branchId,
+            'description'  => $description,
+            'source'       => 'commission_confirm',
+            'created_by'   => $createdBy,
+            // Commission confirmation is an admin period-end action that may
+            // span branches (entries are grouped by salesman, not branch).
+            // With branch_id=null the per-branch period-close guard is
+            // naturally skipped (see createJournalEntry step 2).
+            'skip_period_check' => $branchId === null,
+        ];
+
+        $journalEntryId = $this->createJournalEntry($entry, $lines);
+
+        return (object) ['id' => $journalEntryId];
+    }
+
+    /**
      * Validate that the posting date falls within an open accounting period.
      *
      * P2-1: Admin bypass — when config('accounting.period_close_admin_override')

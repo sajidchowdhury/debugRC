@@ -216,6 +216,23 @@ class LedgerNatureService
             'description' => 'Loss on asset disposal',
             'used_by' => 'Fixed asset disposal — sale below book value or write-off',
         ],
+        // Phase 9.5: Commission natures — CommissionService::confirmPeriod GL posting.
+        // G3 fix (2026-09-01): these were referenced by JournalPostingService::postCommissionExpense
+        // but never registered, so the Dr-side ledger could not resolve (BadMethodCallException
+        // from G1 masked this — once postCommissionExpense exists, the GL call would throw on
+        // lookupLedgerByNature('commission_expense') returning null).
+        'commission_expense' => [
+            'account_type' => 'Expense',
+            'normal_balance' => 'debit',
+            'description' => 'Commission expense (salesman commission recognized at period confirm)',
+            'used_by' => 'Commission period confirm — Dr side',
+        ],
+        'commission_payable' => [
+            'account_type' => 'Liability',
+            'normal_balance' => 'credit',
+            'description' => 'Commission payable to salesmen (liability until paid via employee transaction)',
+            'used_by' => 'Commission period confirm — Cr side',
+        ],
     ];
 
     /**
