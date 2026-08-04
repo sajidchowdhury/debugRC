@@ -19,12 +19,12 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | Severity | Count | Blocks cutover? |
 |---|---|---|
 | CRITICAL | 77 | Yes — all of them |
-| HIGH | 104 | Most |
+| HIGH | 103 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 63 | No |
 | UNKNOWN | 38 | Triage needed |
-| **TOTAL open** | **349** | |
-| _of which resolved_ | 7 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **348** | |
+| _of which resolved_ | 8 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -32,7 +32,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 |---|---|
 | api | 51 |
 | architecture | 20 |
-| finance | 82 |
+| finance | 81 |
 | purchasing | 28 |
 | reports | 80 |
 | sales | 39 |
@@ -168,13 +168,13 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-102 | G9 | HIGH | finance | finance/consolidation-intercompany.md:718 | — | #### G9 — `MoneyTransferService::postIntercompanySettlement` uses non-registered `'intercompany'` nature → silently skips | — | H2 | open | — |
 | G-103 | G9 | HIGH | finance | finance/fixed-assets.md:898 | — | **G9 (MAJOR):** `DELETE FROM asset_disposals` destroys the audit trail. The disposal record vanishes; only the GL reversal JE remains, with … | notifications phase | H2 | open | — |
 | G-104 | G10 | HIGH | finance | finance/consolidation-intercompany.md:734 | — | #### G10 — `WarehouseTransferService::postIntercompanyGL` is DEAD CODE with fossilized bugs | — | H2 | open | — |
-| G-105 | G11 | HIGH | finance | finance/consolidation-intercompany.md:750 | app/Http/Middleware/EnforceBranchIsolation.php:165-246 | #### G11 — `EnforceBranchIsolation::inferTableFromUri` does NOT cover consolidation / warehouse-transfers / elimination-rules / companies UR… | cutover, RLS audit | H2 | open | — |
-| G-106 | G12 | HIGH | finance | finance/consolidation-intercompany.md:772 | — | #### G12 — NO BranchScope on `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `Company` models | — | H2 | open | — |
-| G-107 | G13 | HIGH | finance | finance/consolidation-intercompany.md:786 | — | #### G13 — NO Policy classes for `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `MoneyTransfer` / `WarehouseTransfer` / `Comp… | cutover, RLS audit | H2 | open | — |
-| G-108 | G14 | HIGH | finance | finance/consolidation-intercompany.md:798 | — | #### G14 — `BranchIntercompanyService::reverseLedgerByReference` inserts reversal rows with `journal_entry_id = null` | GL posting | H2 | open | — |
+| G-105 | G11 | HIGH | finance | finance/consolidation-intercompany.md:750 | app/Http/Middleware/EnforceBranchIsolation.php:165-246 | #### G11 — `EnforceBranchIsolation::inferTableFromUri` does NOT cover consolidation / warehouse-transfers / elimination-rules / companies UR… | cutover, RLS audit | H2 | resolved | `68a9672` |
+| G-106 | G12 | HIGH | finance | finance/consolidation-intercompany.md:775 | routes/web.php:1733 | #### G12 — NO BranchScope on `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `Company` models | cutover, RLS audit | H2 | open | — |
+| G-107 | G13 | HIGH | finance | finance/consolidation-intercompany.md:789 | — | #### G13 — NO Policy classes for `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `MoneyTransfer` / `WarehouseTransfer` / `Comp… | cutover, RLS audit | H2 | open | — |
+| G-108 | G14 | HIGH | finance | finance/consolidation-intercompany.md:801 | — | #### G14 — `BranchIntercompanyService::reverseLedgerByReference` inserts reversal rows with `journal_entry_id = null` | GL posting | H2 | open | — |
 | G-109 | G14 | HIGH | finance | finance/fixed-assets.md:174 | — | BR30 \| **DepreciationService and AssetDisposalService MUST call `JournalPostingService::reverseJournalEntry` directly** (NOT `JournalRevers… | notifications phase | H2 | open | — |
-| G-110 | G15 | HIGH | finance | finance/consolidation-intercompany.md:813 | — | #### G15 — `ConsolidationService::calculateBalanceElimination` queries `branch_ledger` WITHOUT joining `journal_entries` to filter by `is_re… | GL posting | H2 | open | — |
-| G-111 | G16 | HIGH | finance | finance/consolidation-intercompany.md:832 | — | #### G16 — `ConsolidationService::calculateAggregateElimination` uses `min(debitNet, creditNet)` which may eliminate LESS than the true inte… | — | H2 | open | — |
+| G-110 | G15 | HIGH | finance | finance/consolidation-intercompany.md:816 | — | #### G15 — `ConsolidationService::calculateBalanceElimination` queries `branch_ledger` WITHOUT joining `journal_entries` to filter by `is_re… | GL posting | H2 | open | — |
+| G-111 | G16 | HIGH | finance | finance/consolidation-intercompany.md:835 | — | #### G16 — `ConsolidationService::calculateAggregateElimination` uses `min(debitNet, creditNet)` which may eliminate LESS than the true inte… | — | H2 | open | — |
 | G-112 | G16 | HIGH | finance | finance/fixed-assets.md:848 | — | **G16 (MAJOR):** For a fully-depreciated asset, `NBV = salvage_value`. If scrapped for ৳0, the code computes `loss = 0 − salvage = −salvage`… | notifications phase | H2 | open | — |
 | G-113 | G19 | HIGH | finance | finance/fixed-assets.md:899 | — | **G19 (MAJOR):** The force-reversed pending schedules (set during `disposeAsset`) are NOT restored. The accountant must manually re-generate… | notifications phase | H2 | open | — |
 | G-114 | G27 | HIGH | finance | finance/fixed-assets.md:172 | — | BR28 \| **The subsystem MUST be accessible only to `accountant`, `manager`, `admin` (route middleware).** Superadmin bypasses via `EnsureRol… | cutover, RLS audit | H2 | open | — |
@@ -341,13 +341,13 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-275 | G20 | LOW | architecture | architecture/realtime-events.md:1113 | — | ### G20 — LOW — `getActiveChannels()` SQL may return multiple rows per channel | — | H4 | open | — |
 | G-276 | G10 | LOW | finance | finance/fixed-assets.md:687 | — | **G10 (MINOR):** The asset-at-cost ledgers (L-0201, L-0210..L-0240) have NO `ledger_nature`. The `LedgerNatureService::validateChartOfAccoun… | notifications phase | H4 | open | — |
 | G-277 | G11 | LOW | finance | finance/fixed-assets.md:229 | — | **G11 (MINOR):** `$periodFrom` and `$periodTo` are stored on the schedule but NOT used in the calculation. There is no pro-rata by days (mid… | — | H4 | open | — |
-| G-278 | G17 | LOW | finance | finance/consolidation-intercompany.md:847 | — | #### G17 — `ConsolidationRun` ↔ `Company` relationship is broken | — | H4 | open | — |
-| G-279 | G18 | LOW | finance | finance/consolidation-intercompany.md:857 | — | #### G18 — `EliminationEntry` has NO SoftDeletes, but `EliminationRule` and `ConsolidationRun` DO | — | H4 | open | — |
-| G-280 | G19 | LOW | finance | finance/consolidation-intercompany.md:869 | — | #### G19 — `MoneyTransfer` ↔ `ConsolidationRun` no direct model relationship | — | H4 | open | — |
+| G-278 | G17 | LOW | finance | finance/consolidation-intercompany.md:850 | — | #### G17 — `ConsolidationRun` ↔ `Company` relationship is broken | — | H4 | open | — |
+| G-279 | G18 | LOW | finance | finance/consolidation-intercompany.md:860 | — | #### G18 — `EliminationEntry` has NO SoftDeletes, but `EliminationRule` and `ConsolidationRun` DO | — | H4 | open | — |
+| G-280 | G19 | LOW | finance | finance/consolidation-intercompany.md:872 | — | #### G19 — `MoneyTransfer` ↔ `ConsolidationRun` no direct model relationship | — | H4 | open | — |
 | G-281 | G20 | LOW | finance | finance/branch-demand.md:1293 | app/Services/BranchDemand/BranchDemandService.php:336-345 | #### G20 — Demand send does NOT consult `FiscalPeriod` status before posting GL | — | H4 | open | — |
-| G-282 | G20 | LOW | finance | finance/consolidation-intercompany.md:879 | — | #### G20 — `WarehouseTransferItem` has NO timestamps and NO SoftDeletes | — | H4 | open | — |
-| G-283 | G21 | LOW | finance | finance/consolidation-intercompany.md:888 | — | #### G21 — `BranchDemandMoneyTransferSettlement` model doc-block is stale | DDL drift | H4 | open | — |
-| G-284 | G22 | LOW | finance | finance/consolidation-intercompany.md:899 | — | #### G22 — `WarehouseTransferController::audit` action filters `auditEvents` by parsing JSON `details.transfer_id` in PHP — fragile | — | H4 | open | — |
+| G-282 | G20 | LOW | finance | finance/consolidation-intercompany.md:882 | — | #### G20 — `WarehouseTransferItem` has NO timestamps and NO SoftDeletes | — | H4 | open | — |
+| G-283 | G21 | LOW | finance | finance/consolidation-intercompany.md:891 | — | #### G21 — `BranchDemandMoneyTransferSettlement` model doc-block is stale | DDL drift | H4 | open | — |
+| G-284 | G22 | LOW | finance | finance/consolidation-intercompany.md:902 | — | #### G22 — `WarehouseTransferController::audit` action filters `auditEvents` by parsing JSON `details.transfer_id` in PHP — fragile | — | H4 | open | — |
 | G-285 | G26 | LOW | finance | finance/fixed-assets.md:738 | — | **G26 (MINOR):** `nextCode` is called BEFORE `FixedAsset::create`. If `create` throws, the sequence is already incremented — non-contiguous … | notifications phase | H4 | open | — |
 | G-286 | G18 | LOW | purchasing | purchasing/purchase-receive.md:420 | — | **G18 — `purchase_receive_items.warehouse_id` nullable in DDL but required by FormRequest.** | DDL drift | H4 | open | — |
 | G-287 | G14 | LOW | reports | reports/cte-reports.md:622 | — | **G14** \| **LOW** \| `ReportsCatalog.php:9` docblock (cross-ref `reports/reports-catalog.md` G16) — "all 18 reports across 5 categories" do… | DDL drift | H4 | open | — |
@@ -458,7 +458,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 ## Top fix-clusters (recommended execution order)
 
-1. **Security/RLS cluster — missing role middleware + RLS gaps** — 67 rows. Fix once in routes/web.php + routes/api.php + middleware registration. Blocks cutover.
+1. **Security/RLS cluster — missing role middleware + RLS gaps** — 68 rows. Fix once in routes/web.php + routes/api.php + middleware registration. Blocks cutover.
 2. **Notification worker-forward cluster (G1/G2/G3 + dead events)** — 55 rows. Remove CHANNEL_EVENT_MAP entries; dispatch directly from PHP. Closes notification-workflow G1-G3 + cascade.
 3. **DDL/migration drift cluster (stale migrations vs documented schema)** — 40 rows. Reconcile database/sql/*.sql baseline with migrations. Closes ~8 rows.
 4. **CSV/export cluster — no role middleware, no BOM, no throttle, no audit row** — 30 rows. Add role middleware to admin/reports group + standardise on CsvExporter. Closes ~10 reports rows.

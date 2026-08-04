@@ -769,6 +769,9 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
   'warehouse_transfers';` (already filtered by controller, but the middleware would add a
   defense-in-depth layer).
 
+> Reference: resolves G11 (ISSUES_REGISTER.md row G-105).
+> ✅ RESOLVED in commit 68a9672 — Extended `EnforceBranchIsolation::inferTableFromUri()` to cover the 4 missing URI patterns (`consolidation`, `warehouse-transfers`, `elimination-rules`, `companies`). All 4 return `null` — the candidate tables (`consolidation_runs`, `elimination_rules`, `elimination_entries`, `companies`) lack a single `branch_id` column (admin-only RLS or global), and `warehouse_transfers` is cross-branch (`from_branch_id` + `to_branch_id`, no single `branch_id`). Returning a table name would cause the downstream `value('branch_id')` query in `resolveUrlParamBranchId()` to throw `column "branch_id" does not exist`. Authorization is handled by `WarehouseTransferController::getUserBranchId()` (L74-82) for warehouse-transfers and by the `role:accountant,manager,admin` route middleware (`routes/web.php:1733`) for consolidation/companies/elimination-rules. See `app/Http/Middleware/EnforceBranchIsolation.php:245-289`. NOTE: this deviates from the gap text's literal fix recommendation (`return 'warehouse_transfers'`) because that recommendation would have caused the runtime error described above; returning `null` matches the existing pattern for cross-branch tables (`branch-demands`, `money-transfers`). Sub-problem D (Session 2, Security/RLS cluster).
+
 #### G12 — NO BranchScope on `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `Company` models
 
 - **Severity:** MAJOR.
