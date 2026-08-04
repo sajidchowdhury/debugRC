@@ -104,11 +104,64 @@ function normalizeSeverity(s) {
   const u = s.toUpperCase();
   if (u === 'MAJOR')  return 'HIGH';
   if (u === 'MINOR')  return 'LOW';
-  return u; // CRITICAL | HIGH | MEDIUM | LOW
+  return u; // CRITICAL | HIGH | MEDIUM | LOW | WONTFIX
 }
 
 function severityRank(s) {
-  return { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, UNKNOWN: 4 }[s] ?? 5;
+  return { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, WONTFIX: 4, UNKNOWN: 5 }[s] ?? 6;
+}
+
+// ---------- Severity overrides (manual triage) ----------
+// Reads the existing ISSUES_REGISTER.md (if present) and builds a map of
+// (gid, sourceFile) -> severity for rows where severity is NOT UNKNOWN.
+// These overrides are applied AFTER extraction, ONLY when the extracted
+// severity is UNKNOWN. This preserves source-file severity tags (which
+// take precedence) while allowing manual triage of UNKNOWN gaps.
+//
+// Background: the extractor derives severity from tags in source AI_CONTEXT
+// files. Gaps without severity tags are classified UNKNOWN. The triage
+// subagent (Task 25) manually assigns severities to UNKNOWN gaps by editing
+// the Severity column of ISSUES_REGISTER.md. Without this override logic,
+// re-running the extractor would overwrite those manual assignments with
+// UNKNOWN again. The override map preserves them across re-extractions.
+//
+// See: AI_CONTEXT/TRIAGE_FINANCE_UNKNOWN.md for the triage methodology.
+function readSeverityOverrides() {
+  const overrides = new Map(); // key=`${gid}|${sourceFile}` -> severity
+  if (!fs.existsSync(OUTPUT_MD)) return overrides;
+  const content = fs.readFileSync(OUTPUT_MD, 'utf8');
+  const lines = content.split('\n');
+  for (const line of lines) {
+    // Match register rows: | G-XXX | <gid> | <severity> | <sector> | <source>:<line> | ...
+    const m = line.match(/^\| G-\d+ \| ([^|]+) \| ([^|]+) \| [^|]+ \| ([^|]+?):\d+ \|/);
+    if (!m) continue;
+    const gid = m[1].trim();
+    const severity = m[2].trim();
+    const sourceWithLine = m[3].trim();
+    if (severity === 'UNKNOWN' || severity === '—' || severity === '') continue;
+    // Override key uses (gid, sourceFile) — same as the extractor's dedup key.
+    const key = `${gid}|${sourceWithLine}`;
+    overrides.set(key, severity);
+  }
+  return overrides;
+}
+
+function applySeverityOverrides(entries, overrides) {
+  let applied = 0;
+  for (const e of entries) {
+    if (e.severity !== 'UNKNOWN') continue; // Only override UNKNOWN entries.
+    const key = `${e.gid}|${e.sourceFile}`;
+    if (overrides.has(key)) {
+      const newSev = overrides.get(key);
+      // Only apply if the override is a recognized severity (not UNKNOWN).
+      if (newSev && newSev !== 'UNKNOWN') {
+        e.severity = newSev;
+        e.severityOverride = true; // Flag for traceability.
+        applied++;
+      }
+    }
+  }
+  return applied;
 }
 
 function extractSeverity(line, ctxLines) {
@@ -378,7 +431,7 @@ function emitMarkdown({ files, entries, crossRef, gidSector }) {
   // Counts — resolved entries are kept in the register (for traceability)
   // but EXCLUDED from the severity + sector counts so the "at a glance"
   // table reflects only open gaps.
-  const sevCounts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, UNKNOWN: 0 };
+  const sevCounts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, WONTFIX: 0, UNKNOWN: 0 };
   const sectorCounts = {};
   let resolvedCount = 0;
   for (const e of entries) {
@@ -425,6 +478,7 @@ function emitMarkdown({ files, entries, crossRef, gidSector }) {
   lines.push(`| HIGH | ${sevCounts.HIGH || 0} | Most |`);
   lines.push(`| MEDIUM | ${sevCounts.MEDIUM || 0} | Some |`);
   lines.push(`| LOW | ${sevCounts.LOW || 0} | No |`);
+  if (sevCounts.WONTFIX) lines.push(`| WONTFIX | ${sevCounts.WONTFIX} | False positive / not actionable |`);
   if (sevCounts.UNKNOWN) lines.push(`| UNKNOWN | ${sevCounts.UNKNOWN} | Triage needed |`);
   lines.push(`| **TOTAL open** | **${entries.length - resolvedCount}** | |`);
   if (resolvedCount > 0) lines.push(`| _of which resolved_ | ${resolvedCount} | (kept for traceability, excluded from counts above) |`);
@@ -448,7 +502,7 @@ function emitMarkdown({ files, entries, crossRef, gidSector }) {
   lines.push('');
   lines.push('- **ID** — sequential G-001..G-NNN (this register\'s own numbering)');
   lines.push('- **Orig ID** — the G# from the source file (e.g. G1, G7)');
-  lines.push('- **Severity** — CRITICAL / HIGH / MEDIUM / LOW (MAJOR→HIGH, MINOR→LOW, UNKNOWN=untriaged)');
+  lines.push('- **Severity** — CRITICAL / HIGH / MEDIUM / LOW / WONTFIX (MAJOR→HIGH, MINOR→LOW, UNKNOWN=untriaged). WONTFIX = false positive / not actionable. Manually-triaged severities for UNKNOWN gaps are preserved across re-extractions via `readSeverityOverrides()`.');
   lines.push('- **Sector** — which AI_CONTEXT subfolder');
   lines.push('- **Source** — `path/to/file.md:line`');
   lines.push('- **Code ref** — `laravel/path:line` if cited');
@@ -598,6 +652,24 @@ function computeClusters(entries) {
 
 function main() {
   const { files, entries, crossRef, gidSector } = extract();
+
+  // Apply manual severity overrides (read from existing ISSUES_REGISTER.md).
+  // This preserves manually-triaged severities for UNKNOWN gaps across
+  // re-extractions. See readSeverityOverrides() for details.
+  //
+  // NOTE: Overrides are applied AFTER extraction but BEFORE emitMarkdown.
+  // We do NOT re-sort after applying overrides — this preserves register ID
+  // stability (G-XXX IDs are assigned by sorted position in emitMarkdown).
+  // The 38 formerly-UNKNOWN rows stay at their original positions (the bottom
+  // of the register, since UNKNOWN sorts last), now with overridden
+  // severities. The summary counts in emitMarkdown reflect the overrides
+  // (computed from the final severity field).
+  const overrides = readSeverityOverrides();
+  const appliedCount = applySeverityOverrides(entries, overrides);
+  if (appliedCount > 0) {
+    process.stderr.write(`[extract_issues_register] Applied ${appliedCount} manual severity overrides (from existing ISSUES_REGISTER.md).\n`);
+  }
+
   const md = emitMarkdown({ files, entries, crossRef, gidSector });
   fs.writeFileSync(OUTPUT_MD, md, 'utf8');
 
