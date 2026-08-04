@@ -56,14 +56,22 @@ These exist in the repository but are **deliberately excluded** from this knowle
 
 ### If you are an AI assistant
 
-1. **Start here** (`README.md`), then read `PROJECT_OVERVIEW.md`, then `GLOSSARY.md` for
-   terminology.
-2. Read `IMPLEMENTATION_PLAN.md` to see which areas are already documented (check the
-   Progress Tracker, §5) and which are pending.
-3. Navigate to the module folder relevant to your task (see the map below).
-4. **Obey `IMPLEMENTATION_PLAN.md` §7 (AI Instructions)** — especially: never assume
+1. **Tier 0 (always load first):** `README.md` (this file) → `PROJECT_OVERVIEW.md` →
+   `GLOSSARY.md` for terminology.
+2. **Tier 1 (route your task):** Read `DISPATCH.md` — find the row matching your task
+   pattern, then load ONLY the files listed in that row's Load order. This avoids
+   burning ~150K tokens loading all 104 files.
+3. **Tier 2 (targeted):** Load the 3–5 files DISPATCH.md tells you to load, in order.
+4. **Tier 3 (if cited):** If a routing caveat mentions a G# gap ID, load
+   `ISSUES_REGISTER.md` and grep for that ID. If checking horizon priority, load
+   `ROADMAP.md`.
+5. **Obey `IMPLEMENTATION_PLAN.md` §7 (AI Instructions)** — especially: never assume
    undocumented business logic, preserve accounting integrity, never bypass services,
    respect branch isolation, and update docs when code changes.
+
+> **New to the codebase?** `DISPATCH.md` is the single highest-leverage file — it turns
+> "which of 104 files do I read?" into a 1-line lookup. Always consult it before
+> loading any module file.
 
 ### If you are a human
 
@@ -85,6 +93,7 @@ AI_CONTEXT/
 ├── GLOSSARY.md                ← Business + technical terms
 ├── ROADMAP.md                 ← (Phase 21) Forward roadmap — H1 Cutover → H4 Scale
 ├── ISSUES_REGISTER.md         ← (Phase 22) Consolidated gap catalogue (356 rows, auto-extracted)
+├── DISPATCH.md                ← (Phase 23) Tier-1 task→file routing table (33 patterns, ~85% token reduction)
 │
 ├── architecture/              ← (Phase 1) Layers, RLS, realtime, partitioning
 ├── business/                  ← (Phase 2) Business model, org structure, workflows
@@ -584,6 +593,19 @@ AI_CONTEXT/
   → audit-trigger attachment=21 → …). Re-extract weekly via
   `node scripts/extract_issues_register.js`. This is the bridge between the knowledge
   base (Phases 0–21) and the execution backlog (ROADMAP.md H1–H4).
+- **Phase 23 — Dispatch Routing Table (AI effectiveness layer):** ✅ Complete
+  (`DISPATCH.md` 294L NEW at AI_CONTEXT root). The single highest-leverage file in the
+  knowledge base — turns 104 files (~54K lines, ~150K tokens) into "load 3 files, skip
+  101." Contains **33 task-pattern routing rows** covering all 16 sectors (sales=4,
+  accounting=5, inventory=4, purchasing=2, finance=3, security=4, reports=2, api=2,
+  database=2, deployment=2, cross-cutting=3), each mapping a realistic task description
+  (e.g. "fix sales invoice posting") to a minimal Load-order file set with explicit Skip
+  list, token estimate, and caveats citing specific G# gap IDs from ISSUES_REGISTER.md.
+  Also includes a 104-file cheat sheet (one-line purpose per file, grouped by subfolder),
+  8 anti-patterns, and a default-routing fallback. Expected token spend per task:
+  ~17–23K (Tier 0/1 boot + 3–5 targeted files) vs ~150K to load everything = **~85%
+  reduction**. This is the Tier-1 entry point after the Tier-0 boot files
+  (README/PROJECT_OVERVIEW/GLOSSARY).
 
 ---
 
