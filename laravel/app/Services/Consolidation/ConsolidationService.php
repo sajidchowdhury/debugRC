@@ -756,32 +756,108 @@ SQL;
 
     /**
      * Refresh materialized views used by consolidation reporting.
+     *
+     * REPORTS-1 (G-052 / G-054): each refresh is now logged to
+     * financial_audit_log with operation='REFRESH' so the audit chain
+     * captures ad-hoc MV recomputes triggered by consolidation runs
+     * (not just the scheduled 5-min cycle). The audit-log write is
+     * non-blocking — a failure to log never aborts the refresh.
      */
     private function refreshMaterializedViews(): void
     {
+        $this->refreshSingleMvWithAudit('mv_consolidated_trial_balance');
+        $this->refreshSingleMvWithAudit('mv_branch_intercompany');
+    }
+
+    /**
+     * Refresh a single MV with CONCURRENTLY → plain-REFRESH fallback,
+     * then log the outcome to financial_audit_log (operation='REFRESH').
+     */
+    private function refreshSingleMvWithAudit(string $mvName): void
+    {
+        $start = microtime(true);
+        $ok = false;
+        $error = null;
+
         try {
-            DB::statement("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_consolidated_trial_balance");
+            DB::statement("REFRESH MATERIALIZED VIEW CONCURRENTLY {$mvName}");
+            $ok = true;
         } catch (\Throwable $e) {
-            // If CONCURRENTLY fails (needs unique index), try without
+            // If CONCURRENTLY fails (needs unique index, or ShareLock
+            // contention with a concurrent refresh), try plain REFRESH.
             try {
-                DB::statement("REFRESH MATERIALIZED VIEW mv_consolidated_trial_balance");
+                DB::statement("REFRESH MATERIALIZED VIEW {$mvName}");
+                $ok = true;
             } catch (\Throwable $e2) {
-                Log::warning('Failed to refresh mv_consolidated_trial_balance', [
-                    'error' => $e2->getMessage(),
-                ]);
+                $error = $e2->getMessage();
+                Log::warning("Failed to refresh {$mvName}", ['error' => $error]);
             }
         }
 
+        $elapsedMs = (int) round((microtime(true) - $start) * 1000);
+
+        // Audit-log the refresh outcome. Non-blocking: a failure to log
+        // must never abort the consolidation flow.
         try {
-            DB::statement("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_branch_intercompany");
+            DB::table('financial_audit_log')->insert([
+                'table_name'       => $mvName,
+                'operation'        => 'REFRESH',
+                'record_id'        => 0,
+                'before_data'      => null,
+                'after_data'       => json_encode([
+                    'status'      => $ok ? 'ok' : 'failed',
+                    'elapsed_ms'  => $elapsedMs,
+                    'error'       => $error,
+                    'trigger'     => 'ConsolidationService::refreshMaterializedViews',
+                ]),
+                'changed_columns'  => '[]',
+                'performed_by'     => $this->resolveAuditUser(),
+                'db_session_user'  => null,
+                'branch_id'        => $this->resolveAuditBranchId(),
+                'request_path'     => 'ConsolidationService',
+                'request_ip'       => request()?->ip() ?? '127.0.0.1',
+                'request_id'       => request()?->header('X-Request-ID'),
+                'created_at'       => now(),
+            ]);
         } catch (\Throwable $e) {
-            try {
-                DB::statement("REFRESH MATERIALIZED VIEW mv_branch_intercompany");
-            } catch (\Throwable $e2) {
-                Log::warning('Failed to refresh mv_branch_intercompany', [
-                    'error' => $e2->getMessage(),
-                ]);
-            }
+            Log::warning("Failed to log MV refresh to financial_audit_log for {$mvName}", [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Resolve the current user identifier for audit logging.
+     * Returns 'cli:...' in CLI context, 'user:{id}' in web context.
+     */
+    private function resolveAuditUser(): ?string
+    {
+        if (PHP_SAPI === 'cli') {
+            $user = get_current_user() ?: 'unknown';
+            $host = gethostname() ?: 'unknown';
+            return "cli:{$user}@{$host}";
+        }
+
+        $userId = auth()->id();
+        return $userId ? "user:{$userId}" : 'web:anonymous';
+    }
+
+    /**
+     * Resolve the current branch_id for audit logging.
+     * Reads from session (web) or app.branch_id GUC (CLI).
+     */
+    private function resolveAuditBranchId(): ?int
+    {
+        $branchId = session('branch_id');
+        if ($branchId !== null) {
+            return (int) $branchId;
+        }
+
+        try {
+            $result = DB::selectOne("SELECT NULLIF(current_setting('app.branch_id', true), '')::int AS branch_id");
+            return $result?->branch_id;
+        } catch (\Throwable $e) {
+            return null;
         }
     }
 

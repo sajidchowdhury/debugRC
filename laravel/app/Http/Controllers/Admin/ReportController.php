@@ -323,7 +323,8 @@ class ReportController extends Controller
     public function journalEntries(Request $request)
     {
         $data = $this->parseDateRange($request);
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        // G-044: read-site branch filtering — non-admins pinned to session branch.
+        $branchId = $this->resolveBranchScope($request);
         $referenceType = $request->input('reference_type');
 
         $report = $this->reportService->journalEntries($data['from'], $data['to'], $branchId, $referenceType);
@@ -375,7 +376,8 @@ class ReportController extends Controller
     public function receivableAging(Request $request)
     {
         $asOf = $this->parseAsOfDate($request);
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        // G-044: read-site branch filtering — non-admins pinned to session branch.
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->reportService->receivableAging($asOf, $branchId);
 
@@ -392,7 +394,8 @@ class ReportController extends Controller
     public function payableAging(Request $request)
     {
         $asOf = $this->parseAsOfDate($request);
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        // G-044: read-site branch filtering — non-admins pinned to session branch.
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->reportService->payableAging($asOf, $branchId);
 
@@ -408,7 +411,8 @@ class ReportController extends Controller
      */
     public function branchIntercompany(Request $request)
     {
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        // G-044: read-site branch filtering — non-admins pinned to session branch.
+        $branchId = $this->resolveBranchScope($request);
         $report = $this->reportService->branchIntercompany($branchId);
 
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
@@ -575,8 +579,10 @@ SQL, [$data['from'], $data['to']]);
 
     public function productStockAnalysis(Request $request)
     {
+        // G-044: read-site branch filtering — non-admins pinned to session branch.
+        $branchId = $this->resolveBranchScope($request);
         $report = $this->reportService->stockValuation(
-            $request->input('branch_id') ? (int) $request->input('branch_id') : null,
+            $branchId,
             $request->input('warehouse_id') ? (int) $request->input('warehouse_id') : null,
         );
 
@@ -1020,6 +1026,52 @@ SQL, [$data['from'], $data['to']]);
         return $request->input('as_of_date')
             ? Carbon::parse($request->input('as_of_date'))
             : Carbon::now();
+    }
+
+    /**
+     * Resolve the branch scope for MV-reading report methods.
+     *
+     * REPORTS-1 (G-044): PostgreSQL does NOT support Row Level Security
+     * on materialized views (RLS is only for tables + regular views).
+     * The previous fix attempt (commit 278a03d) tried `ALTER MATERIALIZED
+     * VIEW ... ENABLE ROW LEVEL SECURITY` and failed at runtime with
+     * `55000: Wrong object type: ENABLE ROW SECURITY cannot be performed
+     * on relation "mv_ar_aging"`. That migration was reverted.
+     *
+     * The correct fix is READ-SITE FILTERING: every controller method
+     * that reads an MV must explicitly filter `WHERE branch_id = ?`.
+     * The previous code used `->when($branchId, ...)` which made the
+     * filter OPTIONAL — a caller passing null branch_id got ALL
+     * branches' data. This helper makes the filter MANDATORY for
+     * non-admin users (pinned to session branch_id) while preserving
+     * the admin "all branches" view (null).
+     *
+     * Logic:
+     *   - Admin user with explicit branch_id in request → that branch.
+     *   - Admin user with no branch_id in request → null (all branches).
+     *   - Non-admin user with no branch_id → session branch_id (forced).
+     *   - Non-admin user with branch_id != session → session branch_id
+     *     (defense in depth — EnforceBranchIsolation middleware should
+     *     already have blocked this, but we double-guard at the read site).
+     *
+     * @return int|null The branch_id to filter by, or null for "all
+     *                  branches" (admin only).
+     */
+    private function resolveBranchScope(Request $request): ?int
+    {
+        $user = $request->user();
+        $sessionBranchId = (int) (session('branch_id') ?? $user?->getBranchId() ?? 0);
+        $requestBranchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+
+        // Admins can view any branch (or all branches when null).
+        if ($user?->isAdmin()) {
+            return $requestBranchId;
+        }
+
+        // Non-admins: pin to session branch_id. If they explicitly
+        // requested their own branch, honor it; otherwise force the
+        // session branch (defense in depth against crafted requests).
+        return $sessionBranchId > 0 ? $sessionBranchId : null;
     }
 
     /**
