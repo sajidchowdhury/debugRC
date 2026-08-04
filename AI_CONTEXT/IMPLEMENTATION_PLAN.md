@@ -3,8 +3,8 @@
 > **Document type:** Master roadmap (living document)
 > **Project:** RC_ERP_v2 — Remote Center ERP (Laravel 12 + PostgreSQL 16 + Redis)
 > **Repository:** `debugRC/` (cloned from `github.com/sajidchowdhury/debugRC`)
-> **Status:** Phases 0–20 COMPLETE. Phase 21 (Changelog, Known Limitations & Roadmap) pending commission.
-> **Last updated:** Phase 20 complete
+> **Status:** Phases 0–21 COMPLETE. All planned AI_CONTEXT documentation phases delivered.
+> **Last updated:** Phase 21 complete
 
 ---
 
@@ -648,7 +648,7 @@ Phase 17 — API Layer (REST v1)                              [x] Complete
 Phase 18 — Archive & Legacy Anti-Corruption Layer       [x] Complete
 Phase 19 — Deployment, DevOps & Partitioning/Archival   [x] Complete
 Phase 20 — Cross-Cutting Workflows                      [x] Complete
-Phase 21 — Changelog, Known Limitations & Roadmap       [ ] Not Started
+Phase 21 — Changelog, Known Limitations & Roadmap       [x] Complete
 ```
 
 ### Review gates

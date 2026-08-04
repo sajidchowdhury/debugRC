@@ -3,7 +3,7 @@
 > **Module:** Top-level overview
 > **Audience:** Engineers, AI assistants, accountants, product owners
 > **Status:** Canonical
-> **Last reviewed:** Initial creation (Phase 0)
+> **Last reviewed:** Phase 21 (§11 Known Limitations + §12 Roadmap expanded)
 > **Source of truth:** This file + repo `README.md` + `laravel/composer.json`
 
 ---
@@ -294,28 +294,177 @@ An AI assistant MUST NOT reintroduce these, and MUST NOT assume they exist:
 
 ---
 
-## 11. Known limitations (initial — expanded in Phase 21)
+## 11. Known limitations (expanded in Phase 21)
+
+These are the explicit, current limitations of RC_ERP_v2. An AI assistant or engineer
+MUST be aware of these before making changes. Each limitation links to the canonical
+`AI_CONTEXT/` reference for detail.
+
+### 11.1 Deployment limitations
 
 - **Phase 1 (VPS BDIX provisioning) is pending** — the app is code-complete but not yet
-  deployed to production; local Docker is the supported dev path.
+  deployed to production; local Docker is the supported dev path. See
+  [`../deployment/vps-bdix-deployment.md`](../deployment/vps-bdix-deployment.md).
+- **Manual security actions remain** (cannot be done in code):
+  - [ ] Reset all production user passwords (bcrypt hashes were in a public SQL dump).
+  - [ ] Delete or make-private the old public repo `sajidchowdhury/RC_ERP`.
+  - [ ] Delete or make-private the public repo `sajidchowdhury/RC_ERP_Laravel`.
+  - [ ] Provision BDIX VPS (Phase 1).
+  - [ ] Set production `.env` with new credentials (chmod 600, never committed).
+- **Legacy MySQL is intended to be set to read-only on production** (not yet enforced at
+  the DB level everywhere). See [`../archive/legacy-read-only.md`](../archive/legacy-read-only.md).
+
+### 11.2 Pending product phases
+
 - **Phase 13 (AI Sidecar) is pending** — report chatbot, demand forecasting, invoice OCR,
-  anomaly detection are not yet built.
-- **Manual security actions** remain: reset all production user passwords, make old public
-  repos private, provision the BDIX VPS, set production `.env`.
-- **Legacy MySQL** is intended to be set to read-only on production (not yet enforced at
-  the DB level everywhere).
+  anomaly detection are not yet built. See [`../ROADMAP.md`](../ROADMAP.md) §3.
+
+### 11.3 Cross-cutting technical gaps
+
+These are gaps documented across the `AI_CONTEXT/` knowledge base. They are NOT product
+blockers, but they should be resolved before the VPS cutover.
+
+- **G1/G2/G3 (notifications):** double-dispatch, wrong-event-on-update,
+  worker-forward-missing-context. Admins receive duplicate toasts; context-aware
+  recipients receive only the direct-call copy. See
+  [`../workflows/notification-workflow.md`](../workflows/notification-workflow.md) §1.1 + §13.
+- **Dead intercompany settlement methods:**
+  - `CustomerPaymentService::postIntercompanySettlement` (L772, `return null;`) —
+    code exists but is unreachable. See
+    [`../accounting/customer-payments.md`](../accounting/customer-payments.md) §8.
+  - `SupplierTransactionService::postIntercompanySettlement` (L616) — same status.
+    See [`../accounting/supplier-transactions.md`](../accounting/supplier-transactions.md) §8.
+  - `WarehouseTransferService::postIntercompanyGL` (L531) — defined but NOT called from
+    `confirm()`. Cross-branch transfers currently post stock movements but NO GL entries.
+    See [`../inventory/warehouse-transfer.md`](../inventory/warehouse-transfer.md) §7.3 + §8
+    and [`../workflows/inventory-to-gl.md`](../workflows/inventory-to-gl.md) §12.1.
+- **Avg-cost snapshot backfill:** legacy `stock_transactions.unit_cost` and
+  `sales_invoice_items.avg_cost_snapshot` are NULL for pre-migration data — drift risk on
+  reversals. See [`../inventory/stock-costing.md`](../inventory/stock-costing.md) §13.
+- **Period close does not enforce recon:** the close command succeeds even if
+  `subledger:reconcile-*` reports drift. The accountant must run recon manually before
+  close. See [`../workflows/period-close-workflow.md`](../workflows/period-close-workflow.md)
+  §12.8.
+- **Legacy vs enhanced period close reconciliation:** `accounting_periods` (legacy
+  soft-close) and `fiscal_periods` (enhanced) can disagree. Reconciliation is manual.
+  See [`../workflows/period-close-workflow.md`](../workflows/period-close-workflow.md) §12.12.
+- **Approval engine inconsistency (G1–G7):** Pattern A (generic configurable engine) vs
+  Pattern B (entity-specific maker-checker) do not share infrastructure. Only
+  `manual_journal` is wired into Pattern A, and even there the post-step is broken (G2).
+  See [`../workflows/approval-workflow.md`](../workflows/approval-workflow.md) §1.
+- **Branch demand notification never fires:** `branch_demand_created` rule exists in the
+  seeder but `BranchDemandService` doesn't call `dispatch()`. See
+  [`../finance/branch-demand.md`](../finance/branch-demand.md).
+- **Damage approval events functionally dead:** 3 `damage_invoice_*` approval events are
+  NOT in `NotificationRule::EVENTS`. See [`../inventory/damage.md`](../inventory/damage.md).
+- **RLS gap on notification tables:** `notifications`, `notification_rules`,
+  `notification_rule_recipients` lack RLS policies (G5). See
+  [`../architecture/branch-isolation-rls.md`](../architecture/branch-isolation-rls.md).
+- **Audit trigger gap on notification tables:** `fn_financial_audit_trigger` is missing on
+  `notification_rules` + `notification_rule_recipients` (G6). See
+  [`../security/audit-trails.md`](../security/audit-trails.md).
+- **`system_policy_change` event not in EVENTS/EVENT_META** (G4): forwarded by the
+  `rcerp_system` DB trigger but not consumable by the notification rule engine. See
+  [`../security/system-policy-compliance.md`](../security/system-policy-compliance.md).
+- **Sanctum guard declared but UNUSED:** `config/auth.php` declares a `sanctum` guard, but
+  the actual API auth is a custom bearer-token implementation. See
+  [`../security/auth-and-sessions.md`](../security/auth-and-sessions.md).
+- **`ApplySystemPolicyScope` dead code:** the scope is defined but never wired into any
+  model. See [`../security/system-policy-compliance.md`](../security/system-policy-compliance.md).
+- **`SystemPolicyPolicy` dead code:** registered in `AppServiceProvider` but never used.
+  See [`../security/rbac-roles-permissions.md`](../security/rbac-roles-permissions.md).
+
+### 11.4 Operational limitations
+
+- **Single currency (BDT).** No multi-currency support. See
+  [`../business/business-model.md`](../business/business-model.md).
+- **No manufacturing module.** The `manufacturing/` folder is a placeholder. See
+  [`../business/business-model.md`](../business/business-model.md).
+- **No supplier portal.** Suppliers cannot self-service view their GRNs/payments.
+- **No customer portal.** Customers cannot self-service view their invoices/payments.
+- **No early-payment discount on supplier payments.** The `supplier_payments.discount_amount`
+  column exists but is not yet wired into `postPaymentGL()`.
+- **No back-order workflow.** An invoice fails atomically if any line is short-stocked.
+- **No partial GRN confirmation.** A GRN is either fully confirmed or remains draft.
+- **No three-way match (PO ↔ GRN ↔ Supplier Invoice).** The match is manual.
+- **No AP aging auto-refresh on payment.** The MV `ap_aging_summary` exists but is not
+  auto-refreshed after supplier payment confirm (only on the 5-min `refresh:report-views` cycle).
+
+### 11.5 Documentation limitations
+
+- **Some `docs/` markdown is stale.** The `AI_CONTEXT/` knowledge base is the canonical
+  reference; `docs/migration/*` is preserved as historical context. Where they disagree,
+  prefer `AI_CONTEXT/`.
+- **`bootstrap/app.php` comment says "Laravel 11"** but the runtime is Laravel 12
+  (`composer.json` requires `laravel/framework: ^12.0`). The comment is stale.
+- **`README.md` says "Laravel 11"** in one place. Same staleness.
 
 ---
 
-## 12. Future improvements (roadmap — detailed in Phase 21)
+## 12. Future improvements (roadmap — detailed in [`../ROADMAP.md`](../ROADMAP.md))
 
-- Provision BDIX VPS and cut over from legacy to Laravel in production.
-- Build the Phase 13 AI sidecar (Python FastAPI): report chatbot, demand forecasting,
-  invoice OCR, anomaly detection.
-- Continue hardening partitioning & archival (pg_partman, retention, Parquet export).
-- Extend the REST API v1 coverage.
+This section is a summary; the full roadmap with milestones, dependencies, and
+sequencing lives in [`../ROADMAP.md`](../ROADMAP.md).
+
+### 12.1 Production deployment (Phase 1)
+
+- Provision BDIX VPS (Ubuntu 22.04, PHP 8.3, PostgreSQL 16, Redis, Nginx).
+- Run `php artisan migrate` + `php artisan chart:seed` + `php artisan migrate:master-data`.
+- Verify on VPS: `php artisan chart:validate` + `php artisan stock:replay-verify` +
+  `php artisan journal:replay-verify`.
+- Set legacy MySQL to READ-ONLY (revoke write privileges).
+- Configure Nginx (see [`../deployment/nginx-config.md`](../deployment/nginx-config.md)).
+
+### 12.2 AI Sidecar (Phase 13 — Python FastAPI)
+
+- Report chatbot (natural-language query → SQL → report).
+- Demand forecasting (historical sales → forecast per SKU/branch).
+- Invoice OCR (supplier invoice PDF → draft GRN).
+- Anomaly detection (GL/stock anomalies → flagged for review).
+
+### 12.3 Partitioning & archival hardening
+
+- Continue pg_partman retention enforcement.
+- Automate Parquet export for archived partitions.
+- Add partition-health alerting (extend the existing
+  `partition:measure-perf` + `partition:verify-join` commands).
+
+### 12.4 REST API v1 coverage extension
+
+- Extend `/api/v1` to cover all modules (currently Sales/StockTake are best-covered).
+- Add OAuth2 client-credentials flow for machine-to-machine integrations.
+- Publish `laravel/docs/api/API_REFERENCE.md` (Scribe-generated).
+
+### 12.5 Cross-cutting gap remediation
+
+- Fix G1/G2/G3 in the notification system.
+- Activate dead intercompany settlement methods (now that `banks.branch_id` exists).
+- Backfill avg_cost_snapshot on legacy data.
+- Enforce recon before period close.
+- Reconcile legacy vs enhanced period close.
+- Unify Pattern A and Pattern B approval engines (or deprecate one).
+
+### 12.6 Operational enhancements
+
+- Back-order workflow (split cart into fulfillable invoice + back-order cart).
+- Partial GRN confirmation.
+- Three-way match (PO ↔ GRN ↔ Supplier Invoice).
+- Supplier portal (read-only).
+- Customer portal (read-only).
+- Early-payment discount on supplier payments.
+- AP aging auto-refresh on payment confirm.
+- Multi-currency support (if business requires).
+
+### 12.7 Documentation enhancements
+
+- Stale-comment cleanup (`bootstrap/app.php`, `README.md` — Laravel 11 → 12).
+- Year-end close dry-run command.
+- Period-close dashboard (single screen for close preparation).
+- Stock ledger → GL reconciliation materialized view.
 
 ---
 
 *This overview is the foundation. Module-specific depth lives in the phase folders. Keep
-this file updated whenever the tech stack, principles, or module map changes.*
+this file updated whenever the tech stack, principles, or module map changes. For the
+full product history, see [`../changelog/PRODUCT_CHANGELOG.md`](../changelog/PRODUCT_CHANGELOG.md).
+For the detailed roadmap, see [`../ROADMAP.md`](../ROADMAP.md).*
