@@ -5,8 +5,11 @@
 > **Status:** Draft — pending review (4 CRITICAL + 6 HIGH gaps; see §14).
 > **REPORTS-1 (commit `d2101f2`):** 6 of the 10 open reports CRITICALs resolved
 > (G-044/G1, G-047/G2, G-049/G3, G-052/G7, G-053/G6, G-054/G7).
-> G-051/G4 (test debt) deferred per the no-test-code rule.
-> 4 reports CRITICALs remain open (G-046, G-048, G-050, G-051) — see REPORTS-2 cluster.
+> **REPORTS-2 (commit `1665ae5`):** G-046/G-048/G-050 resolved (Dockerfile DuckDB +
+> catalog drift + dangling branchDemandWeekly stub — see `reports/csv-export.md` +
+> `reports/reports-catalog.md`).
+> G-051/G4 (test debt) deferred per the no-test-code rule — the only remaining open
+> reports CRITICAL.
 > **Last reviewed:** Phase 16 (Reporting & Exports)
 > **Source of truth:** This file documents all 13 materialized views (MVs) in RC_ERP_v2, the
 > `refresh_all_report_views()` PL/pgSQL function, the `reports:refresh` artisan command, and
