@@ -585,6 +585,9 @@ up to 5 minutes.
 Evidence: `SystemPolicyService.php:26-27,89-90`.
 
 ### G9 — NEW — NO RLS on `system_policies` (HIGH)
+
+> ✅ RESOLVED in commit dd31590 (G-174) — RLS migration `2026_08_30_000001_add_rls_missing_tables.php` (G-174 section) adds ENABLE + FORCE ROW LEVEL SECURITY and per-verb `rls_system_policies_select/insert/update/delete` + `rls_system_policies_admin` policies on `system_policies`. Unlike G-015/G-095 (where admin-only RLS was a bug), admin-only RLS is the CORRECT posture here because: (1) the route middleware is `role:superadmin` (G-173, resolved in Session 1), so only superadmin reaches the controller; (2) the table has no `branch_id` and is intentionally superadmin-only; (3) `app.is_admin = 'true'` is set for admin + superadmin by the `SetAppBranchId` middleware. The per-verb policies use condition `false` (so non-admins get zero rows / blocked writes via the `app.is_admin` bypass folded into each policy). This blocks direct DB-level modification by any non-admin role, forcing all writes through `SystemPolicyService::activate()/deactivate()` (which writes the audit log + dispatches the event + invalidates the cache). Mirrors the canonical `add_rls_branch_isolation` pattern.
+
 36 tables have RLS enabled + FORCE in `07_views_triggers_constraints.sql:509-850`.
 `system_policies` is NOT among them. Any user with DB-level INSERT/UPDATE/DELETE permission on
 `system_policies` can directly modify the active policy, bypassing

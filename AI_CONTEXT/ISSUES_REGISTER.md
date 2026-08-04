@@ -18,13 +18,13 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | Severity | Count | Blocks cutover? |
 |---|---|---|
-| CRITICAL | 79 | Yes — all of them |
-| HIGH | 112 | Most |
+| CRITICAL | 77 | Yes — all of them |
+| HIGH | 108 | Most |
 | MEDIUM | 77 | Some |
 | LOW | 70 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **339** | |
-| _of which resolved_ | 18 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **334** | |
+| _of which resolved_ | 23 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -32,11 +32,11 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 |---|---|
 | api | 51 |
 | architecture | 20 |
-| finance | 80 |
+| finance | 77 |
 | purchasing | 24 |
 | reports | 80 |
 | sales | 35 |
-| security | 15 |
+| security | 14 |
 | workflows | 34 |
 
 ## How to use this register
@@ -78,14 +78,14 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-012 | G2 | CRITICAL | finance | finance/branch-demand.md:1089 | app/Services/Accounting/MoneyTransferService.php:442 | #### G2 — `MoneyTransferService::postIntercompanySettlement` uses wrong ledger nature + never calls `settleFromMoneyTransfer` | — | H1 | open | — |
 | G-013 | G2 | CRITICAL | finance | finance/consolidation-intercompany.md:610 | — | #### G2 — FIFO demand-settlement feature is DEAD CODE | — | H1 | open | — |
 | G-014 | G3 | CRITICAL | finance | finance/branch-demand.md:1104 | app/Services/BranchDemand/BranchDemandShadowService.php:317-328 | #### G3 — `shadow_cutover_log` schema mismatch | DDL drift | H1 | open | — |
-| G-015 | G3 | CRITICAL | finance | finance/consolidation-intercompany.md:632 | — | #### G3 — RLS admin-only on `consolidation_runs` + `elimination_entries` + `elimination_rules` + `companies` | cutover, RLS audit | H1 | open | — |
+| G-015 | G3 | CRITICAL | finance | finance/consolidation-intercompany.md:632 | — | #### G3 — RLS admin-only on `consolidation_runs` + `elimination_entries` + `elimination_rules` + `companies` | cutover, RLS audit | H1 | resolved | dd31590 |
 | G-016 | G4 | CRITICAL | finance | finance/branch-demand.md:1117 | app/Services/BranchDemand/BranchDemandShadowService.php:44-107 | #### G4 — `BranchDemandShadowService::compareOperation` has NO caller | — | H1 | open | — |
 | G-017 | G4 | CRITICAL | finance | finance/consolidation-intercompany.md:648 | database/sql/02_accounting.sql:446-455 | #### G4 — `fn_financial_audit_trigger` NOT attached to 7 in-scope tables | audit-trail phase | H1 | open | — |
 | G-018 | G5 | CRITICAL | finance | finance/branch-demand.md:1133 | database/sql/03_stock.sql:715-742 | #### G5 — DDL stale — `branch_demand*` tables + shadow tables missing from `database/sql/*.sql` | DDL drift | H1 | open | — |
 | G-019 | G5 | CRITICAL | finance | finance/consolidation-intercompany.md:667 | — | #### G5 — DDL stale: `consolidation_runs` / `elimination_rules` / `elimination_entries` / `companies` / `mv_consolidated_trial_balance` NOT … | DDL drift | H1 | open | — |
 | G-020 | G6 | CRITICAL | finance | finance/branch-demand.md:1148 | database/sql/02_accounting.sql:446-455 | #### G6 — `fn_financial_audit_trigger` NOT attached to ANY `branch_demand*` table or `branch_ledger` | audit-trail phase | H1 | open | — |
 | G-021 | G7 | CRITICAL | finance | finance/branch-demand.md:1162 | app/Services/Notification/NotificationService.php:60 | #### G7 — `'branch_demand_created'` notification NOT WIRED | notifications phase | H1 | open | — |
-| G-022 | G8 | CRITICAL | finance | finance/branch-demand.md:1174 | — | #### G8 — NO RLS on 5 branch_demand-related tables | cutover, RLS audit | H1 | open | — |
+| G-022 | G8 | CRITICAL | finance | finance/branch-demand.md:1174 | — | #### G8 — NO RLS on 5 branch_demand-related tables | cutover, RLS audit | H1 | resolved | dd31590 |
 | G-023 | G13 | CRITICAL | finance | finance/fixed-assets.md:772 | — | **G13 (CRITICAL):** `postDepreciation` is NOT wrapped in `DB::transaction`. If the asset update fails (e.g., RLS WITH CHECK), the JE is alre… | cutover, RLS audit | H1 | open | — |
 | G-024 | G1 | CRITICAL | purchasing | purchasing/purchase-audit.md:410 | — | **G1 — `paid_amount` column missing on `purchase_receives`.** Affects the audit of GRN | — | H1 | open | — |
 | G-025 | G1 | CRITICAL | purchasing | purchasing/purchase-receive.md:392 | — | **G1 — `purchase_receives.paid_amount` column referenced but never created.** | — | H1 | open | — |
@@ -158,7 +158,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-092 | G4 | HIGH | architecture | architecture/realtime-events.md:987 | — | ### G4 — HIGH — Worker not scheduled by Laravel cron; no in-repo supervisor/systemd config | notifications phase | H2 | open | — |
 | G-093 | G5 | HIGH | architecture | architecture/realtime-events.md:995 | — | ### G5 — HIGH — No RLS on `notifications`, `notification_rules`, `notification_rule_recipients` | cutover, RLS audit | H1 | open | — |
 | G-094 | G6 | HIGH | architecture | architecture/realtime-events.md:1002 | — | ### G6 — HIGH — `fn_financial_audit_trigger` NOT attached to 8/10 monitored tables | audit-trail phase | H1 | open | — |
-| G-095 | G1 | HIGH | finance | finance/fixed-assets.md:171 | — | BR27 \| **RLS MUST block all access for non-admin users.** The single `_admin_policy` on each of the 3 tables only allows `app.is_admin = 't… | cutover, RLS audit | H1 | open | — |
+| G-095 | G1 | HIGH | finance | finance/fixed-assets.md:171 | — | BR27 \| **RLS MUST block all access for non-admin users.** The single `_admin_policy` on each of the 3 tables only allows `app.is_admin = 't… | cutover, RLS audit | H1 | resolved | dd31590 |
 | G-096 | G6 | HIGH | finance | finance/consolidation-intercompany.md:683 | — | #### G6 — `ConsolidationService::reverseEliminationJournal` explicitly sets `is_reversed=false` on the reversal JE | GL posting | H2 | open | — |
 | G-097 | G7 | HIGH | finance | finance/consolidation-intercompany.md:693 | — | #### G7 — `ConsolidationService::postEliminationEntry` does NOT set `entry_date` on `journal_lines` | GL posting | H2 | open | — |
 | G-098 | G7 | HIGH | finance | finance/fixed-assets.md:173 | — | BR29 \| **`fn_financial_audit_trigger` MUST NOT be attached to any fixed-asset table.** ⚠️ **G7 — only `journal_entries`/`journal_lines` are… | audit-trail phase | H1 | open | — |
@@ -237,7 +237,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-171 | G1 | HIGH | security | security/system-policy-compliance.md:537 | — | ### G1 — `ApplySystemPolicyScope` is unused (MAJOR) | cutover, RLS audit | H2 | open | — |
 | G-172 | G2 | HIGH | security | security/system-policy-compliance.md:543 | — | ### G2 — No write-blocking in INVESTIGATION mode (MAJOR) | — | H2 | open | — |
 | G-173 | G3 | HIGH | security | security/system-policy-compliance.md:549 | routes/web.php:1601-1605 | ### G3 — Route group lacks `role:superadmin` middleware (MAJOR) | cutover, RLS audit | H2 | resolved | `b3a9fd7` |
-| G-174 | G9 | HIGH | security | security/system-policy-compliance.md:587 | — | ### G9 — NEW — NO RLS on `system_policies` (HIGH) | cutover, RLS audit | H1 | open | — |
+| G-174 | G9 | HIGH | security | security/system-policy-compliance.md:587 | — | ### G9 — NEW — NO RLS on `system_policies` (HIGH) | cutover, RLS audit | H1 | resolved | dd31590 |
 | G-175 | G13 | HIGH | security | security/system-policy-compliance.md:624 | — | ### G13 — NEW — INVESTIGATION mode has NO business-logic consumer (HIGH) | — | H2 | open | — |
 | G-176 | G3 | HIGH | workflows | workflows/approval-workflow.md:1110 | — | ### G3 — HIGH — ApprovalController has NO FormRequest classes | notifications phase | H2 | open | — |
 | G-177 | G4 | HIGH | workflows | workflows/notification-workflow.md:1240 | — | ### G4 — HIGH — 8 events are dead config (declared/forwarded but never fire) | — | H2 | open | — |
@@ -410,7 +410,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-344 | G21 | CRITICAL | finance | finance/branch-demand.md:1300 | app/Services/Accounting/MoneyTransferService.php:442 | #### G21 — `MoneyTransfer` model uses `'intercompany'` ledger nature; `BranchIntercompanyService` uses `'interbranch_payable'/'interbranch_r… | — | H1 | open | — |
 | G-345 | G22 | LOW | finance | finance/branch-demand.md:1308 | app/Http/Resources/Api/V1/BranchDemand/BranchDemandResource.php:14-52 | #### G22 — `BranchDemandResource` excludes internal audit fields | API Phase 17 | H4 | open | — |
 | G-346 | G22 | LOW | finance | finance/dimensions-cost-centers.md:551 | — | `Branch` \| `app/Models/Branch.php` \| `dimension_values.branch_id` FK. **G22 — `Branch` model has no `dimensionValues()` hasMany.** \| | — | H4 | open | — |
-| G-347 | G23 | HIGH | finance | finance/branch-demand.md:1315 | database/migrations/2026_07_29_000017_create_branch_demand_audit_log_table.php:105 | #### G23 — Inconsistent GUC key between `audit_log` and `shadow_demand_comparisons` RLS | cutover, RLS audit | H1 | open | — |
+| G-347 | G23 | HIGH | finance | finance/branch-demand.md:1315 | database/migrations/2026_07_29_000017_create_branch_demand_audit_log_table.php:105 | #### G23 — Inconsistent GUC key between `audit_log` and `shadow_demand_comparisons` RLS | cutover, RLS audit | H1 | resolved | dd31590 |
 | G-348 | G24 | MEDIUM | finance | finance/branch-demand.md:1326 | config/branch_demand_shadow.php:88-95 | #### G24 — `config` `comparison_scope` keys `gl_postings`/`ledger`/`settlements`/`stock_movements`/`repricing` NEVER consulted | GL posting | H2 | open | — |
 | G-349 | G25 | HIGH | finance | finance/branch-demand.md:1334 | app/Http/Middleware/EnforceBranchIsolation.php:229 | #### G25 — `EnforceBranchIsolation::inferTableFromUri` does NOT cover `'branch-demand-shadow'` path | cutover, RLS audit | H2 | open | — |
 | G-350 | G25 | HIGH | finance | finance/fixed-assets.md:573 | — | **`EnforceBranchIsolation`** — `inferTableFromUri` (lines 165–246) does NOT include `fixed-assets` / `asset_depreciation` / `asset_disposal`… | cutover, RLS audit | H2 | open | — |

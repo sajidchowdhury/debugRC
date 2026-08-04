@@ -1173,6 +1173,8 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 #### G8 — NO RLS on 5 branch_demand-related tables
 
+> ✅ RESOLVED in commit dd31590 — RLS migration `2026_08_30_000001_add_rls_missing_tables.php` adds ENABLE + FORCE ROW LEVEL SECURITY and per-verb policies (SELECT/INSERT/UPDATE/DELETE + admin bypass) on `branch_demand_items`, `branch_demand_repricing`, `branch_demand_customer_payment_settlements`, `branch_demand_money_transfer_settlements`, and `shadow_cutover_log`. The 4 child tables use a correlated EXISTS subquery to `branch_demands` mirroring the dual-branch condition (`from_branch_id` OR `to_branch_id`); the settlement tables use their actual FK column name `demand_id` (NOT `branch_demand_id`). `shadow_cutover_log` (no branch column — daily diagnostic table) uses an admin-only policy (`false` condition + admin bypass), which is the correct posture for an operational cutover-readiness table. Append-only tables (`repricing`, both settlements) block UPDATE/DELETE for non-admins via `USING(false)`. Mirrors the canonical `add_rls_branch_isolation` pattern (GUC `app.branch_id` + `app.is_admin`).
+
 - **Severity:** CRITICAL.
 - **Evidence:** `database/sql/07_views_triggers_constraints.sql` (missing policies) +
   migrations (only `branch_demand_audit_log` + `shadow_demand_comparisons` have RLS). Missing
@@ -1315,6 +1317,8 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 - **Fix:** add a `?with=audit` query param to opt-in to the audit fields.
 
 #### G23 — Inconsistent GUC key between `audit_log` and `shadow_demand_comparisons` RLS
+
+> ✅ RESOLVED in commit dd31590 — RLS migration `2026_08_30_000001_add_rls_missing_tables.php` (G-347 section) DROPs the buggy `bdal_branch_read` policy and recreates it with `branch_id = current_setting('app.branch_id')::int` (replacing `current_setting('app.current_branch_id')::bigint`). The canonical GUC name `app.branch_id` is set by `SetAppBranchId` middleware on every authenticated request; `app.current_branch_id` was never set, so the old policy never matched non-admins and they saw zero audit rows. The migration also adds `FORCE ROW LEVEL SECURITY` (the original migration only did `ENABLE` — without FORCE the table owner bypasses RLS, making the policy ineffective for the actual app DB user). The other 4 policies (`bdal_admin_read`, `bdal_insert`, `bdal_no_update`, `bdal_no_delete`) are left unchanged — they were already correct.
 
 - **Evidence:** `database/migrations/2026_07_29_000017_create_branch_demand_audit_log_table.php:105`
   (`current_setting('app.current_branch_id')`) vs

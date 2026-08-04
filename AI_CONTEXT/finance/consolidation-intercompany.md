@@ -631,6 +631,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 
 #### G3 — RLS admin-only on `consolidation_runs` + `elimination_entries` + `elimination_rules` + `companies`
 
+> ✅ RESOLVED in commit dd31590 — RLS migration `2026_08_30_000001_add_rls_missing_tables.php` (G-015 section) DROPs the old `{table}_admin_policy` (admin-only FOR ALL) on `companies`, `consolidation_runs`, `elimination_entries`, and `elimination_rules`, then replaces with per-verb `rls_{table}_select/insert/update/delete` + `rls_{table}_admin` policies. These are corporate-level tables with NO `branch_id` column, so the policy condition is "any authenticated branch user": `current_setting('app.is_admin', true) = 'true' OR current_setting('app.branch_id', true) IS NOT NULL` (the `SetAppBranchId` middleware sets `app.branch_id` on every authenticated request, so non-NULL == authenticated). RLS here blocks only unauthenticated/direct-SQL access; the route middleware `role:accountant,manager,admin` handles role differentiation. Mirrors the canonical `add_rls_branch_isolation` pattern (GUC `app.branch_id` + `app.is_admin`, ENABLE + FORCE RLS, DROP IF EXISTS for idempotency).
+
 - **Severity:** CRITICAL.
 - **Evidence:** `2026_08_11_000001_create_intercompany_and_consolidation.php:244-252` — single
   `_admin_policy` per table with `USING (current_setting('app.is_admin', true) = 'true')` +
