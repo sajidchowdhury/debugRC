@@ -499,7 +499,52 @@ AI_CONTEXT/
   switch, page states, API request lifecycle, CSV request lifecycle, master-data export
   flowchart, Parquet archival state). Total 82 gaps across 5 files (3+3+1+3+1 = 11 CRITICAL
   cross-referenced; 7+3+5+9+4 = 28 HIGH; 4+5+3+9+3 = 24 MEDIUM; 2+2+2+7+3 = 16 LOW).
-- **Phases 17–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 17 — API Layer (REST v1):** ✅ Complete (`api/` — 4 files: `api-overview.md`
+  657L, `api-conventions.md` 783L, `api-modules.md` ~520L, `api-reference-index.md` ~330L
+  = ~2289 lines total, L complexity, depends on Phase 5 + Phase 4). Documents the
+  `/api/v1/*` REST surface — versioning (URL path segment, no v2, no Accept negotiation),
+  custom bearer-token auth via `ApiAuth` middleware (NOT Sanctum despite `sanctum:^4.0` in
+  composer.json; SHA-256 hashed `users.api_token`; `Auth::login` on `web` guard for RBAC
+  parity), Redis-backed `ApiRateLimit` (30/60/120 req/min tiers, per-(token,IP) bucket,
+  `X-RateLimit-*` headers), RLS context via `SetApiBranchContext` (sets `app.branch_id` +
+  `app.is_admin` GUCs for the 4 inventory/branch-demand module groups), 15 API controllers
+  (5,500 LOC, 101 endpoints), canonical JSON envelope `{data, message, meta}`, pagination
+  contract, full HTTP error status matrix (200/201/204/400/401/403/404/409/422/429/500),
+  idempotency pattern (client UUID + 5-min cache) on 3 endpoints, `/api/docs` public
+  interactive page. 16-gap catalogue (2 CRITICAL: G1 API_REFERENCE.md 14% coverage, G2
+  ApiDocController 23% coverage; 4 HIGH; 6 MEDIUM; 4 LOW).
+- **Phase 18 — Archive & Legacy Anti-Corruption Layer:** ✅ Complete (`archive/` — 3 files:
+  `legacy-overview.md` ~443L, `anti-corruption-layer.md` ~591L, `legacy-read-only.md`
+  ~613L = ~1647 lines total, M complexity, depends on Phase 1 + Phase 3). Documents the
+  legacy PHP/MySQL origin (the `legacy/` folder — 38 controllers, 43 models, 22
+  hand-rolled framework files) that ran Remote Center's operations for ~7 years before
+  the Laravel 12 + PostgreSQL 16 migration; the runtime ACL (`app/Archive/` — DTOs +
+  `LegacyMySQLRepository` PDO impl + `ArchiveService` PG-first unified search with 1-hour
+  Redis cache); the 5-layer read-only enforcement plan (MySQL `GRANT SELECT` only + PDO
+  `ERRMODE_EXCEPTION` + read-only interface + `ARCHIVE_ENABLED` feature flag + Docker
+  `--profile archive` opt-in); full `config/archive.php` anatomy. Critical R-1
+  distinction: TWO separate "archive" systems (legacy MySQL archive vs PostgreSQL
+  partition archival) share NO code/tables/config, only the word "archive".
+- **Phase 19 — Deployment, DevOps & Partitioning/Archival Ops:** ✅ Complete
+  (`deployment/` — 7 files: `environment.md` 635L, `docker-setup.md` 552L,
+  `vps-bdix-deployment.md` 786L, `nginx-config.md` 645L, `artisan-commands.md` 746L,
+  `cron-scheduled-jobs.md` 781L, `go-live-checklist.md` 1052L = 5197 lines total, L
+  complexity, depends on Phase 1 + Phase 3). Documents the full deployment surface —
+  env-var catalogue (60+ vars across `config/*.php` with production cheatsheet + hygiene
+  audit + `APP_KEY` rotation procedure); Docker dev stack (5-container topology, 9-step
+  entrypoint, Windows-NTFS bind-mount UID fix, `node_modules/.package-hash` cache-bust
+  fix); VPS BDIX bare-metal deployment (Ubuntu 22.04 + PHP 8.4-FPM + PG 16 + Redis 7 +
+  Nginx + Let's Encrypt + supervisor + 12-step provisioning sequence + 24-hour rollback
+  window); Nginx config (both Docker `docker/nginx/default.conf` and VPS
+  `docs/migration/nginx.conf.example` — SSE-specific tuning, dual-root routing, security
+  blocks, gzip); 27 custom artisan commands (10 verification + 3 partitioning ops + 3
+  migration + 1 setup + 10 operational) + standard Laravel commands + 4 verification
+  suites (post-deploy / period-close / partitioning ops / archival); 3 scheduling systems
+  (Laravel scheduler with 6 jobs + pg_cron with 7 jobs + supervisor with 2 long-running
+  workers) + timezone reconciliation table (Laravel Asia/Dhaka vs pg_cron UTC) + 24-hour
+  job timeline; go-live checklist (12 sections, 5 sign-offs, rollback plan, acceptable-
+  risk documentation).
+- **Phases 20–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
