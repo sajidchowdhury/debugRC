@@ -249,10 +249,14 @@ sequenceDiagram
 | `write_off` | `buildWriteOffGL` L508 | Dr **Bad Debt** (`write_off` → falls back to `finance_cost` → `operating_expense`) amount · Cr **AR** amount |
 | `payment` (refund) | `buildRefundGL` L543 | Dr **AR** amount · Cr **Bank/Cash** amount |
 
-> **Note:** `CustomerPaymentService::postIntercompanySettlement` (L772) is **currently DISABLED**
-> — `return null;` at line 780 because the `banks` table didn't have `branch_id` when written.
-> Code exists but is unreachable. (`banks.branch_id` was later added by
-> `2026_08_06_000001_add_branch_id_to_banks.php`.)
+> **Note:** `CustomerPaymentService::postIntercompanySettlement` (L825) is **currently DISABLED**
+> — `return null;` at line 828 because the original implementation assumed `banks` had no
+> `branch_id` column. **G-327 RESOLVED in `2aefa26` (FINANCE-2)** — the unreachable dead-code
+> block below the early-return was REMOVED (it referenced `branch_ledger` columns dropped by
+> `2026_07_29_000013`). The early-return itself remains; removing it + implementing the real
+> intercompany path is **G-021 (FINANCE-3)**. `banks.branch_id` was added by
+> `2026_08_06_000001_add_branch_id_to_banks.php` — the original justification is stale, see
+> `accounting/customer-payments.md` §8 + `finance/branch-demand.md` §11.2 G10.
 
 #### 7.6.2 Purchase module (2 methods)
 

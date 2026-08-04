@@ -233,6 +233,15 @@ Inserts `invoice_payment_allocations` row. EXCLUDE constraint
 
 ## 8. Intercompany settlement — DEAD CODE
 
+> ✅ **G-327 RESOLVED in commit `2aefa26` (FINANCE-2)** — the unreachable dead-code block below
+> the `return null;` early-exit has been REMOVED. The block referenced `branch_ledger` columns
+> dropped by migration `2026_07_29_000013` (`transaction_type`, `amount`, `is_settled`) and would
+> have thrown `SQLSTATE[42703]` if ever reached. The early-return itself REMAINS — removing it is
+> G-021 (deferred to FINANCE-3). The source comment now enumerates the canonical `branch_ledger`
+> schema (`debit`/`credit`/`running_balance`/`is_reversed`/`remarks`) so the dev who resolves
+> G-021 writes the new implementation against the live schema, not the dropped one. See
+> `finance/branch-demand.md` §11.2 G10 for the dual-write entry.
+
 `postIntercompanySettlement` (L772-835) contains stale code:
 
 ```php

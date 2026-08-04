@@ -827,31 +827,40 @@ class CustomerPaymentService
         $amount = (float) $payment->amount;
         if ($amount < 0.01 || !$payment->bank_id) return null;
 
-        // FINANCE-2 (G-327): The `banks` table does NOT have a `branch_id`
-        // column — banks are not branch-scoped in the current schema.
-        // Intercompany settlement requires a bank→branch mapping which
-        // doesn't exist yet. Skip entirely.
+        // FINANCE-2 (G-327): The previously-present dead-code block below
+        // this early-return has been REMOVED. It was unreachable AND
+        // referenced `branch_ledger` columns that were dropped by migration
+        // `2026_07_29_000013` (`transaction_type`, `amount`, `is_settled`)
+        // — if a future dev ever unblocked this path, the INSERT would have
+        // thrown `SQLSTATE[42703]`.
         //
-        // The previously-present dead-code block below the early-return has
-        // been REMOVED. It was unreachable AND referenced `branch_ledger`
-        // columns that were dropped by migration `2026_07_29_000013`
-        // (`transaction_type`, `amount`, `is_settled`) — if a future dev
-        // ever unblocked this path by adding `banks.branch_id`, the INSERT
-        // would have thrown `SQLSTATE[42703]`.
-        //
-        // When G-021 (FINANCE-3) is resolved by introducing the
-        // bank→branch mapping, the new implementation must be written fresh
-        // against the CURRENT `branch_ledger` schema:
-        //   - `debit`         numeric(14,2)
-        //   - `credit`        numeric(14,2)
-        //   - `running_balance` numeric(14,2)
-        //   - `is_reversed`   boolean DEFAULT false
-        //   - `remarks`       text
-        //   - `journal_entry_id`, `from_branch_id`, `to_branch_id`,
-        //     `transaction_date`, `reference_type`, `reference_id`
-        // (See `02_accounting.sql:203-222` for the canonical DDL.)
-        // The legacy `transaction_type` / `amount` / `is_settled` columns
-        // are GONE — do not re-introduce them.
+        // The early-return itself remains — its removal is G-021 (FINANCE-3).
+        // IMPORTANT: per `AI_CONTEXT/accounting/customer-payments.md` §8,
+        // migration `2026_08_06_000001_add_branch_id_to_banks.php` DID add
+        // a `branch_id` column to `banks`. The original "banks has no
+        // branch_id" justification for the early-return is therefore STALE
+        // — the bank→branch mapping now exists. FINANCE-3 (G-021) must:
+        //   1. Remove this early-return.
+        //   2. Load `$bankBranchId = DB::table('banks')->where('id',
+        //      $payment->bank_id)->value('branch_id')`.
+        //   3. Skip only when `$bankBranchId === $payment->branch_id`
+        //      (same-branch payment — no intercompany needed).
+        //   4. Write the new implementation against the CURRENT
+        //      `branch_ledger` schema (NOT the dropped columns):
+        //        - `debit`           numeric(14,2)
+        //        - `credit`          numeric(14,2)
+        //        - `running_balance` numeric(14,2)
+        //        - `is_reversed`     boolean DEFAULT false
+        //        - `remarks`         text
+        //        - `journal_entry_id`, `from_branch_id`, `to_branch_id`,
+        //          `transaction_date`, `reference_type`, `reference_id`
+        //      See `02_accounting.sql:203-222` for the canonical DDL.
+        //   5. Mirror the Employee/Supplier pattern (`EmployeeTransaction
+        //      Service::postIntercompanySettlement` L639,
+        //      `SupplierTransactionService::postIntercompanySettlement`
+        //      L616) — two-JE intercompany using `interbranch_receivable`
+        //      / `interbranch_payable` natures +
+        //      `reference_type='customer_payment_intercompany'`.
         return null;
     }
 

@@ -3,8 +3,9 @@
 > **Module:** Finance / Branch Demand
 > **Audience:** Engineers, AI assistants, accountants
 > **Status:** Draft — pending accountant sign-off (**SAFETY-CRITICAL** — posts GL, moves stock,
-> reverses stock, settles intercompany balances. **8 CRITICAL gaps** require remediation before
-> production use — 4 of which are DEAD CODE.)
+> reverses stock, settles intercompany balances. **8 CRITICAL gaps** originally catalogued; **5 now resolved**
+> (G3+G4 in `2aefa26`/FINANCE-2, G5+G6 in `0385b87`/FINANCE-1, G8 in `dd31590`); **3 remain open** (G1, G2, G7) —
+> 2 of which are DEAD CODE.)
 > **Last reviewed:** Phase 13 (initial creation)
 > **Source of truth:** This file is the canonical reference for the branch-demand subsystem. The
 > implementation lives in
@@ -1068,7 +1069,9 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 ## 11. Gap catalogue
 
-### 11.1 CRITICAL (8)
+### 11.1 CRITICAL (8) — 5 resolved, 3 open
+
+> **Resolved (5):** G3 ✅ `2aefa26` (FINANCE-2) · G4 ✅ `2aefa26` (FINANCE-2) · G5 ✅ `0385b87` (FINANCE-1) · G6 ✅ `0385b87` (FINANCE-1) · G8 ✅ `dd31590`. **Open (3):** G1 (CustomerPaymentService early-return null — also G-021 in ISSUES_REGISTER), G2 (MoneyTransferService wrong ledger nature + dead settlement), G7 (branch_demand_created notification not wired). Plus G10 (G-327 in ISSUES_REGISTER) was a CRITICAL-tier issue filed under §11.2 MAJOR here — also resolved in `2aefa26`.
 
 #### G1 — `CustomerPaymentService::postIntercompanySettlement` early-returns null
 
@@ -1103,6 +1106,21 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 #### G3 — `shadow_cutover_log` schema mismatch
 
+> ✅ RESOLVED in commit `2aefa26` (FINANCE-2) — `BranchDemandShadowService::recordCutoverDailyLog`
+> rewritten to mirror the canonical `WarehouseTransferShadowService::recordCutoverDailyLog` pattern:
+> `updateOrInsert` on `check_date` (the table's UNIQUE key — drops the nonexistent `module` filter),
+> with the migration's actual column names (`comparisons_total`, `comparisons_match`,
+> `comparisons_diff`, `comparisons_missing_legacy`, `comparisons_error`, `is_clean_day`,
+> `consecutive_clean_days`, `cutover_ready`, `checked_by`, `checked_at`). Computes
+> `consecutive_clean_days` from the previous day's row and derives `cutover_ready` from the
+> configured threshold. Wrapped in try/catch + Log::warning (non-blocking diagnostic — a
+> shadow-table failure must never abort the parent batch-compare transaction). Two downstream
+> symptoms also fixed: (1) `BranchDemandShadowController::cutover` had `->where('module',
+> 'branch_demand')` (would have thrown `SQLSTATE[42703]` at page load) — dropped; (2)
+> `cutover.blade.php` referenced `$log->is_clean`, `$log->total_compared`, `$log->match_count`,
+> `$log->diff_count` — updated to `$log->is_clean_day`, `$log->comparisons_total`,
+> `$log->comparisons_match`, `$log->comparisons_diff`.
+
 - **Severity:** CRITICAL.
 - **Evidence:** `app/Services/BranchDemand/BranchDemandShadowService.php:317-328` vs
   `database/migrations/2025_07_28_000012_create_shadow_mode_tables.php:77-112`. Service INSERTs
@@ -1115,6 +1133,33 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
   migration's schema is richer; prefer migrating the service to use it.
 
 #### G4 — `BranchDemandShadowService::compareOperation` has NO caller
+
+> ✅ RESOLVED in commit `2aefa26` (FINANCE-2) — `compareOperation` is now wired into 7 demand
+> transition methods via a new private `dispatchShadowCompare` helper duplicated across the two
+> services that own demand transitions:
+>
+> - `BranchDemandService::dispatchShadowCompare` — calls after each of 6 transitions:
+>   `createDemand` (operation='create'), `sendGoodsWithWarehouses` ('send'),
+>   `confirmReceipt` ('confirm_receipt'), `reverseDemand` ('reverse'),
+>   `deleteDraftDemand` ('delete' — captures a snapshot array inside the txn since the row is gone
+>   post-commit), `rejectDemand` ('reject').
+> - `BranchDemandRepricingService::dispatchShadowCompare` — calls after `createRepricingAdjustment`
+>   (operation='reprice').
+>
+> Design constraints (mirrors the SALES-2 non-blocking pattern):
+> - **Post-commit**: the helper runs AFTER `DB::transaction` returns so the Laravel-side snapshot
+>   is stable.
+> - **No-op when disabled**: short-circuits on `config('branch_demand_shadow.enabled', false)` so
+>   the common production case pays zero overhead beyond one `config()` lookup.
+> - **Lazy resolution**: `BranchDemandShadowService` is resolved via `app(...)` — no constructor
+>   coupling, no circular-dependency risk.
+> - **Non-blocking**: try/catch + `Log::warning` — a shadow-mode failure (config missing, table
+>   lock, legacy connection down) MUST NEVER abort the parent transition.
+>
+> `fifoSettleDemands` (private, in `BranchIntercompanyService`) is intentionally NOT wired — it's
+> called internally by other transition entry points, and wiring those entry points covers it.
+> Shadow mode now feeds `shadow_demand_comparisons` on every commit; `checkCutoverReadiness`
+> returns real data instead of the hardcoded `consecutive_clean_days=0`.
 
 - **Severity:** CRITICAL.
 - **Evidence:** `app/Services/BranchDemand/BranchDemandShadowService.php:44-107`. Grep across
@@ -1209,6 +1254,18 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 #### G10 — `CustomerPaymentService::postIntercompanySettlement` dead-code below `return null;` references nonexistent `branch_ledger` columns
 
+> ✅ RESOLVED in commit `2aefa26` (FINANCE-2) — the unreachable dead-code block (~50 lines below
+> the `return null;` early-exit) has been REMOVED. The block referenced dropped `branch_ledger`
+> columns (`transaction_type`, `amount`, `is_settled` — all dropped by migration
+> `2026_07_29_000013`) and would have thrown `SQLSTATE[42703]` if a future dev ever unblocked the
+> path by adding `banks.branch_id`. The early-return itself is intentionally KEPT — `banks` still
+> has no `branch_id` column (G1 / G-021, deferred to FINANCE-3). The expanded comment in the
+> source now documents the G-021 dependency AND enumerates the CURRENT `branch_ledger` schema
+> (`debit`, `credit`, `running_balance`, `is_reversed`, `remarks`, `journal_entry_id`,
+> `from_branch_id`, `to_branch_id`, `transaction_date`, `reference_type`, `reference_id` — per
+> `02_accounting.sql:203-222`) so the future dev who resolves G-021 writes the new implementation
+> against the live schema, not the dropped one.
+
 - **Evidence:** `app/Services/Sales/CustomerPaymentService.php:808-815` — if `banks.branch_id`
   is ever added and the early-return is removed, the INSERT will fail with `SQLSTATE[42703]`
   because it references `transaction_type`, `amount`, `is_settled` columns (all dropped by
@@ -1274,6 +1331,18 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 - **Fix:** wrap the INSERT in try/catch + `Log::warning` on failure.
 
 #### G17 — `BranchDemandAuditService::getSalesBelowLockedCost` references nonexistent tables `sales_items` + `sales`
+
+> ✅ RESOLVED in commit `2aefa26` (FINANCE-2) — query rewritten with the correct PostgreSQL table
+> names (`sales_invoice_items` joined to `sales_invoices` via `sales_invoice_id`) and the correct
+> column aliases (`sales_invoices.id as sale_id`, `sales_invoices.invoice_code as sale_code`,
+> `sales_invoices.invoice_date as sale_date`, `sales_invoice_items.qty as sale_qty`,
+> `sales_invoice_items.rate as sale_rate`). The previous query threw
+> `SQLSTATE[42P01]: relation "sales_items" does not exist` whenever
+> `getDemandAntiGamingFlags` invoked this flag. The canonical pattern is borrowed from
+> `BranchDemandRepricingService::getOutOfRangeSales` (which already used the correct names — see
+> G29 for the adjacent column bug in that same canonical pattern). The downstream `$flags->push`
+> payload was unchanged: the `sale_id`/`sale_code`/`sale_date` keys are still emitted, just sourced
+> from the correct tables. Docblock updated to reference `sales_invoice_items`/`sales_invoices`.
 
 - **Evidence:** `app/Services/BranchDemand/BranchDemandAuditService.php:228, 232`. Actual table
   names are `sales_invoice_items` + `sales_invoices` (per
@@ -1381,6 +1450,15 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 #### G29 — **CRITICAL** — `BranchDemandRepricingService::getOutOfRangeSales` selects nonexistent `sii.total` column
 
+> ✅ RESOLVED in commit `2aefa26` (FINANCE-2) — `'sii.total'` → `'sii.amount'` at
+> `BranchDemandRepricingService.php:705`. The `sales_invoice_items.amount` column is
+> `GENERATED ALWAYS AS (qty * rate) STORED` (per `04_sales.sql:114` and the `SalesInvoiceItem`
+> model `@property string $amount GENERATED: qty × rate`). There is NO `total` column on the
+> table. The previous selection threw `SQLSTATE[42703]: column "sii.total" does not exist` on
+> every repricing audit run. Inline comment added at the select call site documenting the schema
+> evidence. The selected column is not consumed downstream in the warning-building loop
+> (`$sale->rate` is the only property accessed), so the rename has no behavioral side-effects.
+
 - **Evidence:** `app/Services/BranchDemand/BranchDemandRepricingService.php:705` — the
   `getOutOfRangeSales()` repricing-audit query does `->select([..., 'sii.total'])` against
   `sales_invoice_items as sii`. The table has NO `total` column — the correct column is `amount`
@@ -1474,7 +1552,7 @@ sequenceDiagram
     BDS->>DB: COMMIT
 ```
 
-### 12.2 Shadow-mode comparison (theoretical — NOT WIRED today)
+### 12.2 Shadow-mode comparison (now WIRED — G4 resolved in `2aefa26`/FINANCE-2)
 
 ```mermaid
 sequenceDiagram
@@ -1485,9 +1563,9 @@ sequenceDiagram
     participant Legacy as Legacy MySQL (archive)
     participant DB as PostgreSQL
 
-    Note over Op,Legacy: Per-operation comparison (NOT WIRED — G4)
+    Note over Op,Legacy: Per-operation comparison (NOW WIRED — G4 resolved in 2aefa26/FINANCE-2)
     Op->>L: demand operation (create/send/...)
-    L->>SDS: SHOULD call compareOperation(op, demandId, laravelData)
+    L->>SDS: BranchDemandService::dispatchShadowCompare(op, demand) [post-commit, non-blocking]
     SDS->>Legacy: readLegacyData(demandId, op)
     alt legacy row not found
         SDS->>DB: INSERT shadow_demand_comparisons (diff_status='missing_legacy')
@@ -1548,13 +1626,22 @@ sequenceDiagram
    `interbranch_receivable` + `interbranch_payable` ledger natures + call
    `settleFromMoneyTransfer` after the GL post. Restores FIFO settlement via inter-branch money
    transfers.
-3. **G3** — Align `BranchDemandShadowService::recordCutoverDailyLog` with the
-   `shadow_cutover_log` migration schema (use `check_date`, `comparisons_total`, `comparisons_match`,
+3. **G3** — ✅ RESOLVED in `2aefa26` (FINANCE-2). `BranchDemandShadowService::recordCutoverDailyLog`
+   rewritten to mirror the canonical `WarehouseTransferShadowService` pattern: `updateOrInsert` on
+   `check_date`, with the migration's actual column names (`comparisons_total`, `comparisons_match`,
    `comparisons_diff`, `comparisons_missing_legacy`, `comparisons_error`, `is_clean_day`,
-   `consecutive_clean_days`, `cutover_ready`, `checked_by`).
-4. **G4** — Wire `BranchDemandShadowService::compareOperation` into every demand transition
-   (create/send/confirm_receipt/reverse/reject/delete/reprice/settle) — either via direct call
-   after commit OR via Laravel events + listener.
+   `consecutive_clean_days`, `cutover_ready`, `checked_by`, `checked_at`). Computes
+   `consecutive_clean_days` from the previous day's row and `cutover_ready` from the threshold config.
+   Try/catch + Log::warning (non-blocking). Also fixed: `BranchDemandShadowController::cutover`
+   dropped the nonexistent `->where('module', ...)` filter; `cutover.blade.php` property names
+   updated to match the schema.
+4. **G4** — ✅ RESOLVED in `2aefa26` (FINANCE-2). `BranchDemandShadowService::compareOperation`
+   is now wired into 7 demand transitions via a new private `dispatchShadowCompare` helper
+   (duplicated across `BranchDemandService` + `BranchDemandRepricingService` to avoid cross-service
+   coupling). Covers `create`, `send`, `confirm_receipt`, `reverse`, `delete`, `reject`, `reprice`.
+   Helper is non-blocking (try/catch + Log::warning), no-op when `config('branch_demand_shadow.enabled')`
+   is false, and lazy-resolves the shadow service via `app(...)` (no constructor coupling).
+   `checkCutoverReadiness` now returns real data instead of the hardcoded `consecutive_clean_days=0`.
 5. **G5** — ✅ RESOLVED in `0385b87` (FINANCE-1). `database/sql/09_branch_demand.sql`
    created with the 6 new tables (repricing, audit_log, both settlements, both shadow
    tables); `03_stock.sql` refreshed in-place for `branch_demands` + `branch_demand_items`.
@@ -1576,9 +1663,12 @@ sequenceDiagram
 
 9. **G9** — Create `BranchDemandPolicy` with per-action methods. Wire `$this->authorize(...)`
    calls in the controller.
-10. **G10** — When fixing G1, also update the dead-code block in
-    `CustomerPaymentService::postIntercompanySettlement` to use the new `branch_ledger` schema
-    (`debit`/`credit`/`running_balance`/`is_reversed`).
+10. **G10** — ✅ RESOLVED in `2aefa26` (FINANCE-2). The unreachable dead-code block below the
+    `return null;` early-exit in `CustomerPaymentService::postIntercompanySettlement` has been REMOVED.
+    It referenced `branch_ledger` columns dropped by migration `2026_07_29_000013`
+    (`transaction_type`, `amount`, `is_settled`). The early-return itself remains; removing it is
+    G-021 (FINANCE-3). Source comment now enumerates the canonical `branch_ledger` schema
+    (`debit`/`credit`/`running_balance`/`is_reversed`/`remarks`) for the future dev.
 11. **G11** — Uncomment the `transfer()` relationship in
     `BranchDemandMoneyTransferSettlement` and update the doc-block.
 12. **G12** — Add `journal_entry_id_debtor` column to `branch_demand_repricing` + persist both
@@ -1592,8 +1682,10 @@ sequenceDiagram
     and document that the WT header warehouses are decorative.
 16. **G16** — Wrap `BranchDemandAuditLogger::log` INSERT in try/catch + `Log::warning` on
     failure.
-17. **G17** — Rename `sales_items` → `sales_invoice_items` and `sales` → `sales_invoices` in
-    `BranchDemandAuditService::getSalesBelowLockedCost`.
+17. **G17** — ✅ RESOLVED in `2aefa26` (FINANCE-2). `BranchDemandAuditService::getSalesBelowLockedCost`
+    rewritten with the correct PostgreSQL table names (`sales_invoice_items` joined to
+    `sales_invoices`) and the correct column aliases. The previous query threw
+    `SQLSTATE[42P01]: relation "sales_items" does not exist`.
 18. **G18** — Verify the `sales_invoice_items` column name (`amount` vs `total`) and use the
     correct one in `BranchDemandWeeklyReportService::getWarehouseWiseSales`.
 19. **G19** — Include `$demandCogs` in the returned profit calculation in
@@ -1657,14 +1749,17 @@ sequenceDiagram
 - [ ] Confirm repricing GL adjustment direction (positive: Dr receivable / Cr inventory on
       supplier; negative: Dr inventory / Cr receivable on supplier).
 - [ ] Confirm Phase 5 receipt gate (reversal blocked until `received_at IS NOT NULL`).
-- [ ] Confirm shadow mode graduation (7 consecutive zero-diff days → cutover-ready). Note
-      that shadow mode is currently NOT WIRED (G4) — `consecutive_clean_days` is always 0.
+- [ ] Confirm shadow mode graduation (7 consecutive zero-diff days → cutover-ready).
+      ✅ Shadow mode is now WIRED (G4 resolved in `2aefa26`/FINANCE-2) — every demand transition
+      dispatches a `compareOperation` call post-commit. The previous "`consecutive_clean_days`
+      is always 0" caveat no longer applies.
 - [ ] Confirm weekly report columns match "MAIN BILL SHIT1.xlsx" Excel sheet. Note that the
       `profit` column excludes demand COGS (G19) — may not match the Excel sheet's intended
       profit definition.
-- [ ] Review the 8 CRITICAL gaps (G1-G8) and prioritise remediation. **G1 + G2 + G4 are the
-      highest-impact fixes** — without them, the settlement infrastructure is dead code, and
-      the shadow-mode cutover cannot be tracked.
+- [ ] Review the 8 CRITICAL gaps (G1-G8) and prioritise remediation. **5 of 8 are now resolved**
+      (G3+G4 in FINANCE-2, G5+G6 in FINANCE-1, G8 in `dd31590`). **3 remain open** (G1, G2, G7) —
+      G1 + G2 are the highest-impact remaining fixes (both are DEAD CODE: customer-payment
+      settlement + money-transfer settlement). G7 is a missing notification dispatch.
 
 ---
 
