@@ -22,6 +22,19 @@
 --   Commission is calculated on payment allocation, not on invoice creation.
 --   FK from commission_entries → sales_invoices (partitioned) is trigger-based
 --   (trg_fk_ce_si), matching the pattern established in Task 34.
+--
+-- SALES-4 (2026-09-01): DDL refreshed to match the live schema.
+-- Previously this file was stale — 8 columns and the entire sales_challan_items
+-- table existed ONLY in migrations (gap G5 CRITICAL). The DDL now includes:
+--   - sales_invoices: is_blank_godown_printed + blank_godown_printed_at/by
+--   - sales_invoice_dispatches: ordered_qty, dispatched_qty, dispatched_ctn, created_by
+--   - sales_challan_items: full CREATE TABLE (was missing entirely)
+--   - sales_returns: cogs_amount, reason
+--   - sales_return_items: sales_invoice_item_id, damage_invoice_id
+-- Plus the associated indexes (idx_sci_*, idx_sdis_pipeline, idx_sdis_product_warehouse,
+-- idx_sri_invoice_item, idx_sri_damage_invoice, idx_si_call_a_day_active).
+-- All migrations that add these columns are idempotent (Schema::hasColumn guards),
+-- so they remain no-ops on a fresh install where the DDL already has the columns.
 
 CREATE TABLE sales_invoices (
     id integer GENERATED ALWAYS AS IDENTITY,
@@ -45,6 +58,10 @@ CREATE TABLE sales_invoices (
     -- Sales workflow: draft → confirmed (godown prep) → challan issued (stock out) → paid
     is_godown_prepared boolean NOT NULL DEFAULT false,
     godown_prepared_at timestamp(0),
+    -- Phase 4.2: blank godown print tracking (3-step godown workflow)
+    is_blank_godown_printed boolean NOT NULL DEFAULT false,
+    blank_godown_printed_at timestamp(0),
+    blank_godown_printed_by integer,
     is_challan_issued boolean NOT NULL DEFAULT false,
     challan_issued_at timestamp(0),
     journal_entry_id integer REFERENCES journal_entries(id),
@@ -79,6 +96,9 @@ CREATE INDEX idx_si_salesman ON sales_invoices(salesman_id);
 CREATE INDEX idx_si_branch ON sales_invoices(branch_id, invoice_date);
 CREATE INDEX idx_si_journal ON sales_invoices(journal_entry_id);
 CREATE INDEX idx_si_status ON sales_invoices(status);
+-- Partial index: only rows where call_a_day = false (the default Today Invoice
+-- view filters by call_a_day = false across ALL scopes/chips).
+CREATE INDEX idx_si_call_a_day_active ON sales_invoices(call_a_day) WHERE call_a_day = false;
 
 -- Child tables reference sales_invoices via trigger-based FK enforcement
 -- (declarative FK → partitioned table not supported in PG 12-17)
@@ -113,18 +133,25 @@ CREATE TABLE sales_invoice_dispatches (
     product_id integer NOT NULL REFERENCES products(id),
     warehouse_id integer REFERENCES warehouses(id),
     qty numeric(14,4) NOT NULL,
+    -- ordered/dispatched distinction is CRITICAL for stock availability:
+    --   available = physical_qty - SUM(ordered_qty - dispatched_qty)
+    --               WHERE ordered_qty > dispatched_qty
+    ordered_qty numeric(14,4) NOT NULL DEFAULT 0,
+    dispatched_qty numeric(14,4) NOT NULL DEFAULT 0,
+    dispatched_ctn numeric(14,4) NOT NULL DEFAULT 0,  -- Phase 4: carton-packing count (annotation, not a quantity)
     rate numeric(12,2) DEFAULT 0,
     amount numeric(14,2) GENERATED ALWAYS AS (qty * rate) STORED,
     dispatch_date date,
+    created_by integer,
     CONSTRAINT unique_invoice_product UNIQUE (sales_invoice_id, product_id)
 );
 CREATE INDEX idx_sdis_invoice ON sales_invoice_dispatches(sales_invoice_id);
 CREATE INDEX idx_sdis_warehouse ON sales_invoice_dispatches(warehouse_id);
--- NOTE: idx_sdis_product_warehouse (with INCLUDE covering clause) is created
--- by migration 2025_01_28_000001_add_product_warehouse_index_to_sales_invoice_dispatches
--- AFTER migrations 2025_01_08_000002 adds the ordered_qty/dispatched_qty
--- columns. Defining it here would fail with SQLSTATE[42703] because those
--- columns don't exist in the base table definition.
+-- Partial index: only open pipeline rows (dispatched < ordered).
+CREATE INDEX idx_sdis_pipeline ON sales_invoice_dispatches(sales_invoice_id, product_id) WHERE dispatched_qty < ordered_qty;
+-- Composite covering index for the batched pipeline-qty query in
+-- StockAvailabilityService::getBranchWarehouseBreakdownForProducts().
+CREATE INDEX idx_sdis_product_warehouse ON sales_invoice_dispatches(product_id, warehouse_id) INCLUDE (ordered_qty, dispatched_qty, sales_invoice_id);
 
 CREATE TABLE sales_challans (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -155,6 +182,30 @@ CREATE INDEX idx_sc_invoice ON sales_challans(sales_invoice_id);
 CREATE INDEX idx_sc_journal ON sales_challans(journal_entry_id);
 CREATE INDEX idx_sc_adj_journal ON sales_challans(adjustment_journal_entry_id);
 
+-- ============================================================
+-- sales_challan_items (P0-5, migration 2025_01_08_000005)
+-- ============================================================
+-- Per-line issue-cost SSOT. Each challan line stores the avg_cost used at
+-- the moment of stock OUT, so that:
+--   (a) Challan reversal can restore inventory at the ORIGINAL per-line
+--       issue_rate (not the current avg_cost, which may have drifted).
+--   (b) GrossMarginReport can JOIN per-line to break down COGS by
+--       product / warehouse.
+-- Append-only snapshots — NO updated_at column (lines are never updated).
+CREATE TABLE sales_challan_items (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    sales_challan_id integer NOT NULL REFERENCES sales_challans(id) ON DELETE CASCADE,
+    product_id integer NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+    warehouse_id integer NOT NULL REFERENCES warehouses(id) ON DELETE RESTRICT,
+    qty numeric(14,4) NOT NULL,              -- positive (items issued OUT)
+    issue_rate numeric(12,2) DEFAULT 0,      -- avg_cost snapshot at challan issue
+    cogs_amount numeric(14,2) DEFAULT 0,    -- qty × issue_rate (denormalized for reporting)
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_sci_challan ON sales_challan_items(sales_challan_id);
+CREATE INDEX idx_sci_product ON sales_challan_items(product_id);
+CREATE INDEX idx_sci_wh ON sales_challan_items(warehouse_id);
+
 CREATE TABLE sales_draft_carts (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -181,6 +232,7 @@ CREATE TABLE sales_returns (
     customer_id integer NOT NULL,
     branch_id integer NOT NULL REFERENCES branches(id),
     total_amount numeric(14,2) DEFAULT 0,
+    cogs_amount numeric(14,2) DEFAULT 0,  -- total COGS to reverse (snapshot)
     status varchar(20) NOT NULL DEFAULT 'created' CHECK (status IN ('created','confirmed','reversed')),
     journal_entry_id integer REFERENCES journal_entries(id),
     cogs_journal_entry_id integer REFERENCES journal_entries(id),
@@ -191,6 +243,7 @@ CREATE TABLE sales_returns (
     reversed_by integer,
     reverse_reason text,
     notes text,
+    reason text,  -- user-supplied rationale for the return (distinct from notes)
     created_by integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -202,6 +255,7 @@ CREATE INDEX idx_sr_journal ON sales_returns(journal_entry_id);
 CREATE TABLE sales_return_items (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     sales_return_id integer NOT NULL REFERENCES sales_returns(id) ON DELETE CASCADE,
+    sales_invoice_item_id integer REFERENCES sales_invoice_items(id) ON DELETE SET NULL,  -- returnable-qty cap + original_cost lookup
     product_id integer NOT NULL REFERENCES products(id),
     warehouse_id integer REFERENCES warehouses(id),
     qty numeric(14,4) NOT NULL,
@@ -209,9 +263,12 @@ CREATE TABLE sales_return_items (
     -- FIX: MySQL was missing `amount`. PG: GENERATED STORED.
     amount numeric(14,2) GENERATED ALWAYS AS (qty * rate) STORED,
     condition_state varchar(10) DEFAULT 'Good' CHECK (condition_state IN ('Good','Damage')),
-    original_cost numeric(12,2) DEFAULT 0  -- snapshot of avg cost at time of original challan
+    original_cost numeric(12,2) DEFAULT 0,  -- snapshot of avg cost at time of original challan
+    damage_invoice_id integer REFERENCES damage_invoices(id) ON DELETE SET NULL  -- P1-5 linked damage write-off
 );
 CREATE INDEX idx_sri_return ON sales_return_items(sales_return_id);
+CREATE INDEX idx_sri_invoice_item ON sales_return_items(sales_invoice_item_id) WHERE sales_invoice_item_id IS NOT NULL;
+CREATE INDEX idx_sri_damage_invoice ON sales_return_items(damage_invoice_id) WHERE damage_invoice_id IS NOT NULL;
 
 -- ============================================================
 -- COMMISSION TRACKING (Task 37)
