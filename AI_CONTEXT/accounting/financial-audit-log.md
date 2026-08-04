@@ -240,10 +240,14 @@ $$ LANGUAGE plpgsql SECURITY DEFINER
     COALESCE(_after::TEXT, _before::TEXT))` — uses `pgcrypto.digest()`, hex-encoded.
 12. INSERT into `financial_audit_log` with all captured context.
 
-### 7.3 The 10 financial tables with the trigger attached
+### 7.3 Tables with the trigger attached (38 total)
 
-Source: `laravel/database/sql/02_accounting.sql:446-455` (original) + recreated by partitioning
-migrations. Exact count: **10 tables**.
+Source: `laravel/database/sql/02_accounting.sql:446-455` (original 10) + recreated by
+partitioning migrations + **SALES-3** (commit `de2b6e6`, migration
+`2026_09_01_000002` — 14 sales tables) + **FINANCE-1** (commit `0385b87`,
+migration `2026_09_01_000003` — 14 finance tables). Exact count: **38 tables**.
+
+**Original 10 (accounting — `02_accounting.sql:446-455`):**
 
 | # | Trigger name | Table |
 |---|---|---|
@@ -258,12 +262,31 @@ migrations. Exact count: **10 tables**.
 | 9 | `trg_audit_other_expenses` | `other_expenses` |
 | 10 | `trg_audit_employee_transactions` | `employee_transactions` |
 
-> **NOT attached to:** `sales_invoices`, `sales_challans`, `sales_returns`, `purchase_receives`,
-> `purchase_returns`, `stock_adjustments`, `stock_take_sessions`, `damage_invoices`,
-> `warehouse_transfers`, `branch_demands` (these have their own per-module audit loggers — see
-> `../security/audit-trails.md` §7.5). **Scope gap:** a sales invoice cancellation that triggers
-> a GL reversal IS audited via `journal_entries`/`journal_lines`, but the `sales_invoices` row
-> mutation itself is only in `user_audit_log` (if at all).
+**SALES-3 — 14 sales+commission tables (commit `de2b6e6`, migration `2026_09_01_000002`):**
+
+`sales_invoices`, `sales_invoice_items`, `sales_invoice_dispatchers`,
+`sales_invoice_dispatches`, `sales_challans`, `sales_challan_items`,
+`sales_draft_carts`, `sales_returns`, `sales_return_items`, `commission_rules`,
+`commission_rule_tiers`, `commission_rule_product_groups`,
+`commission_rule_targets`, `commission_entries`.
+
+**FINANCE-1 — 14 finance tables (commit `0385b87`, migration `2026_09_01_000003`):**
+
+`consolidation_runs`, `elimination_rules`, `elimination_entries`, `companies`,
+`warehouse_transfers`, `warehouse_transfer_items`, `branch_ledger`,
+`branch_demands`, `branch_demand_items`, `branch_demand_repricing`,
+`branch_demand_customer_payment_settlements`,
+`branch_demand_money_transfer_settlements`, `shadow_demand_comparisons`,
+`shadow_cutover_log`.
+
+> **NOT attached to:** `purchase_receives`, `purchase_returns`, `purchase_orders`,
+> `stock_adjustments`, `stock_take_sessions`, `damage_invoices`, `customer_ledger`,
+> `supplier_ledger`, `employee_ledger` (these have their own per-module audit loggers — see
+> `../security/audit-trails.md` §7.5). **Scope gap:** a purchase receive or stock adjustment that
+> triggers a GL posting IS audited via `journal_entries`/`journal_lines`, but the
+> `purchase_receives`/`stock_adjustments` row mutation itself is only in `user_audit_log` (if at
+> all). The purchasing cluster has its own G3 gap entries (`purchase-audit.md`, `purchase-receive.md`,
+> `purchase-return.md`) tracking the same trigger-attachment need.
 
 ### 7.4 REVOKE statements — verbatim
 
@@ -415,7 +438,7 @@ Two distinct systems:
 |---|---|---|
 | Schema source | `06_payment_and_misc.sql` | `02_accounting.sql:332-378` |
 | Writer | `AuditableMasterData` trait + `UserAuditLogger` service (application code) | `fn_financial_audit_trigger` (DB trigger, automatic) |
-| Scope | Master-data CRUD (31 models via trait) + security events (login/logout/password) | Financial mutations (10 tables) |
+| Scope | Master-data CRUD (31 models via trait) + security events (login/logout/password) | Financial mutations (38 tables: 10 accounting + 14 sales + 14 finance) |
 | Mutability | UPDATE/DELETE allowed (admin can edit) | REVOKE UPDATE/DELETE from all roles — immutable |
 | Hashing | None (plain JSONB diff) | SHA-256 hash-chained (cryptographic tamper-evidence) |
 | Retention | 36 months (3 years) | 84 months (7 years) |
@@ -512,11 +535,12 @@ WHERE chain_valid = false;
   FK has `ON DELETE CASCADE` — a `DELETE FROM journal_entries` would cascade to lines AND fire
   the audit trigger (capturing the DELETE). But the data is gone. The audit log proves it
   happened, but can't restore it. See `reversal-vs-cancellation.md` §12.
-- **Scope gap: 10 tables only.** `sales_invoices`, `purchase_receives`, `stock_adjustments`,
-  etc. are NOT audited by `fn_financial_audit_trigger`. Their mutations are captured (if at all)
-  by `user_audit_log` via the `AuditableMasterData` trait, which is mutable and not hash-chained.
-  A silent DELETE on `sales_invoices` would be logged to `user_audit_log` (action
-  `master_data_deleted`) but not to `financial_audit_log`. See §13.
+- **Scope gap: 38 tables (was 10; expanded by SALES-3 + FINANCE-1).** `purchase_receives`,
+  `purchase_returns`, `stock_adjustments`, `stock_take_sessions`, `damage_invoices`,
+  `customer_ledger`, etc. are NOT audited by `fn_financial_audit_trigger`. Their mutations are
+  captured (if at all) by `user_audit_log` via the `AuditableMasterData` trait, which is mutable
+  and not hash-chained. A silent DELETE on `purchase_receives` would be logged to `user_audit_log`
+  (action `master_data_deleted`) but not to `financial_audit_log`. See §13.
 - **`changed_columns` uses `IS DISTINCT FROM`** which treats NULL = NULL as true (not distinct).
   A column changing from NULL to NULL (no-op) won't appear. Correct behavior.
 - **`before_data` / `after_data` capture the FULL row** as JSONB, including generated columns

@@ -179,7 +179,7 @@ Five business + one engineering drivers:
 | `../accounting/journal-posting-rules.md` | `JournalPostingService::createJournalEntry` `$entry`/`$lines` array shape; `lookupLedgerByNature()`; confirmation that branch-demand DOES call this service for fulfillment + repricing + settlement journals. |
 | `../accounting/fiscal-year-period-close.md` | `FiscalPeriod` / `PeriodCloseLog` — gap G20: branch-demand send/reprice does NOT consult fiscal period status. |
 | `../accounting/chart-of-accounts.md` | `Ledger` model — `interbranch_receivable` (Asset, debit), `interbranch_payable` (Liability, credit), `inventory` (Asset, debit), `cash_bank` ledger natures. Registered in `LedgerNatureService.php:121-132`. |
-| `../accounting/financial-audit-log.md` | `fn_financial_audit_trigger` — gap G6: NOT attached to ANY `branch_demand*` table or `branch_ledger`. |
+| `../accounting/financial-audit-log.md` | ✅ RESOLVED (`0385b87`, FINANCE-1): `fn_financial_audit_trigger` is now attached to all 8 branch-demand tables + `branch_ledger` (G6). |
 | `../accounting/reversal-vs-cancellation.md` | Reversal semantics — gap G13: `reverseDemand` uses `JournalPostingService::reverseJournalEntry` directly (not `JournalReversalService::reverseByJournalEntry`). `status='reversed'` is terminal with no reopen path. |
 | `../accounting/customer-payments.md` | Gap G1 — `CustomerPaymentService::postIntercompanySettlement` early-returns null; `BranchIntercompanyService::settleFromCustomerPayment` is NEVER called. |
 | `../accounting/money-transfers.md` | Gap G2 — `MoneyTransferService::postIntercompanySettlement` uses `'intercompany'` ledger nature (NOT `'interbranch_payable'/'interbranch_receivable'`); never calls `settleFromMoneyTransfer`. Gap G21 — two parallel intercompany GL systems. |
@@ -1132,6 +1132,8 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 #### G5 — DDL stale — `branch_demand*` tables + shadow tables missing from `database/sql/*.sql`
 
+> ✅ RESOLVED in commit `0385b87` (FINANCE-1) — Two-part fix: (1) `database/sql/03_stock.sql` refreshed in-place — `branch_demands` + `branch_demand_items` now declare the post-migration schema (status CHECK with `'pending','received','rejected','reversed'`; `from_warehouse_id` + `to_warehouse_id` replacing `warehouse_id`; `cost_rate` replacing `rate`; `price_min`/`price_max`/`price_default`; `total_value`/`settlement_amount`/`warehouse_transfer_id`/`journal_entry_id_debtor`/`received_at`/`received_by`/`reversed_at`/`reversed_by`/`reverse_reason`; `fulfilled_qty` dropped). Mirrors SALES-4's in-place DDL refresh precedent. (2) New file `database/sql/09_branch_demand.sql` defines the 6 previously-missing tables: `branch_demand_repricing`, `branch_demand_audit_log`, `branch_demand_customer_payment_settlements`, `branch_demand_money_transfer_settlements`, `shadow_demand_comparisons`, `shadow_cutover_log`. `2025_01_01_000001_create_rcerp_schema.php` updated to load `08_consolidation` + `09_branch_demand` after `07_views_triggers_constraints`. A fresh `php artisan migrate:fresh` from the SQL baseline now creates the entire branch-demand subsystem. The migrations remain as the source of truth for RLS policies (rewritten by dd31590 / G-022) — the DDL file intentionally does NOT duplicate RLS to avoid two sources of truth. `branch_ledger` was already in `02_accounting.sql:203` with the new schema (not stale, not redefined).
+
 - **Severity:** CRITICAL.
 - **Evidence:** `database/sql/03_stock.sql:715-742` still has legacy
   `branch_demands.status CHECK ('pending','approved','rejected','fulfilled','cancelled')` and
@@ -1146,6 +1148,8 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
   `2025_01_01_000001_create_rcerp_schema.php` to execute it.
 
 #### G6 — `fn_financial_audit_trigger` NOT attached to ANY `branch_demand*` table or `branch_ledger`
+
+> ✅ RESOLVED in commit `0385b87` (FINANCE-1) — Migration `2026_09_01_000003_attach_financial_audit_trigger_to_finance_tables.php` attaches `trg_audit_<table> AFTER INSERT OR UPDATE OR DELETE FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger()` to all 8 tables cited in this gap: `branch_demands`, `branch_demand_items`, `branch_demand_repricing`, `branch_demand_customer_payment_settlements`, `branch_demand_money_transfer_settlements`, `branch_ledger`, `shadow_demand_comparisons`, `shadow_cutover_log`. (`branch_ledger` is also counted in G-017's 7-table list — it's attached once, listed in the migration's `CONSOLIDATION_TABLES` array.) Idempotent (DROP TRIGGER IF EXISTS + CREATE TRIGGER). `branch_demand_audit_log` is intentionally EXCLUDED — it is itself an append-only forensic audit trail (RLS blocks UPDATE/DELETE via `USING(false)`); hash-chaining the audit-of-the-audit adds overhead without forensic value. The trigger function reads `branch_id` from JSONB, so it works on `shadow_cutover_log` (which has no branch_id column — admin-only diagnostic table). After FINANCE-1, every INSERT/UPDATE/DELETE on branch-demand and branch_ledger tables writes a SHA-256-chained row to `financial_audit_log` with before_data/after_data snapshots. Direct DB mutations (e.g. a DBA running `UPDATE branch_demands SET status = ...`) are now forensically captured — previously invisible because `branch_demand_audit_log` is written by the service layer, not by a DB trigger.
 
 - **Severity:** CRITICAL.
 - **Evidence:** `database/sql/02_accounting.sql:446-455` lists 10 tables with the trigger
@@ -1525,7 +1529,7 @@ sequenceDiagram
 | 1 | All GL postings route through `JournalPostingService::createJournalEntry` | ✅ **CONFIRMED** | `BranchIntercompanyService.php:131, 167` (fulfillment); `BranchDemandRepricingService.php:295, 329` (repricing); `BranchIntercompanyService.php:1018` (settlement). All call `$this->journalPosting->createJournalEntry()` or `->postJournalEntry()`. |
 | 2 | All reversals route through `JournalReversalService::reverseByJournalEntry` | ❌ **NOT CONFIRMED** | `BranchIntercompanyService::reverseDemandJournals` L317+L325 calls `JournalPostingService::reverseJournalEntry` directly. `BranchIntercompanyService::reverseSettlementsByReference` L1090 also uses `reverseJournalEntry`. Inconsistent with `CustomerPaymentService::cancelPayment` which uses `JournalReversalService::reverseByJournalEntry` for cascade. **G13.** |
 | 3 | Period-close enforced | ❌ **NOT CONFIRMED** | `BranchDemandService::sendGoodsWithWarehouses` and `BranchDemandRepricingService::createRepricingAdjustment` do NOT check `fiscal_periods.status` or `period_close_logs` before posting GL. Same gap as Phase 10 sales. **G20.** |
-| 4 | `fn_financial_audit_trigger` attached to `branch_demand*` tables | ❌ **NOT CONFIRMED** | `database/sql/02_accounting.sql:446-455` lists 10 tables with the trigger attached. ZERO `branch_demand*` tables. ZERO `branch_ledger`. ZERO `shadow_*` tables. **Recurring cross-phase gap G6.** |
+| 4 | `fn_financial_audit_trigger` attached to `branch_demand*` tables | ✅ **CONFIRMED** | ✅ RESOLVED in `0385b87` (FINANCE-1): migration `2026_09_01_000003` now attaches the trigger to all 8 missing tables — `branch_demands`, `branch_demand_items`, `branch_demand_repricing`, `branch_demand_customer_payment_settlements`, `branch_demand_money_transfer_settlements`, `branch_ledger`, `shadow_demand_comparisons`, `shadow_cutover_log`. (`branch_demand_audit_log` intentionally excluded — it IS an audit trail.) **G6 — resolved.** |
 | 5 | RLS enabled + per-verb policies on `branch_demand*` tables | ⚠️ **PARTIAL** | `branch_demands`: ✅ 6 policies (`07_views_triggers_constraints.sql:850-856` SELECT/INSERT/UPDATE/DELETE/admin, USING `from_branch_id OR to_branch_id OR is_admin`). `branch_ledger`: ✅ 6 policies (`07_views:826-832`). `branch_demand_audit_log`: ✅ 5 policies (migration `2026_07_29_000017:99-135` including branch-scoped SELECT, admin bypass, INSERT `WITH CHECK (true)`, no UPDATE/DELETE). `shadow_demand_comparisons`: ✅ 3 policies (migration `2026_07_29_000019:74-99`). **NO RLS on:** `branch_demand_items`, `branch_demand_repricing`, `branch_demand_customer_payment_settlements`, `branch_demand_money_transfer_settlements`, `shadow_cutover_log`. **G8.** |
 | 6 | `EnforceBranchIsolation::inferTableFromUri` covers branch-demand URIs | ⚠️ **PARTIAL — by design** | `EnforceBranchIsolation.php:229` returns `null` for path containing `'branch-demands'` — comment says *"Branch demands are cross-branch by nature... we skip the table inference and let the controller authorize based on the user's role in the demand (requester or supplier)."* `'branch-demand-shadow'` path is NOT explicitly listed but is admin-only by convention. **G25.** |
 | 7 | `BranchScope` global scope on `BranchDemand` / `BranchDemandItem` models | ❌ **NOT CONFIRMED — intentional** | Neither `BranchDemand.php` nor `BranchDemandItem.php` uses `BranchScope`. Grep confirmed: 28 other models use `BranchScope`; `BranchDemand`/`BranchDemandItem` do NOT. Intentional because `branch_demands` has TWO branch columns (`from_branch_id` + `to_branch_id`) and is cross-branch by nature. Authorization handled in `BranchDemandController::show()` L221-225 (hard 403 if user not in either branch). RLS at DB level enforces the same. |
@@ -1551,12 +1555,16 @@ sequenceDiagram
 4. **G4** — Wire `BranchDemandShadowService::compareOperation` into every demand transition
    (create/send/confirm_receipt/reverse/reject/delete/reprice/settle) — either via direct call
    after commit OR via Laravel events + listener.
-5. **G5** — Add `database/sql/09_branch_demand.sql` with the post-migration schema for all 8
-   tables. Update `2025_01_01_000001_create_rcerp_schema.php` to execute it.
-6. **G6** — Attach `fn_financial_audit_trigger` to all 8 missing tables (`branch_demands`,
-   `branch_demand_items`, `branch_demand_repricing`,
-   `branch_demand_customer_payment_settlements`, `branch_demand_money_transfer_settlements`,
-   `branch_ledger`, `shadow_demand_comparisons`, `shadow_cutover_log`).
+5. **G5** — ✅ RESOLVED in `0385b87` (FINANCE-1). `database/sql/09_branch_demand.sql`
+   created with the 6 new tables (repricing, audit_log, both settlements, both shadow
+   tables); `03_stock.sql` refreshed in-place for `branch_demands` + `branch_demand_items`.
+   `2025_01_01_000001_create_rcerp_schema.php` updated to load `09_branch_demand`.
+6. **G6** — ✅ RESOLVED in `0385b87` (FINANCE-1). Migration
+   `2026_09_01_000003_attach_financial_audit_trigger_to_finance_tables.php` attaches the
+   trigger to all 8 missing tables (`branch_demands`, `branch_demand_items`,
+   `branch_demand_repricing`, `branch_demand_customer_payment_settlements`,
+   `branch_demand_money_transfer_settlements`, `branch_ledger`,
+   `shadow_demand_comparisons`, `shadow_cutover_log`).
 7. **G7** — Call `NotificationService::dispatch('branch_demand_created', ...)` from
    `BranchDemandService::createDemand` after the commit. Supplier branch's warehouse manager
    gets notified of new demands.

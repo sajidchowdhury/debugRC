@@ -152,7 +152,7 @@ Three accounting + one engineering driver:
 | `../accounting/fiscal-year-period-close.md` | Period-close is enforced indirectly via `JournalPostingService::validatePeriod`. **Elimination JEs do NOT enforce period-close (G1).** |
 | `../accounting/reversal-vs-cancellation.md` | Append-only reversal principle. `BranchIntercompanyService::reverseDemandJournals` ✓ uses `JournalPostingService::reverseJournalEntry`. `MoneyTransferService::reverseTransfer` ✓ uses `JournalReversalService::reverseByJournalEntry`. **`ConsolidationService::reverseEliminationJournal` ✗ bypasses both (G1).** |
 | `../accounting/chart-of-accounts.md` | `interbranch_receivable` (L-0105) + `interbranch_payable` (L-0303) ledger natures + the 5 elimination ledgers (L-0106, L-0304, L-0403, L-0504, L-0404) + the `is_elimination` flag. |
-| `../accounting/financial-audit-log.md` | `fn_financial_audit_trigger` is NOT attached to 7 in-scope tables (G4). Only `money_transfers` IS attached. |
+| `../accounting/financial-audit-log.md` | ✅ RESOLVED (`0385b87`, FINANCE-1): `fn_financial_audit_trigger` is now attached to all 7 in-scope tables (G4). `money_transfers` was already attached. |
 | `../accounting/money-transfers.md` | The full per-transfer CRUD + GL matrix + bank balance sync + cash ledger + reversal flow. This doc covers ONLY the cross-branch intercompany settlement half (G9). |
 | `../accounting/subledger-reconciliation.md` | The `branch_ledger` sub-ledger reconciliation — `mv_branch_intercompany` MV + `getIntercompanyReconciliation` report. |
 | `../accounting/running-balance.md` | The `branch_ledger.running_balance` column + `getRunningBalance` method semantics. |
@@ -649,6 +649,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 
 #### G4 — `fn_financial_audit_trigger` NOT attached to 7 in-scope tables
 
+> ✅ RESOLVED in commit `0385b87` (FINANCE-1) — Migration `2026_09_01_000003_attach_financial_audit_trigger_to_finance_tables.php` attaches `trg_audit_<table> AFTER INSERT OR UPDATE OR DELETE FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger()` to all 7 in-scope tables: `consolidation_runs`, `elimination_rules`, `elimination_entries`, `companies`, `warehouse_transfers`, `warehouse_transfer_items`, `branch_ledger`. Idempotent (DROP TRIGGER IF EXISTS + CREATE TRIGGER). Guards that `fn_financial_audit_trigger()` exists in `pg_proc` before attaching (throws `RuntimeException` if `02_accounting.sql` wasn't loaded). The trigger function is generic — reads `branch_id` from JSONB (`to_jsonb(NEW)->>'branch_id'`), so it works on tables without a `branch_id` column (`companies`, `elimination_rules`, `warehouse_transfer_items`). After FINANCE-1, the hash-chain audit trail covers 38 tables total (10 original accounting + 14 sales from SALES-3 + 14 finance from this batch). Direct DB mutations on consolidation/elimination/warehouse-transfer/branch-ledger tables are now forensically captured in `financial_audit_log` with SHA-256 hash chaining.
+
 - **Severity:** CRITICAL.
 - **Evidence:** `database/sql/02_accounting.sql:446-455` lists 10 attached tables:
   `journal_entries`, `journal_lines`, `manual_journals`, `manual_journal_lines`,
@@ -667,6 +669,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
   Recurring gap from Phase 9/10/11/12.
 
 #### G5 — DDL stale: `consolidation_runs` / `elimination_rules` / `elimination_entries` / `companies` / `mv_consolidated_trial_balance` NOT in any `database/sql/*.sql` file
+
+> ✅ RESOLVED in commit `0385b87` (FINANCE-1) — Created `database/sql/08_consolidation.sql` (the canonical DDL for the consolidation subsystem) and updated `2025_01_01_000001_create_rcerp_schema.php` to load it after `07_views_triggers_constraints.sql`. The new file defines all 4 tables (`companies`, `consolidation_runs`, `elimination_rules`, `elimination_entries`) with their full post-migration schema (FKs, CHECK constraints, indexes, soft-deletes), plus the `branches.company_id` column + FK + index, the `ledgers.is_elimination` column + index, and the `mv_consolidated_trial_balance` materialized view + unique index. A fresh `php artisan migrate:fresh` from the SQL baseline now creates the entire consolidation subsystem. The migration `2026_08_11_000001` remains as the source of truth for RLS policies (rewritten by dd31590 / G-015) and seed data — the DDL file intentionally does NOT duplicate RLS policies to avoid two sources of truth. The migration's `CREATE TABLE` / `CREATE MATERIALIZED VIEW` statements use `IF NOT EXISTS`, so on a fresh install the migration is a no-op (tables already exist from the SQL file); on an upgraded install, the SQL file's `CREATE` is skipped (tables already exist from the migration).
 
 - **Severity:** CRITICAL.
 - **Evidence:** grep across `database/sql/01_auth_and_master.sql` through
@@ -1060,7 +1064,7 @@ stateDiagram-v2
 | 1 | All GL postings route through `JournalPostingService::createJournalEntry` | **NOT CONFIRMED** | `BranchIntercompanyService::postDemandFulfillmentJournals` ✓ (`:107, :133`). `BranchIntercompanyService::fifoSettleDemands` ✓ (`:1013`) but DEAD CODE. `MoneyTransferService::postTransferGL` ✓ (`:278`). `MoneyTransferService::postIntercompanySettlement` ✓ (`:455`) but silently skips (G9). `WarehouseTransferService::postIntercompanyGL` ✓ (`:557, :580`) but DEAD CODE (G10). **`ConsolidationService::postEliminationEntry` ✗ BYPASSES** — uses `JournalEntry::create()` + `JournalLine::create()` directly (`:364-390`). |
 | 2 | All reversals route through `JournalReversalService::reverseByJournalEntry` (or do they bypass?) | **NOT CONFIRMED** | `MoneyTransferService::reverseTransfer` ✓ (`:134, :142`). `BranchIntercompanyService::reverseDemandJournals` ✗ calls `JournalPostingService::reverseJournalEntry` directly (`:342, :352`) — does NOT route through `JournalReversalService` (no sub-ledger cascade needed because `branch_ledger` is reversed separately by `reverseLedgerByReference`). `WarehouseTransferService::cancelTransfer` ✗ calls `JournalPostingService::reverseJournalEntry` directly (`:450, :456`). **`ConsolidationService::reverseEliminationJournal` ✗ BYPASSES BOTH** — creates reversal `JournalEntry` + `JournalLine` manually (`:457-481`). |
 | 3 | Period-close enforced via `FiscalYearService` or `JournalPostingService::validatePeriod` | **PARTIAL** | `BranchIntercompanyService::postDemandFulfillmentJournals` ✓ (via `createJournalEntry` which calls `validatePeriod` when `skip_period_check` is not set). `MoneyTransferService::postTransferGL` ✓ (via `postJournalEntry`). `WarehouseTransferService::postIntercompanyGL` ✓ (DEAD CODE but would enforce). **`ConsolidationService::postEliminationEntry` ✗ NO period-close check** — bypasses `JournalPostingService` entirely, so `validatePeriod` is never called. The elimination JE is posted at `entry_date = $run->period_to` with no validation that the period is open. |
-| 4 | `fn_financial_audit_trigger` attached | **PARTIAL** | `money_transfers` ✓ attached (`02_accounting.sql:452` + re-attached post-partition in `2026_08_02_000004:536`). `consolidation_runs` ✗ NOT attached. `elimination_rules` ✗ NOT attached. `elimination_entries` ✗ NOT attached. `warehouse_transfers` ✗ NOT attached. `warehouse_transfer_items` ✗ NOT attached. `branch_ledger` ✗ NOT attached. `companies` ✗ NOT attached. (G4 — recurring cross-phase gap.) |
+| 4 | `fn_financial_audit_trigger` attached | **FULL** | `money_transfers` ✓ attached (`02_accounting.sql:452` + re-attached post-partition in `2026_08_02_000004:536`). ✅ RESOLVED in `0385b87` (FINANCE-1): migration `2026_09_01_000003` now attaches the trigger to all 7 in-scope tables — `consolidation_runs`, `elimination_rules`, `elimination_entries`, `companies`, `warehouse_transfers`, `warehouse_transfer_items`, `branch_ledger`. (G4 — resolved.) |
 | 5 | RLS enabled + per-verb policies | **PARTIAL** | `money_transfers` ✓ proper per-verb policies (dual-branch_id) in `2025_01_20_000007:136-152`. `warehouse_transfers` ✓ same dual-branch pattern. `branch_ledger` ✓ same. `branch_demands` ✓ same. **`consolidation_runs` ✗ admin-only** (`2026_08_11_000001:244-252`). **`elimination_entries` ✗ admin-only**. **`elimination_rules` ✗ admin-only**. **`companies` ✗ admin-only**. (G3.) |
 | 6 | `EnforceBranchIsolation::inferTableFromUri` covers URIs | **PARTIAL** | `money-transfers` ✓ returns `null` (cross-branch by nature). `branch-demands` ✓ returns `null` (same reason). **`consolidation` ✗ NOT covered**. **`warehouse-transfers` ✗ NOT covered**. **`elimination-rules` ✗ NOT covered**. **`companies` ✗ NOT covered**. (G11.) |
 | 7 | BranchScope global scope on the models | **PARTIAL** | `MoneyTransfer` ✓ uses `MoneyTransferBranchScope` (dual-branch). `WarehouseTransfer` ✓ uses `WarehouseTransferBranchScope` (dual-branch). **`ConsolidationRun` ✗ NO BranchScope**. **`EliminationRule` ✗ NO BranchScope**. **`EliminationEntry` ✗ NO BranchScope**. **`Company` ✗ NO BranchScope**. (G12.) |
@@ -1087,15 +1091,18 @@ stateDiagram-v2
    to read (group-level data) + admin/accountant/manager to write (via a role check). Either drop
    RLS entirely and rely on route middleware, or use
    `current_setting('app.is_admin', true) = 'true' OR current_setting('app.branch_id', true) IS NOT NULL`.
-4. **G4** — Attach `fn_financial_audit_trigger` to all 7 in-scope tables
-   (`consolidation_runs`, `elimination_rules`, `elimination_entries`, `companies`,
-   `warehouse_transfers`, `warehouse_transfer_items`, `branch_ledger`). This is the recurring
-   cross-phase gap from Phase 9/10/11/12 — should be a single migration that adds the trigger to
-   every missing table.
-5. **G5** — Add `database/sql/08_consolidation.sql` with the DDL for the 4 consolidation tables +
-   `mv_consolidated_trial_balance` + `mv_branch_intercompany`. Update
-   `2025_01_01_000001_create_rcerp_schema.php` to execute it. Keeps the SQL baseline in sync
-   with migrations.
+4. **G4** — ✅ RESOLVED in `0385b87` (FINANCE-1). Migration
+   `2026_09_01_000003_attach_financial_audit_trigger_to_finance_tables.php`
+   attaches `fn_financial_audit_trigger` to all 7 in-scope tables
+   (`consolidation_runs`, `elimination_rules`, `elimination_entries`,
+   `companies`, `warehouse_transfers`, `warehouse_transfer_items`,
+   `branch_ledger`).
+5. **G5** — ✅ RESOLVED in `0385b87` (FINANCE-1). Created
+   `database/sql/08_consolidation.sql` with the DDL for the 4 consolidation
+   tables + `mv_consolidated_trial_balance` + `branches.company_id` +
+   `ledgers.is_elimination`. Updated
+   `2025_01_01_000001_create_rcerp_schema.php` to execute it. (`mv_branch_intercompany`
+   was already in `02_accounting.sql` — not stale.)
 
 ### 14.2 MAJOR (11)
 
@@ -1183,6 +1190,8 @@ stateDiagram-v2
 - [ ] Review the 5 CRITICAL gaps (G1-G5) and prioritise remediation. **G1 + G3 are the
       highest-impact fixes** — without G1, elimination JEs can be posted to closed periods with
       no audit trail; without G3, accountants and managers cannot use the subsystem at all.
+      ✅ **G3 resolved** (`dd31590`), **G4 + G5 resolved** (`0385b87`, FINANCE-1). Only **G1 + G2**
+      remain open in the CRITICAL tier.
 
 ---
 
