@@ -544,7 +544,32 @@ AI_CONTEXT/
   workers) + timezone reconciliation table (Laravel Asia/Dhaka vs pg_cron UTC) + 24-hour
   job timeline; go-live checklist (12 sections, 5 sign-offs, rollback plan, acceptable-
   risk documentation).
-- **Phases 20–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 20 — Cross-Cutting Workflows:** ✅ Complete (`workflows/` — 5 files:
+  `procure-to-pay.md` 554L, `order-to-cash.md` 659L, `inventory-to-gl.md` 639L,
+  `period-close-workflow.md` 569L, `notification-workflow.md` 1897L = 4318 lines total,
+  XL complexity, safety-critical, depends on Phases 6–13). Documents the five
+  end-to-end business workflows that span modules — Procure-to-Pay (PO → receive →
+  invoice → payment → GL, with Dr/Cr postings inline), Order-to-Cash (sales-order →
+  challan → invoice → receipt → GL, with multi-branch VAT + commission postings),
+  Inventory-to-GL (stock-ledger → costing → reconciliation → GL impact on every
+  movement type), Period-Close (fiscal-period lock → sub-ledger recon → MV refresh →
+  trial-balance sign-off), and Notification-Workflow (enhanced from Phase 15 with the
+  full SSE + database-notification + broadcast-channel flow). Each file contains
+  Mermaid sequence diagrams spanning controllers → services → models → DB → triggers,
+  with all journal postings (Dr/Cr tables) inline per `journal-posting-rules.md` §7.6.
+- **Phase 21 — Changelog, Known Limitations & Roadmap:** ✅ Complete
+  (`changelog/PRODUCT_CHANGELOG.md` 460L NEW, `PROJECT_OVERVIEW.md` §11–§12 expanded
+  470L, `ROADMAP.md` 680L NEW at AI_CONTEXT root — 1610 lines total, M complexity,
+  depends on all prior phases). Consolidates the product history (13 migration phases,
+  8 partitioning sub-phases + HOTFIX-9, removed features, sales remediation R-items,
+  cross-cutting fixes), the known-limitations catalogue (deployment / pending-phases /
+  14 cross-cutting technical gaps with file:line citations / 9 operational / 3
+  documentation), and the forward roadmap (4 horizons: H1 Cutover 7 tasks, H2
+  Stabilize 8 items, H3 Extend 10 ops + 5 AI sidecar items, H4 Scale 7 items — 38-row
+  summary table with dependencies + decision log).
+- **All 22 planned AI_CONTEXT documentation phases (0–21):** ✅ COMPLETE. Knowledge
+  base is fully delivered. Next product work follows `ROADMAP.md` (H1 VPS cutover →
+  H2 stabilize → H3 AI sidecar → H4 scale).
 
 ---
 
