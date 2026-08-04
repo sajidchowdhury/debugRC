@@ -402,8 +402,16 @@ return $this->journalPosting->createJournalEntry([...], $lines);
    `sales_invoice_items`, `sales_invoice_dispatches`, and `sales_invoice_dispatchers`
    via migration `2026_09_01_000002` (SALES-3, commit de2b6e6). All 4 tables are now
    hash-chain-audited alongside `customer_payments`.
-3. **G5 (CRITICAL)** — DDL `04_sales.sql` is stale: `is_blank_godown_printed`, `call_a_day`,
-   `ordered_qty`, `dispatched_qty`, `dispatched_ctn`, `created_by` exist only in migrations.
+3. **G5 (CRITICAL — RESOLVED)** — DDL `04_sales.sql` is now refreshed to match the live
+   schema (SALES-4, commit 33563e4). The DDL now includes `is_blank_godown_printed` +
+   `blank_godown_printed_at` + `blank_godown_printed_by` on `sales_invoices`, and
+   `ordered_qty` + `dispatched_qty` + `dispatched_ctn` + `created_by` on
+   `sales_invoice_dispatches`. Plus the partial index `idx_si_call_a_day_active`,
+   `idx_sdis_pipeline`, and `idx_sdis_product_warehouse`.
+   NOTE: the original G5 gap text listed `call_a_day` and `sales_invoices.created_by`
+   as drifted — both were ALREADY in the DDL (lines 57 + 59). Those two were NOT
+   drifted; the doc claim was inaccurate. The actual drifted columns are the 3
+   blank-godown-print columns + the 4 dispatch columns listed above.
 4. **G8 (MAJOR)** — `sales_invoice_items.condition_state` column exists but is NEVER used at the
    invoice layer (always 'Good'). Dead column.
 5. **G12 (MAJOR)** — `sales_invoices.salesman_id` has NO FK to `employees(id)`. Orphan

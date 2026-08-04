@@ -319,8 +319,11 @@ return $this->journalPosting->createJournalEntry([
 1. **G4 (CRITICAL — RESOLVED)** — `fn_financial_audit_trigger` is now attached to
    `sales_returns` and `sales_return_items` via migration `2026_09_01_000002` (SALES-3,
    commit de2b6e6). Both tables are now hash-chain-audited alongside `customer_payments`.
-2. **G5 (CRITICAL)** — DDL `04_sales.sql` is stale: `cogs_amount`, `reason`,
-   `sales_invoice_item_id`, `damage_invoice_id` exist only in migrations.
+2. **G5 (CRITICAL — RESOLVED)** — DDL `04_sales.sql` is now refreshed to match the live
+   schema (SALES-4, commit 33563e4). The DDL now includes `cogs_amount` and `reason`
+   on `sales_returns`, and `sales_invoice_item_id` + `damage_invoice_id` on
+   `sales_return_items` (with FKs + partial indexes). Previously these existed only
+   in migrations `2025_01_08_000003` and `2025_01_09_000002`.
 3. **G6 (MAJOR)** — No `SalesReturnPolicy` class. RBAC via route middleware + RLS only.
 
    > ✅ RESOLVED in commit 1ccc5b6 — Policy class `App\Policies\SalesReturnPolicy` created + registered in `AppServiceProvider::boot()`. Mirrors existing `role:` middleware exactly (defense-in-depth — no behavior change). Methods: viewAny/view/create/confirm/reverse/delete/reversePreview/getInvoiceDetails/searchInvoices/summary/export/audit/printSlip. Splits `viewAny()` (index: `salesman,accountant,warehouse_manager,manager,admin`) from `view()` (show: `accountant,warehouse_manager,manager,admin`) to mirror the divergent route middleware exactly.

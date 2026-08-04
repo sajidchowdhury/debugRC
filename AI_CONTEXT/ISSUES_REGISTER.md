@@ -134,10 +134,10 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-068 | G4 | CRITICAL | sales | sales/sales-overview.md:289 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to ANY of the 9 sales tables + | audit-trail phase | H1 | resolved | de2b6e6 |
 | G-069 | G4 | CRITICAL | sales | sales/sales-return.md:319 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_returns` / | audit-trail phase | H1 | resolved | de2b6e6 |
 | G-070 | G4 | CRITICAL | sales | sales/transport-cost.md:219 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_invoices` / | audit-trail phase | H1 | resolved | de2b6e6 |
-| G-071 | G5 | CRITICAL | sales | sales/sales-challan.md:334 | — | **G5 (CRITICAL)** — `sales_challan_items` table is NOT in `04_sales.sql` DDL — created only | DDL drift | H1 | open | — |
-| G-072 | G5 | CRITICAL | sales | sales/sales-invoice.md:398 | — | **G5 (CRITICAL)** — DDL `04_sales.sql` is stale: `is_blank_godown_printed`, `call_a_day`, | DDL drift | H1 | open | — |
-| G-073 | G5 | CRITICAL | sales | sales/sales-overview.md:292 | — | **G5 (CRITICAL)** — DDL `04_sales.sql` is stale; many live columns/tables exist ONLY in | DDL drift | H1 | open | — |
-| G-074 | G5 | CRITICAL | sales | sales/sales-return.md:321 | — | **G5 (CRITICAL)** — DDL `04_sales.sql` is stale: `cogs_amount`, `reason`, | DDL drift | H1 | open | — |
+| G-071 | G5 | CRITICAL | sales | sales/sales-challan.md:334 | — | **G5 (CRITICAL)** — `sales_challan_items` table is NOT in `04_sales.sql` DDL — created only | DDL drift | H1 | resolved | 33563e4 |
+| G-072 | G5 | CRITICAL | sales | sales/sales-invoice.md:398 | — | **G5 (CRITICAL)** — DDL `04_sales.sql` is stale: `is_blank_godown_printed`, `call_a_day`, | DDL drift | H1 | resolved | 33563e4 |
+| G-073 | G5 | CRITICAL | sales | sales/sales-overview.md:292 | — | **G5 (CRITICAL)** — DDL `04_sales.sql` is stale; many live columns/tables exist ONLY in | DDL drift | H1 | resolved | 33563e4 |
+| G-074 | G5 | CRITICAL | sales | sales/sales-return.md:321 | — | **G5 (CRITICAL)** — DDL `04_sales.sql` is stale: `cogs_amount`, `reason`, | DDL drift | H1 | resolved | 33563e4 |
 | G-075 | G1 | CRITICAL | workflows | workflows/approval-workflow.md:1090 | — | ### G1 — CRITICAL — Architectural inconsistency: generic engine used by 1 entity only | — | H1 | open | — |
 | G-076 | G1 | CRITICAL | workflows | workflows/notification-workflow.md:1185 | — | ### G1 — CRITICAL — DOUBLE DISPATCH on 4 events | — | H1 | open | — |
 | G-077 | G2 | CRITICAL | workflows | workflows/approval-workflow.md:1101 | — | ### G2 — CRITICAL — ManualJournalService::postJournal refuses 'approved' status | GL posting | H1 | open | — |

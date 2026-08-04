@@ -305,9 +305,13 @@ sibling docs:
    de2b6e6). Only `customer_payments` was previously hash-chain-audited; now all 14 sales+
    commission tables are. `customer_ledger` (accounting sector) remains a separate gap.
    Documented in `sales-audit.md`.
-5. **G5 (CRITICAL)** — DDL `04_sales.sql` is stale; many live columns/tables exist ONLY in
-   migrations (`sales_challan_items`, `is_blank_godown_printed`, `call_a_day`, `ordered_qty`,
-   `dispatched_qty`, `cogs_amount`, `reason`, `sales_invoice_item_id`, `damage_invoice_id`).
+5. **G5 (CRITICAL — RESOLVED)** — DDL `04_sales.sql` is now refreshed to match the live
+   schema (SALES-4, commit 33563e4). Previously many live columns/tables existed ONLY in
+   migrations (`sales_challan_items`, `is_blank_godown_printed`, `ordered_qty`,
+   `dispatched_qty`, `dispatched_ctn`, `cogs_amount`, `reason`, `sales_invoice_item_id`,
+   `damage_invoice_id`). All are now in the canonical DDL. NOTE: `call_a_day` and
+   `sales_invoices.created_by` were listed as drifted but were ALREADY in the DDL — those
+   two were not drifted (doc claim was inaccurate).
    Documented across the relevant sibling docs.
 6. **Commission G1+G2+G3 (CRITICAL — ALL RESOLVED)** — G1 (`postCommissionExpense` missing)
    + G3 (`commission_expense`/`commission_payable` natures not registered) resolved in commit
@@ -358,9 +362,9 @@ The full gap catalogues are in the sibling docs. Cross-cutting gaps (affecting m
    `SalesInvoice`, `SalesChallan`, `SalesReturn`, `Customer`, `CommissionRule`, `CommissionEntry`
    but never fires because the services use raw queries. CRITICAL — silent audit gap.
 3. **`fn_financial_audit_trigger` NOT attached to ANY sales/commission table** — only
-   `customer_payments` is covered. CRITICAL — forensic gap.
+   `customer_payments` is covered. CRITICAL — forensic gap. [RESOLVED in SALES-3, commit de2b6e6]
 4. **DDL `04_sales.sql` is stale** — 8+ columns and 1 table (`sales_challan_items`) exist only
-   in migrations. CRITICAL — schema documentation drift.
+   in migrations. CRITICAL — schema documentation drift. [RESOLVED in SALES-4, commit 33563e4]
 5. **`customer_ledger.transaction_type` has NO CHECK constraint** — free varchar. Typos silently
    corrupt the ledger. MAJOR.
 6. **API v1 routes have NO role middleware on invoice store/update/cancel and return

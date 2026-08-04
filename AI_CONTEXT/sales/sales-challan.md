@@ -338,8 +338,11 @@ return $this->journalPosting->createJournalEntry([
 2. **G4 (CRITICAL — RESOLVED)** — `fn_financial_audit_trigger` is now attached to
    `sales_challans` and `sales_challan_items` via migration `2026_09_01_000002` (SALES-3,
    commit de2b6e6). Both tables are now hash-chain-audited alongside `customer_payments`.
-3. **G5 (CRITICAL)** — `sales_challan_items` table is NOT in `04_sales.sql` DDL — created only
-   by migration `2025_01_08_000005`.
+3. **G5 (CRITICAL — RESOLVED)** — `sales_challan_items` table is now in `04_sales.sql`
+   DDL (SALES-4, commit 33563e4). Previously it was created only by migration
+   `2025_01_08_000005` and missing from the canonical DDL. The DDL now includes
+   the full CREATE TABLE (id, sales_challan_id FK CASCADE, product_id FK RESTRICT,
+   warehouse_id FK RESTRICT, qty, issue_rate, cogs_amount, created_at) + 3 indexes.
 4. **G6 (MAJOR)** — No `SalesChallanPolicy` class. RBAC via route middleware + RLS only.
 
    > ✅ RESOLVED in commit 1ccc5b6 — Policy class `App\Policies\SalesChallanPolicy` created + registered in `AppServiceProvider::boot()`. Mirrors existing `role:` middleware exactly (defense-in-depth — no behavior change). Methods: viewAny/view/listDispatchers/blankGodownForm/storeBlankGodown/godown/storeGodown/challanForm/issueChallan/create/cancel/delete/print/exportCsv. Splits `viewAny()` (index: `warehouse_manager,dispatcher,manager,admin`) from `view()` (show: `accountant,warehouse_manager,manager,admin`) to mirror the divergent route middleware exactly.
