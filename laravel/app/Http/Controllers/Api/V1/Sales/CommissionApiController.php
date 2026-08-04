@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api\V1\Sales;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\Api\V1\Sales\CommissionEntryResource;
+use App\Http\Resources\Api\V1\Sales\CommissionRuleResource;
 use App\Services\Sales\CommissionService;
 use App\Services\Sales\SalesAccess;
 use App\Models\CommissionRule;
@@ -65,7 +67,7 @@ class CommissionApiController extends Controller
             ->paginate($request->integer('per_page', 25));
 
         return response()->json([
-            'data' => $rules->map(fn($rule) => $this->formatRule($rule)),
+            'data' => CommissionRuleResource::collection($rules->items()),
             'meta' => [
                 'current_page' => $rules->currentPage(),
                 'last_page' => $rules->lastPage(),
@@ -87,7 +89,7 @@ class CommissionApiController extends Controller
         ])->findOrFail($id);
 
         return response()->json([
-            'data' => $this->formatRule($rule),
+            'data' => new CommissionRuleResource($rule),
         ]);
     }
 
@@ -121,7 +123,7 @@ class CommissionApiController extends Controller
         $rule = $this->commissionService->createRule($validated);
 
         return response()->json([
-            'data' => $this->formatRule($rule->load(['salesman', 'tiers', 'productGroups', 'targets'])),
+            'data' => new CommissionRuleResource($rule->load(['salesman', 'tiers', 'productGroups', 'targets'])),
             'message' => 'Commission rule created successfully',
         ], 201);
     }
@@ -181,7 +183,7 @@ class CommissionApiController extends Controller
             ->paginate($request->integer('per_page', 25));
 
         return response()->json([
-            'data' => $entries->map(fn($entry) => $this->formatEntry($entry)),
+            'data' => CommissionEntryResource::collection($entries->items()),
             'meta' => [
                 'current_page' => $entries->currentPage(),
                 'last_page' => $entries->lastPage(),
@@ -263,77 +265,4 @@ class CommissionApiController extends Controller
         ]);
     }
 
-    // ===================================================================
-    // FORMATTING HELPERS
-    // ===================================================================
-
-    private function formatRule(CommissionRule $rule): array
-    {
-        $data = [
-            'id' => $rule->id,
-            'salesman' => $rule->salesman ? [
-                'id' => $rule->salesman->id,
-                'name' => $rule->salesman->name,
-                'employee_code' => $rule->salesman->employee_code,
-            ] : null,
-            'rule_type' => $rule->rule_type,
-            'rate' => (float) $rule->rate,
-            'effective_from' => $rule->effective_from?->toDateString(),
-            'effective_to' => $rule->effective_to?->toDateString(),
-            'is_active' => $rule->is_active,
-            'is_currently_active' => $rule->isCurrentlyActive(),
-            'branch' => $rule->branch ? [
-                'id' => $rule->branch->id,
-                'name' => $rule->branch->branch_name,
-            ] : null,
-            'notes' => $rule->notes,
-        ];
-
-        if ($rule->relationLoaded('tiers') && $rule->tiers->isNotEmpty()) {
-            $data['tiers'] = $rule->tiers->map(fn($t) => [
-                'threshold' => (float) $t->threshold,
-                'rate' => (float) $t->rate,
-                'sort_order' => $t->sort_order,
-            ]);
-        }
-
-        if ($rule->relationLoaded('productGroups') && $rule->productGroups->isNotEmpty()) {
-            $data['product_groups'] = $rule->productGroups->map(fn($pg) => [
-                'product_group_id' => $pg->product_group_id,
-                'group_name' => $pg->productGroup?->group_name,
-                'rate' => (float) $pg->rate,
-            ]);
-        }
-
-        if ($rule->relationLoaded('targets') && $rule->targets->isNotEmpty()) {
-            $data['targets'] = $rule->targets->map(fn($t) => [
-                'target_amount' => (float) $t->target_amount,
-                'bonus_rate' => (float) $t->bonus_rate,
-                'period' => $t->period,
-            ]);
-        }
-
-        return $data;
-    }
-
-    private function formatEntry(CommissionEntry $entry): array
-    {
-        return [
-            'id' => $entry->id,
-            'salesman' => $entry->salesman ? [
-                'id' => $entry->salesman->id,
-                'name' => $entry->salesman->name,
-            ] : null,
-            'invoice_code' => $entry->salesInvoice?->invoice_code,
-            'commission_base' => (float) $entry->commission_base,
-            'commission_rate' => (float) $entry->commission_rate,
-            'commission_amount' => (float) $entry->commission_amount,
-            'status' => $entry->status,
-            'entry_date' => $entry->entry_date?->toDateString(),
-            'commission_period' => $entry->commission_period,
-            'is_reversal' => $entry->isReturnReversal(),
-            'notes' => $entry->notes,
-            'created_at' => $entry->created_at?->toIso8601String(),
-        ];
-    }
 }

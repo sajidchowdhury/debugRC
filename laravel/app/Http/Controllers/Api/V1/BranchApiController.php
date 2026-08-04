@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\Api\V1\Branch\BranchResource;
 use App\Models\Branch;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -49,7 +50,7 @@ class BranchApiController extends Controller
         $paginator = $query->orderBy('id', 'desc')->paginate($perPage);
 
         return response()->json([
-            'data' => $paginator->items(),
+            'data' => BranchResource::collection($paginator->items()),
             'meta' => [
                 'current_page' => $paginator->currentPage(),
                 'last_page'    => $paginator->lastPage(),
@@ -59,6 +60,10 @@ class BranchApiController extends Controller
                 'to'           => $paginator->lastItem(),
             ],
         ]);
+        // NOTE: index() previously returned raw Eloquent models via
+        // $paginator->items(), leaking internal audit columns (created_by,
+        // deleted_by, updated_at). Now standardized through BranchResource.
+        // The meta shape (incl. from/to) is intentionally preserved.
     }
 
     /**
@@ -72,7 +77,7 @@ class BranchApiController extends Controller
             return $this->notFound("Branch {$id} not found.");
         }
 
-        return response()->json(['data' => $branch]);
+        return response()->json(['data' => new BranchResource($branch)]);
     }
 
     /**
@@ -106,7 +111,7 @@ class BranchApiController extends Controller
             $branch = Branch::create($validated);
 
             return response()->json([
-                'data'    => $branch->fresh(),
+                'data'    => new BranchResource($branch->fresh()),
                 'message' => 'Branch created.',
             ], 201);
         } catch (\Throwable $e) {
@@ -153,7 +158,7 @@ class BranchApiController extends Controller
             $branch->update($validated);
 
             return response()->json([
-                'data'    => $branch->fresh(),
+                'data'    => new BranchResource($branch->fresh()),
                 'message' => 'Branch updated.',
             ]);
         } catch (\Throwable $e) {
