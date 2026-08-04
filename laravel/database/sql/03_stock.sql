@@ -712,14 +712,31 @@ CREATE TABLE daily_warehouse_stock_summary (
 );
 CREATE INDEX idx_dwss_date ON daily_warehouse_stock_summary(summary_date);
 
+-- FINANCE-1 (2026-09-01): refreshed to post-migration schema.
+-- Mirrors migrations 2026_07_29_000010 (branch_demands) + 2026_07_29_000011
+-- (branch_demand_items). The legacy schema (status CHECK with
+-- 'pending','approved','rejected','fulfilled','cancelled'; warehouse_id;
+-- fulfilled_qty; rate) is replaced by the live schema below. A fresh install
+-- (load 03_stock.sql + run idempotent migrations) produces the SAME schema as
+-- an upgraded install. The migrations remain as no-ops on fresh installs
+-- (ADD COLUMN IF NOT EXISTS / DROP COLUMN IF EXISTS guards).
 CREATE TABLE branch_demands (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     demand_code varchar(30) NOT NULL,
     demand_date date NOT NULL,
     from_branch_id integer NOT NULL REFERENCES branches(id),
     to_branch_id integer NOT NULL REFERENCES branches(id),
-    status varchar(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','fulfilled','cancelled')),
+    status varchar(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','received','rejected','reversed')),
     journal_entry_id integer REFERENCES journal_entries(id),
+    total_value numeric(12,2),
+    settlement_amount numeric(12,2) DEFAULT 0,
+    warehouse_transfer_id integer REFERENCES warehouse_transfers(id) ON DELETE SET NULL,
+    journal_entry_id_debtor integer REFERENCES journal_entries(id),
+    received_at timestamp(0),
+    received_by integer,
+    reversed_at timestamp(0),
+    reversed_by integer,
+    reverse_reason text,
     is_reversed boolean NOT NULL DEFAULT false,
     notes text,
     created_by integer,
@@ -728,15 +745,23 @@ CREATE TABLE branch_demands (
     CONSTRAINT branch_demands_code_unique UNIQUE (demand_code)
 );
 CREATE INDEX idx_bd_branches ON branch_demands(from_branch_id, to_branch_id);
+CREATE INDEX idx_bd_status ON branch_demands(status);
+CREATE INDEX idx_bd_warehouse_transfer ON branch_demands(warehouse_transfer_id);
 
 CREATE TABLE branch_demand_items (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     branch_demand_id integer NOT NULL REFERENCES branch_demands(id) ON DELETE CASCADE,
     product_id integer NOT NULL REFERENCES products(id),
-    warehouse_id integer REFERENCES warehouses(id),
+    from_warehouse_id integer REFERENCES warehouses(id),
+    to_warehouse_id integer REFERENCES warehouses(id),
     qty numeric(14,4) NOT NULL,
-    fulfilled_qty numeric(14,4) DEFAULT 0,
-    rate numeric(12,2) DEFAULT 0,
+    cost_rate numeric(12,4) DEFAULT 0,
+    price_min numeric(12,2) DEFAULT 0,
+    price_max numeric(12,2) DEFAULT 0,
+    price_default numeric(12,2) DEFAULT 0,
     notes text
 );
 CREATE INDEX idx_bdi_demand ON branch_demand_items(branch_demand_id);
+CREATE INDEX idx_bdi_product ON branch_demand_items(product_id);
+CREATE INDEX idx_bdi_from_warehouse ON branch_demand_items(from_warehouse_id);
+CREATE INDEX idx_bdi_to_warehouse ON branch_demand_items(to_warehouse_id);

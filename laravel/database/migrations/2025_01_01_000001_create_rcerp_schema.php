@@ -129,12 +129,20 @@ return new class extends Migration
         $this->executeSqlFile('05_purchase');
         $this->executeSqlFile('06_payment_and_misc');
         $this->executeSqlFile('07_views_triggers_constraints');
+        // FINANCE-1 (2026-09-01): consolidation + branch-demand DDL.
+        // Loaded after 07_* so all base tables + the fn_financial_audit_trigger
+        // function exist before these subsystem tables reference them.
+        $this->executeSqlFile('08_consolidation');
+        $this->executeSqlFile('09_branch_demand');
     }
 
     public function down(): void
     {
         // Drop in reverse dependency order.
         DB::statement('DROP VIEW IF EXISTS v_journal_entries_with_lines CASCADE');
+        // FINANCE-1 (2026-09-01): drop consolidation + branch-demand subsystem
+        // objects. MV must be dropped before its underlying tables.
+        DB::statement('DROP MATERIALIZED VIEW IF EXISTS mv_consolidated_trial_balance CASCADE');
 
         $tables = [
             'user_audit_log', 'login_rate_limits', 'investigation_activators',
@@ -149,6 +157,14 @@ return new class extends Migration
             'sales_draft_carts', 'sales_challans',
             'sales_invoice_dispatches', 'sales_invoice_dispatchers', 'sales_invoice_items',
             'sales_invoices',
+            // FINANCE-1: branch-demand child tables (depend on branch_demands) —
+            // dropped before branch_demands to satisfy FK CASCADE order.
+            'branch_demand_repricing',
+            'branch_demand_audit_log',
+            'branch_demand_customer_payment_settlements',
+            'branch_demand_money_transfer_settlements',
+            'shadow_demand_comparisons',
+            'shadow_cutover_log',
             'branch_demand_items', 'branch_demands',
             'daily_warehouse_stock_summary',
             'damage_invoice_items', 'damage_invoices',
@@ -166,11 +182,18 @@ return new class extends Migration
             'suppliers', 'customers',
             'product_price_history', 'product_groups', 'product_categories', 'products',
             'user_menu_permissions', 'menus', 'users', 'employees', 'branches',
+            // FINANCE-1: consolidation tables (depend on ledgers + branches + journal_entries)
+            'elimination_entries', 'elimination_rules', 'consolidation_runs', 'companies',
         ];
 
         foreach ($tables as $table) {
             DB::statement("DROP TABLE IF EXISTS {$table} CASCADE");
         }
+
+        // FINANCE-1: remove the columns added to branches + ledgers by 08_consolidation.sql.
+        // Done after the tables that reference them are dropped.
+        DB::statement('ALTER TABLE branches DROP COLUMN IF EXISTS company_id');
+        DB::statement('ALTER TABLE ledgers DROP COLUMN IF EXISTS is_elimination');
 
         // Drop trigger functions
         DB::statement("DROP FUNCTION IF EXISTS enforce_balanced_journal_entry() CASCADE");
