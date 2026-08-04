@@ -6,6 +6,7 @@ use App\Models\Branch;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Tests\Helpers\BuildsRoleUsers;
+use Tests\Helpers\IssuesApiTokens;
 use Tests\Helpers\InsertsBranchDependencies;
 use Tests\Helpers\InsertsBranchDemandDependencies;
 use Tests\Helpers\InsertsProductDependencies;
@@ -31,6 +32,7 @@ use Tests\TestCase;
 class BranchDemandApiTest extends TestCase
 {
     use BuildsRoleUsers;
+    use IssuesApiTokens;
     use InsertsBranchDependencies;
     use InsertsBranchDemandDependencies;
     use InsertsProductDependencies;
@@ -50,12 +52,12 @@ class BranchDemandApiTest extends TestCase
 
     public function test_list_demands_returns_paginated_json(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
         // Create a demand that involves this branch
         $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'pending');
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->getJson('/api/v1/branch-demands');
 
         $response->assertStatus(200);
@@ -67,12 +69,12 @@ class BranchDemandApiTest extends TestCase
 
     public function test_list_demands_with_status_filter(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
         $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'pending');
         $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'received');
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->getJson('/api/v1/branch-demands?status=pending');
 
         $response->assertStatus(200);
@@ -89,11 +91,11 @@ class BranchDemandApiTest extends TestCase
 
     public function test_show_demand_returns_detail_json(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
         $demandId = $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'pending');
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->getJson("/api/v1/branch-demands/{$demandId}");
 
         $response->assertStatus(200);
@@ -108,9 +110,9 @@ class BranchDemandApiTest extends TestCase
 
     public function test_show_nonexistent_demand_returns_404(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->getJson('/api/v1/branch-demands/999999');
 
         $response->assertStatus(404);
@@ -120,7 +122,7 @@ class BranchDemandApiTest extends TestCase
 
     public function test_create_demand_returns_201(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
         // Use Branch::factory() to avoid GENERATED ALWAYS identity column issue
         $toBranch = Branch::factory()->create();
@@ -137,7 +139,7 @@ class BranchDemandApiTest extends TestCase
             'updated_at' => now(),
         ]);
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->postJson('/api/v1/branch-demands', [
                 'to_branch_id' => $toBranchId,
                 'demand_date' => now()->toDateString(),
@@ -156,9 +158,9 @@ class BranchDemandApiTest extends TestCase
 
     public function test_create_demand_to_same_branch_returns_422(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->postJson('/api/v1/branch-demands', [
                 'to_branch_id' => $this->branchId,
                 'demand_date' => now()->toDateString(),
@@ -172,9 +174,9 @@ class BranchDemandApiTest extends TestCase
 
     public function test_create_demand_validation_errors(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->postJson('/api/v1/branch-demands', []);
 
         $response->assertStatus(422);
@@ -185,7 +187,7 @@ class BranchDemandApiTest extends TestCase
 
     public function test_reverse_demand_returns_success(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
         $demandId = $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'received');
 
@@ -196,7 +198,7 @@ class BranchDemandApiTest extends TestCase
             'received_by' => $this->adminUser->id,
         ]);
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->postJson("/api/v1/branch-demands/{$demandId}/reverse", [
                 'reason' => 'API test reversal reason',
             ]);
@@ -208,11 +210,11 @@ class BranchDemandApiTest extends TestCase
 
     public function test_reverse_demand_validation_requires_reason(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
         $demandId = $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'received');
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->postJson("/api/v1/branch-demands/{$demandId}/reverse", []);
 
         $response->assertStatus(422);
@@ -223,11 +225,11 @@ class BranchDemandApiTest extends TestCase
 
     public function test_reject_demand_returns_success(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
         $demandId = $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'pending');
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->postJson("/api/v1/branch-demands/{$demandId}/reject", [
                 'reason' => 'API test rejection reason',
             ]);
@@ -240,11 +242,11 @@ class BranchDemandApiTest extends TestCase
 
     public function test_delete_demand_returns_success(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
         $demandId = $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'pending');
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->deleteJson("/api/v1/branch-demands/{$demandId}");
 
         $response->assertStatus(200);
@@ -254,11 +256,11 @@ class BranchDemandApiTest extends TestCase
 
     public function test_reprice_demand_validation_requires_new_total_and_reason(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
         $demandId = $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'received');
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->postJson("/api/v1/branch-demands/{$demandId}/reprice", []);
 
         $response->assertStatus(422);
@@ -269,9 +271,9 @@ class BranchDemandApiTest extends TestCase
 
     public function test_outstanding_returns_json(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->getJson('/api/v1/branch-demands/outstanding');
 
         $response->assertStatus(200);
@@ -282,12 +284,12 @@ class BranchDemandApiTest extends TestCase
 
     public function test_warehouses_returns_branch_warehouses(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
         // Insert a warehouse for this branch
         $this->insertWarehouse($this->branchId);
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->getJson("/api/v1/branch-demands/warehouses/{$this->branchId}");
 
         $response->assertStatus(200);
@@ -298,7 +300,7 @@ class BranchDemandApiTest extends TestCase
 
     public function test_audit_returns_trail_json(): void
     {
-        $token = $this->adminUser->generateApiToken();
+        $token = $this->apiTokenForUser($this->adminUser);
 
         $demandId = $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'received');
 
@@ -306,7 +308,7 @@ class BranchDemandApiTest extends TestCase
         $this->insertBranchDemandAuditLog($demandId, 'create', $this->branchId);
         $this->insertBranchDemandAuditLog($demandId, 'send', $this->branchId);
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->getJson("/api/v1/branch-demands/{$demandId}/audit");
 
         $response->assertStatus(200);
@@ -318,9 +320,9 @@ class BranchDemandApiTest extends TestCase
     public function test_salesman_cannot_create_demand(): void
     {
         $salesman = $this->makeRoleUser('salesman');
-        $token = $salesman->generateApiToken();
+        $token = $this->apiTokenForUser($salesman);
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->postJson('/api/v1/branch-demands', [
                 'to_branch_id' => $this->branchId + 1,
                 'demand_date' => now()->toDateString(),
@@ -335,7 +337,7 @@ class BranchDemandApiTest extends TestCase
     public function test_warehouse_manager_can_create_demand(): void
     {
         $whManager = $this->makeRoleUser('warehouse_manager');
-        $token = $whManager->generateApiToken();
+        $token = $this->apiTokenForUser($whManager);
 
         // Use Branch::factory() to avoid GENERATED ALWAYS identity column issue
         $toBranch = Branch::factory()->create();
@@ -352,7 +354,7 @@ class BranchDemandApiTest extends TestCase
             'updated_at' => now(),
         ]);
 
-        $response = $this->withHeader('Authorization', "Bearer {$token}")
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->postJson('/api/v1/branch-demands', [
                 'to_branch_id' => $toBranchId,
                 'demand_date' => now()->toDateString(),

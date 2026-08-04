@@ -14,7 +14,7 @@ use Tests\TestCase;
  *
  * Covers:
  *   - GET /api/docs returns 200 + HTML.
- *   - The docs page lists all 14 /api/v1/* endpoints.
+ *   - The docs page lists all 23 documented /api/v1/* endpoint cards.
  *   - The docs page contains a Bearer-token input for the Try-It panel.
  *   - `php artisan api:token {username}` issues a working token.
  *   - `php artisan api:token {username}` fails with exit code 1 for unknown users.
@@ -74,8 +74,11 @@ class ApiDocTest extends TestCase
             );
         }
 
-        // The total count of 14 endpoints must be displayed in the heading.
-        $this->assertStringContainsString('Endpoints (14)', $body);
+        // The total count of endpoint cards must be displayed in the heading.
+        // G10 fix: was 'Endpoints (14)' (stale Phase 13 count). The ApiDocController
+        // renders {$count} = count($endpoints array) = 23 cards (Phase 8/9/10/Task 37
+        // added 9 more). Update when endpoints() catalogue changes.
+        $this->assertStringContainsString('Endpoints (23)', $body);
     }
 
     public function test_api_docs_page_has_bearer_token_input(): void

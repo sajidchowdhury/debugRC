@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Traits\AuditableMasterData;
@@ -47,7 +48,7 @@ use App\Models\Scopes\BranchScope;
  */
 class CommissionRule extends Model
 {
-    use SoftDeletes, AuditableMasterData;
+    use SoftDeletes, AuditableMasterData, HasFactory;
 
     protected $table = 'commission_rules';
 
