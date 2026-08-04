@@ -18,13 +18,13 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | Severity | Count | Blocks cutover? |
 |---|---|---|
-| CRITICAL | 75 | Yes — all of them |
+| CRITICAL | 76 | Yes — all of them |
 | HIGH | 95 | Most |
 | MEDIUM | 75 | Some |
 | LOW | 70 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **317** | |
-| _of which resolved_ | 40 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **318** | |
+| _of which resolved_ | 39 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -34,7 +34,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | architecture | 19 |
 | finance | 69 |
 | purchasing | 24 |
-| reports | 79 |
+| reports | 80 |
 | sales | 35 |
 | security | 14 |
 | workflows | 31 |
@@ -107,7 +107,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-041 | G1 | CRITICAL | reports | reports/csv-export.md:176 | routes/web.php:1650 | ⚠️ **Gap G1 (CRITICAL):** 6 export endpoints in the `admin/reports` group have NO `role:` | cutover, RLS audit | H1 | resolved | `b3a9fd7` |
 | G-042 | G1 | CRITICAL | reports | reports/cte-reports.md:109 | routes/web.php:405-408 | ⚠️ **Gap G1 (CRITICAL, cross-references `reports/reports-catalog.md` G1):** The 4 CTE routes | — | H1 | resolved | `b3a9fd7` |
 | G-043 | G1 | CRITICAL | reports | reports/dashboards.md:685 | routes/web.php:100-108 | **G1** \| **CRITICAL** (cross-ref `reports/reports-catalog.md` G1) \| `routes/web.php:100-108` — dashboard routes have only `auth` middlewar… | cutover, RLS audit | H1 | resolved | `b3a9fd7` |
-| G-044 | G1 | CRITICAL | reports | reports/materialized-views.md:733 | — | **G1** \| **CRITICAL** \| Grep `ALTER TABLE mv_` / `ENABLE ROW LEVEL SECURITY.*mv_` / `CREATE POLICY.*mv_` across `laravel/database/` → 0 ma… | cutover, RLS audit | H1 | resolved | 278a03d |
+| G-044 | G1 | CRITICAL | reports | reports/materialized-views.md:733 | — | **G1** \| **CRITICAL** \| Grep `ALTER TABLE mv_` / `ENABLE ROW LEVEL SECURITY.*mv_` / `CREATE POLICY.*mv_` across `laravel/database/` → 0 ma… | cutover, RLS audit | H1 | open | — |
 | G-045 | G1 | CRITICAL | reports | reports/reports-catalog.md:94 | routes/web.php:359-409 | ⚠️ **Gap G1 (CRITICAL):** The `admin/reports` route group at `routes/web.php:359-409` has **no | — | H1 | resolved | `b3a9fd7` |
 | G-046 | G2 | CRITICAL | reports | reports/csv-export.md:864 | routes/web.php:359-409 | **G2** \| **CRITICAL** \| `Dockerfile` (L1-40) — no `duckdb` binary installed. `ExportArchivedPartitionsToParquet::findDuckdb()` returns `nu… | partitioning ops | H1 | open | — |
 | G-047 | G2 | CRITICAL | reports | reports/materialized-views.md:734 | — | **G2** \| **CRITICAL** \| Grep `mv_ledger_balances \\| mv_ar_aging \\| mv_ap_aging \\| mv_stock_valuation \\| mv_journal_entry_summary \\| m… | GL posting | H1 | open | — |

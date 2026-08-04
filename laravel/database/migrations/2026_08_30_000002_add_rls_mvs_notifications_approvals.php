@@ -4,11 +4,10 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Security/RLS cluster remediation — Sub-problem C (Session 5).
+ * Security/RLS cluster remediation — Sub-problem C (Session 5, revised).
  *
- * Resolves 4 ISSUES_REGISTER rows in the Security/RLS cluster by adding
+ * Resolves 3 ISSUES_REGISTER rows in the Security/RLS cluster by adding
  * Row-Level-Security policies on:
- *   - 13 materialized views (G-044) — all currently unprotected
  *   - 3 notification tables (G-093 / G-179) — same gap, cross-referenced
  *   - 4 generic approval tables (G-188)
  *
@@ -25,42 +24,31 @@ use Illuminate\Support\Facades\DB;
  *     `current_setting('app.is_admin', true) = 'true' OR ({$condition})`.
  *   - Every CREATE POLICY is preceded by DROP POLICY IF EXISTS for idempotency.
  *
+ * --------------------------------------------------------------------
+ * IMPORTANT — Why G-044 (materialized views) is NOT in this migration
+ * --------------------------------------------------------------------
+ * The original version of this migration attempted to ENABLE + FORCE RLS on
+ * 13 materialized views (mv_ar_aging, mv_ap_aging, mv_stock_valuation, etc.)
+ * using `ALTER MATERIALIZED VIEW ... ENABLE ROW LEVEL SECURITY`. This FAILS
+ * at runtime with:
+ *
+ *   SQLSTATE[42809]: Wrong object type: 7 ERROR: ALTER action ENABLE ROW
+ *   SECURITY cannot be performed on relation "mv_ar_aging"
+ *   DETAIL: This operation is not supported for materialized views.
+ *
+ * PostgreSQL does NOT support Row Level Security on materialized views —
+ * RLS is only supported on tables (and views, but NOT materialized views).
+ * MVs store pre-materialized physical rows; RLS policies on the underlying
+ * tables do NOT propagate to MVs, and RLS cannot be enabled on the MV itself.
+ *
+ * G-044 remains OPEN. The correct fix for MV branch isolation is READ-SITE
+ * FILTERING: every report controller/service that reads an MV must explicitly
+ * filter `WHERE branch_id = ?` (the session branch_id) or join through a
+ * session-filtered table. This is a code-level audit + enforcement task, not
+ * a DB-level migration. See AI_CONTEXT/reports/materialized-views.md §G1 for
+ * the documented approach.
+ *
  * Gaps resolved:
- *
- *   G-044 (CRITICAL, reports) — NO RLS on 13 materialized views. MVs store
- *   pre-materialized physical rows, so RLS on the underlying tables does NOT
- *   propagate to MVs. Any authenticated DB user with SELECT sees ALL branches'
- *   data. Categorization (verified by reading each MV's source migration):
- *
- *     **Branch-scoped** (5 MVs with `branch_id`):
- *       1. mv_ar_aging            — branch_id from customer_ledger
- *       2. mv_ap_aging            — branch_id from supplier_ledger
- *       3. mv_stock_valuation     — branch_id from warehouse
- *       4. mv_journal_entry_summary — branch_id from journal_entries
- *       5. mv_product_movement_summary — branch_id from warehouse
- *       Policy: `branch_id = current_setting('app.branch_id')::int` + admin bypass.
- *
- *     **Cross-branch** (1 MV with from_branch_id + to_branch_id):
- *       6. mv_branch_intercompany — branch-pair due-from/due-to balances.
- *       Policy: `from_branch_id = app.branch_id::int OR to_branch_id = app.branch_id::int`
- *       + admin bypass (user sees pairs where they are EITHER the from or to branch).
- *
- *     **Admin-only** (7 MVs without branch_id — corporate / diagnostic):
- *       7.  mv_ledger_balances                — aggregates by ledger_id across ALL branches.
- *       8.  mv_consolidated_trial_balance     — corporate consolidation.
- *       9.  mv_customer_ledger_balance_check  — reconciliation diagnostic (customer_id).
- *       10. mv_supplier_ledger_balance_check  — reconciliation diagnostic (supplier_id).
- *       11. mv_employee_ledger_balance_check  — reconciliation diagnostic (employee_id).
- *       12. mv_cash_ledger_balance_check      — reconciliation diagnostic (cash_ledger).
- *       13. mv_product_abc_classification     — warehouse-level diagnostic.
- *       Policy: `false` condition + admin bypass folded in (admin-only).
- *
- *   IMPORTANT on FORCE RLS for MVs: REFRESH MATERIALIZED VIEW is an owner
- *   operation that is NOT subject to the target MV's RLS policies — so FORCE
- *   RLS does NOT block REFRESH. FORCE only makes the MV's SELECT subject to
- *   RLS even when the table owner reads it. This is the correct behavior:
- *   the app can REFRESH MVs (via the scheduler or `reports:refresh` artisan
- *   command) but can only SELECT rows matching the branch/admin policy.
  *
  *   G-093 (HIGH, architecture) + G-179 (HIGH, workflows) — same gap,
  *   cross-referenced. NO RLS on 3 notification tables:
@@ -127,93 +115,6 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // ============================================================
-        // === G-044: 13 materialized views ===
-        //
-        // MVs are read-only physical snapshots. RLS policies on the
-        // underlying tables do NOT propagate to MVs (MVs store pre-computed
-        // rows). ENABLE + FORCE RLS on each MV + SELECT-only policy
-        // (no INSERT/UPDATE/DELETE — MVs are populated by REFRESH, which is
-        // an owner operation not subject to target-MV RLS).
-        //
-        // 3 categories:
-        //   A) 5 branch-scoped MVs (branch_id column)
-        //   B) 1 cross-branch MV (from_branch_id + to_branch_id)
-        //   C) 7 admin-only MVs (no branch_id — corporate / diagnostic)
-        // ============================================================
-
-        // --- A) Branch-scoped MVs (5) ---
-        $branchScopedMvs = [
-            'mv_ar_aging',
-            'mv_ap_aging',
-            'mv_stock_valuation',
-            'mv_journal_entry_summary',
-            'mv_product_movement_summary',
-        ];
-        foreach ($branchScopedMvs as $mv) {
-            $this->enableMvRLS($mv);
-            $this->createMvSelectPolicy(
-                $mv,
-                "branch_id = current_setting('app.branch_id')::int"
-            );
-        }
-
-        // --- B) Cross-branch MV (1): mv_branch_intercompany ---
-        // Schema (2025_01_03_000001): from_branch_id + to_branch_id.
-        // User sees rows where they are EITHER the from or to branch.
-        $this->enableMvRLS('mv_branch_intercompany');
-        $this->createMvSelectPolicy(
-            'mv_branch_intercompany',
-            "from_branch_id = current_setting('app.branch_id')::int "
-            . "OR to_branch_id = current_setting('app.branch_id')::int"
-        );
-
-        // --- C) Admin-only MVs (7) ---
-        // Corporate / diagnostic MVs without a branch_id column.
-        // Admin-only SELECT policy (condition = false + admin bypass folded in).
-        // Verified by reading each MV's source migration:
-        //   - mv_ledger_balances (2025_01_03_000001:30-51): aggregates by ledger_id
-        //     across ALL branches (no branch_id in SELECT or GROUP BY).
-        //   - mv_consolidated_trial_balance (2026_08_11_000001:465-499):
-        //     corporate consolidation across ALL branches.
-        //   - mv_customer_ledger_balance_check (2025_01_20_000006:75-98):
-        //     reconciliation diagnostic by customer_id.
-        //   - mv_supplier_ledger_balance_check (2025_01_20_000006:109-132):
-        //     reconciliation diagnostic by supplier_id.
-        //   - mv_employee_ledger_balance_check (2025_01_20_000006:143-166):
-        //     reconciliation diagnostic by employee_id.
-        //   - mv_cash_ledger_balance_check (2025_01_20_000006:185-206):
-        //     reconciliation diagnostic by branch_id — WAIT: this MV HAS
-        //     branch_id (from cash_ledger), so it is branch-scoped, NOT
-        //     admin-only. Moved to branch-scoped list above. (Discovery:
-        //     task spec said "verify it has no branch_id" — verification
-        //     found it DOES have branch_id. Recategorized.)
-        //   - mv_product_abc_classification (2025_07_29_000001:140-):
-        //     warehouse-level diagnostic (warehouse_id, no branch_id).
-        $adminOnlyMvs = [
-            'mv_ledger_balances',
-            'mv_consolidated_trial_balance',
-            'mv_customer_ledger_balance_check',
-            'mv_supplier_ledger_balance_check',
-            'mv_employee_ledger_balance_check',
-            'mv_product_abc_classification',
-        ];
-        foreach ($adminOnlyMvs as $mv) {
-            $this->enableMvRLS($mv);
-            $this->createMvSelectPolicy($mv, 'false');
-        }
-
-        // DISCOVERY: mv_cash_ledger_balance_check HAS branch_id (from
-        // cash_ledger, per 2025_01_20_000006:185-206). The task spec asked
-        // to verify and treat as admin-only if no branch_id — but the MV
-        // DOES have branch_id. So branch-scoped policy applies. (Listed
-        // separately from the $branchScopedMvs loop above for traceability.)
-        $this->enableMvRLS('mv_cash_ledger_balance_check');
-        $this->createMvSelectPolicy(
-            'mv_cash_ledger_balance_check',
-            "branch_id = current_setting('app.branch_id')::int"
-        );
-
         // ============================================================
         // === G-093 / G-179: 3 notification tables ===
         //
@@ -329,39 +230,11 @@ return new class extends Migration
      * Revert the migration.
      *
      * Drops all RLS policies created by up() and DISABLEs RLS on every
-     * table / MV. Does NOT re-create any prior state — none of these
-     * tables/MVs had RLS before this migration (they were the gap).
-     *
-     * For MVs, ALTER MATERIALIZED VIEW accepts ENABLE / FORCE / DISABLE
-     * ROW LEVEL SECURITY the same way ALTER TABLE does (MVs are table-like
-     * for RLS purposes).
+     * table. Does NOT re-create any prior state — none of these tables
+     * had RLS before this migration (they were the gap).
      */
     public function down(): void
     {
-        // === G-044: 13 materialized views ===
-        $mvs = [
-            // Branch-scoped (5)
-            'mv_ar_aging',
-            'mv_ap_aging',
-            'mv_stock_valuation',
-            'mv_journal_entry_summary',
-            'mv_product_movement_summary',
-            // Cross-branch (1)
-            'mv_branch_intercompany',
-            // Admin-only (6) + the discovery case (mv_cash_ledger_balance_check
-            // is branch-scoped, but it's dropped here alongside its siblings).
-            'mv_ledger_balances',
-            'mv_consolidated_trial_balance',
-            'mv_customer_ledger_balance_check',
-            'mv_supplier_ledger_balance_check',
-            'mv_employee_ledger_balance_check',
-            'mv_cash_ledger_balance_check',
-            'mv_product_abc_classification',
-        ];
-        foreach ($mvs as $mv) {
-            $this->dropAllMvRlsPolicies($mv);
-        }
-
         // === G-093 / G-179: 3 notification tables ===
         $notifTables = ['notifications', 'notification_rules', 'notification_rule_recipients'];
         foreach ($notifTables as $table) {
@@ -489,62 +362,6 @@ return new class extends Migration
             DB::statement("ALTER TABLE {$table} NO FORCE ROW LEVEL SECURITY");
         } catch (\Throwable $e) {
             // Table may not exist or policy may not exist — ignore.
-        }
-    }
-
-    // ============================================================
-    // MV-specific helpers
-    // ============================================================
-
-    /**
-     * Enable RLS on a materialized view and force it even for the owner.
-     *
-     * ALTER MATERIALIZED VIEW accepts ENABLE / FORCE ROW LEVEL SECURITY
-     * the same way ALTER TABLE does (MVs are table-like for RLS purposes).
-     *
-     * IMPORTANT: REFRESH MATERIALIZED VIEW is an owner operation and is NOT
-     * subject to the target MV's RLS policies. So FORCE RLS does NOT block
-     * REFRESH — only blocks SELECT on the MV by the owner. This is the
-     * correct behavior: the app can REFRESH MVs but can only SELECT rows
-     * matching the branch/admin policy.
-     */
-    private function enableMvRLS(string $mv): void
-    {
-        DB::statement("ALTER MATERIALIZED VIEW {$mv} ENABLE ROW LEVEL SECURITY");
-        DB::statement("ALTER MATERIALIZED VIEW {$mv} FORCE ROW LEVEL SECURITY");
-    }
-
-    /**
-     * Create SELECT-only policy on a materialized view.
-     *
-     * MVs are read-only physical snapshots — no INSERT/UPDATE/DELETE
-     * policies (REFRESH MATERIALIZED VIEW is an owner operation not subject
-     * to target-MV RLS). Only SELECT needs a policy.
-     *
-     * Admin bypass is folded into the condition the same way as table policies.
-     */
-    private function createMvSelectPolicy(string $mv, string $condition): void
-    {
-        DB::statement("DROP POLICY IF EXISTS rls_{$mv}_select ON {$mv}");
-        DB::statement(
-            "CREATE POLICY rls_{$mv}_select ON {$mv}
-             FOR SELECT
-             USING (current_setting('app.is_admin', true) = 'true' OR ({$condition}))"
-        );
-    }
-
-    /**
-     * Drop the SELECT policy on a materialized view and DISABLE + NO FORCE
-     * RLS. Used by down() for clean revert.
-     */
-    private function dropAllMvRlsPolicies(string $mv): void
-    {
-        try {
-            DB::statement("DROP POLICY IF EXISTS rls_{$mv}_select ON {$mv}");
-            DB::statement("ALTER MATERIALIZED VIEW {$mv} DISABLE ROW LEVEL SECURITY");
-            DB::statement("ALTER MATERIALIZED VIEW {$mv} NO FORCE ROW LEVEL SECURITY");
-        } catch (\Throwable $e) {
-            // MV may not exist or policy may not exist — ignore.
         }
     }
 };

@@ -732,7 +732,41 @@ sequenceDiagram
 |---|---|---|---|---|
 | **G1** | **CRITICAL** | Grep `ALTER TABLE mv_` / `ENABLE ROW LEVEL SECURITY.*mv_` / `CREATE POLICY.*mv_` across `laravel/database/` → 0 matches. All 13 MVs are unprotected. | `mv_stock_valuation`, `mv_ar_aging`, `mv_ap_aging`, `mv_branch_intercompany`, `mv_product_movement_summary`, etc. all expose data from ALL branches to ANY authenticated user with SELECT permission. RLS on the underlying tables is bypassed because MVs are pre-materialized physical rows — RLS policies on `warehouse_stock` do not propagate to `mv_stock_valuation`. | Either (a) enable RLS + create per-branch policies on every MV (`CREATE POLICY ... ON mv_stock_valuation FOR SELECT USING (branch_id = current_setting('app.branch_id')::int)`), OR (b) require every read site to filter `WHERE branch_id = ?` explicitly. |
 
-> ✅ RESOLVED in commit 278a03d (G-044) — RLS migration `2026_08_30_000002_add_rls_mvs_notifications_approvals.php` (G-044 section) adds `ENABLE ROW LEVEL SECURITY` + `FORCE ROW LEVEL SECURITY` + SELECT-only policies on all 13 materialized views. Categorization (verified by reading each MV's source migration): (A) **5 branch-scoped MVs** with `branch_id` column (`mv_ar_aging`, `mv_ap_aging`, `mv_stock_valuation`, `mv_journal_entry_summary`, `mv_product_movement_summary`) — policy `branch_id = current_setting('app.branch_id')::int` + admin bypass; (B) **1 cross-branch MV** (`mv_branch_intercompany`, has `from_branch_id` + `to_branch_id`) — policy `from_branch_id = app.branch_id::int OR to_branch_id = app.branch_id::int` + admin bypass; (C) **7 admin-only MVs** without `branch_id` (corporate / diagnostic: `mv_ledger_balances`, `mv_consolidated_trial_balance`, `mv_customer_ledger_balance_check`, `mv_supplier_ledger_balance_check`, `mv_employee_ledger_balance_check`, `mv_product_abc_classification`, and the discovery case `mv_cash_ledger_balance_check` — wait, that one DOES have branch_id from `cash_ledger`; see below). DISCOVERY: `mv_cash_ledger_balance_check` (per `2025_01_20_000006:185-206`) HAS `branch_id` from `cash_ledger` (PARTITION BY branch_id) — task spec said "verify it has no branch_id"; verification found it DOES, so it is branch-scoped, NOT admin-only. Final tally: 6 branch-scoped + 1 cross-branch + 6 admin-only = 13. **FORCE RLS is critical for MVs**: without it the table owner (Laravel DB user) bypasses RLS, same bug as G-347. REFRESH MATERIALIZED VIEW is an owner operation not subject to target-MV RLS — so FORCE does NOT block REFRESH (the app can still refresh MVs via scheduler / `reports:refresh`), only blocks SELECT by the owner. NO INSERT/UPDATE/DELETE policies (MVs are read-only). Mirrors the canonical `add_rls_branch_isolation` pattern (GUC `app.branch_id` + `app.is_admin`, DROP IF EXISTS for idempotency).
+> ⚠️ REOPENED — G-044 remains OPEN. The original fix attempt (commit `278a03d`, Session 5) tried to
+> add `ENABLE ROW LEVEL SECURITY` + `FORCE ROW LEVEL SECURITY` on the 13 MVs via
+> `ALTER MATERIALIZED VIEW ... ENABLE ROW LEVEL SECURITY`. This FAILS at runtime:
+>
+> ```
+> SQLSTATE[42809]: Wrong object type: 7 ERROR: ALTER action ENABLE ROW SECURITY
+> cannot be performed on relation "mv_ar_aging"
+> DETAIL: This operation is not supported for materialized views.
+> ```
+>
+> **PostgreSQL does NOT support Row Level Security on materialized views.** RLS is only supported on
+> tables (and regular views, but NOT materialized views). MVs store pre-materialized physical rows;
+> RLS policies on the underlying tables do NOT propagate to MVs, and RLS cannot be enabled on the MV
+> itself. The fix attempt was reverted — the migration `2026_08_30_000002` was rewritten to remove all
+> MV-related RLS code (keeping only the notification + approval table RLS, which works correctly on
+> regular tables).
+>
+> **Correct fix approach (option (b) from the Recommended fix column):** READ-SITE FILTERING. Every
+> report controller/service that reads an MV must explicitly filter `WHERE branch_id = ?` (the session
+> branch_id) or join through a session-filtered table. This is a code-level audit + enforcement task:
+>   1. Audit every `ReportService` method + report controller that reads an MV (`mv_ar_aging`,
+>      `mv_ap_aging`, `mv_stock_valuation`, `mv_journal_entry_summary`, `mv_product_movement_summary`,
+>      `mv_branch_intercompany`, `mv_cash_ledger_balance_check` — the 7 MVs with branch_id columns).
+>   2. For each read site, add an explicit `->where('branch_id', $sessionBranchId)` (or
+>      `->where('from_branch_id', $sessionBranchId)->orWhere('to_branch_id', $sessionBranchId)` for
+>      `mv_branch_intercompany`).
+>   3. For the 6 corporate/diagnostic MVs without branch_id (`mv_ledger_balances`,
+>      `mv_consolidated_trial_balance`, `mv_customer_ledger_balance_check`, `mv_supplier_ledger_balance_check`,
+>      `mv_employee_ledger_balance_check`, `mv_product_abc_classification`): restrict to admin-only at the
+>      controller level (`role:admin` middleware or `$user->isAdmin()` check).
+>   4. Add a test that verifies a non-admin user in Branch A cannot see Branch B's data via any MV-reading
+>      report endpoint.
+>
+> This is a code-level task (controller/service audit + filtering), not a DB-level migration. Tracked
+> as a separate follow-up cluster (Reports/Read-site-filtering).
 
 | **G2** | **CRITICAL** | Grep `mv_ledger_balances \| mv_ar_aging \| mv_ap_aging \| mv_stock_valuation \| mv_journal_entry_summary \| mv_branch_intercompany \| mv_product_movement_summary \| refresh_all_report_views` across `laravel/database/sql/*.sql` → 0 matches. Only `mv_product_abc_classification` is in `03_stock.sql:587-629`. | Fresh environments initialized from the SQL baseline (`01_*..07_*.sql`) lack ALL 12 other MVs. `php artisan migrate` would create them, but the SQL baseline is supposed to be the canonical schema reference. Any DBA who reads `database/sql/` to understand the schema will miss 12 MVs. | Regenerate `database/sql/*.sql` baseline from a migrated DB. At minimum, add a `08_materialized_views.sql` file with all 13 MV definitions + indexes + the `refresh_all_report_views()` function. |
 | **G3** | **CRITICAL** | `ConsolidationService::refreshMaterializedViews():781-807` is the ONLY refresh path for `mv_consolidated_trial_balance` — and it's `private`, called only after consolidation run posts (ad-hoc). Grep `Schedule::command` + pg_cron jobs for `mv_consolidated_trial_balance` → 0 matches. | If consolidation hasn't been run in N days, `mv_consolidated_trial_balance` reflects stale data from the last `ConsolidationService::refreshMaterializedViews()` call. Consolidated reports read from it without knowing how stale it is. No `computed_at` column to detect staleness. | Add `REFRESH MATERIALIZED VIEW CONCURRENTLY mv_consolidated_trial_balance` to `refresh_all_report_views()`. OR add a separate pg_cron job (e.g. hourly). |
