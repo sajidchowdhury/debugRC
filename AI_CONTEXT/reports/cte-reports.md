@@ -110,7 +110,7 @@ Cite ReportController method map:
 at `routes/web.php:405-408` are inside the `admin/reports` prefix group which has **no
 `role:` middleware**. Any authenticated user can hit them.
 
-> ✅ RESOLVED in commit bce8389 — Added `role:accountant,manager,admin` middleware to the `admin/reports` prefix group at `routes/web.php:359`, which transitively gates all 4 CTE routes (todaySummaryCte, arAgingCte, generalLedgerCte, grossMarginCte). Sub-problem A (Session 1, Security/RLS cluster).
+> ✅ RESOLVED in commit b3a9fd7 — Added `role:accountant,manager,admin` middleware to the `admin/reports` prefix group at `routes/web.php:359`, which transitively gates all 4 CTE routes (todaySummaryCte, arAgingCte, generalLedgerCte, grossMarginCte). Sub-problem A (Session 1, Security/RLS cluster).
 
 ---
 

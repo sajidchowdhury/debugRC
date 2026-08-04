@@ -177,7 +177,7 @@ export.
 middleware — any authenticated user can download Trial Balance, Cash Flow, Stocktake Variance,
 Stocktake Weekly, and Damage Report CSVs. Financial data exfiltration risk.
 
-> ✅ RESOLVED in commit bce8389 — Added `role:accountant,manager,admin` middleware to the `admin/reports` prefix group at `routes/web.php:359`, which transitively gates all 5 export endpoints (stocktakeVarianceExport L393, stocktakeWeeklyExport L396, damageReportExport L402, trialBalance L361, cashFlow L364) and the 4 CTE routes. Sub-problem A (Session 1, Security/RLS cluster).
+> ✅ RESOLVED in commit b3a9fd7 — Added `role:accountant,manager,admin` middleware to the `admin/reports` prefix group at `routes/web.php:359`, which transitively gates all 5 export endpoints (stocktakeVarianceExport L393, stocktakeWeeklyExport L396, damageReportExport L402, trialBalance L361, cashFlow L364) and the 4 CTE routes. Sub-problem A (Session 1, Security/RLS cluster).
 
 ### 4.2 Other actors
 

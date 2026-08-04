@@ -192,7 +192,7 @@ sequenceDiagram
 role-section visibility is enforced in PHP via `resolveRoleSections()` (L2089-2148), not at
 the route level.
 
-> ✅ RESOLVED in commit bce8389 — Added `role:admin,manager,accountant,salesman,warehouse_manager,dispatcher,hr,user,other` middleware to the 3 dashboard routes (`/dashboard`, `/dashboard/sales-trend`, `/dashboard/fragment`) at `routes/web.php:100-108`. Permissive list (all 10 canonical roles pass) — closes the defense-in-depth gap while preserving the dashboard's "every authed user sees their own dashboard" design. Sub-problem A (Session 1, Security/RLS cluster).
+> ✅ RESOLVED in commit b3a9fd7 — Added `role:admin,manager,accountant,salesman,warehouse_manager,dispatcher,hr,user,other` middleware to the 3 dashboard routes (`/dashboard`, `/dashboard/sales-trend`, `/dashboard/fragment`) at `routes/web.php:100-108`. Permissive list (all 10 canonical roles pass) — closes the defense-in-depth gap while preserving the dashboard's "every authed user sees their own dashboard" design. Sub-problem A (Session 1, Security/RLS cluster).
 
 ⚠️ **Gap G10:** `resolveRoleSections` default for unknown roles (`'hr'`, `'other'`, default)
 is permissive (L2140-2143): turns on sales+collections+operational+accuracy. Any new role

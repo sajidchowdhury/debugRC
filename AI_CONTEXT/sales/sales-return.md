@@ -324,7 +324,7 @@ return $this->journalPosting->createJournalEntry([
 4. **G13 (MAJOR)** — API v1 routes have NO role middleware on return store/confirm/reverse —
    only `api.auth` (token). Any authenticated API user can create/confirm/reverse returns.
 
-   > ✅ RESOLVED in commit bce8389 — Added `api.auth:<roles>` gate to the 3 return write endpoints at `routes/api.php:208,210,213`, mirroring the web RBAC: store → `api.auth:salesman,manager,admin` (web L1557); confirm → `api.auth:warehouse_manager,accountant,manager,admin` (web L1518); reverse → `api.auth:accountant,manager,admin` (web L1522). Superadmin passes via `ApiAuth`'s superadmin bypass. Sub-problem A (Session 1, Security/RLS cluster).
+   > ✅ RESOLVED in commit b3a9fd7 — Added `api.auth:<roles>` gate to the 3 return write endpoints at `routes/api.php:208,210,213`, mirroring the web RBAC: store → `api.auth:salesman,manager,admin` (web L1557); confirm → `api.auth:warehouse_manager,accountant,manager,admin` (web L1518); reverse → `api.auth:accountant,manager,admin` (web L1522). Superadmin passes via `ApiAuth`'s superadmin bypass. Sub-problem A (Session 1, Security/RLS cluster).
 5. **G16 (MAJOR)** — `sales_returns` has NO `confirmed_at` / `confirmed_by` columns. The
    confirmer's identity is recoverable only via `user_audit_log`. The `printSlip` controller
    method explicitly works around this by querying `user_audit_log` for `action='return_confirmed'`.
