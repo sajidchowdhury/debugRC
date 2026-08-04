@@ -1,4 +1,4 @@
-# Notification Workflow — Event → Rule → Recipient → Fan-out (Phase 15)
+# Notification Workflow — Event → Rule → Recipient → Fan-out (Phase 15, enhanced Phase 20)
 
 > **Module:** Workflows / Notification System
 > **Audience:** Engineers, AI assistants, accountants, auditors, compliance officers, admins
@@ -10,7 +10,7 @@
 > is only partially production-ready — admins receive duplicate notifications while
 > context-aware recipients (warehouse manager of branch, salesman of invoice) receive only the
 > direct-call copy, and sales-return confirm/reverse fire spurious "return created" toasts.
-> **Last reviewed:** Phase 15 (initial creation)
+> **Last reviewed:** Phase 20 (cross-cutting enhancement appended §18)
 > **Source of truth:** This file is the canonical reference for the rule-based notification
 > system. The implementation lives in:
 > - `laravel/app/Services/Notification/NotificationService.php` (262L — the dispatcher crown jewel),
@@ -1624,6 +1624,274 @@ GROUP BY r.event;
 
 ---
 
+## 18. Cross-Cutting ERP Workflow Event Map (Phase 20 enhancement)
+
+This section stitches the notification system into the four other end-to-end workflows
+defined in Phase 20. It is the **canonical lookup** for "which notifications fire at which
+step of which workflow, and who receives them". For the rule-engine mechanics (event →
+rule → recipient resolution → fan-out), see §1–17 above.
+
+### 18.1 Notification touchpoints per Phase 20 workflow
+
+The table below lists every notification event fired by each end-to-end workflow, with
+the dispatch call site, the rule that catches it, and the resolved recipient types.
+
+| Workflow | Step | Event | Call site | Rule (seeder) | Recipient types resolved |
+|---|---|---|---|---|---|
+| **Procure-to-Pay** | PO create | (none — PO is non-posting; no event fired) | — | — | — |
+| Procure-to-Pay | PO approve | (none — PO approval is internal) | — | — | — |
+| Procure-to-Pay | GRN create (draft) | (none — draft state) | — | — | — |
+| Procure-to-Pay | GRN confirm | `purchase_receive_confirmed` | `PurchaseReceiveService::confirm()` | seeder row | `admin`, `warehouse_manager_of_branch`, `purchase_manager_of_branch` |
+| Procure-to-Pay | GRN cancel (reversal) | `purchase_receive_cancelled` | `PurchaseReceiveService::cancel()` | seeder row | `admin`, `warehouse_manager_of_branch` |
+| Procure-to-Pay | Return confirm | `purchase_return_confirmed` | `PurchaseReturnService::confirm()` | seeder row | `admin`, `warehouse_manager_of_branch`, `purchase_manager_of_branch` |
+| Procure-to-Pay | Supplier payment confirm | `supplier_payment_confirmed` | `SupplierTransactionService::confirm()` | seeder row | `admin`, `accountant`, `purchase_manager_of_branch` |
+| Procure-to-Pay | Supplier payment cancel | `supplier_payment_cancelled` | `SupplierTransactionService::cancel()` | seeder row | `admin`, `accountant` |
+| **Order-to-Cash** | Cart create | (none — cart is non-posting) | — | — | — |
+| Order-to-Cash | Cart expired (cron) | (none — silent expiry) | — | — | — |
+| Order-to-Cash | Invoice create (draft) | (none — draft state) | — | — | — |
+| Order-to-Cash | Invoice finalize | `sales_finalize` | `SalesInvoiceService.php:335` | seeder row | `admin`, `warehouse_manager_of_branch`, `salesman_of_invoice`, `sales_manager_of_branch` |
+| Order-to-Cash | Invoice cancel | `sales_invoice_cancelled` | `SalesInvoiceService::cancel()` | seeder row | `admin`, `salesman_of_invoice`, `sales_manager_of_branch` |
+| Order-to-Cash | Challan confirm | `challan_create` | `SalesChallanService.php:524` | seeder row | `admin`, `warehouse_manager_of_branch`, `salesman_of_invoice` |
+| Order-to-Cash | Customer payment confirm | `payment_receive` | `CustomerPaymentService.php:219` | seeder row | `admin`, `accountant`, `salesman_of_invoice`, `sales_manager_of_branch` |
+| Order-to-Cash | Customer payment cancel | `customer_payment_cancelled` | `CustomerPaymentService::cancel()` | seeder row | `admin`, `accountant`, `salesman_of_invoice` |
+| Order-to-Cash | Return create (draft) | `return_created` | `SalesReturnService.php:145` | seeder row | `admin`, `salesman_of_invoice`, `sales_manager_of_branch` |
+| Order-to-Cash | Return confirm | `return_confirmed` | `SalesReturnService.php:260` | seeder row | `admin`, `accountant`, `salesman_of_invoice` |
+| Order-to-Cash | Return reverse (cancel) | `return_reversed` | `SalesReturnService.php:385` | seeder row | `admin`, `accountant`, `salesman_of_invoice` |
+| **Inventory-to-GL** | Stock adjustment submitted | `stock_adjustment_submitted` | `StockAdjustmentService::submit()` | seeder row | `admin`, `warehouse_manager_of_branch` |
+| Inventory-to-GL | Stock adjustment approved | `stock_adjustment_approved` | `StockAdjustmentService::approve()` | seeder row | `admin`, `submitter` (context: `created_by`) |
+| Inventory-to-GL | Stock adjustment confirmed | `stock_adjustment_confirmed` | `StockAdjustmentService::confirm()` | seeder row | `admin`, `warehouse_manager_of_branch`, `accountant` |
+| Inventory-to-GL | Stock take submitted | `stock_take_submitted` | `StockTakeService::submit()` | seeder row | `admin`, `warehouse_manager_of_branch` |
+| Inventory-to-GL | Stock take approved | `stock_take_approved` | `StockTakeService::approve()` | seeder row | `admin`, `submitter` |
+| Inventory-to-GL | Stock take confirmed (gain/loss posted) | `stock_take_confirmed` | `StockTakeService::confirm()` | seeder row | `admin`, `warehouse_manager_of_branch`, `accountant` |
+| Inventory-to-GL | Damage submitted | `damage_invoice_submitted` (G4 — functionally dead, NOT in EVENTS) | `DamageService::submit()` | — | — |
+| Inventory-to-GL | Damage approved | `damage_invoice_approved` (G4 — functionally dead) | `DamageService::approve()` | — | — |
+| Inventory-to-GL | Damage confirmed | `damage_invoice_confirmed` | `DamageService::confirm()` | seeder row | `admin`, `warehouse_manager_of_branch`, `accountant` |
+| Inventory-to-GL | Damage employee recovery | `damage_employee_recovery` | `DamageService::postEmployeeRecovery()` | seeder row | `admin`, `employee` (context: `recovery_employee_id`), `hr_manager` |
+| Inventory-to-GL | Warehouse transfer confirm (same-branch) | (none — no GL post; silent) | — | — | — |
+| Inventory-to-GL | Warehouse transfer confirm (cross-branch) | `warehouse_transfer_confirmed` | `WarehouseTransferService::confirm()` | seeder row | `admin`, `warehouse_manager_of_branch` (both branches via context) |
+| Inventory-to-GL | Branch demand created | `branch_demand_created` (seeder exists but call site MISSING — see [`../finance/branch-demand.md`](../finance/branch-demand.md)) | (none) | seeder row | (intended: `admin`, `requester_branch_manager`, `supplier_branch_manager`) |
+| Inventory-to-GL | Branch demand fulfilled | `branch_demand_fulfilled` | `BranchIntercompanyService::fulfill()` | seeder row | `admin`, `requester_branch_manager`, `supplier_branch_manager` |
+| **Period Close** | Period closed (month-end) | `period_closed` | `AccountingPeriodService::closePeriod()` | seeder row | `admin`, `accountant`, `branch_manager` |
+| Period Close | Period reopened (admin) | `period_reopened` | `AccountingPeriodService::reopenPeriod()` | seeder row | `admin`, `accountant`, `branch_manager`, `auditor` |
+| Period Close | Year-end close | `year_end_closed` | `AccountingPeriodService::yearEndClose()` | seeder row | `admin`, `accountant`, `auditor`, `compliance_officer` |
+| Period Close | Override-post into closed period | `period_override_posted` (logged via `user_audit_log`, NOT via NotificationService — see §18.3) | `JournalPostingService::createJournalEntry()` (admin override path) | — | (audit log only, no notification) |
+
+> **Note on G1/G2/G3:** The double-dispatch (G1), wrong-event-on-update (G2), and
+> worker-forward-missing-context (G3) gaps documented in §1.1 above apply to the four
+> `sales_finalize` / `challan_create` / `payment_receive` / `return_created` events. Until
+> the G1–G3 remediation lands, admins receive duplicate toasts for these four events while
+> context-aware recipients (`salesman_of_invoice`, `warehouse_manager_of_branch`) receive
+> only the direct-call copy. See §13 for the recommended fix.
+
+### 18.2 The event × workflow × recipient-type matrix (canonical)
+
+This is the single matrix an AI assistant should consult to answer "who gets notified when
+X happens in workflow Y".
+
+```mermaid
+flowchart LR
+    subgraph P2P["Procure-to-Pay"]
+        grn["GRN confirm<br/>purchase_receive_confirmed"]
+        grnc["GRN cancel<br/>purchase_receive_cancelled"]
+        ret["Return confirm<br/>purchase_return_confirmed"]
+        pay["Supplier payment confirm<br/>supplier_payment_confirmed"]
+        payc["Supplier payment cancel<br/>supplier_payment_cancelled"]
+    end
+    subgraph O2C["Order-to-Cash"]
+        inv["Invoice finalize<br/>sales_finalize"]
+        invc["Invoice cancel<br/>sales_invoice_cancelled"]
+        chl["Challan confirm<br/>challan_create"]
+        cpay["Customer payment<br/>payment_receive"]
+        cpayc["Customer payment cancel<br/>customer_payment_cancelled"]
+        rcre["Return create<br/>return_created"]
+        rcon["Return confirm<br/>return_confirmed"]
+        rrev["Return reverse<br/>return_reversed"]
+    end
+    subgraph INV["Inventory-to-GL"]
+        sas["Stock adj submitted<br/>stock_adjustment_submitted"]
+        sac["Stock adj confirmed<br/>stock_adjustment_confirmed"]
+        sts["Stock take submitted<br/>stock_take_submitted"]
+        stc["Stock take confirmed<br/>stock_take_confirmed"]
+        dcon["Damage confirmed<br/>damage_invoice_confirmed"]
+        drec["Damage recovery<br/>damage_employee_recovery"]
+        wtc["Warehouse transfer<br/>warehouse_transfer_confirmed"]
+        bdf["Branch demand fulfilled<br/>branch_demand_fulfilled"]
+    end
+    subgraph PC["Period Close"]
+        pcc["Period closed<br/>period_closed"]
+        pcr["Period reopened<br/>period_reopened"]
+        yec["Year-end closed<br/>year_end_closed"]
+    end
+    subgraph R["Recipients"]
+        admin["admin"]
+        acc["accountant"]
+        wm["warehouse_manager_of_branch"]
+        sm["salesman_of_invoice"]
+        smg["sales_manager_of_branch"]
+        pmg["purchase_manager_of_branch"]
+        aud["auditor"]
+        co["compliance_officer"]
+        emp["employee (recovery)"]
+        bm["branch_manager"]
+    end
+
+    grn --> admin
+    grn --> wm
+    grn --> pmg
+    ret --> admin
+    ret --> wm
+    pay --> admin
+    pay --> acc
+    pay --> pmg
+
+    inv --> admin
+    inv --> wm
+    inv --> sm
+    inv --> smg
+    chl --> admin
+    chl --> wm
+    chl --> sm
+    cpay --> admin
+    cpay --> acc
+    cpay --> sm
+    cpay --> smg
+    rcon --> admin
+    rcon --> acc
+    rcon --> sm
+
+    sac --> admin
+    sac --> wm
+    sac --> acc
+    stc --> admin
+    stc --> wm
+    stc --> acc
+    dcon --> admin
+    dcon --> wm
+    dcon --> acc
+    drec --> admin
+    drec --> emp
+    wtc --> admin
+    wtc --> wm
+    bdf --> admin
+    bdf --> bm
+
+    pcc --> admin
+    pcc --> acc
+    pcc --> bm
+    yec --> admin
+    yec --> acc
+    yec --> aud
+    yec --> co
+```
+
+### 18.3 Period-close override: audit log, not notification
+
+The `period_override_posted` event is the ONE case where the system does NOT dispatch a
+notification. When a superadmin posts into a closed period (with
+`PERIOD_CLOSE_ADMIN_OVERRIDE=true`), the post is logged to `user_audit_log` (append-only,
+RLS-protected) — NOT to the notification rules engine. This is deliberate:
+
+- Notifications are for "something happened that you should know about". Override-posts
+  are rare, sensitive, and should be reviewed by an auditor reading the audit log — not
+  broadcast to admins (who may be the ones doing the override).
+- The audit log row carries the actor, posting_date, branch_id, and reason — sufficient
+  for an audit trail without a notification.
+
+If a future requirement demands a notification for override-posts, the
+`user_audit_log` INSERT trigger could be extended to call
+`NotificationService::dispatch('period_override_posted', ...)`. Out of current scope.
+
+### 18.4 Notification fan-out sequence (cross-cutting view)
+
+The sequence below shows how a single business event (e.g. `sales_finalize`) fans out
+across the notification pipeline AND the realtime SSE pipeline, touching multiple
+recipients across multiple roles. It is the cross-cutting view that complements
+[`./order-to-cash.md`](./order-to-cash.md) §11.1.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as SalesInvoiceService
+    participant NS as NotificationService
+    participant DB as PostgreSQL
+    participant NRules as notification_rules (with recipients)
+    participant ERP as ERPNotification (Laravel)
+    participant LNS as ListenNotifyService
+    participant W as ListenNotifyWorker
+    participant R as Redis
+    participant SSE as SseController
+    participant B as Browser (per user)
+    actor Admin
+    actor WM as Warehouse Manager
+    actor SM as Salesman
+
+    Note over S,B: STAGE — Invoice finalize fires sales_finalize
+    S->>NS: dispatch('sales_finalize', body, 'sales_invoice', $id, $context)
+    NS->>DB: SELECT notification_rules WHERE event='sales_finalize' AND active
+    DB-->>NS: 1 rule (with 4 recipient-type pivots)
+    NS->>NS: resolveRecipients(['admin','warehouse_manager_of_branch','salesman_of_invoice','sales_manager_of_branch'], $context)
+    NS->>DB: SELECT users WHERE role='admin' OR (role='warehouse_manager' AND branch_id=$context.branch_id) OR id=$context.salesman_id OR (role='sales_manager' AND branch_id=$context.branch_id)
+    DB-->>NS: [admin1, admin2, wm_of_branch, salesman, sm_of_branch] (de-duped)
+    loop each recipient (5 users)
+        NS->>ERP: send($user, ERPNotification($event, $body, $ref))
+        ERP->>DB: INSERT notifications (type=ERPNotification, notifiable_id=user.id, data={event, body, ref})
+    end
+    NS->>DB: UPDATE notification_rules SET times_fired = times_fired + 1
+    NS->>LNS: emitNotify('rcerp_notification_dispatched', {event, recipient_ids})
+    LNS->>DB: SELECT pg_notify('rcerp_notification_dispatched', ...)
+
+    Note over W,B: Realtime fan-out (parallel)
+    W->>DB: LISTEN rcerp_notification_dispatched
+    DB-->>W: notification payload
+    W->>R: LPUSH sse:user:{id} {event, body, ref}  (for each recipient_id)
+    loop each connected SSE client
+        SSE->>R: BRPOP sse:user:{id} 0
+        R-->>SSE: notification payload
+        SSE->>B: data: {event, body, ref, ts}
+        B->>B: renderToast()
+    end
+    Note over Admin,SM: All 5 recipients see the live toast (within ~1s)
+```
+
+> **G1 caveat:** Until the G1 remediation lands, the worker ALSO forwards the
+> `rcerp_sales_invoice` DB trigger event to `NotificationService::dispatch('sales_finalize', ...)`
+> via the `CHANNEL_EVENT_MAP`. This produces a SECOND dispatch pass that re-resolves the
+> `admin` recipient type and re-sends to admins only (because the worker-forwarded call
+> omits `$context`, the context-aware recipient types resolve empty on the second pass).
+> Result: admins see TWO toasts; context-aware recipients see ONE. See §1.1 + §13 G1.
+
+### 18.5 Notification-volume estimation per workflow
+
+Based on the historical migration corpus (see
+[`../database/etl-legacy-migration.md`](../database/etl-legacy-migration.md)) and assuming
+the G1–G3 gaps are FIXED (single-dispatch):
+
+| Workflow | Events / year (est.) | Recipients / event (avg) | Notifications / year (est.) |
+|---|---|---|---|
+| Procure-to-Pay | ~311 GRN + ~50 returns + ~550 payments = ~911 | 3 | ~2,733 |
+| Order-to-Cash | ~521 invoices + ~521 challans + ~550 payments + ~25 returns × 3 events = ~2,142 | 4 | ~8,568 |
+| Inventory-to-GL | ~120 adjustments + ~24 stock takes + ~60 damage + ~50 transfers + ~12 demands = ~266 | 3 | ~798 |
+| Period Close | ~48 month-close + ~1 year-end + ~5 reopens = ~54 | 4 | ~216 |
+| **Total** | ~3,373 events | — | ~12,315 notifications/year |
+
+These estimates feed the `purge-old-notifications` pg_cron job (daily 03:00), which
+purges notifications older than the retention threshold (default 90 days, configurable
+via `system_policies.metadata.notification_retention_days`).
+
+### 18.6 Cross-references to Phase 20 sibling workflows
+
+| Sibling workflow | What this section links to |
+|---|---|
+| [`./procure-to-pay.md`](./procure-to-pay.md) | §18.1 — 6 P2P events catalogued (GRN confirm/cancel, return, supplier payment confirm/cancel) |
+| [`./order-to-cash.md`](./order-to-cash.md) | §18.1 — 8 O2C events catalogued (invoice finalize/cancel, challan, payment confirm/cancel, return create/confirm/reverse) |
+| [`./inventory-to-gl.md`](./inventory-to-gl.md) | §18.1 — 11 inventory events catalogued (stock adjustment submit/approve/confirm, stock take submit/approve/confirm, damage confirm/recovery, warehouse transfer, branch demand) |
+| [`./period-close-workflow.md`](./period-close-workflow.md) | §18.1 + §18.3 — 3 period-close events catalogued + override-post audit-log (no notification) explanation |
+| [`../architecture/realtime-events.md`](../architecture/realtime-events.md) | §18.4 — the realtime fan-out pipeline (LISTEN/NOTIFY → worker → Redis → SSE) |
+| [`../deployment/cron-scheduled-jobs.md`](../deployment/cron-scheduled-jobs.md) | §18.5 — `purge-old-notifications` daily 03:00 |
+
+---
+
 *This is the canonical reference for the rule-based notification system. For the realtime
 transport (LISTEN/NOTIFY → worker → Redis → SSE → browser), see
-[`../architecture/realtime-events.md`](../architecture/realtime-events.md).*
+[`../architecture/realtime-events.md`](../architecture/realtime-events.md). For the
+cross-cutting event map (which workflow fires which event), see §18 above.*
