@@ -397,9 +397,11 @@ return $this->journalPosting->createJournalEntry([...], $lines);
    > array (product_id + qty + rate per line; condition_state constrained to the DDL CHECK
    > `'Good'`/`'Damage'`) plus the header fields the service reads (`invoice_date`,
    > `credit_limit_override`, `override_reason`, `dispatcher_ids`). Mobile invoice edit works.
-2. **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_invoices` /
-   `sales_invoice_items` / `sales_invoice_dispatches` / `sales_invoice_dispatchers`. Only
-   `customer_payments` of the sales ecosystem is hash-chain-audited.
+2. **G4 (CRITICAL — RESOLVED)** — `fn_financial_audit_trigger` is now attached to
+   `sales_invoices` (partitioned — PG 12+ auto-inherits to monthly partitions),
+   `sales_invoice_items`, `sales_invoice_dispatches`, and `sales_invoice_dispatchers`
+   via migration `2026_09_01_000002` (SALES-3, commit de2b6e6). All 4 tables are now
+   hash-chain-audited alongside `customer_payments`.
 3. **G5 (CRITICAL)** — DDL `04_sales.sql` is stale: `is_blank_godown_printed`, `call_a_day`,
    `ordered_qty`, `dispatched_qty`, `dispatched_ctn`, `created_by` exist only in migrations.
 4. **G8 (MAJOR)** — `sales_invoice_items.condition_state` column exists but is NEVER used at the

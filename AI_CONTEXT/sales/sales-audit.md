@@ -24,12 +24,13 @@ financial tables via the `fn_financial_audit_trigger()` PostgreSQL function. Eac
 SHA-256 `row_hash` chained to the previous row's `prev_hash`, producing a tamper-evident ledger.
 UPDATE and DELETE are REVOKE'd at the DB level.
 
-**Coverage of the sales ecosystem: PARTIAL.** Of the 10 tables to which the trigger is
-attached (`02_accounting.sql:446-455`), only **`customer_payments`** is sales-related. The 9
-core sales tables — `sales_invoices`, `sales_invoice_items`, `sales_invoice_dispatchers`,
-`sales_invoice_dispatches`, `sales_challans`, `sales_challan_items`, `sales_draft_carts`,
-`sales_returns`, `sales_return_items` — plus `customer_ledger` and the 5 commission tables have
-**NO** `trg_audit_*` attachment (gap G4 CRITICAL).
+**Coverage of the sales ecosystem: FULL (as of SALES-3).** The
+`fn_financial_audit_trigger()` is now attached to `customer_payments` (from
+`02_accounting.sql:446-455`) PLUS all 9 core sales tables + 5 commission tables
+(14 tables, attached by migration `2026_09_01_000002` — SALES-3, commit
+de2b6e6). The trigger fires on every INSERT/UPDATE/DELETE and writes a
+hash-chained row to `financial_audit_log`. UPDATE and DELETE on
+`financial_audit_log` are REVOKE'd at the DB level.
 
 ### Layer 2 — User-action log (`user_audit_log` via `SalesAuditLogger` + `UserAuditLogger`)
 
@@ -50,7 +51,9 @@ The `AuditableMasterData` trait is `use`d on `Customer`, `SalesInvoice`, `SalesC
 **Coverage: FULL but with a critical gap.** `SalesAuditLogger::log()` always fires (the service
 methods call it explicitly). However, the `AuditableMasterData` trait is **bypassed** because
 the services use `DB::table(…)->insertGetId(…)` and `DB::table(…)->where(…)->update(…)` (raw
-queries) instead of Eloquent (gap G4 CRITICAL — same pattern as purchasing).
+queries) instead of Eloquent (gap #11 in §11 — `master_data_*` rows are NEVER written through
+the canonical service path). NOTE: this is a SEPARATE concern from the DB-trigger G4 (now
+resolved); the trait gap is about the Eloquent-event audit trail, not the hash-chain.
 
 ### Layer 3 — Per-module audit-log views
 
@@ -104,9 +107,9 @@ scheduled job, no alerting on FAIL items (gap G5 MAJOR — compare to `PurchaseA
   (debit + credit rows from invoice/payment/return) against the GL `ar` control account. Any
   drift is surfaced via the `ledger` section of the checklist.
 - **On forensic investigation.** The `financial_audit_log` hash-chain verification (via the
-  `v_financial_audit_chain_verification` view) detects tampering of `customer_payments` rows.
-  The 9 core sales tables are NOT covered (gap G4) — a separate `user_audit_log` query is
-  required.
+  `v_financial_audit_chain_verification` view) detects tampering of any of the 14 sales+
+  commission tables + `customer_payments` (trigger attached in SALES-3, commit de2b6e6).
+  `customer_ledger` is NOT yet covered (accounting sector, separate gap).
 - **On auditor request.** External auditors are given read-only access to the per-module audit
   views + the checklist dashboard. There is no separate "auditor" role — auditors use the
   `accountant` role.
@@ -131,10 +134,12 @@ entries).
 - `sales-overview.md`, `sales-invoice.md`, `sales-challan.md`, `sales-cart.md`,
   `sales-return.md`, `commission.md`, `transport-cost.md` — the audited entities. Each
   documents its own state-machine and audit-log emission.
-- `../accounting/financial-audit-log.md` — the hash-chain mechanism. NOTE the partial-coverage
-  gap (G4 — only `customer_payments` of the sales ecosystem is covered).
+- `../accounting/financial-audit-log.md` — the hash-chain mechanism. Coverage now FULL for
+  the sales ecosystem (trigger attached to 14 sales+commission tables in SALES-3, commit
+  de2b6e6). `customer_ledger` (accounting) remains a separate gap.
 - `../security/audit-trails.md` — `UserAuditLogger` + `AuditableMasterData` trait. NOTE the
-  bypass gap (G4 — trait bypassed by `DB::table()` writes in the sales services).
+  trait-bypass gap (#11 in §11 — `master_data_*` rows not written for `DB::table()` writes).
+  This is a SEPARATE concern from the DB-trigger G4 (now resolved).
 - `../accounting/subledger-reconciliation.md` §reconcileAR — depends on `customer_ledger` rows
   written by invoice/payment/return services.
 - `../accounting/fiscal-year-period-close.md` — the period-close gate.
@@ -155,11 +160,15 @@ entries).
   is NOT a scheduled job.
 - **MUST** branch-scope the audit-log reads. Non-admins see only their branch's audit entries
   (filtered by `branch_id` on `user_audit_log`).
-- **MUST NOT** rely on `AuditableMasterData` trait alone (gap G4 — bypassed by `DB::table`
-  writes). The `master_data_*` rows are NEVER written for sales mutations through the canonical
-  service path.
+- **MUST NOT** rely on `AuditableMasterData` trait alone (gap #11 in §11 — bypassed by
+  `DB::table` writes). The `master_data_*` rows are NEVER written for sales mutations through
+  the canonical service path. (The DB-trigger audit via `fn_financial_audit_trigger` IS now
+  attached — SALES-3 — so direct DB mutations ARE hash-chain-audited regardless of whether
+  the trait fires.)
 - **MUST NOT** assume `financial_audit_log` covers sales tables (gap G4 — only
-  `customer_payments` is covered).
+  `customer_payments` is covered). [RESOLVED in SALES-3, commit de2b6e6 — trigger now
+  attached to all 9 sales tables + 5 commission tables. Kept as a historical note; the
+  assumption is now SAFE.]
 - **MUST** keep `user_audit_log` partitioned by month. Old partitions can be archived to cold
   storage.
 - **MUST NOT** allow UPDATE or DELETE on `financial_audit_log` (REVOKE'd at DB level; the
@@ -215,29 +224,39 @@ entries).
 - `REVOKE UPDATE, DELETE ON financial_audit_log FROM PUBLIC;` — even superusers cannot mutate.
 - `v_financial_audit_chain_verification` view — recomputes the hash chain and flags any break.
 
-### Trigger attachments (`02_accounting.sql:446-455`)
+### Trigger attachments
 
-The trigger `trg_audit_<table>` is attached to these 10 tables:
+The trigger `trg_audit_<table>` is attached to these 24 tables:
 
-| Table | Sales ecosystem? |
-|---|---|
-| `journal_entries` | shared (covers all GL postings) |
-| `journal_lines` | shared (covers all GL postings) |
-| `manual_journals` | accounting |
-| `manual_journal_lines` | accounting |
-| `customer_payments` | **YES** — sales ecosystem |
-| `supplier_payments` | purchasing |
-| `money_transfers` | accounting |
-| `other_incomes` | accounting |
-| `other_expenses` | accounting |
-| `employee_transactions` | accounting |
+| Table | Sales ecosystem? | Attached by |
+|---|---|---|
+| `journal_entries` | shared (covers all GL postings) | `02_accounting.sql:446` |
+| `journal_lines` | shared (covers all GL postings) | `02_accounting.sql:447` |
+| `manual_journals` | accounting | `02_accounting.sql:448` |
+| `manual_journal_lines` | accounting | `02_accounting.sql:449` |
+| `customer_payments` | **YES** — sales ecosystem | `02_accounting.sql:450` |
+| `supplier_payments` | purchasing | `02_accounting.sql:451` |
+| `money_transfers` | accounting | `02_accounting.sql:452` |
+| `other_incomes` | accounting | `02_accounting.sql:453` |
+| `other_expenses` | accounting | `02_accounting.sql:454` |
+| `employee_transactions` | accounting | `02_accounting.sql:455` |
+| `sales_invoices` | **YES** — sales (partitioned, auto-inherits to partitions) | SALES-3 (de2b6e6) |
+| `sales_invoice_items` | **YES** — sales | SALES-3 (de2b6e6) |
+| `sales_invoice_dispatchers` | **YES** — sales | SALES-3 (de2b6e6) |
+| `sales_invoice_dispatches` | **YES** — sales | SALES-3 (de2b6e6) |
+| `sales_challans` | **YES** — sales | SALES-3 (de2b6e6) |
+| `sales_challan_items` | **YES** — sales | SALES-3 (de2b6e6) |
+| `sales_draft_carts` | **YES** — sales | SALES-3 (de2b6e6) |
+| `sales_returns` | **YES** — sales | SALES-3 (de2b6e6) |
+| `sales_return_items` | **YES** — sales | SALES-3 (de2b6e6) |
+| `commission_rules` | **YES** — sales (commission) | SALES-3 (de2b6e6) |
+| `commission_rule_tiers` | **YES** — sales (commission) | SALES-3 (de2b6e6) |
+| `commission_rule_product_groups` | **YES** — sales (commission) | SALES-3 (de2b6e6) |
+| `commission_rule_targets` | **YES** — sales (commission) | SALES-3 (de2b6e6) |
+| `commission_entries` | **YES** — sales (commission) | SALES-3 (de2b6e6) |
 
-**NOT attached** (gap G4 CRITICAL): `sales_invoices`, `sales_invoice_items`,
-`sales_invoice_dispatchers`, `sales_invoice_dispatches`, `sales_challans`, `sales_challan_items`,
-`sales_draft_carts`, `sales_returns`, `sales_return_items`, `customer_ledger`,
-`commission_rules`, `commission_rule_tiers`, `commission_rule_product_groups`,
-`commission_rule_targets`, `commission_entries`. Direct DB mutations to these tables are NOT
-hash-chain-audited.
+**Still NOT attached** (separate gaps, not sales-G4): `customer_ledger` (accounting sector).
+Direct DB mutations to `customer_ledger` are NOT hash-chain-audited.
 
 ### `SalesAuditLogger` event methods (442 lines)
 
@@ -307,20 +326,22 @@ Render admin.reports.sales_audit_checklist with 3 pass/warn/fail badges
 |---|---|---|
 | `SalesAuditLogger::log()` (17 event methods) | outbound | Called by every Sales service method; writes to DB + file |
 | `UserAuditLogger::log(userId, action, targetUserId, details)` | outbound | Dual-write to `user_audit_log` DB + `logs/user_audit.log` file |
-| `AuditableMasterData` trait | outbound | Hooks Eloquent events on 7 models (BYPASSED — gap G4) |
+| `AuditableMasterData` trait | outbound | Hooks Eloquent events on 7 models (BYPASSED — gap #11 in §11, NOT G4) |
 | `ReportController::computeSalesAuditChecks(from, to)` | outbound | 3-section invariant checker |
 | `SalesInvoiceController::auditTrail(Request)` | outbound | `admin.sales-audit.index` view (reads `user_audit_log`) |
 | `ReconciliationService::reconcileAR` | inbound | Consumes `customer_ledger` rows; output feeds the checklist's `ledger` section |
-| `v_financial_audit_chain_verification` view | outbound | Forensic hash-chain check (covers `customer_payments` only — gap G4) |
+| `v_financial_audit_chain_verification` view | outbound | Forensic hash-chain check (covers 14 sales+commission tables + `customer_payments` — SALES-3) |
 | `EnforceBranchIsolation::logBranchOverrideIfCrossBranch` | outbound | Logs admin cross-branch operations as `branch_override` action |
 | `logs/user_audit.log` file | outbound | Defense-in-depth file copy of every `user_audit_log` row |
 
 ## 10. Edge cases
 
 - **Direct SQL mutation** (e.g. a DBA running `UPDATE sales_invoices SET total_amount = ...`).
-  Bypasses both `SalesAuditLogger` (no service method called) AND `AuditableMasterData` (no
-  Eloquent event) AND `fn_financial_audit_trigger` (no trigger attached — gap G4). The mutation
-  is invisible to all three audit layers. This is the worst case for forensic investigation.
+  Bypasses `SalesAuditLogger` (no service method called) AND `AuditableMasterData` (no Eloquent
+  event). BUT — as of SALES-3 (commit de2b6e6) — `fn_financial_audit_trigger` IS now attached
+  to all 14 sales+commission tables, so the mutation IS captured in `financial_audit_log` with
+  a hash-chained `before_data`/`after_data` snapshot. The forensic trail is intact. (Previously
+  gap G4 — invisible to all three audit layers; now only invisible to layers 2 + the trait.)
 - **Cancel inside a `DB::transaction` that later rolls back.** `SalesAuditLogger::log()` runs
   inside the transaction. If the transaction rolls back, the audit-log row is also rolled back
   (the mutation did not happen, so the audit entry should not exist either). This is correct.
@@ -340,17 +361,32 @@ Render admin.reports.sales_audit_checklist with 3 pass/warn/fail badges
   `SalesAuditLogger::recentSalesEvents` (which includes them) for a complete view.
 - **Commission events.** `commission_rule_created`, `commission_calculated`,
   `commission_reversed_on_return`, `commission_reversed_on_payment_reversal`,
-  `commission_period_confirmed` are emitted by `CommissionService` BUT currently NEVER fire
-  because the methods are dead code (gap G2 in `commission.md`).
+  `commission_period_confirmed` are emitted by `CommissionService` and NOW fire (gap G2
+  resolved in SALES-2, commit 2f686c0 — the auto-calc pipeline is wired).
 - **Stale-draft cleanup.** `stale_drafts_cancelled` event (bulk action) — emitted by the
   `CancelStaleSalesDrafts` command nightly.
 - **Call-it-a-day.** `sale_call_a_day` event captures the bulk invoice_ids + updated_count.
 
 ## 11. Gaps
 
-1. **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to ANY of the 9 sales tables +
-   `customer_ledger` + 5 commission tables. Only `customer_payments` of the sales ecosystem is
-   hash-chain-audited. Direct DB mutations to these tables bypass the forensic hash chain.
+1. **G4 (CRITICAL — RESOLVED)** — `fn_financial_audit_trigger` is now attached to ALL 9 sales
+   tables + 5 commission tables (14 total) via migration `2026_09_01_000002` (SALES-3, commit
+   de2b6e6). Only `customer_payments` of the sales ecosystem was previously hash-chain-audited;
+   now all 14 sales+commission tables are. Direct DB mutations to these tables are captured in
+   `financial_audit_log` with hash-chained before/after snapshots.
+   > ✅ RESOLVED in SALES-3 (commit de2b6e6) — migration
+   > `2026_09_01_000002_attach_financial_audit_trigger_to_sales_tables.php` attaches
+   > `trg_audit_<table>` to 9 core sales tables (`sales_invoices`, `sales_invoice_items`,
+   > `sales_invoice_dispatchers`, `sales_invoice_dispatches`, `sales_challans`,
+   > `sales_challan_items`, `sales_draft_carts`, `sales_returns`, `sales_return_items`) + 5
+   > commission tables (`commission_rules`, `commission_rule_tiers`,
+   > `commission_rule_product_groups`, `commission_rule_targets`, `commission_entries`).
+   > `sales_invoices` is partitioned — PG 12+ auto-inherits the trigger to all existing +
+   > future monthly partitions. Idempotent (DROP TRIGGER IF EXISTS before CREATE). up()
+   > verifies the function exists before attaching.
+   >
+   > `customer_ledger` (accounting sector) is NOT covered by SALES-3 — it's a separate gap
+   > in the finance/accounting sector, not the sales cluster.
 2. **G5 (MAJOR)** — Sales audit checklist has only **3 sections** vs `PurchaseAuditService`'s
    12. Missing sections: missing COGS journals on challans, missing return journals, missing
    customer_ledger links, commission reconciliation, transport adjustment integrity, RLS bypass
@@ -394,11 +430,15 @@ Render admin.reports.sales_audit_checklist with 3 pass/warn/fail badges
       Document the gap (G5) vs `PurchaseAuditService`'s 12 sections.
 - [ ] Branch isolation is enforced on audit-log reads (non-admins see only their branch's
       entries — verify the `branch_id` filter in `SalesInvoiceController::auditTrail`).
-- [ ] Gap G4 (no `fn_financial_audit_trigger` on sales tables) is documented as a known
-      limitation. Confirm whether attaching the trigger is feasible (performance impact must be
-      tested — the trigger fires on every write).
-- [ ] Gap G4 (`AuditableMasterData` bypass) is documented. Confirm the audit team is aware that
-      `master_data_*` rows are NOT written for sales mutations through the service path.
+- [x] Gap G4 (no `fn_financial_audit_trigger` on sales tables) — RESOLVED in SALES-3
+      (commit de2b6e6). Trigger now attached to all 9 sales tables + 5 commission tables.
+      Performance impact: same per-write hash-chain lookup as the existing 10 audited tables
+      (BRIN-indexed). Monitor write-latency on highest-frequency tables
+      (`sales_draft_carts`, `sales_invoice_items`); if needed, a future migration can move
+      those to an async audit queue.
+- [ ] Gap #11 (`AuditableMasterData` bypass) is documented. Confirm the audit team is aware
+      that `master_data_*` rows are NOT written for sales mutations through the service path.
+      (This is a SEPARATE concern from the DB-trigger G4, now resolved.)
 - [ ] Gap G9 (cart events omitted from `auditTrail` web view) is documented.
 - [ ] The `v_financial_audit_chain_verification` view is run on a schedule (DBA responsibility)
       to detect tampering of `customer_payments` rows. Confirm the schedule.

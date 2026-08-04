@@ -298,10 +298,12 @@ sibling docs:
    > ✅ RESOLVED in commit 3f35e77 (SALES-1) — removed the nonexistent `'challan_completed'` from
    > all 5 `whereNotIn` arrays (behavior-preserving). See `sales-challan.md` §G3.
 
-   > Note: the Commission cluster G1+G2+G3 (item 6 below) is partially resolved — G1 (postCommissionExpense)
-   > + G3 (ledger natures) closed in 3f35e77; G2 (dead-code wiring) deferred to SALES-2.
-4. **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to ANY of the 9 sales tables +
-   `customer_ledger`. Only `customer_payments` of the sales ecosystem is hash-chain-audited.
+   > Note: the Commission cluster G1+G2+G3 (item 6 below) is FULLY resolved — G1+G3 in
+   > 3f35e77 (SALES-1), G2 in 2f686c0 (SALES-2).
+4. **G4 (CRITICAL — RESOLVED)** — `fn_financial_audit_trigger` is now attached to ALL 9 sales
+   tables + 5 commission tables (14 total) via migration `2026_09_01_000002` (SALES-3, commit
+   de2b6e6). Only `customer_payments` was previously hash-chain-audited; now all 14 sales+
+   commission tables are. `customer_ledger` (accounting sector) remains a separate gap.
    Documented in `sales-audit.md`.
 5. **G5 (CRITICAL)** — DDL `04_sales.sql` is stale; many live columns/tables exist ONLY in
    migrations (`sales_challan_items`, `is_blank_godown_printed`, `call_a_day`, `ordered_qty`,

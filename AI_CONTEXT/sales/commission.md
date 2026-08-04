@@ -373,9 +373,18 @@ stateDiagram-v2
    > ✅ RESOLVED in commit 3f35e77 (SALES-1) — registered `commission_expense` (Expense, debit) +
    > `commission_payable` (Liability, credit) in `LedgerNatureService::EXTENDED_NATURES`. With G1
    > also fixed, `postCommissionExpense` now resolves both ledgers and posts the balanced JE.
-4. **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `commission_rules` /
-   `commission_entries` / `commission_rule_tiers` / `commission_rule_product_groups` /
-   `commission_rule_targets`.
+4. **G4 (CRITICAL — RESOLVED)** — `fn_financial_audit_trigger` is now attached to all 5
+   commission tables (`commission_rules`, `commission_entries`, `commission_rule_tiers`,
+   `commission_rule_product_groups`, `commission_rule_targets`) via migration
+   `2026_09_01_000002` (SALES-3, commit de2b6e6).
+
+   > ✅ RESOLVED in SALES-3 (commit de2b6e6) — migration
+   > `2026_09_01_000002_attach_financial_audit_trigger_to_sales_tables.php` attaches
+   > `trg_audit_<table>` to the 5 commission tables + 9 core sales tables (14 total).
+   > Direct DB mutations to commission tables are now captured in `financial_audit_log`
+   > with hash-chained before/after snapshots. The trigger function reads `branch_id`
+   > from the row's JSONB (works for tables without a `branch_id` column —
+   > `commission_rule_tiers` etc. are safe).
 5. **G7 (MAJOR)** — No `config/commission.php` — no knobs for commission batch minimum, max
    rules per salesman, default rule type, target period default, auto-confirm flag.
 6. **G8 (MAJOR)** — No materialized view for commission summaries. `getSalesmanSummary` and

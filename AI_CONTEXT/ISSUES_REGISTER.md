@@ -127,13 +127,13 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-061 | G3 | CRITICAL | sales | sales/commission.md:334 | — | **G3 (CRITICAL)** — `LedgerNatureService` has NO `commission_expense` or `commission_payable` | — | H1 | resolved | 3f35e77 |
 | G-062 | G3 | CRITICAL | sales | sales/sales-challan.md:328 | — | **G3 (CRITICAL)** — `StockAvailabilityService` pipeline filter references nonexistent status | — | H1 | resolved | 3f35e77 |
 | G-063 | G3 | CRITICAL | sales | sales/sales-overview.md:286 | — | **G3 (CRITICAL)** — `StockAvailabilityService` pipeline filter references nonexistent status | — | H1 | resolved | 3f35e77 |
-| G-064 | G4 | CRITICAL | sales | sales/commission.md:336 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `commission_rules` / | audit-trail phase | H1 | open | — |
-| G-065 | G4 | CRITICAL | sales | sales/sales-audit.md:351 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to ANY of the 9 sales tables + | audit-trail phase | H1 | open | — |
-| G-066 | G4 | CRITICAL | sales | sales/sales-challan.md:332 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_challans` / | audit-trail phase | H1 | open | — |
-| G-067 | G4 | CRITICAL | sales | sales/sales-invoice.md:395 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_invoices` / | audit-trail phase | H1 | open | — |
-| G-068 | G4 | CRITICAL | sales | sales/sales-overview.md:289 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to ANY of the 9 sales tables + | audit-trail phase | H1 | open | — |
-| G-069 | G4 | CRITICAL | sales | sales/sales-return.md:319 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_returns` / | audit-trail phase | H1 | open | — |
-| G-070 | G4 | CRITICAL | sales | sales/transport-cost.md:219 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_invoices` / | audit-trail phase | H1 | open | — |
+| G-064 | G4 | CRITICAL | sales | sales/commission.md:336 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `commission_rules` / | audit-trail phase | H1 | resolved | de2b6e6 |
+| G-065 | G4 | CRITICAL | sales | sales/sales-audit.md:351 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to ANY of the 9 sales tables + | audit-trail phase | H1 | resolved | de2b6e6 |
+| G-066 | G4 | CRITICAL | sales | sales/sales-challan.md:332 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_challans` / | audit-trail phase | H1 | resolved | de2b6e6 |
+| G-067 | G4 | CRITICAL | sales | sales/sales-invoice.md:395 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_invoices` / | audit-trail phase | H1 | resolved | de2b6e6 |
+| G-068 | G4 | CRITICAL | sales | sales/sales-overview.md:289 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to ANY of the 9 sales tables + | audit-trail phase | H1 | resolved | de2b6e6 |
+| G-069 | G4 | CRITICAL | sales | sales/sales-return.md:319 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_returns` / | audit-trail phase | H1 | resolved | de2b6e6 |
+| G-070 | G4 | CRITICAL | sales | sales/transport-cost.md:219 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_invoices` / | audit-trail phase | H1 | resolved | de2b6e6 |
 | G-071 | G5 | CRITICAL | sales | sales/sales-challan.md:334 | — | **G5 (CRITICAL)** — `sales_challan_items` table is NOT in `04_sales.sql` DDL — created only | DDL drift | H1 | open | — |
 | G-072 | G5 | CRITICAL | sales | sales/sales-invoice.md:398 | — | **G5 (CRITICAL)** — DDL `04_sales.sql` is stale: `is_blank_godown_printed`, `call_a_day`, | DDL drift | H1 | open | — |
 | G-073 | G5 | CRITICAL | sales | sales/sales-overview.md:292 | — | **G5 (CRITICAL)** — DDL `04_sales.sql` is stale; many live columns/tables exist ONLY in | DDL drift | H1 | open | — |

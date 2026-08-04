@@ -316,8 +316,9 @@ return $this->journalPosting->createJournalEntry([
 
 ## 11. Gaps
 
-1. **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_returns` /
-   `sales_return_items`. Only `customer_payments` is hash-chain-audited.
+1. **G4 (CRITICAL — RESOLVED)** — `fn_financial_audit_trigger` is now attached to
+   `sales_returns` and `sales_return_items` via migration `2026_09_01_000002` (SALES-3,
+   commit de2b6e6). Both tables are now hash-chain-audited alongside `customer_payments`.
 2. **G5 (CRITICAL)** — DDL `04_sales.sql` is stale: `cogs_amount`, `reason`,
    `sales_invoice_item_id`, `damage_invoice_id` exist only in migrations.
 3. **G6 (MAJOR)** — No `SalesReturnPolicy` class. RBAC via route middleware + RLS only.

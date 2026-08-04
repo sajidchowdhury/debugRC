@@ -335,8 +335,9 @@ return $this->journalPosting->createJournalEntry([
    > only `['reversed', 'cancelled']`; the `sid.ordered_qty > sid.dispatched_qty` predicate does
    > the real "fully dispatched" exclusion. Behavior-preserving (the nonexistent value was a
    > no-op — `whereNotIn` never matched it).
-2. **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_challans` /
-   `sales_challan_items`. Only `customer_payments` is hash-chain-audited.
+2. **G4 (CRITICAL — RESOLVED)** — `fn_financial_audit_trigger` is now attached to
+   `sales_challans` and `sales_challan_items` via migration `2026_09_01_000002` (SALES-3,
+   commit de2b6e6). Both tables are now hash-chain-audited alongside `customer_payments`.
 3. **G5 (CRITICAL)** — `sales_challan_items` table is NOT in `04_sales.sql` DDL — created only
    by migration `2025_01_08_000005`.
 4. **G6 (MAJOR)** — No `SalesChallanPolicy` class. RBAC via route middleware + RLS only.

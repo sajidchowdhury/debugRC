@@ -216,8 +216,10 @@ return $this->journalPosting->createJournalEntry([
 
 ## 11. Gaps
 
-1. **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_invoices` /
-   `sales_challans` (transport cost mutations not forensically audited).
+1. **G4 (CRITICAL — RESOLVED)** — `fn_financial_audit_trigger` is now attached to
+   `sales_invoices` and `sales_challans` (the two tables that carry transport-cost
+   columns) via migration `2026_09_01_000002` (SALES-3, commit de2b6e6). Transport-cost
+   mutations are now hash-chain-audited.
 2. **G18 (MINOR)** — No `transport_vendors` master table — free-text `transport_name` fragments
    reporting.
 3. **NO `transport_cost_items` table** — transport is header-level only, cannot capture per-line
