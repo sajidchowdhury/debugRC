@@ -180,6 +180,39 @@ function sectorFromPath(rel) {
   return parts[0];
 }
 
+// ---------- Resolved-marker detection ----------
+// A gap is considered RESOLVED when a line matching the resolved-marker regex
+// appears below the gap definition. The marker format (appended by remediation
+// commits):
+//   > ✅ RESOLVED in commit <hash> — <one-line description>
+// We look backwards from each marker, line by line, until we find the first
+// line containing a G# mention. That G# is the one being resolved. This avoids
+// false positives from nearby (but unrelated) gap definitions in the same list
+// or table. The commit hash is captured for display in the register's
+// "Resolved" column.
+const RESOLVED_MARKER_RE = /^\s*>\s*✅\s*RESOLVED\s+in\s+commit\s+([0-9a-f]{7,40})\b/i;
+
+function extractResolvedGids(lines) {
+  const resolved = new Map(); // gid -> commitHash
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(RESOLVED_MARKER_RE);
+    if (!m) continue;
+    const commitHash = m[1];
+    // Walk backwards from the marker until we find a line with a G# mention.
+    // Stop after 15 lines (safety limit — gap descriptions are rarely longer).
+    for (let j = i - 1; j >= Math.max(0, i - 15); j--) {
+      const ids = [...lines[j].matchAll(G_ID_RE)].map(m => 'G' + m[1]);
+      if (ids.length > 0) {
+        for (const id of ids) {
+          if (!resolved.has(id)) resolved.set(id, commitHash);
+        }
+        break; // stop at the first line containing a G# mention
+      }
+    }
+  }
+  return resolved;
+}
+
 // ---------- Main extraction ----------
 
 function extract() {
@@ -194,6 +227,9 @@ function extract() {
     const lines = fs.readFileSync(file, 'utf8').split('\n');
     let currentGapSection = null;
     let inFixSection = false;
+
+    // Build the (gid -> commitHash) map for any gap marked resolved in this file.
+    const resolvedGidsInFile = extractResolvedGids(lines);
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -250,8 +286,9 @@ function extract() {
       const sentence = cleanSentence(line);
 
       for (const id of [...new Set(ids)]) {
+        const gidKey = 'G' + id;
         rawEntries.push({
-          gid:        'G' + id,
+          gid:        gidKey,
           sourceFile: rel,
           sector:     sectorFromPath(rel),
           line:       i + 1,
@@ -260,6 +297,8 @@ function extract() {
           definition: definition,
           section:    currentGapSection,
           sentence:   sentence,
+          resolved:      resolvedGidsInFile.has(gidKey),
+          resolvedCommit: resolvedGidsInFile.get(gidKey) || null,
         });
       }
     }
@@ -284,7 +323,12 @@ function extract() {
     slot.refLines.push(e.line);
     slot.severities.add(e.severity);
     const cur = slot.best;
+    // Prefer non-resolved entries over resolved ones (a file may have
+    // multiple gap definitions for the same G#; if ANY is marked resolved,
+    // the (gid, file) pair is considered resolved — but if another mention
+    // is NOT under a resolved marker, that one wins as the canonical entry).
     const better =
+      (e.resolved !== cur.resolved) ? (!e.resolved && cur.resolved) :
       (severityRank(e.severity) < severityRank(cur.severity)) ||
       (e.severity === cur.severity && e.line < cur.line);
     if (better) slot.best = e;
@@ -331,10 +375,14 @@ function emitMarkdown({ files, entries, crossRef, gidSector }) {
     year: 'numeric', month: '2-digit', day: '2-digit',
   }); // YYYY-MM-DD
 
-  // Counts
+  // Counts — resolved entries are kept in the register (for traceability)
+  // but EXCLUDED from the severity + sector counts so the "at a glance"
+  // table reflects only open gaps.
   const sevCounts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, UNKNOWN: 0 };
   const sectorCounts = {};
+  let resolvedCount = 0;
   for (const e of entries) {
+    if (e.resolved) { resolvedCount++; continue; }
     sevCounts[e.severity] = (sevCounts[e.severity] || 0) + 1;
     sectorCounts[e.sector] = (sectorCounts[e.sector] || 0) + 1;
   }
@@ -378,7 +426,8 @@ function emitMarkdown({ files, entries, crossRef, gidSector }) {
   lines.push(`| MEDIUM | ${sevCounts.MEDIUM || 0} | Some |`);
   lines.push(`| LOW | ${sevCounts.LOW || 0} | No |`);
   if (sevCounts.UNKNOWN) lines.push(`| UNKNOWN | ${sevCounts.UNKNOWN} | Triage needed |`);
-  lines.push(`| **TOTAL** | **${entries.length}** | |`);
+  lines.push(`| **TOTAL open** | **${entries.length - resolvedCount}** | |`);
+  if (resolvedCount > 0) lines.push(`| _of which resolved_ | ${resolvedCount} | (kept for traceability, excluded from counts above) |`);
   lines.push('');
   lines.push('### By sector');
   lines.push('');
@@ -407,11 +456,12 @@ function emitMarkdown({ files, entries, crossRef, gidSector }) {
   lines.push('- **Blocks** — what is blocked (cutover / RLS audit / API phase / etc.)');
   lines.push('- **Horizon** — H1/H2/H3/H4 from ROADMAP.md (best judgement)');
   lines.push('- **Status** — open / in-progress / resolved / wontfix');
+  lines.push('- **Resolved** — commit hash that closed this gap (or `—` if open)');
   lines.push('');
   lines.push('## Register');
   lines.push('');
-  lines.push('| ID | Orig | Severity | Sector | Source | Code ref | Summary | Blocks | Horizon | Status |');
-  lines.push('|----|------|----------|--------|--------|----------|---------|--------|----------|--------|');
+  lines.push('| ID | Orig | Severity | Sector | Source | Code ref | Summary | Blocks | Horizon | Status | Resolved |');
+  lines.push('|----|------|----------|--------|--------|----------|---------|--------|----------|--------|----------|');
 
   entries.forEach((e, idx) => {
     const id = 'G-' + String(idx + 1).padStart(3, '0');
@@ -421,8 +471,10 @@ function emitMarkdown({ files, entries, crossRef, gidSector }) {
     const source = `${e.sourceFile}:${e.line}`;
     const blocks = blocksFor(e);
     const horizon = horizonFor(e);
+    const status = e.resolved ? 'resolved' : 'open';
+    const resolvedCol = e.resolvedCommit ? '`' + e.resolvedCommit + '`' : '—';
     lines.push(
-      `| ${id} | ${e.gid} | ${e.severity} | ${e.sector} | ${source} | ${codeRef} | ${summary} | ${blocks} | ${horizon} | open |`
+      `| ${id} | ${e.gid} | ${e.severity} | ${e.sector} | ${source} | ${codeRef} | ${summary} | ${blocks} | ${horizon} | ${status} | ${resolvedCol} |`
     );
   });
 
@@ -549,13 +601,18 @@ function main() {
   const md = emitMarkdown({ files, entries, crossRef, gidSector });
   fs.writeFileSync(OUTPUT_MD, md, 'utf8');
 
-  // JSON to stdout (summary + entries)
+  // JSON to stdout (summary + entries). Resolved entries remain in `entries`
+  // for traceability but are excluded from the open-counts below.
+  const openEntries = entries.filter(e => !e.resolved);
+  const resolvedEntries = entries.filter(e => e.resolved);
   const summary = {
     generatedAt: new Date().toISOString(),
     sourceFiles: files.length,
     totalEntries: entries.length,
-    bySeverity: entries.reduce((acc, e) => { acc[e.severity] = (acc[e.severity] || 0) + 1; return acc; }, {}),
-    bySector: entries.reduce((acc, e) => { acc[e.sector] = (acc[e.sector] || 0) + 1; return acc; }, {}),
+    openEntries: openEntries.length,
+    resolvedEntries: resolvedEntries.length,
+    bySeverity: openEntries.reduce((acc, e) => { acc[e.severity] = (acc[e.severity] || 0) + 1; return acc; }, {}),
+    bySector: openEntries.reduce((acc, e) => { acc[e.sector] = (acc[e.sector] || 0) + 1; return acc; }, {}),
     crossRefSize: [...crossRef.values()].filter(m => m.size >= 2).length,
     entries,
   };

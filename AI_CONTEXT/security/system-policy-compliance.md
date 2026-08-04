@@ -553,6 +553,8 @@ middleware. The `manage-system-policy` Gate IS consumed via `@can()` in 2 layout
 link — `layouts/admin.blade.php:306` + `components/layouts/erp.blade.php:329`) but NOT via
 `Gate::authorize` in the controller or via route middleware.
 
+> ✅ RESOLVED in commit bce8389 — Added `role:superadmin` middleware to the `admin/compliance` prefix group at `routes/web.php:1601`. `EnsureRole` rejects any non-superadmin at the route layer before the controller is invoked; the in-controller `isSuperadmin()` check now serves as defense-in-depth layer 2. Sub-problem A (Session 1, Security/RLS cluster).
+
 ### G4 — `SystemPolicyPolicy` class is dead code (LOW)
 Defined in `app/Policies/SystemPolicyPolicy.php` but never registered via `Gate::policy()`. The
 Gate uses a closure. Don't assume `$this->authorize('manage', SystemPolicy::class)` resolves to

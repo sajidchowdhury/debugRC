@@ -96,6 +96,8 @@ Report execution frequency (driven by the catalog's `preset_days` field + busine
 every report route. RLS enforces branch isolation but not role-based read access. A salesman
 can currently view the entire company Trial Balance and Profit & Loss. See §14 G1.
 
+> ✅ RESOLVED in commit bce8389 — Added `role:accountant,manager,admin` middleware to the `admin/reports` prefix group at `routes/web.php:359`. This single fix closes G-045 (catalog group), G-041 (CSV exports), and G-042 (4 CTE routes) simultaneously. NOTE: this also blocks salesmen from the 4 sales-category reports (revenue_overview, gross_margin, customer_performance, sales_funnel) — the optional per-route relaxation to `role:admin,manager,accountant,salesman` documented in §13.1 is NOT applied; track as a follow-up if cross-role read is later required. Sub-problem A (Session 1, Security/RLS cluster).
+
 ---
 
 ## 5. Related modules

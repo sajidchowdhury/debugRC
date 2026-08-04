@@ -170,14 +170,20 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
     Route::get('sales/invoices/{id}', [SalesInvoiceApiController::class, 'show'])
         ->where('id', '[0-9]+')
         ->middleware('api.rate:60');
+    // G-166 (HIGH): invoice store/update/cancel previously had only
+    // `api.rate:30` — any authenticated API user (any role) could create,
+    // edit, or cancel invoices. Added `api.auth:salesman,manager,admin` to
+    // mirror the web RBAC at `routes/web.php:1177,1182` (cancel + update)
+    // and the docblock role requirement at api.php:139. Superadmin passes
+    // via ApiAuth's superadmin bypass. See `sales/sales-invoice.md` §13 G13.
     Route::post('sales/invoices', [SalesInvoiceApiController::class, 'store'])
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:salesman,manager,admin', 'api.rate:30');
     Route::put('sales/invoices/{id}', [SalesInvoiceApiController::class, 'update'])
         ->where('id', '[0-9]+')
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:salesman,manager,admin', 'api.rate:30');
     Route::post('sales/invoices/{id}/cancel', [SalesInvoiceApiController::class, 'cancel'])
         ->where('id', '[0-9]+')
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:salesman,manager,admin', 'api.rate:30');
 
     // ---------- Sales Challans — 30/60 req/min ----------
     Route::get('sales/challans', [SalesChallanApiController::class, 'index'])
@@ -205,14 +211,23 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
     Route::get('sales/returns/{id}', [SalesReturnApiController::class, 'show'])
         ->where('id', '[0-9]+')
         ->middleware('api.rate:60');
+    // G-167 (HIGH): return store/confirm/reverse previously had only
+    // `api.rate:30` — any authenticated API user (any role) could create,
+    // confirm, or reverse returns. Added `api.auth:<roles>` to mirror the
+    // web RBAC at `routes/web.php:1557,1518,1522`:
+    //   - store   → salesman,manager,admin          (web L1557)
+    //   - confirm → warehouse_manager,accountant,manager,admin (web L1518)
+    //   - reverse → accountant,manager,admin         (web L1522)
+    // Superadmin passes via ApiAuth's superadmin bypass. See
+    // `sales/sales-return.md` §13 G13.
     Route::post('sales/returns', [SalesReturnApiController::class, 'store'])
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:salesman,manager,admin', 'api.rate:30');
     Route::post('sales/returns/{id}/confirm', [SalesReturnApiController::class, 'confirm'])
         ->where('id', '[0-9]+')
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:warehouse_manager,accountant,manager,admin', 'api.rate:30');
     Route::post('sales/returns/{id}/reverse', [SalesReturnApiController::class, 'reverse'])
         ->where('id', '[0-9]+')
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:accountant,manager,admin', 'api.rate:30');
 
     // ---------- Customer Payments — 30/60 req/min ----------
     Route::get('sales/payments', [CustomerPaymentApiController::class, 'index'])

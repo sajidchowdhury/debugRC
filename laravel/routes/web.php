@@ -97,16 +97,26 @@ Route::middleware('auth')->group(function () {
     // See docs/USER_PERFORMANCE_DASHBOARD_PLAN.md for the full plan.
     // Legacy controller kept as LegacyDashboardController for reference.
     // ============================================================
+    // G-043 (CRITICAL, defense-in-depth): dashboard routes had only `auth`
+    // middleware — any authed user could hit /dashboard. The dashboard is
+    // the user's own performance view (intentionally permissive across all
+    // 10 roles), but we still attach `role:` as a defense-in-depth gate so
+    // EnsureRole confirms the user has a recognised role. Superadmin passes
+    // via the middleware's bypass; admin via the admin-tier bypass; all 8
+    // operational roles via exact match. See `reports/dashboards.md` §14 G1.
     Route::get('dashboard', [UserPerformanceDashboardController::class, 'index'])
-        ->name('dashboard');
+        ->name('dashboard')
+        ->middleware('role:admin,manager,accountant,salesman,warehouse_manager,dispatcher,hr,user,other');
     Route::get('dashboard/sales-trend', [UserPerformanceDashboardController::class, 'salesTrendAjax'])
-        ->name('dashboard.salesTrend');
+        ->name('dashboard.salesTrend')
+        ->middleware('role:admin,manager,accountant,salesman,warehouse_manager,dispatcher,hr,user,other');
     // Phase 6 — AJAX fragment endpoint for no-full-reload period/employee
     // switching. Returns JSON {html, period, periodLabel, range, employeeId}
     // where `html` is the rendered #perf-dashboard inner markup. The Blade
     // view detects fragmentMode=true and skips @extends('layouts.admin').
     Route::get('dashboard/fragment', [UserPerformanceDashboardController::class, 'fragmentAjax'])
-        ->name('dashboard.fragment');
+        ->name('dashboard.fragment')
+        ->middleware('role:admin,manager,accountant,salesman,warehouse_manager,dispatcher,hr,user,other');
 
     // UI Preview — Phase 4 dev/design tool (storybook-style component showcase).
     // Renders all <x-erp.*> design-system components with sample data.
@@ -356,7 +366,21 @@ Route::middleware('auth')->group(function () {
     });
 
     // Financial reports (18 reports)
-    Route::prefix('admin/reports')->name('admin.reports.')->group(function () {
+    // G-045 / G-041 / G-042 (CRITICAL): the entire `admin/reports` prefix
+    // group previously had NO `role:` middleware — only the outer `auth`
+    // gate from L90. Any authenticated user (incl. salesman, hr, dispatcher)
+    // could hit Trial Balance, P&L, Balance Sheet, Cash Flow, all 4 CTE
+    // reports, and the 3 CSV exports (stocktake variance, stocktake weekly,
+    // damage) — financial data exfiltration. RLS only enforces branch
+    // isolation, NOT role-based read access. Adding `role:accountant,
+    // manager,admin` per the recommended fix in `reports/reports-catalog.md`
+    // §13.1 + `reports/csv-export.md` §14 G1 + `reports/cte-reports.md` §14
+    // G1 (all three cite this same group). NOTE: this also blocks salesmen
+    // from the 4 sales-category reports (revenue_overview, gross_margin,
+    // customer_performance, sales_funnel) — see reports-catalog.md §13.1
+    // for the optional per-route relaxation to `role:admin,manager,
+    // accountant,salesman` if cross-role read is later required.
+    Route::prefix('admin/reports')->name('admin.reports.')->middleware('role:accountant,manager,admin')->group(function () {
         // Finance & Control
         Route::get('trial-balance', [ReportController::class, 'trialBalance'])->name('trialBalance');
         Route::get('profit-and-loss', [ReportController::class, 'profitAndLoss'])->name('profitAndLoss');
@@ -1597,8 +1621,13 @@ Route::middleware('auth')->group(function () {
 
     // ============================================================
     // Phase 11: System Policy & Compliance Framework
+    // G-173 (HIGH): route group previously relied solely on the in-controller
+    // `isSuperadmin()` check (defense-in-depth gap). Added `role:superadmin`
+    // middleware so EnsureRole rejects non-superadmin users at the route
+    // layer before the controller is invoked. See
+    // `security/system-policy-compliance.md` §13 G3.
     // ============================================================
-    Route::prefix('admin/compliance')->name('admin.compliance.')->group(function () {
+    Route::prefix('admin/compliance')->name('admin.compliance.')->middleware('role:superadmin')->group(function () {
         Route::get('/', [SystemPolicyController::class, 'index'])->name('index');
         Route::post('/activate', [SystemPolicyController::class, 'activate'])->name('activate');
         Route::post('/deactivate', [SystemPolicyController::class, 'deactivate'])->name('deactivate');
