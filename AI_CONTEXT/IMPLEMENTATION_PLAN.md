@@ -3,8 +3,8 @@
 > **Document type:** Master roadmap (living document)
 > **Project:** RC_ERP_v2 — Remote Center ERP (Laravel 12 + PostgreSQL 16 + Redis)
 > **Repository:** `debugRC/` (cloned from `github.com/sajidchowdhury/debugRC`)
-> **Status:** Phases 0–16 COMPLETE. Phase 17 (API Layer REST v1) pending commission.
-> **Last updated:** Phase 16 complete
+> **Status:** Phases 0–17 COMPLETE. Phase 18 (Archive & Legacy Anti-Corruption Layer) pending commission.
+> **Last updated:** Phase 17 complete
 
 ---
 
@@ -644,7 +644,7 @@ Phase 13 — Consolidation, Intercompany & Branch Demand  [x] Complete
 Phase 14 — Approval Workflow & Compliance               [x] Complete
 Phase 15 — Notifications & Realtime                     [x] Complete
 Phase 16 — Reporting & Exports                          [x] Complete
-Phase 17 — API Layer (REST v1)                          [ ] Not Started
+Phase 17 — API Layer (REST v1)                              [x] Complete
 Phase 18 — Archive & Legacy Anti-Corruption Layer       [ ] Not Started
 Phase 19 — Deployment, DevOps & Partitioning/Archival   [ ] Not Started
 Phase 20 — Cross-Cutting Workflows                      [ ] Not Started
