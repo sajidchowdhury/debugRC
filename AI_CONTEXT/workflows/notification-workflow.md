@@ -1261,6 +1261,9 @@ flowchart LR
   `DamageService::dispatchApprovalNotification`.
 
 ### G5 — HIGH — NO RLS on `notifications` / `notification_rules` / `notification_rule_recipients`
+
+> ✅ RESOLVED in commit 278a03d (G-179, cross-referenced with G-093 — same gap, same migration) — RLS migration `2026_08_30_000002_add_rls_mvs_notifications_approvals.php` (G-093/G-179 section) adds `ENABLE ROW LEVEL SECURITY` + `FORCE ROW LEVEL SECURITY` + per-verb policies on all 3 notification tables. **`notifications`** (Laravel-standard polymorphic, NO `branch_id`): SELECT admin-only, INSERT authenticated-user (`app.branch_id IS NOT NULL` — the app creates notifications from many non-admin contexts like sales_invoice finalize), UPDATE + DELETE admin-only. **DISCOVERY**: the user-scoped SELECT policy (`notifiable_id = current_setting('app.user_id', true)::bigint AND notifiable_type = 'App\\Models\\User'`) would be the correct long-term fix, BUT the `app.user_id` GUC is NOT set by any middleware in this codebase (verified by grep on `app/Http/Middleware/` — only `app.branch_id` + `app.is_admin` + `app.request_*` audit-trail GUCs are set by `SetAppBranchId` / `SetApiBranchContext`). Admin-only is the safe interim posture; a future task should add `app.user_id` to the middleware + replace this policy with the user-scoped variant. Documented limitation. **`notification_rules`** + **`notification_rule_recipients`** (admin-managed config, route middleware `role:admin`): admin-only for ALL verbs (SELECT/INSERT/UPDATE/DELETE — condition `false` + admin bypass folded in). Mirrors the canonical `add_rls_branch_isolation` pattern.
+
 - **Evidence:** `2025_01_20_000007_add_rls_branch_isolation.php` L84-116 enables RLS on 22
   tables. None of the 3 notification tables are in the list. The `notifications` table
   uses Laravel's `notifiable_id`/`notifiable_type` polymorphic schema — no `branch_id`

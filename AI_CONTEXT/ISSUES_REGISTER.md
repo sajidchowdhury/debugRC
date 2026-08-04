@@ -18,26 +18,26 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | Severity | Count | Blocks cutover? |
 |---|---|---|
-| CRITICAL | 77 | Yes — all of them |
-| HIGH | 108 | Most |
+| CRITICAL | 76 | Yes — all of them |
+| HIGH | 105 | Most |
 | MEDIUM | 77 | Some |
 | LOW | 70 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **334** | |
-| _of which resolved_ | 23 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **330** | |
+| _of which resolved_ | 27 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
 | Sector | Open issues |
 |---|---|
 | api | 51 |
-| architecture | 20 |
+| architecture | 19 |
 | finance | 77 |
 | purchasing | 24 |
-| reports | 80 |
+| reports | 79 |
 | sales | 35 |
 | security | 14 |
-| workflows | 34 |
+| workflows | 32 |
 
 ## How to use this register
 
@@ -107,7 +107,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-041 | G1 | CRITICAL | reports | reports/csv-export.md:176 | routes/web.php:1650 | ⚠️ **Gap G1 (CRITICAL):** 6 export endpoints in the `admin/reports` group have NO `role:` | cutover, RLS audit | H1 | resolved | `b3a9fd7` |
 | G-042 | G1 | CRITICAL | reports | reports/cte-reports.md:109 | routes/web.php:405-408 | ⚠️ **Gap G1 (CRITICAL, cross-references `reports/reports-catalog.md` G1):** The 4 CTE routes | — | H1 | resolved | `b3a9fd7` |
 | G-043 | G1 | CRITICAL | reports | reports/dashboards.md:685 | routes/web.php:100-108 | **G1** \| **CRITICAL** (cross-ref `reports/reports-catalog.md` G1) \| `routes/web.php:100-108` — dashboard routes have only `auth` middlewar… | cutover, RLS audit | H1 | resolved | `b3a9fd7` |
-| G-044 | G1 | CRITICAL | reports | reports/materialized-views.md:733 | — | **G1** \| **CRITICAL** \| Grep `ALTER TABLE mv_` / `ENABLE ROW LEVEL SECURITY.*mv_` / `CREATE POLICY.*mv_` across `laravel/database/` → 0 ma… | cutover, RLS audit | H1 | open | — |
+| G-044 | G1 | CRITICAL | reports | reports/materialized-views.md:733 | — | **G1** \| **CRITICAL** \| Grep `ALTER TABLE mv_` / `ENABLE ROW LEVEL SECURITY.*mv_` / `CREATE POLICY.*mv_` across `laravel/database/` → 0 ma… | cutover, RLS audit | H1 | resolved | 278a03d |
 | G-045 | G1 | CRITICAL | reports | reports/reports-catalog.md:94 | routes/web.php:359-409 | ⚠️ **Gap G1 (CRITICAL):** The `admin/reports` route group at `routes/web.php:359-409` has **no | — | H1 | resolved | `b3a9fd7` |
 | G-046 | G2 | CRITICAL | reports | reports/csv-export.md:864 | routes/web.php:359-409 | **G2** \| **CRITICAL** \| `Dockerfile` (L1-40) — no `duckdb` binary installed. `ExportArchivedPartitionsToParquet::findDuckdb()` returns `nu… | partitioning ops | H1 | open | — |
 | G-047 | G2 | CRITICAL | reports | reports/materialized-views.md:734 | — | **G2** \| **CRITICAL** \| Grep `mv_ledger_balances \\| mv_ar_aging \\| mv_ap_aging \\| mv_stock_valuation \\| mv_journal_entry_summary \\| m… | GL posting | H1 | open | — |
@@ -156,7 +156,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-090 | G7 | HIGH | api | api/api-overview.md:577 | — | G7 \| HIGH \| Idempotency is implemented on only 3 of ~10 transactional write endpoints (`POST /sales/invoices`, `POST /sales/challans/issue… | — | H2 | open | — |
 | G-091 | G3 | HIGH | architecture | architecture/realtime-events.md:975 | — | ### G3 — HIGH — DDL stale (recurring cross-phase gap) | DDL drift | H2 | open | — |
 | G-092 | G4 | HIGH | architecture | architecture/realtime-events.md:987 | — | ### G4 — HIGH — Worker not scheduled by Laravel cron; no in-repo supervisor/systemd config | notifications phase | H2 | open | — |
-| G-093 | G5 | HIGH | architecture | architecture/realtime-events.md:995 | — | ### G5 — HIGH — No RLS on `notifications`, `notification_rules`, `notification_rule_recipients` | cutover, RLS audit | H1 | open | — |
+| G-093 | G5 | HIGH | architecture | architecture/realtime-events.md:995 | — | ### G5 — HIGH — No RLS on `notifications`, `notification_rules`, `notification_rule_recipients` | cutover, RLS audit | H1 | resolved | 278a03d |
 | G-094 | G6 | HIGH | architecture | architecture/realtime-events.md:1002 | — | ### G6 — HIGH — `fn_financial_audit_trigger` NOT attached to 8/10 monitored tables | audit-trail phase | H1 | open | — |
 | G-095 | G1 | HIGH | finance | finance/fixed-assets.md:171 | — | BR27 \| **RLS MUST block all access for non-admin users.** The single `_admin_policy` on each of the 3 tables only allows `app.is_admin = 't… | cutover, RLS audit | H1 | resolved | dd31590 |
 | G-096 | G6 | HIGH | finance | finance/consolidation-intercompany.md:683 | — | #### G6 — `ConsolidationService::reverseEliminationJournal` explicitly sets `is_reversed=false` on the reversal JE | GL posting | H2 | open | — |
@@ -242,7 +242,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-176 | G3 | HIGH | workflows | workflows/approval-workflow.md:1110 | — | ### G3 — HIGH — ApprovalController has NO FormRequest classes | notifications phase | H2 | open | — |
 | G-177 | G4 | HIGH | workflows | workflows/notification-workflow.md:1240 | — | ### G4 — HIGH — 8 events are dead config (declared/forwarded but never fire) | — | H2 | open | — |
 | G-178 | G5 | HIGH | workflows | workflows/approval-workflow.md:1129 | — | ### G5 — HIGH — No branch.isolation on approval routes | cutover, RLS audit | H2 | open | — |
-| G-179 | G5 | HIGH | workflows | workflows/notification-workflow.md:1263 | — | ### G5 — HIGH — NO RLS on `notifications` / `notification_rules` / `notification_rule_recipients` | cutover, RLS audit | H1 | open | — |
+| G-179 | G5 | HIGH | workflows | workflows/notification-workflow.md:1263 | — | ### G5 — HIGH — NO RLS on `notifications` / `notification_rules` / `notification_rule_recipients` | cutover, RLS audit | H1 | resolved | 278a03d |
 | G-180 | G6 | HIGH | workflows | workflows/approval-workflow.md:1139 | — | ### G6 — HIGH — approval_requests.entity_id is unsignedBigInteger, NOT FK | — | H2 | open | — |
 | G-181 | G6 | HIGH | workflows | workflows/notification-workflow.md:1276 | — | ### G6 — HIGH — NO `fn_financial_audit_trigger` on `notification_rules` / `notification_rule_recipients` | audit-trail phase | H1 | open | — |
 | G-182 | G7 | HIGH | workflows | workflows/notification-workflow.md:1287 | laravel/database/sql/06_payment_and_misc.sql:181-194 | ### G7 — HIGH — DDL stale (notification tables missing/mismatched in `database/sql/*.sql` baseline) | DDL drift | H2 | open | — |
@@ -251,7 +251,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-185 | G9 | HIGH | workflows | workflows/notification-workflow.md:1315 | — | ### G9 — HIGH — NO sidebar menu entry for `/admin/notifications/rules` | notifications phase | H2 | open | — |
 | G-186 | G11 | HIGH | workflows | workflows/approval-workflow.md:1175 | — | ### G11 — HIGH — No menu/nav entry for admin/approvals | — | H2 | open | — |
 | G-187 | G12 | HIGH | workflows | workflows/approval-workflow.md:1181 | — | ### G12 — HIGH — No fn_financial_audit_trigger on approval tables | audit-trail phase | H1 | open | — |
-| G-188 | G15 | HIGH | workflows | workflows/approval-workflow.md:1203 | — | ### G15 — HIGH — NO RLS on the 4 generic approval tables | cutover, RLS audit | H1 | open | — |
+| G-188 | G15 | HIGH | workflows | workflows/approval-workflow.md:1203 | — | ### G15 — HIGH — NO RLS on the 4 generic approval tables | cutover, RLS audit | H1 | resolved | 278a03d |
 | G-189 | G3 | MEDIUM | api | api/api-conventions.md:699 | — | G3 \| MEDIUM \| Pagination `meta` shape is inconsistent: `BranchApiController::index` includes `from` + `to`; the other 3 paginated controll… | — | H2 | open | — |
 | G-190 | G3 | MEDIUM | api | api/api-reference-index.md:265 | — | G3 \| MEDIUM \| `API_REFERENCE.md`'s "Rate limiting" section (line 134–139) is stale — says "Laravel's standard `throttle` middleware" but t… | cutover, RLS audit | H2 | open | — |
 | G-191 | G4 | MEDIUM | api | api/api-overview.md:574 | — | G4 \| MEDIUM \| Token length inconsistency: `User::generateApiToken()` uses `Str::random(60)`, `GenerateApiToken` command uses `Str::random(… | — | H2 | open | — |
