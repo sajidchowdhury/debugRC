@@ -46,7 +46,8 @@ class SalesReturnService
         private SalesAuditLogger $auditLogger,
         private DamageService $damageService,
         private NotificationService $notifications,
-        private SalesReturnReversalGuard $reversalGuard
+        private SalesReturnReversalGuard $reversalGuard,
+        private CommissionService $commission
     ) {}
 
     /**
@@ -248,6 +249,22 @@ class SalesReturnService
                 (float) $return->total_amount, (float) $return->cogs_amount,
                 $journalEntryId
             );
+
+            // SALES-2 (G2/G-058): Reverse commission earned on the returned
+            // invoice — creates a NEGATIVE commission entry proportional to
+            // (return_amount / invoice_total × original commission). Wrapped in
+            // try/catch so a commission reversal failure (e.g. no prior entries
+            // for the invoice, or invoice has no salesman) never blocks the
+            // return confirmation. The stock + GL reversal is the source of
+            // truth; commission is a downstream concern.
+            try {
+                $this->commission->reverseOnReturn($return);
+            } catch (\Throwable $e) {
+                Log::warning('Commission reverseOnReturn failed (non-blocking)', [
+                    'return_id' => $returnId,
+                    'error'     => $e->getMessage(),
+                ]);
+            }
 
             // P1-7: Notify warehouse managers + accountants that a return was confirmed.
             // F-18c: pass $context. sales_returns has no salesman_id column —

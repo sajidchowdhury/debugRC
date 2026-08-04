@@ -4,6 +4,7 @@ namespace App\Services\Sales;
 
 use App\Models\Bank;
 use App\Models\CustomerPayment;
+use App\Models\InvoicePaymentAllocation;
 use App\Services\Accounting\DocumentSequenceService;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\JournalReversalService;
@@ -44,7 +45,8 @@ class CustomerPaymentService
         private SubLedgerService $subLedger,
         private SalesAccess $salesAccess,
         private SalesAuditLogger $auditLogger,
-        private NotificationService $notifications
+        private NotificationService $notifications,
+        private CommissionService $commission
     ) {}
 
     /**
@@ -167,10 +169,33 @@ class CustomerPaymentService
                 $invoiceId = (int) ($alloc['invoice_id'] ?? 0);
                 $allocatedAmount = (float) ($alloc['allocated_amount'] ?? 0);
                 if ($invoiceId > 0 && $allocatedAmount > 0.001) {
-                    $this->allocateToInvoice($paymentId, $invoiceId, $allocatedAmount, $confirmedBy, $transactionType);
+                    $allocationId = $this->allocateToInvoice($paymentId, $invoiceId, $allocatedAmount, $confirmedBy, $transactionType);
                     $totalAllocated += $allocatedAmount;
                     if ($firstInvoiceId === null) {
                         $firstInvoiceId = $invoiceId;
+                    }
+
+                    // SALES-2 (G2/G-058): Trigger commission calculation on
+                    // payment allocation — but ONLY for AR-reduction types
+                    // (receive/discount/write_off = customer paying us, which
+                    // earns commission). 'payment' (refund) does NOT earn
+                    // commission. Wrapped in try/catch so a commission failure
+                    // (e.g. no rule for salesman) never blocks the payment —
+                    // commission is a downstream concern, not a payment gate.
+                    if (in_array($transactionType, self::AR_REDUCTION_TYPES) && $allocationId !== null) {
+                        try {
+                            $allocationModel = InvoicePaymentAllocation::find($allocationId);
+                            if ($allocationModel) {
+                                $this->commission->calculateOnAllocation($allocationModel);
+                            }
+                        } catch (\Throwable $e) {
+                            Log::warning('Commission calculateOnAllocation failed (non-blocking)', [
+                                'payment_id'    => $paymentId,
+                                'allocation_id' => $allocationId,
+                                'invoice_id'    => $invoiceId,
+                                'error'         => $e->getMessage(),
+                            ]);
+                        }
                     }
                 }
             }
@@ -290,6 +315,30 @@ class CustomerPaymentService
             $allocations = DB::table('invoice_payment_allocations')
                 ->where('payment_id', $paymentId)
                 ->get();
+
+            // SALES-2 (G2/G-058): Reverse commission entries tied to each
+            // allocation BEFORE the allocations are deleted (reverseOnPaymentReversal
+            // looks up the commission_entry by allocation_id). Only for
+            // AR-reduction types (receive/discount/write_off) — 'payment'
+            // (refund) never earned commission, so there's nothing to reverse.
+            // Non-blocking: a commission reversal failure must not prevent the
+            // payment cancellation (the GL/ledger reversal is the source of truth).
+            if (in_array($transactionType, self::AR_REDUCTION_TYPES)) {
+                foreach ($allocations as $allocation) {
+                    try {
+                        $allocationModel = InvoicePaymentAllocation::find($allocation->id);
+                        if ($allocationModel) {
+                            $this->commission->reverseOnPaymentReversal($allocationModel);
+                        }
+                    } catch (\Throwable $e) {
+                        Log::warning('Commission reverseOnPaymentReversal failed (non-blocking)', [
+                            'payment_id'    => $paymentId,
+                            'allocation_id' => $allocation->id ?? null,
+                            'error'         => $e->getMessage(),
+                        ]);
+                    }
+                }
+            }
 
             foreach ($allocations as $allocation) {
                 if ($transactionType === 'payment') {
@@ -645,7 +694,7 @@ class CustomerPaymentService
      * For 'payment' (refund) type: reduces invoice paid_amount (increases due_amount).
      * For all other types: increases invoice paid_amount (decreases due_amount).
      */
-    private function allocateToInvoice(int $paymentId, int $invoiceId, float $amount, int $createdBy, string $transactionType = 'receive'): void
+    private function allocateToInvoice(int $paymentId, int $invoiceId, float $amount, int $createdBy, string $transactionType = 'receive'): ?int
     {
         // Check invoice exists + not reversed.
         $invoice = DB::table('sales_invoices')
@@ -667,7 +716,7 @@ class CustomerPaymentService
                 );
             }
 
-            DB::table('invoice_payment_allocations')->insert([
+            $allocationId = DB::table('invoice_payment_allocations')->insertGetId([
                 'invoice_id' => $invoiceId,
                 'payment_id' => $paymentId,
                 'allocated_amount' => $amount,
@@ -681,6 +730,8 @@ class CustomerPaymentService
                     'paid_amount' => DB::raw('GREATEST(0, paid_amount - ' . $amount . ')'),
                     'updated_at' => now(),
                 ]);
+
+            return (int) $allocationId;
         } else {
             // Normal allocation: check payment doesn't exceed invoice outstanding.
             $paidSoFar = (float) DB::table('invoice_payment_allocations as ipa')
@@ -697,7 +748,7 @@ class CustomerPaymentService
             }
 
             // Create allocation.
-            DB::table('invoice_payment_allocations')->insert([
+            $allocationId = DB::table('invoice_payment_allocations')->insertGetId([
                 'invoice_id' => $invoiceId,
                 'payment_id' => $paymentId,
                 'allocated_amount' => $amount,
@@ -711,6 +762,8 @@ class CustomerPaymentService
                     'paid_amount' => DB::raw('paid_amount + ' . $amount),
                     'updated_at' => now(),
                 ]);
+
+            return (int) $allocationId;
         }
     }
 

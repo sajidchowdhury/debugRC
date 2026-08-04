@@ -10,10 +10,11 @@
 > + `laravel/app/Models/CommissionRuleTarget.php`
 > + `laravel/database/migrations/2025_01_22_000001_create_commission_tracking.php`.
 
-> ⚠️ **CRITICAL:** This module has **3 blocking gaps** (G1 + G2 + G3) that prevent production use.
-> The entire auto-calculation pipeline is **dead code** (never called from
-> `CustomerPaymentService` / `SalesReturnService`), and the month-end `confirmPeriod` calls a
-> non-existent method. See §11.
+> ⚠️ **RESOLVED:** This module's 3 blocking gaps (G1 + G2 + G3) are now ALL fixed.
+> G1 + G3 were resolved in commit 3f35e77 (SALES-1). G2 (the dead-code auto-calc pipeline)
+> was resolved in SALES-2 — the 4 commission methods are now wired into their callers
+> (`CustomerPaymentService::confirmPayment` / `cancelPayment`,
+> `SalesReturnService::confirmReturn`, `EmployeeTransactionService`). See §11.
 
 ## 1. What is it?
 
@@ -36,20 +37,19 @@ The commission entry has 4 lifecycle states: `calculated → confirmed → paid`
 a terminal side-state). Month-end `confirmPeriod('YYYY-MM')` groups entries by salesman and
 posts a GL journal entry per salesman (Dr `commission_expense` / Cr `employee_payable`).
 
-> ⚠️ **The entire auto-calc pipeline is DEAD CODE (G2).** `calculateOnAllocation`,
-> `reverseOnReturn`, `reverseOnPaymentReversal`, and `markAsPaid` are NEVER called from
+> ✅ **The auto-calc pipeline is now WIRED (G2 — resolved in SALES-2).** `calculateOnAllocation`,
+> `reverseOnReturn`, `reverseOnPaymentReversal`, and `markAsPaid` are called from
 > `CustomerPaymentService::confirmPayment`, `SalesReturnService::confirmReturn`,
-> `CustomerPaymentService::cancelPayment`, or `EmployeeTransactionService`. Only
-> `CommissionApiController` (rule CRUD + manual `confirmPeriod` + summaries) is wired.
+> `CustomerPaymentService::cancelPayment`, and `EmployeeTransactionService` respectively. All
+> 4 call sites are wrapped in try/catch (non-blocking) so a commission failure never aborts
+> the parent transaction. `CommissionApiController` (rule CRUD + `confirmPeriod` + summaries)
+> remains wired as before.
 >
-> ⚠️ **`confirmPeriod` has a CRITICAL BUG (G1).** It calls
-> `$this->journalPosting->postCommissionExpense(...)` which DOES NOT EXIST on
-> `JournalPostingService`. Running `POST /api/v1/sales/commission/confirm-period` throws
-> `BadMethodCallException`.
+> ✅ **`confirmPeriod` is fixed (G1 — resolved in 3f35e77).** `JournalPostingService::postCommissionExpense`
+> now exists and posts a balanced Dr commission_expense / Cr commission_payable JE per salesman.
 >
-> ⚠️ **The ledger natures are NOT registered (G3).** `LedgerNatureService::EXTENDED_NATURES`
-> has no `commission_expense` or `commission_payable` nature. Even if G1 is fixed, the GL
-> posting cannot resolve the Dr side ledger.
+> ✅ **The ledger natures are registered (G3 — resolved in 3f35e77).** `LedgerNatureService::EXTENDED_NATURES`
+> has `commission_expense` (Expense, debit) + `commission_payable` (Liability, credit).
 
 ## 2. Why does it exist?
 
@@ -67,24 +67,28 @@ posts a GL journal entry per salesman (Dr `commission_expense` / Cr `employee_pa
 
 ## 3. When is it used?
 
-> ⚠️ All "intended" triggers below are DEAD CODE (G2) unless explicitly noted.
+> ✅ All triggers below are now WIRED (G2 — resolved in SALES-2). Commission calls are
+> non-blocking (try/catch) so the parent transaction succeeds even if no rule matches.
 
-- **On customer payment confirmation** (INTENDED — DEAD): `calculateOnAllocation` creates a
-  `calculated` commission entry.
-- **On sales return confirmation** (INTENDED — DEAD): `reverseOnReturn` creates a NEGATIVE
+- **On customer payment confirmation** (WIRED — SALES-2): `calculateOnAllocation` creates a
+  `calculated` commission entry. Fires only for AR-reduction types (receive/discount/write_off).
+- **On sales return confirmation** (WIRED — SALES-2): `reverseOnReturn` creates a NEGATIVE
   commission entry proportional to `return_amount / invoice_total × original commission`.
-- **On payment cancellation** (INTENDED — DEAD): `reverseOnPaymentReversal` marks original
-  `reversed` + creates negative mirror with `reversed_by_entry_id` link.
-- **On month-end batch** (WIRED but BROKEN — G1): `confirmPeriod('YYYY-MM')` via
+- **On payment cancellation** (WIRED — SALES-2): `reverseOnPaymentReversal` marks original
+  `reversed` + creates negative mirror with `reversed_by_entry_id` link. Fires only for
+  AR-reduction types (receive/discount/write_off).
+- **On month-end batch** (WIRED — G1 fixed in 3f35e77): `confirmPeriod('YYYY-MM')` via
   `POST /api/v1/sales/commission/confirm-period` (admin-only API). Posts GL Dr Commission
-  Expense / Cr Employee Payable per salesman. **Crashes at `postCommissionExpense` call.**
-- **On employee transaction (type=repayment)** (INTENDED — DEAD): `markAsPaid` sets status →
-  `paid`.
+  Expense / Cr Employee Payable per salesman.
+- **On employee transaction (type=repayment)** (WIRED — SALES-2): `markAsPaid` sets status →
+  `paid` for confirmed entries in the transaction's period.
 
-The ONLY working flows are:
+All flows are now working:
 - **Rule CRUD** via `CommissionApiController` (admin API).
 - **Entries list / summaries** via `CommissionApiController` (read API).
-- **`confirmPeriod`** is wired but crashes (G1).
+- **`confirmPeriod`** is wired and working (G1 fixed in 3f35e77).
+- **Auto-calc pipeline** is wired (G2 fixed in SALES-2): `calculateOnAllocation`,
+  `reverseOnReturn`, `reverseOnPaymentReversal`, `markAsPaid`.
 
 ## 4. Who uses it?
 
@@ -266,10 +270,10 @@ CREATE TABLE commission_entries (
 
 ```mermaid
 stateDiagram-v2
-    [*] --> calculated: calculateOnAllocation() [DEAD CODE G2]
-    calculated --> confirmed: confirmPeriod() [CRASHES G1 — postCommissionExpense missing]
-    confirmed --> paid: markAsPaid() [DEAD CODE G2]
-    calculated --> reversed: reverseOnPaymentReversal() [DEAD CODE G2]
+    [*] --> calculated: calculateOnAllocation() [WIRED SALES-2]
+    calculated --> confirmed: confirmPeriod() [WORKING — G1 fixed 3f35e77]
+    confirmed --> paid: markAsPaid() [WIRED SALES-2]
+    calculated --> reversed: reverseOnPaymentReversal() [WIRED SALES-2]
     confirmed --> reversed: (manual reversal)
     paid --> [*]: terminal
     reversed --> [*]: terminal
@@ -295,15 +299,15 @@ stateDiagram-v2
 
 | Integration | Direction | Status | Purpose |
 |---|---|---|---|
-| `CustomerPaymentService::confirmPayment` → `calculateOnAllocation` | inbound | **DEAD CODE (G2)** | Should trigger commission calc on payment allocation |
-| `SalesReturnService::confirmReturn` → `reverseOnReturn` | inbound | **DEAD CODE (G2)** | Should create negative commission on return |
-| `CustomerPaymentService::cancelPayment` → `reverseOnPaymentReversal` | inbound | **DEAD CODE (G2)** | Should reverse commission on payment cancel |
-| `EmployeeTransactionService` (repayment) → `markAsPaid` | inbound | **DEAD CODE (G2)** | Should mark commission paid |
+| `CustomerPaymentService::confirmPayment` → `calculateOnAllocation` | inbound | ✅ wired (SALES-2) | Commission calc on payment allocation (AR-reduction types only) |
+| `SalesReturnService::confirmReturn` → `reverseOnReturn` | inbound | ✅ wired (SALES-2) | Negative commission on return |
+| `CustomerPaymentService::cancelPayment` → `reverseOnPaymentReversal` | inbound | ✅ wired (SALES-2) | Reverse commission on payment cancel (AR-reduction types only) |
+| `EmployeeTransactionService` (repayment) → `markAsPaid` | inbound | ✅ wired (SALES-2) | Mark commission paid |
 | `CommissionApiController` (8 endpoints) | inbound | ✅ wired | Rule CRUD + entries list + summaries + confirmPeriod |
-| `JournalPostingService::postCommissionExpense` | outbound | **DOES NOT EXIST (G1)** | Should post Dr commission_expense / Cr employee_payable |
-| `LedgerNatureService::EXTENDED_NATURES['commission_expense']` | outbound | **NOT REGISTERED (G3)** | Dr side ledger resolution |
-| `LedgerNatureService::EXTENDED_NATURES['commission_payable']` | outbound | **NOT REGISTERED (G3)** | Cr side ledger resolution |
-| `SalesAuditLogger` (5 commission events) | outbound | ✅ wired but NEVER fire (G2) | commission_rule_created, commission_calculated, etc. |
+| `JournalPostingService::postCommissionExpense` | outbound | ✅ exists (3f35e77) | Posts Dr commission_expense / Cr employee_payable |
+| `LedgerNatureService::EXTENDED_NATURES['commission_expense']` | outbound | ✅ registered (3f35e77) | Dr side ledger resolution |
+| `LedgerNatureService::EXTENDED_NATURES['commission_payable']` | outbound | ✅ registered (3f35e77) | Cr side ledger resolution |
+| `SalesAuditLogger` (5 commission events) | outbound | ✅ wired + now fires (SALES-2) | commission_rule_created, commission_calculated, etc. |
 
 ## 10. Edge cases
 
@@ -338,9 +342,31 @@ stateDiagram-v2
    `SalesReturnService::confirmReturn`, `CustomerPaymentService::cancelPayment`, or
    `EmployeeTransactionService`.
 
-   > ⏳ DEFERRED to SALES-2 — wiring the 4 dead-code methods into their 4 callers is the next batch.
-   > Now unblocked: G1 (postCommissionExpense exists) + G3 (ledger natures registered) are both done
-   > in commit 3f35e77, so the GL side of the pipeline will work once the call sites are wired.
+   > ✅ RESOLVED in SALES-2 — all 4 dead-code methods are now wired into their callers:
+   > - `calculateOnAllocation` ← `CustomerPaymentService::confirmPayment` (per-allocation,
+   >   AR-reduction types only: receive/discount/write_off)
+   > - `reverseOnPaymentReversal` ← `CustomerPaymentService::cancelPayment` (per-allocation,
+   >   before the allocation rows are deleted, AR-reduction types only)
+   > - `reverseOnReturn` ← `SalesReturnService::confirmReturn` (after status → confirmed +
+   >   audit log, before the notification dispatch)
+   > - `markAsPaid` ← `EmployeeTransactionService::createTransaction` (when
+   >   transaction_type='repayment', period derived from transaction_date YYYY-MM)
+   >
+   > All 4 call sites are wrapped in try/catch + Log::warning — a commission failure (e.g.
+   > no rule for the salesman, invoice has no salesman, or no prior entries to reverse)
+   > NEVER aborts the parent payment/return/transaction. The GL/ledger posting remains the
+   > source of truth; commission is a downstream concern.
+   >
+   > `allocateToInvoice` was refactored from `void` to `?int` (returns the allocation ID via
+   > `insertGetId`) so the caller can load the `InvoicePaymentAllocation` model and pass it to
+   > `calculateOnAllocation`. `CommissionService` was added to the constructor of all 3 caller
+   > services (no circular dependency — CommissionService depends only on JournalPostingService,
+   > DocumentSequenceService, SalesAuditLogger, SalesAccess).
+   >
+   > NOTE: gap G14 (reverseOnReturn uses `now()->format('Y-m')` for the reversal period instead
+   > of the original entry's period) remains open — tracked separately. The SALES-2 wiring does
+   > not change the period-derivation logic inside CommissionService; it only connects the
+   > call sites.
 3. **G3 (CRITICAL)** — `LedgerNatureService` has NO `commission_expense` or `commission_payable`
    natures. Even if G1 is fixed, the GL posting can't resolve the Dr side ledger.
 

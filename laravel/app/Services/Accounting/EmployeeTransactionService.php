@@ -6,6 +6,7 @@ use App\Models\EmployeeTransaction;
 use App\Models\EmployeeLedger;
 use App\Models\Bank;
 use App\Models\BankLedgerMapping;
+use App\Services\Sales\CommissionService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -42,6 +43,7 @@ class EmployeeTransactionService
         private JournalReversalService $journalReversal,
         private SubLedgerService $subLedger,
         private DocumentSequenceService $sequenceService,
+        private CommissionService $commission,
     ) {}
 
     /**
@@ -169,6 +171,39 @@ class EmployeeTransactionService
                 'journal_entry_id' => $journalEntryId,
                 'intercompany_journal_entry_id' => $intercompanyJournalId,
             ]);
+
+            // SALES-2 (G2/G-058): When a salesman is repaid (transaction_type=
+            // 'repayment'), mark their confirmed commission entries for the
+            // transaction's period as 'paid'. This closes the commission
+            // lifecycle: calculated → confirmed (month-end) → paid (repayment).
+            // The period is derived from transaction_date (YYYY-MM). Non-blocking:
+            // a commission update failure must not prevent the employee
+            // transaction (the GL/ledger posting is the source of truth).
+            // NOTE: gap G14 — if the repayment period differs from the original
+            // commission period, entries won't be found. That is tracked
+            // separately; this wiring implements the documented intent.
+            if ($transactionType === 'repayment') {
+                try {
+                    $period = substr($data['transaction_date'] ?? now()->format('Y-m-d'), 0, 7);
+                    $paidCount = $this->commission->markAsPaid($employeeId, $period);
+                    if ($paidCount > 0) {
+                        Log::info('Commission entries marked as paid', [
+                            'employee_id'        => $employeeId,
+                            'period'             => $period,
+                            'paid_count'         => $paidCount,
+                            'transaction_id'     => $transactionId,
+                            'transaction_code'   => $transactionCode,
+                        ]);
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning('Commission markAsPaid failed (non-blocking)', [
+                        'employee_id'      => $employeeId,
+                        'transaction_id'   => $transactionId,
+                        'transaction_code' => $transactionCode,
+                        'error'            => $e->getMessage(),
+                    ]);
+                }
+            }
 
             return EmployeeTransaction::with([
                 'employee', 'branch', 'bank',
