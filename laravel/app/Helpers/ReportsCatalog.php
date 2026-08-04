@@ -3,11 +3,22 @@
 namespace App\Helpers;
 
 /**
- * Reports Catalog — Phase 5.
+ * Reports Catalog — Phase 5 + Phase 6 + Phase 1E.
  * Mirrors legacy app/helpers/ReportsCatalog.php.
  *
- * Metadata registry of all 18 reports across 5 categories.
+ * Metadata registry of all 32 reports across 6 categories.
  * Used by the reports index page (hub) + navigation.
+ *
+ * G-048 (CRITICAL, REPORTS-2): previously the docblock claimed "18 reports
+ * across 5 categories" while categories() returned 25, and 7 report routes
+ * existed as unreachable orphans (4 CTE reports, ABC, budget variance,
+ * reconciliation hub). All 7 are now registered below — the catalog is the
+ * single source of truth for report discovery.
+ * G-050 (CRITICAL, REPORTS-2): the `branch_demand_weekly` entry previously
+ * pointed at `admin.reports.branchDemandWeekly` — a 5-column stub. It now
+ * points at `admin.branch-demands.weekly-report`, the real 23-column
+ * BranchDemandWeeklyReportService report. The stub controller method is kept
+ * as a redirect for backward compatibility with bookmarks.
  */
 class ReportsCatalog
 {
@@ -54,6 +65,7 @@ class ReportsCatalog
                     self::r('product_stock_analysis', 'Product Stock Analysis', 'In/out movement with opening & closing', 'admin.reports.productStockAnalysis', 'fa-microscope', ['movement'], 30),
                     self::r('product_movement', 'Product Movement', 'Chronological ledger for one SKU', 'admin.reports.productMovement', 'fa-route', ['movement'], 30),
                     self::r('warehouse_transfer_summary', 'Warehouse Transfer Summary', 'Period aggregates, top products, warehouse pairs, and trends', 'admin.warehouse-transfers.summary', 'fa-right-left', ['transfer', 'warehouse', 'export'], 30, false, 'range'),
+                    self::r('abc_report', 'ABC Classification', 'Pareto ranking of SKUs by value contribution (mv_product_abc_classification)', 'admin.stock-take.abc-report', 'fa-list-ol', ['abc', 'classification', 'inventory'], 0, false, 'range'),
                 ],
             ],
             [
@@ -72,6 +84,7 @@ class ReportsCatalog
                     self::r('daily_cash_book', 'Day Book (Cash & Bank)', 'Split view: receipts vs payments in the period', 'admin.reports.dailyCashBook', 'fa-book-open', ['cash'], 7, true, 'range'),
                     self::r('branch_intercompany', 'Branch Intercompany Ledger', 'Due between branches — settlement trail', 'admin.reports.branchIntercompany', 'fa-arrows-left-right', ['branch'], 30, false, 'range'),
                     self::r('branch_wise_ledger', 'Branch-wise Ledger', 'Per-branch GL activity summary', 'admin.reports.branchWiseLedger', 'fa-sitemap', ['branch', 'gl'], 30, false, 'range'),
+                    self::r('budgets_variance', 'Budget Variance', 'Budget vs actual by ledger / cost center with drill-down', 'admin.budgets.variance', 'fa-chart-column', ['budget', 'variance', 'finance'], 30, false, 'range'),
                 ],
             ],
             [
@@ -85,8 +98,22 @@ class ReportsCatalog
                     self::r('purchase_audit', 'Purchase Audit Checklist', 'GRN, supplier ledger, and purchase posting integrity', 'admin.reports.purchaseAudit', 'fa-truck', ['control', 'audit'], 0, false, 'range'),
                     self::r('stocktake_variance', 'Stock Take Variance', 'Line-level count vs system by session with GL drill-down', 'admin.reports.stocktakeVariance', 'fa-table', ['detail', 'variance'], 30, false, 'range'),
                     self::r('stocktake_weekly', 'Stock Take — Weekly Control', 'Posted sessions, gain/loss totals & top SKU variances', 'admin.reports.stocktakeWeekly', 'fa-chart-line', ['control', 'variance'], 7, false, 'range'),
-                    self::r('branch_demand_weekly', 'Branch Demand — Weekly', 'Inter-branch Demand, settlement & floor stock', 'admin.reports.branchDemandWeekly', 'fa-share-nodes', ['branch'], 7, false, 'range'),
+                    self::r('branch_demand_weekly', 'Branch Demand — Weekly', 'Inter-branch demand, settlement & floor stock — 23-column Excel-audit replication', 'admin.branch-demands.weekly-report', 'fa-share-nodes', ['branch'], 7, false, 'range'),
                     self::r('damage_report', 'Damage Report', 'Damage cost by month, category, warehouse, employee & top products', 'admin.reports.damageReport', 'fa-triangle-exclamation', ['damage', 'loss', 'export'], 30, true, 'range'),
+                    self::r('reconciliation_index', 'Reconciliation Hub', 'AR/AP/employee-payable 3-way subledger reconciliation vs GL control accounts', 'admin.reconciliation.index', 'fa-scale-balanced', ['reconciliation', 'gl', 'control'], 0, false, 'range'),
+                ],
+            ],
+            [
+                'id' => 'cte',
+                'label' => 'Phase 1E — CTE Reports',
+                'icon' => 'fa-bolt',
+                'accent' => 'finance',
+                'tagline' => 'Single-query PostgreSQL CTE aggregations — no PHP-side loops',
+                'reports' => [
+                    self::r('today_summary_cte', 'Today Summary (CTE)', 'All dashboard KPIs in one query — pending godown/challan counts', 'admin.reports.todaySummaryCte', 'fa-bolt', ['cte', 'dashboard'], 0, false, 'as_of'),
+                    self::r('ar_aging_cte', 'Receivable Aging (CTE)', 'Customer due balances by age bucket — single SQL window query', 'admin.reports.arAgingCte', 'fa-clock-rotate-left', ['cte', 'aging', 'finance'], 0, false, 'as_of'),
+                    self::r('general_ledger_cte', 'General Ledger (CTE)', 'Account activity with SQL window-function running balance', 'admin.reports.generalLedgerCte', 'fa-book-open-reader', ['cte', 'gl'], 30, false, 'range'),
+                    self::r('gross_margin_cte', 'Gross Margin (CTE)', 'True per-product margin via challan-item → stock-transaction COGS join', 'admin.reports.grossMarginCte', 'fa-percent', ['cte', 'margin', 'cogs'], 30, false, 'range'),
                 ],
             ],
         ];

@@ -30,6 +30,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
+# DuckDB CLI (for partition:export-parquet cold-storage pipeline)
+# -----------------------------------------------------------------------------
+# G-046 (CRITICAL): DuckDB is the conversion engine for the quarterly
+# partition-to-Parquet archival pipeline (ExportArchivedPartitionsToParquet
+# command). Without it, the command silently falls back to CSV export and
+# then DROPs the archive table — irretrievably losing typed data.
+# DuckDB is NOT in Debian bookworm's default apt repos, so we download the
+# official static CLI binary from GitHub releases. Pinned to v1.1.0 for
+# reproducibility; bump explicitly when upgrading.
+# Verification: `docker run --rm rc-erp:latest which duckdb` → /usr/local/bin/duckdb
+RUN curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.1.0/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip \
+    && unzip /tmp/duckdb.zip -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/duckdb \
+    && rm /tmp/duckdb.zip \
+    && duckdb --version
+
+# -----------------------------------------------------------------------------
 # PHP extensions
 # -----------------------------------------------------------------------------
 # Core extensions (bundled with PHP)

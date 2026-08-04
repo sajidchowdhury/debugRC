@@ -46,12 +46,20 @@ Schedule::command('stock:reconcile-drift')
 // 04:00 pg_cron consolidation job so exports operate on already-consolidated
 // partitions). NB: Laravel's ->quarterly() runs at 00:00 — we use an explicit
 // cron expression to control the 04:30 timing.
-Schedule::command('partition:export-parquet')
+//
+// G-046 (CRITICAL, REPORTS-2): pass `--require-parquet` so the scheduled run
+// ABORTs (return FAILURE) instead of silently falling back to CSV when DuckDB
+// is missing. The CSV fallback path DROPs the typed archive table after a
+// type-less CSV export — irretrievable data loss. The Dockerfile installs
+// DuckDB v1.1.0, so this flag is defense-in-depth against a misconfigured
+// image. A failed quarterly run is visible in the scheduler log; a silent
+// CSV degradation is not.
+Schedule::command('partition:export-parquet --require-parquet')
     ->cron('30 4 1 1,4,7,10 *')
     ->withoutOverlapping()
     ->runInBackground()
     ->name('partition-export-parquet')
-    ->description('Export archived partitions to Parquet cold storage (quarterly)');
+    ->description('Export archived partitions to Parquet cold storage (quarterly, requires DuckDB)');
 
 // Phase 10.1 — Phase 8.7: Verify partition-wise joins weekly (Mondays 05:00).
 // Runs EXPLAIN ANALYZE on the JE↔JL join, asserts a partition-wise join node

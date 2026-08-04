@@ -29,6 +29,16 @@ use Illuminate\Support\Facades\Storage;
  * pipeline never blocks — operators can convert CSV→Parquet later on a
  * separate host.
  *
+ * G-046 (CRITICAL, REPORTS-2): the CSV fallback is dangerous because the
+ * command DROPs the archive table after a successful (CSV) export — the
+ * original typed data is irretrievably lost and only the type-less CSV
+ * remains. The Dockerfile now installs the DuckDB CLI binary (v1.1.0) so
+ * the fallback path should never trigger in production. As defense-in-depth,
+ * pass `--require-parquet` to ABORT (return FAILURE) instead of falling back
+ * to CSV when DuckDB is missing. The quarterly schedule in routes/console.php
+ * passes `--require-parquet` so a misconfigured image fails loud rather than
+ * silently degrading archival fidelity.
+ *
  * Lifecycle:
  *
  *   archive.<partition>              ┐
@@ -61,7 +71,8 @@ class ExportArchivedPartitionsToParquet extends Command
     protected $signature = 'partition:export-parquet
                             {--dry-run : List what would be exported without doing it}
                             {--keep : Do not drop the archive table after a successful export}
-                            {--force : Overwrite an existing Parquet file}';
+                            {--force : Overwrite an existing Parquet file}
+                            {--require-parquet : Abort (return FAILURE) if DuckDB is not available — do not fall back to CSV}';
 
     protected $description = 'Export archived partitions to Parquet cold storage (quarterly)';
 
@@ -84,11 +95,20 @@ class ExportArchivedPartitionsToParquet extends Command
         // `Storage` facade handles recursive creation.
         $this->ensureExportDirectory();
 
-        // Detect DuckDB once. If absent, we fall back to CSV.
+        // Detect DuckDB once. If absent, we fall back to CSV — unless the
+        // caller passed --require-parquet, in which case we ABORT so the
+        // quarterly schedule fails loud rather than silently degrading to a
+        // type-less CSV export (and then DROPping the typed archive table).
+        $requireParquet = (bool) $this->option('require-parquet');
         $duckdbPath = $this->findDuckdb();
         $useParquet = $duckdbPath !== null;
         if (! $useParquet) {
-            $this->warn('DuckDB not found on PATH — falling back to CSV export. Install DuckDB for native Parquet output.');
+            if ($requireParquet) {
+                $this->error('DuckDB not found on PATH and --require-parquet was passed. Aborting to avoid the CSV-fallback path that DROPs the typed archive table. Install DuckDB (see Dockerfile) or drop --require-parquet to allow CSV fallback.');
+                Log::error('partition:export-parquet: aborted — DuckDB unavailable and --require-parquet set.');
+                return self::FAILURE;
+            }
+            $this->warn('DuckDB not found on PATH — falling back to CSV export. Install DuckDB for native Parquet output, or pass --require-parquet to abort.');
             Log::warning('partition:export-parquet: DuckDB not available; falling back to CSV export.');
         }
 

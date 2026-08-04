@@ -816,19 +816,16 @@ SQL, [$data['from'], $data['to']]);
 
     public function branchDemandWeekly(Request $request)
     {
-        $data = $this->parseDateRange($request);
-        $rows = \Illuminate\Support\Facades\DB::table('branch_demands as bd')
-            ->join('branches as fb', 'fb.id', '=', 'bd.from_branch_id')
-            ->join('branches as tb', 'tb.id', '=', 'bd.to_branch_id')
-            ->whereBetween('bd.demand_date', [$data['from'], $data['to']])
-            ->select('bd.id', 'bd.demand_code', 'bd.demand_date', 'bd.status', 'fb.branch_name as from_branch', 'tb.branch_name as to_branch')
-            ->orderBy('bd.demand_date', 'desc')
-            ->paginate(25);
-
-        return view('admin.reports.branch_demand_weekly', [
-            'meta' => ['title' => 'Branch Demand — Weekly', 'from_date' => $data['from']->format('Y-m-d'), 'to_date' => $data['to']->format('Y-m-d')],
-            'data' => $rows,
-        ]);
+        // G-050 (CRITICAL, REPORTS-2): this method was a 5-column stub that
+        // paginated raw branch_demands rows. The REAL 23-column weekly report
+        // lives at admin.branch-demands.weekly-report →
+        // BranchDemandReportController::weekly →
+        // BranchDemandWeeklyReportService::generateDailyReport. The
+        // ReportsCatalog entry now points directly at the real route; this
+        // stub is retained only as a redirect for any bookmarks/links still
+        // targeting admin.reports.branchDemandWeekly, forwarding the query
+        // string so date filters survive the hop.
+        return redirect()->route('admin.branch-demands.weekly-report', $request->query());
     }
 
     // ============================================================
