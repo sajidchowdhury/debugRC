@@ -294,25 +294,52 @@ class PurchaseOrderService
      * Update received_qty on a PO item (called by GRN in Phase 7.2).
      * Auto-updates PO status: partial if some received, received if all fully received.
      *
-     * @param int $poId
-     * @param int $productId
-     * @param float $additionalReceivedQty
+     * PURCHASING-3 (G-037): signature changed to accept purchase_order_item_id
+     * instead of (poId, productId). The old signature located the PO item via
+     * `where('purchase_order_id', $poId)->where('product_id', $productId)->first()`,
+     * which silently credited the FIRST matching line when a PO had duplicate
+     * products on multiple lines — leaving the other line at received_qty=0 and
+     * producing wrong PO status flips. The GRN item already carries
+     * `purchase_order_item_id` (FK to purchase_order_items.id), so we lookup
+     * directly by PK — unambiguous even with duplicate products.
+     *
+     * PURCHASING-3 (G-038): over-receive guard added. Throws if the cumulative
+     * received_qty would exceed the ordered qty (with a 0.0001 tolerance for
+     * floating-point noise). The audit checklist detects over-receives after
+     * the fact; this guard PREVENTS them at the service boundary.
+     *
+     * @param int   $poItemId            purchase_order_items.id (FK from GRN item)
+     * @param float $additionalReceivedQty qty being received now (positive)
      * @return PurchaseOrder
+     * @throws \RuntimeException If PO item not found, or over-receive guard trips.
      */
-    public function updateReceivedQty(int $poId, int $productId, float $additionalReceivedQty): PurchaseOrder
+    public function updateReceivedQty(int $poItemId, float $additionalReceivedQty): PurchaseOrder
     {
-        return DB::transaction(function () use ($poId, $productId, $additionalReceivedQty) {
+        return DB::transaction(function () use ($poItemId, $additionalReceivedQty) {
             $item = DB::table('purchase_order_items')
-                ->where('purchase_order_id', $poId)
-                ->where('product_id', $productId)
+                ->where('id', $poItemId)
                 ->lockForUpdate()
                 ->first();
 
             if (!$item) {
-                throw new \RuntimeException("PO item not found for PO {$poId}, product {$productId}.");
+                throw new \RuntimeException("PO item not found for po_item_id {$poItemId}.");
             }
 
+            $poId = (int) $item->purchase_order_id;
+
+            // PURCHASING-3 (G-038): over-receive guard.
+            // Tolerance 0.0001 absorbs floating-point noise (numeric(14,4) column).
             $newReceived = (float) $item->received_qty + $additionalReceivedQty;
+            $orderedQty = (float) $item->qty;
+            if ($newReceived > $orderedQty + 0.0001) {
+                throw new \RuntimeException(
+                    "Over-receive guard tripped for PO item {$poItemId}: "
+                    . "ordered {$orderedQty}, already received {$item->received_qty}, "
+                    . "attempting to add {$additionalReceivedQty} → total {$newReceived} "
+                    . "exceeds ordered by " . round($newReceived - $orderedQty, 4) . "."
+                );
+            }
+
             DB::table('purchase_order_items')
                 ->where('id', $item->id)
                 ->update(['received_qty' => $newReceived]);

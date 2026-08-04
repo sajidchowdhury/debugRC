@@ -720,21 +720,47 @@ class PurchaseAuditService
     private function scalarCount(string $sql): int
     {
         try {
-            $row = DB::selectOne($sql);
+            // PURCHASING-3 (G-040): use parameter binding instead of string
+            // concatenation. branchFilter() and branchWarehouseFilter() emit
+            // '?' placeholders; we count them and supply $this->branchId for
+            // each. When branchId is null, the filter methods return '' (no
+            // '?'), so bindings is empty and DB::selectOne gets an empty array.
+            $placeholderCount = substr_count($sql, '?');
+            $bindings = $placeholderCount > 0
+                ? array_fill(0, $placeholderCount, $this->branchId)
+                : [];
+            $row = DB::selectOne($sql, $bindings);
             return $row ? (int) ($row->c ?? 0) : 0;
         } catch (\Throwable $e) {
             return -1;
         }
     }
 
+    /**
+     * PURCHASING-3 (G-040): returns a SQL fragment with a '?' placeholder
+     * instead of concatenating (int) $this->branchId directly into the string.
+     *
+     * The (int) cast previously prevented SQL injection, but the pattern
+     * violated the project's coding standards (use prepared statements) and
+     * tripped static analyzers. The placeholder is bound by scalarCount(),
+     * which counts '?' characters in the full SQL and passes $this->branchId
+     * for each.
+     *
+     * Returns '' when branchId is null (admin cross-branch view) — no
+     * placeholder, no binding.
+     */
     private function branchFilter(string $column): string
     {
         if (!$this->branchId) {
             return '';
         }
-        return " AND {$column} = " . (int) $this->branchId;
+        return " AND {$column} = ?";
     }
 
+    /**
+     * PURCHASING-3 (G-040): same refactor as branchFilter — uses '?'
+     * placeholder for the branch_id value in the EXISTS subquery.
+     */
     private function branchWarehouseFilter(string $warehouseColumn): string
     {
         if (!$this->branchId) {
@@ -742,8 +768,8 @@ class PurchaseAuditService
         }
         return " AND EXISTS (
             SELECT 1 FROM warehouses w
-            WHERE w.id = {$warehouseColumn} AND w.branch_id = " . (int) $this->branchId . '
-        )';
+            WHERE w.id = {$warehouseColumn} AND w.branch_id = ?
+        )";
     }
 
     /**

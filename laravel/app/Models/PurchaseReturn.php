@@ -70,6 +70,8 @@ class PurchaseReturn extends Model
         'warehouse_id',
         'total_amount',
         'status',
+        'confirmed_by',   // PURCHASING-3 G-039
+        'confirmed_at',   // PURCHASING-3 G-039
         'journal_entry_id',
         'is_reversed',
         'reversed_at',
@@ -85,12 +87,14 @@ class PurchaseReturn extends Model
         'total_amount' => 'decimal:2',
         'is_reversed' => 'boolean',
         'reversed_at' => 'datetime',
+        'confirmed_at' => 'datetime',   // PURCHASING-3 G-039
         'purchase_receive_id' => 'integer',
         'supplier_id' => 'integer',
         'branch_id' => 'integer',
         'warehouse_id' => 'integer',
         'journal_entry_id' => 'integer',
         'created_by' => 'integer',
+        'confirmed_by' => 'integer',   // PURCHASING-3 G-039
         'reversed_by' => 'integer',
     ];
 

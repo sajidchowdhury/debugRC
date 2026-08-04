@@ -238,20 +238,44 @@ class PurchaseReceiveService
             ]);
 
             // 4. Update PO received_qty (if against a PO).
+            // PURCHASING-3 (G-037): pass purchase_order_item_id (not product_id)
+            // so the PO item is located by PK — unambiguous even when a PO has
+            // the same product on multiple lines. Skip GRN items with null
+            // purchase_order_item_id (direct receives or unmatched lines).
             if ($receive->purchase_order_id) {
                 foreach ($receive->items as $item) {
+                    if (!$item->purchase_order_item_id) {
+                        // Defensive: log + skip. Shouldn't happen for PO-linked
+                        // receives since the controller pre-fills the FK, but a
+                        // direct service call (jobs/tests) could omit it.
+                        Log::warning(
+                            'PurchaseReceiveService::confirmReceive — GRN item has no purchase_order_item_id, skipping PO received_qty update',
+                            [
+                                'receive_id' => $receiveId,
+                                'receive_code' => $receive->receive_code,
+                                'po_id' => $receive->purchase_order_id,
+                                'product_id' => $item->product_id,
+                                'qty' => $item->qty,
+                            ]
+                        );
+                        continue;
+                    }
                     $this->poService->updateReceivedQty(
-                        $receive->purchase_order_id,
-                        $item->product_id,
+                        (int) $item->purchase_order_item_id,
                         (float) $item->qty
                     );
                 }
             }
 
             // 5. Update GRN status.
+            // PURCHASING-3 (G-039): persist confirmed_by / confirmed_at on the
+            // row so the confirmer's identity is a fast O(1) PK lookup, not a
+            // slow month-partitioned user_audit_log join.
             $receiveUpdate = [
                 'status' => 'confirmed',
                 'journal_entry_id' => $journalEntryId,
+                'confirmed_by' => $confirmedBy,
+                'confirmed_at' => now(),
                 'updated_at' => now(),
             ];
             // PURCHASING-2 (G-035): capture old before update so we can log
@@ -356,11 +380,25 @@ class PurchaseReceiveService
                 }
 
                 // Reverse PO received_qty (decrement by the received qty).
+                // PURCHASING-3 (G-037): pass purchase_order_item_id (not product_id).
                 if ($receive->purchase_order_id) {
                     foreach ($receive->items as $item) {
+                        if (!$item->purchase_order_item_id) {
+                            // Defensive: log + skip. Mirrors the confirmReceive path.
+                            Log::warning(
+                                'PurchaseReceiveService::cancelReceive — GRN item has no purchase_order_item_id, skipping PO received_qty decrement',
+                                [
+                                    'receive_id' => $receiveId,
+                                    'receive_code' => $receive->receive_code,
+                                    'po_id' => $receive->purchase_order_id,
+                                    'product_id' => $item->product_id,
+                                    'qty' => $item->qty,
+                                ]
+                            );
+                            continue;
+                        }
                         $this->decrementPoReceivedQty(
-                            $receive->purchase_order_id,
-                            $item->product_id,
+                            (int) $item->purchase_order_item_id,
                             (float) $item->qty
                         );
                     }
@@ -466,16 +504,24 @@ class PurchaseReceiveService
 
     /**
      * Decrement PO received_qty (on GRN cancel).
+     *
+     * PURCHASING-3 (G-037): signature changed to accept purchase_order_item_id
+     * instead of (poId, productId). Mirrors the updateReceivedQty refactor —
+     * lookup by PK so duplicate-product PO lines are unambiguous.
+     *
+     * @param int   $poItemId purchase_order_items.id
+     * @param float $qty      qty being reversed (positive)
      */
-    private function decrementPoReceivedQty(int $poId, int $productId, float $qty): void
+    private function decrementPoReceivedQty(int $poItemId, float $qty): void
     {
         $item = DB::table('purchase_order_items')
-            ->where('purchase_order_id', $poId)
-            ->where('product_id', $productId)
+            ->where('id', $poItemId)
             ->lockForUpdate()
             ->first();
 
         if (!$item) return;
+
+        $poId = (int) $item->purchase_order_id;
 
         $newReceived = max(0, (float) $item->received_qty - $qty);
         DB::table('purchase_order_items')

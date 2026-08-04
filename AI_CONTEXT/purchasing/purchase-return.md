@@ -406,6 +406,14 @@ return $this->journalPosting->createJournalEntry([
 4. **G11 — No `confirmed_by` / `confirmed_at` columns.** The confirmer's identity is
    recoverable only via `user_audit_log` (partitioned by month — slow join). MAJOR for
    auditability.
+
+   > ✅ RESOLVED (PURCHASING-3) — Migration `2026_09_03_000003_add_confirmed_by_at_to_purchase_tables.php`
+   > adds `confirmed_by integer` + `confirmed_at timestamp(0)` to `purchase_returns` (and
+   > `purchase_receives` for symmetry). Nullable — null for draft rows, populated on confirm.
+   > `confirmReturn()` now sets both columns alongside `status='confirmed'`. DDL refreshed in
+   > `05_purchase.sql`. Eloquent model updated (`$fillable` + `$casts`). The confirmer's identity
+   > is now a fast O(1) PK lookup instead of a slow month-partitioned `user_audit_log` join.
+   > Closes G-039.
 5. **G12 — `sub_total`, `discount_amount`, `tax_amount` columns exist but are NEVER written.**
    `createReturn` only sets `total_amount`. The GL posts a single Dr `ap` / Cr `inventory` at
    the net total — no input-VAT reclaim ledger entry. MAJOR — VAT compliance gap. Either write

@@ -288,6 +288,14 @@ If any step fails, the whole PO rolls back — no orphan items, no orphan audit 
 3. **G6 — No over-receive guard.** A user can receive more than the PO line's `qty`. The audit
    checklist detects this after the fact but does not prevent it. MAJOR — financial impact if
    the rate is wrong.
+
+   > ✅ RESOLVED (PURCHASING-3) — Over-receive guard added to `PurchaseOrderService::updateReceivedQty`.
+   > After computing `$newReceived = $item->received_qty + $additionalReceivedQty`, the method
+   > throws `RuntimeException` if `$newReceived > $item->qty + 0.0001` (tolerance for float noise
+   > on `numeric(14,4)` columns). The exception message includes the ordered qty, already-received
+   > qty, attempted-add qty, and the excess — for fast triage. The guard PREVENTS over-receives
+   > at the service boundary instead of relying on the audit checklist to detect them after the
+   > fact. Closes G-038.
 4. **G7 — No `ApprovalService` integration.** POs are not subject to maker-checker approval
    despite their financial significance. A single `manager` can create + send + receive a
    BDT 10M PO without a second-person review. MAJOR — control gap.

@@ -431,8 +431,28 @@ return $this->journalPosting->createJournalEntry([
 5. **G5 — `received_qty` updated by `product_id`, not `purchase_order_item_id`.** If a PO has
    the same product on multiple lines, the first matching line gets all the received_qty credit.
    MAJOR — PO status flip becomes wrong.
+
+   > ✅ RESOLVED (PURCHASING-3) — `PurchaseOrderService::updateReceivedQty` signature changed
+   > from `(int $poId, int $productId, float $additionalReceivedQty)` to
+   > `(int $poItemId, float $additionalReceivedQty)`. The PO item is now located by PK
+   > (`where('id', $poItemId)`) instead of by `(poId, productId)` — unambiguous even when a
+   > PO has duplicate products on multiple lines. The GRN item already carries
+   > `purchase_order_item_id` (FK to `purchase_order_items.id`), so the caller in
+   > `PurchaseReceiveService::confirmReceive` passes `(int) $item->purchase_order_item_id`
+   > instead of `($receive->purchase_order_id, $item->product_id)`. Same refactor applied to
+   > the private `decrementPoReceivedQty` (called from `cancelReceive`). GRN items with null
+   > `purchase_order_item_id` (direct receives or unmatched lines) are skipped with a
+   > `Log::warning` — defensive. Closes G-037.
 6. **G6 — No over-receive guard.** A user can receive 100 units against a PO line that ordered
    10. MAJOR — financial impact if the rate is wrong.
+
+   > ✅ RESOLVED (PURCHASING-3) — Over-receive guard added to `PurchaseOrderService::updateReceivedQty`.
+   > After computing `$newReceived = $item->received_qty + $additionalReceivedQty`, the method
+   > checks `if ($newReceived > $item->qty + 0.0001) throw \RuntimeException(...)` with a
+   > detailed message (ordered, already-received, attempting-to-add, excess). The 0.0001
+   > tolerance absorbs floating-point noise on `numeric(14,4)` columns. The guard PREVENTS
+   > over-receives at the service boundary (previously the audit checklist only detected them
+   > after the fact). Closes G-038.
 7. **G8 — avg_cost uses per-line gross rate, not net-of-discount.** If a GRN has header
    `discount_amount` or `tax_amount`, the GL posts the net total (Dr Inventory = sub_total −
    discount + tax) but the stock's `avg_cost` uses the per-line gross `rate`. The two diverge
@@ -440,6 +460,13 @@ return $this->journalPosting->createJournalEntry([
 8. **G11 — No `confirmed_by` / `confirmed_at` columns.** The confirmer's identity is recoverable
    only via `user_audit_log` (partitioned by month — slow join for historical queries). MAJOR
    for auditability.
+
+   > ✅ RESOLVED (PURCHASING-3) — Migration `2026_09_03_000003_add_confirmed_by_at_to_purchase_tables.php`
+   > adds `confirmed_by integer` + `confirmed_at timestamp(0)` to both `purchase_receives` and
+   > `purchase_returns` (nullable — null for draft rows). `confirmReceive()` now sets both
+   > columns alongside `status='confirmed'`. DDL refreshed in `05_purchase.sql`. Eloquent models
+   > updated (`$fillable` + `$casts`). The confirmer's identity is now a fast O(1) PK lookup
+   > instead of a slow month-partitioned `user_audit_log` join. Closes G-039.
 9. **G17 — `warehouse_id` nullable mismatch with PO.** A PO can be created without a warehouse
    (nullable), but the GRN against it must specify a warehouse at the header level. MINOR.
 10. **G18 — `purchase_receive_items.warehouse_id` nullable in DDL but required by FormRequest.**

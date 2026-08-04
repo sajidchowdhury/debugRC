@@ -251,9 +251,14 @@ class PurchaseReturnService
             ]);
 
             // 5. Update return status.
+            // PURCHASING-3 (G-039): persist confirmed_by / confirmed_at on the
+            // row so the confirmer's identity is a fast O(1) PK lookup, not a
+            // slow month-partitioned user_audit_log join.
             $returnUpdate = [
                 'status' => 'confirmed',
                 'journal_entry_id' => $journalEntryId,
+                'confirmed_by' => $confirmedBy,
+                'confirmed_at' => now(),
                 'updated_at' => now(),
             ];
             // PURCHASING-2 (G-036): capture old before update so we can log

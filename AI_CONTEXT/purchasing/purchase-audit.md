@@ -454,6 +454,14 @@ purchase tables are NOT in the hash chain.
 5. **G15 — `PurchaseAuditService::branchFilter` uses string concatenation into raw SQL.** The
    `(int)` cast prevents SQL injection, but the pattern violates the project's coding standards
    (use prepared statements). Static analyzers will flag it. MINOR.
+
+   > ✅ RESOLVED (PURCHASING-3) — `branchFilter()` and `branchWarehouseFilter()` now return SQL
+   > fragments with `?` placeholders instead of concatenating `(int) $this->branchId` into the
+   > string. `scalarCount()` counts `?` characters via `substr_count($sql, '?')` and passes
+   > `array_fill(0, $count, $this->branchId)` as bindings to `DB::selectOne($sql, $bindings)`.
+   > When `$this->branchId` is null (admin cross-branch view), the filter methods return `''`
+   > (no placeholder), so bindings is empty and `DB::selectOne` gets an empty array. Zero
+   > changes to the 34 call sites — the binding is auto-collected. Closes G-040.
 6. **No scheduled job for the checklist.** The checklist runs only on-demand. A FAIL item
    (e.g. negative stock, missing journal) can persist for days before someone opens the
    dashboard. MAJOR — operational.

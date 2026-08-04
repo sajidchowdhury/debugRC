@@ -60,6 +60,11 @@ CREATE TABLE purchase_receives (
     -- SupplierTransactionService::allocateToGRN (+) / reversePayment (-).
     paid_amount numeric(14,2) DEFAULT 0,
     status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','cancelled')),
+    -- PURCHASING-3 G-039: confirmer identity persisted on the row for fast
+    -- O(1) PK lookup (avoids slow month-partitioned user_audit_log join).
+    -- Null for draft rows; populated by confirmReceive().
+    confirmed_by integer,
+    confirmed_at timestamp(0),
     journal_entry_id integer REFERENCES journal_entries(id),
     is_reversed boolean NOT NULL DEFAULT false,
     reversed_at timestamp(0),
@@ -110,6 +115,11 @@ CREATE TABLE purchase_returns (
     tax_amount numeric(14,2) DEFAULT 0,
     total_amount numeric(14,2) DEFAULT 0,
     status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','confirmed','cancelled')),
+    -- PURCHASING-3 G-039: confirmer identity persisted on the row for fast
+    -- O(1) PK lookup (avoids slow month-partitioned user_audit_log join).
+    -- Null for draft rows; populated by confirmReturn().
+    confirmed_by integer,
+    confirmed_at timestamp(0),
     journal_entry_id integer REFERENCES journal_entries(id),
     is_reversed boolean NOT NULL DEFAULT false,
     reversed_at timestamp(0),
