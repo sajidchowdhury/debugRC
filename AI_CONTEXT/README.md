@@ -399,7 +399,107 @@ AI_CONTEXT/
   `forwardToNotificationService` becomes a no-op (DB trigger still fires `pg_notify` for SSE
   refresh via `publishToRedis` which is unaffected). NOT SAFETY-CRITICAL (no GL posting) but
   business-critical (drives operational visibility).
-- **Phases 16–21:** Not started. Execute one phase at a time per the roadmap.
+- **Phase 16 — Reporting & Exports:** ✅ Complete (`reports/` — 5 files: `reports-catalog.md`
+  740L, `materialized-views.md` 834L, `cte-reports.md` 694L, `csv-export.md` 986L,
+  `dashboards.md` 780L = 4034 lines total, L complexity, depends on Phase 3). Spans the full
+  reporting surface — central catalog helper + 13 materialized views + 4 CTE functions + 22
+  CSV/Parquet export endpoints + 3 dashboard tiers. **Reports Catalog**
+  (`reports-catalog.md`): `ReportsCatalog` helper (187L, 6 static methods, 5 categories × 21
+  reports + 7 orphans = 28 total report endpoints) is the spine; `ReportController` 1079L
+  with 33 public methods; 8 services (`ReportService` 1171L, `CteReportService` 304L,
+  `DamageReportService` 434L, `StockTakeVarianceReport` 229L, `StockTakeWeeklyReport` 195L,
+  `WarehouseTransferSummaryReport` 287L, `BranchDemandWeeklyReportService` 1076L,
+  `DimensionReportingService` 261L); 4 SQL patterns (raw SQL heredoc / DB::table / MV read /
+  CTE function call); 3 refresh strategies (real-time / MV-refresh @5min / on-demand CSV
+  export); 4 reconciliation checks (TB Dr=Cr, BS A=L+E, CashFlow plugs_to_gl_cash, AR Aging
+  matches_gl); ReportsHub.js 167L (4 lens presets + pin-to-localStorage); reports-premium.css
+  529L (5 accent colors). 16 gaps (3 CRITICAL: G1 NO `role:` middleware on `admin/reports`
+  prefix group — salesmen can hit Trial Balance / P&L / BS / Cash Flow / all 4 CTE reports /
+  all CSV exports, RLS only enforces branch isolation not role-based read; G2 catalog drift —
+  claims 18 reports but has 21, plus 7 orphan reports including all 4 CTE reports unreachable
+  from hub; G3 `branch_demand_weekly` catalog entry is a STUB pointing at a 5-column list
+  while the REAL 23-column report is at `admin.branch-demands.weekly-report` orphan route;
+  7 HIGH: G4 DDL stale — `database/sql/07_views_triggers_constraints.sql` has ZERO matches
+  for the 7 MVs / 4 CTE functions / `refresh_all_report_views()`, only in migrations; G5
+  `fn_financial_audit_trigger` attached to only 9 tables — 14 transactional tables that feed
+  reports bypass `financial_audit_log`; G6 ZERO FormRequests for 50+ unvalidated report
+  filter inputs; G7 ZERO tests for 57 untested report service methods (P&L/BS/CF unaudited);
+  G8/G9/G10 AR Aging + Gross Margin + General Ledger each have duplicate non-CTE + CTE
+  implementations with no equivalence test; 4 MEDIUM + 2 LOW). **Materialized Views**
+  (`materialized-views.md`): 13 MVs discovered (not 8 as initially scoped) — 7 financial
+  (mv_ledger_balances, mv_ar_aging, mv_ap_aging, mv_stock_valuation, mv_journal_entry_summary,
+  mv_branch_intercompany, mv_product_movement_summary) + 1 ABC + 1 consolidated trial balance
+  + 4 running-balance check; `refresh_all_report_views()` PL/pgSQL function verbatim (7×
+  REFRESH CONCURRENTLY in single BEGIN…END — Gap G6 may fail since PG forbids CONCURRENTLY
+  inside transaction block); `reports:refresh` artisan command 43L + Laravel scheduler
+  (`console.php:11-17` every 5min `withoutOverlapping` `runInBackground`) + pg_cron duplicate
+  (`2025_01_20_000009:222-228` every 5min — Gap G5 no coordination); on-demand refresh claim
+  in docblock is NOT WIRED (Gap G15 — grep for callers of
+  `ReportService::refreshMaterializedViews()` returns 0 matches); 3 regular views
+  (`v_journal_entries_with_lines`, `v_financial_audit_chain_verification`, `budget_vs_actual`).
+  14 gaps (4 CRITICAL: G1 NO RLS on any of 13 MVs — pre-materialized physical rows bypass
+  source-table RLS policies; G2 DDL staleness — baseline `database/sql/*.sql` has ZERO
+  matches for 12 of 13 MVs (only `mv_product_abc_classification` is in `03_stock.sql`);
+  G3 `mv_consolidated_trial_balance` orphaned refresh — NO scheduled refresh, only ad-hoc
+  via private `ConsolidationService::refreshMaterializedViews()`; G4 ZERO tests for MV
+  refresh command + ZERO MV integrity tests; 3 HIGH + 5 MEDIUM + 2 LOW). **CTE Reports**
+  (`cte-reports.md`): 4 PostgreSQL `STABLE` PL/pgSQL functions returning `jsonb` —
+  `rcerp_today_summary` (10+ CTEs, replaces 6+ LegacyDashboard queries), `rcerp_ar_aging_cte`
+  (bucketing + reconciliation + detail + per-branch CTEs, includes `checks.matches_gl: bool`),
+  `rcerp_general_ledger_cte` (opening-balance + window-function running-balance via `SUM()
+  OVER (PARTITION BY ledger_id ORDER BY entry_date, entry_no, jl.id ROWS UNBOUNDED
+  PRECEDING)` — replaces PHP-side `$running[$key] += $r->debit - $r->credit` loop),
+  `rcerp_gross_margin_cte` (6-stage pipeline: active_invoices → invoice_items → item_cogs via
+  stock_transactions join → invoice_margin → product_margin → grand_totals — accurate
+  per-product COGS replacing simplified `sales_challans.issue_cost` column). `CteReportService`
+  304L crown jewel — 4 public methods + 4 private fallback methods, single round-trip
+  `DB::selectOne("SELECT rcerp_*_cte(...) AS result")`, `meta.source = 'cte_function'` on
+  success / `'fallback'` on Throwable. 2 convenience views (`v_today_summary`,
+  `v_ar_aging_today`). 11 gaps (1 CRITICAL cross-ref G1, 5 HIGH cross-ref G2/G4/G7/G8/G9/G10,
+  3 MEDIUM, 2 LOW). **CSV & Parquet Export** (`csv-export.md`): 22 HTTP export endpoints + 1
+  Artisan command across 3 tiers — Tier 1 `CsvExporter` service (159L, streaming via
+  `response()->stream()` + `chunk(500)` + UTF-8 BOM via `fwrite($out, "\xEF\xBB\xBF")`, used
+  by 9 master-data modules via `BaseMasterDataController::export`); Tier 2 inline `fputcsv`
+  exports in 14 controllers/services with 4 pattern variants (cursor+fprintf BOM / get+fwrite
+  BOM / php://temp buffered NO BOM / `?export=csv` query toggle); Tier 3 DuckDB-backed
+  Parquet archival (`ExportArchivedPartitionsToParquet` 339L, quarterly at 04:30 on Jan 1 /
+  Apr 1 / Jul 1 / Oct 1, COPY→temp CSV→DuckDB→Parquet ZSTD, DROPs archive table after
+  success unless `--keep`). 30 gaps (3 CRITICAL: G1 NO `role:` middleware on 6 export
+  endpoints in `admin/reports` group — any authed user can download Trial Balance / Cash
+  Flow / Stocktake Variance / Stocktake Weekly / Damage CSVs; G2 DuckDB NOT in Docker image
+  — `Dockerfile` has no `duckdb` binary, every quarterly run silently falls back to CSV then
+  DROPS the typed archive data irretrievably; G12 reaffirms G1 — `?export=csv` query toggle
+  on `trialBalance` + `cashFlow` routes means no opportunity to attach role middleware;
+  9 HIGH: G3 CsvExporter not bound as singleton + no Facade, G4 BranchDemandReport export
+  buffered NOT streamed + no 90-day cap = memory exhaustion DoS, G5 no `config/export.php`,
+  G6 NO audit-log row on ANY export (SOX compliance gap), G7 NO FormRequest validation on
+  any export, G8 NO throttle on any export endpoint, G11 14 of 22 endpoints bypass
+  CsvExporter + roll their own fputcsv, G21 BranchDemand CSV missing BOM, G23 Purchase Order
+  CSV missing BOM, G24 Budget Variance CSV missing BOM; 9 MEDIUM + 7 LOW). **Dashboards**
+  (`dashboards.md`): 3 dashboard tiers + 1 dead demo asset — (1) PRIMARY
+  `UserPerformanceDashboardController` 2246L god-class (Gap G9) with 29 methods (16 cached
+  metric methods + 13 helpers), per-user attribution via `created_by = $userId` (class
+  docblock: "NO company-wide metrics anywhere"), 60s `Cache::remember` per metric, 200ms
+  slow-query threshold logging to `storage/logs/perf.log`, 5 period presets (today/mtd/qtd/
+  last30/custom — `ytd` deliberately removed), super-admin can `?employee_id=X`, role-section
+  visibility via `resolveRoleSections()` switch; (2) `DashboardApiController` 167L REST API
+  for mobile apps + AI sidecar (3 endpoints: index/sales-trend/top-products, all `api.auth`
+  + `api.rate:120` highest tier); (3) `LegacyDashboardController` 502L DEAD CODE (Gap G7 —
+  imported but not routed, `view('dashboard.index')` references non-existent blade); (4)
+  `intelligent-sales-cockpit.html` 1700L dead demo asset in `/public/` (Gap G8 — hardcoded
+  "Ayesha Rahman"/"$185k" demo data accessible without auth, same pattern as Phase 15's
+  dead `push.js`). 6 partial composite indexes from `2026_07_31_000001` migration optimize
+  hot queries. 11 gaps (1 CRITICAL cross-ref G1, 4 HIGH: G7 LegacyDashboard dead code, G8
+  intelligent-sales-cockpit.html dead asset, G9 2246L god-class with inline SQL violates
+  Phase 4 coding-standards, G10 no FormRequest validation + permissive `resolveRoleSections`
+  default; 3 MEDIUM + 3 LOW). NOT SAFETY-CRITICAL (no GL posting) but business-critical
+  (drives financial close + audit + operational visibility). 9 Mermaid diagrams across the
+  5 files (hub→report sequence, MV refresh cycle, report filter state, CTE happy path, CTE
+  error path, AR aging decision tree, MV state lifecycle, dashboard page load, AJAX fragment
+  switch, page states, API request lifecycle, CSV request lifecycle, master-data export
+  flowchart, Parquet archival state). Total 82 gaps across 5 files (3+3+1+3+1 = 11 CRITICAL
+  cross-referenced; 7+3+5+9+4 = 28 HIGH; 4+5+3+9+3 = 24 MEDIUM; 2+2+2+7+3 = 16 LOW).
+- **Phases 17–21:** Not started. Execute one phase at a time per the roadmap.
 
 ---
 
