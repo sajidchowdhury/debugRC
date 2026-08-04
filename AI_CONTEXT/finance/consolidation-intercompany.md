@@ -589,9 +589,32 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 
 ## 11. Gap catalogue
 
-### 11.1 CRITICAL (5)
+### 11.1 CRITICAL (5) — 5 resolved, 0 open
+
+> **Resolved (5):** G1 ✅ `5905123` (FINANCE-3) · G2 ✅ `5905123` (FINANCE-3) · G3 ✅ `dd31590` · G4 ✅ `0385b87` (FINANCE-1) · G5 ✅ `0385b87` (FINANCE-1). **Open (0)** — the CRITICAL tier for this doc is now fully closed.
 
 #### G1 — `ConsolidationService` BYPASSES `JournalPostingService` for elimination JE creation + reversal
+
+> ✅ RESOLVED in commit `5905123` (FINANCE-3) — both methods now delegate to
+> `JournalPostingService` (already injected at L60):
+>   - `postEliminationEntry`: replaced `JournalEntry::create()` + `JournalLine::create()` × 2 with
+>     `$this->journalPosting->createJournalEntry($entry, $lines)`. Now enforces Dr=Cr balance
+>     validation, period-close validation (`validatePeriod` via `accounting_periods.closed_through_date`),
+>     ledger-active validation, AND writes to `journal_posting_logs` (the "who posted what, when"
+>     audit trail). The previous direct-model path bypassed all four safeguards.
+>   - `reverseEliminationJournal`: replaced the manual swap (create reversal JE + swap Dr/Cr lines
+>     + mark original is_reversed) with `$this->journalPosting->reverseJournalEntry($originalJeId,
+>     $reversedBy, $reason)`. Signature changed from `JournalEntry $original` to `int $originalJeId`
+>     (caller updated to pass `(int) $entry->journal_entry_id`). Idempotent guard added (cheap
+>     `is_reversed` check before the throw-on-double-reversal call). The reversal JE inherits
+>     `reference_type='reversal'` + `source='reversal'` from JournalPostingService (was
+>     `consolidation_reversal` + `elimination`); the audit trail is preserved via `reference_id`
+>     + `reversal_of_entry_id` on the original JE.
+>
+> Unused `JournalEntry` + `JournalLine` model imports removed. `$this->docSequence` is still
+> used for `ConsolidationRun.run_code` generation (L77) — the entry_no is now generated
+> internally by `JournalPostingService::generateEntryNo()` (consistent with all other JEs in
+> the system).
 
 - **Severity:** CRITICAL.
 - **Evidence:** `app/Services/Consolidation/ConsolidationService.php:364-390` (`postEliminationEntry`
@@ -608,6 +631,26 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
   `$this->journalPosting->reverseJournalEntry($original->id, $reversedBy, $reason)`.
 
 #### G2 — FIFO demand-settlement feature is DEAD CODE
+
+> ✅ RESOLVED in commit `5905123` (FINANCE-3) — the FIFO demand-settlement feature is now LIVE.
+> Both call sites are wired (non-blocking try/catch + Log::warning — a settlement failure rolls
+> back only the settlement; the parent payment/transfer stays committed):
+>   - `CustomerPaymentService::confirmPayment` now calls
+>     `BranchIntercompanyService::settleFromCustomerPayment(paymentId, branchId, amount, postedBy)`
+>     AFTER the parent commit. `cancelPayment` calls `reverseCustomerPaymentSettlements` after
+>     commit (symmetric reversal).
+>   - `MoneyTransferService::createTransfer` now calls
+>     `BranchIntercompanyService::settleFromMoneyTransfer(transferId, fromBranchId, toBranchId,
+>     amount, transferType, postedBy)` AFTER the parent commit. `reverseTransfer` calls
+>     `reverseMoneyTransferSettlements` after commit.
+>
+> The `branch_demand_customer_payment_settlements` + `branch_demand_money_transfer_settlements`
+> link tables are now populated. `branch_demands.settlement_amount` is now incremented. The
+> `fifoSettleDemands` private method (L940) iterates open received demands in FIFO order,
+> allocates the payment/transfer amount (oldest first, partial settlement allowed), inserts
+> settlement rows, bumps `settlement_amount`, posts the settlement JE (Dr Due-to / Cr Cash-Bank),
+> and records the `branch_ledger` pair. The "FIFO settlement on customer payment / money
+> transfer" feature advertised in the doc-blocks is now real.
 
 - **Severity:** CRITICAL.
 - **Evidence:** `BranchIntercompanyService::settleFromCustomerPayment` (L653),

@@ -112,7 +112,7 @@ Base DDL plus migrations add `transaction_type` (CHECK 4 types), `reference_no`,
 | `amount` | `numeric(14,2)` | |
 | `discount_amount` | `numeric(14,2)` | for `receive` type, posts to `sales_discount` |
 | `journal_entry_id` | FK journal_entries | main GL entry |
-| `intercompany_journal_entry_id` | FK journal_entries | cross-branch — ⚠️ DEAD CODE, see §8 |
+| `intercompany_journal_entry_id` | FK journal_entries | cross-branch — ✅ LIVE (was DEAD CODE, see §8; resolved in `5905123`/FINANCE-3) |
 | `is_reversed`, `reversed_at`, `reversed_by`, `reverse_reason` | | |
 | `reference_no`, `collected_by`, `created_by`, timestamps | | |
 
@@ -231,47 +231,38 @@ Inserts `invoice_payment_allocations` row. EXCLUDE constraint
 (`ipa_unique_invoice_payment`) prevents duplicate invoice+payment pairs. The
 `trg_ipa_no_overallocation` trigger prevents `SUM(allocated_amount) > invoice total_amount`.
 
-## 8. Intercompany settlement — DEAD CODE
+## 8. Intercompany settlement — LIVE (was DEAD CODE)
 
 > ✅ **G-327 RESOLVED in commit `2aefa26` (FINANCE-2)** — the unreachable dead-code block below
 > the `return null;` early-exit has been REMOVED. The block referenced `branch_ledger` columns
 > dropped by migration `2026_07_29_000013` (`transaction_type`, `amount`, `is_settled`) and would
-> have thrown `SQLSTATE[42703]` if ever reached. The early-return itself REMAINS — removing it is
-> G-021 (deferred to FINANCE-3). The source comment now enumerates the canonical `branch_ledger`
-> schema (`debit`/`credit`/`running_balance`/`is_reversed`/`remarks`) so the dev who resolves
-> G-021 writes the new implementation against the live schema, not the dropped one. See
-> `finance/branch-demand.md` §11.2 G10 for the dual-write entry.
-
-`postIntercompanySettlement` (L772-835) contains stale code:
-
-```php
-private function postIntercompanySettlement(CustomerPayment $payment, int $createdBy): ?int
-{
-    $amount = (float) $payment->amount;
-    if ($amount < 0.01 || !$payment->bank_id) return null;
-    // NOTE: The `banks` table does NOT have a `branch_id` column — banks
-    // are not branch-scoped in the current schema. Intercompany settlement
-    // requires bank→branch mapping which doesn't exist yet. Skip entirely.
-    return null;
-    // ...dead code below never executes...
-}
-```
-
-> ⚠️ **CRITICAL GAP:** Migration `2026_08_06_000001_add_branch_id_to_banks.php` **DID** add a
-> `branch_id` column to `banks` (used by EmployeeTransactionService L648 and
-> SupplierTransactionService L625). The CustomerPaymentService intercompany path was **never
-> updated** and silently returns `null`. Cross-branch customer payments (customer pays at Branch A
-> using Branch B's bank) do **NOT** post intercompany settlement — the bank-ledger reconciliation
-> will break, and the interbranch obligation is invisible on the trial balance.
+> have thrown `SQLSTATE[42703]` if ever reached.
 >
-> There is **no `customer_payment_intercompany` reference_type** anywhere in the codebase because
-> this code path never fires. Compare to Employee/Supplier which both use
-> `*_intercompany` reference_types.
-
-**Recommended fix:** update `postIntercompanySettlement` to mirror the Employee/Supplier pattern
-(check `bank.branch_id !== payment.branch_id`, post two JEs with
-`interbranch_receivable` / `interbranch_payable`, insert `branch_ledger` obligation row, set
-`reference_type='customer_payment_intercompany'`).
+> ✅ **G-010 / G-021 RESOLVED in commit `5905123` (FINANCE-3)** — the stale early-return itself
+> has been REMOVED and the real two-JE intercompany implementation has been written, mirroring the
+> canonical `EmployeeTransactionService::postIntercompanySettlement` (L674-819) pattern:
+>   1. Loads `banks.branch_id` (added by migration `2026_08_06_000001` — the original "banks has
+>      no branch_id" justification was stale).
+>   2. Skips when the bank is shared (NULL branch_id) OR same-branch as the payment.
+>   3. Resolves `interbranch_receivable` (L-0105) + `interbranch_payable` (L-0303) natures —
+>      NOT the single `intercompany` nature.
+>   4. Posts two JEs: creditor (Dr Due-from / Cr Bank-ledger) at the payment's branch + debtor
+>      (Dr Bank-ledger / Cr Due-to) at the bank's branch.
+>   5. Inserts a `branch_ledger` obligation row (from_branch=debtor, to_branch=creditor).
+>   6. Returns the debtor JE id (stored on `customer_payments.intercompany_journal_entry_id`).
+>
+> Reference type: `customer_payment_intercompany` (was missing from the codebase before this fix
+> — the path never fired). Direction is INFLOW (customer paying us): creditor = payment's branch
+> (where AR lives), debtor = bank's branch (which must fund the deposit).
+>
+> ✅ **G-013 (customer-payment side) RESOLVED in commit `5905123` (FINANCE-3)** —
+> `confirmPayment` now calls `BranchIntercompanyService::settleFromCustomerPayment` AFTER the
+> parent commit (non-blocking try/catch + Log::warning). FIFO-settles open branch demands from
+> the payment amount. `cancelPayment` calls `reverseCustomerPaymentSettlements` after commit
+> (non-blocking). The `branch_demand_customer_payment_settlements` table + the `fifoSettleDemands`
+> method are no longer dead code.
+>
+> See `finance/branch-demand.md` §11.1 G1 + §11.2 G10 for the dual-write entry.
 
 ## 9. Workflow / state machine — two-phase draft → confirm → cancel
 
@@ -290,7 +281,7 @@ Unlike Money/Employee/Supplier modules, CustomerPayment has an explicit draft ph
 1. **`createPayment($data)` (L85-119)** — inserts `customer_payments` row with `is_reversed=false`,
    **no** GL posting, **no** ledger, **no** allocation. Returns draft.
 2. **`confirmPayment($paymentId, $confirmedBy, $allocations=[])` (L140-248)** — posts GL +
-   customer_ledger + multi-invoice allocation + intercompany (dead code, §8) + bank sync + audit
+   customer_ledger + multi-invoice allocation + intercompany (✅ LIVE per §8, resolved in `5905123`/FINANCE-3) + bank sync + audit
    log + notification dispatch.
 3. **`cancelPayment($paymentId, $cancelledBy, $reason)` (L260-349)** — full reversal cascade.
 
@@ -338,7 +329,7 @@ window returns the original payment result instead of creating a duplicate.
 3. `JournalReversalService::reverseByJournalEntry` on `journal_entry_id` (cascades to GL +
    customer_ledger).
 4. `JournalReversalService::reverseByJournalEntry` on `intercompany_journal_entry_id` (if set —
-   currently always null due to §8 dead code).
+   currently always null due to §8 dead code — ✅ RESOLVED in `5905123`/FINANCE-3; the intercompany path now fires for cross-branch bank-mode payments).
 5. For each `invoice_payment_allocations` row:
    - Refund (`payment` type): increment invoice `paid_amount` by `allocated_amount` (restore).
    - Other types: decrement invoice `paid_amount` by `GREATEST(0, paid_amount - allocated_amount)`.
@@ -379,13 +370,8 @@ sequenceDiagram
    `06_payment_and_misc.sql:11`). Customers can be deleted leaving orphaned payments.
    Application-level enforcement only. **Recommended fix:** add `REFERENCES customers(id)` after
    confirming no orphans exist (data migration may be needed).
-2. **Intercompany dead code** (§8) — cross-branch customer payments do not post intercompany
-   settlement. The bank-ledger reconciles to the bank book but the interbranch obligation is NOT
-   tracked. This is a regression from the Employee/Supplier pattern. **High-priority fix.**
-3. **No `customer_payment_intercompany` reference_type** — because the intercompany path never
-   fires, this reference_type doesn't appear anywhere. If §8 is fixed, add this reference_type to
-   the app-enforced enum (no DB CHECK to update — see `journal-posting-rules.md` §reference_type
-   matrix).
+2. **Intercompany settlement** (§8) — ✅ RESOLVED in `5905123`/FINANCE-3. Cross-branch customer payments now post intercompany settlement (two JEs + branch_ledger row). `settleFromCustomerPayment` is now wired from `confirmPayment` (non-blocking).
+3. **`customer_payment_intercompany` reference_type** — ✅ NOW EXISTS (added in `5905123`/FINANCE-3). The intercompany path fires for cross-branch bank-mode AR-reduction payments (receive/discount/write_off). Reference-type matrix in `journal-posting-rules.md` updated.
 4. **`write_off` type uses fallback chain** `write_off` → `finance_cost` → `operating_expense`
    (L510-518). If none configured, throws RuntimeException. Per `chart-of-accounts.md` the
    `write_off` nature IS registered — but the fallback chain suggests it wasn't always seeded.
@@ -424,8 +410,7 @@ sequenceDiagram
       is correct. Compare to the supplier-side asymmetry (`supplier-transactions.md` §12 #1).
 - [ ] The `write_off` fallback chain `write_off` → `finance_cost` → `operating_expense` (§12 #4) —
       which ledger is canonical in production?
-- [ ] The intercompany dead code (§8) — confirm this is a regression and should be fixed to mirror
-      the Employee/Supplier pattern.
+- [ ] The intercompany settlement (§8) — ✅ RESOLVED in `5905123`/FINANCE-3. Confirm the two-JE pattern (creditor Dr Due-from / Cr Bank-ledger; debtor Dr Bank-ledger / Cr Due-to) + branch_ledger obligation row matches the org's intercompany accounting policy. Confirm the `customer_payment_intercompany` reference_type is acceptable for audit-trail filtering. Mirrors the Employee/Supplier pattern.
 - [ ] The two-phase draft → confirm lifecycle (§9) — is the auto-confirm in the controller
       acceptable, or should large payments require explicit manager approval before confirm?
 - [ ] The idempotency token requirement (§12 #5) — confirm the frontend generates UUIDs correctly.

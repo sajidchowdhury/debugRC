@@ -172,38 +172,49 @@ are derived (see `running-balance.md`).
 `reference_type` on cash-ledger rows = `'money_transfer'`, `reference_id` = the transfer id.
 Direction: `money_transfer_out` on the from-branch, `money_transfer_in` on the to-branch.
 
-## 8. Intercompany settlement
+## 8. Intercompany settlement — canonical two-JE pattern
 
-For `from_branch_id !== to_branch_id`, `postIntercompanySettlement` (L439-475) posts **one**
-balanced JE with both lines on the same `'intercompany'` ledger nature, but with different
-per-line `branch_id`:
+> ✅ **G-012 + G-344 RESOLVED in commit `5905123` (FINANCE-3)** — `postIntercompanySettlement`
+> rewritten to mirror the canonical Employee/Supplier/CustomerPayment intercompany pattern (two-JE
+> pair using `interbranch_receivable` + `interbranch_payable` natures + a `branch_ledger`
+> obligation row). The previous single-JE `'intercompany'` ledger nature (two lines on one JE,
+> unregistered nature, parallel GL system with no reconciliation) is gone.
 
-```php
-$icLedgerId = $this->journalPosting->lookupLedgerByNature('intercompany');
-$lines = [
-    ['ledger_id' => $icLedgerId, 'debit' => $amount,  'credit' => 0,        'branch_id' => $toBranchId],
-    ['ledger_id' => $icLedgerId, 'debit' => 0,        'credit' => $amount,  'branch_id' => $fromBranchId],
-];
-return $this->journalPosting->postJournalEntry([
-    'reference_type' => 'money_transfer_intercompany',
-    'reference_id'   => $transferId,
-    'branch_id'      => $fromBranchId,
-    'description'    => "Intercompany — Money Transfer ({$fromBranchId} → {$toBranchId})",
-    'lines'          => $lines,
-    'created_by'     => $data['created_by'] ?? null,
-]);
+For `from_branch_id !== to_branch_id`, `postIntercompanySettlement` (L470-589) now posts **two**
+balanced JEs + a `branch_ledger` row:
+
+**Creditor journal** (at `to_branch_id` — the branch receiving money):
+```
+Dr interbranch_receivable (L-0105)  = amount
+Cr cash_bank                        = amount
 ```
 
-> ⚠️ **GAP** (carried from Phase 6): the `'intercompany'` ledger_nature is **not** registered in
-> `LedgerNatureService::CRITICAL_NATURES` or `EXTENDED_NATURES`. `lookupLedgerByNature('intercompany')`
-> returns `null`, the intercompany posting silently skips (warning logged at L444), and the
-> cross-branch obligation is **not** tracked. Compare to Employee/Supplier transactions, which use
-> the registered `interbranch_receivable` / `interbranch_payable` natures. See §12.
+**Debtor journal** (at `from_branch_id` — the branch sending money):
+```
+Dr cash_bank                        = amount
+Cr interbranch_payable (L-0303)     = amount
+```
 
-> ⚠️ **Pattern divergence:** Money Transfer posts a **single** intercompany JE with two branch_ids
-> on the lines. Employee and Supplier transactions post **two** separate balanced JEs (one at the
-> bank's branch, one at the transaction's branch). The two patterns are not interchangeable; pick
-> one when reconciling.
+**Branch ledger obligation row**:
+```
+from_branch_id = debtor (sender), to_branch_id = creditor (receiver),
+debit = amount, credit = 0, reference_type = 'money_transfer',
+reference_id = transferId, journal_entry_id = debtorJeId
+```
+
+Returns the debtor JE id (stored on `money_transfers.intercompany_journal_entry_id`).
+
+Reference type preserved as `money_transfer_intercompany` for audit-trail continuity. Direction:
+`from_branch_id` = debtor (sender), `to_branch_id` = creditor (receiver). The two parallel
+intercompany GL systems are consolidated into one — the `branch_ledger` running balance now
+reconciles with the GL intercompany postings because both write to the same ledger pair.
+
+> ✅ **G-013 (money-transfer side) RESOLVED in commit `5905123` (FINANCE-3)** —
+> `createTransfer` now calls `BranchIntercompanyService::settleFromMoneyTransfer` AFTER the parent
+> commit (non-blocking try/catch + Log::warning). FIFO-settles open branch demands from the
+> transfer amount. `reverseTransfer` calls `reverseMoneyTransferSettlements` after commit
+> (non-blocking). The `branch_demand_money_transfer_settlements` table + the `fifoSettleDemands`
+> method are no longer dead code.
 
 ## 9. Workflow / state machine
 
@@ -295,9 +306,12 @@ sequenceDiagram
    column (deliberate, per `07_views_triggers_constraints.sql:468-471` comment). Recommended fix:
    add an `is_reversed` column and UPDATE it, or post a counter-entry. **Accountant must confirm
    whether the cash-ledger history is needed for audit.**
-2. **`'intercompany'` nature not registered** (carried from Phase 6 §12). Cross-branch money
-   transfers silently skip the intercompany posting. The bank-ledger balances still reconcile, but
-   the interbranch obligation is invisible on the trial balance. See §8.
+2. **`'intercompany'` nature not registered** — ✅ RESOLVED in `5905123`/FINANCE-3. The
+   `postIntercompanySettlement` method no longer references the `'intercompany'` nature at all.
+   It now uses the registered `interbranch_receivable` (L-0105) + `interbranch_payable` (L-0303)
+   pair, matching Employee/Supplier/CustomerPayment. Cross-branch money transfers now post the
+   full two-JE intercompany pair + a `branch_ledger` obligation row. The interbranch obligation
+   is visible on the trial balance and reconciles with `branch_ledger`. See §8.
 3. **`entry_date` not propagated to GL.** `postTransferGL` calls `postJournalEntry` **without**
    setting `entry_date`. `createJournalEntry` defaults it to `now()->format('Y-m-d')`
    (JournalPostingService.php:104). A back-dated `transfer_date` on `money_transfers` does **not**
@@ -318,10 +332,8 @@ sequenceDiagram
 
 - [ ] The Dr/Cr matrix in §7.2 matches the actual movement of cash for each of the 4 types.
 - [ ] The `cash_to_cash` no-GL rule is acceptable (cash asset class unchanged).
-- [ ] The intercompany single-JE-two-line-branch_id pattern in §8 is acceptable, OR the accountant
-      prefers the two-JE pattern used by Employee/Supplier transactions. Document the decision.
-- [ ] The `'intercompany'` ledger nature gap (§12 #2) — should it be registered, or should the
-      service migrate to `interbranch_receivable` / `interbranch_payable`?
+- [ ] The intercompany two-JE pattern in §8 — ✅ RESOLVED in `5905123`/FINANCE-3 (now uses the canonical two-JE `interbranch_receivable` + `interbranch_payable` pair + `branch_ledger` row, matching Employee/Supplier/CustomerPayment). Confirm the pattern matches the org's intercompany accounting policy.
+- [ ] The `'intercompany'` ledger nature gap (§12 #2) — ✅ RESOLVED in `5905123`/FINANCE-3. The service now uses `interbranch_receivable` / `interbranch_payable` (registered natures, seeded L-0105 / L-0303). The unregistered `'intercompany'` nature is no longer referenced.
 - [ ] The `entry_date` non-propagation gap (§12 #3) — is the historical GL distortion material?
 - [ ] The `cash_ledger` hard-DELETE on reversal (§12 #1) — is the cash-ledger history needed for
       audit? If yes, recommend the fix.

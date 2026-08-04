@@ -3,9 +3,9 @@
 > **Module:** Finance / Branch Demand
 > **Audience:** Engineers, AI assistants, accountants
 > **Status:** Draft — pending accountant sign-off (**SAFETY-CRITICAL** — posts GL, moves stock,
-> reverses stock, settles intercompany balances. **8 CRITICAL gaps** originally catalogued; **5 now resolved**
-> (G3+G4 in `2aefa26`/FINANCE-2, G5+G6 in `0385b87`/FINANCE-1, G8 in `dd31590`); **3 remain open** (G1, G2, G7) —
-> 2 of which are DEAD CODE.)
+> reverses stock, settles intercompany balances. **8 CRITICAL gaps** originally catalogued; **ALL 8 now resolved**
+> (G1+G2+G7 in `5905123`/FINANCE-3, G3+G4 in `2aefa26`/FINANCE-2, G5+G6 in `0385b87`/FINANCE-1, G8 in `dd31590`).
+> **0 remain open** — the CRITICAL tier for this doc is closed. MAJOR + MINOR tiers still have open items.
 > **Last reviewed:** Phase 13 (initial creation)
 > **Source of truth:** This file is the canonical reference for the branch-demand subsystem. The
 > implementation lives in
@@ -74,22 +74,22 @@ It has both a **web UI** (`routes/web.php:680-755`, 28 routes) and a **REST API*
 (`routes/api.php:470-554`, 14 endpoints under `api/v1/branch-demands`). The API uses the same
 service layer as the web — no parallel business logic.
 
-> **CRITICAL — 4 DEAD-CODE gaps:**
-> - **G1** — `CustomerPaymentService::postIntercompanySettlement` early-returns null because
->   `banks` has no `branch_id` column. `settleFromCustomerPayment` is NEVER invoked.
->   `branch_demand_customer_payment_settlements` table stays empty.
-> - **G2** — `MoneyTransferService::postIntercompanySettlement` uses the unregistered
->   `'intercompany'` ledger nature + never calls `settleFromMoneyTransfer`.
->   `branch_demand_money_transfer_settlements` table stays empty.
-> - **G3** — `shadow_cutover_log` schema mismatches the service: the service INSERTs columns
->   `module`/`total_compared`/`match_count`/`diff_count`/`is_clean`; the migration defines
->   `check_date`/`comparisons_total`/etc. INSERT will fail with `SQLSTATE[42703]`.
-> - **G4** — `BranchDemandShadowService::compareOperation` has NO caller anywhere in `app/`.
->   Shadow mode is plumbed (config + dashboard + service + tables) but NOT WIRED.
->   `checkCutoverReadiness` always returns `consecutive_clean_days=0` because
->   `shadow_demand_comparisons` is empty.
+> **CRITICAL — 4 DEAD-CODE gaps (ALL RESOLVED):**
+> - **G1** ✅ `5905123` (FINANCE-3) — `CustomerPaymentService::postIntercompanySettlement`
+>   rewritten to the canonical two-JE intercompany pattern. The stale early-return (justified
+>   by "banks has no branch_id" — invalidated by migration `2026_08_06_000001`) is gone.
+>   `settleFromCustomerPayment` is now wired from `confirmPayment` (non-blocking).
+> - **G2** ✅ `5905123` (FINANCE-3) — `MoneyTransferService::postIntercompanySettlement`
+>   rewritten to use `interbranch_receivable` + `interbranch_payable` (NOT the parallel
+>   `intercompany` nature) + a `branch_ledger` row. `settleFromMoneyTransfer` is now wired
+>   from `createTransfer` (non-blocking).
+> - **G3** ✅ `2aefa26` (FINANCE-2) — `shadow_cutover_log` schema mismatch fixed.
+> - **G4** ✅ `2aefa26` (FINANCE-2) — `BranchDemandShadowService::compareOperation` wired into
+>   7 demand transition methods via `dispatchShadowCompare`.
 >
-> See §6 BR21-BR25 + §11 G1-G4.
+> See §6 BR21-BR25 + §11 G1-G4. **All 8 CRITICAL gaps in §11.1 are now RESOLVED** —
+> G1/G2/G7 in `5905123` (FINANCE-3), G3/G4 in `2aefa26` (FINANCE-2), G5/G6 in `0385b87`
+> (FINANCE-1), G8 in `dd31590`. The CRITICAL tier for this doc is closed.
 
 ---
 
@@ -1069,11 +1069,31 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 ## 11. Gap catalogue
 
-### 11.1 CRITICAL (8) — 5 resolved, 3 open
+### 11.1 CRITICAL (8) — 8 resolved, 0 open
 
-> **Resolved (5):** G3 ✅ `2aefa26` (FINANCE-2) · G4 ✅ `2aefa26` (FINANCE-2) · G5 ✅ `0385b87` (FINANCE-1) · G6 ✅ `0385b87` (FINANCE-1) · G8 ✅ `dd31590`. **Open (3):** G1 (CustomerPaymentService early-return null — also G-021 in ISSUES_REGISTER), G2 (MoneyTransferService wrong ledger nature + dead settlement), G7 (branch_demand_created notification not wired). Plus G10 (G-327 in ISSUES_REGISTER) was a CRITICAL-tier issue filed under §11.2 MAJOR here — also resolved in `2aefa26`.
+> **Resolved (8):** G1 ✅ `5905123` (FINANCE-3) · G2 ✅ `5905123` (FINANCE-3) · G3 ✅ `2aefa26` (FINANCE-2) · G4 ✅ `2aefa26` (FINANCE-2) · G5 ✅ `0385b87` (FINANCE-1) · G6 ✅ `0385b87` (FINANCE-1) · G7 ✅ `5905123` (FINANCE-3) · G8 ✅ `dd31590`. Plus G10 (G-327 in ISSUES_REGISTER) was a CRITICAL-tier issue filed under §11.2 MAJOR here — also resolved in `2aefa26`. **Open (0)** — the CRITICAL tier for this doc is now fully closed. FINANCE CLUSTER COMPLETE.
 
 #### G1 — `CustomerPaymentService::postIntercompanySettlement` early-returns null
+
+> ✅ RESOLVED in commit `5905123` (FINANCE-3) — the stale early-return has been REMOVED and the
+> real two-JE intercompany implementation has been written, mirroring the canonical
+> `EmployeeTransactionService::postIntercompanySettlement` (L674-819) pattern. The fix:
+>   1. Loads `banks.branch_id` (added by migration `2026_08_06_000001` — the original "banks
+>      has no branch_id" justification was stale).
+>   2. Skips when the bank is shared (NULL branch_id) OR same-branch as the payment.
+>   3. Resolves `interbranch_receivable` (L-0105) + `interbranch_payable` (L-0303) natures —
+>      NOT the single `intercompany` nature.
+>   4. Posts two JEs: creditor (Dr Due-from / Cr Bank-ledger) at the payment's branch + debtor
+>      (Dr Bank-ledger / Cr Due-to) at the bank's branch.
+>   5. Inserts a `branch_ledger` obligation row (from_branch=debtor, to_branch=creditor).
+>   6. Returns the debtor JE id (stored on `customer_payments.intercompany_journal_entry_id`).
+>
+> Reference type: `customer_payment_intercompany` (was missing from the codebase before this fix
+> — the path never fired). Direction is INFLOW (customer paying us): creditor = payment's branch
+> (where AR lives), debtor = bank's branch (which must fund the deposit). Refund-type payments
+> (`transaction_type='payment'`) are NOT handled here — the GL reversal cascade handles them via
+> `JournalReversalService`. The early-return was the G-021 / G-010 dual entry; both IDs close
+> with this single fix.
 
 - **Severity:** CRITICAL.
 - **Evidence:** `app/Services/Sales/CustomerPaymentService.php:770` — comment: *"banks table
@@ -1090,6 +1110,26 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
   table + the `settlement_amount` column.
 
 #### G2 — `MoneyTransferService::postIntercompanySettlement` uses wrong ledger nature + never calls `settleFromMoneyTransfer`
+
+> ✅ RESOLVED in commit `5905123` (FINANCE-3) — `MoneyTransferService::postIntercompanySettlement`
+> has been rewritten to mirror the canonical two-JE intercompany pattern (creditor JE at
+> `to_branch_id`: Dr `interbranch_receivable` / Cr `cash_bank`; debtor JE at `from_branch_id`:
+> Dr `cash_bank` / Cr `interbranch_payable`) + a `branch_ledger` obligation row. The previous
+> single-JE `intercompany` ledger nature (two lines on one JE) created a parallel intercompany
+> GL system with no reconciliation against the `branch_ledger` running balance. The new code
+> uses the same `interbranch_receivable` + `interbranch_payable` pair as
+> `BranchIntercompanyService`, `EmployeeTransactionService`, `SupplierTransactionService`, and
+> (post-FINANCE-3) `CustomerPaymentService`. Reference type preserved as
+> `money_transfer_intercompany` for audit-trail continuity. Direction: `from_branch_id` = debtor
+> (sender), `to_branch_id` = creditor (receiver).
+>
+> G-013 (FIFO demand-settlement dead code) is also closed in the same commit:
+> `MoneyTransferService::createTransfer` now calls
+> `BranchIntercompanyService::settleFromMoneyTransfer` AFTER the parent commit (non-blocking
+> try/catch + Log::warning — a settlement failure rolls back only the settlement; the committed
+> money transfer stays intact). `reverseTransfer` calls `reverseMoneyTransferSettlements` after
+> commit (non-blocking). The `branch_demand_money_transfer_settlements` table + the
+> `fifoSettleDemands` method are no longer dead code.
 
 - **Severity:** CRITICAL.
 - **Evidence:** `app/Services/Accounting/MoneyTransferService.php:442, 437-471` — uses
@@ -1209,6 +1249,19 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
   FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger()` for each of the 8 missing tables.
 
 #### G7 — `'branch_demand_created'` notification NOT WIRED
+
+> ✅ RESOLVED in commit `5905123` (FINANCE-3) — `BranchDemandService::createDemand` now calls
+> `NotificationService::dispatch('branch_demand_created', ...)` AFTER the parent commit + the
+> FINANCE-2 shadow-compare dispatch. `NotificationService` already registered the event type
+> (icon `fa-clipboard-list`, color `info`, title "Branch Demand Created") at L60 — it just had
+> no caller. The dispatch passes `context.branch_id = $toBranchId` (the supplier branch) so the
+> `warehouse_manager_of_branch` recipient resolver fires and alerts the supplier branch's
+> warehouse manager that a new demand has been raised against their branch.
+> `reference_type='branch_demand'`, `reference_id=$demand->id`. Resolved lazily via `app(...)`
+> (mirrors the FINANCE-2 `dispatchShadowCompare` pattern — no constructor coupling, no circular
+> dependency risk). Non-blocking: try/catch + `Log::warning` — a notification failure (no
+> active rule, no recipients, DB write error) MUST NEVER abort the demand creation (the demand
+> is already committed at this point).
 
 - **Severity:** CRITICAL.
 - **Evidence:** `app/Services/Notification/NotificationService.php:60` — NotificationService
@@ -1375,6 +1428,14 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 - **Fix:** add a `FiscalYearService::assertPeriodOpen($entryDate)` call before the GL post.
 
 #### G21 — `MoneyTransfer` model uses `'intercompany'` ledger nature; `BranchIntercompanyService` uses `'interbranch_payable'/'interbranch_receivable'`
+
+> ✅ RESOLVED in commit `5905123` (FINANCE-3) — same fix as G2 above.
+> `MoneyTransferService::postIntercompanySettlement` now uses the canonical
+> `interbranch_receivable` + `interbranch_payable` pair (NOT the parallel `intercompany`
+> nature). The two parallel intercompany GL systems are consolidated into one. The
+> `branch_ledger` running balance now reconciles with the GL intercompany postings because
+> both write to the same ledger pair. See the G2 RESOLVED blockquote above for the full
+> two-JE structure.
 
 - **Evidence:** `app/Services/Accounting/MoneyTransferService.php:442` vs
   `app/Services/BranchDemand/BranchIntercompanyService.php:120-121`. Two parallel intercompany
@@ -1618,14 +1679,8 @@ sequenceDiagram
 
 ### 14.1 CRITICAL (8)
 
-1. **G1** — Add `banks.branch_id` column (or a `bank_branch_mappings` table for many-to-many) +
-   wire `CustomerPaymentService::confirmPayment` to call
-   `BranchIntercompanyService::settleFromCustomerPayment`. Restores FIFO settlement via bank
-   customer payments.
-2. **G2** — Migrate `MoneyTransferService::postIntercompanySettlement` to use the
-   `interbranch_receivable` + `interbranch_payable` ledger natures + call
-   `settleFromMoneyTransfer` after the GL post. Restores FIFO settlement via inter-branch money
-   transfers.
+1. **G1** — ✅ RESOLVED in `5905123` (FINANCE-3). Migration `2026_08_06_000001_add_branch_id_to_banks.php` already added `banks.branch_id` (NULL = shared/head-office). `CustomerPaymentService::postIntercompanySettlement` rewritten to mirror `EmployeeTransactionService::postIntercompanySettlement`: loads `banks.branch_id`, skips shared + same-branch banks, posts two JEs (creditor Dr Due-from / Cr Bank-ledger; debtor Dr Bank-ledger / Cr Due-to), inserts `branch_ledger` obligation row, `reference_type='customer_payment_intercompany'`. `confirmPayment` now wires `settleFromCustomerPayment` after commit (non-blocking); `cancelPayment` wires `reverseCustomerPaymentSettlements` after commit (non-blocking). FIFO settlement via bank customer payments is now LIVE.
+2. **G2** — ✅ RESOLVED in `5905123` (FINANCE-3). `MoneyTransferService::postIntercompanySettlement` rewritten to use `interbranch_receivable` + `interbranch_payable` (NOT the parallel `intercompany` nature) + a `branch_ledger` obligation row. Two JEs: creditor (Dr Due-from / Cr Cash-Bank) at `to_branch_id`; debtor (Dr Cash-Bank / Cr Due-to) at `from_branch_id`. `createTransfer` now wires `settleFromMoneyTransfer` after commit (non-blocking); `reverseTransfer` wires `reverseMoneyTransferSettlements` after commit (non-blocking). FIFO settlement via inter-branch money transfers is now LIVE.
 3. **G3** — ✅ RESOLVED in `2aefa26` (FINANCE-2). `BranchDemandShadowService::recordCutoverDailyLog`
    rewritten to mirror the canonical `WarehouseTransferShadowService` pattern: `updateOrInsert` on
    `check_date`, with the migration's actual column names (`comparisons_total`, `comparisons_match`,
@@ -1652,9 +1707,7 @@ sequenceDiagram
    `branch_demand_repricing`, `branch_demand_customer_payment_settlements`,
    `branch_demand_money_transfer_settlements`, `branch_ledger`,
    `shadow_demand_comparisons`, `shadow_cutover_log`).
-7. **G7** — Call `NotificationService::dispatch('branch_demand_created', ...)` from
-   `BranchDemandService::createDemand` after the commit. Supplier branch's warehouse manager
-   gets notified of new demands.
+7. **G7** — ✅ RESOLVED in `5905123` (FINANCE-3). `BranchDemandService::createDemand` now calls `NotificationService::dispatch('branch_demand_created', ...)` after the commit + shadow-compare dispatch. `NotificationService` already registered the event type at L60 — it just had no caller. Dispatch passes `context.branch_id = $toBranchId` (supplier branch) so the `warehouse_manager_of_branch` recipient resolver fires. Resolved lazily via `app(...)` (no constructor coupling). Non-blocking: try/catch + Log::warning — a notification failure MUST NEVER abort the demand creation. Supplier branch's warehouse manager now gets notified of new demands.
 8. **G8** — Add per-verb RLS policies to `branch_demand_items`, `branch_demand_repricing`,
    `branch_demand_customer_payment_settlements`, `branch_demand_money_transfer_settlements`,
    `shadow_cutover_log` mirroring the `branch_demands` pattern.
@@ -1743,9 +1796,11 @@ sequenceDiagram
       natures are seeded.
 - [ ] Confirm FIFO settlement semantics (oldest demand first, partial settlement allowed,
       per-demand `settleAmount = min(outstanding, remainingAmount)`).
-- [ ] Confirm bank customer payments SHOULD settle demands (currently DEAD CODE — G1).
+- [ ] Confirm bank customer payments SHOULD settle demands (✅ G1 resolved in `5905123`/FINANCE-3 —
+      `settleFromCustomerPayment` now wired from `confirmPayment` after commit, non-blocking).
 - [ ] Confirm money transfers `cash_to_cash` + `cash_to_bank` SHOULD settle demands
-      (currently DEAD CODE — G2).
+      (✅ G2 resolved in `5905123`/FINANCE-3 — `settleFromMoneyTransfer` now wired from
+      `createTransfer` after commit, non-blocking).
 - [ ] Confirm repricing GL adjustment direction (positive: Dr receivable / Cr inventory on
       supplier; negative: Dr inventory / Cr receivable on supplier).
 - [ ] Confirm Phase 5 receipt gate (reversal blocked until `received_at IS NOT NULL`).
@@ -1756,10 +1811,11 @@ sequenceDiagram
 - [ ] Confirm weekly report columns match "MAIN BILL SHIT1.xlsx" Excel sheet. Note that the
       `profit` column excludes demand COGS (G19) — may not match the Excel sheet's intended
       profit definition.
-- [ ] Review the 8 CRITICAL gaps (G1-G8) and prioritise remediation. **5 of 8 are now resolved**
-      (G3+G4 in FINANCE-2, G5+G6 in FINANCE-1, G8 in `dd31590`). **3 remain open** (G1, G2, G7) —
-      G1 + G2 are the highest-impact remaining fixes (both are DEAD CODE: customer-payment
-      settlement + money-transfer settlement). G7 is a missing notification dispatch.
+- [ ] Review the 8 CRITICAL gaps (G1-G8) and prioritise remediation. **ALL 8 are now resolved**
+      (G1+G2+G7 in FINANCE-3/`5905123`, G3+G4 in FINANCE-2/`2aefa26`, G5+G6 in FINANCE-1/`0385b87`,
+      G8 in `dd31590`). **0 remain open** — the CRITICAL tier for this doc is closed. The two
+      DEAD CODE paths (customer-payment settlement + money-transfer settlement) are now LIVE;
+      the `branch_demand_created` notification is now WIRED.
 
 ---
 

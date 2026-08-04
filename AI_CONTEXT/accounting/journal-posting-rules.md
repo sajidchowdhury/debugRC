@@ -249,14 +249,22 @@ sequenceDiagram
 | `write_off` | `buildWriteOffGL` L508 | Dr **Bad Debt** (`write_off` → falls back to `finance_cost` → `operating_expense`) amount · Cr **AR** amount |
 | `payment` (refund) | `buildRefundGL` L543 | Dr **AR** amount · Cr **Bank/Cash** amount |
 
-> **Note:** `CustomerPaymentService::postIntercompanySettlement` (L825) is **currently DISABLED**
-> — `return null;` at line 828 because the original implementation assumed `banks` had no
-> `branch_id` column. **G-327 RESOLVED in `2aefa26` (FINANCE-2)** — the unreachable dead-code
-> block below the early-return was REMOVED (it referenced `branch_ledger` columns dropped by
-> `2026_07_29_000013`). The early-return itself remains; removing it + implementing the real
-> intercompany path is **G-021 (FINANCE-3)**. `banks.branch_id` was added by
-> `2026_08_06_000001_add_branch_id_to_banks.php` — the original justification is stale, see
-> `accounting/customer-payments.md` §8 + `finance/branch-demand.md` §11.2 G10.
+> **Note:** `CustomerPaymentService::postIntercompanySettlement` (L842) — ✅ **G-010 / G-021
+> RESOLVED in `5905123` (FINANCE-3)**. The stale early-return has been REMOVED and the real
+> two-JE intercompany implementation has been written, mirroring the canonical
+> `EmployeeTransactionService::postIntercompanySettlement` pattern. The method now:
+>   1. Loads `banks.branch_id` (added by `2026_08_06_000001_add_branch_id_to_banks.php` — the
+>      original "banks has no branch_id" justification was stale).
+>   2. Skips shared banks (NULL branch_id) + same-branch banks.
+>   3. Resolves `interbranch_receivable` (L-0105) + `interbranch_payable` (L-0303) natures.
+>   4. Posts creditor JE (Dr Due-from / Cr Bank-ledger) + debtor JE (Dr Bank-ledger / Cr Due-to).
+>   5. Inserts a `branch_ledger` obligation row.
+>   6. Returns the debtor JE id (stored on `customer_payments.intercompany_journal_entry_id`).
+>
+> Reference type: `customer_payment_intercompany` (was missing from the codebase before this fix).
+> The prior G-327 dead-code block (referencing dropped `branch_ledger` columns) was removed in
+> `2aefa26` (FINANCE-2). See `accounting/customer-payments.md` §8 + `finance/branch-demand.md`
+> §11.1 G1 + §11.2 G10.
 
 #### 7.6.2 Purchase module (2 methods)
 
@@ -327,7 +335,7 @@ sequenceDiagram
 |---|---|---|---|
 | 24 | `postDemandFulfillmentJournals` | `BranchIntercompanyService.php:76` | **Two JEs.** Creditor (supplier branch): Dr **interbranch_receivable** / Cr **Inventory**. Debtor (requester branch): Dr **Inventory** / Cr **interbranch_payable**. |
 | 25 | `postIntercompanyGL` | `WarehouseTransferService.php:531` | **Two JEs.** From-branch: Dr **interbranch_payable** / Cr **Inventory**. To-branch: Dr **Inventory** / Cr **interbranch_receivable**. |
-| 26 | `postEliminationEntry` | `ConsolidationService.php:339` | Dr debit_ledger (or `elimination_debit_ledger_id`) / Cr credit_ledger (or `elimination_credit_ledger_id`). reference_type=`consolidation_elimination`. **Bypasses `createJournalEntry`** — uses `JournalEntry::create()` + `JournalLine::create()` directly. |
+| 26 | `postEliminationEntry` | `ConsolidationService.php:339` | Dr debit_ledger (or `elimination_debit_ledger_id`) / Cr credit_ledger (or `elimination_credit_ledger_id`). reference_type=`consolidation_elimination`. ✅ **G-011 RESOLVED in `5905123` (FINANCE-3)** — now delegates to `$this->journalPosting->createJournalEntry(...)` (enforces Dr=Cr, period-close, ledger-active, writes `journal_posting_logs`). `reverseEliminationJournal` now delegates to `$this->journalPosting->reverseJournalEntry(...)` (idempotent, idempotent guard added). The previous direct `JournalEntry::create()` + `JournalLine::create()` bypass is closed. |
 | 27 | `postConsolidation` | `ConsolidationService.php:292` | Wrapper that loops elimination entries and calls `postEliminationEntry` for each. |
 
 #### 7.6.8 Other income/expense + manual journal + fixed assets (5 methods)
@@ -358,12 +366,13 @@ Collected from all `createJournalEntry`/`postJournalEntry` call sites:
 | `sales_challan` | `postCogsGL` | Sales |
 | `sales_return` | `postRevenueReversalGL`, `postCogsReversalGL` | Sales |
 | `customer_payment` | `postPaymentGL`, `postIntercompanySettlement` | Sales |
+| `customer_payment_intercompany` | `postIntercompanySettlement` (creditor + debtor JEs) — ✅ added in `5905123`/FINANCE-3 | Sales |
 | `supplier_payment` | `postPaymentGL`, `postSupplierLedgerForType`, `postIntercompanySettlement` | Accounting |
 | `supplier_payment_intercompany` | `postIntercompanySettlement` (creditor + debtor JEs) | Accounting |
 | `employee_transaction` | `postTransactionGL`, `postEmployeeLedgerForType` | Accounting |
 | `employee_transaction_intercompany` | `postIntercompanySettlement` (creditor + debtor JEs) | Accounting |
 | `money_transfer` | `postTransferGL`, `recordCashLedger` | Accounting |
-| `money_transfer_intercompany` | `postIntercompanySettlement` | Accounting |
+| `money_transfer_intercompany` | `postIntercompanySettlement` (creditor + debtor JEs) — ✅ rewritten in `5905123`/FINANCE-3 to use `interbranch_receivable` + `interbranch_payable` (was single-JE `intercompany` nature) | Accounting |
 | `other_income` | `postIncomeGL` | Accounting |
 | `other_expense` | `postExpenseGL` | Accounting |
 | `manual_journal` | `postToGL` | Accounting |
