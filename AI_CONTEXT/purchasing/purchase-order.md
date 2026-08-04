@@ -276,6 +276,15 @@ If any step fails, the whole PO rolls back — no orphan items, no orphan audit 
    (Eloquent). The trait's `static::created()` listener never fires. The `master_data_*` audit
    rows are NEVER written through the canonical service path — only `UserAuditLogger::log()` is.
    CRITICAL — the trait is dead code on this model.
+
+   > ✅ RESOLVED (PURCHASING-2) — Added `PurchaseOrder::logManualAudit()` calls to all 5 write
+   > paths in `PurchaseOrderService`: `createOrder` (created), `updateOrder` (updated),
+   > `markAsSent` (updated), `cancelOrder` (updated), `updateReceivedQty` (updated, only when
+   > status flips). The helper is a new public static method on the `AuditableMasterData`
+   > trait. For updates, old values are captured via `DB::table('purchase_orders')->first()`
+   > BEFORE the update, and the audit row records `array_intersect_key($old, $update)` as old
+   > + `$update` as new — mirroring the trait's `array_intersect_key($old, $changes)`
+   > semantics. All calls fire inside the parent `DB::transaction()`. Closes G-034.
 3. **G6 — No over-receive guard.** A user can receive more than the PO line's `qty`. The audit
    checklist detects this after the fact but does not prevent it. MAJOR — financial impact if
    the rate is wrong.

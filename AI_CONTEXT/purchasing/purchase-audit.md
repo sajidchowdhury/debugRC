@@ -439,6 +439,18 @@ purchase tables are NOT in the hash chain.
    rows are NEVER written through the canonical path. The audit team is likely unaware of this
    — they may believe the trait is capturing full old/new attribute diffs when it is not.
    CRITICAL — silent audit gap.
+
+   > ✅ RESOLVED (PURCHASING-2) — Added `AuditableMasterData::logManualAudit()` public static
+   > helper to the trait (mirrors the protected `logAudit()` payload + transaction-aware
+   > error handling). Wired explicit `logManualAudit()` calls into all 3 purchase services:
+   > `PurchaseOrderService` (createOrder, updateOrder, markAsSent, cancelOrder, updateReceivedQty),
+   > `PurchaseReceiveService` (createReceive, confirmReceive, cancelReceive × 2 updates,
+   > decrementPoReceivedQty), `PurchaseReturnService` (createReturn, confirmReturn,
+   > cancelReturn × 2 updates). For INSERTs: log 'created' with the inserted row. For UPDATEs:
+   > capture old via `DB::table(...)->first()` BEFORE the update, then log 'updated' with
+   > `array_intersect_key($old, $update)` as old and `$update` as new (mirrors the trait's
+   > `array_intersect_key($old, $changes)` semantics). All calls happen INSIDE the parent
+   > `DB::transaction()` so atomicity is preserved. Closes G-033 + G-034 + G-035 + G-036.
 5. **G15 — `PurchaseAuditService::branchFilter` uses string concatenation into raw SQL.** The
    `(int)` cast prevents SQL injection, but the pattern violates the project's coding standards
    (use prepared statements). Static analyzers will flag it. MINOR.

@@ -418,6 +418,16 @@ return $this->journalPosting->createJournalEntry([
    `confirmReceive`, and `cancelReceive` all use raw `DB::table(…)` queries. Eloquent events
    never fire. The `master_data_*` audit rows are NEVER written through the canonical path —
    only `UserAuditLogger::log()` captures the mutation. CRITICAL — silent audit gap.
+
+   > ✅ RESOLVED (PURCHASING-2) — Added `PurchaseReceive::logManualAudit()` calls to all 4 write
+   > paths in `PurchaseReceiveService`: `createReceive` (created), `confirmReceive` (updated),
+   > `cancelReceive` (updated × 2 — reversal-field update + status='cancelled' update),
+   > `decrementPoReceivedQty` (updated — logs the PO status flip via `PurchaseOrder::logManualAudit`,
+   > mirroring the GRN-confirm path in `PurchaseOrderService::updateReceivedQty`). The helper is
+   > a new public static method on the `AuditableMasterData` trait. For updates, old values are
+   > captured via `DB::table('purchase_receives')->first()` BEFORE each update, and the audit row
+   > records `array_intersect_key($old, $update)` as old + `$update` as new. All calls fire
+   > inside the parent `DB::transaction()`. Closes G-035.
 5. **G5 — `received_qty` updated by `product_id`, not `purchase_order_item_id`.** If a PO has
    the same product on multiple lines, the first matching line gets all the received_qty credit.
    MAJOR — PO status flip becomes wrong.

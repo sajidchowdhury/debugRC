@@ -4,6 +4,7 @@ namespace App\Services\Purchase;
 
 use App\Models\PurchaseReceive;
 use App\Models\PurchaseReturn;
+use App\Models\PurchaseOrder;
 use App\Services\Auth\UserAuditLogger;
 use App\Services\Stock\StockService;
 use App\Services\Accounting\DocumentSequenceService;
@@ -123,6 +124,28 @@ class PurchaseReceiveService
                 'updated_at' => now(),
             ]);
 
+            // PURCHASING-2 (G-035): manually fire the master_data audit since
+            // DB::table()->insertGetId bypasses Eloquent events. The
+            // AuditableMasterData trait's static::created listener would have
+            // logged this row had we used PurchaseReceive::create($row).
+            $receiveRow = [
+                'receive_code' => $receiveCode,
+                'receive_date' => $data['receive_date'] ?? now()->format('Y-m-d'),
+                'purchase_order_id' => $poId,
+                'supplier_id' => $supplierId,
+                'branch_id' => $branchId,
+                'warehouse_id' => $data['warehouse_id'] ?? null,
+                'sub_total' => round($subTotal, 2),
+                'discount_amount' => round($discount, 2),
+                'tax_amount' => round($tax, 2),
+                'total_amount' => round($total, 2),
+                'status' => 'draft',
+                'is_reversed' => false,
+                'notes' => $data['notes'] ?? null,
+                'created_by' => $data['created_by'] ?? null,
+            ];
+            PurchaseReceive::logManualAudit('purchase_receives', $receiveId, 'created', null, $receiveRow);
+
             $itemRows = [];
             foreach ($items as $item) {
                 $itemRows[] = [
@@ -226,13 +249,23 @@ class PurchaseReceiveService
             }
 
             // 5. Update GRN status.
+            $receiveUpdate = [
+                'status' => 'confirmed',
+                'journal_entry_id' => $journalEntryId,
+                'updated_at' => now(),
+            ];
+            // PURCHASING-2 (G-035): capture old before update so we can log
+            // the master_data audit row the AuditableMasterData trait would
+            // have written had we used $receive->update($receiveUpdate).
+            $oldReceive = (array) DB::table('purchase_receives')->where('id', $receiveId)->first();
             DB::table('purchase_receives')
                 ->where('id', $receiveId)
-                ->update([
-                    'status' => 'confirmed',
-                    'journal_entry_id' => $journalEntryId,
-                    'updated_at' => now(),
-                ]);
+                ->update($receiveUpdate);
+            PurchaseReceive::logManualAudit(
+                'purchase_receives', $receiveId, 'updated',
+                array_intersect_key($oldReceive, $receiveUpdate),
+                $receiveUpdate
+            );
 
             // Phase 6: audit log.
             UserAuditLogger::log(
@@ -333,19 +366,37 @@ class PurchaseReceiveService
                     }
                 }
 
+                // PURCHASING-2 (G-035): capture old BEFORE the reversal-field
+                // update so we can log the master_data audit row.
+                $reverseUpdate = [
+                    'is_reversed' => true,
+                    'reversed_at' => now(),
+                    'reversed_by' => $cancelledBy,
+                    'reverse_reason' => $reason,
+                ];
+                $oldReceiveForReverse = (array) DB::table('purchase_receives')->where('id', $receiveId)->first();
                 DB::table('purchase_receives')
                     ->where('id', $receiveId)
-                    ->update([
-                        'is_reversed' => true,
-                        'reversed_at' => now(),
-                        'reversed_by' => $cancelledBy,
-                        'reverse_reason' => $reason,
-                    ]);
+                    ->update($reverseUpdate);
+                PurchaseReceive::logManualAudit(
+                    'purchase_receives', $receiveId, 'updated',
+                    array_intersect_key($oldReceiveForReverse, $reverseUpdate),
+                    $reverseUpdate
+                );
             }
 
+            // PURCHASING-2 (G-035): capture old for the status='cancelled' update
+            // (separate from the reversal-field update above).
+            $oldReceiveForCancel = (array) DB::table('purchase_receives')->where('id', $receiveId)->first();
+            $cancelUpdate = ['status' => 'cancelled', 'updated_at' => now()];
             DB::table('purchase_receives')
                 ->where('id', $receiveId)
-                ->update(['status' => 'cancelled', 'updated_at' => now()]);
+                ->update($cancelUpdate);
+            PurchaseReceive::logManualAudit(
+                'purchase_receives', $receiveId, 'updated',
+                array_intersect_key($oldReceiveForCancel, $cancelUpdate),
+                $cancelUpdate
+            );
 
             // Phase 6: audit log.
             UserAuditLogger::log(
@@ -437,7 +488,18 @@ class PurchaseReceiveService
         $allReceived = $allItems->every(fn($i) => (float) $i->received_qty >= (float) $i->qty - 0.0001);
 
         $newStatus = $allReceived ? 'received' : ($anyReceived ? 'partial' : 'sent');
-        DB::table('purchase_orders')->where('id', $poId)->update(['status' => $newStatus, 'updated_at' => now()]);
+        // PURCHASING-2 (G-034/G-035): capture old + log manual master_data
+        // audit for the PO status flip driven by GRN cancellation. Mirrors
+        // the audit hook in PurchaseOrderService::updateReceivedQty (the
+        // GRN-confirm path) so both directions are audited.
+        $poStatusUpdate = ['status' => $newStatus, 'updated_at' => now()];
+        $oldPo = (array) DB::table('purchase_orders')->where('id', $poId)->first();
+        DB::table('purchase_orders')->where('id', $poId)->update($poStatusUpdate);
+        PurchaseOrder::logManualAudit(
+            'purchase_orders', $poId, 'updated',
+            array_intersect_key($oldPo, $poStatusUpdate),
+            $poStatusUpdate
+        );
     }
 
     /**

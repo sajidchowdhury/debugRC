@@ -86,6 +86,27 @@ class PurchaseOrderService
             }
             DB::table('purchase_order_items')->insert($itemRows);
 
+            // PURCHASING-2 (G-034): manually fire the master_data audit since
+            // DB::table()->insertGetId bypasses Eloquent events. The
+            // AuditableMasterData trait's static::created listener would have
+            // logged this row had we used PurchaseOrder::create($row).
+            $poRow = [
+                'po_code' => $poCode,
+                'po_date' => $data['po_date'] ?? now()->format('Y-m-d'),
+                'supplier_id' => (int) $data['supplier_id'],
+                'branch_id' => (int) $data['branch_id'],
+                'warehouse_id' => $data['warehouse_id'] ?? null,
+                'sub_total' => round($subTotal, 2),
+                'discount_amount' => round($discount, 2),
+                'tax_amount' => round($tax, 2),
+                'total_amount' => round($total, 2),
+                'status' => 'draft',
+                'expected_date' => $data['expected_date'] ?? null,
+                'notes' => $data['notes'] ?? null,
+                'created_by' => $data['created_by'] ?? null,
+            ];
+            PurchaseOrder::logManualAudit('purchase_orders', $poId, 'created', null, $poRow);
+
             $po = PurchaseOrder::with(['items.product', 'supplier', 'branch', 'warehouse'])->find($poId);
 
             // Phase 6: audit log.
@@ -134,7 +155,7 @@ class PurchaseOrderService
             $total = $subTotal - $discount + $tax;
 
             // Update header.
-            DB::table('purchase_orders')->where('id', $poId)->update([
+            $poUpdate = [
                 'supplier_id' => (int) $data['supplier_id'],
                 'branch_id' => (int) $data['branch_id'],
                 'warehouse_id' => $data['warehouse_id'] ?? null,
@@ -146,7 +167,17 @@ class PurchaseOrderService
                 'tax_amount' => round($tax, 2),
                 'total_amount' => round($total, 2),
                 'updated_at' => now(),
-            ]);
+            ];
+            // PURCHASING-2 (G-034): capture old before update so we can log
+            // the master_data audit row the AuditableMasterData trait would
+            // have written had we used $po->update($poUpdate).
+            $oldPo = (array) DB::table('purchase_orders')->where('id', $poId)->first();
+            DB::table('purchase_orders')->where('id', $poId)->update($poUpdate);
+            PurchaseOrder::logManualAudit(
+                'purchase_orders', $poId, 'updated',
+                array_intersect_key($oldPo, $poUpdate),
+                $poUpdate
+            );
 
             // Delete existing items + re-insert (simpler than diffing).
             DB::table('purchase_order_items')->where('purchase_order_id', $poId)->delete();
@@ -195,10 +226,15 @@ class PurchaseOrderService
             throw new \RuntimeException("Only draft POs can be marked as sent (current: {$po->status}).");
         }
 
-        DB::table('purchase_orders')->where('id', $poId)->update([
-            'status' => 'sent',
-            'updated_at' => now(),
-        ]);
+        // PURCHASING-2 (G-034): capture old + log manual master_data audit.
+        $sentUpdate = ['status' => 'sent', 'updated_at' => now()];
+        $oldPo = (array) DB::table('purchase_orders')->where('id', $poId)->first();
+        DB::table('purchase_orders')->where('id', $poId)->update($sentUpdate);
+        PurchaseOrder::logManualAudit(
+            'purchase_orders', $poId, 'updated',
+            array_intersect_key($oldPo, $sentUpdate),
+            $sentUpdate
+        );
 
         // Phase 6: audit log.
         UserAuditLogger::log(
@@ -226,11 +262,19 @@ class PurchaseOrderService
             throw new \RuntimeException("Only draft or sent POs can be cancelled (current: {$po->status}).");
         }
 
-        DB::table('purchase_orders')->where('id', $poId)->update([
+        // PURCHASING-2 (G-034): capture old + log manual master_data audit.
+        $cancelUpdate = [
             'status' => 'cancelled',
             'notes' => trim(($po->notes ?? '') . "\n\n[Cancelled] " . $reason),
             'updated_at' => now(),
-        ]);
+        ];
+        $oldPo = (array) DB::table('purchase_orders')->where('id', $poId)->first();
+        DB::table('purchase_orders')->where('id', $poId)->update($cancelUpdate);
+        PurchaseOrder::logManualAudit(
+            'purchase_orders', $poId, 'updated',
+            array_intersect_key($oldPo, $cancelUpdate),
+            $cancelUpdate
+        );
 
         // Phase 6: audit log.
         UserAuditLogger::log(
@@ -284,9 +328,18 @@ class PurchaseOrderService
             $newStatus = $allReceived ? 'received' : ($anyReceived ? 'partial' : null);
 
             if ($newStatus) {
+                // PURCHASING-2 (G-034): log manual master_data audit for the
+                // status flip driven by GRN receive / cancel.
+                $statusUpdate = ['status' => $newStatus, 'updated_at' => now()];
+                $oldPo = (array) DB::table('purchase_orders')->where('id', $poId)->first();
                 DB::table('purchase_orders')
                     ->where('id', $poId)
-                    ->update(['status' => $newStatus, 'updated_at' => now()]);
+                    ->update($statusUpdate);
+                PurchaseOrder::logManualAudit(
+                    'purchase_orders', $poId, 'updated',
+                    array_intersect_key($oldPo, $statusUpdate),
+                    $statusUpdate
+                );
             }
 
             return PurchaseOrder::with(['items.product', 'supplier', 'branch'])->find($poId);

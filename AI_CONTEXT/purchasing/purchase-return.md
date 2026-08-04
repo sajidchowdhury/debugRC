@@ -395,6 +395,14 @@ return $this->journalPosting->createJournalEntry([
 3. **G4 — `AuditableMasterData` trait bypassed by `DB::table()` writes.** `createReturn`,
    `confirmReturn`, and `cancelReturn` all use raw `DB::table(…)` queries. The trait never
    fires. Only `UserAuditLogger::log()` captures the mutation. CRITICAL — silent audit gap.
+
+   > ✅ RESOLVED (PURCHASING-2) — Added `PurchaseReturn::logManualAudit()` calls to all 3 write
+   > paths in `PurchaseReturnService`: `createReturn` (created), `confirmReturn` (updated),
+   > `cancelReturn` (updated × 2 — reversal-field update + status='cancelled' update). The helper
+   > is a new public static method on the `AuditableMasterData` trait. For updates, old values
+   > are captured via `DB::table('purchase_returns')->first()` BEFORE each update, and the audit
+   > row records `array_intersect_key($old, $update)` as old + `$update` as new. All calls fire
+   > inside the parent `DB::transaction()`. Closes G-036.
 4. **G11 — No `confirmed_by` / `confirmed_at` columns.** The confirmer's identity is
    recoverable only via `user_audit_log` (partitioned by month — slow join). MAJOR for
    auditability.

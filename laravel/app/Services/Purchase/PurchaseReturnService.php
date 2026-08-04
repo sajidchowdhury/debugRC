@@ -111,6 +111,25 @@ class PurchaseReturnService
                 'updated_at' => now(),
             ]);
 
+            // PURCHASING-2 (G-036): manually fire the master_data audit since
+            // DB::table()->insertGetId bypasses Eloquent events. The
+            // AuditableMasterData trait's static::created listener would have
+            // logged this row had we used PurchaseReturn::create($row).
+            $returnRow = [
+                'return_code' => $returnCode,
+                'return_date' => $data['return_date'] ?? now()->format('Y-m-d'),
+                'purchase_receive_id' => $receiveId,
+                'supplier_id' => $supplierId,
+                'branch_id' => $branchId,
+                'warehouse_id' => $warehouseId,
+                'total_amount' => round($totalAmount, 2),
+                'status' => 'draft',
+                'is_reversed' => false,
+                'reason' => $data['reason'] ?? null,
+                'created_by' => $data['created_by'] ?? null,
+            ];
+            PurchaseReturn::logManualAudit('purchase_returns', $returnId, 'created', null, $returnRow);
+
             $itemRows = [];
             foreach ($items as $item) {
                 $itemRows[] = [
@@ -232,13 +251,23 @@ class PurchaseReturnService
             ]);
 
             // 5. Update return status.
+            $returnUpdate = [
+                'status' => 'confirmed',
+                'journal_entry_id' => $journalEntryId,
+                'updated_at' => now(),
+            ];
+            // PURCHASING-2 (G-036): capture old before update so we can log
+            // the master_data audit row the AuditableMasterData trait would
+            // have written had we used $return->update($returnUpdate).
+            $oldReturn = (array) DB::table('purchase_returns')->where('id', $returnId)->first();
             DB::table('purchase_returns')
                 ->where('id', $returnId)
-                ->update([
-                    'status' => 'confirmed',
-                    'journal_entry_id' => $journalEntryId,
-                    'updated_at' => now(),
-                ]);
+                ->update($returnUpdate);
+            PurchaseReturn::logManualAudit(
+                'purchase_returns', $returnId, 'updated',
+                array_intersect_key($oldReturn, $returnUpdate),
+                $returnUpdate
+            );
 
             // Phase 6: audit log.
             $goodCount = $return->items->filter(fn($i) => $i->isGood())->count();
@@ -323,19 +352,36 @@ class PurchaseReturnService
                     }
                 }
 
+                // PURCHASING-2 (G-036): capture old BEFORE the reversal-field
+                // update so we can log the master_data audit row.
+                $reverseUpdate = [
+                    'is_reversed' => true,
+                    'reversed_at' => now(),
+                    'reversed_by' => $cancelledBy,
+                    'reverse_reason' => $reason,
+                ];
+                $oldReturnForReverse = (array) DB::table('purchase_returns')->where('id', $returnId)->first();
                 DB::table('purchase_returns')
                     ->where('id', $returnId)
-                    ->update([
-                        'is_reversed' => true,
-                        'reversed_at' => now(),
-                        'reversed_by' => $cancelledBy,
-                        'reverse_reason' => $reason,
-                    ]);
+                    ->update($reverseUpdate);
+                PurchaseReturn::logManualAudit(
+                    'purchase_returns', $returnId, 'updated',
+                    array_intersect_key($oldReturnForReverse, $reverseUpdate),
+                    $reverseUpdate
+                );
             }
 
+            // PURCHASING-2 (G-036): capture old for status='cancelled' update.
+            $oldReturnForCancel = (array) DB::table('purchase_returns')->where('id', $returnId)->first();
+            $cancelUpdate = ['status' => 'cancelled', 'updated_at' => now()];
             DB::table('purchase_returns')
                 ->where('id', $returnId)
-                ->update(['status' => 'cancelled', 'updated_at' => now()]);
+                ->update($cancelUpdate);
+            PurchaseReturn::logManualAudit(
+                'purchase_returns', $returnId, 'updated',
+                array_intersect_key($oldReturnForCancel, $cancelUpdate),
+                $cancelUpdate
+            );
 
             // Phase 6: audit log.
             UserAuditLogger::log(
