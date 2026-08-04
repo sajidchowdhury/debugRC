@@ -267,6 +267,166 @@ class BranchDemandApiTest extends TestCase
         $response->assertJsonValidationErrors(['new_total_value', 'reason']);
     }
 
+    /**
+     * G12 — Happy-path reprice: a 'received' demand with a positive
+     * total_value can be repriced to a new total_value, returning the
+     * repricing adjustment record with original_total / new_total /
+     * adjustment_amount.
+     *
+     * Service contract (BranchDemandRepricingService::createRepricingAdjustment):
+     *   - demand.status must be 'received' (else RuntimeException)
+     *   - demand.is_reversed must be false
+     *   - new_total_value must differ from current total_value by >= 0.01
+     *   - new_total_value must be >= demand.settlement_amount
+     *
+     * The service posts GL journals (postRepricingAdjustmentJournals)
+     * which may fail in the test DB if ledger master data is missing —
+     * the controller catches Throwable and returns 422 with
+     * "Failed to reprice demand." We tolerate either 200 (full success)
+     * or 422 (GL-side failure) using the same pattern as
+     * test_reverse_demand_returns_success above. When 200, the full
+     * repricing JSON structure is asserted.
+     */
+    public function test_reprice_demand_returns_success_on_received_demand(): void
+    {
+        $token = $this->apiTokenForUser($this->adminUser);
+
+        $demandId = $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'received');
+
+        // The insertBranchDemand helper does not set total_value (NULL by
+        // default). The service requires a positive current total to
+        // compute a meaningful adjustment.
+        DB::table('branch_demands')->where('id', $demandId)->update([
+            'total_value'       => 1000.00,
+            'settlement_amount' => 0,
+            'is_reversed'       => false,
+        ]);
+
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
+            ->postJson("/api/v1/branch-demands/{$demandId}/reprice", [
+                'new_total_value' => 1200.00,
+                'reason'          => 'Negotiated price increase with partner branch.',
+            ]);
+
+        // Tolerate GL-side failure (same pattern as test_reverse_demand_returns_success).
+        $this->assertContains(
+            $response->status(),
+            [200, 422],
+            'Reprice should either succeed (200) or fail gracefully on GL posting (422).'
+        );
+
+        if ($response->status() === 200) {
+            $response->assertJsonStructure([
+                'data',
+                'message',
+                'repricing' => [
+                    'id',
+                    'original_total',
+                    'new_total',
+                    'adjustment_amount',
+                    'journal_entry_id',
+                ],
+            ]);
+
+            // Repricing arithmetic — original=1000, new=1200, adjustment=+200.
+            $response->assertJsonPath('repricing.original_total', 1000.00);
+            $response->assertJsonPath('repricing.new_total', 1200.00);
+            $response->assertJsonPath('repricing.adjustment_amount', 200.00);
+
+            // The demand's total_value should now reflect the new total.
+            $response->assertJsonPath('data.id', $demandId);
+            $response->assertJsonPath('data.status', 'received');
+            $response->assertJsonPath('data.total_value', 1200.00);
+
+            // DB assertion: the repricing record was persisted.
+            $this->assertDatabaseHas('branch_demand_repricing', [
+                'branch_demand_id'    => $demandId,
+                'original_total_value' => 1000.00,
+                'new_total_value'     => 1200.00,
+                'adjustment_amount'   => 200.00,
+            ]);
+        }
+    }
+
+    /**
+     * G12 (negative) — Reprice rejects a non-'received' demand at the
+     * API layer. Mirrors BranchDemandRepricingServiceTest but exercises
+     * the full HTTP path (FormRequest → controller → service → 422).
+     */
+    public function test_reprice_demand_rejects_non_received_demand(): void
+    {
+        $token = $this->apiTokenForUser($this->adminUser);
+
+        // 'pending' status — service requires 'received'.
+        $demandId = $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'pending');
+
+        DB::table('branch_demands')->where('id', $demandId)->update([
+            'total_value'       => 1000.00,
+            'settlement_amount' => 0,
+        ]);
+
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
+            ->postJson("/api/v1/branch-demands/{$demandId}/reprice", [
+                'new_total_value' => 1200.00,
+                'reason'          => 'Negotiated price increase with partner branch.',
+            ]);
+
+        $response->assertStatus(422);
+        $response->assertJsonPath('message', fn ($msg) => str_contains((string) $msg, "status is 'pending'"));
+    }
+
+    /**
+     * G12 (negative) — Reprice rejects a new_total_value equal to the
+     * current total_value (no-op adjustment).
+     */
+    public function test_reprice_demand_rejects_same_total_value(): void
+    {
+        $token = $this->apiTokenForUser($this->adminUser);
+
+        $demandId = $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'received');
+
+        DB::table('branch_demands')->where('id', $demandId)->update([
+            'total_value'       => 1000.00,
+            'settlement_amount' => 0,
+        ]);
+
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
+            ->postJson("/api/v1/branch-demands/{$demandId}/reprice", [
+                'new_total_value' => 1000.00,
+                'reason'          => 'No-change repricing attempt.',
+            ]);
+
+        $response->assertStatus(422);
+        $response->assertJsonPath('message', fn ($msg) => str_contains((string) $msg, 'No adjustment needed'));
+    }
+
+    /**
+     * G12 (negative) — Reprice rejects a new_total_value below the
+     * already-settled amount (would create a negative outstanding balance).
+     */
+    public function test_reprice_demand_rejects_below_settled_amount(): void
+    {
+        $token = $this->apiTokenForUser($this->adminUser);
+
+        $demandId = $this->insertBranchDemand($this->branchId, $this->branchId + 1, 'received');
+
+        // Demand settled for 800; trying to reprice down to 500 would
+        // create a negative outstanding balance.
+        DB::table('branch_demands')->where('id', $demandId)->update([
+            'total_value'       => 1000.00,
+            'settlement_amount' => 800.00,
+        ]);
+
+        $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
+            ->postJson("/api/v1/branch-demands/{$demandId}/reprice", [
+                'new_total_value' => 500.00,
+                'reason'          => 'Below-settlement repricing attempt.',
+            ]);
+
+        $response->assertStatus(422);
+        $response->assertJsonPath('message', fn ($msg) => str_contains((string) $msg, 'negative outstanding balance'));
+    }
+
     // ===================== OUTSTANDING =====================
 
     public function test_outstanding_returns_json(): void

@@ -21,6 +21,8 @@ use Tests\TestCase;
  *   - Custom limit via the middleware parameter (api.rate:5).
  *   - Per-token bucket isolation (different tokens have separate counts).
  *   - /api/docs is NOT rate-limited (always 200).
+ *   - G9: write endpoints capped at 30 req/min (api.rate:30) — the 31st
+ *     write returns 429 with "Maximum 30 requests per minute."
  */
 class ApiRateLimitTest extends TestCase
 {
@@ -75,6 +77,47 @@ class ApiRateLimitTest extends TestCase
         $over = $this->withHeaders($headers)->getJson('/api/v1/branches');
         $over->assertStatus(429);
         $over->assertJson(['message' => 'Rate limit exceeded. Maximum 60 requests per minute.']);
+        $over->assertJsonStructure(['retry_after']);
+    }
+
+    // ====================================================================
+    // OVER-LIMIT — WRITE ENDPOINTS (30 req/min cap — G9)
+    // ====================================================================
+
+    /**
+     * G9 — Verify the 30 req/min transactional write cap.
+     *
+     * Mutating endpoints (POST/PUT/DELETE on sales/invoices, payments,
+     * challans, branch-demands, etc.) are capped at api.rate:30 — half the
+     * 60/min read cap and a quarter of the 120/min dashboard cap. This test
+     * exercises the increment path on a write route, confirming the 31st
+     * request returns 429 with the correct "Maximum 30" message.
+     *
+     * We use POST /branch-demands/{id}/reprice because its FormRequest
+     * (RepriceBranchDemandRequest) rejects empty bodies with 422 — the
+     * rate limiter increments BEFORE FormRequest validation runs, so every
+     * request still counts against the cap regardless of body validity.
+     */
+    public function test_rate_limit_blocks_write_endpoints_at_30_per_minute(): void
+    {
+        $user  = $this->makeRoleUser('admin');
+        $token = $this->apiTokenForUser($user);
+
+        $headers = ['Authorization' => $this->bearerHeader($token)];
+
+        // Send 30 write requests — all must pass the rate limiter.
+        // (They 422 on validation, but the limiter has already counted them.)
+        for ($i = 0; $i < 30; $i++) {
+            $response = $this->withHeaders($headers)
+                ->postJson('/api/v1/branch-demands/999999/reprice', []);
+            $this->assertSame(422, $response->status(), "Write request #{$i} should pass rate limit (422 validation expected).");
+        }
+
+        // 31st request — over the 30/min write cap.
+        $over = $this->withHeaders($headers)
+            ->postJson('/api/v1/branch-demands/999999/reprice', []);
+        $over->assertStatus(429);
+        $over->assertJson(['message' => 'Rate limit exceeded. Maximum 30 requests per minute.']);
         $over->assertJsonStructure(['retry_after']);
     }
 
