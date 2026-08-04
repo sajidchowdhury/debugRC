@@ -162,6 +162,38 @@ class BranchDemandService
         // FINANCE-2 (G-016): wire shadow-mode comparison after the commit.
         $this->dispatchShadowCompare('create', $demand);
 
+        // FINANCE-3 (G-021): dispatch the 'branch_demand_created' notification
+        // so the supplier branch's warehouse manager is alerted that a new
+        // demand has been raised against their branch. NotificationService
+        // already registers the event type (icon/color/title) at L60 — it just
+        // had no caller. Resolved lazily via app(...) (mirrors the
+        // dispatchShadowCompare pattern) to avoid constructor coupling.
+        // Non-blocking: a notification failure (no active rule, no recipients,
+        // DB write error) MUST NEVER abort the demand creation — the demand is
+        // already committed at this point.
+        try {
+            app(\App\Services\Notification\NotificationService::class)->dispatch(
+                event:           'branch_demand_created',
+                body:            "Branch demand {$demand->demand_code} created — "
+                                 . count($items) . ' item(s) from branch #' . $fromBranchId
+                                 . ' to branch #' . $toBranchId
+                                 . ' (dated ' . ($data['demand_date'] ?? now()->format('Y-m-d')) . ').',
+                referenceType:   'branch_demand',
+                referenceId:     $demand->id,
+                extra:           ['title' => 'New Branch Demand'],
+                context:         [
+                    'branch_id'  => $toBranchId,  // supplier branch — warehouse_manager_of_branch resolves here
+                    'created_by' => $data['created_by'] ?? null,
+                ],
+            );
+        } catch (\Throwable $e) {
+            Log::warning('branch_demand_created notification dispatch failed (non-blocking)', [
+                'demand_id'   => $demand->id,
+                'demand_code' => $demand->demand_code,
+                'error'       => $e->getMessage(),
+            ]);
+        }
+
         return $demand;
     }
 

@@ -53,7 +53,7 @@ class MoneyTransferService
         $fromBranchId = (int) ($data['from_branch_id'] ?? session('branch_id', 1));
         $toBranchId = (int) ($data['to_branch_id'] ?? $fromBranchId);
 
-        return DB::transaction(function () use ($data, $transferCode, $transferType, $amount, $fromBranchId, $toBranchId) {
+        $transfer = DB::transaction(function () use ($data, $transferCode, $transferType, $amount, $fromBranchId, $toBranchId) {
             // 1. Insert money_transfer record.
             $transferId = DB::table('money_transfers')->insertGetId([
                 'transfer_code'  => $transferCode,
@@ -115,6 +115,38 @@ class MoneyTransferService
 
             return MoneyTransfer::with(['fromBranch', 'toBranch', 'fromBank', 'toBank', 'journalEntry'])->find($transferId);
         });
+
+        // FINANCE-3 (G-013): FIFO-settle open branch demands from this money
+        // transfer. BranchIntercompanyService::settleFromMoneyTransfer
+        // allocates the transfer amount in FIFO order against open received
+        // demands where from_branch_id is the debtor and to_branch_id is the
+        // creditor, inserts branch_demand_money_transfer_settlements rows,
+        // bumps branch_demands.settlement_amount, posts the settlement JE
+        // (Dr Due-to / Cr Cash-Bank), and records the branch_ledger pair.
+        //
+        // Only inter-branch cash_to_cash / cash_to_bank transfers settle
+        // demands (the service itself short-circuits otherwise — see
+        // BranchIntercompanyService::settleFromMoneyTransfer L755-757).
+        // Non-blocking: a settlement failure rolls back only the settlement;
+        // the committed money transfer stays intact.
+        try {
+            app(\App\Services\BranchDemand\BranchIntercompanyService::class)
+                ->settleFromMoneyTransfer(
+                    transferId:   $transfer->id,
+                    fromBranchId: $fromBranchId,
+                    toBranchId:   $toBranchId,
+                    amount:       $amount,
+                    transferType: $transferType,
+                    postedBy:     (int) ($data['created_by'] ?? 0),
+                );
+        } catch (\Throwable $e) {
+            Log::warning('settleFromMoneyTransfer failed (non-blocking)', [
+                'transfer_id' => $transfer->id,
+                'error'       => $e->getMessage(),
+            ]);
+        }
+
+        return $transfer;
     }
 
     /**
@@ -122,7 +154,7 @@ class MoneyTransferService
      */
     public function reverseTransfer(int $transferId, int $reversedBy, string $reason): MoneyTransfer
     {
-        return DB::transaction(function () use ($transferId, $reversedBy, $reason) {
+        $transfer = DB::transaction(function () use ($transferId, $reversedBy, $reason) {
             $transfer = MoneyTransfer::lockForUpdate()->findOrFail($transferId);
 
             if ($transfer->is_reversed) {
@@ -178,6 +210,26 @@ class MoneyTransferService
 
             return MoneyTransfer::find($transferId);
         });
+
+        // FINANCE-3 (G-013): Reverse any FIFO demand settlements that were
+        // created from this transfer. BranchIntercompanyService::
+        // reverseMoneyTransferSettlements reverses the settlement JEs,
+        // marks the branch_ledger rows is_reversed=true, deletes the
+        // branch_demand_money_transfer_settlements rows, and decrements
+        // branch_demands.settlement_amount. Non-blocking: a settlement
+        // reversal failure must not prevent the transfer reversal (the
+        // GL/bank/cash-ledger reversal is the source of truth).
+        try {
+            app(\App\Services\BranchDemand\BranchIntercompanyService::class)
+                ->reverseMoneyTransferSettlements($transferId, $reversedBy, $reason);
+        } catch (\Throwable $e) {
+            Log::warning('reverseMoneyTransferSettlements failed (non-blocking)', [
+                'transfer_id' => $transferId,
+                'error'       => $e->getMessage(),
+            ]);
+        }
+
+        return $transfer;
     }
 
     /**
@@ -435,31 +487,145 @@ class MoneyTransferService
 
     /**
      * Post intercompany journal entry for cross-branch transfers.
+     *
+     * FINANCE-3 (G-012 / G-344): rewritten to mirror the canonical
+     * Employee/Supplier/CustomerPayment intercompany pattern (two-JE pair
+     * using `interbranch_receivable` + `interbranch_payable` natures +
+     * a `branch_ledger` obligation row). The previous implementation used
+     * a single `intercompany` ledger nature with two lines on one JE —
+     * that created a parallel intercompany GL system with no
+     * reconciliation against the `branch_ledger` running balance and was
+     * never wired to `BranchIntercompanyService::settleFromMoneyTransfer`
+     * (G-013 dead code).
+     *
+     * Direction:
+     *   - `from_branch_id` = the branch SENDING money (debtor — owes the
+     *     creditor branch for the goods/services that this transfer settles).
+     *   - `to_branch_id`   = the branch RECEIVING money (creditor).
+     *
+     * Two JEs are posted:
+     *   1. Creditor journal (at to_branch_id):
+     *        Dr interbranch_receivable / Cr cash_bank
+     *   2. Debtor journal (at from_branch_id):
+     *        Dr cash_bank / Cr interbranch_payable
+     *
+     * Plus a `branch_ledger` row recording the interbranch obligation
+     * (from_branch = debtor, to_branch = creditor, debit = amount).
+     *
+     * Reference type: `money_transfer_intercompany` (unchanged from the
+     * previous implementation — preserves audit-trail continuity).
+     *
+     * @return int|null The debtor-side journal_entry_id (stored on
+     *     `money_transfers.intercompany_journal_entry_id`). Null if the
+     *     interbranch ledger natures are not configured.
      */
     private function postIntercompanySettlement(int $transferId, string $type, float $amount, int $fromBranchId, int $toBranchId, array $data): ?int
     {
         try {
-            $icLedgerId = $this->journalPosting->lookupLedgerByNature('intercompany');
-            if (!$icLedgerId) {
-                Log::warning('Intercompany ledger not found — skipping intercompany settlement for money transfer', [
+            // Resolve the canonical interbranch ledger pair (seeded L-0105 / L-0303).
+            $dueFromLedgerId = $this->journalPosting->lookupLedgerByNature('interbranch_receivable');
+            $dueToLedgerId   = $this->journalPosting->lookupLedgerByNature('interbranch_payable');
+            if (!$dueFromLedgerId || !$dueToLedgerId) {
+                Log::warning('Interbranch ledgers not configured — skipping money-transfer intercompany settlement', [
+                    'transfer_id'   => $transferId,
+                    'from_branch_id' => $fromBranchId,
+                    'to_branch_id'   => $toBranchId,
+                ]);
+                return null;
+            }
+
+            // Resolve the cash/bank ledger for the offsetting side of each JE.
+            // Uses the from_bank_id if available (bank_to_bank / bank_to_cash),
+            // else falls back to the cash_bank nature.
+            $cashBankLedgerId = $this->journalPosting->lookupLedgerByNature('cash_bank');
+            if (!$cashBankLedgerId) {
+                Log::warning('cash_bank ledger not configured — skipping money-transfer intercompany settlement', [
                     'transfer_id' => $transferId,
                 ]);
                 return null;
             }
 
-            $lines = [
-                ['ledger_id' => $icLedgerId, 'debit' => $amount, 'credit' => 0, 'branch_id' => $toBranchId],
-                ['ledger_id' => $icLedgerId, 'debit' => 0, 'credit' => $amount, 'branch_id' => $fromBranchId],
-            ];
+            $entryDate = $data['transfer_date'] ?? now()->format('Y-m-d');
+            $createdBy = $data['created_by'] ?? null;
 
-            return $this->journalPosting->postJournalEntry([
+            // 1. Creditor journal (at to_branch_id — the branch receiving money):
+            //    Dr interbranch_receivable / Cr cash_bank
+            $creditorJeId = $this->journalPosting->createJournalEntry([
+                'entry_date'     => $entryDate,
+                'reference_type' => 'money_transfer_intercompany',
+                'reference_id'   => $transferId,
+                'branch_id'      => $toBranchId,
+                'description'    => "Intercompany — Money Transfer #{$transferId} (received from branch {$fromBranchId})",
+                'source'         => 'money_transfer_intercompany',
+                'created_by'     => $createdBy,
+            ], [
+                [
+                    'ledger_id' => $dueFromLedgerId,
+                    'debit'     => $amount,
+                    'credit'    => 0,
+                    'memo'      => "Due from branch {$fromBranchId} — money transfer #{$transferId}",
+                ],
+                [
+                    'ledger_id' => $cashBankLedgerId,
+                    'debit'     => 0,
+                    'credit'    => $amount,
+                    'memo'      => "Cash/Bank credit — money transfer #{$transferId} received from branch {$fromBranchId}",
+                ],
+            ]);
+
+            // 2. Debtor journal (at from_branch_id — the branch sending money):
+            //    Dr cash_bank / Cr interbranch_payable
+            $debtorJeId = $this->journalPosting->createJournalEntry([
+                'entry_date'     => $entryDate,
                 'reference_type' => 'money_transfer_intercompany',
                 'reference_id'   => $transferId,
                 'branch_id'      => $fromBranchId,
-                'description'    => "Intercompany — Money Transfer ({$fromBranchId} → {$toBranchId})",
-                'lines'          => $lines,
-                'created_by'     => $data['created_by'] ?? null,
+                'description'    => "Intercompany — Money Transfer #{$transferId} (sent to branch {$toBranchId})",
+                'source'         => 'money_transfer_intercompany',
+                'created_by'     => $createdBy,
+            ], [
+                [
+                    'ledger_id' => $cashBankLedgerId,
+                    'debit'     => $amount,
+                    'credit'    => 0,
+                    'memo'      => "Cash/Bank debit — money transfer #{$transferId} sent to branch {$toBranchId}",
+                ],
+                [
+                    'ledger_id' => $dueToLedgerId,
+                    'debit'     => 0,
+                    'credit'    => $amount,
+                    'memo'      => "Due to branch {$toBranchId} — money transfer #{$transferId}",
+                ],
             ]);
+
+            // 3. Record the interbranch obligation in branch_ledger.
+            //    from_branch = debtor (sender), to_branch = creditor (receiver).
+            DB::table('branch_ledger')->insert([
+                'transaction_date' => $entryDate,
+                'from_branch_id'   => $fromBranchId,
+                'to_branch_id'     => $toBranchId,
+                'reference_type'   => 'money_transfer',
+                'reference_id'     => $transferId,
+                'debit'            => $amount,
+                'credit'           => 0,
+                'remarks'          => "Money transfer #{$transferId} ({$type}) — branch {$fromBranchId} → branch {$toBranchId}",
+                'journal_entry_id' => $debtorJeId,
+                'is_reversed'      => false,
+                'created_by'       => $createdBy,
+                'created_at'       => now(),
+            ]);
+
+            Log::info('Money transfer intercompany settlement posted', [
+                'transfer_id'     => $transferId,
+                'from_branch_id'  => $fromBranchId,
+                'to_branch_id'    => $toBranchId,
+                'amount'          => $amount,
+                'creditor_je_id'  => $creditorJeId,
+                'debtor_je_id'    => $debtorJeId,
+            ]);
+
+            // Return the debtor JE id (primary, stored in intercompany_journal_entry_id).
+            return $debtorJeId;
         } catch (\Throwable $e) {
             // CRITICAL: Re-throw if inside a DB::transaction(), because a
             // swallowed SQL error leaves PostgreSQL in an aborted state (25P02).

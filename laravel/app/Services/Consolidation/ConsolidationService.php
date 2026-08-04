@@ -6,8 +6,6 @@ use App\Models\Company;
 use App\Models\ConsolidationRun;
 use App\Models\EliminationEntry;
 use App\Models\EliminationRule;
-use App\Models\Accounting\JournalEntry;
-use App\Models\Accounting\JournalLine;
 use App\Services\Accounting\JournalPostingService;
 use App\Services\Accounting\DocumentSequenceService;
 use Illuminate\Support\Facades\DB;
@@ -358,39 +356,39 @@ class ConsolidationService
             }
         }
 
-        // Create the journal entry
-        $entryNo = $this->docSequence->next('JE', $postedBy);
-
-        $je = JournalEntry::create([
-            'entry_no' => $entryNo,
-            'entry_date' => $run->period_to,
+        // FINANCE-3 (G-011): Post the elimination JE via JournalPostingService
+        // instead of `JournalEntry::create()` + `JournalLine::create()` directly.
+        // This enforces Dr=Cr balance validation, period-close validation,
+        // ledger-active validation, AND writes to `journal_posting_logs` (the
+        // "who posted what, when" audit trail). The previous direct-model
+        // path bypassed all four safeguards — a future edit could post an
+        // unbalanced elimination JE silently, post to a closed period, or
+        // reference an inactive ledger, with no posting-log trail.
+        $jeId = $this->journalPosting->createJournalEntry([
+            'entry_date'     => $run->period_to,
             'reference_type' => 'consolidation_elimination',
-            'reference_id' => $run->id,
-            'branch_id' => $branchId,
-            'description' => $entry->description . " [Run: {$run->run_code}]",
-            'source' => 'elimination',
-            'created_by' => $postedBy,
-        ]);
-
-        // Create journal lines
-        JournalLine::create([
-            'journal_entry_id' => $je->id,
-            'ledger_id' => $debitLedgerId,
-            'debit' => $entry->elimination_amount,
-            'credit' => 0,
-            'memo' => "Elimination: {$rule->rule_name}",
-        ]);
-
-        JournalLine::create([
-            'journal_entry_id' => $je->id,
-            'ledger_id' => $creditLedgerId,
-            'debit' => 0,
-            'credit' => $entry->elimination_amount,
-            'memo' => "Elimination: {$rule->rule_name}",
+            'reference_id'   => $run->id,
+            'branch_id'      => $branchId,
+            'description'    => $entry->description . " [Run: {$run->run_code}]",
+            'source'         => 'elimination',
+            'created_by'     => $postedBy,
+        ], [
+            [
+                'ledger_id' => $debitLedgerId,
+                'debit'     => (float) $entry->elimination_amount,
+                'credit'    => 0,
+                'memo'      => "Elimination: {$rule->rule_name}",
+            ],
+            [
+                'ledger_id' => $creditLedgerId,
+                'debit'     => 0,
+                'credit'    => (float) $entry->elimination_amount,
+                'memo'      => "Elimination: {$rule->rule_name}",
+            ],
         ]);
 
         // Link the journal entry to the elimination entry
-        $entry->update(['journal_entry_id' => $je->id]);
+        $entry->update(['journal_entry_id' => $jeId]);
     }
 
     // ── Reverse Consolidation ──────────────────────────────────────
@@ -415,7 +413,7 @@ class ConsolidationService
             // Reverse each elimination journal entry
             foreach ($run->eliminationEntries as $entry) {
                 if ($entry->journal_entry_id) {
-                    $this->reverseEliminationJournal($entry->journalEntry, $reversedBy, $reason);
+                    $this->reverseEliminationJournal((int) $entry->journal_entry_id, $reversedBy, $reason);
                 }
             }
 
@@ -444,49 +442,30 @@ class ConsolidationService
     /**
      * Reverse a single elimination journal entry.
      *
-     * Creates a reversal journal entry with swapped Dr/Cr.
+     * FINANCE-3 (G-011): delegated to JournalPostingService::reverseJournalEntry
+     * instead of manually creating a swapped Dr/Cr JE + lines. This enforces
+     * the same Dr=Cr / ledger-active / journal_posting_logs safeguards as the
+     * forward-posting path (now that postEliminationEntry also uses
+     * JournalPostingService). The reversal JE inherits `reference_type='reversal'`
+     * + `source='reversal'` from JournalPostingService (was `consolidation_reversal`
+     * + `elimination`); the audit trail is preserved via `reference_id=$originalJeId`
+     * + `reversal_of_entry_id` on the original JE.
+     *
+     * Idempotent: if the original JE is already reversed, the call is a no-op
+     * (JournalPostingService::reverseJournalEntry throws on double-reversal, so
+     * we guard with a cheap is_reversed check first).
      */
-    private function reverseEliminationJournal(JournalEntry $original, int $reversedBy, string $reason): void
+    private function reverseEliminationJournal(int $originalJeId, int $reversedBy, string $reason): void
     {
-        if ($original->is_reversed) {
-            return; // Already reversed
+        $alreadyReversed = DB::table('journal_entries')
+            ->where('id', $originalJeId)
+            ->value('is_reversed');
+
+        if ($alreadyReversed) {
+            return; // Already reversed — idempotent no-op.
         }
 
-        $reversalNo = $this->docSequence->next('JE', $reversedBy);
-
-        $reversal = JournalEntry::create([
-            'entry_no' => $reversalNo,
-            'entry_date' => $original->entry_date,
-            'reference_type' => 'consolidation_reversal',
-            'reference_id' => $original->id,
-            'branch_id' => $original->branch_id,
-            'description' => "Reversal of elimination entry {$original->entry_no}: {$reason}",
-            'source' => 'elimination',
-            'is_reversed' => false,
-            'reversal_of_entry_id' => $original->id,
-            'reversed_by' => $reversedBy,
-            'reverse_reason' => $reason,
-            'created_by' => $reversedBy,
-        ]);
-
-        // Create reversal lines (swap Dr/Cr)
-        foreach ($original->lines as $line) {
-            JournalLine::create([
-                'journal_entry_id' => $reversal->id,
-                'ledger_id' => $line->ledger_id,
-                'debit' => $line->credit,
-                'credit' => $line->debit,
-                'memo' => "Reversal: " . ($line->memo ?? ''),
-            ]);
-        }
-
-        // Mark original as reversed
-        $original->update([
-            'is_reversed' => true,
-            'reversed_at' => now(),
-            'reversed_by' => $reversedBy,
-            'reverse_reason' => $reason,
-        ]);
+        $this->journalPosting->reverseJournalEntry($originalJeId, $reversedBy, $reason);
     }
 
     // ── Consolidated Reporting ─────────────────────────────────────

@@ -141,7 +141,7 @@ class CustomerPaymentService
      */
     public function confirmPayment(int $paymentId, int $confirmedBy, array $allocations = []): CustomerPayment
     {
-        return DB::transaction(function () use ($paymentId, $confirmedBy, $allocations) {
+        $payment = DB::transaction(function () use ($paymentId, $confirmedBy, $allocations) {
             $payment = CustomerPayment::lockForUpdate()->find($paymentId);
 
             if (!$payment) {
@@ -270,6 +270,44 @@ class CustomerPaymentService
                 'allocations.invoice',
             ])->find($paymentId);
         });
+
+        // FINANCE-3 (G-013): FIFO-settle open branch demands from this
+        // customer payment. BranchIntercompanyService::settleFromCustomerPayment
+        // iterates open received demands where this payment's branch is the
+        // debtor, allocates the payment amount in FIFO order (oldest first),
+        // inserts branch_demand_customer_payment_settlements rows, bumps
+        // branch_demands.settlement_amount, posts the settlement JE (Dr Due-to
+        // / Cr Cash-Bank), and records the branch_ledger pair.
+        //
+        // Non-blocking (mirrors the SALES-2 / FINANCE-2 pattern): wrapped in
+        // its own DB::transaction so a settlement failure rolls back ONLY the
+        // settlement — the confirmed payment (GL + AR + allocation + intercompany)
+        // stays committed. A failure here means the demand stays open and the
+        // accountant must settle manually; it MUST NEVER abort the parent
+        // payment confirmation.
+        $transactionType = $payment->transaction_type ?? 'receive';
+        $amount          = (float) $payment->amount;
+        $branchId        = (int) $payment->branch_id;
+        if (in_array($transactionType, self::AR_REDUCTION_TYPES) && $amount > 0.01) {
+            try {
+                app(\App\Services\BranchDemand\BranchIntercompanyService::class)
+                    ->settleFromCustomerPayment(
+                        paymentId: $paymentId,
+                        branchId:  $branchId,
+                        amount:    $amount,
+                        postedBy:  $confirmedBy,
+                    );
+            } catch (\Throwable $e) {
+                Log::warning('settleFromCustomerPayment failed (non-blocking)', [
+                    'payment_id' => $paymentId,
+                    'branch_id'  => $branchId,
+                    'amount'     => $amount,
+                    'error'      => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $payment;
     }
 
     /**
@@ -284,7 +322,7 @@ class CustomerPaymentService
      */
     public function cancelPayment(int $paymentId, int $cancelledBy, string $reason = ''): CustomerPayment
     {
-        return DB::transaction(function () use ($paymentId, $cancelledBy, $reason) {
+        $payment = DB::transaction(function () use ($paymentId, $cancelledBy, $reason) {
             $payment = CustomerPayment::lockForUpdate()->find($paymentId);
 
             if (!$payment) {
@@ -395,6 +433,26 @@ class CustomerPaymentService
 
             return CustomerPayment::find($paymentId);
         });
+
+        // FINANCE-3 (G-013): Reverse any FIFO demand settlements that were
+        // created from this payment. BranchIntercompanyService::
+        // reverseCustomerPaymentSettlements reverses the settlement JEs,
+        // marks the branch_ledger rows is_reversed=true, deletes the
+        // branch_demand_customer_payment_settlements rows, and decrements
+        // branch_demands.settlement_amount. Non-blocking: a settlement
+        // reversal failure must not prevent the payment cancellation (the
+        // GL/AR/allocation reversal is the source of truth).
+        try {
+            app(\App\Services\BranchDemand\BranchIntercompanyService::class)
+                ->reverseCustomerPaymentSettlements($paymentId, $cancelledBy, $reason);
+        } catch (\Throwable $e) {
+            Log::warning('reverseCustomerPaymentSettlements failed (non-blocking)', [
+                'payment_id' => $paymentId,
+                'error'      => $e->getMessage(),
+            ]);
+        }
+
+        return $payment;
     }
 
     // ============================================================
@@ -815,53 +873,171 @@ class CustomerPaymentService
      * Post intercompany settlement for bank-mode payments.
      *
      * When a customer pays at Branch A but the bank belongs to Branch B,
-     * this creates an intercompany entry: Branch A owes Branch B for the bank deposit.
+     * this creates a two-JE intercompany entry mirroring the Employee/Supplier
+     * pattern: Branch A owes Branch B for the bank deposit.
      *
-     * Only applies to AR-reduction types (receive, discount, write_off).
-     * Refund type reverses the flow (not handled here — refund intercompany is rare).
+     * Only applies to AR-reduction types (receive, discount, write_off) — these
+     * are INFLOW (customer paying us, money comes IN to the bank). Refund type
+     * ('payment') reverses the flow and is NOT handled here (refund intercompany
+     * is rare; the GL reversal cascade handles it via JournalReversalService).
      *
-     * @return int|null journal_entry_id (null if no intercompany needed)
+     * FINANCE-3 (G-010 / G-021): the previous early-return was stale —
+     * migration `2026_08_06_000001_add_branch_id_to_banks.php` DID add
+     * `banks.branch_id` (NULL = shared/head-office). The early-return was
+     * removed and the real implementation mirroring EmployeeTransactionService
+     * ::postIntercompanySettlement (L674-819) was written against the CURRENT
+     * `branch_ledger` schema (NOT the dropped columns `transaction_type` /
+     * `amount` / `is_settled` dropped by migration `2026_07_29_000013`).
+     *
+     * Reference type: `customer_payment_intercompany` (was missing entirely
+     * from the codebase before this fix — the path never fired).
+     *
+     * @return int|null The debtor-side journal_entry_id (stored on
+     *     `customer_payments.intercompany_journal_entry_id`). Null if no
+     *     intercompany is needed (shared bank, same-branch bank, or ledger
+     *     natures not configured).
      */
     private function postIntercompanySettlement(CustomerPayment $payment, int $createdBy): ?int
     {
         $amount = (float) $payment->amount;
-        if ($amount < 0.01 || !$payment->bank_id) return null;
+        if ($amount < 0.01 || !$payment->bank_id) {
+            return null;
+        }
 
-        // FINANCE-2 (G-327): The previously-present dead-code block below
-        // this early-return has been REMOVED. It was unreachable AND
-        // referenced `branch_ledger` columns that were dropped by migration
-        // `2026_07_29_000013` (`transaction_type`, `amount`, `is_settled`)
-        // — if a future dev ever unblocked this path, the INSERT would have
-        // thrown `SQLSTATE[42703]`.
-        //
-        // The early-return itself remains — its removal is G-021 (FINANCE-3).
-        // IMPORTANT: per `AI_CONTEXT/accounting/customer-payments.md` §8,
-        // migration `2026_08_06_000001_add_branch_id_to_banks.php` DID add
-        // a `branch_id` column to `banks`. The original "banks has no
-        // branch_id" justification for the early-return is therefore STALE
-        // — the bank→branch mapping now exists. FINANCE-3 (G-021) must:
-        //   1. Remove this early-return.
-        //   2. Load `$bankBranchId = DB::table('banks')->where('id',
-        //      $payment->bank_id)->value('branch_id')`.
-        //   3. Skip only when `$bankBranchId === $payment->branch_id`
-        //      (same-branch payment — no intercompany needed).
-        //   4. Write the new implementation against the CURRENT
-        //      `branch_ledger` schema (NOT the dropped columns):
-        //        - `debit`           numeric(14,2)
-        //        - `credit`          numeric(14,2)
-        //        - `running_balance` numeric(14,2)
-        //        - `is_reversed`     boolean DEFAULT false
-        //        - `remarks`         text
-        //        - `journal_entry_id`, `from_branch_id`, `to_branch_id`,
-        //          `transaction_date`, `reference_type`, `reference_id`
-        //      See `02_accounting.sql:203-222` for the canonical DDL.
-        //   5. Mirror the Employee/Supplier pattern (`EmployeeTransaction
-        //      Service::postIntercompanySettlement` L639,
-        //      `SupplierTransactionService::postIntercompanySettlement`
-        //      L616) — two-JE intercompany using `interbranch_receivable`
-        //      / `interbranch_payable` natures +
-        //      `reference_type='customer_payment_intercompany'`.
-        return null;
+        // Load the bank with its branch_id (added by migration
+        // 2026_08_06_000001_add_branch_id_to_banks). NULL = shared bank.
+        $bank = Bank::find($payment->bank_id);
+        if (!$bank) {
+            return null;
+        }
+        $bankBranchId = $bank->branch_id ? (int) $bank->branch_id : null;
+        if (!$bankBranchId) {
+            // Shared / head-office bank — no intercompany needed.
+            return null;
+        }
+
+        $txnBranchId = (int) $payment->branch_id;  // payment's branch (where AR lives)
+
+        // Same branch — no intercompany needed.
+        if ($bankBranchId === $txnBranchId) {
+            return null;
+        }
+
+        // Resolve interbranch ledgers (seeded L-0105 / L-0303).
+        $dueFromLedgerId = $this->journalPosting->lookupLedgerByNature('interbranch_receivable');
+        $dueToLedgerId   = $this->journalPosting->lookupLedgerByNature('interbranch_payable');
+        if (!$dueFromLedgerId || !$dueToLedgerId) {
+            Log::warning('Intercompany ledgers not configured, skipping customer-payment settlement', [
+                'payment_id'   => $payment->id,
+                'payment_code' => $payment->payment_code,
+                'txn_branch_id'  => $txnBranchId,
+                'bank_branch_id' => $bankBranchId,
+            ]);
+            return null;
+        }
+
+        // Resolve the bank's mapped ledger (falls back to cash_bank nature).
+        $bankLedgerId = $this->resolveDebitLedger($payment);
+        if (!$bankLedgerId) {
+            Log::warning('Could not resolve bank ledger for customer-payment intercompany settlement', [
+                'payment_id' => $payment->id,
+            ]);
+            return null;
+        }
+
+        $entryDate = $payment->payment_date
+            ? ($payment->payment_date instanceof \Carbon\Carbon
+                ? $payment->payment_date->format('Y-m-d')
+                : date('Y-m-d', strtotime((string) $payment->payment_date)))
+            : now()->format('Y-m-d');
+        $payCode  = $payment->payment_code;
+        $txnType  = $payment->transaction_type ?? 'receive';
+
+        // INFLOW (customer paying us): creditor = payment's branch (where AR lives
+        // and where the bank credit is recorded), debtor = bank's branch (which
+        // must fund the deposit). Mirrors EmployeeTransactionService INFLOW.
+        $creditorBranchId = $txnBranchId;
+        $debtorBranchId   = $bankBranchId;
+
+        // 1. Creditor journal (at the payment's branch):
+        //    Dr interbranch_receivable / Cr bank-ledger
+        $creditorJeId = $this->journalPosting->createJournalEntry([
+            'entry_date'     => $entryDate,
+            'reference_type' => 'customer_payment_intercompany',
+            'reference_id'   => $payment->id,
+            'branch_id'      => $creditorBranchId,
+            'description'    => "Intercompany — Customer payment {$payCode} ({$txnType}; bank at branch {$bankBranchId})",
+            'source'         => 'customer_payment_intercompany',
+            'created_by'     => $createdBy,
+        ], [
+            [
+                'ledger_id' => $dueFromLedgerId,
+                'debit'     => $amount,
+                'credit'    => 0,
+                'memo'      => "Due from branch {$debtorBranchId} — customer payment {$payCode}",
+            ],
+            [
+                'ledger_id' => $bankLedgerId,
+                'debit'     => 0,
+                'credit'    => $amount,
+                'memo'      => "Bank received customer payment {$payCode} for branch {$debtorBranchId}",
+            ],
+        ]);
+
+        // 2. Debtor journal (at the bank's branch):
+        //    Dr bank-ledger / Cr interbranch_payable
+        $debtorJeId = $this->journalPosting->createJournalEntry([
+            'entry_date'     => $entryDate,
+            'reference_type' => 'customer_payment_intercompany',
+            'reference_id'   => $payment->id,
+            'branch_id'      => $debtorBranchId,
+            'description'    => "Intercompany — Customer payment {$payCode} (deposit at branch {$bankBranchId} bank)",
+            'source'         => 'customer_payment_intercompany',
+            'created_by'     => $createdBy,
+        ], [
+            [
+                'ledger_id' => $bankLedgerId,
+                'debit'     => $amount,
+                'credit'    => 0,
+                'memo'      => "Bank clearing — customer payment {$payCode} via branch {$creditorBranchId} bank",
+            ],
+            [
+                'ledger_id' => $dueToLedgerId,
+                'debit'     => 0,
+                'credit'    => $amount,
+                'memo'      => "Due to branch {$creditorBranchId} — customer payment {$payCode}",
+            ],
+        ]);
+
+        // 3. Record the interbranch obligation in branch_ledger.
+        //    INFLOW: from_branch = debtor (bank branch), to_branch = creditor (txn branch)
+        DB::table('branch_ledger')->insert([
+            'transaction_date' => $entryDate,
+            'from_branch_id'   => $debtorBranchId,
+            'to_branch_id'     => $creditorBranchId,
+            'reference_type'   => 'customer_payment',
+            'reference_id'     => $payment->id,
+            'debit'            => $amount,
+            'credit'           => 0,
+            'remarks'          => "Customer payment {$payCode} ({$txnType}) — bank at branch {$bankBranchId}",
+            'journal_entry_id' => $debtorJeId,
+            'is_reversed'      => false,
+            'created_by'       => $createdBy,
+            'created_at'       => now(),
+        ]);
+
+        Log::info('Customer payment intercompany settlement posted', [
+            'payment_id'      => $payment->id,
+            'payment_code'    => $payCode,
+            'txn_branch_id'   => $txnBranchId,
+            'bank_branch_id'  => $bankBranchId,
+            'amount'          => $amount,
+            'creditor_je_id'  => $creditorJeId,
+            'debtor_je_id'    => $debtorJeId,
+        ]);
+
+        // Return the debtor JE id (primary, stored in intercompany_journal_entry_id).
+        return $debtorJeId;
     }
 
     // ============================================================

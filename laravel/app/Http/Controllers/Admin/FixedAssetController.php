@@ -290,6 +290,45 @@ class FixedAssetController extends Controller
             'notes' => 'nullable|string|max:1000',
         ]);
 
+        // FINANCE-3 (G-335 / BR21): Once at least one depreciation schedule
+        // has been posted for this asset, the cost / salvage / useful-life /
+        // method / asset-ledger / dep-ledger fields are IMMUTABLE. Editing
+        // them silently distorts the books: past schedules retain the old
+        // cost basis (overstating NBV), future schedules pick up the new cost
+        // (understating depreciation expense), and the auditor cannot
+        // reconstruct the historical trajectory. The previous `update` only
+        // recalculated `net_book_value = new_cost − accumulated_depreciation`
+        // — a cosmetic fix that masked the underlying schedule distortion.
+        //
+        // If a cost/salvage/useful-life/method/ledger change is genuinely
+        // required, the accountant must (1) reverse all posted schedules for
+        // the asset, (2) edit the asset, (3) re-generate + re-post the
+        // schedules. This controller intentionally blocks the silent path.
+        // Per `AI_CONTEXT/finance/fixed-assets.md` §14.1 remediation #4.
+        $hasPostedDepreciation = AssetDepreciationSchedule::where('fixed_asset_id', $fixedAsset->id)
+            ->where('status', 'posted')
+            ->exists();
+
+        if ($hasPostedDepreciation) {
+            // Identify which protected fields the user is trying to change.
+            $protectedFields = [
+                'acquisition_cost'      => (float) $validated['acquisition_cost']      !== (float) $fixedAsset->acquisition_cost,
+                'salvage_value'         => (float) ($validated['salvage_value'] ?? 0)  !== (float) $fixedAsset->salvage_value,
+                'useful_life_months'    => (int)   $validated['useful_life_months']    !== (int)   $fixedAsset->useful_life_months,
+                'depreciation_method'   =>          $validated['depreciation_method']  !==          $fixedAsset->depreciation_method,
+                'asset_ledger_id'       => (int)   $validated['asset_ledger_id']       !== (int)   $fixedAsset->asset_ledger_id,
+                'dep_ledger_id'         => (int)   $validated['dep_ledger_id']         !== (int)   $fixedAsset->dep_ledger_id,
+            ];
+            $blocked = array_keys(array_filter($protectedFields));
+
+            if (!empty($blocked)) {
+                $list = implode(', ', $blocked);
+                return back()
+                    ->withInput()
+                    ->with('error', "Cannot edit {$list} after depreciation has been posted. Reverse all posted depreciation schedules for this asset first, then re-edit and re-generate the schedules.");
+            }
+        }
+
         try {
             $validated['salvage_value'] = $validated['salvage_value'] ?? 0;
             $validated['declining_balance_rate'] = $validated['declining_balance_rate'] ?? 20;
