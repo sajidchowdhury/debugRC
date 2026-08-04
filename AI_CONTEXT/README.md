@@ -83,6 +83,8 @@ AI_CONTEXT/
 ├── IMPLEMENTATION_PLAN.md     ← Master roadmap + standards + AI rules
 ├── PROJECT_OVERVIEW.md        ← What the ERP is, principles, tech stack, modules
 ├── GLOSSARY.md                ← Business + technical terms
+├── ROADMAP.md                 ← (Phase 21) Forward roadmap — H1 Cutover → H4 Scale
+├── ISSUES_REGISTER.md         ← (Phase 22) Consolidated gap catalogue (356 rows, auto-extracted)
 │
 ├── architecture/              ← (Phase 1) Layers, RLS, realtime, partitioning
 ├── business/                  ← (Phase 2) Business model, org structure, workflows
@@ -570,6 +572,18 @@ AI_CONTEXT/
 - **All 22 planned AI_CONTEXT documentation phases (0–21):** ✅ COMPLETE. Knowledge
   base is fully delivered. Next product work follows `ROADMAP.md` (H1 VPS cutover →
   H2 stabilize → H3 AI sidecar → H4 scale).
+- **Phase 22 — Issues Register & Discovery Layer:** ✅ Complete
+  (`ISSUES_REGISTER.md` 470L NEW at AI_CONTEXT root + `scripts/extract_issues_register.js`
+  567L re-runnable extractor). Consolidates every gap marker (G# IDs + severity tags +
+  code citations) found across all 104 `AI_CONTEXT/*.md` files into a single triageable
+  register: **356 rows** (81 CRITICAL / 107 HIGH / 67 MEDIUM / 63 LOW / 38 UNKNOWN),
+  organised by sector (api=51, architecture=20, finance=82, purchasing=28, reports=84,
+  sales=41, security=16, workflows=34), with a 30-row cross-reference matrix (G# IDs
+  cited in 2+ files) and a Top-10 fix-clusters section ranking execution order
+  (Security/RLS=64 rows → Notification worker-forward=55 → DDL drift=40 → CSV/export=30
+  → audit-trigger attachment=21 → …). Re-extract weekly via
+  `node scripts/extract_issues_register.js`. This is the bridge between the knowledge
+  base (Phases 0–21) and the execution backlog (ROADMAP.md H1–H4).
 
 ---
 
