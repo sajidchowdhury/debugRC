@@ -18,19 +18,19 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | Severity | Count | Blocks cutover? |
 |---|---|---|
-| CRITICAL | 76 | Yes — all of them |
+| CRITICAL | 70 | Yes — all of them |
 | HIGH | 93 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **306** | |
-| _of which resolved_ | 51 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **300** | |
+| _of which resolved_ | 57 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
 | Sector | Open issues |
 |---|---|
-| api | 35 |
+| api | 29 |
 | architecture | 19 |
 | finance | 69 |
 | purchasing | 24 |
@@ -64,12 +64,12 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | ID | Orig | Severity | Sector | Source | Code ref | Summary | Blocks | Horizon | Status | Resolved |
 |----|------|----------|--------|--------|----------|---------|--------|----------|--------|----------|
-| G-001 | G1 | CRITICAL | api | api/api-modules.md:719 | — | G1 \| CRITICAL \| `API_REFERENCE.md` documents only 14 of 100 `/v1` endpoints (86% drift). See `api-reference-index.md` §4. \| Rewrite `API_… | — | H1 | open | — |
-| G-002 | G1 | CRITICAL | api | api/api-overview.md:571 | — | G1 \| CRITICAL \| `laravel/docs/api/API_REFERENCE.md` documents only 14 of 100 `/v1` endpoints (14% coverage, 86% drift). It claims Phase 18… | — | H1 | open | — |
-| G-003 | G1 | CRITICAL | api | api/api-reference-index.md:263 | — | G1 \| CRITICAL \| `API_REFERENCE.md` documents only 14 of 100 `/v1` endpoints (86% drift). The file claims "14 endpoints" in its intro line.… | — | H1 | open | — |
-| G-004 | G2 | CRITICAL | api | api/api-modules.md:720 | — | G2 \| CRITICAL \| `ApiDocController::endpoints()` hardcodes 23 of 100 endpoint cards (77% drift). \| Generate from `routes/api.php` reflecti… | API Phase 17 | H1 | open | — |
-| G-005 | G2 | CRITICAL | api | api/api-overview.md:572 | — | G2 \| CRITICAL \| `ApiDocController::endpoints()` (the `/api/docs` page) hardcodes 23 of 100 endpoint cards (77% drift). New endpoints added… | — | H1 | open | — |
-| G-006 | G2 | CRITICAL | api | api/api-reference-index.md:264 | — | G2 \| CRITICAL \| `ApiDocController::endpoints()` hardcodes 23 of 100 endpoint cards (77% drift). The interactive docs page is missing 77 en… | API Phase 17 | H1 | open | — |
+| G-001 | G1 | CRITICAL | api | api/api-modules.md:719 | — | G1 \| CRITICAL \| `API_REFERENCE.md` documents only 14 of 100 `/v1` endpoints (86% drift). See `api-reference-index.md` §4. \| Rewrite `API_… | — | H1 | resolved | 7fc2882 |
+| G-002 | G1 | CRITICAL | api | api/api-overview.md:571 | — | G1 \| CRITICAL \| `laravel/docs/api/API_REFERENCE.md` documents only 14 of 100 `/v1` endpoints (14% coverage, 86% drift). It claims Phase 18… | — | H1 | resolved | 7fc2882 |
+| G-003 | G1 | CRITICAL | api | api/api-reference-index.md:263 | — | G1 \| CRITICAL \| `API_REFERENCE.md` documents only 14 of 100 `/v1` endpoints (86% drift). The file claims "14 endpoints" in its intro line.… | — | H1 | resolved | 7fc2882 |
+| G-004 | G2 | CRITICAL | api | api/api-modules.md:720 | — | G2 \| CRITICAL \| `ApiDocController::endpoints()` hardcodes 23 of 100 endpoint cards (77% drift). \| Generate from `routes/api.php` reflecti… | API Phase 17 | H1 | resolved | 7fc2882 |
+| G-005 | G2 | CRITICAL | api | api/api-overview.md:572 | — | G2 \| CRITICAL \| `ApiDocController::endpoints()` (the `/api/docs` page) hardcodes 23 of 100 endpoint cards (77% drift). New endpoints added… | — | H1 | resolved | 7fc2882 |
+| G-006 | G2 | CRITICAL | api | api/api-reference-index.md:264 | — | G2 \| CRITICAL \| `ApiDocController::endpoints()` hardcodes 23 of 100 endpoint cards (77% drift). The interactive docs page is missing 77 en… | API Phase 17 | H1 | resolved | 7fc2882 |
 | G-007 | G3 | CRITICAL | api | api/api-modules.md:721 | — | G3 \| CRITICAL \| ZERO tests for 8 of 14 modules: Sales Cart, Sales Invoices, Sales Challans, Sales Returns, Customer Payments, Commission, … | test debt | H1 | open | — |
 | G-008 | G1 | CRITICAL | architecture | architecture/realtime-events.md:932 | — | ### G1 — CRITICAL — Per-user Redis queue is dead code (polled, never written) | notifications phase | H1 | open | — |
 | G-009 | G2 | CRITICAL | architecture | architecture/realtime-events.md:948 | — | ### G2 — CRITICAL — Partition migration regresses LISTEN/NOTIFY trigger payload | DDL drift | H1 | open | — |

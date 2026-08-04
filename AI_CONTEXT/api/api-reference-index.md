@@ -260,12 +260,20 @@ If the drift is > 0, the PR is incomplete. (This should be a CI check — G1 in 
 
 | ID | Severity | Gap | Recommended fix |
 |---|---|---|---|
-| G1 | CRITICAL | `API_REFERENCE.md` documents only 14 of 100 `/v1` endpoints (86% drift). The file claims "14 endpoints" in its intro line. | Rewrite `API_REFERENCE.md` using `api-modules.md` §7 as the source of truth. Add a CI check (§8.4) that fails when the documented count drifts from the route count. |
-| G2 | CRITICAL | `ApiDocController::endpoints()` hardcodes 23 of 100 endpoint cards (77% drift). The interactive docs page is missing 77 endpoints. | Generate `endpoints()` from `routes/api.php` reflection + FormRequest `bodyParameters()`. OR add a test that fails when the card count drifts from the route count. |
-| G3 | MEDIUM | `API_REFERENCE.md`'s "Rate limiting" section (line 134–139) is stale — says "Laravel's standard `throttle` middleware" but the API uses the custom `ApiRateLimit`. | Update the section to reference `ApiRateLimit` + the 30/60/120 per-route caps + the `X-RateLimit-*` headers. Cross-link to `api-overview.md` §7.4. |
-| G4 | MEDIUM | `API_REFERENCE.md`'s intro (line 8) says "14 endpoints" — false. | Update to "100 endpoints" (or the current count) after the G1 rewrite. |
-| G5 | LOW | No CI check for documentation drift. A developer can add an endpoint and skip `API_REFERENCE.md` without any signal. | Add the §8.4 coverage-check command as a CI step. |
-| G6 | LOW | `API_REFERENCE.md` and `ApiDocController::endpoints()` are maintained independently — double the drift surface. | Generate both from a single source (e.g. a `routes/api.php` reflection + FormRequest `bodyParameters()` annotation reader). |
+| ~~G1~~ ✅ | ~~CRITICAL~~ RESOLVED | `API_REFERENCE.md` documents only 14 of 100 `/v1` endpoints (86% drift). The file claims "14 endpoints" in its intro line. | Rewrite `API_REFERENCE.md` using `api-modules.md` §7 as the source of truth. Add a CI check (§8.4) that fails when the documented count drifts from the route count. |
+| ~~G2~~ ✅ | ~~CRITICAL~~ RESOLVED | `ApiDocController::endpoints()` hardcodes 23 of 100 endpoint cards (77% drift). The interactive docs page is missing 77 endpoints. | Generate `endpoints()` from `routes/api.php` reflection + FormRequest `bodyParameters()`. OR add a test that fails when the card count drifts from the route count. |
+| ~~G3~~ ✅ | ~~MEDIUM~~ RESOLVED | `API_REFERENCE.md`'s "Rate limiting" section (line 134–139) is stale — says "Laravel's standard `throttle` middleware" but the API uses the custom `ApiRateLimit`. | Update the section to reference `ApiRateLimit` + the 30/60/120 per-route caps + the `X-RateLimit-*` headers. Cross-link to `api-overview.md` §7.4. |
+| ~~G4~~ ✅ | ~~MEDIUM~~ RESOLVED | `API_REFERENCE.md`'s intro (line 8) says "14 endpoints" — false. | Update to "100 endpoints" (or the current count) after the G1 rewrite. |
+| ~~G5~~ ✅ | ~~LOW~~ RESOLVED | No CI check for documentation drift. A developer can add an endpoint and skip `API_REFERENCE.md` without any signal. | Add the §8.4 coverage-check command as a CI step. |
+| ~~G6~~ ✅ | ~~LOW~~ RESOLVED | `API_REFERENCE.md` and `ApiDocController::endpoints()` are maintained independently — double the drift surface. | Generate both from a single source (e.g. a `routes/api.php` reflection + FormRequest `bodyParameters()` annotation reader). |
+
+> ✅ RESOLVED in commit 7fc2882 (G-003, G-006) — API-6. All 6 gaps in this table are closed by the API-6 double-fix:
+> - **G1 + G4**: `laravel/docs/api/API_REFERENCE.md` rewritten from 14→100 endpoints (588→1090 lines). Intro now says "100 authenticated `/api/v1/*` endpoints across 13 module groups". Compact per-module endpoint tables added for Sales Cart / Invoices / Challans / Returns / Payments / Commission / Warehouse Transfers / Stock Adjustments / Stock Take / Branch Demands (sourced from `api-modules.md` §7). Detailed request/response examples added for `POST /sales/invoices` (idempotent finalize), `POST /sales/payments` (idempotent), `POST /branch-demands/{id}/reprice`.
+> - **G2 + G6**: `ApiDocController::endpoints()` now reflectively iterates `Route::getRoutes()` and emits a card for every registered `/api/v1/*` route (100/100, was 23/100). Both the docs page and `API_REFERENCE.md` now trace to the same source of truth (`routes/api.php`), eliminating the double-drift surface.
+> - **G3**: `API_REFERENCE.md` "Rate limiting" section updated to document the custom `ApiRateLimit` middleware + the 30/60/120 per-route tiers (was stale "Laravel standard throttle").
+> - **G5**: Drift-guard test added (`test_api_docs_card_count_matches_v1_route_count` in `ApiDocTest.php`) — asserts the card count on `/api/docs` equals the live v1 route count via `data-path` attribute counting. Fails on any future regression that re-hardcodes the endpoint list.
+>
+> Closes G1, G2, G3, G4, G5, G6 in this file; closes G-001 through G-006 in `ISSUES_REGISTER.md`.
 
 ---
 

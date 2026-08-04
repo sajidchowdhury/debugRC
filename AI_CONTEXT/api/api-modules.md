@@ -716,12 +716,14 @@ Gap IDs are stable references shared with `api-overview.md` §13 and `api-conven
 
 | ID | Severity | Gap | Recommended fix |
 |---|---|---|---|
-| G1 | CRITICAL | `API_REFERENCE.md` documents only 14 of 100 `/v1` endpoints (86% drift). See `api-reference-index.md` §4. | Rewrite `API_REFERENCE.md` from this file's per-module tables. |
-| G2 | CRITICAL | `ApiDocController::endpoints()` hardcodes 23 of 100 endpoint cards (77% drift). | Generate from `routes/api.php` reflection, OR add a test that fails on drift. |
+| ~~G1~~ ✅ | ~~CRITICAL~~ RESOLVED | `API_REFERENCE.md` documents only 14 of 100 `/v1` endpoints (86% drift). See `api-reference-index.md` §4. | Rewrite `API_REFERENCE.md` from this file's per-module tables. |
+| ~~G2~~ ✅ | ~~CRITICAL~~ RESOLVED | `ApiDocController::endpoints()` hardcodes 23 of 100 endpoint cards (77% drift). | Generate from `routes/api.php` reflection, OR add a test that fails on drift. |
 | G3 | CRITICAL | ZERO tests for 8 of 14 modules: Sales Cart, Sales Invoices, Sales Challans, Sales Returns, Customer Payments, Commission, Warehouse Transfers, Stock Adjustments = 56 endpoints untested. | Add a `*_ApiTest.php` per module. |
 | G4 | HIGH | `CommissionApiController::listRules` does not clamp `per_page` (OOM risk). | Add `min((int) ..., 100)`. |
 | G5 | MEDIUM | `BranchDemandApiTest` hand-rolls token issuance 16× instead of using `IssuesApiTokens`. | Refactor to use the helper. |
 | G6 | HIGH | Role-gate inconsistency: Sales Cart/Invoices/Returns/Payments write endpoints have NO route-level `api.auth:role` gate. | Add `api.auth:salesman,manager,admin` to those routes. |
+
+> ✅ RESOLVED in commit 7fc2882 (G-001, G-004) — API-6. `ApiDocController::endpoints()` now iterates `Route::getRoutes()` and emits a card for every registered `/api/v1/*` route (100/100). Rich metadata merged from a `catalogue()` lookup for the 23 hand-documented endpoints; the other 77 render a minimal card. `laravel/docs/api/API_REFERENCE.md` rewritten from 14→100 endpoints (588→1090 lines) with compact per-module tables sourced from this file's §7. A drift-guard test (`test_api_docs_card_count_matches_v1_route_count`) asserts the card count equals the v1 route count. Closes G1 + G2.
 
 > ✅ RESOLVED in commit c4acdb0 (G-086, cross-ref G-087) — Added `api.auth:salesman,manager,admin` route middleware to the Sales API write endpoints (POST/PUT/DELETE only — reads keep `api.auth` + `api.rate` only). Two route groups were missing the gate entirely (Cart + Customer Payments); three were already partially fixed by prior gaps:
 > - **Sales Cart** (5 write routes, newly added): `POST /sales/cart` (store), `PUT /sales/cart` (update), `DELETE /sales/cart/{productId}` (destroy), `POST /sales/cart/clear`, `POST /sales/cart/soft-hold`. Read-like `POST /sales/cart/validate` + `GET /sales/cart/availability` keep auth-only (no state mutation).
