@@ -289,43 +289,66 @@ class BranchDemandShadowService
 
     /**
      * Record a daily cutover log entry.
+     *
+     * FINANCE-2 (G-014): Previously INSERTed nonexistent columns (`module`,
+     * `total_compared`, `match_count`, `diff_count`, `is_clean`) — the
+     * migration `2025_07_28_000012_create_shadow_mode_tables.php` defines a
+     * richer schema (`comparisons_total`, `comparisons_match`,
+     * `comparisons_diff`, `comparisons_missing_legacy`, `comparisons_error`,
+     * `is_clean_day`, `consecutive_clean_days`, `cutover_ready`, `checked_by`,
+     * `checked_at`). The previous INSERT threw `SQLSTATE[42703]` and crashed
+     * the daily-summary step of every batch comparison run.
+     *
+     * Now mirrors the canonical `WarehouseTransferShadowService::recordCutoverDailyLog`
+     * pattern: `updateOrInsert` on `check_date` (the table's UNIQUE key),
+     * computes `consecutive_clean_days` from the previous day's row, and
+     * derives `cutover_ready` from the configured threshold. Wrapped in
+     * try/catch + Log::warning so a diagnostic-table failure never aborts
+     * the parent batch-compare transaction (non-blocking audit pattern).
      */
     public function recordCutoverDailyLog(array $batchResult, ?int $userId = null): void
     {
-        $date = now()->toDateString();
+        $today = now()->format('Y-m-d');
+        $isCleanDay = ($batchResult['diff_count'] ?? 0) === 0
+            && ($batchResult['error_count'] ?? 0) === 0;
 
-        // Upsert the cutover log
-        $exists = DB::table('shadow_cutover_log')
-            ->where('check_date', $date)
-            ->where('module', 'branch_demand')
-            ->exists();
+        // Calculate consecutive clean days from the previous day's row.
+        $previousLog = DB::table('shadow_cutover_log')
+            ->where('check_date', now()->subDay()->format('Y-m-d'))
+            ->first();
 
-        if ($exists) {
-            DB::table('shadow_cutover_log')
-                ->where('check_date', $date)
-                ->where('module', 'branch_demand')
-                ->update([
-                    'total_compared' => $batchResult['total_compared'] ?? 0,
-                    'match_count'    => $batchResult['match_count'] ?? 0,
-                    'diff_count'     => $batchResult['diff_count'] ?? 0,
-                    'is_clean'       => ($batchResult['diff_count'] ?? 0) === 0
-                                       && ($batchResult['error_count'] ?? 0) === 0,
-                    'checked_by'     => $userId,
-                    'updated_at'     => now(),
+        $consecutiveCleanDays = $isCleanDay
+            ? ($previousLog ? ($previousLog->is_clean_day ? $previousLog->consecutive_clean_days + 1 : 1) : 1)
+            : 0;
+
+        $threshold = config('branch_demand_shadow.cutover.consecutive_days_zero_diff', 7);
+
+        try {
+            DB::table('shadow_cutover_log')->updateOrInsert(
+                ['check_date' => $today],
+                [
+                    'comparisons_total'         => $batchResult['total_compared'] ?? 0,
+                    'comparisons_match'         => $batchResult['match_count'] ?? 0,
+                    'comparisons_diff'          => $batchResult['diff_count'] ?? 0,
+                    'comparisons_missing_legacy' => $batchResult['missing_legacy'] ?? 0,
+                    'comparisons_error'         => $batchResult['error_count'] ?? 0,
+                    'is_clean_day'              => $isCleanDay,
+                    'consecutive_clean_days'    => $consecutiveCleanDays,
+                    'cutover_ready'             => $consecutiveCleanDays >= $threshold,
+                    'checked_by'                => $userId,
+                    'checked_at'                => now(),
+                    'updated_at'                => now(),
+                ]
+            );
+        } catch (\Throwable $e) {
+            // Non-blocking: the cutover log is a diagnostic table. A failure
+            // here (e.g. transient lock, RLS policy change) must NEVER abort
+            // the parent batch-compare transaction.
+            Log::channel(config('branch_demand_shadow.alerts.log_channel', 'shadow'))
+                ->warning('Failed to record shadow cutover daily log', [
+                    'check_date' => $today,
+                    'error'      => $e->getMessage(),
                 ]);
-        } else {
-            DB::table('shadow_cutover_log')->insert([
-                'check_date'     => $date,
-                'module'         => 'branch_demand',
-                'total_compared' => $batchResult['total_compared'] ?? 0,
-                'match_count'    => $batchResult['match_count'] ?? 0,
-                'diff_count'     => $batchResult['diff_count'] ?? 0,
-                'is_clean'       => ($batchResult['diff_count'] ?? 0) === 0
-                                   && ($batchResult['error_count'] ?? 0) === 0,
-                'checked_by'     => $userId,
-                'created_at'     => now(),
-                'updated_at'     => now(),
-            ]);
         }
     }
 

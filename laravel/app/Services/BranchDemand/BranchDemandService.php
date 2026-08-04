@@ -12,6 +12,14 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
+// FINANCE-2 (G-016): BranchDemandShadowService is intentionally NOT injected
+// via the constructor to avoid a potential circular dependency (the shadow
+// service reads from `branch_demands` via DB facade — harmless — but future
+// evolution could couple it back to this service). Resolving lazily via
+// `app(...)` from the helper below keeps the wiring decoupled and ensures
+// a shadow-mode failure can never block a demand transition.
+use App\Services\BranchDemand\BranchDemandShadowService;
+
 /**
  * Branch Demand Service — Phase 2 + Phase 3 + Phase 5 + Phase 8.
  *
@@ -97,7 +105,7 @@ class BranchDemandService
 
         $demandCode = CodeGenerator::generate('branch_demands', 'demand_code', 'BD-');
 
-        return DB::transaction(function () use ($data, $items, $demandCode, $fromBranchId, $toBranchId) {
+        $demand = DB::transaction(function () use ($data, $items, $demandCode, $fromBranchId, $toBranchId) {
             // Create the demand header
             $demandId = DB::table('branch_demands')->insertGetId([
                 'demand_code'    => $demandCode,
@@ -150,6 +158,11 @@ class BranchDemandService
 
             return BranchDemand::find($demandId);
         });
+
+        // FINANCE-2 (G-016): wire shadow-mode comparison after the commit.
+        $this->dispatchShadowCompare('create', $demand);
+
+        return $demand;
     }
 
     // ===================== SEND =====================
@@ -184,7 +197,7 @@ class BranchDemandService
             'sent_by'   => $sentBy,
         ]);
 
-        return DB::transaction(function () use ($demandId, $items, $sentBy) {
+        $demand = DB::transaction(function () use ($demandId, $items, $sentBy) {
             // Lock the demand row
             $demand = DB::table('branch_demands')
                 ->where('id', $demandId)
@@ -365,6 +378,11 @@ class BranchDemandService
 
             return BranchDemand::find($demandId);
         });
+
+        // FINANCE-2 (G-016): wire shadow-mode comparison after the commit.
+        $this->dispatchShadowCompare('send', $demand);
+
+        return $demand;
     }
 
     // ===================== REVERSE =====================
@@ -390,7 +408,7 @@ class BranchDemandService
      */
     public function reverseDemand(int $demandId, string $reason, int $reversedBy): BranchDemand
     {
-        return DB::transaction(function () use ($demandId, $reason, $reversedBy) {
+        $demand = DB::transaction(function () use ($demandId, $reason, $reversedBy) {
             // Lock the demand row
             $demand = DB::table('branch_demands')
                 ->where('id', $demandId)
@@ -509,6 +527,11 @@ class BranchDemandService
 
             return BranchDemand::find($demandId);
         });
+
+        // FINANCE-2 (G-016): wire shadow-mode comparison after the commit.
+        $this->dispatchShadowCompare('reverse', $demand);
+
+        return $demand;
     }
 
     // ===================== CONFIRM RECEIPT (Phase 5) =====================
@@ -539,7 +562,7 @@ class BranchDemandService
      */
     public function confirmReceipt(int $demandId, int $confirmedBy, int $branchId): BranchDemand
     {
-        return DB::transaction(function () use ($demandId, $confirmedBy, $branchId) {
+        $demand = DB::transaction(function () use ($demandId, $confirmedBy, $branchId) {
             // Lock the demand row
             $demand = DB::table('branch_demands')
                 ->where('id', $demandId)
@@ -606,6 +629,11 @@ class BranchDemandService
 
             return BranchDemand::find($demandId);
         });
+
+        // FINANCE-2 (G-016): wire shadow-mode comparison after the commit.
+        $this->dispatchShadowCompare('confirm_receipt', $demand);
+
+        return $demand;
     }
 
     // ===================== DELETE =====================
@@ -621,7 +649,12 @@ class BranchDemandService
      */
     public function deleteDraftDemand(int $demandId): void
     {
-        DB::transaction(function () use ($demandId) {
+        // FINANCE-2 (G-016): capture the demand snapshot BEFORE the row is
+        // deleted (the shadow comparison runs AFTER commit; the demand is
+        // gone by then, so the snapshot must be built inside the txn).
+        $snapshot = null;
+
+        DB::transaction(function () use ($demandId, &$snapshot) {
             $demand = DB::table('branch_demands')
                 ->where('id', $demandId)
                 ->lockForUpdate()
@@ -645,6 +678,17 @@ class BranchDemandService
                 'demand_date'    => $demand->demand_date,
             ]);
 
+            // Snapshot for post-commit shadow comparison.
+            $snapshot = [
+                'id'                => (int) $demand->id,
+                'demand_code'       => $demand->demand_code,
+                'from_branch_id'    => (int) $demand->from_branch_id,
+                'to_branch_id'      => (int) $demand->to_branch_id,
+                'status'            => $demand->status,
+                'total_value'       => (float) ($demand->total_value ?? 0),
+                'settlement_amount' => (float) ($demand->settlement_amount ?? 0),
+            ];
+
             // Delete items first (cascade)
             DB::table('branch_demand_items')
                 ->where('branch_demand_id', $demandId)
@@ -660,6 +704,13 @@ class BranchDemandService
                 'demand_code' => $demand->demand_code,
             ]);
         });
+
+        // FINANCE-2 (G-016): wire shadow-mode comparison AFTER the commit.
+        // `delete` is a destruction event — the snapshot captured above is
+        // all we have to compare against legacy.
+        if ($snapshot !== null) {
+            $this->dispatchShadowCompare('delete', $snapshot);
+        }
     }
 
     // ===================== REJECT =====================
@@ -678,7 +729,7 @@ class BranchDemandService
      */
     public function rejectDemand(int $demandId, string $reason, int $rejectedBy): BranchDemand
     {
-        return DB::transaction(function () use ($demandId, $reason, $rejectedBy) {
+        $demand = DB::transaction(function () use ($demandId, $reason, $rejectedBy) {
             $demand = DB::table('branch_demands')
                 ->where('id', $demandId)
                 ->lockForUpdate()
@@ -719,6 +770,11 @@ class BranchDemandService
 
             return BranchDemand::find($demandId);
         });
+
+        // FINANCE-2 (G-016): wire shadow-mode comparison after the commit.
+        $this->dispatchShadowCompare('reject', $demand);
+
+        return $demand;
     }
 
     // ===================== PRIVATE HELPERS =====================
@@ -1008,5 +1064,74 @@ class BranchDemandService
             'warehouse_transfer_id' => $warehouseTransferId,
             'reversed_by'           => $reversedBy,
         ]);
+    }
+
+    // ===================== SHADOW MODE (FINANCE-2 / G-016) =====================
+
+    /**
+     * Dispatch a non-blocking shadow-mode comparison after a demand transition commits.
+     *
+     * FINANCE-2 (G-016): previously `BranchDemandShadowService::compareOperation`
+     * had ZERO callers — shadow mode was plumbed (config + dashboard + service +
+     * table) but never invoked, so `checkCutoverReadiness` always returned
+     * `consecutive_clean_days=0` and the legacy-MySQL cutover could never be
+     * tracked. This helper wires `compareOperation` into every public demand
+     * transition (`create`, `send`, `confirm_receipt`, `reverse`, `delete`,
+     * `reject`) AND the repricing transition (wired separately in
+     * `BranchDemandRepricingService`).
+     *
+     * Design constraints:
+     *   - **Non-blocking**: shadow mode is a diagnostic; a comparison failure
+     *     (config missing, table lock, legacy connection down, etc.) MUST
+     *     NEVER abort the parent transition. Wrap in try/catch + Log::warning.
+     *   - **Post-commit**: the comparison runs AFTER `DB::transaction` returns,
+     *     so the Laravel-side snapshot is stable.
+     *   - **Lazy resolution**: `BranchDemandShadowService` is resolved via
+     *     `app(...)` to avoid constructor-level circular dependencies.
+     *   - **No-op when disabled**: short-circuit on the config flag so the
+     *     common case (shadow mode OFF in production) pays zero overhead
+     *     beyond one `config()` lookup per transition.
+     *
+     * @param string                         $operation  create|send|confirm_receipt|reverse|delete|reject
+     * @param \App\Models\BranchDemand|array $demand     BranchDemand model OR
+     *        snapshot array (for `delete` — the row is gone post-commit).
+     */
+    private function dispatchShadowCompare(string $operation, BranchDemand|array $demand): void
+    {
+        if (!config('branch_demand_shadow.enabled', false)) {
+            return;
+        }
+
+        try {
+            // Normalize: BranchDemand model OR pre-captured snapshot array.
+            $snapshot = $demand instanceof BranchDemand
+                ? [
+                    'id'                => (int) $demand->id,
+                    'demand_code'       => $demand->demand_code,
+                    'from_branch_id'    => (int) $demand->from_branch_id,
+                    'to_branch_id'      => (int) $demand->to_branch_id,
+                    'status'            => $demand->status,
+                    'total_value'       => (float) ($demand->total_value ?? 0),
+                    'settlement_amount' => (float) ($demand->settlement_amount ?? 0),
+                ]
+                : $demand;
+
+            $shadow = app(BranchDemandShadowService::class);
+
+            $shadow->compareOperation(
+                operation:    $operation,
+                demandId:      $snapshot['id'],
+                fromBranchId:  $snapshot['from_branch_id'] ?? null,
+                toBranchId:    $snapshot['to_branch_id'] ?? null,
+                laravelData:   $snapshot,
+                comparedBy:    Auth::id(),
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Branch demand shadow comparison failed (non-blocking)', [
+                'operation'  => $operation,
+                'demand_id'  => is_object($demand) ? $demand->id : ($demand['id'] ?? null),
+                'error'      => $e->getMessage(),
+            ]);
+        }
     }
 }

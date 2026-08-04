@@ -827,64 +827,32 @@ class CustomerPaymentService
         $amount = (float) $payment->amount;
         if ($amount < 0.01 || !$payment->bank_id) return null;
 
-        // NOTE: The `banks` table does NOT have a `branch_id` column — banks
-        // are not branch-scoped in the current schema. Intercompany settlement
-        // requires bank→branch mapping which doesn't exist yet. Skip entirely.
+        // FINANCE-2 (G-327): The `banks` table does NOT have a `branch_id`
+        // column — banks are not branch-scoped in the current schema.
+        // Intercompany settlement requires a bank→branch mapping which
+        // doesn't exist yet. Skip entirely.
+        //
+        // The previously-present dead-code block below the early-return has
+        // been REMOVED. It was unreachable AND referenced `branch_ledger`
+        // columns that were dropped by migration `2026_07_29_000013`
+        // (`transaction_type`, `amount`, `is_settled`) — if a future dev
+        // ever unblocked this path by adding `banks.branch_id`, the INSERT
+        // would have thrown `SQLSTATE[42703]`.
+        //
+        // When G-021 (FINANCE-3) is resolved by introducing the
+        // bank→branch mapping, the new implementation must be written fresh
+        // against the CURRENT `branch_ledger` schema:
+        //   - `debit`         numeric(14,2)
+        //   - `credit`        numeric(14,2)
+        //   - `running_balance` numeric(14,2)
+        //   - `is_reversed`   boolean DEFAULT false
+        //   - `remarks`       text
+        //   - `journal_entry_id`, `from_branch_id`, `to_branch_id`,
+        //     `transaction_date`, `reference_type`, `reference_id`
+        // (See `02_accounting.sql:203-222` for the canonical DDL.)
+        // The legacy `transaction_type` / `amount` / `is_settled` columns
+        // are GONE — do not re-introduce them.
         return null;
-
-        $fromBranchId = $payment->branch_id;        // customer's branch
-        $toBranchId = (int) $bankBranchId;          // bank's branch
-
-        $dueToLedgerId = $this->journalPosting->lookupLedgerByNature('interbranch_payable');
-        $dueFromLedgerId = $this->journalPosting->lookupLedgerByNature('interbranch_receivable');
-
-        if (!$dueToLedgerId || !$dueFromLedgerId) {
-            // Intercompany ledgers not configured — skip (not critical).
-            Log::warning('Intercompany ledgers not configured, skipping settlement', [
-                'payment_id' => $payment->id,
-            ]);
-            return null;
-        }
-
-        // From-branch: Dr Due-to-Branch / Cr (the bank ledger is already debited in main GL).
-        // This records that from-branch owes to-branch for the bank deposit.
-        $journalEntryId = $this->journalPosting->createJournalEntry([
-            'entry_date' => $payment->payment_date->format('Y-m-d'),
-            'reference_type' => 'customer_payment',
-            'reference_id' => $payment->id,
-            'branch_id' => $fromBranchId,
-            'description' => 'Intercompany settlement — Payment ' . $payment->payment_code,
-            'source' => 'customer_payment_intercompany',
-            'created_by' => $createdBy,
-        ], [
-            [
-                'ledger_id' => $dueToLedgerId,
-                'debit' => $amount, 'credit' => 0,
-                'memo' => 'Bank deposit at branch ' . $toBranchId . ' — ' . $payment->payment_code,
-            ],
-            [
-                'ledger_id' => $dueFromLedgerId,
-                'debit' => 0, 'credit' => $amount,
-                'memo' => 'Payment received at branch ' . $fromBranchId . ' — ' . $payment->payment_code,
-            ],
-        ]);
-
-        // Record in branch_ledger.
-        DB::table('branch_ledger')->insert([
-            'from_branch_id' => $fromBranchId,
-            'to_branch_id' => $toBranchId,
-            'transaction_date' => $payment->payment_date->format('Y-m-d'),
-            'transaction_type' => 'customer_payment',
-            'reference_type' => 'customer_payment',
-            'reference_id' => $payment->id,
-            'amount' => $amount,
-            'description' => 'Payment ' . $payment->payment_code . ' — bank at different branch',
-            'journal_entry_id' => $journalEntryId,
-            'is_settled' => false,
-            'created_at' => now(),
-        ]);
-
-        return $journalEntryId;
     }
 
     // ============================================================

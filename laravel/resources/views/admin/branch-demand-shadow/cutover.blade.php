@@ -62,13 +62,17 @@
                     </thead>
                     <tbody>
                         @foreach($dailyLogs as $log)
-                            <tr class="{{ $log->is_clean ? 'table-success' : 'table-danger' }}">
+                            {{-- FINANCE-2 (G-014): property names aligned with the actual --}}
+                            {{-- `shadow_cutover_log` schema: is_clean_day, comparisons_total, --}}
+                            {{-- comparisons_match, comparisons_diff (was: is_clean, --}}
+                            {{-- total_compared, match_count, diff_count). --}}
+                            <tr class="{{ $log->is_clean_day ? 'table-success' : 'table-danger' }}">
                                 <td>{{ $log->check_date }}</td>
-                                <td>{{ $log->total_compared }}</td>
-                                <td>{{ $log->match_count }}</td>
-                                <td>{{ $log->diff_count }}</td>
+                                <td>{{ $log->comparisons_total }}</td>
+                                <td>{{ $log->comparisons_match }}</td>
+                                <td>{{ $log->comparisons_diff }}</td>
                                 <td>
-                                    @if($log->is_clean)
+                                    @if($log->is_clean_day)
                                         <span class="badge bg-success">Clean</span>
                                     @else
                                         <span class="badge bg-danger">Has Diffs</span>

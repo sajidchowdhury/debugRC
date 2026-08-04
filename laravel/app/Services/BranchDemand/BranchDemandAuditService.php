@@ -173,9 +173,18 @@ class BranchDemandAuditService
      *   - The receiver is trying to inflate volume at the expense of margin
      *   - The receiver is engaging in a price war using intercompany goods
      *
-     * This flag checks sales invoices (sales_items) for products that were
-     * received via branch demand, comparing the sale rate against the
-     * locked cost_rate.
+     * This flag checks sales invoices (`sales_invoice_items` joined to
+     * `sales_invoices`) for products that were received via branch demand,
+     * comparing the sale rate against the locked cost_rate.
+     *
+     * FINANCE-2 (G-337): previously referenced nonexistent tables
+     * `sales_items` + `sales` (the legacy MySQL names) and the legacy
+     * column names `sale_id`, `sale_code`, `sale_date`. The actual
+     * PostgreSQL tables are `sales_invoice_items` + `sales_invoices`
+     * (per `04_sales.sql` + the canonical pattern in
+     * `BranchDemandRepricingService::getOutOfRangeSales`). The previous
+     * query threw `SQLSTATE[42P01]: relation "sales_items" does not exist`
+     * whenever `getDemandAntiGamingFlags` invoked this flag.
      *
      * @param int       $branchId
      * @param string|null $dateFrom
@@ -207,27 +216,28 @@ class BranchDemandAuditService
 
         $productIds = $demandItems->pluck('product_id')->unique()->toArray();
 
-        // Find sales items for those products in this branch
-        $salesQuery = DB::table('sales_items')
-            ->join('sales', 'sales_items.sale_id', '=', 'sales.id')
-            ->where('sales.branch_id', $branchId)
-            ->whereIn('sales_items.product_id', $productIds)
-            ->where('sales.status', '!=', 'cancelled')
-            ->where('sales_items.rate', '>', 0)
+        // Find sales invoice items for those products in this branch.
+        // FINANCE-2 (G-337): corrected table + column names.
+        $salesQuery = DB::table('sales_invoice_items')
+            ->join('sales_invoices', 'sales_invoice_items.sales_invoice_id', '=', 'sales_invoices.id')
+            ->where('sales_invoices.branch_id', $branchId)
+            ->whereIn('sales_invoice_items.product_id', $productIds)
+            ->where('sales_invoices.status', '!=', 'cancelled')
+            ->where('sales_invoice_items.rate', '>', 0)
             ->select([
-                'sales.id as sale_id',
-                'sales.sale_code',
-                'sales.sale_date',
-                'sales_items.product_id',
-                'sales_items.qty as sale_qty',
-                'sales_items.rate as sale_rate',
+                'sales_invoices.id as sale_id',
+                'sales_invoices.invoice_code as sale_code',
+                'sales_invoices.invoice_date as sale_date',
+                'sales_invoice_items.product_id',
+                'sales_invoice_items.qty as sale_qty',
+                'sales_invoice_items.rate as sale_rate',
             ]);
 
         if ($dateFrom) {
-            $salesQuery->where('sales.sale_date', '>=', $dateFrom);
+            $salesQuery->where('sales_invoices.invoice_date', '>=', $dateFrom);
         }
         if ($dateTo) {
-            $salesQuery->where('sales.sale_date', '<=', $dateTo);
+            $salesQuery->where('sales_invoices.invoice_date', '<=', $dateTo);
         }
 
         $salesItems = $salesQuery->get();

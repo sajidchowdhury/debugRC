@@ -169,9 +169,12 @@ class BranchDemandShadowController extends Controller
     {
         $readiness = $this->shadowService->checkCutoverReadiness();
 
-        // Get last 14 days of cutover logs
+        // Get last 14 days of cutover logs.
+        // FINANCE-2 (G-014): dropped the `->where('module', 'branch_demand')`
+        // filter — the `shadow_cutover_log` table has NO `module` column
+        // (it is UNIQUE on `check_date` alone; one row per day). The
+        // previous filter threw `SQLSTATE[42703]` and crashed the cutover page.
         $dailyLogs = DB::table('shadow_cutover_log')
-            ->where('module', 'branch_demand')
             ->orderByDesc('check_date')
             ->limit(14)
             ->get();

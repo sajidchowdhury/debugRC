@@ -5,8 +5,13 @@ namespace App\Services\BranchDemand;
 use App\Models\BranchDemand;
 use App\Models\BranchDemandRepricing;
 use App\Services\Accounting\JournalPostingService;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+
+// FINANCE-2 (G-016): lazy resolution via `app(...)` — same pattern as
+// BranchDemandService. Avoids constructor coupling to the shadow service.
+use App\Services\BranchDemand\BranchDemandShadowService;
 
 /**
  * Branch Demand Repricing Service — Phase 7.
@@ -91,7 +96,7 @@ class BranchDemandRepricingService
             throw new \InvalidArgumentException('A reason is required for repricing adjustments.');
         }
 
-        return DB::transaction(function () use ($demandId, $newTotalValue, $reason, $approvedBy, $createdBy) {
+        $repricing = DB::transaction(function () use ($demandId, $newTotalValue, $reason, $approvedBy, $createdBy) {
             // Lock the demand row
             $demand = DB::table('branch_demands')
                 ->where('id', $demandId)
@@ -211,6 +216,14 @@ class BranchDemandRepricingService
 
             return BranchDemandRepricing::find($repricingId);
         });
+
+        // FINANCE-2 (G-016): wire shadow-mode comparison after the commit.
+        // Repricing mutates total_value + GL — the legacy system must agree
+        // on the new total before cutover. Re-load the demand (the locked
+        // row inside the txn is a stdClass, not a BranchDemand model).
+        $this->dispatchShadowCompare('reprice', BranchDemand::find($demandId));
+
+        return $repricing;
     }
 
     // ===================== GL ADJUSTMENT JOURNALS =====================
@@ -702,7 +715,13 @@ class BranchDemandRepricingService
                     'si.invoice_date',
                     'sii.qty',
                     'sii.rate',
-                    'sii.total',
+                    // FINANCE-2 (G-357): `sales_invoice_items` has NO `total`
+                    // column — the correct column is `amount` (GENERATED
+                    // STORED: qty × rate, per `04_sales.sql:114` and the
+                    // SalesInvoiceItem model @property). The previous
+                    // `sii.total` selection threw `SQLSTATE[42703]: column
+                    // "sii.total" does not exist` on every repricing audit run.
+                    'sii.amount',
                 ]);
 
             if ($dateFrom) {
@@ -781,5 +800,49 @@ class BranchDemandRepricingService
         }
 
         return $ranges;
+    }
+
+    // ===================== SHADOW MODE (FINANCE-2 / G-016) =====================
+
+    /**
+     * Dispatch a non-blocking shadow-mode comparison after a repricing commits.
+     *
+     * FINANCE-2 (G-016): mirrors `BranchDemandService::dispatchShadowCompare`
+     * — duplicated intentionally to avoid cross-service coupling. The shadow
+     * service is resolved lazily; failures are logged + swallowed.
+     *
+     * @param string               $operation  always 'reprice' here (kept
+     *        parametric for symmetry with the sibling helper).
+     * @param \App\Models\BranchDemand $demand
+     */
+    private function dispatchShadowCompare(string $operation, BranchDemand $demand): void
+    {
+        if (!config('branch_demand_shadow.enabled', false)) {
+            return;
+        }
+
+        try {
+            $shadow = app(BranchDemandShadowService::class);
+
+            $shadow->compareOperation(
+                operation:    $operation,
+                demandId:      (int) $demand->id,
+                fromBranchId:  (int) $demand->from_branch_id,
+                toBranchId:    (int) $demand->to_branch_id,
+                laravelData:   [
+                    'demand_code'       => $demand->demand_code,
+                    'status'            => $demand->status,
+                    'total_value'       => (float) ($demand->total_value ?? 0),
+                    'settlement_amount' => (float) ($demand->settlement_amount ?? 0),
+                ],
+                comparedBy:    Auth::id(),
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Branch demand shadow comparison failed (non-blocking)', [
+                'operation'  => $operation,
+                'demand_id'  => $demand->id,
+                'error'      => $e->getMessage(),
+            ]);
+        }
     }
 }
