@@ -280,12 +280,25 @@ sibling docs:
 1. **G1 (CRITICAL)** — `customers.shop_name` column referenced but NEVER created by any migration.
    Runtime `SQLSTATE[42703]` on cart customer-search / list-drafts / customer-details AJAX calls.
    Documented in `sales-cart.md`.
+
+   > ✅ RESOLVED in commit 3f35e77 (SALES-1) — migration `2026_09_01_000001_add_shop_name_to_customers`
+   > adds the column back (nullable varchar(200), backfilled from `customer_name`). DDL baseline
+   > `01_auth_and_master.sql` updated. See `sales-cart.md` §G1.
 2. **G2 (CRITICAL)** — `SalesInvoiceApiController::update` doesn't pass `items[]`, always fails
    with "Cannot update: items list is empty." Mobile API invoice edit is broken. Documented in
    `sales-invoice.md`.
+
+   > ✅ RESOLVED in commit 3f35e77 (SALES-1) — `update()` now validates + passes the full `items[]`
+   > array + the header fields the service reads. See `sales-invoice.md` §G2.
 3. **G3 (CRITICAL)** — `StockAvailabilityService` pipeline filter references nonexistent status
    `'challan_completed'`. Currently benign (secondary filter catches it) but fragile. Documented
    in `sales-challan.md`.
+
+   > ✅ RESOLVED in commit 3f35e77 (SALES-1) — removed the nonexistent `'challan_completed'` from
+   > all 5 `whereNotIn` arrays (behavior-preserving). See `sales-challan.md` §G3.
+
+   > Note: the Commission cluster G1+G2+G3 (item 6 below) is partially resolved — G1 (postCommissionExpense)
+   > + G3 (ledger natures) closed in 3f35e77; G2 (dead-code wiring) deferred to SALES-2.
 4. **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to ANY of the 9 sales tables +
    `customer_ledger`. Only `customer_payments` of the sales ecosystem is hash-chain-audited.
    Documented in `sales-audit.md`.

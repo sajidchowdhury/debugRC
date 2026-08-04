@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-08-04
+Last reviewed: 2026-09-01
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -18,13 +18,13 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | Severity | Count | Blocks cutover? |
 |---|---|---|
-| CRITICAL | 70 | Yes — all of them |
+| CRITICAL | 62 | Yes — all of them |
 | HIGH | 93 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **300** | |
-| _of which resolved_ | 57 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **292** | |
+| _of which resolved_ | 65 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -35,7 +35,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | finance | 69 |
 | purchasing | 24 |
 | reports | 80 |
-| sales | 35 |
+| sales | 27 |
 | security | 14 |
 | workflows | 31 |
 
@@ -118,15 +118,15 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-052 | G5 | CRITICAL | reports | reports/materialized-views.md:739 | database/sql/02_accounting.sql:446-455 | **G7** \| (cross-ref `reports/reports-catalog.md` G5) \| `fn_financial_audit_trigger` attached to only 9 tables in `database/sql/02_accounti… | audit-trail phase | H1 | open | — |
 | G-053 | G6 | CRITICAL | reports | reports/materialized-views.md:353 | — | Transaction? \| NO explicit wrapper, but PL/pgSQL wraps BEGIN…END in an implicit transaction. \| **Gap G6 (CRITICAL):** PostgreSQL explicitl… | — | H1 | open | — |
 | G-054 | G7 | CRITICAL | reports | reports/materialized-views.md:739 | database/sql/02_accounting.sql:446-455 | **G7** \| (cross-ref `reports/reports-catalog.md` G5) \| `fn_financial_audit_trigger` attached to only 9 tables in `database/sql/02_accounti… | audit-trail phase | H1 | open | — |
-| G-055 | G1 | CRITICAL | sales | sales/commission.md:326 | — | **G1 (CRITICAL)** — `CommissionService::confirmPeriod` calls non-existent | — | H1 | open | — |
-| G-056 | G1 | CRITICAL | sales | sales/sales-cart.md:207 | — | **G1 (CRITICAL)** — `customers.shop_name` column referenced by `getCustomerDetails` (L487), | — | H1 | open | — |
-| G-057 | G1 | CRITICAL | sales | sales/sales-overview.md:280 | — | **G1 (CRITICAL)** — `customers.shop_name` column referenced but NEVER created by any migration. | DDL drift | H1 | open | — |
+| G-055 | G1 | CRITICAL | sales | sales/commission.md:326 | — | **G1 (CRITICAL)** — `CommissionService::confirmPeriod` calls non-existent | — | H1 | resolved | 3f35e77 |
+| G-056 | G1 | CRITICAL | sales | sales/sales-cart.md:207 | — | **G1 (CRITICAL)** — `customers.shop_name` column referenced by `getCustomerDetails` (L487), | — | H1 | resolved | 3f35e77 |
+| G-057 | G1 | CRITICAL | sales | sales/sales-overview.md:280 | — | **G1 (CRITICAL)** — `customers.shop_name` column referenced but NEVER created by any migration. | DDL drift | H1 | resolved | 3f35e77 |
 | G-058 | G2 | CRITICAL | sales | sales/commission.md:329 | — | **G2 (CRITICAL)** — Entire commission auto-calc pipeline is DEAD CODE. | — | H1 | open | — |
-| G-059 | G2 | CRITICAL | sales | sales/sales-invoice.md:392 | — | **G2 (CRITICAL)** — `SalesInvoiceApiController::update` doesn't pass `items[]`, always fails | — | H1 | open | — |
-| G-060 | G2 | CRITICAL | sales | sales/sales-overview.md:283 | — | **G2 (CRITICAL)** — `SalesInvoiceApiController::update` doesn't pass `items[]`, always fails | — | H1 | open | — |
-| G-061 | G3 | CRITICAL | sales | sales/commission.md:334 | — | **G3 (CRITICAL)** — `LedgerNatureService` has NO `commission_expense` or `commission_payable` | — | H1 | open | — |
-| G-062 | G3 | CRITICAL | sales | sales/sales-challan.md:328 | — | **G3 (CRITICAL)** — `StockAvailabilityService` pipeline filter references nonexistent status | — | H1 | open | — |
-| G-063 | G3 | CRITICAL | sales | sales/sales-overview.md:286 | — | **G3 (CRITICAL)** — `StockAvailabilityService` pipeline filter references nonexistent status | — | H1 | open | — |
+| G-059 | G2 | CRITICAL | sales | sales/sales-invoice.md:392 | — | **G2 (CRITICAL)** — `SalesInvoiceApiController::update` doesn't pass `items[]`, always fails | — | H1 | resolved | 3f35e77 |
+| G-060 | G2 | CRITICAL | sales | sales/sales-overview.md:283 | — | **G2 (CRITICAL)** — `SalesInvoiceApiController::update` doesn't pass `items[]`, always fails | — | H1 | resolved | 3f35e77 |
+| G-061 | G3 | CRITICAL | sales | sales/commission.md:334 | — | **G3 (CRITICAL)** — `LedgerNatureService` has NO `commission_expense` or `commission_payable` | — | H1 | resolved | 3f35e77 |
+| G-062 | G3 | CRITICAL | sales | sales/sales-challan.md:328 | — | **G3 (CRITICAL)** — `StockAvailabilityService` pipeline filter references nonexistent status | — | H1 | resolved | 3f35e77 |
+| G-063 | G3 | CRITICAL | sales | sales/sales-overview.md:286 | — | **G3 (CRITICAL)** — `StockAvailabilityService` pipeline filter references nonexistent status | — | H1 | resolved | 3f35e77 |
 | G-064 | G4 | CRITICAL | sales | sales/commission.md:336 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `commission_rules` / | audit-trail phase | H1 | open | — |
 | G-065 | G4 | CRITICAL | sales | sales/sales-audit.md:351 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to ANY of the 9 sales tables + | audit-trail phase | H1 | open | — |
 | G-066 | G4 | CRITICAL | sales | sales/sales-challan.md:332 | — | **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_challans` / | audit-trail phase | H1 | open | — |

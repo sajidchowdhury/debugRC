@@ -209,6 +209,12 @@ stateDiagram-v2
    NEVER created by any migration. Runtime `SQLSTATE[42703]` on cart AJAX endpoints. The
    migration `2026_07_30_000011` comment explicitly states "new schema has only customer_name
    (no shop_name column)".
+
+   > ✅ RESOLVED in commit 3f35e77 (SALES-1) — migration `2026_09_01_000001_add_shop_name_to_customers`
+   > adds the `shop_name` column back (nullable varchar(200), backfilled from `customer_name`).
+   > Idempotent (guards on `information_schema`). DDL baseline `01_auth_and_master.sql` updated.
+   > Codifies the ops ETL `post_load_fixes.sql` "FIX 12" as a proper migration. Cart AJAX
+   > endpoints (customer-search / list-drafts / customer-details) no longer throw SQLSTATE[42703].
 2. **G6 (MAJOR)** — No `SalesDraftCartPolicy` class. RBAC via route middleware + RLS only.
 
    > ✅ RESOLVED in commit 1ccc5b6 — Policy class `App\Policies\SalesDraftCartPolicy` created + registered in `AppServiceProvider::boot()`. Mirrors existing `role:` middleware exactly (defense-in-depth — no behavior change). Methods: view/create/update/delete/clear. The cart route group (`admin/sales`) carries `role:salesman,manager,admin` + `branch.isolation` at the prefix level (routes/web.php L1082-1083); all cart routes inherit it.

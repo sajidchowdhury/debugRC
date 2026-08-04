@@ -329,6 +329,12 @@ return $this->journalPosting->createJournalEntry([
    `'challan_completed'` (L141, L186). The DDL CHECK is `('draft','confirmed','cancelled','reversed')`
    — no `challan_completed`. Currently benign (secondary `dispatched_qty < ordered_qty` filter
    catches it) but fragile.
+
+   > ✅ RESOLVED in commit 3f35e77 (SALES-1) — removed `'challan_completed'` from all 5
+   > `whereNotIn('si.status', ...)` arrays (L141, L186, L265, L351, L491). The filter now excludes
+   > only `['reversed', 'cancelled']`; the `sid.ordered_qty > sid.dispatched_qty` predicate does
+   > the real "fully dispatched" exclusion. Behavior-preserving (the nonexistent value was a
+   > no-op — `whereNotIn` never matched it).
 2. **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_challans` /
    `sales_challan_items`. Only `customer_payments` is hash-chain-audited.
 3. **G5 (CRITICAL)** — `sales_challan_items` table is NOT in `04_sales.sql` DDL — created only

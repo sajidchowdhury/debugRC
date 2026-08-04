@@ -326,13 +326,27 @@ stateDiagram-v2
 1. **G1 (CRITICAL)** — `CommissionService::confirmPeriod` calls non-existent
    `JournalPostingService::postCommissionExpense()` (L674). Runtime `BadMethodCallException`
    when API client POSTs `/api/v1/sales/commission/confirm-period`.
+
+   > ✅ RESOLVED in commit 3f35e77 (SALES-1) — added `JournalPostingService::postCommissionExpense()`
+   > (Dr commission_expense / Cr commission_payable, swaps Dr/Cr for net-negative reversal periods,
+   > returns `{id}` object to match the `$je->id` access pattern). Call site enhanced to pass
+   > `salesman_id` + `created_by` for traceability. `branch_id=null` → skips per-branch period
+   > check (commission confirmation is an admin action spanning branches).
 2. **G2 (CRITICAL)** — Entire commission auto-calc pipeline is DEAD CODE.
    `calculateOnAllocation` (L205), `reverseOnReturn` (L498), `reverseOnPaymentReversal` (L580),
    `markAsPaid` (L719) are NEVER called from `CustomerPaymentService::confirmPayment`,
    `SalesReturnService::confirmReturn`, `CustomerPaymentService::cancelPayment`, or
    `EmployeeTransactionService`.
+
+   > ⏳ DEFERRED to SALES-2 — wiring the 4 dead-code methods into their 4 callers is the next batch.
+   > Now unblocked: G1 (postCommissionExpense exists) + G3 (ledger natures registered) are both done
+   > in commit 3f35e77, so the GL side of the pipeline will work once the call sites are wired.
 3. **G3 (CRITICAL)** — `LedgerNatureService` has NO `commission_expense` or `commission_payable`
    natures. Even if G1 is fixed, the GL posting can't resolve the Dr side ledger.
+
+   > ✅ RESOLVED in commit 3f35e77 (SALES-1) — registered `commission_expense` (Expense, debit) +
+   > `commission_payable` (Liability, credit) in `LedgerNatureService::EXTENDED_NATURES`. With G1
+   > also fixed, `postCommissionExpense` now resolves both ledgers and posts the balanced JE.
 4. **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `commission_rules` /
    `commission_entries` / `commission_rule_tiers` / `commission_rule_product_groups` /
    `commission_rule_targets`.

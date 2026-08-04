@@ -392,6 +392,11 @@ return $this->journalPosting->createJournalEntry([...], $lines);
 1. **G2 (CRITICAL)** — `SalesInvoiceApiController::update` doesn't pass `items[]`, always fails
    with "Cannot update: items list is empty." Mobile API invoice edit is broken.
    (`Api/V1/Sales/SalesInvoiceApiController.php:140-172`)
+
+   > ✅ RESOLVED in commit 3f35e77 (SALES-1) — `update()` now validates + passes the full `items[]`
+   > array (product_id + qty + rate per line; condition_state constrained to the DDL CHECK
+   > `'Good'`/`'Damage'`) plus the header fields the service reads (`invoice_date`,
+   > `credit_limit_override`, `override_reason`, `dispatcher_ids`). Mobile invoice edit works.
 2. **G4 (CRITICAL)** — `fn_financial_audit_trigger` NOT attached to `sales_invoices` /
    `sales_invoice_items` / `sales_invoice_dispatches` / `sales_invoice_dispatchers`. Only
    `customer_payments` of the sales ecosystem is hash-chain-audited.
