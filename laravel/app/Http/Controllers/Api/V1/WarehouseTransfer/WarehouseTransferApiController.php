@@ -4,10 +4,9 @@ namespace App\Http\Controllers\Api\V1\WarehouseTransfer;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\WarehouseTransfer\WarehouseTransferResource;
+use App\Http\Requests\Api\V1\WarehouseTransfer\StoreWarehouseTransferRequest;
 use App\Models\Warehouse;
 use App\Models\WarehouseTransfer;
-use App\Rules\WarehouseBelongsToBranch;
-use App\Rules\WarehouseTransferItemHasAvailableStock;
 use App\Services\Stock\StockAvailabilityService;
 use App\Services\Stock\StockService;
 use App\Services\Stock\WarehouseTransferService;
@@ -119,31 +118,12 @@ class WarehouseTransferApiController extends Controller
      * Phase 1 enforcement: both warehouses must belong to the same branch.
      * Phase 2 enforcement: pipeline-aware availability check on each item.
      */
-    public function store(Request $request): JsonResponse
+    public function store(StoreWarehouseTransferRequest $request): JsonResponse
     {
         $user = Auth::user();
         $userBranchId = $user ? (int) $user->getBranchId() : null;
 
-        $validated = $request->validate([
-            'from_warehouse_id' => [
-                'required', 'integer', 'exists:warehouses,id',
-                new WarehouseBelongsToBranch($userBranchId, 'branch'),
-            ],
-            'to_warehouse_id' => [
-                'required', 'integer', 'exists:warehouses,id',
-                'different:from_warehouse_id',
-                new WarehouseBelongsToBranch($userBranchId, 'branch'),
-            ],
-            'transfer_date' => 'required|date',
-            'notes' => 'nullable|string|max:1000',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.qty' => [
-                'required', 'numeric', 'min:0.001',
-                new WarehouseTransferItemHasAvailableStock((int) $request->input('from_warehouse_id')),
-            ],
-            'items.*.rate' => 'nullable|numeric|min:0',
-        ]);
+        $validated = $request->validated();
 
         // Phase 1: Controller-level same-branch guard (defense-in-depth)
         $fromWarehouse = Warehouse::findOrFail($validated['from_warehouse_id']);

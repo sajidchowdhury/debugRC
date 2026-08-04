@@ -4,6 +4,9 @@ namespace App\Http\Controllers\Api\V1\BranchDemand;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\BranchDemand\BranchDemandResource;
+use App\Http\Requests\Api\V1\BranchDemand\StoreBranchDemandRequest;
+use App\Http\Requests\Api\V1\BranchDemand\SendBranchDemandRequest;
+use App\Http\Requests\Api\V1\BranchDemand\RepriceBranchDemandRequest;
 use App\Models\BranchDemand;
 use App\Services\BranchDemand\BranchDemandService;
 use App\Services\BranchDemand\BranchIntercompanyService;
@@ -251,17 +254,9 @@ class BranchDemandApiController extends Controller
      *     items[].qty: numeric (required, min 0.01)
      *     items[].notes: string|null (optional, max 500)
      */
-    public function store(Request $request): JsonResponse
+    public function store(StoreBranchDemandRequest $request): JsonResponse
     {
-        $validated = $request->validate([
-            'to_branch_id'       => 'required|integer|exists:branches,id',
-            'demand_date'        => 'required|date',
-            'notes'              => 'nullable|string|max:2000',
-            'items'              => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.qty'        => 'required|numeric|min:0.01',
-            'items.*.notes'      => 'nullable|string|max:500',
-        ]);
+        $validated = $request->validated();
 
         // Ensure the to_branch_id is not the same as the user's branch
         $branchId = $this->currentBranchId();
@@ -312,14 +307,9 @@ class BranchDemandApiController extends Controller
      *
      * Requires: admin, manager, or warehouse_manager role.
      */
-    public function send(Request $request, int $id): JsonResponse
+    public function send(SendBranchDemandRequest $request, int $id): JsonResponse
     {
-        $validated = $request->validate([
-            'items'                        => 'required|array|min:1',
-            'items.*.id'                   => 'required|integer|exists:branch_demand_items,id',
-            'items.*.from_warehouse_id'    => 'required|integer|exists:warehouses,id',
-            'items.*.to_warehouse_id'      => 'required|integer|exists:warehouses,id',
-        ]);
+        $validated = $request->validated();
 
         try {
             $demand = $this->demandService->sendGoodsWithWarehouses(
@@ -524,13 +514,9 @@ class BranchDemandApiController extends Controller
      *
      * Requires: admin or manager role.
      */
-    public function reprice(Request $request, int $id): JsonResponse
+    public function reprice(RepriceBranchDemandRequest $request, int $id): JsonResponse
     {
-        $validated = $request->validate([
-            'new_total_value' => 'required|numeric|min:0',
-            'reason'          => 'required|string|min:10|max:1000',
-            'approved_by'     => 'nullable|integer|exists:users,id',
-        ]);
+        $validated = $request->validated();
 
         try {
             $repricing = $this->repricingService->createRepricingAdjustment(

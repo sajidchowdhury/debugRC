@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1\StockAdjustment;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\StockAdjustment\StockAdjustmentResource;
+use App\Http\Requests\Api\V1\StockAdjustment\StoreStockAdjustmentRequest;
 use App\Models\StockAdjustment;
 use App\Services\Stock\StockAdjustmentPolicyService;
 use App\Services\Stock\StockAdjustmentService;
@@ -190,23 +191,9 @@ class StockAdjustmentApiController extends Controller
      *
      * Returns 201 with the draft resource on success.
      */
-    public function store(Request $request): JsonResponse
+    public function store(StoreStockAdjustmentRequest $request): JsonResponse
     {
-        $validated = $request->validate([
-            'warehouse_id' => 'required|integer|exists:warehouses,id',
-            'adjustment_type' => 'required|in:increase,decrease',
-            // Phase 2 — category is mandatory.
-            'adjustment_category' => 'required|in:' . implode(',', StockAdjustment::ADJUSTMENT_CATEGORIES),
-            'adjustment_date' => 'required|date',
-            'reason' => 'nullable|string|max:1000',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.qty' => 'required|numeric|min:0.001',
-            // Phase 5 — optional UOM the qty was entered in.
-            'items.*.uom_id' => 'nullable|integer|exists:units_of_measure,id',
-            'items.*.rate' => 'nullable|numeric|min:0',
-            'items.*.reason' => 'nullable|string|max:500',
-        ]);
+        $validated = $request->validated();
 
         // Phase 1: defense-in-depth — role check for creating a draft.
         // The route-level api.auth gate already ensured the caller has

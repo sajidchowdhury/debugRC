@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\Branch\BranchResource;
+use App\Http\Requests\Api\V1\Branch\StoreBranchRequest;
+use App\Http\Requests\Api\V1\Branch\UpdateBranchRequest;
 use App\Models\Branch;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -83,16 +85,9 @@ class BranchApiController extends Controller
     /**
      * Create a new branch.
      */
-    public function store(Request $request): JsonResponse
+    public function store(StoreBranchRequest $request): JsonResponse
     {
-        $validated = $request->validate([
-            'branch_code' => 'required|string|max:20|regex:/^[A-Za-z0-9\-_.]+$/|unique:branches,branch_code',
-            'branch_name' => 'required|string|max:100',
-            'address'     => 'nullable|string',
-            'phone'       => 'nullable|string|max:20',
-            'email'       => 'nullable|email|max:100',
-            'is_active'   => 'boolean',
-        ]);
+        $validated = $request->validated();
 
         // Normalize like BranchController: uppercase code, trim text fields.
         $validated['branch_code'] = strtoupper(trim($validated['branch_code']));
@@ -125,7 +120,7 @@ class BranchApiController extends Controller
     /**
      * Update an existing branch.
      */
-    public function update(Request $request, int $id): JsonResponse
+    public function update(UpdateBranchRequest $request, int $id): JsonResponse
     {
         $branch = Branch::find($id);
 
@@ -133,14 +128,7 @@ class BranchApiController extends Controller
             return $this->notFound("Branch {$id} not found.");
         }
 
-        $validated = $request->validate([
-            'branch_code' => "sometimes|required|string|max:20|regex:/^[A-Za-z0-9\-_.]+$/|unique:branches,branch_code,{$id}",
-            'branch_name' => 'sometimes|required|string|max:100',
-            'address'     => 'nullable|string',
-            'phone'       => 'nullable|string|max:20',
-            'email'       => 'nullable|email|max:100',
-            'is_active'   => 'boolean',
-        ]);
+        $validated = $request->validated();
 
         if (isset($validated['branch_code'])) {
             $validated['branch_code'] = strtoupper(trim($validated['branch_code']));

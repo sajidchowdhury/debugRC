@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\Sales;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\Sales\CommissionEntryResource;
 use App\Http\Resources\Api\V1\Sales\CommissionRuleResource;
+use App\Http\Requests\Api\V1\Sales\StoreCommissionRuleRequest;
 use App\Services\Sales\CommissionService;
 use App\Services\Sales\SalesAccess;
 use App\Models\CommissionRule;
@@ -63,8 +64,12 @@ class CommissionApiController extends Controller
             });
         }
 
+        // G4 fix: clamp per_page to [1,100] like BranchApiController::index,
+        // preventing an unbounded per_page from OOM-ing the serializer.
+        $perPage = min(100, max(1, $request->integer('per_page', 25)));
+
         $rules = $query->orderBy('effective_from', 'desc')
-            ->paginate($request->integer('per_page', 25));
+            ->paginate($perPage);
 
         return response()->json([
             'data' => CommissionRuleResource::collection($rules->items()),
@@ -98,27 +103,9 @@ class CommissionApiController extends Controller
      *
      * POST /api/v1/sales/commission/rules
      */
-    public function storeRule(Request $request): JsonResponse
+    public function storeRule(StoreCommissionRuleRequest $request): JsonResponse
     {
-        $validated = $request->validate([
-            'salesman_id' => 'required|integer|exists:employees,id',
-            'rule_type' => 'required|in:flat,tiered,product_group,target_bonus',
-            'rate' => 'required|numeric|min:0|max:100',
-            'effective_from' => 'nullable|date',
-            'effective_to' => 'nullable|date|after:effective_from',
-            'branch_id' => 'nullable|integer|exists:branches,id',
-            'notes' => 'nullable|string|max:500',
-            'tiers' => 'required_if:rule_type,tiered|array',
-            'tiers.*.threshold' => 'required_with:tiers|numeric|min:0',
-            'tiers.*.rate' => 'required_with:tiers|numeric|min:0|max:100',
-            'product_groups' => 'required_if:rule_type,product_group|array',
-            'product_groups.*.product_group_id' => 'required_with:product_groups|integer|exists:product_groups,id',
-            'product_groups.*.rate' => 'required_with:product_groups|numeric|min:0|max:100',
-            'targets' => 'required_if:rule_type,target_bonus|array',
-            'targets.*.target_amount' => 'required_with:targets|numeric|min:0',
-            'targets.*.bonus_rate' => 'required_with:targets|numeric|min:0|max:100',
-            'targets.*.period' => 'nullable|in:monthly,quarterly,yearly',
-        ]);
+        $validated = $request->validated();
 
         $rule = $this->commissionService->createRule($validated);
 
@@ -179,8 +166,11 @@ class CommissionApiController extends Controller
             $query->where('entry_date', '<=', $request->input('to_date'));
         }
 
+        // G4 fix: clamp per_page to [1,100] (same as listRules).
+        $perPage = min(100, max(1, $request->integer('per_page', 25)));
+
         $entries = $query->orderBy('entry_date', 'desc')
-            ->paginate($request->integer('per_page', 25));
+            ->paginate($perPage);
 
         return response()->json([
             'data' => CommissionEntryResource::collection($entries->items()),
