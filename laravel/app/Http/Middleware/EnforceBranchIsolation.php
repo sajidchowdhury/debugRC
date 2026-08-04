@@ -242,6 +242,50 @@ class EnforceBranchIsolation
         if (str_contains($path, 'other-expenses')) {
             return 'other_expenses';
         }
+        // --- Phase 8 (Intercompany & Consolidation): G-105 (HIGH) ---
+        // See finance/consolidation-intercompany.md §G11 + §G12 and
+        // architecture/branch-isolation-rls.md §5.3 (cross-branch skip).
+        //
+        // All 4 patterns return null (NOT a table name). The downstream
+        // resolveUrlParamBranchId() does:
+        //     DB::table($table)->where('id', $id)->value('branch_id');
+        // None of the candidate tables have a single `branch_id` column:
+        //   - consolidation_runs / elimination_rules / elimination_entries /
+        //     companies are admin-only RLS tables with NO branch_id column
+        //     (see migration 2026_08_11_000001_create_intercompany_and_consolidation).
+        //   - warehouse_transfers is cross-branch (from_branch_id +
+        //     to_branch_id, NO single branch_id — see 03_stock.sql:640-661
+        //     + 2025_01_20_000007_add_rls_branch_isolation.php:138).
+        // Returning a table name here would cause a runtime
+        // `column "branch_id" does not exist` error. Authorization is
+        // handled at other layers:
+        //   - WarehouseTransferController::getUserBranchId() (L74-82)
+        //     filters reads by from_branch_id OR to_branch_id.
+        //   - role:accountant,manager,admin route middleware (web.php:1733)
+        //     restricts consolidation/companies/elimination-rules routes.
+        if (str_contains($path, 'consolidation')) {
+            // Covers admin/consolidation/* (runs + rules + companies — all
+            // nested under this prefix). Group-level, admin-only RLS.
+            return null;
+        }
+        if (str_contains($path, 'warehouse-transfers')) {
+            // Cross-branch (from_branch_id + to_branch_id). Controller-level
+            // filter via WarehouseTransferController::getUserBranchId().
+            return null;
+        }
+        if (str_contains($path, 'elimination-rules')) {
+            // Defensive: routes currently nest under admin/consolidation/rules
+            // (caught above), but a future top-level admin/elimination-rules/*
+            // route would land here. elimination_rules has no branch_id.
+            return null;
+        }
+        if (str_contains($path, 'companies')) {
+            // Defensive: routes currently nest under admin/consolidation/
+            // companies (caught above), but a future top-level admin/companies/*
+            // route would land here. `companies` is a global table (admin-only
+            // RLS, no branch_id) — NOT branch-scoped, so RLS does not apply.
+            return null;
+        }
         return null;
     }
 
