@@ -357,7 +357,13 @@ Route::middleware('auth')->group(function () {
     Route::get('admin/reconciliation/section/{sectionId}', [ReconciliationController::class, 'section'])->name('admin.reconciliation.section');
 
     // Phase 5: Approval Workflow
-    Route::prefix('admin/approvals')->name('admin.approvals.')->middleware('role:accountant,manager,admin')->group(function () {
+    // G-178 (HIGH): added `branch.isolation` to the admin/approvals route
+    // group. The middleware's inferTableFromUri() now maps `approvals` to
+    // null (approval_requests has NO branch_id — only requested_by user_id).
+    // The middleware still checks request->input('branch_id') for forged
+    // values on POST bodies, and the ApprovalService validates the entity's
+    // branch_id against the approver's session branch at the service layer.
+    Route::prefix('admin/approvals')->name('admin.approvals.')->middleware(['role:accountant,manager,admin', 'branch.isolation'])->group(function () {
         Route::get('/', [ApprovalController::class, 'queue'])->name('queue');
         Route::post('{id}/approve', [ApprovalController::class, 'approve'])->name('approve')->middleware('role:manager,admin');
         Route::post('{id}/reject', [ApprovalController::class, 'reject'])->name('reject')->middleware('role:manager,admin');
@@ -1485,12 +1491,17 @@ Route::middleware('auth')->group(function () {
         Route::post('{id}/post', [ManualJournalController::class, 'post'])
             ->name('post')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         // Phase 5: Approval workflow
+        // G-178 (HIGH): added `branch.isolation` to submit/approve/reject.
+        // Manual journals are branch-scoped (manual_journals.branch_id), so
+        // the middleware resolves {id} → branch_id via the existing
+        // `manual-journals` pattern in inferTableFromUri(). A manager from
+        // Branch A can no longer approve another branch's pending JE.
         Route::post('{id}/submit', [ManualJournalController::class, 'submitForApproval'])
             ->name('submit')->middleware(['role:accountant,manager,admin', 'branch.isolation']);
         Route::post('{id}/approve', [ManualJournalController::class, 'approve'])
-            ->name('approve')->middleware(['role:manager,admin']);
+            ->name('approve')->middleware(['role:manager,admin', 'branch.isolation']);
         Route::post('{id}/reject', [ManualJournalController::class, 'reject'])
-            ->name('reject')->middleware(['role:manager,admin']);
+            ->name('reject')->middleware(['role:manager,admin', 'branch.isolation']);
     });
     Route::resource('admin/manual-journals', ManualJournalController::class)
         ->only(['index', 'create'])
@@ -1790,25 +1801,41 @@ Route::middleware('auth')->group(function () {
 
     // ============================================================
     // Phase 9.4: Fixed Asset & Depreciation
+    // G-114 (HIGH): per-action role differentiation. The group middleware
+    // stays `role:accountant,manager,admin` (BR28 basic requirement — the
+    // subsystem is accessible to accountant, manager, admin). Disposal +
+    // depreciation POST routes get a tighter `role:manager,admin` overlay:
+    //   - dispose-form/store-disposal: removal of an asset from the books
+    //     is a management decision (has GL impact — gain/loss JE posted).
+    //   - generate-depreciation/post-depreciation/post-single-depreciation/
+    //     reverse-depreciation: posting depreciation is a period-close action.
+    // Accountants retain create/store/edit/update access for asset master
+    // data. See `finance/fixed-assets.md` §G27.
     // ============================================================
     Route::prefix('admin/fixed-assets')->name('admin.fixed-assets.')->middleware('role:accountant,manager,admin')->group(function () {
         // Static routes first (before parameterized)
         Route::get('create', [FixedAssetController::class, 'create'])->name('create');
         Route::post('/', [FixedAssetController::class, 'store'])->name('store');
         Route::get('depreciation', [FixedAssetController::class, 'depreciation'])->name('depreciation');
-        Route::post('generate-depreciation', [FixedAssetController::class, 'generateDepreciation'])->name('generate-depreciation');
-        Route::post('post-depreciation', [FixedAssetController::class, 'postDepreciation'])->name('post-depreciation');
+        Route::post('generate-depreciation', [FixedAssetController::class, 'generateDepreciation'])->name('generate-depreciation')
+            ->middleware('role:manager,admin');
+        Route::post('post-depreciation', [FixedAssetController::class, 'postDepreciation'])->name('post-depreciation')
+            ->middleware('role:manager,admin');
         Route::get('disposals', [FixedAssetController::class, 'disposals'])->name('disposals');
         Route::get('disposals/{disposal}', [FixedAssetController::class, 'showDisposal'])->name('show-disposal');
-        Route::patch('schedules/{schedule}/post', [FixedAssetController::class, 'postSingleDepreciation'])->name('post-single-depreciation');
-        Route::patch('schedules/{schedule}/reverse', [FixedAssetController::class, 'reverseDepreciation'])->name('reverse-depreciation');
+        Route::patch('schedules/{schedule}/post', [FixedAssetController::class, 'postSingleDepreciation'])->name('post-single-depreciation')
+            ->middleware('role:manager,admin');
+        Route::patch('schedules/{schedule}/reverse', [FixedAssetController::class, 'reverseDepreciation'])->name('reverse-depreciation')
+            ->middleware('role:manager,admin');
 
         // Parameterized routes (wildcard) — MUST be last
         Route::get('{fixedAsset}', [FixedAssetController::class, 'show'])->name('show');
         Route::get('{fixedAsset}/edit', [FixedAssetController::class, 'edit'])->name('edit');
         Route::put('{fixedAsset}', [FixedAssetController::class, 'update'])->name('update');
-        Route::get('{fixedAsset}/dispose', [FixedAssetController::class, 'showDisposalForm'])->name('dispose-form');
-        Route::post('{fixedAsset}/dispose', [FixedAssetController::class, 'storeDisposal'])->name('store-disposal');
+        Route::get('{fixedAsset}/dispose', [FixedAssetController::class, 'showDisposalForm'])->name('dispose-form')
+            ->middleware('role:manager,admin');
+        Route::post('{fixedAsset}/dispose', [FixedAssetController::class, 'storeDisposal'])->name('store-disposal')
+            ->middleware('role:manager,admin');
     });
     Route::get('admin/fixed-assets', [FixedAssetController::class, 'index'])
         ->name('admin.fixed-assets.index')

@@ -1136,6 +1136,11 @@ has RLS — but the `ApprovalRequest` row itself is branch-less, and the service
 entity's branch_id against the user's session branch. Same gap on `ManualJournalController` approve/
 reject routes (L1464-1469 lack `branch.isolation`).
 
+> ✅ RESOLVED in commit c4acdb0 (G-178) — Three changes:
+> 1. Added `branch.isolation` middleware to the `admin/approvals` route group in `routes/web.php:366` (was `role:accountant,manager,admin` only — now `['role:accountant,manager,admin', 'branch.isolation']`).
+> 2. Added `branch.isolation` middleware to the ManualJournalController approve/reject (and submit) routes in `routes/web.php:1499-1504` (submit already had it from a prior fix; approve/reject were missing it).
+> 3. Extended `EnforceBranchIsolation::inferTableFromUri()` with an `approvals` pattern returning `null` — `approval_requests` has NO `branch_id` column (only `requested_by` user_id), so single-branch inference doesn't apply. The middleware still checks `request->input('branch_id')` for forged values on POST bodies (defense-in-depth). The entity's branch is validated at the service layer: `ApprovalService` loads the entity via `entity_type + entity_id` and re-checks the entity's `branch_id` against the approver's session branch. For the ManualJournal routes specifically, the middleware resolves `{id}` → `manual_journals.branch_id` via the existing `manual-journals` pattern (line 186), so a manager from Branch A can no longer approve another branch's pending JE. See `app/Http/Middleware/EnforceBranchIsolation.php:336-345` + `routes/web.php:359-372, 1493-1504`. Sub-problem A (Session 6, Security/RLS cluster).
+
 ### G6 — HIGH — approval_requests.entity_id is unsignedBigInteger, NOT FK
 
 Migration L59 `$table->unsignedBigInteger('entity_id')` — no `->constrained()`. If a manual_journal

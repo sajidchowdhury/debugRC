@@ -219,6 +219,22 @@ class EnforceBranchIsolation
         if (str_contains($path, 'damages')) {
             return 'damage_invoices';
         }
+        // --- Phase 9 (Branch Demand Shadow): G-349 (HIGH) ---
+        // Shadow comparison data is cross-branch by nature (compares demand
+        // headers across from_branch + to_branch). Skip single-branch
+        // inference — the ShadowService::computeDiffs() handles authorization
+        // via the underlying demand rows (which ARE branch-scoped).
+        //
+        // CRITICAL ORDERING: this check MUST come BEFORE the `branch-demands`
+        // check below because `branch-demand-shadow` contains the substring
+        // `branch-demand`. If placed after, the `branch-demands` check would
+        // match first (and return null — same result), but placing it first
+        // makes the explicit cross-branch intent of the shadow path visible
+        // in the source code, matching the pattern in
+        // `finance/branch-demand.md` §G25.
+        if (str_contains($path, 'branch-demand-shadow')) {
+            return null;
+        }
         // --- Phase 9 (Branch Demand plan): Branch demands are cross-branch by
         // nature — they involve BOTH from_branch_id and to_branch_id. Standard
         // branch isolation (single branch_id column) does NOT apply. Instead,
@@ -284,6 +300,47 @@ class EnforceBranchIsolation
             // companies (caught above), but a future top-level admin/companies/*
             // route would land here. `companies` is a global table (admin-only
             // RLS, no branch_id) — NOT branch-scoped, so RLS does not apply.
+            return null;
+        }
+        // --- Phase 8 (Dimensions & Cost Centers): G-324 (HIGH) ---
+        // `dimension_values` has branch_id (nullable — null = all branches,
+        // from migration `2026_08_10_000002_create_budgeting_and_cost_centers`).
+        // Resolves {id} from admin/dimensions/{id}/values/{valueId} or
+        // admin/dimension-values/{id} to dimension_values.branch_id. The
+        // parent `dimensions` table itself is global (no branch_id) — but
+        // value rows are branch-scoped, so resolving to `dimension_values`
+        // is the correct branch-id source for both URL shapes.
+        if (str_contains($path, 'dimension-values') || str_contains($path, 'dimensions')) {
+            return 'dimension_values';
+        }
+        // --- Phase 8 (Fixed Assets): G-350 (HIGH) ---
+        // `fixed_assets` has branch_id (from migration
+        // `2026_08_13_000001_create_fixed_assets`). URL param {fixedAsset}
+        // resolves to fixed_assets.branch_id — covers show/edit/dispose/
+        // depreciate routes. (asset_depreciation_schedules + asset_disposals
+        // use fixed_asset_id FK, NOT branch_id directly — but the route param
+        // is always the fixed_asset id, so single-table resolution suffices.)
+        if (str_contains($path, 'fixed-assets')
+            || str_contains($path, 'asset-depreciation')
+            || str_contains($path, 'asset-disposal')) {
+            return 'fixed_assets';
+        }
+        // --- Phase 8 (Budgeting): G-356 (HIGH) ---
+        // `budgets` has branch_id (nullable — null = all branches,
+        // from migration `2026_08_10_000002_create_budgeting_and_cost_centers`).
+        // Resolves {id} from admin/budgets/{id}/edit, admin/budgets/{id}/activate,
+        // admin/budgets/{id}/cancel to budgets.branch_id.
+        if (str_contains($path, 'budgets')) {
+            return 'budgets';
+        }
+        // --- Phase 5 (Approval Workflow): G-178 (HIGH) ---
+        // `approval_requests` has NO branch_id (only requested_by user_id).
+        // The entity's branch is checked at the service level — ApprovalService
+        // loads the entity via entity_type + entity_id and validates the
+        // approver's session branch against the entity's branch_id. Return
+        // null — the middleware still checks request->input('branch_id') for
+        // forged values on the POST body (defense-in-depth).
+        if (str_contains($path, 'approvals')) {
             return null;
         }
         return null;

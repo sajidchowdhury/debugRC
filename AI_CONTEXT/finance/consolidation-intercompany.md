@@ -788,6 +788,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
   inappropriate — the fix is to ensure the RLS policy (G3) allows authenticated branch users to
   read all consolidation data (since it's group-level). For `companies`, same.
 
+> ✅ RESOLVED in commit c4acdb0 (G-106) — Documentation resolution. BranchScope is intentionally NOT added to `ConsolidationRun`, `EliminationRule`, `EliminationEntry`, or `Company` models because these are corporate-level tables with NO `branch_id` column (verified in Session 4 — see migration `2026_08_11_000001_create_intercompany_and_consolidation`). A BranchScope requires a `branch_id` column to filter on; there is nothing to filter. The gap's own recommended fix (line 787-789 above) IS already done: G-015 (the RLS fix, Session 4, commit dd31590 / migration `2026_08_30_000001_add_rls_missing_tables.php`) replaced the admin-only `_admin_policy` (which blocked all non-admins) with authenticated-user per-verb policies on all 4 tables (`rls_{table}_select/insert/update/delete` using `current_setting('app.branch_id') IS NOT NULL` — i.e. any logged-in user with a branch context can read all group-level data; writes still require admin). The combination of (a) authenticated-user RLS for reads + (b) admin-only RLS for writes + (c) the existing `role:accountant,manager,admin` route middleware on `admin/consolidation/*` (web.php:1733) provides the correct access matrix without a BranchScope. This is a documentation resolution confirming the design decision; no code change. Sub-problem D (Session 6, Security/RLS cluster).
+
 #### G13 — NO Policy classes for `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `MoneyTransfer` / `WarehouseTransfer` / `Company`
 
 - **Severity:** MAJOR.

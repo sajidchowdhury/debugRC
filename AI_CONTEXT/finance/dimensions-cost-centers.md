@@ -101,6 +101,8 @@ Three management-accounting drivers:
 > dimension value creation is NOT request-level guarded (a non-admin accountant in Branch A can
 > POST `admin/dimensions/{id}/values` with `branch_id = Branch B`).
 
+> ✅ RESOLVED in commit c4acdb0 (G-324) — Extended `EnforceBranchIsolation::inferTableFromUri()` with a `dimensions` / `dimension-values` pattern that resolves to `dimension_values` (the table that has `branch_id`, nullable — null = all branches, per migration `2026_08_10_000002_create_budgeting_and_cost_centers`). The parent `dimensions` table itself is global (no branch_id), but value rows are branch-scoped, so resolving to `dimension_values` is the correct branch-id source for both URL shapes (`admin/dimensions/{id}/values/{valueId}` and `admin/dimension-values/{id}`). The middleware now blocks a non-admin accountant in Branch A from forging a `branch_id = Branch B` on POST `admin/dimensions/{id}/values` and from URL-guessing another branch's value id. RLS remains the DB-level backstop (per-verb `rls_dimension_values_*` policies from G-095's migration). See `app/Http/Middleware/EnforceBranchIsolation.php:305-315`. Sub-problem D (Session 6, Security/RLS cluster).
+
 ---
 
 ## 5. Related modules

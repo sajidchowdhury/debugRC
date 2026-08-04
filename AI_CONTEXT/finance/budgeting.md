@@ -82,6 +82,8 @@ Three management-accounting drivers:
 > URL access (e.g. `/admin/budgets/{id}/edit` for another branch's budget) is NOT request-level
 > guarded. RLS is the only backstop (and it has no `WITH CHECK` — G8).
 
+> ✅ RESOLVED in commit c4acdb0 (G-356) — Extended `EnforceBranchIsolation::inferTableFromUri()` with a `budgets` pattern that resolves to `budgets` (the table has `branch_id`, nullable — null = all branches, per migration `2026_08_10_000002_create_budgeting_and_cost_centers`). Resolves `{id}` from `admin/budgets/{id}/edit`, `admin/budgets/{id}/activate`, and `admin/budgets/{id}/cancel` to `budgets.branch_id`. The middleware now blocks a non-admin accountant in Branch A from URL-guessing another branch's budget id. RLS (per-verb `rls_budgets_*` policies from G-095's migration) remains the DB-level backstop. See `app/Http/Middleware/EnforceBranchIsolation.php:328-335`. Sub-problem D (Session 6, Security/RLS cluster).
+
 ---
 
 ## 5. Related modules

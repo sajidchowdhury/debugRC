@@ -1345,6 +1345,8 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 - **Fix:** add `if (str_contains($path, 'branch-demand-shadow')) return null;` (shadow
   comparison data is cross-branch by nature).
 
+> ✅ RESOLVED in commit c4acdb0 (G-349) — Added `if (str_contains($path, 'branch-demand-shadow')) return null;` to `EnforceBranchIsolation::inferTableFromUri()`. Shadow comparison data is cross-branch by nature (compares demand headers across from_branch + to_branch via `BranchDemandShadowService::computeDiffs()`), so single-branch inference does not apply. CRITICAL ORDERING: this check is placed BEFORE the existing `branch-demands` check (line 245) because the path `branch-demand-shadow` contains the substring `branch-demand`. If `branch-demands` were checked first, the shadow path would match the wrong branch (returning null anyway — same result — but the explicit cross-branch intent of the shadow path would be invisible in the source). Placing the shadow check first documents the intent. See `app/Http/Middleware/EnforceBranchIsolation.php:222-237`. Sub-problem D (Session 6, Security/RLS cluster).
+
 #### G26 — `VerifyBranchDemandSchema` command checks only 10 things — misses 6 tables
 
 - **Evidence:** `app/Console/Commands/VerifyBranchDemandSchema.php`. Checks `branch_demands`

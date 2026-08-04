@@ -142,21 +142,27 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
     // ======================================================================
 
     // ---------- Sales Cart — 30/60 req/min ----------
+    // G-086/G-087 (HIGH): the Cart write endpoints (store/update/destroy/
+    // clear/soft-hold) previously had ONLY `api.rate:30` — any authenticated
+    // API user (any role) could mutate the cart. Added `api.auth:salesman,
+    // manager,admin` to mirror the web RBAC (routes/web.php SalesCart group
+    // has `role:salesman,manager,admin`). validate + availability are read-
+    // like (no state mutation) and keep auth-only via the outer `api.auth`.
     Route::get('sales/cart', [SalesCartApiController::class, 'show'])
         ->middleware('api.rate:60');
     Route::post('sales/cart', [SalesCartApiController::class, 'store'])
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:salesman,manager,admin', 'api.rate:30');
     Route::put('sales/cart', [SalesCartApiController::class, 'update'])
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:salesman,manager,admin', 'api.rate:30');
     Route::delete('sales/cart/{productId}', [SalesCartApiController::class, 'destroy'])
         ->where('productId', '[0-9]+')
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:salesman,manager,admin', 'api.rate:30');
     Route::post('sales/cart/clear', [SalesCartApiController::class, 'clear'])
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:salesman,manager,admin', 'api.rate:30');
     Route::post('sales/cart/validate', [SalesCartApiController::class, 'validateCart'])
         ->middleware('api.rate:30');
     Route::post('sales/cart/soft-hold', [SalesCartApiController::class, 'softHold'])
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:salesman,manager,admin', 'api.rate:30');
     Route::get('sales/cart/availability', [SalesCartApiController::class, 'availability'])
         ->middleware('api.rate:60');
 
@@ -230,6 +236,15 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
         ->middleware('api.auth:accountant,manager,admin', 'api.rate:30');
 
     // ---------- Customer Payments — 30/60 req/min ----------
+    // G-086/G-087 (HIGH): the Customer Payments write endpoints (store/
+    // confirm/cancel) previously had ONLY `api.rate:30` — any authenticated
+    // API user (any role) could create/confirm/cancel a payment. Added
+    // `api.auth:salesman,manager,admin` to mirror the web RBAC (web.php
+    // CustomerPayment group has `role:salesman,manager,admin` for store,
+    // `role:accountant,manager,admin` for confirm, `role:accountant,
+    // manager,admin` for cancel). The single salesman,manager,admin matrix
+    // is a defense-in-depth floor (SalesAccess::assertBranchAccessible +
+    // controller-level checks retain the per-action differentiation).
     Route::get('sales/payments', [CustomerPaymentApiController::class, 'index'])
         ->middleware('api.rate:60');
     Route::get('sales/payments/outstanding-invoices', [CustomerPaymentApiController::class, 'outstandingInvoices'])
@@ -238,13 +253,13 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
         ->where('id', '[0-9]+')
         ->middleware('api.rate:60');
     Route::post('sales/payments', [CustomerPaymentApiController::class, 'store'])
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:salesman,manager,admin', 'api.rate:30');
     Route::post('sales/payments/{id}/confirm', [CustomerPaymentApiController::class, 'confirm'])
         ->where('id', '[0-9]+')
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:salesman,manager,admin', 'api.rate:30');
     Route::post('sales/payments/{id}/cancel', [CustomerPaymentApiController::class, 'cancel'])
         ->where('id', '[0-9]+')
-        ->middleware('api.rate:30');
+        ->middleware('api.auth:salesman,manager,admin', 'api.rate:30');
 
     // ======================================================================
     // Task 37 — Commission Tracking API

@@ -19,25 +19,25 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | Severity | Count | Blocks cutover? |
 |---|---|---|
 | CRITICAL | 76 | Yes — all of them |
-| HIGH | 105 | Most |
+| HIGH | 96 | Most |
 | MEDIUM | 77 | Some |
 | LOW | 70 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **330** | |
-| _of which resolved_ | 27 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **321** | |
+| _of which resolved_ | 36 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
 | Sector | Open issues |
 |---|---|
-| api | 51 |
+| api | 49 |
 | architecture | 19 |
-| finance | 77 |
+| finance | 71 |
 | purchasing | 24 |
 | reports | 79 |
 | sales | 35 |
 | security | 14 |
-| workflows | 32 |
+| workflows | 31 |
 
 ## How to use this register
 
@@ -149,8 +149,8 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-083 | G3 | HIGH | api | api/api-overview.md:573 | — | G3 \| HIGH \| ZERO tests for 8 of 14 modules: Sales Cart, Sales Invoices, Sales Challans, Sales Returns, Customer Payments, Commission, Ware… | test debt | H2 | open | — |
 | G-084 | G4 | HIGH | api | api/api-conventions.md:700 | — | G4 \| HIGH \| `CommissionApiController::listRules` does NOT clamp `per_page` to 100. OOM risk. \| Add `min((int) $request->input('per_page',… | — | H2 | open | — |
 | G-085 | G4 | HIGH | api | api/api-modules.md:722 | — | G4 \| HIGH \| `CommissionApiController::listRules` does not clamp `per_page` (OOM risk). \| Add `min((int) ..., 100)`. \| | — | H2 | open | — |
-| G-086 | G6 | HIGH | api | api/api-modules.md:724 | — | G6 \| HIGH \| Role-gate inconsistency: Sales Cart/Invoices/Returns/Payments write endpoints have NO route-level `api.auth:role` gate. \| Add… | cutover, RLS audit | H2 | open | — |
-| G-087 | G6 | HIGH | api | api/api-overview.md:576 | — | G6 \| HIGH \| Role-gate inconsistency: write endpoints on Sales Cart/Invoices/Returns/Payments rely ONLY on the controller's `SalesAccess::a… | cutover, RLS audit | H2 | open | — |
+| G-086 | G6 | HIGH | api | api/api-modules.md:724 | — | G6 \| HIGH \| Role-gate inconsistency: Sales Cart/Invoices/Returns/Payments write endpoints have NO route-level `api.auth:role` gate. \| Add… | cutover, RLS audit | H2 | resolved | c4acdb0 |
+| G-087 | G6 | HIGH | api | api/api-overview.md:576 | — | G6 \| HIGH \| Role-gate inconsistency: write endpoints on Sales Cart/Invoices/Returns/Payments rely ONLY on the controller's `SalesAccess::a… | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-088 | G7 | HIGH | api | api/api-conventions.md:703 | — | G7 \| HIGH \| Idempotency implemented on only 3 of ~14 transactional write endpoints. See §11.3. \| Add `idempotency_token` to the 6 endpoin… | — | H2 | open | — |
 | G-089 | G7 | HIGH | api | api/api-modules.md:725 | — | G7 \| HIGH \| Idempotency implemented on only 3 of ~14 transactional write endpoints. See `api-conventions.md` §11.3. \| Add `idempotency_to… | API Phase 17 | H2 | open | — |
 | G-090 | G7 | HIGH | api | api/api-overview.md:577 | — | G7 \| HIGH \| Idempotency is implemented on only 3 of ~10 transactional write endpoints (`POST /sales/invoices`, `POST /sales/challans/issue… | — | H2 | open | — |
@@ -169,7 +169,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-103 | G9 | HIGH | finance | finance/fixed-assets.md:898 | — | **G9 (MAJOR):** `DELETE FROM asset_disposals` destroys the audit trail. The disposal record vanishes; only the GL reversal JE remains, with … | notifications phase | H2 | open | — |
 | G-104 | G10 | HIGH | finance | finance/consolidation-intercompany.md:734 | — | #### G10 — `WarehouseTransferService::postIntercompanyGL` is DEAD CODE with fossilized bugs | — | H2 | open | — |
 | G-105 | G11 | HIGH | finance | finance/consolidation-intercompany.md:750 | app/Http/Middleware/EnforceBranchIsolation.php:165-246 | #### G11 — `EnforceBranchIsolation::inferTableFromUri` does NOT cover consolidation / warehouse-transfers / elimination-rules / companies UR… | cutover, RLS audit | H2 | resolved | `68a9672` |
-| G-106 | G12 | HIGH | finance | finance/consolidation-intercompany.md:775 | routes/web.php:1733 | #### G12 — NO BranchScope on `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `Company` models | cutover, RLS audit | H2 | open | — |
+| G-106 | G12 | HIGH | finance | finance/consolidation-intercompany.md:775 | routes/web.php:1733 | #### G12 — NO BranchScope on `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `Company` models | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-107 | G13 | HIGH | finance | finance/consolidation-intercompany.md:789 | — | #### G13 — NO Policy classes for `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `MoneyTransfer` / `WarehouseTransfer` / `Comp… | cutover, RLS audit | H2 | resolved | 1ccc5b6 |
 | G-108 | G14 | HIGH | finance | finance/consolidation-intercompany.md:801 | — | #### G14 — `BranchIntercompanyService::reverseLedgerByReference` inserts reversal rows with `journal_entry_id = null` | GL posting | H2 | open | — |
 | G-109 | G14 | HIGH | finance | finance/fixed-assets.md:174 | — | BR30 \| **DepreciationService and AssetDisposalService MUST call `JournalPostingService::reverseJournalEntry` directly** (NOT `JournalRevers… | notifications phase | H2 | open | — |
@@ -177,7 +177,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-111 | G16 | HIGH | finance | finance/consolidation-intercompany.md:835 | — | #### G16 — `ConsolidationService::calculateAggregateElimination` uses `min(debitNet, creditNet)` which may eliminate LESS than the true inte… | — | H2 | open | — |
 | G-112 | G16 | HIGH | finance | finance/fixed-assets.md:848 | — | **G16 (MAJOR):** For a fully-depreciated asset, `NBV = salvage_value`. If scrapped for ৳0, the code computes `loss = 0 − salvage = −salvage`… | notifications phase | H2 | open | — |
 | G-113 | G19 | HIGH | finance | finance/fixed-assets.md:899 | — | **G19 (MAJOR):** The force-reversed pending schedules (set during `disposeAsset`) are NOT restored. The accountant must manually re-generate… | notifications phase | H2 | open | — |
-| G-114 | G27 | HIGH | finance | finance/fixed-assets.md:172 | — | BR28 \| **The subsystem MUST be accessible only to `accountant`, `manager`, `admin` (route middleware).** Superadmin bypasses via `EnsureRol… | cutover, RLS audit | H2 | open | — |
+| G-114 | G27 | HIGH | finance | finance/fixed-assets.md:172 | — | BR28 \| **The subsystem MUST be accessible only to `accountant`, `manager`, `admin` (route middleware).** Superadmin bypasses via `EnsureRol… | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-115 | G6 | HIGH | purchasing | purchasing/purchase-receive.md:409 | — | **G6 — No over-receive guard.** A user can receive 100 units against a PO line that ordered | — | H2 | open | — |
 | G-116 | G7 | HIGH | purchasing | purchasing/purchase-order.md:280 | — | **G7 — No `ApprovalService` integration.** POs are not subject to maker-checker approval | — | H2 | open | — |
 | G-117 | G8 | HIGH | purchasing | purchasing/purchase-receive.md:411 | — | **G8 — avg_cost uses per-line gross rate, not net-of-discount.** If a GRN has header | — | H2 | open | — |
@@ -241,7 +241,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-175 | G13 | HIGH | security | security/system-policy-compliance.md:624 | — | ### G13 — NEW — INVESTIGATION mode has NO business-logic consumer (HIGH) | — | H2 | open | — |
 | G-176 | G3 | HIGH | workflows | workflows/approval-workflow.md:1110 | — | ### G3 — HIGH — ApprovalController has NO FormRequest classes | notifications phase | H2 | open | — |
 | G-177 | G4 | HIGH | workflows | workflows/notification-workflow.md:1240 | — | ### G4 — HIGH — 8 events are dead config (declared/forwarded but never fire) | — | H2 | open | — |
-| G-178 | G5 | HIGH | workflows | workflows/approval-workflow.md:1129 | — | ### G5 — HIGH — No branch.isolation on approval routes | cutover, RLS audit | H2 | open | — |
+| G-178 | G5 | HIGH | workflows | workflows/approval-workflow.md:1129 | — | ### G5 — HIGH — No branch.isolation on approval routes | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-179 | G5 | HIGH | workflows | workflows/notification-workflow.md:1263 | — | ### G5 — HIGH — NO RLS on `notifications` / `notification_rules` / `notification_rule_recipients` | cutover, RLS audit | H1 | resolved | 278a03d |
 | G-180 | G6 | HIGH | workflows | workflows/approval-workflow.md:1139 | — | ### G6 — HIGH — approval_requests.entity_id is unsignedBigInteger, NOT FK | — | H2 | open | — |
 | G-181 | G6 | HIGH | workflows | workflows/notification-workflow.md:1276 | — | ### G6 — HIGH — NO `fn_financial_audit_trigger` on `notification_rules` / `notification_rule_recipients` | audit-trail phase | H1 | open | — |
@@ -387,7 +387,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-321 | G4 | MEDIUM | finance | finance/dimensions-cost-centers.md:84 | — | **G4:** "Tag journal line with dimension" is currently NOT wired to any business module. | GL posting | H2 | open | — |
 | G-322 | G5 | HIGH | finance | finance/budgeting.md:114 | — | BR3 \| A budget MUST NOT be activated if another active budget exists for the same `(fiscal_year, branch_id)`. ⚠️ **G5 — check is buggy; all… | — | H2 | open | — |
 | G-323 | G5 | HIGH | finance | finance/fixed-assets.md:154 | — | BR20 \| **`disposal_code` MUST be generated via `LIKE` + `ORDER BY DESC` + 1** (format `DSP-YYYY-NNNNN`). ⚠️ **G5 — race-prone; should use `… | — | H2 | open | — |
-| G-324 | G7 | HIGH | finance | finance/dimensions-cost-centers.md:100 | — | **G7:** `EnforceBranchIsolation::inferTableFromUri` does NOT include `dimensions`. Cross-branch | cutover, RLS audit | H2 | open | — |
+| G-324 | G7 | HIGH | finance | finance/dimensions-cost-centers.md:100 | — | **G7:** `EnforceBranchIsolation::inferTableFromUri` does NOT include `dimensions`. Cross-branch | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-325 | G8 | LOW | finance | finance/budgeting.md:66 | — | **G8:** There is no artisan command and no scheduled job for variance reporting. The | — | H4 | open | — |
 | G-326 | G9 | HIGH | finance | finance/budgeting.md:117 | routes/web.php:1647-1662 | BR6 \| Budget activation MUST set `approved_at = now()` and `approved_by = auth()->id()`. ⚠️ **G9 — no maker-checker separation.** \| `Budge… | — | H2 | open | — |
 | G-327 | G10 | CRITICAL | finance | finance/branch-demand.md:1202 | app/Services/Sales/CustomerPaymentService.php:808-815 | #### G10 — `CustomerPaymentService::postIntercompanySettlement` dead-code below `return null;` references nonexistent `branch_ledger` column… | — | H1 | open | — |
@@ -412,14 +412,14 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-346 | G22 | LOW | finance | finance/dimensions-cost-centers.md:551 | — | `Branch` \| `app/Models/Branch.php` \| `dimension_values.branch_id` FK. **G22 — `Branch` model has no `dimensionValues()` hasMany.** \| | — | H4 | open | — |
 | G-347 | G23 | HIGH | finance | finance/branch-demand.md:1315 | database/migrations/2026_07_29_000017_create_branch_demand_audit_log_table.php:105 | #### G23 — Inconsistent GUC key between `audit_log` and `shadow_demand_comparisons` RLS | cutover, RLS audit | H1 | resolved | dd31590 |
 | G-348 | G24 | MEDIUM | finance | finance/branch-demand.md:1326 | config/branch_demand_shadow.php:88-95 | #### G24 — `config` `comparison_scope` keys `gl_postings`/`ledger`/`settlements`/`stock_movements`/`repricing` NEVER consulted | GL posting | H2 | open | — |
-| G-349 | G25 | HIGH | finance | finance/branch-demand.md:1334 | app/Http/Middleware/EnforceBranchIsolation.php:229 | #### G25 — `EnforceBranchIsolation::inferTableFromUri` does NOT cover `'branch-demand-shadow'` path | cutover, RLS audit | H2 | open | — |
-| G-350 | G25 | HIGH | finance | finance/fixed-assets.md:573 | — | **`EnforceBranchIsolation`** — `inferTableFromUri` (lines 165–246) does NOT include `fixed-assets` / `asset_depreciation` / `asset_disposal`… | cutover, RLS audit | H2 | open | — |
+| G-349 | G25 | HIGH | finance | finance/branch-demand.md:1334 | app/Http/Middleware/EnforceBranchIsolation.php:229 | #### G25 — `EnforceBranchIsolation::inferTableFromUri` does NOT cover `'branch-demand-shadow'` path | cutover, RLS audit | H2 | resolved | c4acdb0 |
+| G-350 | G25 | HIGH | finance | finance/fixed-assets.md:573 | — | **`EnforceBranchIsolation`** — `inferTableFromUri` (lines 165–246) does NOT include `fixed-assets` / `asset_depreciation` / `asset_disposal`… | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-351 | G26 | MEDIUM | finance | finance/branch-demand.md:1342 | — | #### G26 — `VerifyBranchDemandSchema` command checks only 10 things — misses 6 tables | DDL drift | H2 | open | — |
 | G-352 | G27 | LOW | finance | finance/branch-demand.md:1354 | app/Models/BranchDemandItem.php:29 | #### G27 — `BranchDemandItem` model `$timestamps = false` | — | H4 | open | — |
 | G-353 | G27 | HIGH | finance | finance/budgeting.md:77 | — | **Manager** \| Intended: approves budgets, reviews variance \| ✅ Reads work; ⚠️ **G27 — can also create/activate/cancel (no per-action role … | cutover, RLS audit | H2 | open | — |
 | G-354 | G28 | MEDIUM | finance | finance/branch-demand.md:1362 | app/Services/BranchDemand/BranchDemandService.php:626-630 | #### G28 — `BranchDemandService::rejectDemand` appends `"[Rejected: {reason}]"` to notes via text concatenation | — | H2 | open | — |
 | G-355 | G28 | MEDIUM | finance | finance/fixed-assets.md:163 | — | BR24 \| **Accumulated depreciation ledger** is read from `asset.dep_ledger_id` (REQUIRED at asset creation). No nature-based fallback. ⚠️ **… | notifications phase | H2 | open | — |
-| G-356 | G29 | HIGH | finance | finance/budgeting.md:81 | — | **G29:** `EnforceBranchIsolation::inferTableFromUri` does NOT include `budgets`. Cross-branch | cutover, RLS audit | H2 | open | — |
+| G-356 | G29 | HIGH | finance | finance/budgeting.md:81 | — | **G29:** `EnforceBranchIsolation::inferTableFromUri` does NOT include `budgets`. Cross-branch | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-357 | G29 | CRITICAL | finance | finance/branch-demand.md:1370 | app/Services/BranchDemand/BranchDemandRepricingService.php:705 | #### G29 — **CRITICAL** — `BranchDemandRepricingService::getOutOfRangeSales:705` selects nonexistent `sii.total` (should be `sii.amount`); throws SQLSTATE 42703 — crashes repricing audit at runtime. Discovered during G18 triage. Manually filed — not yet re-extracted. | repricing audit | H1 | open | — |
 
 ## Cross-reference matrix — gaps cited in multiple files
