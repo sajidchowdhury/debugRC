@@ -1685,6 +1685,16 @@ Route::middleware('auth')->group(function () {
     // ============================================================
 
     // Budgets
+    // G-353 (HIGH): per-action role differentiation. The group middleware
+    // stays `role:accountant,manager,admin` (BR27 basic requirement — the
+    // subsystem is accessible to accountant, manager, admin). The 3
+    // status-changing routes (activate / close / cancel) get a tighter
+    // `role:manager,admin` overlay: activation/closure/cancellation are
+    // management approval actions (they move a budget between lifecycle
+    // states that lock / unlock posting), not data entry. Accountants
+    // retain create/store/show/edit/update access for budget drafting +
+    // revision. Same pattern as G-114 fixed-assets (Session 6). See
+    // `finance/budgeting.md` §G27.
     Route::prefix('admin/budgets')->name('admin.budgets.')->middleware('role:accountant,manager,admin')->group(function () {
         Route::get('variance', [BudgetController::class, 'varianceReport'])->name('variance');
         Route::get('export-csv', [BudgetController::class, 'exportCsv'])->name('export-csv');
@@ -1693,9 +1703,12 @@ Route::middleware('auth')->group(function () {
         Route::get('{budget}', [BudgetController::class, 'show'])->name('show');
         Route::get('{budget}/edit', [BudgetController::class, 'edit'])->name('edit');
         Route::put('{budget}', [BudgetController::class, 'update'])->name('update');
-        Route::patch('{budget}/activate', [BudgetController::class, 'activate'])->name('activate');
-        Route::patch('{budget}/close', [BudgetController::class, 'close'])->name('close');
-        Route::patch('{budget}/cancel', [BudgetController::class, 'cancel'])->name('cancel');
+        Route::patch('{budget}/activate', [BudgetController::class, 'activate'])->name('activate')
+            ->middleware('role:manager,admin');
+        Route::patch('{budget}/close', [BudgetController::class, 'close'])->name('close')
+            ->middleware('role:manager,admin');
+        Route::patch('{budget}/cancel', [BudgetController::class, 'cancel'])->name('cancel')
+            ->middleware('role:manager,admin');
     });
     Route::get('admin/budgets', [BudgetController::class, 'index'])
         ->name('admin.budgets.index')

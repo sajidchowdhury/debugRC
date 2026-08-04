@@ -18,21 +18,21 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | Severity | Count | Blocks cutover? |
 |---|---|---|
-| CRITICAL | 76 | Yes — all of them |
-| HIGH | 96 | Most |
-| MEDIUM | 77 | Some |
+| CRITICAL | 75 | Yes — all of them |
+| HIGH | 95 | Most |
+| MEDIUM | 75 | Some |
 | LOW | 70 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **321** | |
-| _of which resolved_ | 36 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **317** | |
+| _of which resolved_ | 40 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
 | Sector | Open issues |
 |---|---|
-| api | 49 |
+| api | 47 |
 | architecture | 19 |
-| finance | 71 |
+| finance | 69 |
 | purchasing | 24 |
 | reports | 79 |
 | sales | 35 |
@@ -86,7 +86,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-020 | G6 | CRITICAL | finance | finance/branch-demand.md:1148 | database/sql/02_accounting.sql:446-455 | #### G6 — `fn_financial_audit_trigger` NOT attached to ANY `branch_demand*` table or `branch_ledger` | audit-trail phase | H1 | open | — |
 | G-021 | G7 | CRITICAL | finance | finance/branch-demand.md:1162 | app/Services/Notification/NotificationService.php:60 | #### G7 — `'branch_demand_created'` notification NOT WIRED | notifications phase | H1 | open | — |
 | G-022 | G8 | CRITICAL | finance | finance/branch-demand.md:1174 | — | #### G8 — NO RLS on 5 branch_demand-related tables | cutover, RLS audit | H1 | resolved | dd31590 |
-| G-023 | G13 | CRITICAL | finance | finance/fixed-assets.md:772 | — | **G13 (CRITICAL):** `postDepreciation` is NOT wrapped in `DB::transaction`. If the asset update fails (e.g., RLS WITH CHECK), the JE is alre… | cutover, RLS audit | H1 | open | — |
+| G-023 | G13 | CRITICAL | finance | finance/fixed-assets.md:772 | — | **G13 (CRITICAL):** `postDepreciation` is NOT wrapped in `DB::transaction`. If the asset update fails (e.g., RLS WITH CHECK), the JE is alre… | cutover, RLS audit | H1 | resolved | d617c14 |
 | G-024 | G1 | CRITICAL | purchasing | purchasing/purchase-audit.md:410 | — | **G1 — `paid_amount` column missing on `purchase_receives`.** Affects the audit of GRN | — | H1 | open | — |
 | G-025 | G1 | CRITICAL | purchasing | purchasing/purchase-receive.md:392 | — | **G1 — `purchase_receives.paid_amount` column referenced but never created.** | — | H1 | open | — |
 | G-026 | G2 | CRITICAL | purchasing | purchasing/purchase-audit.md:413 | — | **G2 — No `Purchase*Policy` classes.** Per-row audit gating is impossible. The audit team | cutover, RLS audit | H1 | resolved | 1ccc5b6 |
@@ -261,8 +261,8 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-195 | G5 | MEDIUM | api | api/api-overview.md:575 | — | G5 \| MEDIUM \| `BranchDemandApiTest` hand-rolls token issuance 16× instead of using the `IssuesApiTokens` helper that the 5 other API test … | test debt | H3 | open | — |
 | G-196 | G6 | MEDIUM | api | api/api-conventions.md:702 | — | G6 \| MEDIUM \| No sort convention. No endpoint accepts `?sort=field` or `?order=asc`. All list endpoints hard-code `orderBy('created_at', '… | — | H2 | open | — |
 | G-197 | G8 | MEDIUM | api | api/api-conventions.md:704 | — | G8 \| MEDIUM \| No ETag / conditional-GET support on read endpoints. Mobile clients re-download full lists on every poll. \| Add `ETag` + `I… | — | H2 | open | — |
-| G-198 | G8 | MEDIUM | api | api/api-modules.md:726 | — | G8 \| MEDIUM \| No API test verifies `set.api.branch` enforces RLS for the 4 protected modules. \| Add a `test_non_admin_cannot_see_other_br… | cutover, RLS audit | H1 | open | — |
-| G-199 | G8 | MEDIUM | api | api/api-overview.md:578 | — | G8 \| MEDIUM \| No API test verifies the `set.api.branch` middleware actually enforces RLS for any of the 4 RLS-protected modules. Cross-bra… | cutover, RLS audit | H1 | open | — |
+| G-198 | G8 | MEDIUM | api | api/api-modules.md:726 | — | G8 \| MEDIUM \| No API test verifies `set.api.branch` enforces RLS for the 4 protected modules. \| Add a `test_non_admin_cannot_see_other_br… | cutover, RLS audit | H1 | resolved | d617c14 |
+| G-199 | G8 | MEDIUM | api | api/api-overview.md:578 | — | G8 \| MEDIUM \| No API test verifies the `set.api.branch` middleware actually enforces RLS for any of the 4 RLS-protected modules. Cross-bra… | cutover, RLS audit | H1 | resolved | d617c14 |
 | G-200 | G9 | MEDIUM | api | api/api-conventions.md:705 | — | G9 \| MEDIUM \| No `Accept` negotiation. API always returns JSON regardless of `Accept` header. A future `v2` cannot be selected via `Accept… | — | H2 | open | — |
 | G-201 | G9 | MEDIUM | api | api/api-modules.md:727 | — | G9 \| MEDIUM \| `ApiRateLimitTest` does not verify the 30 req/min transactional write cap. \| Add a `test_write_endpoint_enforces_30_per_min… | test debt | H3 | open | — |
 | G-202 | G9 | MEDIUM | api | api/api-overview.md:579 | — | G9 \| MEDIUM \| `ApiRateLimitTest` verifies the 60-req/min branches cap and the 120-req/min dashboard cap, but NOT the 30-req/min transactio… | test debt | H3 | open | — |
@@ -416,7 +416,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-350 | G25 | HIGH | finance | finance/fixed-assets.md:573 | — | **`EnforceBranchIsolation`** — `inferTableFromUri` (lines 165–246) does NOT include `fixed-assets` / `asset_depreciation` / `asset_disposal`… | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-351 | G26 | MEDIUM | finance | finance/branch-demand.md:1342 | — | #### G26 — `VerifyBranchDemandSchema` command checks only 10 things — misses 6 tables | DDL drift | H2 | open | — |
 | G-352 | G27 | LOW | finance | finance/branch-demand.md:1354 | app/Models/BranchDemandItem.php:29 | #### G27 — `BranchDemandItem` model `$timestamps = false` | — | H4 | open | — |
-| G-353 | G27 | HIGH | finance | finance/budgeting.md:77 | — | **Manager** \| Intended: approves budgets, reviews variance \| ✅ Reads work; ⚠️ **G27 — can also create/activate/cancel (no per-action role … | cutover, RLS audit | H2 | open | — |
+| G-353 | G27 | HIGH | finance | finance/budgeting.md:77 | — | **Manager** \| Intended: approves budgets, reviews variance \| ✅ Reads work; ⚠️ **G27 — can also create/activate/cancel (no per-action role … | cutover, RLS audit | H2 | resolved | d617c14 |
 | G-354 | G28 | MEDIUM | finance | finance/branch-demand.md:1362 | app/Services/BranchDemand/BranchDemandService.php:626-630 | #### G28 — `BranchDemandService::rejectDemand` appends `"[Rejected: {reason}]"` to notes via text concatenation | — | H2 | open | — |
 | G-355 | G28 | MEDIUM | finance | finance/fixed-assets.md:163 | — | BR24 \| **Accumulated depreciation ledger** is read from `asset.dep_ledger_id` (REQUIRED at asset creation). No nature-based fallback. ⚠️ **… | notifications phase | H2 | open | — |
 | G-356 | G29 | HIGH | finance | finance/budgeting.md:81 | — | **G29:** `EnforceBranchIsolation::inferTableFromUri` does NOT include `budgets`. Cross-branch | cutover, RLS audit | H2 | resolved | c4acdb0 |

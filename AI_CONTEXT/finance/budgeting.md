@@ -78,6 +78,8 @@ Three management-accounting drivers:
 | **Accountant** | Intended primary user: creates budgets, runs variance | ✅ Reads work (RLS allows `branch_id IS NULL OR branch_id = session`); ⚠️ **G27 — can activate/cancel (should arguably be manager+)** |
 | **API consumer** | — | ❌ No REST API exists |
 
+> ✅ RESOLVED in commit d617c14 (G-353) — Added `->middleware('role:manager,admin')` overlay to the 3 status-changing routes in the `admin/budgets` route group (`routes/web.php:1706-1711`): `activate`, `close`, `cancel`. The group middleware stays `role:accountant,manager,admin` (BR27 basic requirement — the budgeting subsystem is accessible to accountant, manager, admin). Activation/closure/cancellation are management approval actions (they move a budget between lifecycle states that lock/unlock posting), not data entry. Accountants retain create/store/show/edit/update access for budget drafting + revision. Laravel merges middleware — the prefix `role:accountant,manager,admin` runs first, then the route-level `role:manager,admin` runs: an accountant passes the first but fails the second (403); a manager/admin passes both (allowed). Same defense-in-depth pattern as G-114 fixed-assets disposal + depreciation routes (Session 6, commit ece0a1a). Sub-problem E (Session 7, Security/RLS cluster — FINAL session).
+
 > **G29:** `EnforceBranchIsolation::inferTableFromUri` does NOT include `budgets`. Cross-branch
 > URL access (e.g. `/admin/budgets/{id}/edit` for another branch's budget) is NOT request-level
 > guarded. RLS is the only backstop (and it has no `WITH CHECK` — G8).

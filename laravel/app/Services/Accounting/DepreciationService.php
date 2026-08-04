@@ -254,6 +254,12 @@ class DepreciationService
      *   Dr Depreciation Expense   (dep_expense_ledger_id)
      *   Cr Accumulated Depreciation (dep_ledger_id)
      *
+     * The entire method body is wrapped in a single DB::transaction so that
+     * if any step fails (e.g., the asset UPDATE is blocked by an RLS WITH
+     * CHECK policy, or the schedule UPDATE throws), the JE creation + the
+     * schedule status update are rolled back together. This preserves GL ↔
+     * sub-ledger consistency (closes G13 / G-023).
+     *
      * @param AssetDepreciationSchedule $schedule
      * @param int|null $userId
      * @return int The journal_entry_id
@@ -261,97 +267,99 @@ class DepreciationService
      */
     public function postDepreciation(AssetDepreciationSchedule $schedule, ?int $userId = null): int
     {
-        if (!$schedule->isPending()) {
-            throw new \RuntimeException("Schedule #{$schedule->id} is not pending (status: {$schedule->status}).");
-        }
+        return DB::transaction(function () use ($schedule, $userId) {
+            if (!$schedule->isPending()) {
+                throw new \RuntimeException("Schedule #{$schedule->id} is not pending (status: {$schedule->status}).");
+            }
 
-        $asset = $schedule->fixedAsset;
-        if (!$asset) {
-            throw new \RuntimeException("Asset not found for schedule #{$schedule->id}.");
-        }
+            $asset = $schedule->fixedAsset;
+            if (!$asset) {
+                throw new \RuntimeException("Asset not found for schedule #{$schedule->id}.");
+            }
 
-        // Resolve the depreciation expense ledger
-        $depExpenseLedgerId = $asset->dep_expense_ledger_id
-            ?? $this->natureService->resolveLedgerByNature('depreciation_expense');
+            // Resolve the depreciation expense ledger
+            $depExpenseLedgerId = $asset->dep_expense_ledger_id
+                ?? $this->natureService->resolveLedgerByNature('depreciation_expense');
 
-        if (!$depExpenseLedgerId) {
-            throw new \RuntimeException("No depreciation expense ledger found. Please configure L-0903 or assign a dep_expense_ledger_id to asset {$asset->asset_code}.");
-        }
+            if (!$depExpenseLedgerId) {
+                throw new \RuntimeException("No depreciation expense ledger found. Please configure L-0903 or assign a dep_expense_ledger_id to asset {$asset->asset_code}.");
+            }
 
-        $depLedgerId = $asset->dep_ledger_id;
-        if (!$depLedgerId) {
-            throw new \RuntimeException("No accumulated depreciation ledger found for asset {$asset->asset_code}.");
-        }
+            $depLedgerId = $asset->dep_ledger_id;
+            if (!$depLedgerId) {
+                throw new \RuntimeException("No accumulated depreciation ledger found for asset {$asset->asset_code}.");
+            }
 
-        $depreciationAmount = (float) $schedule->depreciation_amount;
+            $depreciationAmount = (float) $schedule->depreciation_amount;
 
-        if ($depreciationAmount <= 0) {
-            throw new \RuntimeException("Depreciation amount is zero for schedule #{$schedule->id}.");
-        }
+            if ($depreciationAmount <= 0) {
+                throw new \RuntimeException("Depreciation amount is zero for schedule #{$schedule->id}.");
+            }
 
-        $userId = $userId ?? Auth::id();
+            $userId = $userId ?? Auth::id();
 
-        // Create the journal entry
-        $journalEntryId = $this->journalService->createJournalEntry(
-            [
-                'entry_date' => $schedule->depreciation_date->format('Y-m-d'),
-                'reference_type' => 'fixed_asset_depreciation',
-                'reference_id' => $asset->id,
-                'branch_id' => $asset->branch_id,
-                'description' => "Depreciation for {$asset->asset_code} - {$asset->description} ({$schedule->period_from} to {$schedule->period_to})",
-                'source' => 'fixed_asset_depreciation',
-                'created_by' => $userId,
-            ],
-            [
+            // Create the journal entry
+            $journalEntryId = $this->journalService->createJournalEntry(
                 [
-                    'ledger_id' => $depExpenseLedgerId,
-                    'debit' => $depreciationAmount,
-                    'credit' => 0,
-                    'memo' => "Depreciation expense - {$asset->asset_code}",
+                    'entry_date' => $schedule->depreciation_date->format('Y-m-d'),
+                    'reference_type' => 'fixed_asset_depreciation',
+                    'reference_id' => $asset->id,
+                    'branch_id' => $asset->branch_id,
+                    'description' => "Depreciation for {$asset->asset_code} - {$asset->description} ({$schedule->period_from} to {$schedule->period_to})",
+                    'source' => 'fixed_asset_depreciation',
+                    'created_by' => $userId,
                 ],
                 [
-                    'ledger_id' => $depLedgerId,
-                    'debit' => 0,
-                    'credit' => $depreciationAmount,
-                    'memo' => "Accumulated depreciation - {$asset->asset_code}",
-                ],
-            ]
-        );
+                    [
+                        'ledger_id' => $depExpenseLedgerId,
+                        'debit' => $depreciationAmount,
+                        'credit' => 0,
+                        'memo' => "Depreciation expense - {$asset->asset_code}",
+                    ],
+                    [
+                        'ledger_id' => $depLedgerId,
+                        'debit' => 0,
+                        'credit' => $depreciationAmount,
+                        'memo' => "Accumulated depreciation - {$asset->asset_code}",
+                    ],
+                ]
+            );
 
-        // Update the schedule
-        $schedule->update([
-            'journal_entry_id' => $journalEntryId,
-            'status' => 'posted',
-            'posted_by' => $userId,
-            'posted_at' => now(),
-        ]);
-
-        // Update the asset's accumulated depreciation and book value
-        $newAccumulatedDep = (float) $asset->accumulated_depreciation + $depreciationAmount;
-        $newBookValue = (float) $asset->acquisition_cost - $newAccumulatedDep;
-
-        // Check if fully depreciated
-        $newStatus = $asset->status;
-        if ($newBookValue <= (float) $asset->salvage_value + 0.01) {
-            $newBookValue = (float) $asset->salvage_value;
-            $newStatus = 'fully_depreciated';
-        }
-
-        $asset->update([
-            'accumulated_depreciation' => $newAccumulatedDep,
-            'net_book_value' => $newBookValue,
-            'last_depreciation_date' => $schedule->depreciation_date,
-            'status' => $newStatus,
-        ]);
-
-        // Update units produced for units_of_production method
-        if ($asset->depreciation_method === 'units_of_production' && $schedule->units_produced > 0) {
-            $asset->update([
-                'units_produced_to_date' => (float) $asset->units_produced_to_date + (float) $schedule->units_produced,
+            // Update the schedule
+            $schedule->update([
+                'journal_entry_id' => $journalEntryId,
+                'status' => 'posted',
+                'posted_by' => $userId,
+                'posted_at' => now(),
             ]);
-        }
 
-        return $journalEntryId;
+            // Update the asset's accumulated depreciation and book value
+            $newAccumulatedDep = (float) $asset->accumulated_depreciation + $depreciationAmount;
+            $newBookValue = (float) $asset->acquisition_cost - $newAccumulatedDep;
+
+            // Check if fully depreciated
+            $newStatus = $asset->status;
+            if ($newBookValue <= (float) $asset->salvage_value + 0.01) {
+                $newBookValue = (float) $asset->salvage_value;
+                $newStatus = 'fully_depreciated';
+            }
+
+            $asset->update([
+                'accumulated_depreciation' => $newAccumulatedDep,
+                'net_book_value' => $newBookValue,
+                'last_depreciation_date' => $schedule->depreciation_date,
+                'status' => $newStatus,
+            ]);
+
+            // Update units produced for units_of_production method
+            if ($asset->depreciation_method === 'units_of_production' && $schedule->units_produced > 0) {
+                $asset->update([
+                    'units_produced_to_date' => (float) $asset->units_produced_to_date + (float) $schedule->units_produced,
+                ]);
+            }
+
+            return $journalEntryId;
+        });
     }
 
     /**
