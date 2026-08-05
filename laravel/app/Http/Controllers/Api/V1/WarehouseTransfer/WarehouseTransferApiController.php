@@ -13,6 +13,7 @@ use App\Services\Stock\WarehouseTransferService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -125,6 +126,21 @@ class WarehouseTransferApiController extends Controller
 
         $validated = $request->validated();
 
+        // Idempotency replay check (PURCHASING-API-3, G-088/G-089/G-090).
+        // Only engages when the client sends an `idempotency_token`; a
+        // retry within 5 min returns the cached result instead of
+        // creating a duplicate draft transfer. See api-conventions.md §11.1.
+        $idempotencyToken = $validated['idempotency_token'] ?? null;
+        if ($idempotencyToken !== null) {
+            $cacheKey = 'api:warehouse_transfer:' . $idempotencyToken;
+            $cached = Cache::get($cacheKey);
+            if ($cached !== null) {
+                return response()->json(array_merge($cached, [
+                    'idempotent_replay' => true,
+                ]));
+            }
+        }
+
         // Phase 1: Controller-level same-branch guard (defense-in-depth)
         $fromWarehouse = Warehouse::findOrFail($validated['from_warehouse_id']);
         $toWarehouse = Warehouse::findOrFail($validated['to_warehouse_id']);
@@ -156,10 +172,17 @@ class WarehouseTransferApiController extends Controller
 
             $transfer->load(['fromWarehouse', 'toWarehouse', 'fromBranch', 'toBranch', 'items.product', 'createdBy']);
 
-            return response()->json([
+            $result = [
                 'data'    => new WarehouseTransferResource($transfer),
                 'message' => "Draft transfer {$transfer->transfer_code} created. Review and confirm to apply.",
-            ], 201);
+            ];
+
+            // Cache the result for 5 minutes (idempotency window).
+            if ($idempotencyToken !== null) {
+                Cache::put('api:warehouse_transfer:' . $idempotencyToken, $result, now()->addMinutes(5));
+            }
+
+            return response()->json($result, 201);
         } catch (\Throwable $e) {
             return response()->json([
                 'message' => 'Failed to create transfer.',

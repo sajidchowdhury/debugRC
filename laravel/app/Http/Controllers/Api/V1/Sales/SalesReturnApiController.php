@@ -11,6 +11,7 @@ use App\Services\Sales\SalesAccess;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Sales Return API Controller — Mobile write endpoints.
@@ -89,13 +90,36 @@ class SalesReturnApiController extends Controller
      * Create a sales return (status=created, no stock/GL).
      *
      * POST /api/v1/sales/returns
+     *
+     * Idempotency (PURCHASING-API-3, G-088/G-089/G-090): if the client
+     * sends an `idempotency_token`, a retry within 5 min returns the
+     * cached result instead of creating a duplicate return + reversal
+     * journal. The token is optional (`sometimes`) so already-deployed
+     * mobile clients that omit it are not broken; new clients SHOULD
+     * always send it. See api-conventions.md §11.1.
      */
     public function store(StoreReturnRequest $request): JsonResponse
     {
         $validated = $request->validated();
 
+        // Idempotency replay check (only when token is present).
+        $idempotencyToken = $validated['idempotency_token'] ?? null;
+        if ($idempotencyToken !== null) {
+            $cacheKey = 'api:sales_return:' . $idempotencyToken;
+            $cached = Cache::get($cacheKey);
+            if ($cached !== null) {
+                return response()->json(array_merge($cached, [
+                    'idempotent_replay' => true,
+                ]));
+            }
+        }
+
         $invoice = \App\Models\SalesInvoice::findOrFail($validated['sales_invoice_id']);
         $this->salesAccess->assertBranchAccessible($invoice->branch_id);
+
+        // Strip the idempotency_token before handing off to the service
+        // (the service array-merges this into the model attributes).
+        unset($validated['idempotency_token']);
 
         try {
             $return = $this->returnService->createReturn(array_merge($validated, [
@@ -103,12 +127,19 @@ class SalesReturnApiController extends Controller
                 'created_by' => Auth::id(),
             ]));
 
-            return response()->json([
+            $result = [
                 'message' => 'Sales return created successfully',
                 'data'    => new SalesReturnResource(
                     $return->load(['customer', 'items'])
                 ),
-            ], 201);
+            ];
+
+            // Cache the result for 5 minutes (idempotency window).
+            if ($idempotencyToken !== null) {
+                Cache::put('api:sales_return:' . $idempotencyToken, $result, now()->addMinutes(5));
+            }
+
+            return response()->json($result, 201);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 409);
         }

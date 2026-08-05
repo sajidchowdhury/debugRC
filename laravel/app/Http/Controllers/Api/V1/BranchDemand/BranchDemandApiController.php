@@ -17,6 +17,7 @@ use App\Services\Stock\StockService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -258,6 +259,22 @@ class BranchDemandApiController extends Controller
     {
         $validated = $request->validated();
 
+        // Idempotency replay check (PURCHASING-API-3, G-088/G-089/G-090).
+        // Only engages when the client sends an `idempotency_token`; a
+        // retry within 5 min returns the cached result instead of
+        // creating a duplicate demand + intercompany journals. See
+        // api-conventions.md §11.1.
+        $idempotencyToken = $validated['idempotency_token'] ?? null;
+        if ($idempotencyToken !== null) {
+            $cacheKey = 'api:branch_demand:' . $idempotencyToken;
+            $cached = Cache::get($cacheKey);
+            if ($cached !== null) {
+                return response()->json(array_merge($cached, [
+                    'idempotent_replay' => true,
+                ]));
+            }
+        }
+
         // Ensure the to_branch_id is not the same as the user's branch
         $branchId = $this->currentBranchId();
         if ((int) $validated['to_branch_id'] === $branchId) {
@@ -270,6 +287,9 @@ class BranchDemandApiController extends Controller
         try {
             $items = $validated['items'];
             unset($validated['items']);
+            // Strip the idempotency_token before handing off to the service
+            // (the service array-merges this into the model attributes).
+            unset($validated['idempotency_token']);
 
             $validated['from_branch_id'] = $branchId;
             $validated['created_by'] = Auth::id();
@@ -277,10 +297,17 @@ class BranchDemandApiController extends Controller
             $demand = $this->demandService->createDemand($validated, $items);
             $demand->load(['fromBranch', 'toBranch', 'items.product', 'createdBy']);
 
-            return response()->json([
+            $result = [
                 'data'    => new BranchDemandResource($demand),
                 'message' => "Demand {$demand->demand_code} created successfully.",
-            ], 201);
+            ];
+
+            // Cache the result for 5 minutes (idempotency window).
+            if ($idempotencyToken !== null) {
+                Cache::put('api:branch_demand:' . $idempotencyToken, $result, now()->addMinutes(5));
+            }
+
+            return response()->json($result, 201);
         } catch (\InvalidArgumentException $e) {
             return response()->json([
                 'message' => $e->getMessage(),

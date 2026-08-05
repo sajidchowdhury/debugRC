@@ -11,6 +11,14 @@ use Illuminate\Foundation\Http\FormRequest;
  * comes back IN at ORIGINAL avg_cost (not current avg_cost) and COGS
  * is reversed exactly. This is the correctness-critical rule per
  * avg_cost_rule.md §3.
+ *
+ * Idempotency (G-088/G-089/G-090, PURCHASING-API-3): the client SHOULD
+ * send an `idempotency_token` (UUID). If present, a retry within 5 min
+ * returns the cached result instead of creating a duplicate return +
+ * reversal journal. The field is `sometimes` (not `required`) so
+ * already-deployed mobile clients that don't send the token are not
+ * broken; new clients are expected to send it. See api-conventions.md
+ * §11.1 for the canonical pattern.
  */
 class StoreReturnRequest extends FormRequest
 {
@@ -32,6 +40,7 @@ class StoreReturnRequest extends FormRequest
             'items.*.rate'              => 'required|numeric|min:0',
             'items.*.warehouse_id'      => 'required|integer|exists:warehouses,id',
             'items.*.damage_invoice_id' => 'nullable|integer|exists:damage_invoices,id',
+            'idempotency_token'         => 'sometimes|string|uuid',
         ];
     }
 
@@ -46,6 +55,7 @@ class StoreReturnRequest extends FormRequest
                     ['product_id' => 10, 'qty' => 2, 'rate' => 120.50, 'warehouse_id' => 2],
                 ],
             ],
+            'idempotency_token' => ['description' => 'Client-generated UUID; if present, retries within 5 min return the cached result (PURCHASING-API-3)', 'example' => '550e8400-e29b-41d4-a716-446655440000'],
         ];
     }
 }

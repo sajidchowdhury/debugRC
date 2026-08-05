@@ -11,6 +11,7 @@ use App\Services\Stock\StockAdjustmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -195,6 +196,21 @@ class StockAdjustmentApiController extends Controller
     {
         $validated = $request->validated();
 
+        // Idempotency replay check (PURCHASING-API-3, G-088/G-089/G-090).
+        // Only engages when the client sends an `idempotency_token`; a
+        // retry within 5 min returns the cached result instead of
+        // creating a duplicate draft adjustment. See api-conventions.md §11.1.
+        $idempotencyToken = $validated['idempotency_token'] ?? null;
+        if ($idempotencyToken !== null) {
+            $cacheKey = 'api:stock_adjustment:' . $idempotencyToken;
+            $cached = Cache::get($cacheKey);
+            if ($cached !== null) {
+                return response()->json(array_merge($cached, [
+                    'idempotent_replay' => true,
+                ]));
+            }
+        }
+
         // Phase 1: defense-in-depth — role check for creating a draft.
         // The route-level api.auth gate already ensured the caller has
         // an allowed role (admin/manager/accountant); this re-checks via
@@ -221,10 +237,17 @@ class StockAdjustmentApiController extends Controller
                 'warehouse.branch', 'branch', 'createdBy',
             ]);
 
-            return response()->json([
+            $result = [
                 'data'    => new StockAdjustmentResource($adjustment),
                 'message' => "Draft adjustment {$adjustment->adjustment_code} created. Submit for approval or confirm directly (if below the auto-approve threshold).",
-            ], 201);
+            ];
+
+            // Cache the result for 5 minutes (idempotency window).
+            if ($idempotencyToken !== null) {
+                Cache::put('api:stock_adjustment:' . $idempotencyToken, $result, now()->addMinutes(5));
+            }
+
+            return response()->json($result, 201);
         } catch (\Throwable $e) {
             Log::warning('StockAdjustment API store failed', [
                 'user_id' => $user?->id,

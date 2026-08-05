@@ -17,6 +17,13 @@ use Illuminate\Foundation\Http\FormRequest;
  *
  * The controller retains the same-branch defense-in-depth check AFTER
  * validation passes; this FormRequest only owns the input contract.
+ *
+ * Idempotency (G-088/G-089/G-090, PURCHASING-API-3): the client SHOULD
+ * send an `idempotency_token` (UUID). If present, a retry within 5 min
+ * returns the cached result instead of creating a duplicate draft
+ * transfer. The field is `sometimes` (not `required`) for
+ * backward-compat with deployed mobile clients. See api-conventions.md
+ * §11.1 for the canonical pattern.
  */
 class StoreWarehouseTransferRequest extends FormRequest
 {
@@ -49,6 +56,7 @@ class StoreWarehouseTransferRequest extends FormRequest
                 new WarehouseTransferItemHasAvailableStock($fromWarehouseId),
             ],
             'items.*.rate' => 'nullable|numeric|min:0',
+            'idempotency_token' => 'sometimes|string|uuid',
         ];
     }
 
@@ -60,6 +68,7 @@ class StoreWarehouseTransferRequest extends FormRequest
             'transfer_date'     => ['description' => 'Transfer date (Y-m-d)', 'example' => '2025-01-21'],
             'notes'             => ['description' => 'Optional note', 'example' => 'Restocking electronics'],
             'items'             => ['description' => 'Line items to transfer (min 1)', 'example' => [['product_id' => 10, 'qty' => 5, 'rate' => 100.00]]],
+            'idempotency_token' => ['description' => 'Client-generated UUID; if present, retries within 5 min return the cached result (PURCHASING-API-3)', 'example' => '550e8400-e29b-41d4-a716-446655440000'],
         ];
     }
 }

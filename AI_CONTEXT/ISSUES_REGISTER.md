@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-05 (post-PURCHASING-API-2: G-116/G-123/G-124 resolved in `1cfa5d8`; G-115/G-119 doc-synced to `dab0a4c`; prior: post-PURCHASING-API-1: G-117/G-118/G-120/G-121/G-122 resolved in `efecc66`)
+Last reviewed: 2026-09-05 (post-PURCHASING-API-3: G-088/G-089/G-090 resolved — idempotency retrofitted on 4 High-risk endpoints `/sales/returns`, `/stock-adjustments`, `/warehouse-transfers`, `/branch-demands`; G-082 doc-synced to `51c2386`; prior: post-PURCHASING-API-2: G-116/G-123/G-124 resolved in `1cfa5d8`; G-115/G-119 doc-synced to `dab0a4c`; prior: post-PURCHASING-API-1: G-117/G-118/G-120/G-121/G-122 resolved in `efecc66`)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -19,18 +19,18 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | Severity | Count | Blocks cutover? |
 |---|---|---|
 | CRITICAL | 2 | Yes — all of them |
-| HIGH | 61 | Most |
+| HIGH | 57 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **199** | |
-| _of which resolved_ | 158 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **195** | |
+| _of which resolved_ | 162 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
 | Sector | Open issues |
 |---|---|
-| api | 29 |
+| api | 25 |
 | architecture | 17 |
 | finance | 28 |
 | purchasing | 1 |
@@ -145,15 +145,15 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-079 | G3 | CRITICAL | workflows | workflows/notification-workflow.md:1222 | — | ### G3 — CRITICAL — WORKER-FORWARDED EVENTS HAVE NO `$context` | notifications phase | H1 | resolved | `053609b` |
 | G-080 | G4 | CRITICAL | workflows | workflows/approval-workflow.md:1117 | — | ### G4 — CRITICAL — Notification dispatch is DEAD CODE | notifications phase | H1 | resolved | `d84a5a8` |
 | G-081 | G7 | CRITICAL | workflows | workflows/approval-workflow.md:9 | — | G7 DDL stale) mean the approval subsystem is only partially production-ready.) | DDL drift | H1 | resolved | `d84a5a8` |
-| G-082 | G2 | HIGH | api | api/api-conventions.md:698 | — | G2 \| HIGH \| 3 of 15 controllers hand-roll the response array instead of using a `JsonResource` (Branch, Dashboard, Lookup, Commission). Br… | — | H2 | open | — |
+| G-082 | G2 | HIGH | api | api/api-conventions.md:698 | — | G2 \| HIGH \| 3 of 15 controllers hand-roll the response array instead of using a `JsonResource` (Branch, Dashboard, Lookup, Commission). Br… | — | H2 | resolved | `51c2386` |
 | G-083 | G3 | HIGH | api | api/api-overview.md:573 | — | G3 \| HIGH \| ZERO tests for 8 of 14 modules: Sales Cart, Sales Invoices, Sales Challans, Sales Returns, Customer Payments, Commission, Ware… | test debt | H2 | open | — |
 | G-084 | G4 | HIGH | api | api/api-conventions.md:700 | — | G4 \| HIGH \| `CommissionApiController::listRules` does NOT clamp `per_page` to 100. OOM risk. \| Add `min((int) $request->input('per_page',… | — | H2 | resolved | 1a36086 |
 | G-085 | G4 | HIGH | api | api/api-modules.md:722 | — | G4 \| HIGH \| `CommissionApiController::listRules` does not clamp `per_page` (OOM risk). \| Add `min((int) ..., 100)`. \| | — | H2 | resolved | 1a36086 |
 | G-086 | G6 | HIGH | api | api/api-modules.md:724 | — | G6 \| HIGH \| Role-gate inconsistency: Sales Cart/Invoices/Returns/Payments write endpoints have NO route-level `api.auth:role` gate. \| Add… | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-087 | G6 | HIGH | api | api/api-overview.md:576 | — | G6 \| HIGH \| Role-gate inconsistency: write endpoints on Sales Cart/Invoices/Returns/Payments rely ONLY on the controller's `SalesAccess::a… | cutover, RLS audit | H2 | resolved | c4acdb0 |
-| G-088 | G7 | HIGH | api | api/api-conventions.md:703 | — | G7 \| HIGH \| Idempotency implemented on only 3 of ~14 transactional write endpoints. See §11.3. \| Add `idempotency_token` to the 6 endpoin… | — | H2 | open | — |
-| G-089 | G7 | HIGH | api | api/api-modules.md:725 | — | G7 \| HIGH \| Idempotency implemented on only 3 of ~14 transactional write endpoints. See `api-conventions.md` §11.3. \| Add `idempotency_to… | API Phase 17 | H2 | open | — |
-| G-090 | G7 | HIGH | api | api/api-overview.md:577 | — | G7 \| HIGH \| Idempotency is implemented on only 3 of ~10 transactional write endpoints (`POST /sales/invoices`, `POST /sales/challans/issue… | — | H2 | open | — |
+| G-088 | G7 | HIGH | api | api/api-conventions.md:703 | — | G7 \| HIGH \| Idempotency implemented on only 3 of ~14 transactional write endpoints. See §11.3. \| Add `idempotency_token` to the 6 endpoin… | — | H2 | resolved | PURCHASING-API-3 |
+| G-089 | G7 | HIGH | api | api/api-modules.md:725 | — | G7 \| HIGH \| Idempotency implemented on only 3 of ~14 transactional write endpoints. See `api-conventions.md` §11.3. \| Add `idempotency_to… | API Phase 17 | H2 | resolved | PURCHASING-API-3 |
+| G-090 | G7 | HIGH | api | api/api-overview.md:577 | — | G7 \| HIGH \| Idempotency is implemented on only 3 of ~10 transactional write endpoints (`POST /sales/invoices`, `POST /sales/challans/issue… | — | H2 | resolved | PURCHASING-API-3 |
 | G-091 | G3 | HIGH | architecture | architecture/realtime-events.md:975 | — | ### G3 — HIGH — DDL stale (recurring cross-phase gap) | DDL drift | H2 | open | — |
 | G-092 | G4 | HIGH | architecture | architecture/realtime-events.md:987 | — | ### G4 — HIGH — Worker not scheduled by Laravel cron; no in-repo supervisor/systemd config | notifications phase | H2 | open | — |
 | G-093 | G5 | HIGH | architecture | architecture/realtime-events.md:995 | — | ### G5 — HIGH — No RLS on `notifications`, `notification_rules`, `notification_rule_recipients` | cutover, RLS audit | H1 | resolved | 278a03d |

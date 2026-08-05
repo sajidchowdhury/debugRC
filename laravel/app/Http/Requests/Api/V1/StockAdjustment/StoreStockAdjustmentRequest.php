@@ -14,6 +14,13 @@ use Illuminate\Foundation\Http\FormRequest;
  *
  * The controller retains the Policy::canSubmit() role check AFTER validation;
  * this FormRequest only owns the input contract.
+ *
+ * Idempotency (G-088/G-089/G-090, PURCHASING-API-3): the client SHOULD
+ * send an `idempotency_token` (UUID). If present, a retry within 5 min
+ * returns the cached result instead of creating a duplicate draft
+ * adjustment. The field is `sometimes` (not `required`) for
+ * backward-compat with deployed mobile clients. See api-conventions.md
+ * §11.1 for the canonical pattern.
  */
 class StoreStockAdjustmentRequest extends FormRequest
 {
@@ -36,6 +43,7 @@ class StoreStockAdjustmentRequest extends FormRequest
             'items.*.uom_id'      => 'nullable|integer|exists:units_of_measure,id',
             'items.*.rate'        => 'nullable|numeric|min:0',
             'items.*.reason'      => 'nullable|string|max:500',
+            'idempotency_token'   => 'sometimes|string|uuid',
         ];
     }
 
@@ -48,6 +56,7 @@ class StoreStockAdjustmentRequest extends FormRequest
             'adjustment_date'     => ['description' => 'Adjustment date (Y-m-d)', 'example' => '2025-01-21'],
             'reason'              => ['description' => 'Optional note', 'example' => 'Initial stock setup'],
             'items'               => ['description' => 'Line items (min 1)', 'example' => [['product_id' => 10, 'qty' => 5]]],
+            'idempotency_token'   => ['description' => 'Client-generated UUID; if present, retries within 5 min return the cached result (PURCHASING-API-3)', 'example' => '550e8400-e29b-41d4-a716-446655440000'],
         ];
     }
 }
