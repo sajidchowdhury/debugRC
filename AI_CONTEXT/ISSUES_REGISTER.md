@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-01
+Last reviewed: 2026-09-04 (post-REPORTS-2: G-046/G-048/G-050 resolved in `1665ae5`)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -18,13 +18,13 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | Severity | Count | Blocks cutover? |
 |---|---|---|
-| CRITICAL | 62 | Yes — all of them |
-| HIGH | 93 | Most |
+| CRITICAL | 11 | Yes — all of them |
+| HIGH | 94 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **292** | |
-| _of which resolved_ | 65 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **241** | |
+| _of which resolved_ | 116 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -32,10 +32,10 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 |---|---|
 | api | 29 |
 | architecture | 19 |
-| finance | 69 |
-| purchasing | 24 |
-| reports | 80 |
-| sales | 27 |
+| finance | 51 |
+| purchasing | 11 |
+| reports | 71 |
+| sales | 15 |
 | security | 14 |
 | workflows | 31 |
 
