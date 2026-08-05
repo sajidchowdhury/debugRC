@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-05 (post-SALES-AUDIT-1: resolved 4 sales HIGH gaps — G-158 config/commission.php created with 5 env-overridable knobs; G-165 FK on sales_invoices.salesman_id → employees(id) (migration 2026_09_05_000005); G-169 CommissionApiController 3 remaining inline validate() extracted to FormRequests (SalesmanSummaryRequest / BranchSummaryRequest / ConfirmCommissionPeriodRequest); G-170 sales_returns.confirmed_at + confirmed_by columns added (migration 2026_09_05_000006) + wired into SalesReturnService::confirmReturn + SalesReturn model + Admin/SalesReturnController::printSlip; prior: post-PURCHASING-API-4: G-088/G-089/G-090 Medium-risk follow-up — idempotency retrofitted on `/sales/challans/godown`, `/branch-demands/{id}/send`, `/branch-demands/{id}/reprice`, `/stock-take/sessions`; G7 now FULLY resolved (11 of ~14 transactional write endpoints idempotent; only Low-risk intentionally skipped); prior: post-PURCHASING-API-3: G-088/G-089/G-090 High-risk resolved — idempotency retrofitted on 4 High-risk endpoints `/sales/returns`, `/stock-adjustments`, `/warehouse-transfers`, `/branch-demands`; G-082 doc-synced to `51c2386`; prior: post-PURCHASING-API-2: G-116/G-123/G-124 resolved in `1cfa5d8`; G-115/G-119 doc-synced to `dab0a4c`; prior: post-PURCHASING-API-1: G-117/G-118/G-120/G-121/G-122 resolved in `efecc66`)
+Last reviewed: 2026-09-05 (post-WORKFLOWS-AUDIT-1: resolved 6 workflows HIGH gaps — G-176 ApprovalController 4 FormRequests (Approve/Reject/UpdateWorkflow/QueueIndex); G-180 approval_requests.entity_id polymorphic design documented + 5 partial indexes + cleanup_orphan_approval_requests() SQL function; G-181 fn_financial_audit_trigger attached to notification_rules + notification_rule_recipients; G-183 approval_workflows.branch_id string→integer + FK to branches(id); G-186 Approval Queue + Workflows sidebar menus added; G-187 fn_financial_audit_trigger attached to 4 approval engine tables; prior: post-SALES-AUDIT-1: resolved 4 sales HIGH gaps — G-158 config/commission.php created with 5 env-overridable knobs; G-165 FK on sales_invoices.salesman_id → employees(id) (migration 2026_09_05_000005); G-169 CommissionApiController 3 remaining inline validate() extracted to FormRequests (SalesmanSummaryRequest / BranchSummaryRequest / ConfirmCommissionPeriodRequest); G-170 sales_returns.confirmed_at + confirmed_by columns added (migration 2026_09_05_000006) + wired into SalesReturnService::confirmReturn + SalesReturn model + Admin/SalesReturnController::printSlip; prior: post-PURCHASING-API-4: G-088/G-089/G-090 Medium-risk follow-up — idempotency retrofitted on `/sales/challans/godown`, `/branch-demands/{id}/send`, `/branch-demands/{id}/reprice`, `/stock-take/sessions`; G7 now FULLY resolved (11 of ~14 transactional write endpoints idempotent; only Low-risk intentionally skipped); prior: post-PURCHASING-API-3: G-088/G-089/G-090 High-risk resolved — idempotency retrofitted on 4 High-risk endpoints `/sales/returns`, `/stock-adjustments`, `/warehouse-transfers`, `/branch-demands`; G-082 doc-synced to `51c2386`; prior: post-PURCHASING-API-2: G-116/G-123/G-124 resolved in `1cfa5d8`; G-115/G-119 doc-synced to `dab0a4c`; prior: post-PURCHASING-API-1: G-117/G-118/G-120/G-121/G-122 resolved in `efecc66`)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -19,12 +19,12 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | Severity | Count | Blocks cutover? |
 |---|---|---|
 | CRITICAL | 2 | Yes — all of them |
-| HIGH | 53 | Most |
+| HIGH | 47 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **191** | |
-| _of which resolved_ | 166 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **185** | |
+| _of which resolved_ | 172 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -37,7 +37,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | reports | 71 |
 | sales | 11 |
 | security | 14 |
-| workflows | 24 |
+| workflows | 18 |
 
 ## How to use this register
 
@@ -239,18 +239,18 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-173 | G3 | HIGH | security | security/system-policy-compliance.md:549 | routes/web.php:1601-1605 | ### G3 — Route group lacks `role:superadmin` middleware (MAJOR) | cutover, RLS audit | H2 | resolved | `b3a9fd7` |
 | G-174 | G9 | HIGH | security | security/system-policy-compliance.md:587 | — | ### G9 — NEW — NO RLS on `system_policies` (HIGH) | cutover, RLS audit | H1 | resolved | dd31590 |
 | G-175 | G13 | HIGH | security | security/system-policy-compliance.md:624 | — | ### G13 — NEW — INVESTIGATION mode has NO business-logic consumer (HIGH) | — | H2 | open | — |
-| G-176 | G3 | HIGH | workflows | workflows/approval-workflow.md:1110 | — | ### G3 — HIGH — ApprovalController has NO FormRequest classes | notifications phase | H2 | open | — |
+| G-176 | G3 | HIGH | workflows | workflows/approval-workflow.md:1110 | — | ### G3 — HIGH — ApprovalController has NO FormRequest classes | notifications phase | H2 | resolved | WORKFLOWS-AUDIT-1 |
 | G-177 | G4 | HIGH | workflows | workflows/notification-workflow.md:1240 | — | ### G4 — HIGH — 8 events are dead config (declared/forwarded but never fire) | — | H2 | open | — |
 | G-178 | G5 | HIGH | workflows | workflows/approval-workflow.md:1129 | — | ### G5 — HIGH — No branch.isolation on approval routes | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-179 | G5 | HIGH | workflows | workflows/notification-workflow.md:1263 | — | ### G5 — HIGH — NO RLS on `notifications` / `notification_rules` / `notification_rule_recipients` | cutover, RLS audit | H1 | resolved | 278a03d |
-| G-180 | G6 | HIGH | workflows | workflows/approval-workflow.md:1139 | — | ### G6 — HIGH — approval_requests.entity_id is unsignedBigInteger, NOT FK | — | H2 | open | — |
-| G-181 | G6 | HIGH | workflows | workflows/notification-workflow.md:1276 | — | ### G6 — HIGH — NO `fn_financial_audit_trigger` on `notification_rules` / `notification_rule_recipients` | audit-trail phase | H1 | open | — |
+| G-180 | G6 | HIGH | workflows | workflows/approval-workflow.md:1139 | — | ### G6 — HIGH — approval_requests.entity_id is unsignedBigInteger, NOT FK | — | H2 | resolved | WORKFLOWS-AUDIT-1 |
+| G-181 | G6 | HIGH | workflows | workflows/notification-workflow.md:1276 | — | ### G6 — HIGH — NO `fn_financial_audit_trigger` on `notification_rules` / `notification_rule_recipients` | audit-trail phase | H1 | resolved | WORKFLOWS-AUDIT-1 |
 | G-182 | G7 | HIGH | workflows | workflows/notification-workflow.md:1287 | laravel/database/sql/06_payment_and_misc.sql:181-194 | ### G7 — HIGH — DDL stale (notification tables missing/mismatched in `database/sql/*.sql` baseline) | DDL drift | H2 | open | — |
-| G-183 | G8 | HIGH | workflows | workflows/approval-workflow.md:1155 | — | ### G8 — HIGH — approval_workflows.branch_id declared as string, not integer | — | H2 | open | — |
+| G-183 | G8 | HIGH | workflows | workflows/approval-workflow.md:1155 | — | ### G8 — HIGH — approval_workflows.branch_id declared as string, not integer | — | H2 | resolved | WORKFLOWS-AUDIT-1 |
 | G-184 | G8 | HIGH | workflows | workflows/notification-workflow.md:1302 | — | ### G8 — HIGH — NO FormRequest for `NotificationController::storeRule` + NO `updateRule` route | notifications phase | H2 | open | — |
 | G-185 | G9 | HIGH | workflows | workflows/notification-workflow.md:1315 | — | ### G9 — HIGH — NO sidebar menu entry for `/admin/notifications/rules` | notifications phase | H2 | open | — |
-| G-186 | G11 | HIGH | workflows | workflows/approval-workflow.md:1175 | — | ### G11 — HIGH — No menu/nav entry for admin/approvals | — | H2 | open | — |
-| G-187 | G12 | HIGH | workflows | workflows/approval-workflow.md:1181 | — | ### G12 — HIGH — No fn_financial_audit_trigger on approval tables | audit-trail phase | H1 | open | — |
+| G-186 | G11 | HIGH | workflows | workflows/approval-workflow.md:1175 | — | ### G11 — HIGH — No menu/nav entry for admin/approvals | — | H2 | resolved | WORKFLOWS-AUDIT-1 |
+| G-187 | G12 | HIGH | workflows | workflows/approval-workflow.md:1181 | — | ### G12 — HIGH — No fn_financial_audit_trigger on approval tables | audit-trail phase | H1 | resolved | WORKFLOWS-AUDIT-1 |
 | G-188 | G15 | HIGH | workflows | workflows/approval-workflow.md:1203 | — | ### G15 — HIGH — NO RLS on the 4 generic approval tables | cutover, RLS audit | H1 | resolved | 278a03d |
 | G-189 | G3 | MEDIUM | api | api/api-conventions.md:699 | — | G3 \| MEDIUM \| Pagination `meta` shape is inconsistent: `BranchApiController::index` includes `from` + `to`; the other 3 paginated controll… | — | H2 | open | — |
 | G-190 | G3 | MEDIUM | api | api/api-reference-index.md:265 | — | G3 \| MEDIUM \| `API_REFERENCE.md`'s "Rate limiting" section (line 134–139) is stale — says "Laravel's standard `throttle` middleware" but t… | cutover, RLS audit | H2 | open | — |

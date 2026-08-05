@@ -181,6 +181,8 @@ class MenuService
             'consolidation' => $this->resolveConsolidationRoute($action),
             'bankreconciliation' => $this->resolveBankReconciliationRoute($action),
             'fixedasset' => $this->resolveFixedAssetRoute($action),
+            // WORKFLOWS-AUDIT-1 (G-186): Approval Queue + Workflows menus.
+            'approval' => $action === 'workflows' ? 'admin.approvals.workflows' : 'admin.approvals.queue',
         ];
 
         $routeName = $routeMap[$controller] ?? null;

@@ -1126,6 +1126,19 @@ Grep for `app/Http/Requests/*Approval*` returns 0 results. `ApprovalController::
 inline). `updateWorkflow` uses inline `$request->validate(...)`. `queue` accepts `entityType` from
 user input with NO validation.
 
+> ✅ **RESOLVED — G-176 / G3 (WORKFLOWS-AUDIT-1).** Created 4 FormRequest classes under
+> `app/Http/Requests/Approval/`:
+>   - `ApproveRequest` — `comments: nullable|string|max:1000` (was: no validation at all).
+>   - `RejectRequest` — `reason: required|string|min:3|max:500` (was: inline validate).
+>   - `UpdateWorkflowRequest` — `is_active: boolean`, `min_amount: numeric|min:0`,
+>     `name: string|max:100`, `description: nullable|string|max:500` (was: inline validate).
+>   - `QueueIndexRequest` — `entity_type: nullable|string|in:manual_journal,stock_adjustment,
+>     damage_invoice,purchase_order,stock_take_session` (was: raw `$request->input('entity_type')`
+>     with NO validation — a forged query string could cause downstream errors).
+> ApprovalController: 4 method signatures changed from `Request $request` to the dedicated
+> FormRequest; 2 inline `validate()` calls removed; raw `input()` reads replaced with
+> `validated()`. Zero inline `validate()` calls remain.
+
 ### G4 — CRITICAL — Notification dispatch is DEAD CODE
 
 `ApprovalService::notifyApprovers/notifyRequester` dispatches 4 event names
@@ -1167,6 +1180,32 @@ is hard-deleted, its `approval_requests` row remains as an orphan. `ApprovalRequ
 returns null (because `ManualJournal::find()` returns null), but the row stays in the table and the
 audit log shows it.
 
+> ✅ **RESOLVED — G-180 / G6 (WORKFLOWS-AUDIT-1).** Design decision: KEEP `entity_id` as a
+> polymorphic integer (no single hard FK). Rationale: the approval engine is GENERIC by design —
+> `entity_id` references `manual_journals.id`, `stock_adjustments.id`, `damage_invoices.id`,
+> `purchase_orders.id`, or `stock_take_sessions.id` depending on `entity_type`. PostgreSQL doesn't
+> support a single FK column pointing to multiple parent tables natively (no polymorphic FK
+> constraint). The alternatives (per-entity_type child tables, or per-entity_type FK constraints
+> with NOT VALID + VALIDATE) were rejected as too complex/brittle.
+>
+> Mitigations added:
+>   1. **Partial indexes per entity_type** — `idx_ar_manual_journal_pending`,
+>      `idx_ar_stock_adjustment_pending`, `idx_ar_damage_invoice_pending`,
+>      `idx_ar_purchase_order_pending`, `idx_ar_stock_take_session_pending`. Each is a partial
+>      index on `(entity_id, current_level) WHERE entity_type = '<type>' AND status = 'pending'`.
+>      Speeds up the pending-queue lookup per entity type (the hot path in
+>      `ApprovalService::getPendingQueueForUser`).
+>   2. **`cleanup_orphan_approval_requests()` SQL function** — callable via
+>      `SELECT cleanup_orphan_approval_requests();`. Iterates the known entity_type→table mapping,
+>      finds pending approval_requests rows whose entity_id no longer exists in the parent table
+>      (LEFT JOIN anti-pattern), and marks them as `status='cancelled'` with a rejection_reason
+>      explaining the auto-cancellation. Idempotent — re-running is safe.
+>   3. **Migration runs the cleanup once** on `up()` (best-effort — catches pre-existing orphans).
+>
+> SQL baseline `11_approval_workflow.sql` updated: 5 partial indexes added + the cleanup function
+> defined at the end of the file + a comment block above the `approval_requests` CREATE TABLE
+> documenting the polymorphic design decision.
+
 ### G7 — CRITICAL — DDL stale: approval tables missing from database/sql/*.sql
 
 The 4 generic approval tables exist ONLY in the migration file — NOT in `database/sql/*.sql`. A
@@ -1190,6 +1229,23 @@ Migration L33 `$table->string('branch_id')->nullable()` — clearly a typo. Shou
 `$branchId` is `?int` — Postgres implicit-casts, but no FK enforcement and index efficiency is
 degraded (text comparison vs integer).
 
+> ✅ **RESOLVED — G-183 / G8 (WORKFLOWS-AUDIT-1).** Migration
+> `2026_09_05_000007_fix_approval_workflows_branch_id_type.php`:
+>   1. **Backfill guard** — NULLs out any non-numeric string `branch_id` values (rare — would only
+>      happen if a buggy seed wrote a non-integer string). Numeric strings like `'3'` cast cleanly
+>      during the ALTER.
+>   2. **ALTER COLUMN TYPE integer USING branch_id::integer** — Postgres validates every row
+>      during the cast.
+>   3. **Recreates the `uq_workflow_entity_branch` unique constraint** (dropped before the type
+>      change, recreated after — integer columns participate in unique constraints identically to
+>      strings).
+>   4. **Adds FK `branch_id → branches(id) ON DELETE CASCADE`** — a branch deletion cascades to
+>      its branch-specific workflows; global workflows (`branch_id=NULL`) are unaffected (NULL
+>      never matches).
+> `ApprovalWorkflow` model: `branch_id` added to `$casts` as `'integer'` so Eloquent returns
+> `int|null` instead of `string`. SQL baseline `11_approval_workflow.sql` updated: `branch_id
+> varchar(255)` → `branch_id integer REFERENCES branches(id) ON DELETE CASCADE`.
+
 ### G9 — MEDIUM — is_parallel flag is dead config
 
 Stored + cast + rendered in UI as "All must approve" badge, but `ApprovalService::approve()` never
@@ -1209,6 +1265,17 @@ No menu seed, no nav view references `/admin/approvals`. Users can only reach th
 typing the URL directly. The generic approval engine is effectively invisible to end users. (Mitigated
 by G4 — even if discovered, notifications don't fire.)
 
+> ✅ **RESOLVED — G-186 / G11 (WORKFLOWS-AUDIT-1).** Migration
+> `2026_09_05_000009_add_approval_queue_menus.php` adds a two-level menu structure under the
+> existing "Administration" parent (menu id=2):
+>   - `Approval Queue` (parent, controller=`approval`, icon=`fas fa-check-circle`, sort_order=95)
+>     - `Pending Queue` (action=`index` → `/admin/approvals`)
+>     - `Workflows` (action=`workflows` → `/admin/approvals/workflows`)
+> Superadmin (E0001) gets full `can_view + can_edit` on both menus via `user_menu_permissions`
+> upsert. `MenuService::resolveMenuUrl()` routeMap extended with `approval` →
+> `admin.approvals.queue` (or `admin.approvals.workflows` when action=`workflows`). Idempotent via
+> `updateOrInsert` on `(controller, action)`.
+
 ### G12 — HIGH — No fn_financial_audit_trigger on approval tables
 
 The hash-chain audit trigger is attached to 10 financial tables in `02_accounting.sql` L446-455 but
@@ -1218,6 +1285,19 @@ own application-level audit, but `approval_workflows` and `approval_steps` (whic
 POLICY) have NO immutable audit trail — an admin can silently change `min_amount` or `is_active` on
 a workflow and erase the evidence. Recurring cross-phase gap (Phase 13 found 15+ tables missing the
 trigger).
+
+> ✅ **RESOLVED — G-187 / G12 (WORKFLOWS-AUDIT-1).** Migration
+> `2026_09_05_000010_attach_financial_audit_trigger_to_notification_and_approval_tables.php`
+> attaches `trg_audit_<table>` to all 4 approval engine tables: `approval_workflows`,
+> `approval_steps`, `approval_requests`, `approval_actions`. (The same migration also covers the
+> 2 notification config tables for G-181 — see notification-workflow.md.) The trigger function reads
+> `branch_id` from the row's JSONB representation (works for tables without a `branch_id` column —
+> none of the 4 approval tables have `branch_id` directly). SQL baseline `11_approval_workflow.sql`
+> updated with the 4 trigger attachments at the end of the file. Idempotent via
+> `DROP TRIGGER IF EXISTS` before `CREATE TRIGGER`. Performance note: the 4 target tables have LOW
+> write volume (approval_workflows + approval_steps are admin-config tables; approval_requests +
+> approval_actions are write-on-approve which is rare) — the cost is negligible compared to the
+> existing 10 audited financial tables.
 
 ### G13 — MEDIUM — Reversal of posted manual_journal does NOT cascade to approval_requests
 

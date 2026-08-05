@@ -3,10 +3,13 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Approval\ApproveRequest;
+use App\Http\Requests\Approval\RejectRequest;
+use App\Http\Requests\Approval\UpdateWorkflowRequest;
+use App\Http\Requests\Approval\QueueIndexRequest;
 use App\Services\Approval\ApprovalService;
 use App\Models\ApprovalRequest;
 use App\Models\ApprovalWorkflow;
-use Illuminate\Http\Request;
 
 /**
  * Approval Controller — Phase 5
@@ -22,10 +25,10 @@ class ApprovalController extends Controller
     /**
      * Show the approval queue — pending items for the current user.
      */
-    public function queue(Request $request)
+    public function queue(QueueIndexRequest $request)
     {
         $user = auth()->user();
-        $entityType = $request->input('entity_type');
+        $entityType = $request->validated('entity_type');
 
         $pendingRequests = $this->approvalService->getPendingQueueForUser($user, $entityType);
 
@@ -55,11 +58,11 @@ class ApprovalController extends Controller
     /**
      * Approve a request from the queue.
      */
-    public function approve(Request $request, int $id)
+    public function approve(ApproveRequest $request, int $id)
     {
         $approvalRequest = ApprovalRequest::findOrFail($id);
 
-        $result = $this->approvalService->approve($approvalRequest, $request->input('comments'));
+        $result = $this->approvalService->approve($approvalRequest, $request->validated('comments'));
 
         if (!$result['success']) {
             return back()->with('error', $result['message']);
@@ -72,15 +75,11 @@ class ApprovalController extends Controller
     /**
      * Reject a request from the queue.
      */
-    public function reject(Request $request, int $id)
+    public function reject(RejectRequest $request, int $id)
     {
-        $request->validate([
-            'reason' => 'required|string|min:3|max:500',
-        ]);
-
         $approvalRequest = ApprovalRequest::findOrFail($id);
 
-        $result = $this->approvalService->reject($approvalRequest, $request->input('reason'));
+        $result = $this->approvalService->reject($approvalRequest, $request->validated('reason'));
 
         if (!$result['success']) {
             return back()->with('error', $result['message']);
@@ -106,16 +105,9 @@ class ApprovalController extends Controller
     /**
      * Update a workflow's settings.
      */
-    public function updateWorkflow(Request $request, int $id)
+    public function updateWorkflow(UpdateWorkflowRequest $request, int $id)
     {
         $workflow = ApprovalWorkflow::findOrFail($id);
-
-        $request->validate([
-            'is_active' => 'boolean',
-            'min_amount' => 'numeric|min:0',
-            'name' => 'string|max:100',
-            'description' => 'nullable|string|max:500',
-        ]);
 
         $workflow->update($request->only(['is_active', 'min_amount', 'name', 'description']));
 

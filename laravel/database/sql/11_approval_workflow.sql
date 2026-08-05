@@ -16,9 +16,10 @@
 -- Defines which entity types require approval and at what thresholds.
 -- entity_type: 'manual_journal', 'stock_adjustment', 'damage_invoice'.
 -- branch_id: null = all branches; specific integer = branch-scoped.
--- (G8: branch_id is varchar in the migration — a known typo; kept as-is
--- here for schema parity. Postgres implicit-casts int → text at query
--- time, so runtime is unaffected.)
+-- WORKFLOWS-AUDIT-1 (G-183): branch_id is now integer with FK to branches(id)
+-- (was varchar(255) in the original migration — a known typo). Postgres
+-- implicit-casts int→text worked at query time but no FK enforcement +
+-- index efficiency degraded. Now: integer + FK ON DELETE CASCADE.
 CREATE TABLE approval_workflows (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name varchar(100) NOT NULL,
@@ -26,7 +27,7 @@ CREATE TABLE approval_workflows (
     min_amount numeric(15,2) NOT NULL DEFAULT 0,
     is_active boolean NOT NULL DEFAULT true,
     requires_approval_levels integer NOT NULL DEFAULT 1,
-    branch_id varchar(255),
+    branch_id integer REFERENCES branches(id) ON DELETE CASCADE,  -- WORKFLOWS-AUDIT-1 (G-183): integer + FK
     description text,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -56,7 +57,15 @@ CREATE TABLE approval_steps (
 -- ── 3. approval_requests ─────────────────────────────────────────────────────
 -- Tracks the current state of an approval request for an entity.
 -- status: pending / approved / rejected / cancelled.
--- entity_id: unsignedBigInteger (NOT a FK — G6: polymorphic, no constraint).
+-- entity_id: integer (NOT a hard FK — G6/G-180: polymorphic by design).
+-- WORKFLOWS-AUDIT-1 (G-180): the polymorphic design is intentional —
+-- entity_id references manual_journals.id, stock_adjustments.id,
+-- damage_invoices.id, purchase_orders.id, or stock_take_sessions.id
+-- depending on entity_type. PostgreSQL doesn't support a single FK column
+-- pointing to multiple parent tables natively. Mitigations:
+--   (a) Partial indexes per entity_type (see below) speed up the queue.
+--   (b) A cleanup_orphan_approval_requests() SQL function (defined at the
+--       end of this file) marks orphaned pending rows as 'cancelled'.
 CREATE TABLE approval_requests (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     entity_type varchar(50) NOT NULL,
@@ -77,6 +86,14 @@ CREATE TABLE approval_requests (
 CREATE INDEX idx_ar_entity ON approval_requests(entity_type, entity_id);
 CREATE INDEX idx_ar_status_level ON approval_requests(status, current_level);
 CREATE INDEX idx_ar_requested_by ON approval_requests(requested_by);
+-- WORKFLOWS-AUDIT-1 (G-180): partial indexes per entity_type — speeds up
+-- the pending-queue lookup per entity type (the hot path in
+-- ApprovalService::getPendingQueueForUser).
+CREATE INDEX idx_ar_manual_journal_pending    ON approval_requests(entity_id, current_level) WHERE entity_type = 'manual_journal'    AND status = 'pending';
+CREATE INDEX idx_ar_stock_adjustment_pending  ON approval_requests(entity_id, current_level) WHERE entity_type = 'stock_adjustment'  AND status = 'pending';
+CREATE INDEX idx_ar_damage_invoice_pending    ON approval_requests(entity_id, current_level) WHERE entity_type = 'damage_invoice'    AND status = 'pending';
+CREATE INDEX idx_ar_purchase_order_pending    ON approval_requests(entity_id, current_level) WHERE entity_type = 'purchase_order'    AND status = 'pending';
+CREATE INDEX idx_ar_stock_take_session_pending ON approval_requests(entity_id, current_level) WHERE entity_type = 'stock_take_session' AND status = 'pending';
 
 -- ── 4. approval_actions ─────────────────────────────────────────────────────
 -- Audit log of every approve/reject action taken.
@@ -127,3 +144,77 @@ WHERE aw.name = 'Manual Journal Approval' AND aw.entity_type = 'manual_journal'
       SELECT 1 FROM approval_steps s
       WHERE s.approval_workflow_id = aw.id AND s.level = 2
   );
+
+-- ── 6. Orphan-cleanup helper (WORKFLOWS-AUDIT-1 G-180) ──────────────────────
+-- Marks orphaned pending approval_requests rows as 'cancelled'.
+-- An orphan = a pending approval_requests row whose entity_id no longer
+-- exists in the parent table (manual_journals / stock_adjustments /
+-- damage_invoices / purchase_orders / stock_take_sessions).
+--
+-- Callable via: SELECT cleanup_orphan_approval_requests();
+-- Returns: integer (count of rows marked cancelled).
+-- Idempotent — re-running is safe (only marks currently-orphaned rows).
+--
+-- The polymorphic entity_id design (no single hard FK) is intentional —
+-- see the comment block above the approval_requests CREATE TABLE.
+CREATE OR REPLACE FUNCTION cleanup_orphan_approval_requests()
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_count integer := 0;
+    v_entity_type text;
+    v_entity_table text;
+    v_entity_id bigint;
+    v_orphan_ids bigint[];
+    v_affected integer;
+BEGIN
+    FOR v_entity_type, v_entity_table IN
+        VALUES
+            ('manual_journal',     'manual_journals'),
+            ('stock_adjustment',   'stock_adjustments'),
+            ('damage_invoice',      'damage_invoices'),
+            ('purchase_order',      'purchase_orders'),
+            ('stock_take_session',  'stock_take_sessions')
+    LOOP
+        EXECUTE format(
+            'SELECT ARRAY_AGG(ar.id) FROM approval_requests ar
+             LEFT JOIN %I parent ON parent.id = ar.entity_id
+             WHERE ar.entity_type = %L
+               AND ar.status = ''pending''
+               AND parent.id IS NULL',
+            v_entity_table, v_entity_type
+        ) INTO v_orphan_ids;
+
+        IF v_orphan_ids IS NOT NULL THEN
+            UPDATE approval_requests
+            SET status = 'cancelled',
+                rejection_reason = 'Auto-cancelled: parent ' ||
+                    v_entity_type || ' #' || entity_id ||
+                    ' was hard-deleted (WORKFLOWS-AUDIT-1 G-180 cleanup)',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ANY(v_orphan_ids);
+
+            GET DIAGNOSTICS v_affected = ROW_COUNT;
+            v_count := v_count + v_affected;
+        END IF;
+    END LOOP;
+
+    RETURN v_count;
+END;
+$$;
+
+-- ── 7. Audit triggers: approval engine tables (WORKFLOWS-AUDIT-1 G-187) ─────
+-- Attach fn_financial_audit_trigger to the 4 approval engine tables so policy
+-- changes (approval_workflows.min_amount, is_active; approval_steps.role,
+-- level) are tamper-evident. An admin can no longer silently change approval
+-- thresholds and erase the evidence — every direct DB mutation is captured in
+-- financial_audit_log with hash-chained before/after snapshots.
+-- The trigger function reads branch_id from the row's JSONB (works for tables
+-- without a branch_id column — none of the 4 approval tables have branch_id
+-- directly; approval_workflows.branch_id is the scoped-branch FK column but
+-- the trigger's JSONB access pattern handles it correctly).
+CREATE TRIGGER trg_audit_approval_workflows AFTER INSERT OR UPDATE OR DELETE ON approval_workflows FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_approval_steps AFTER INSERT OR UPDATE OR DELETE ON approval_steps FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_approval_requests AFTER INSERT OR UPDATE OR DELETE ON approval_requests FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_approval_actions AFTER INSERT OR UPDATE OR DELETE ON approval_actions FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();

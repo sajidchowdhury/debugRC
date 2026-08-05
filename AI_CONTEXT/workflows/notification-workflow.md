@@ -1299,6 +1299,17 @@ flowchart LR
   `notification_rule_recipients`. The trigger function already handles tables without
   `branch_id` (per `2026_08_08_000007_fix_audit_trigger_branch_id_access.php`).
 
+> ✅ **RESOLVED — G-181 / G6 (WORKFLOWS-AUDIT-1).** Migration
+> `2026_09_05_000010_attach_financial_audit_trigger_to_notification_and_approval_tables.php`
+> attaches `trg_audit_<table>` to both notification config tables: `notification_rules` +
+> `notification_rule_recipients`. (The same migration also covers the 4 approval engine
+> tables for G-187 — see approval-workflow.md.) The trigger function reads `branch_id` from
+> the row's JSONB representation (works for tables without a `branch_id` column — neither
+> notification table has `branch_id`). SQL baseline `06_payment_and_misc.sql` updated with
+> the 2 trigger attachments at the end of the file. Idempotent via `DROP TRIGGER IF EXISTS`
+> before `CREATE TRIGGER`. Performance note: both target tables have LOW write volume
+> (admin-config tables — rule changes are rare) — the cost is negligible.
+
 ### G7 — HIGH — DDL stale (notification tables missing/mismatched in `database/sql/*.sql` baseline)
 - **Evidence:** `laravel/database/sql/06_payment_and_misc.sql:181-194` still has the
   LEGACY `notifications` schema (`user_id`, `title`, `body`, `is_read`). Migration

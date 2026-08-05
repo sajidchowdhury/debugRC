@@ -23,6 +23,9 @@ class ApprovalWorkflow extends Model
         'min_amount' => 'decimal:2',
         'is_active' => 'boolean',
         'requires_approval_levels' => 'integer',
+        // WORKFLOWS-AUDIT-1 (G-183): branch_id is now integer (was string).
+        // Cast ensures Eloquent returns int|null instead of string.
+        'branch_id' => 'integer',
     ];
 
     /* ── Relationships ─────────────────────────────────────── */

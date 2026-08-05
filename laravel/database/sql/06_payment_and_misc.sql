@@ -255,3 +255,15 @@ CREATE INDEX idx_ual_user ON user_audit_log(user_id);
 CREATE INDEX idx_ual_action ON user_audit_log(action);
 -- BRIN replaces B-tree on created_at for append-only partitioned table
 CREATE INDEX idx_ual_created_at_brin ON user_audit_log USING BRIN (created_at) WITH (pages_per_range = 64);
+
+-- ── Audit triggers: notification config tables (WORKFLOWS-AUDIT-1 G-181) ────
+-- Attach fn_financial_audit_trigger to the 2 admin-managed notification config
+-- tables so rule changes (who gets notified for what) are tamper-evident.
+-- A malicious DB admin can no longer silently UPDATE notification_rules SET
+-- is_active = false to suppress security-relevant notifications without
+-- leaving a hash-chained audit trail in financial_audit_log.
+-- The trigger function reads branch_id from the row's JSONB (works for tables
+-- without a branch_id column — notification_rules + notification_rule_recipients
+-- have no branch_id).
+CREATE TRIGGER trg_audit_notification_rules AFTER INSERT OR UPDATE OR DELETE ON notification_rules FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+CREATE TRIGGER trg_audit_notification_rule_recipients AFTER INSERT OR UPDATE OR DELETE ON notification_rule_recipients FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
