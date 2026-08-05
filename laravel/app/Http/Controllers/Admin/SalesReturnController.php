@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Facades\CsvExporter;
+use App\Http\Controllers\Concerns\WritesExportAuditLog;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\SalesReturn\ConfirmSalesReturnRequest;
 use App\Http\Requests\SalesReturn\GetInvoiceDetailsRequest;
@@ -31,6 +33,8 @@ use Illuminate\Support\Facades\DB;
  */
 class SalesReturnController extends Controller
 {
+    use WritesExportAuditLog;
+
     public function __construct(
         private SalesReturnService $returnService,
         private SalesReturnableQty $returnableQty,
@@ -638,6 +642,11 @@ class SalesReturnController extends Controller
      * Columns: Return Code / Invoice Code / Customer / Branch / Return Date /
      * Total Amount / Status / Reversed / Created By / Reason.
      * UTF-8 BOM prefix so Excel opens Bengali characters correctly.
+     *
+     * REPORTS-AUDIT-4 (G-150 / csv-export.md G11): refactored to delegate
+     * to CsvExporter::exportFromRows(). BOM + Content-Type + RFC 4180
+     * escaping now handled by the canonical service. Column order and
+     * column labels preserved exactly. Writes an export_audit_log row.
      */
     public function export(Request $request)
     {
@@ -676,45 +685,63 @@ class SalesReturnController extends Controller
             ->orderBy('id', 'desc')
             ->get();
 
-        $filename = 'Sales_Returns_' . now()->format('Y-m-d_His') . '.csv';
+        $headerRow = [
+            'Return Code', 'Invoice Code', 'Customer', 'Branch',
+            'Return Date', 'Total Amount', 'Status', 'Reversed',
+            'Created By', 'Reason',
+        ];
 
-        return response()->stream(function () use ($returns) {
-            $out = fopen('php://output', 'w');
-            fwrite($out, "\xEF\xBB\xBF"); // UTF-8 BOM for Excel
-            fputcsv($out, [
-                'Return Code', 'Invoice Code', 'Customer', 'Branch',
-                'Return Date', 'Total Amount', 'Status', 'Reversed',
-                'Created By', 'Reason',
-            ]);
-            foreach ($returns as $r) {
-                if ($r->is_reversed) {
-                    $statusLabel = 'Reversed';
-                } elseif ($r->status === 'confirmed') {
-                    $statusLabel = 'Confirmed';
-                } else {
-                    $statusLabel = 'Pending';
-                }
+        $rowGenerator = $this->buildSalesReturnCsvRows($returns);
 
-                fputcsv($out, [
-                    $r->return_code,
-                    $r->salesInvoice?->invoice_code ?? '',
-                    $r->customer?->customer_name ?? '',
-                    $r->branch?->branch_name ?? '',
-                    optional($r->return_date)->format('Y-m-d'),
-                    number_format((float) $r->total_amount, 2, '.', ''),
-                    $statusLabel,
-                    $r->is_reversed ? 'Yes' : 'No',
-                    $r->created_by ? ('User #' . $r->created_by) : 'System',
-                    $r->reason ?? '',
-                ]);
+        $filename = 'Sales_Returns_' . now()->format('Y-m-d_His');
+
+        // Audit log: row count is known precisely (we used ->get()).
+        $this->logExport('sales_returns', [
+            'branch_id' => $branchId,
+            'from_date' => $fromDate,
+            'to_date' => $toDate,
+            'status' => $status,
+            'search' => $search,
+            'reversed' => $showReversed,
+        ], rowCount: $returns->count(), byteSize: 0);
+
+        return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
+    }
+
+    /**
+     * Build the row generator for the sales-return CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * export() method body (the linter cannot parse `yield` inside an
+     * inline closure expression).
+     *
+     * @param  iterable<int, SalesReturn> $returns
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildSalesReturnCsvRows(iterable $returns): \Generator
+    {
+        foreach ($returns as $r) {
+            if ($r->is_reversed) {
+                $statusLabel = 'Reversed';
+            } elseif ($r->status === 'confirmed') {
+                $statusLabel = 'Confirmed';
+            } else {
+                $statusLabel = 'Pending';
             }
-            fclose($out);
-        }, 200, [
-            'Content-Type'        => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-            'Pragma'              => 'no-cache',
-            'Expires'             => '0',
-        ]);
+
+            yield [
+                $r->return_code,
+                $r->salesInvoice?->invoice_code ?? '',
+                $r->customer?->customer_name ?? '',
+                $r->branch?->branch_name ?? '',
+                optional($r->return_date)->format('Y-m-d'),
+                number_format((float) $r->total_amount, 2, '.', ''),
+                $statusLabel,
+                $r->is_reversed ? 'Yes' : 'No',
+                $r->created_by ? ('User #' . $r->created_by) : 'System',
+                $r->reason ?? '',
+            ];
+        }
     }
 
     /**

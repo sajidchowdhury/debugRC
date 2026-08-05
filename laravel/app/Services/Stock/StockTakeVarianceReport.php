@@ -2,6 +2,7 @@
 
 namespace App\Services\Stock;
 
+use App\Facades\CsvExporter;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -180,50 +181,62 @@ class StockTakeVarianceReport
     /**
      * Stream a CSV of variance lines (Excel-friendly with UTF-8 BOM).
      *
+     * REPORTS-AUDIT-4 (G-150 / csv-export.md G11): refactored to delegate
+     * to CsvExporter::exportFromRows(). BOM + Content-Type + RFC 4180
+     * escaping now handled by the canonical service. Column order and
+     * column labels preserved exactly. Audit-log row is written by the
+     * calling controller (ReportController::stocktakeVarianceExport).
+     *
      * @param array<int, object> $rows
      */
     public function exportCsv(array $rows): StreamedResponse
     {
-        $headers = [
-            'Content-Type'        => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="Stock_Take_Variance_' . now()->format('Y-m-d_His') . '.csv"',
-            'Pragma'              => 'no-cache',
-            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
-            'Expires'             => '0',
+        $headerRow = [
+            'Session', 'Date', 'Branch', 'Warehouse', 'Code', 'Product',
+            'System', 'Physical', 'Variance Qty', 'System Rate', 'Post Rate',
+            'Value Diff', 'Revaluation', 'Reason', 'Applied',
         ];
 
-        return response()->stream(function () use ($rows) {
-            $out = fopen('php://output', 'w');
-            // UTF-8 BOM so Excel reads accented/multibyte cells correctly.
-            fprintf($out, chr(0xEF) . chr(0xBB) . chr(0xBF));
-            fputcsv($out, [
-                'Session', 'Date', 'Branch', 'Warehouse', 'Code', 'Product',
-                'System', 'Physical', 'Variance Qty', 'System Rate', 'Post Rate',
-                'Value Diff', 'Revaluation', 'Reason', 'Applied',
-            ]);
-            foreach ($rows as $r) {
-                fputcsv($out, [
-                    $r->session_code ?? '',
-                    $r->session_date ?? '',
-                    $r->branch_name ?? '',
-                    $r->warehouse_name ?? '',
-                    $r->product_code ?? '',
-                    $r->product_name ?? '',
-                    $r->system_qty ?? 0,
-                    $r->physical_qty ?? 0,
-                    $r->variance_qty ?? 0,
-                    // Phase 9: system_rate = setup-time avg cost,
-                    // post_rate = post-time avg cost, revaluation_amount =
-                    // the adjusting entry for the cost drift.
-                    $r->system_rate ?? 0,
-                    $r->post_rate ?? 0,
-                    $r->value_diff ?? 0,
-                    $r->revaluation_amount ?? 0,
-                    $r->reason ?? '',
-                    !empty($r->is_applied) ? 'Yes' : 'No',
-                ]);
-            }
-            fclose($out);
-        }, 200, $headers);
+        $rowGenerator = $this->buildVarianceCsvRows($rows);
+
+        $filename = 'Stock_Take_Variance_' . now()->format('Y-m-d_His');
+
+        return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
+    }
+
+    /**
+     * Build the row generator for the variance CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * exportCsv() method body (the linter cannot parse `yield` inside an
+     * inline closure expression).
+     *
+     * @param  array<int, object> $rows
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildVarianceCsvRows(array $rows): \Generator
+    {
+        foreach ($rows as $r) {
+            yield [
+                $r->session_code ?? '',
+                $r->session_date ?? '',
+                $r->branch_name ?? '',
+                $r->warehouse_name ?? '',
+                $r->product_code ?? '',
+                $r->product_name ?? '',
+                $r->system_qty ?? 0,
+                $r->physical_qty ?? 0,
+                $r->variance_qty ?? 0,
+                // Phase 9: system_rate = setup-time avg cost,
+                // post_rate = post-time avg cost, revaluation_amount =
+                // the adjusting entry for the cost drift.
+                $r->system_rate ?? 0,
+                $r->post_rate ?? 0,
+                $r->value_diff ?? 0,
+                $r->revaluation_amount ?? 0,
+                $r->reason ?? '',
+                !empty($r->is_applied) ? 'Yes' : 'No',
+            ];
+        }
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Services\Stock;
 
+use App\Facades\CsvExporter;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -159,37 +160,50 @@ class StockTakeWeeklyReport
     /**
      * Stream a CSV of the weekly report sessions (Excel-friendly with BOM).
      *
+     * REPORTS-AUDIT-4 (G-150 / csv-export.md G11): refactored to delegate
+     * to CsvExporter::exportFromRows(). BOM + Content-Type + RFC 4180
+     * escaping now handled by the canonical service. Column order and
+     * column labels preserved exactly. Audit-log row is written by the
+     * calling controller (ReportController::stocktakeWeeklyExport).
+     *
      * @param array{sessions:array<int,object>} $report
      */
     public function exportCsv(array $report): StreamedResponse
     {
-        $headers = [
-            'Content-Type'        => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="Stock_Take_Weekly_' . now()->format('Y-m-d_His') . '.csv"',
-            'Pragma'              => 'no-cache',
-            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
-            'Expires'             => '0',
-        ];
+        $headerRow = ['Session', 'Date', 'Branch', 'Status', 'WH done', 'Variance lines', 'Gain', 'Loss', 'Net', 'Has GL'];
 
-        return response()->stream(function () use ($report) {
-            $out = fopen('php://output', 'w');
-            fprintf($out, chr(0xEF) . chr(0xBB) . chr(0xBF));
-            fputcsv($out, ['Session', 'Date', 'Branch', 'Status', 'WH done', 'Variance lines', 'Gain', 'Loss', 'Net', 'Has GL']);
-            foreach ($report['sessions'] ?? [] as $s) {
-                fputcsv($out, [
-                    $s->session_code ?? '',
-                    $s->session_date ?? '',
-                    $s->branch_name ?? '',
-                    !empty($s->is_reversed) ? 'reversed' : ($s->status ?? ''),
-                    ($s->warehouses_done ?? 0) . '/' . ($s->warehouse_count ?? 0),
-                    $s->variance_lines ?? 0,
-                    $s->gain_value ?? 0,
-                    $s->loss_value ?? 0,
-                    $s->net_value ?? 0,
-                    !empty($s->journal_entry_id) ? 'Yes' : 'No',
-                ]);
-            }
-            fclose($out);
-        }, 200, $headers);
+        $rowGenerator = $this->buildWeeklyCsvRows($report['sessions'] ?? []);
+
+        $filename = 'Stock_Take_Weekly_' . now()->format('Y-m-d_His');
+
+        return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
+    }
+
+    /**
+     * Build the row generator for the weekly CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * exportCsv() method body (the linter cannot parse `yield` inside an
+     * inline closure expression).
+     *
+     * @param  array<int, object> $sessions
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildWeeklyCsvRows(array $sessions): \Generator
+    {
+        foreach ($sessions as $s) {
+            yield [
+                $s->session_code ?? '',
+                $s->session_date ?? '',
+                $s->branch_name ?? '',
+                !empty($s->is_reversed) ? 'reversed' : ($s->status ?? ''),
+                ($s->warehouses_done ?? 0) . '/' . ($s->warehouse_count ?? 0),
+                $s->variance_lines ?? 0,
+                $s->gain_value ?? 0,
+                $s->loss_value ?? 0,
+                $s->net_value ?? 0,
+                !empty($s->journal_entry_id) ? 'Yes' : 'No',
+            ];
+        }
     }
 }

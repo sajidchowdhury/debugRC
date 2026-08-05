@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Facades\CsvExporter;
+use App\Http\Controllers\Concerns\WritesExportAuditLog;
 use App\Http\Controllers\Controller;
 use App\Models\SalesInvoice;
 use App\Models\SalesChallan;
@@ -21,9 +23,17 @@ use Illuminate\Support\Facades\Response;
  *   - ChallanController::export() → challans CSV
  *
  * All CSVs include BOM (0xEF 0xBB 0xBF) for Excel compatibility.
+ *
+ * REPORTS-AUDIT-4 (G-150 / csv-export.md G11): both export methods
+ * refactored to delegate to CsvExporter::exportFromRows(). BOM +
+ * Content-Type + RFC 4180 escaping now handled by the canonical
+ * service. Column order + column labels preserved exactly. Writes
+ * an export_audit_log row via the WritesExportAuditLog trait.
  */
 class CsvExportController extends Controller
 {
+    use WritesExportAuditLog;
+
     /**
      * Export filtered sales invoices as CSV.
      *
@@ -47,59 +57,68 @@ class CsvExportController extends Controller
 
         $invoices = $query->cursor();
 
-        $filename = 'Invoices_' . now()->format('Y-m-d_His') . '.csv';
-
-        $headers = [
-            'Content-Type'        => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-            'Pragma'              => 'no-cache',
-            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
-            'Expires'             => '0',
+        $headerRow = [
+            'Invoice Code',
+            'Date',
+            'Customer',
+            'Mobile',
+            'Branch',
+            'Salesman',
+            'Total Amount',
+            'Paid',
+            'Due',
+            'Status',
+            'Godown Prepared',
+            'Challan Issued',
         ];
 
-        $callback = function () use ($invoices) {
-            $output = fopen('php://output', 'w');
+        $rowGenerator = $this->buildInvoiceCsvRows($invoices);
 
-            // BOM for Excel UTF-8 compatibility
-            fprintf($output, chr(0xEF) . chr(0xBB) . chr(0xBF));
+        $filename = 'Invoices_' . now()->format('Y-m-d_His');
 
-            // Header row
-            fputcsv($output, [
-                'Invoice Code',
-                'Date',
-                'Customer',
-                'Mobile',
-                'Branch',
-                'Salesman',
-                'Total Amount',
-                'Paid',
-                'Due',
-                'Status',
-                'Godown Prepared',
-                'Challan Issued',
-            ]);
+        // Audit log: row count unknown (cursor() stream — we do not
+        // pre-count). Pass 0; the audit row records that an export
+        // happened, with the filter context.
+        $this->logExport('sales_invoices', [
+            'from_date' => $request->input('from_date'),
+            'to_date' => $request->input('to_date'),
+            'customer_id' => $request->input('customer_id'),
+            'branch_id' => $request->input('branch_id'),
+            'status' => $request->input('status'),
+            'search' => $request->input('search'),
+        ], rowCount: 0, byteSize: 0);
 
-            foreach ($invoices as $inv) {
-                fputcsv($output, [
-                    $inv->invoice_code,
-                    $inv->invoice_date ? \Carbon\Carbon::parse($inv->invoice_date)->format('d-m-Y') : '',
-                    $inv->customer?->customer_name ?? '',
-                    $inv->customer?->mobile ?? $inv->customer?->phone ?? '',
-                    $inv->branch?->branch_name ?? '',
-                    $inv->salesman?->name ?? '',
-                    number_format((float) $inv->total_amount, 2, '.', ''),
-                    number_format((float) $inv->paid_amount, 2, '.', ''),
-                    number_format((float) $inv->due_amount, 2, '.', ''),
-                    $inv->status,
-                    $inv->is_godown_prepared ? 'Yes' : 'No',
-                    $inv->is_challan_issued ? 'Yes' : 'No',
-                ]);
-            }
+        return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
+    }
 
-            fclose($output);
-        };
-
-        return Response::stream($callback, 200, $headers);
+    /**
+     * Build the row generator for the sales-invoice CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * exportInvoices() method body (the linter cannot parse `yield` inside
+     * an inline closure expression).
+     *
+     * @param  iterable<int, SalesInvoice> $invoices
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildInvoiceCsvRows(iterable $invoices): \Generator
+    {
+        foreach ($invoices as $inv) {
+            yield [
+                $inv->invoice_code,
+                $inv->invoice_date ? \Carbon\Carbon::parse($inv->invoice_date)->format('d-m-Y') : '',
+                $inv->customer?->customer_name ?? '',
+                $inv->customer?->mobile ?? $inv->customer?->phone ?? '',
+                $inv->branch?->branch_name ?? '',
+                $inv->salesman?->name ?? '',
+                number_format((float) $inv->total_amount, 2, '.', ''),
+                number_format((float) $inv->paid_amount, 2, '.', ''),
+                number_format((float) $inv->due_amount, 2, '.', ''),
+                $inv->status,
+                $inv->is_godown_prepared ? 'Yes' : 'No',
+                $inv->is_challan_issued ? 'Yes' : 'No',
+            ];
+        }
     }
 
     /**
@@ -123,54 +142,61 @@ class CsvExportController extends Controller
 
         $challans = $query->cursor();
 
-        $filename = 'Challans_' . now()->format('Y-m-d_His') . '.csv';
-
-        $headers = [
-            'Content-Type'        => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-            'Pragma'              => 'no-cache',
-            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
-            'Expires'             => '0',
+        $headerRow = [
+            'Challan Code',
+            'Challan Date',
+            'Invoice No',
+            'Customer',
+            'Mobile',
+            'Branch',
+            'Salesman',
+            'COGS (Issue Cost)',
+            'Transport Cost',
+            'Is Reversed',
         ];
 
-        $callback = function () use ($challans) {
-            $output = fopen('php://output', 'w');
+        $rowGenerator = $this->buildChallanCsvRows($challans);
 
-            // BOM for Excel UTF-8 compatibility
-            fprintf($output, chr(0xEF) . chr(0xBB) . chr(0xBF));
+        $filename = 'Challans_' . now()->format('Y-m-d_His');
 
-            // Header row
-            fputcsv($output, [
-                'Challan Code',
-                'Challan Date',
-                'Invoice No',
-                'Customer',
-                'Mobile',
-                'Branch',
-                'Salesman',
-                'COGS (Issue Cost)',
-                'Transport Cost',
-                'Is Reversed',
-            ]);
+        // Audit log: row count unknown (cursor() stream — we do not
+        // pre-count). Pass 0; the audit row records that an export
+        // happened, with the filter context.
+        $this->logExport('sales_challans', [
+            'from_date' => $request->input('from_date'),
+            'to_date' => $request->input('to_date'),
+            'branch_id' => $request->input('branch_id'),
+            'search' => $request->input('search'),
+        ], rowCount: 0, byteSize: 0);
 
-            foreach ($challans as $ch) {
-                fputcsv($output, [
-                    $ch->challan_code,
-                    $ch->challan_date ? \Carbon\Carbon::parse($ch->challan_date)->format('d-m-Y') : '',
-                    $ch->salesInvoice?->invoice_code ?? '',
-                    $ch->salesInvoice?->customer?->customer_name ?? '',
-                    $ch->salesInvoice?->customer?->mobile ?? $ch->salesInvoice?->customer?->phone ?? '',
-                    $ch->branch?->branch_name ?? '',
-                    $ch->salesInvoice?->salesman?->name ?? '',
-                    number_format((float) ($ch->issue_cost ?? 0), 2, '.', ''),
-                    number_format((float) ($ch->transport_cost ?? 0), 2, '.', ''),
-                    $ch->is_reversed ? 'Yes' : 'No',
-                ]);
-            }
+        return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
+    }
 
-            fclose($output);
-        };
-
-        return Response::stream($callback, 200, $headers);
+    /**
+     * Build the row generator for the sales-challan CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * exportChallans() method body (the linter cannot parse `yield` inside
+     * an inline closure expression).
+     *
+     * @param  iterable<int, SalesChallan> $challans
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildChallanCsvRows(iterable $challans): \Generator
+    {
+        foreach ($challans as $ch) {
+            yield [
+                $ch->challan_code,
+                $ch->challan_date ? \Carbon\Carbon::parse($ch->challan_date)->format('d-m-Y') : '',
+                $ch->salesInvoice?->invoice_code ?? '',
+                $ch->salesInvoice?->customer?->customer_name ?? '',
+                $ch->salesInvoice?->customer?->mobile ?? $ch->salesInvoice?->customer?->phone ?? '',
+                $ch->branch?->branch_name ?? '',
+                $ch->salesInvoice?->salesman?->name ?? '',
+                number_format((float) ($ch->issue_cost ?? 0), 2, '.', ''),
+                number_format((float) ($ch->transport_cost ?? 0), 2, '.', ''),
+                $ch->is_reversed ? 'Yes' : 'No',
+            ];
+        }
     }
 }

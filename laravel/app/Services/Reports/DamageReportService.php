@@ -2,6 +2,7 @@
 
 namespace App\Services\Reports;
 
+use App\Facades\CsvExporter;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Carbon;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -387,48 +388,61 @@ class DamageReportService
     /**
      * Stream a CSV of detail lines (Excel-friendly with UTF-8 BOM).
      *
+     * REPORTS-AUDIT-4 (G-150 / csv-export.md G11): refactored to delegate
+     * to CsvExporter::exportFromRows(). BOM + Content-Type + RFC 4180
+     * escaping now handled by the canonical service. Column order and
+     * column labels preserved exactly. Audit-log row is written by the
+     * calling controller (ReportController::damageReportExport).
+     *
      * @param array<int, object> $rows
      */
     public function exportCsv(array $rows): StreamedResponse
     {
-        $headers = [
-            'Content-Type'        => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="Damage_Report_' . now()->format('Y-m-d_His') . '.csv"',
-            'Pragma'              => 'no-cache',
-            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
-            'Expires'             => '0',
+        $headerRow = [
+            'Damage Code', 'Date', 'Branch', 'Warehouse', 'Type', 'Status',
+            'Reason Code', 'Reason', 'Total Value', 'Recovered',
+            'Accountable', 'Witness', 'Approver', 'Submitted At', 'Approved At',
         ];
 
         $typeLabels = DamageInvoice::DAMAGE_TYPES;
+        $rowGenerator = $this->buildDamageCsvRows($rows, $typeLabels);
 
-        return response()->stream(function () use ($rows, $typeLabels) {
-            $out = fopen('php://output', 'w');
-            fprintf($out, chr(0xEF) . chr(0xBB) . chr(0xBF));
-            fputcsv($out, [
-                'Damage Code', 'Date', 'Branch', 'Warehouse', 'Type', 'Status',
-                'Reason Code', 'Reason', 'Total Value', 'Recovered',
-                'Accountable', 'Witness', 'Approver', 'Submitted At', 'Approved At',
-            ]);
-            foreach ($rows as $r) {
-                fputcsv($out, [
-                    $r->damage_code ?? '',
-                    $r->damage_date ?? '',
-                    $r->branch_name ?? '',
-                    $r->warehouse_name ?? '',
-                    $typeLabels[$r->damage_type] ?? $r->damage_type ?? '',
-                    $r->status ?? '',
-                    $r->reason_code ?? '',
-                    $r->reason ?? '',
-                    $r->total_value ?? 0,
-                    $r->recovery_amount ?? 0,
-                    trim(($r->accountable_name ?? '') . ' ' . ($r->accountable_code ?? '')),
-                    trim(($r->witness_name ?? '') . ' ' . ($r->witness_code ?? '')),
-                    $r->approver_name ?? '',
-                    $r->submitted_at ?? '',
-                    $r->approved_at ?? '',
-                ]);
-            }
-            fclose($out);
-        }, 200, $headers);
+        $filename = 'Damage_Report_' . now()->format('Y-m-d_His');
+
+        return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
+    }
+
+    /**
+     * Build the row generator for the damage-detail CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * exportCsv() method body (the linter cannot parse `yield` inside an
+     * inline closure expression).
+     *
+     * @param  array<int, object> $rows
+     * @param  array<string,string> $typeLabels
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildDamageCsvRows(array $rows, array $typeLabels): \Generator
+    {
+        foreach ($rows as $r) {
+            yield [
+                $r->damage_code ?? '',
+                $r->damage_date ?? '',
+                $r->branch_name ?? '',
+                $r->warehouse_name ?? '',
+                $typeLabels[$r->damage_type] ?? $r->damage_type ?? '',
+                $r->status ?? '',
+                $r->reason_code ?? '',
+                $r->reason ?? '',
+                $r->total_value ?? 0,
+                $r->recovery_amount ?? 0,
+                trim(($r->accountable_name ?? '') . ' ' . ($r->accountable_code ?? '')),
+                trim(($r->witness_name ?? '') . ' ' . ($r->witness_code ?? '')),
+                $r->approver_name ?? '',
+                $r->submitted_at ?? '',
+                $r->approved_at ?? '',
+            ];
+        }
     }
 }

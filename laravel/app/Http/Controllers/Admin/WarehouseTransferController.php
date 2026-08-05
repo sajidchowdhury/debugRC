@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Facades\CsvExporter;
+use App\Http\Controllers\Concerns\WritesExportAuditLog;
 use App\Http\Controllers\Controller;
 use App\Models\Warehouse;
 use App\Models\WarehouseTransfer;
@@ -58,6 +60,8 @@ use Illuminate\Support\Facades\Response;
  */
 class WarehouseTransferController extends Controller
 {
+    use WritesExportAuditLog;
+
     public function __construct(
         private WarehouseTransferService $transferService,
         private StockService $stockService,
@@ -370,10 +374,15 @@ class WarehouseTransferController extends Controller
      *
      * Takes the same filter parameters as index() and streams a CSV
      * with BOM for Excel compatibility. Uses cursor() for memory-efficient
-     * iteration, following the pattern in CsvExportController::exportInvoices().
+     * iteration.
      *
      * Columns: Date, Code, From WH, To WH, Branch, Items, Amount, Demand,
      *          Reversed, Status, Created By
+     *
+     * REPORTS-AUDIT-4 (G-150 / csv-export.md G11): refactored to delegate
+     * to CsvExporter::exportFromRows(). BOM + Content-Type + RFC 4180
+     * escaping now handled by the canonical service. Column order and
+     * column labels preserved exactly. Writes an export_audit_log row.
      */
     public function export(Request $request)
     {
@@ -399,61 +408,71 @@ class WarehouseTransferController extends Controller
 
         $transfers = $query->cursor();
 
-        $filename = 'WarehouseTransfers_' . now()->format('Y-m-d_His') . '.csv';
-
-        $headers = [
-            'Content-Type'        => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-            'Pragma'              => 'no-cache',
-            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
-            'Expires'             => '0',
+        $headerRow = [
+            'Date',
+            'Code',
+            'From WH',
+            'To WH',
+            'Branch',
+            'Items',
+            'Amount',
+            'Demand',
+            'Reversed',
+            'Status',
+            'Created By',
         ];
 
-        $callback = function () use ($transfers) {
-            $output = fopen('php://output', 'w');
+        $rowGenerator = $this->buildTransferCsvRows($transfers);
 
-            // BOM for Excel UTF-8 compatibility
-            fprintf($output, chr(0xEF) . chr(0xBB) . chr(0xBF));
+        $filename = 'WarehouseTransfers_' . now()->format('Y-m-d_His');
 
-            // Header row
-            fputcsv($output, [
-                'Date',
-                'Code',
-                'From WH',
-                'To WH',
-                'Branch',
-                'Items',
-                'Amount',
-                'Demand',
-                'Reversed',
-                'Status',
-                'Created By',
-            ]);
+        // Audit log: row count unknown (cursor() stream — we do not
+        // pre-count). Pass 0; the audit row records that an export
+        // happened, with the filter context.
+        $this->logExport('warehouse_transfers', [
+            'branch_id' => $userBranchId,
+            'from_date' => $request->input('from_date'),
+            'to_date' => $request->input('to_date'),
+            'from_warehouse_id' => $request->input('from_warehouse_id'),
+            'to_warehouse_id' => $request->input('to_warehouse_id'),
+            'status' => $request->input('status'),
+            'search' => $request->input('search'),
+        ], rowCount: 0, byteSize: 0);
 
-            foreach ($transfers as $t) {
-                $branchName = $t->fromWarehouse?->branch?->branch_name
-                    ?? $t->toWarehouse?->branch?->branch_name
-                    ?? '';
+        return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
+    }
 
-                fputcsv($output, [
-                    $t->transfer_date ? \Carbon\Carbon::parse($t->transfer_date)->format('d-m-Y') : '',
-                    $t->transfer_code,
-                    $t->fromWarehouse?->warehouse_name ?? '',
-                    $t->toWarehouse?->warehouse_name ?? '',
-                    $branchName,
-                    $t->items->count(),
-                    number_format((float) $t->items->sum(fn ($item) => (float) $item->qty * (float) $item->rate), 2, '.', ''),
-                    $t->branch_demand_id ? 'Yes' : 'No',
-                    $t->is_reversed ? 'Yes' : 'No',
-                    $t->status,
-                    $t->createdBy?->name ?? '',
-                ]);
-            }
+    /**
+     * Build the row generator for the warehouse-transfer CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * export() method body (the linter cannot parse `yield` inside an
+     * inline closure expression).
+     *
+     * @param  iterable<int, WarehouseTransfer> $transfers
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildTransferCsvRows(iterable $transfers): \Generator
+    {
+        foreach ($transfers as $t) {
+            $branchName = $t->fromWarehouse?->branch?->branch_name
+                ?? $t->toWarehouse?->branch?->branch_name
+                ?? '';
 
-            fclose($output);
-        };
-
-        return Response::stream($callback, 200, $headers);
+            yield [
+                $t->transfer_date ? \Carbon\Carbon::parse($t->transfer_date)->format('d-m-Y') : '',
+                $t->transfer_code,
+                $t->fromWarehouse?->warehouse_name ?? '',
+                $t->toWarehouse?->warehouse_name ?? '',
+                $branchName,
+                $t->items->count(),
+                number_format((float) $t->items->sum(fn ($item) => (float) $item->qty * (float) $item->rate), 2, '.', ''),
+                $t->branch_demand_id ? 'Yes' : 'No',
+                $t->is_reversed ? 'Yes' : 'No',
+                $t->status,
+                $t->createdBy?->name ?? '',
+            ];
+        }
     }
 
     // ========================================================================

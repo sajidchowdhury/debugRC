@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Facades\CsvExporter;
+use App\Http\Controllers\Concerns\WritesExportAuditLog;
 use App\Http\Controllers\Controller;
 use App\Models\StockAdjustment;
 use App\Models\Warehouse;
@@ -51,6 +53,8 @@ use Illuminate\Support\Facades\Response;
  */
 class StockAdjustmentController extends Controller
 {
+    use WritesExportAuditLog;
+
     public function __construct(
         private StockAdjustmentService $adjustmentService,
         private StockService $stockService,
@@ -561,13 +565,19 @@ class StockAdjustmentController extends Controller
      * Mirrors WarehouseTransferController::export(): same filter params as
      * index(), branch isolation (admin sees all; non-admin branch-locked),
      * cursor()-based streaming (memory-safe for large exports), BOM-prefixed
-     * UTF-8 for Excel compatibility. No audit-log row is written — a bulk
-     * export spans many adjustments and the audit log requires a single
-     * stock_adjustment_id; the 'export' action vocab is reserved for a
-     * future per-record export.
+     * UTF-8 for Excel compatibility.
      *
      * Columns: Date, Code, Warehouse, Branch, Category, Type, Items, Total,
      * Status, Submitted/Approved/Confirmed by + at, Reversed?.
+     *
+     * REPORTS-AUDIT-4 (G-150 / csv-export.md G11): refactored to delegate
+     * to CsvExporter::exportFromRows(). The prior docblock stated "No
+     * audit-log row is written" — that exemption is removed: this export
+     * now writes an export_audit_log row via the WritesExportAuditLog
+     * trait (G-132 closure). The legacy per-record StockAdjustmentAuditLogger
+     * vocabulary is unaffected (this is a bulk-list export, distinct from
+     * the per-record stock_adjustment_id audit trail). Column order and
+     * column labels preserved exactly.
      */
     public function export(Request $request)
     {
@@ -593,76 +603,90 @@ class StockAdjustmentController extends Controller
 
         $adjustments = $query->cursor();
 
-        $filename = 'StockAdjustments_' . now()->format('Y-m-d_His') . '.csv';
-
-        $headers = [
-            'Content-Type'        => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-            'Pragma'              => 'no-cache',
-            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
-            'Expires'             => '0',
-        ];
-
         $categoryLabels = StockAdjustment::CATEGORY_LABELS;
         $statusLabels   = StockAdjustment::STATUS_LABELS;
 
-        $callback = function () use ($adjustments, $categoryLabels, $statusLabels) {
-            $output = fopen('php://output', 'w');
+        $headerRow = [
+            'Date',
+            'Code',
+            'Warehouse',
+            'Branch',
+            'Category',
+            'Type',
+            'Items',
+            'Total',
+            'Status',
+            'Submitted By',
+            'Submitted At',
+            'Approved By',
+            'Approved At',
+            'Confirmed By',
+            'Confirmed At',
+            'Reversed',
+        ];
 
-            // BOM for Excel UTF-8 compatibility.
-            fprintf($output, chr(0xEF) . chr(0xBB) . chr(0xBF));
+        $rowGenerator = $this->buildAdjustmentCsvRows($adjustments, $categoryLabels, $statusLabels);
 
-            fputcsv($output, [
-                'Date',
-                'Code',
-                'Warehouse',
-                'Branch',
-                'Category',
-                'Type',
-                'Items',
-                'Total',
-                'Status',
-                'Submitted By',
-                'Submitted At',
-                'Approved By',
-                'Approved At',
-                'Confirmed By',
-                'Confirmed At',
-                'Reversed',
-            ]);
+        $filename = 'StockAdjustments_' . now()->format('Y-m-d_His');
 
-            foreach ($adjustments as $a) {
-                $fmtDate = function ($d): string {
-                    return $d ? \Carbon\Carbon::parse($d)->format('d-m-Y') : '';
-                };
-                $fmtUser = function ($u): string {
-                    return $u ? ($u->username ?? $u->name ?? ('user #' . $u->id)) : '';
-                };
+        // Audit log: row count unknown (cursor() stream — we do not
+        // pre-count). Pass 0; the audit row records that an export
+        // happened, with the filter context.
+        $this->logExport('stock_adjustments', [
+            'branch_id' => $userBranchId,
+            'from_date' => $request->input('from_date'),
+            'to_date' => $request->input('to_date'),
+            'warehouse_id' => $request->input('warehouse_id'),
+            'adjustment_type' => $request->input('adjustment_type'),
+            'adjustment_category' => $request->input('adjustment_category'),
+            'status' => $request->input('status'),
+            'search' => $request->input('search'),
+        ], rowCount: 0, byteSize: 0);
 
-                fputcsv($output, [
-                    $fmtDate($a->adjustment_date),
-                    $a->adjustment_code,
-                    $a->warehouse?->warehouse_name ?? '',
-                    $a->warehouse?->branch?->branch_name ?? '',
-                    $categoryLabels[$a->adjustment_category] ?? $a->adjustment_category,
-                    $a->adjustment_type,
-                    $a->items->count(),
-                    number_format((float) $a->total_amount, 2, '.', ''),
-                    $statusLabels[$a->status] ?? $a->status,
-                    $fmtUser($a->submittedBy),
-                    $fmtDate($a->submitted_at),
-                    $fmtUser($a->approvedBy),
-                    $fmtDate($a->approved_at),
-                    $fmtUser($a->confirmedBy),
-                    $fmtDate($a->confirmed_at),
-                    $a->is_reversed ? 'Yes' : 'No',
-                ]);
-            }
+        return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
+    }
 
-            fclose($output);
+    /**
+     * Build the row generator for the stock-adjustment CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * export() method body (the linter cannot parse `yield` inside an
+     * inline closure expression).
+     *
+     * @param  iterable<int, StockAdjustment> $adjustments
+     * @param  array<string,string> $categoryLabels
+     * @param  array<string,string> $statusLabels
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildAdjustmentCsvRows(iterable $adjustments, array $categoryLabels, array $statusLabels): \Generator
+    {
+        $fmtDate = function ($d): string {
+            return $d ? \Carbon\Carbon::parse($d)->format('d-m-Y') : '';
+        };
+        $fmtUser = function ($u): string {
+            return $u ? ($u->username ?? $u->name ?? ('user #' . $u->id)) : '';
         };
 
-        return Response::stream($callback, 200, $headers);
+        foreach ($adjustments as $a) {
+            yield [
+                $fmtDate($a->adjustment_date),
+                $a->adjustment_code,
+                $a->warehouse?->warehouse_name ?? '',
+                $a->warehouse?->branch?->branch_name ?? '',
+                $categoryLabels[$a->adjustment_category] ?? $a->adjustment_category,
+                $a->adjustment_type,
+                $a->items->count(),
+                number_format((float) $a->total_amount, 2, '.', ''),
+                $statusLabels[$a->status] ?? $a->status,
+                $fmtUser($a->submittedBy),
+                $fmtDate($a->submitted_at),
+                $fmtUser($a->approvedBy),
+                $fmtDate($a->approved_at),
+                $fmtUser($a->confirmedBy),
+                $fmtDate($a->confirmed_at),
+                $a->is_reversed ? 'Yes' : 'No',
+            ];
+        }
     }
 
     /**

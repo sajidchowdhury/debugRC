@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Facades\CsvExporter;
+use App\Http\Controllers\Concerns\WritesExportAuditLog;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\PurchaseReceive\CancelPurchaseReceiveRequest;
 use App\Http\Requests\PurchaseReceive\ConfirmPurchaseReceiveRequest;
@@ -28,6 +30,8 @@ use Illuminate\Support\Facades\DB;
  */
 class PurchaseReceiveController extends Controller
 {
+    use WritesExportAuditLog;
+
     public function __construct(
         private PurchaseReceiveService $receiveService,
         private StockService $stockService
@@ -183,6 +187,11 @@ class PurchaseReceiveController extends Controller
     /**
      * Phase 3 — CSV export of filtered GRNs (branch-scoped).
      * Mirrors legacy `PurchaseReceiveController::export()`.
+     *
+     * REPORTS-AUDIT-4 (G-150 / csv-export.md G11): refactored to delegate
+     * to CsvExporter::exportFromRows(). BOM + Content-Type + RFC 4180
+     * escaping now handled by the canonical service. Column order and
+     * column labels preserved exactly. Writes an export_audit_log row.
      */
     public function export(Request $request)
     {
@@ -213,45 +222,63 @@ class PurchaseReceiveController extends Controller
             ->orderBy('id', 'desc')
             ->get();
 
-        $filename = 'Purchase_Receives_' . now()->format('Y-m-d_His') . '.csv';
+        $headerRow = [
+            'GRN Code', 'PO Code', 'Supplier', 'Branch', 'Warehouse',
+            'Receive Date', 'Item Count', 'Total Amount',
+            'Status', 'Reversed', 'Created By', 'Notes',
+        ];
 
-        return response()->stream(function () use ($receives) {
-            $out = fopen('php://output', 'w');
-            fwrite($out, "\xEF\xBB\xBF"); // UTF-8 BOM for Excel
-            fputcsv($out, [
-                'GRN Code', 'PO Code', 'Supplier', 'Branch', 'Warehouse',
-                'Receive Date', 'Item Count', 'Total Amount',
-                'Status', 'Reversed', 'Created By', 'Notes',
-            ]);
-            foreach ($receives as $r) {
-                $statusLabel = [
-                    'draft'     => 'Draft',
-                    'confirmed' => 'Confirmed',
-                    'cancelled' => 'Cancelled',
-                ][$r->status] ?? ucfirst($r->status);
+        $rowGenerator = $this->buildReceiveCsvRows($receives);
 
-                fputcsv($out, [
-                    $r->receive_code,
-                    $r->purchaseOrder?->po_code ?? '',
-                    $r->supplier?->supplier_name ?? '',
-                    $r->branch?->branch_name ?? '',
-                    $r->warehouse?->warehouse_name ?? '',
-                    optional($r->receive_date)->format('Y-m-d'),
-                    $r->items()->count(),
-                    number_format((float) $r->total_amount, 2, '.', ''),
-                    $statusLabel,
-                    $r->is_reversed ? 'Yes' : 'No',
-                    $r->created_by ? ('User #' . $r->created_by) : 'System',
-                    $r->notes ?? '',
-                ]);
-            }
-            fclose($out);
-        }, 200, [
-            'Content-Type'        => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-            'Pragma'              => 'no-cache',
-            'Expires'             => '0',
-        ]);
+        $filename = 'Purchase_Receives_' . now()->format('Y-m-d_His');
+
+        // Audit log: row count is known precisely (we used ->get()).
+        $this->logExport('purchase_receives', [
+            'branch_id' => $branchId,
+            'from_date' => $fromDate,
+            'to_date' => $toDate,
+            'status' => $status,
+            'returned' => $showReturned,
+            'search' => $search,
+        ], rowCount: $receives->count(), byteSize: 0);
+
+        return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
+    }
+
+    /**
+     * Build the row generator for the purchase-receive CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * export() method body (the linter cannot parse `yield` inside an
+     * inline closure expression).
+     *
+     * @param  iterable<int, PurchaseReceive> $receives
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildReceiveCsvRows(iterable $receives): \Generator
+    {
+        foreach ($receives as $r) {
+            $statusLabel = [
+                'draft'     => 'Draft',
+                'confirmed' => 'Confirmed',
+                'cancelled' => 'Cancelled',
+            ][$r->status] ?? ucfirst($r->status);
+
+            yield [
+                $r->receive_code,
+                $r->purchaseOrder?->po_code ?? '',
+                $r->supplier?->supplier_name ?? '',
+                $r->branch?->branch_name ?? '',
+                $r->warehouse?->warehouse_name ?? '',
+                optional($r->receive_date)->format('Y-m-d'),
+                $r->items()->count(),
+                number_format((float) $r->total_amount, 2, '.', ''),
+                $statusLabel,
+                $r->is_reversed ? 'Yes' : 'No',
+                $r->created_by ? ('User #' . $r->created_by) : 'System',
+                $r->notes ?? '',
+            ];
+        }
     }
 
     public function create(Request $request)

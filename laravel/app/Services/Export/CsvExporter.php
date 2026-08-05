@@ -153,23 +153,50 @@ class CsvExporter
      * Build a streamed CSV download response from an iterable of pre-built rows.
      *
      * REPORTS-AUDIT-1 (G-150 / csv-export.md G11) — partial resolution.
+     * REPORTS-AUDIT-4 — finished the refactor of all remaining 11 inline
+     * exports + enhanced with `prepend_rows` + `append_rows` options so
+     * multi-section reports (Trial Balance, Cash Flow) can use the same
+     * canonical path as simple header+data exports.
      *
      * The full refactor of the 13 inline `fputcsv` exports is too large
-     * for one wave. This method is the foundation: it provides the same
-     * streaming + BOM + RFC-4180 guarantees as {@see export()} but for
-     * non-Eloquent sources — arrays, generators, DB cursors, service
-     * pre-built rows. Two of the simplest inline exports
-     * (BudgetController::exportCsv, PurchaseOrderController::export)
-     * were refactored to use this method in this wave. The other 11
-     * remain for a future REPORTS-AUDIT-1b pass.
+     * for one wave. REPORTS-AUDIT-1 laid the foundation + refactored 2
+     * exports; REPORTS-AUDIT-4 finished the remaining 11. This method
+     * provides the same streaming + BOM + RFC-4180 guarantees as
+     * {@see export()} but for non-Eloquent sources — arrays, generators,
+     * DB cursors, service pre-built rows.
+     *
+     * Supported $options keys (all optional):
+     *   - 'content_type' : string  — HTTP Content-Type override.
+     *   - 'bom'          : string  — BOM bytes override (pass '' to skip BOM).
+     *   - 'prepend_rows' : iterable<array> — rows written AFTER the BOM but
+     *                   BEFORE the header row. Used by multi-section reports
+     *                   (Trial Balance) to write title rows ("Trial Balance
+     *                   Report", "Period: X to Y", "Generated: ts") above
+     *                   the column header. Each row is fputcsv'd as-is.
+     *   - 'append_rows'  : iterable<array> — rows written AFTER the data
+     *                   rows. Used by multi-section reports (Trial Balance)
+     *                   to write the GRAND TOTAL row, INTEGRITY CHECKS
+     *                   block, and SUB-LEDGER RECONCILIATION block after
+     *                   the ledger data.
+     *
+     * Header-row behavior:
+     *   - If $headerRow is non-empty, it is written once after the BOM (and
+     *     after any prepend_rows).
+     *   - If $headerRow is empty ([]), NO header line is written. This
+     *     supports reports that have no single fixed column header
+     *     (e.g. Cash Flow Statement, which has per-section sub-headers
+     *     instead of one global column header). Pass an explicit blank
+     *     row via prepend_rows if a separator line is desired.
      *
      * @param  string         $filename  Base filename (without extension / timestamp).
-     * @param  array<string>  $headerRow Column header labels (single row, written once).
+     * @param  array<string>  $headerRow Column header labels (single row, written once). Pass [] for no header.
      * @param  iterable<array<string,mixed>> $rows Pre-built data rows (each row is an array of cell values, written in iteration order).
      * @param  array{
      *     'content_type'?: string,
      *     'bom'?: string,
-     * } $options Optional overrides (e.g. to skip BOM for a non-Excel consumer).
+     *     'prepend_rows'?: iterable<array<mixed>>,
+     *     'append_rows'?: iterable<array<mixed>>,
+     * } $options Optional overrides + multi-section layout rows.
      *
      * @return StreamedResponse
      */
@@ -179,6 +206,8 @@ class CsvExporter
 
         $contentType = (string) ($options['content_type'] ?? $this->contentType);
         $bom = (string) ($options['bom'] ?? $this->bom);
+        $prependRows = $options['prepend_rows'] ?? [];
+        $appendRows  = $options['append_rows']  ?? [];
 
         $headers = [
             'Content-Type'        => $contentType,
@@ -188,7 +217,7 @@ class CsvExporter
             'Expires'             => '0',
         ];
 
-        $callback = function () use ($headerRow, $rows, $bom): void {
+        $callback = function () use ($headerRow, $rows, $bom, $prependRows, $appendRows): void {
             $out = fopen('php://output', 'wb');
 
             if ($out === false) {
@@ -202,12 +231,30 @@ class CsvExporter
                 fwrite($out, $bom);
             }
 
-            // Header row.
-            $this->fputcsv($out, array_values($headerRow));
+            // Prepend rows — written BEFORE the header row. Used by
+            // multi-section reports (Trial Balance, Cash Flow) for title
+            // rows, period labels, and "Generated: ts" stamps.
+            foreach ($prependRows as $row) {
+                $this->fputcsv($out, array_values((array) $row));
+            }
+
+            // Header row. Skipped when empty so multi-section reports that
+            // have no single global column header (e.g. Cash Flow Statement)
+            // do not produce a spurious blank line above the first section.
+            if (!empty($headerRow)) {
+                $this->fputcsv($out, array_values($headerRow));
+            }
 
             // Data rows — iterate one at a time so generators / cursors
             // never load the full result set into memory.
             foreach ($rows as $row) {
+                $this->fputcsv($out, array_values((array) $row));
+            }
+
+            // Append rows — written AFTER the data rows. Used by multi-section
+            // reports for totals, integrity-checks block, and sub-ledger
+            // reconciliation sections.
+            foreach ($appendRows as $row) {
                 $this->fputcsv($out, array_values((array) $row));
             }
 

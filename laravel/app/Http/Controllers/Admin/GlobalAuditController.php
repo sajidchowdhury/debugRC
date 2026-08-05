@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Facades\CsvExporter;
+use App\Http\Controllers\Concerns\WritesExportAuditLog;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -35,6 +37,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  */
 class GlobalAuditController extends Controller
 {
+    use WritesExportAuditLog;
+
     /**
      * Canonical list of master-data tables that the AuditableMasterData trait
      * writes audit entries for. Used to populate the table filter dropdown.
@@ -106,6 +110,13 @@ class GlobalAuditController extends Controller
      * UTF-8 characters correctly). Columns:
      *   ID, Timestamp, User ID, Performer, Action, Table, Record ID,
      *   IP Address, User Agent, Summary
+     *
+     * REPORTS-AUDIT-4 (G-150 / csv-export.md G11): refactored to delegate
+     * to CsvExporter::exportFromRows(). BOM + Content-Type + RFC 4180
+     * escaping now handled by the canonical service. Column order and
+     * column labels preserved exactly. Writes an export_audit_log row.
+     * The chunked DB cursor is consumed by the buildAuditCsvRows()
+     * generator (also memory-bounded via chunk(500)).
      */
     public function export(Request $request): StreamedResponse
     {
@@ -114,59 +125,60 @@ class GlobalAuditController extends Controller
             ->orderBy('ual.created_at', 'desc')
             ->orderBy('ual.id', 'desc');
 
-        $filename = 'global_audit_export_' . now()->format('Ymd_His') . '.csv';
-
-        $headers = [
-            'Content-Type'        => 'text/csv; charset=UTF-8',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-            'Cache-Control'       => 'no-store, no-cache, must-revalidate',
-            'Pragma'              => 'no-cache',
-            'Expires'             => '0',
+        $headerRow = [
+            'ID', 'Timestamp', 'User ID', 'Performer',
+            'Action', 'Table', 'Record ID',
+            'IP Address', 'User Agent', 'Summary',
         ];
 
-        $callback = function () use ($query): void {
-            $out = fopen('php://output', 'wb');
-            if ($out === false) {
-                // @codeCoverageIgnoreStart
-                throw new \RuntimeException('Unable to open php://output stream for CSV export.');
-                // @codeCoverageIgnoreEnd
-            }
+        $rowGenerator = $this->buildAuditCsvRows($query);
 
-            // UTF-8 BOM.
-            fwrite($out, "\xEF\xBB\xBF");
+        $filename = 'global_audit_export_' . now()->format('Ymd_His');
 
-            // Header row.
-            $headerRow = [
-                'ID', 'Timestamp', 'User ID', 'Performer',
-                'Action', 'Table', 'Record ID',
-                'IP Address', 'User Agent', 'Summary',
+        // Audit log: row count unknown (chunked cursor stream — we do
+        // not pre-count). Pass 0; the audit row records that an export
+        // happened, with the filter context.
+        $this->logExport('global_audit', $filters, rowCount: 0, byteSize: 0);
+
+        return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
+    }
+
+    /**
+     * Build the row generator for the global-audit CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * export() method body (the linter cannot parse `yield` inside an
+     * inline closure expression).
+     *
+     * Uses cursor() (LazyCollection) so each row is yielded one at a time
+     * — PHP's `yield` keyword only works at the top level of a generator
+     * function, NOT inside a nested closure (the chunk() callback would
+     * swallow the yields). cursor() internally uses a single chunked
+     * cursor + streams rows on iteration, so memory stays bounded for
+     * very large audit-log exports (the table grows monotonically with
+     * every master-data write).
+     *
+     * @param  \Illuminate\Database\Query\Builder $query
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildAuditCsvRows($query): \Generator
+    {
+        foreach ($query->cursor() as $row) {
+            $details = $this->decodeDetails($row->details);
+            $summary = $this->summarize($details);
+            yield [
+                $row->id,
+                optional($row->created_at)->format('Y-m-d H:i:s'),
+                $row->user_id,
+                $row->performed_by_name ?? ('#' . ($row->user_id ?? 0)),
+                $row->action,
+                $details['table'] ?? '',
+                $details['record_id'] ?? '',
+                $row->ip_address ?? '',
+                $row->user_agent ?? '',
+                $summary,
             ];
-            fputcsv($out, $headerRow, ',', '"', '\\');
-
-            // Stream in chunks to keep memory bounded.
-            $query->chunk(500, function ($rows) use ($out): void {
-                foreach ($rows as $row) {
-                    $details = $this->decodeDetails($row->details);
-                    $summary = $this->summarize($details);
-                    fputcsv($out, [
-                        $row->id,
-                        optional($row->created_at)->format('Y-m-d H:i:s'),
-                        $row->user_id,
-                        $row->performed_by_name ?? ('#' . ($row->user_id ?? 0)),
-                        $row->action,
-                        $details['table'] ?? '',
-                        $details['record_id'] ?? '',
-                        $row->ip_address ?? '',
-                        $row->user_agent ?? '',
-                        $summary,
-                    ], ',', '"', '\\');
-                }
-            });
-
-            fclose($out);
-        };
-
-        return response()->stream($callback, Response::HTTP_OK, $headers);
+        }
     }
 
     /**

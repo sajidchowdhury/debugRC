@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Facades\CsvExporter;
+use App\Http\Controllers\Concerns\WritesExportAuditLog;
 use App\Http\Controllers\Controller;
 use App\Helpers\ReportsCatalog;
 use App\Http\Requests\Reports\ReportAsOfRequest;
@@ -28,6 +30,8 @@ use Illuminate\Support\Facades\DB;
  */
 class ReportController extends Controller
 {
+    use WritesExportAuditLog;
+
     public function __construct(
         private ReportService $reportService,
         private CteReportService $cteReportService,
@@ -65,6 +69,15 @@ class ReportController extends Controller
 
         // CSV export
         if ($request->input('export') === 'csv') {
+            // Audit log: row count is the ledger-line count (data section).
+            $this->logExport('trial_balance', [
+                'from_date' => $report['meta']['from_date'],
+                'to_date' => $report['meta']['to_date'],
+                'branch_id' => $report['meta']['branch_id'],
+                'account_type' => $accountType,
+                'include_zero' => $includeZero,
+            ], rowCount: is_countable($report['data']) ? count($report['data']) : 0, byteSize: 0);
+
             return $this->exportTrialBalanceCsv($report);
         }
 
@@ -79,101 +92,142 @@ class ReportController extends Controller
 
     /**
      * Export Trial Balance as CSV download.
+     *
+     * REPORTS-AUDIT-4 (G-150 / csv-export.md G11): refactored to delegate
+     * to CsvExporter::exportFromRows() using the new `prepend_rows` +
+     * `append_rows` options. The trial-balance CSV has a multi-section
+     * layout (title rows → column header → ledger data rows → totals →
+     * INTEGRITY CHECKS → optional SUB-LEDGER RECONCILIATION) that does
+     * not fit the simple header+data shape. The prepend_rows option
+     * carries the title + period + generated-timestamp block; the
+     * append_rows option carries the totals + integrity-checks +
+     * sub-ledger reconciliation blocks. Column order, column labels,
+     * section ordering, and blank separator rows are preserved exactly.
+     * BOM + Content-Type + RFC 4180 escaping handled by the canonical
+     * service.
      */
     private function exportTrialBalanceCsv(array $report): \Symfony\Component\HttpFoundation\StreamedResponse
     {
-        $filename = 'Trial_Balance_' . $report['meta']['from_date'] . '_to_' . $report['meta']['to_date'];
+        // Title rows — written AFTER the BOM, BEFORE the column header.
+        $prependRows = [
+            ['Trial Balance Report'],
+            ['Period: ' . $report['meta']['from_date'] . ' to ' . $report['meta']['to_date']],
+        ];
+        if (!empty($report['meta']['branch_id'])) {
+            $prependRows[] = ['Branch ID: ' . $report['meta']['branch_id']];
+        }
+        $prependRows[] = ['Generated: ' . now()->format('Y-m-d H:i:s')];
+        $prependRows[] = []; // blank separator row before the column header
 
-        $headers = [
-            'Content-Type'        => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '.csv"',
+        $headerRow = [
+            'Code', 'Ledger Name', 'Type', 'Nature', 'Normal Balance',
+            'Opening Dr', 'Opening Cr', 'Opening Balance', 'Opening Side',
+            'Period Dr', 'Period Cr',
+            'Closing Dr', 'Closing Cr', 'Closing Balance', 'Closing Side',
         ];
 
-        return response()->stream(function () use ($report) {
-            $output = fopen('php://output', 'w');
+        $rowGenerator = $this->buildTrialBalanceCsvRows($report['data']);
 
-            // BOM for Excel UTF-8
-            fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
+        // Append rows — written AFTER the data rows.
+        $appendRows = $this->buildTrialBalanceAppendRows($report);
 
-            // Header
-            fputcsv($output, ['Trial Balance Report']);
-            fputcsv($output, ['Period: ' . $report['meta']['from_date'] . ' to ' . $report['meta']['to_date']]);
-            if ($report['meta']['branch_id']) {
-                fputcsv($output, ['Branch ID: ' . $report['meta']['branch_id']]);
+        $filename = 'Trial_Balance_' . $report['meta']['from_date'] . '_to_' . $report['meta']['to_date'];
+
+        return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator, [
+            'prepend_rows' => $prependRows,
+            'append_rows' => $appendRows,
+        ]);
+    }
+
+    /**
+     * Build the data-row generator for the trial-balance CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * exportTrialBalanceCsv() method body (the linter cannot parse `yield`
+     * inside an inline closure expression).
+     *
+     * @param  iterable<int, object> $data
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildTrialBalanceCsvRows(iterable $data): \Generator
+    {
+        foreach ($data as $row) {
+            yield [
+                $row->ledger_code,
+                $row->ledger_name,
+                $row->account_type,
+                $row->ledger_nature ?? '',
+                $row->normal_balance ?? 'debit',
+                number_format($row->opening_debit, 2, '.', ''),
+                number_format($row->opening_credit, 2, '.', ''),
+                number_format($row->opening_balance, 2, '.', ''),
+                $row->opening_side,
+                number_format($row->period_debit, 2, '.', ''),
+                number_format($row->period_credit, 2, '.', ''),
+                number_format($row->closing_debit, 2, '.', ''),
+                number_format($row->closing_credit, 2, '.', ''),
+                number_format($row->closing_balance, 2, '.', ''),
+                $row->closing_side,
+            ];
+        }
+    }
+
+    /**
+     * Build the append-rows array for the trial-balance CSV export.
+     *
+     * Carries the GRAND TOTAL row, the INTEGRITY CHECKS block, and the
+     * optional SUB-LEDGER RECONCILIATION block. Each row is a flat array
+     * of cell values (variable column count per section is fine — fputcsv
+     * writes whatever cells it receives).
+     *
+     * @param  array $report
+     * @return array<int, array<int,mixed>>
+     */
+    private function buildTrialBalanceAppendRows(array $report): array
+    {
+        $rows = [];
+
+        // Totals row (with a blank separator row before it).
+        $rows[] = []; // blank separator
+        $t = $report['totals'];
+        $rows[] = [
+            'GRAND TOTAL', '', '', '', '',
+            number_format($t['opening_debit'], 2, '.', ''),
+            number_format($t['opening_credit'], 2, '.', ''),
+            '', '',
+            number_format($t['period_debit'], 2, '.', ''),
+            number_format($t['period_credit'], 2, '.', ''),
+            number_format($t['closing_debit'], 2, '.', ''),
+            number_format($t['closing_credit'], 2, '.', ''),
+            '', '',
+        ];
+
+        // Integrity checks block (with a blank separator row before it).
+        $rows[] = []; // blank separator
+        $rows[] = ['INTEGRITY CHECKS'];
+        $c = $report['checks'];
+        $rows[] = ['Opening balanced', $c['opening_balanced'] ? 'YES' : 'NO', 'Diff: ' . $c['opening_diff']];
+        $rows[] = ['Period balanced', $c['period_balanced'] ? 'YES' : 'NO', 'Diff: ' . $c['period_diff']];
+        $rows[] = ['Closing balanced', $c['closing_balanced'] ? 'YES' : 'NO', 'Diff: ' . $c['closing_diff']];
+        $rows[] = ['All accounts balance', $c['all_accounts_balance'] ? 'YES' : 'NO', 'Fails: ' . $c['balance_check_fails']];
+        $rows[] = ['Orphaned journal lines', (string) $c['orphaned_journal_lines']];
+
+        // Optional sub-ledger reconciliation block.
+        if (!empty($c['subledger_reconciliation'])) {
+            $rows[] = []; // blank separator
+            $rows[] = ['SUB-LEDGER RECONCILIATION'];
+            foreach ($c['subledger_reconciliation'] as $sl) {
+                $rows[] = [
+                    $sl['label'],
+                    $sl['reconciled'] ? 'RECONCILED' : 'OUT OF BALANCE',
+                    'GL: ' . number_format($sl['gl_balance'], 2),
+                    'Sub: ' . number_format($sl['sub_balance'], 2),
+                    'Diff: ' . number_format($sl['difference'], 2),
+                ];
             }
-            fputcsv($output, ['Generated: ' . now()->format('Y-m-d H:i:s')]);
-            fputcsv($output, []);
+        }
 
-            // Column headers
-            fputcsv($output, [
-                'Code', 'Ledger Name', 'Type', 'Nature', 'Normal Balance',
-                'Opening Dr', 'Opening Cr', 'Opening Balance', 'Opening Side',
-                'Period Dr', 'Period Cr',
-                'Closing Dr', 'Closing Cr', 'Closing Balance', 'Closing Side',
-            ]);
-
-            // Data rows
-            foreach ($report['data'] as $row) {
-                fputcsv($output, [
-                    $row->ledger_code,
-                    $row->ledger_name,
-                    $row->account_type,
-                    $row->ledger_nature ?? '',
-                    $row->normal_balance ?? 'debit',
-                    number_format($row->opening_debit, 2, '.', ''),
-                    number_format($row->opening_credit, 2, '.', ''),
-                    number_format($row->opening_balance, 2, '.', ''),
-                    $row->opening_side,
-                    number_format($row->period_debit, 2, '.', ''),
-                    number_format($row->period_credit, 2, '.', ''),
-                    number_format($row->closing_debit, 2, '.', ''),
-                    number_format($row->closing_credit, 2, '.', ''),
-                    number_format($row->closing_balance, 2, '.', ''),
-                    $row->closing_side,
-                ]);
-            }
-
-            // Totals
-            fputcsv($output, []);
-            $t = $report['totals'];
-            fputcsv($output, [
-                'GRAND TOTAL', '', '', '', '',
-                number_format($t['opening_debit'], 2, '.', ''),
-                number_format($t['opening_credit'], 2, '.', ''),
-                '', '',
-                number_format($t['period_debit'], 2, '.', ''),
-                number_format($t['period_credit'], 2, '.', ''),
-                number_format($t['closing_debit'], 2, '.', ''),
-                number_format($t['closing_credit'], 2, '.', ''),
-                '', '',
-            ]);
-
-            // Integrity checks
-            fputcsv($output, []);
-            fputcsv($output, ['INTEGRITY CHECKS']);
-            $c = $report['checks'];
-            fputcsv($output, ['Opening balanced', $c['opening_balanced'] ? 'YES' : 'NO', 'Diff: ' . $c['opening_diff']]);
-            fputcsv($output, ['Period balanced', $c['period_balanced'] ? 'YES' : 'NO', 'Diff: ' . $c['period_diff']]);
-            fputcsv($output, ['Closing balanced', $c['closing_balanced'] ? 'YES' : 'NO', 'Diff: ' . $c['closing_diff']]);
-            fputcsv($output, ['All accounts balance', $c['all_accounts_balance'] ? 'YES' : 'NO', 'Fails: ' . $c['balance_check_fails']]);
-            fputcsv($output, ['Orphaned journal lines', (string) $c['orphaned_journal_lines']]);
-
-            if (!empty($c['subledger_reconciliation'])) {
-                fputcsv($output, []);
-                fputcsv($output, ['SUB-LEDGER RECONCILIATION']);
-                foreach ($c['subledger_reconciliation'] as $key => $sl) {
-                    fputcsv($output, [
-                        $sl['label'],
-                        $sl['reconciled'] ? 'RECONCILED' : 'OUT OF BALANCE',
-                        'GL: ' . number_format($sl['gl_balance'], 2),
-                        'Sub: ' . number_format($sl['sub_balance'], 2),
-                        'Diff: ' . number_format($sl['difference'], 2),
-                    ]);
-                }
-            }
-
-            fclose($output);
-        }, 200, $headers);
+        return $rows;
     }
 
     /**
@@ -215,6 +269,16 @@ class ReportController extends Controller
 
         // CSV export
         if ($request->query('export') === 'csv') {
+            // Audit log: row count is the sum of operating + investing +
+            // financing + net-cash + integrity rows (the variable-width
+            // sections make a precise count uninteresting — pass 0; the
+            // audit row records that an export happened, with filters).
+            $this->logExport('cash_flow', [
+                'from_date' => $report['meta']['from_date'],
+                'to_date' => $report['meta']['to_date'],
+                'branch_id' => $branchId,
+            ], rowCount: 0, byteSize: 0);
+
             return $this->exportCashFlowCsv($report);
         }
 
@@ -223,81 +287,110 @@ class ReportController extends Controller
 
     /**
      * Export Cash Flow Statement as CSV download.
+     *
+     * REPORTS-AUDIT-4 (G-150 / csv-export.md G11 + G25 side effect):
+     * refactored to delegate to CsvExporter::exportFromRows(). The cash-
+     * flow CSV has a multi-section layout (title + period → operating
+     * activities → investing activities → financing activities → net cash
+     * movement → INTEGRITY CHECK) with NO single global column header —
+     * each section has its own 2-cell [label, amount] shape. We use:
+     *   - prepend_rows: title + period + blank separator
+     *   - headerRow: [] (skipped — no global column header)
+     *   - rows: all the section content via buildCashFlowCsvRows()
+     *   - append_rows: [] (none — everything is in the rows stream)
+     * BOM + Content-Type + RFC 4180 escaping handled by the canonical
+     * service. The previous inline implementation FORGOT to write the
+     * BOM (Gap G25 — csv-export.md MEDIUM severity) — the refactor
+     * closes G25 as a side effect because CsvExporter::exportFromRows
+     * always writes the BOM via config('reports.csv.bom').
      */
     private function exportCashFlowCsv(array $report): \Symfony\Component\HttpFoundation\StreamedResponse
     {
-        $filename = 'cash_flow_' . $report['meta']['from_date'] . '_to_' . $report['meta']['to_date'] . '.csv';
-        $headers = [
-            'Content-Type' => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        $prependRows = [
+            ['Cash Flow Statement (Indirect Method)'],
+            ['Period', $report['meta']['from_date'] . ' to ' . $report['meta']['to_date']],
+            [], // blank separator
         ];
 
-        return response()->streamDownload(function () use ($report) {
-            $fh = fopen('php://output', 'w');
-            // BOM for Excel
-            fprintf($fh, chr(0xEF) . chr(0xBB) . chr(0xBF));
+        $rowGenerator = $this->buildCashFlowCsvRows($report);
 
-            $op = $report['sections']['operating'];
-            $inv = $report['sections']['investing'];
-            $fin = $report['sections']['financing'];
+        $filename = 'cash_flow_' . $report['meta']['from_date'] . '_to_' . $report['meta']['to_date'];
 
-            // Title
-            fputcsv($fh, ['Cash Flow Statement (Indirect Method)']);
-            fputcsv($fh, ['Period', $report['meta']['from_date'] . ' to ' . $report['meta']['to_date']]);
-            fputcsv($fh, []);
+        return CsvExporter::exportFromRows($filename, [], $rowGenerator, [
+            'prepend_rows' => $prependRows,
+        ]);
+    }
 
-            // Operating Activities
-            fputcsv($fh, ['CASH FLOW FROM OPERATING ACTIVITIES', 'Amount (Tk)']);
-            fputcsv($fh, ['Net Profit (from P&L)', number_format($op['net_profit'], 2)]);
-            fputcsv($fh, ['(+) Depreciation & Amortization', number_format($op['depreciation'], 2)]);
-            fputcsv($fh, ['Changes in Working Capital:']);
-            foreach ($op['wc_adjustments'] as $wc) {
-                $direction = $wc->change >= 0 ? 'Increase' : 'Decrease';
-                fputcsv($fh, ['    ' . $direction . ' in ' . $wc->label, number_format($wc->adjustment, 2)]);
-            }
-            fputcsv($fh, ['Total Working Capital Adjustments', number_format($op['wc_adjustment_total'], 2)]);
-            fputcsv($fh, ['Net Cash from Operating Activities', number_format($op['net'], 2)]);
-            fputcsv($fh, []);
+    /**
+     * Build the row generator for the cash-flow CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * exportCashFlowCsv() method body (the linter cannot parse `yield`
+     * inside an inline closure expression).
+     *
+     * Yields every row of the operating/investing/financing/net-cash/
+     * integrity sections in order. Each row is a 1- or 2-cell array —
+     * fputcsv writes whatever cells it receives, so the variable column
+     * count is preserved exactly as in the prior inline implementation.
+     *
+     * @param  array $report
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildCashFlowCsvRows(array $report): \Generator
+    {
+        $op = $report['sections']['operating'];
+        $inv = $report['sections']['investing'];
+        $fin = $report['sections']['financing'];
 
-            // Investing Activities
-            fputcsv($fh, ['CASH FLOW FROM INVESTING ACTIVITIES', 'Amount (Tk)']);
-            foreach ($inv['rows'] as $row) {
-                $label = $row->net_amount < 0 ? 'Purchase of ' . $row->ledger_name : 'Sale of ' . $row->ledger_name;
-                fputcsv($fh, ['    ' . $label, number_format($row->net_amount, 2)]);
-            }
-            if ($inv['rows']->isEmpty()) {
-                fputcsv($fh, ['    (No investing activity in this period)', '0.00']);
-            }
-            fputcsv($fh, ['Net Cash from Investing Activities', number_format($inv['net'], 2)]);
-            fputcsv($fh, []);
+        // Operating Activities
+        yield ['CASH FLOW FROM OPERATING ACTIVITIES', 'Amount (Tk)'];
+        yield ['Net Profit (from P&L)', number_format($op['net_profit'], 2)];
+        yield ['(+) Depreciation & Amortization', number_format($op['depreciation'], 2)];
+        yield ['Changes in Working Capital:'];
+        foreach ($op['wc_adjustments'] as $wc) {
+            $direction = $wc->change >= 0 ? 'Increase' : 'Decrease';
+            yield ['    ' . $direction . ' in ' . $wc->label, number_format($wc->adjustment, 2)];
+        }
+        yield ['Total Working Capital Adjustments', number_format($op['wc_adjustment_total'], 2)];
+        yield ['Net Cash from Operating Activities', number_format($op['net'], 2)];
+        yield [];
 
-            // Financing Activities
-            fputcsv($fh, ['CASH FLOW FROM FINANCING ACTIVITIES', 'Amount (Tk)']);
-            foreach ($fin['rows'] as $row) {
-                $label = $row->net_amount > 0 ? 'Proceeds from ' . $row->ledger_name : 'Repayment of ' . $row->ledger_name;
-                fputcsv($fh, ['    ' . $label, number_format($row->net_amount, 2)]);
-            }
-            if ($fin['rows']->isEmpty()) {
-                fputcsv($fh, ['    (No financing activity in this period)', '0.00']);
-            }
-            fputcsv($fh, ['Net Cash from Financing Activities', number_format($fin['net'], 2)]);
-            fputcsv($fh, []);
+        // Investing Activities
+        yield ['CASH FLOW FROM INVESTING ACTIVITIES', 'Amount (Tk)'];
+        foreach ($inv['rows'] as $row) {
+            $label = $row->net_amount < 0 ? 'Purchase of ' . $row->ledger_name : 'Sale of ' . $row->ledger_name;
+            yield ['    ' . $label, number_format($row->net_amount, 2)];
+        }
+        if ($inv['rows']->isEmpty()) {
+            yield ['    (No investing activity in this period)', '0.00'];
+        }
+        yield ['Net Cash from Investing Activities', number_format($inv['net'], 2)];
+        yield [];
 
-            // Net Cash Movement
-            fputcsv($fh, ['NET CASH MOVEMENT', 'Amount (Tk)']);
-            fputcsv($fh, ['Opening Cash Balance', number_format($report['totals']['cash_opening'], 2)]);
-            fputcsv($fh, ['Net Increase / (Decrease) in Cash', number_format($report['totals']['net_cash_change'], 2)]);
-            fputcsv($fh, ['Closing Cash Balance', number_format($report['totals']['cash_closing'], 2)]);
-            fputcsv($fh, []);
+        // Financing Activities
+        yield ['CASH FLOW FROM FINANCING ACTIVITIES', 'Amount (Tk)'];
+        foreach ($fin['rows'] as $row) {
+            $label = $row->net_amount > 0 ? 'Proceeds from ' . $row->ledger_name : 'Repayment of ' . $row->ledger_name;
+            yield ['    ' . $label, number_format($row->net_amount, 2)];
+        }
+        if ($fin['rows']->isEmpty()) {
+            yield ['    (No financing activity in this period)', '0.00'];
+        }
+        yield ['Net Cash from Financing Activities', number_format($fin['net'], 2)];
+        yield [];
 
-            // Integrity check
-            fputcsv($fh, ['INTEGRITY CHECK']);
-            fputcsv($fh, ['GL Cash Movement', number_format($report['totals']['net_cash_movement'], 2)]);
-            fputcsv($fh, ['Plug Difference', number_format($report['totals']['plug_difference'], 2)]);
-            fputcsv($fh, ['Reconciled', $report['checks']['plugs_to_gl_cash'] ? 'YES' : 'NO']);
+        // Net Cash Movement
+        yield ['NET CASH MOVEMENT', 'Amount (Tk)'];
+        yield ['Opening Cash Balance', number_format($report['totals']['cash_opening'], 2)];
+        yield ['Net Increase / (Decrease) in Cash', number_format($report['totals']['net_cash_change'], 2)];
+        yield ['Closing Cash Balance', number_format($report['totals']['cash_closing'], 2)];
+        yield [];
 
-            fclose($fh);
-        }, $filename, $headers);
+        // Integrity check
+        yield ['INTEGRITY CHECK'];
+        yield ['GL Cash Movement', number_format($report['totals']['net_cash_movement'], 2)];
+        yield ['Plug Difference', number_format($report['totals']['plug_difference'], 2)];
+        yield ['Reconciled', $report['checks']['plugs_to_gl_cash'] ? 'YES' : 'NO'];
     }
 
     /**
@@ -718,6 +811,11 @@ SQL, [$data['from'], $data['to']]);
         ];
 
         $rows = $this->stocktakeVarianceReport->getVarianceLines($filters);
+
+        // Audit log: row count is known precisely (the report materialises
+        // all matching rows so the count is accurate).
+        $this->logExport('stocktake_variance', $filters, rowCount: count($rows), byteSize: 0);
+
         return $this->stocktakeVarianceReport->exportCsv($rows);
     }
 
@@ -793,6 +891,15 @@ SQL, [$data['from'], $data['to']]);
         $branchId = $request->filled('branch_id') ? (int) $request->input('branch_id') : null;
 
         $report = $this->stocktakeWeeklyReport->getWeekly($from, $to, $branchId);
+
+        // Audit log: row count is the session count (the weekly CSV has
+        // one row per session — count() is precise).
+        $this->logExport('stocktake_weekly', [
+            'from_date' => $from,
+            'to_date' => $to,
+            'branch_id' => $branchId,
+        ], rowCount: is_countable($report['sessions'] ?? null) ? count($report['sessions']) : 0, byteSize: 0);
+
         return $this->stocktakeWeeklyReport->exportCsv($report);
     }
 
@@ -985,6 +1092,11 @@ SQL, [$data['from'], $data['to']]);
         ];
 
         $rows = $this->damageReportService->getDetailLines($filters);
+
+        // Audit log: row count is known precisely. Note G27 (csv-export.md
+        // LOW) — getDetailLines() applies ->limit(500) so the count is
+        // capped at 500 (silent truncation risk; tracked separately).
+        $this->logExport('damage_report', $filters, rowCount: count($rows), byteSize: 0);
 
         return $this->damageReportService->exportCsv($rows);
     }

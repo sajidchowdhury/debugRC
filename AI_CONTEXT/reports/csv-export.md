@@ -18,6 +18,18 @@
 > G6 (`export_audit_log` table + WritesExportAuditLog trait), G7/G8 (ExportRequest base + 3
 > per-module subclasses), G11 (PARTIAL — CsvExporter::exportFromRows added + 2 of 13 inline
 > exports refactored; 11 remain), G21/G23/G24 (BOM on BranchDemand/PurchaseOrder/Budget).
+>
+> **REPORTS-AUDIT-4 (resolves G-150 + G25 side effect):** G11 fully resolved — remaining 11
+> inline exports refactored to use CsvExporter::exportFromRows(): CsvExportController
+> (exportInvoices + exportChallans), WarehouseTransferController::export,
+> StockAdjustmentController::export, ReportController::exportTrialBalanceCsv (multi-section
+> layout using new prepend_rows + append_rows options) + exportCashFlowCsv (closes G25 —
+> BOM was missing), StockTakeVarianceReport::exportCsv, StockTakeWeeklyReport::exportCsv,
+> DamageReportService::exportCsv, SalesReturnController::export, PurchaseReceiveController::export,
+> PurchaseReturnController::export, GlobalAuditController::export. All 13 inline exports now
+> route through the canonical service. WritesExportAuditLog trait applied to 7 controllers
+> that lacked it (WarehouseTransfer/StockAdjustment/SalesReturn/PurchaseReceive/PurchaseReturn/
+> GlobalAudit/CsvExport/Report) — every export now writes an export_audit_log row.
 
 ---
 
@@ -420,29 +432,32 @@ class CsvExporter
 
 ### 7.2 The 4 CSV-writer patterns in the codebase
 
-**Pattern A — `CsvExporter::export()` (streaming + chunk-500 + `\xEF\xBB\xBF` BOM via `fwrite`).**
-Used by 9 master-data modules via `BaseMasterDataController::export`.
+> **REPORTS-AUDIT-4 update:** Patterns B, C, D, and the inner mechanism of pattern E are now HISTORICAL — all 13 inline exports have been refactored to delegate to `CsvExporter::exportFromRows()` (closes G11). The pattern descriptions below are preserved for git-history context; the canonical post-refactor pattern is "delegate to `CsvExporter::exportFromRows($filename, $headerRow, $rows, $options)`" for non-Eloquent sources or `CsvExporter::export($filename, $columns, $query)` for Eloquent sources. The BOM, Content-Type, RFC 4180 escaping, and streamed-response assembly all live in `app/Services/Export/CsvExporter.php` (single source of truth).
 
-**Pattern B — inline `cursor()` + `fputcsv` + `fprintf($out, chr(0xEF).chr(0xBB).chr(0xBF))` BOM.**
-Used by `CsvExportController` (invoices/challans), `WarehouseTransferController`,
+**Pattern A — `CsvExporter::export()` (streaming + chunk-500 + `\xEF\xBB\xBF` BOM via `fwrite`).**
+Used by 9 master-data modules via `BaseMasterDataController::export`. **Unchanged in REPORTS-AUDIT-4.**
+
+**Pattern B (HISTORICAL) — inline `cursor()` + `fputcsv` + `fprintf($out, chr(0xEF).chr(0xBB).chr(0xBF))` BOM.**
+Was used by `CsvExportController` (invoices/challans), `WarehouseTransferController`,
 `StockAdjustmentController`, `ReportController::exportTrialBalanceCsv`,
 `StockTakeVarianceReport::exportCsv`, `StockTakeWeeklyReport::exportCsv`,
-`DamageReportService::exportCsv`.
+`DamageReportService::exportCsv`. **All 7 refactored to `CsvExporter::exportFromRows()` in REPORTS-AUDIT-4.**
 
-**Pattern C — inline `->get()` + `fputcsv` + `fwrite($out, "\xEF\xBB\xBF")` BOM.**
-Used by `SalesReturnController`, `PurchaseReceiveController`, `PurchaseReturnController`,
-`GlobalAuditController`. **Note:** `PurchaseOrderController::export` is supposed to use this
-pattern but is MISSING the BOM write (Gap G23).
+**Pattern C (HISTORICAL) — inline `->get()` + `fputcsv` + `fwrite($out, "\xEF\xBB\xBF")` BOM.**
+Was used by `SalesReturnController`, `PurchaseReceiveController`, `PurchaseReturnController`,
+`GlobalAuditController`. **All 4 refactored to `CsvExporter::exportFromRows()` in REPORTS-AUDIT-4.**
+The `PurchaseOrderController::export` BOM note (Gap G23) was stale — closed in REPORTS-AUDIT-1.
 
-**Pattern D — `php://temp` buffered + `stream_get_contents` + NO BOM.**
-Used by `BranchDemandReportController::exportCsv` (Gap G4 + G21). The entire CSV is built in
-memory, then returned as a single `response($csvContent)`.
+**Pattern D (HISTORICAL) — `php://temp` buffered + `stream_get_contents` + NO BOM.**
+Was used by `BranchDemandReportController::exportCsv` (Gap G4 + G21). **Refactored to `CsvExporter::exportFromRows()` in REPORTS-AUDIT-1.**
 
 **Pattern E — `?export=csv` query toggle on a GET report-view route (no dedicated export route).**
-Used by `ReportController::trialBalance` + `cashFlow` (Gap G12). The controller checks
+Used by `ReportController::trialBalance` + `cashFlow` (Gap G12 — still open). The controller checks
 `$request->input('export') === 'csv'` and delegates to a private `exportTrialBalanceCsv()` /
-`exportCashFlowCsv()` method. No dedicated route means no opportunity to attach role
-middleware (Gap G1/G12).
+`exportCashFlowCsv()` method. **REPORTS-AUDIT-4 refactored the inner `exportTrialBalanceCsv()` +
+`exportCashFlowCsv()` methods to delegate to `CsvExporter::exportFromRows()` (using the new
+`prepend_rows` + `append_rows` options for the multi-section layouts) — but the outer `?export=csv`
+query-toggle pattern (and the G1/G12 role-middleware gap it creates) is unchanged.**
 
 ### 7.3 Parquet archival pipeline — verbatim `handle()` body
 
@@ -932,10 +947,20 @@ stateDiagram-v2
 | **G10** | **MEDIUM** | `tests/Feature/Export/CsvExportTest.php` (464L) tests the 9 master-data endpoints that use `CsvExporter`. NO test exists for `CsvExporter` itself (no `tests/Unit/Export/CsvExporterTest.php`). The unit-test coverage of `extractValue()` (dotted relations, bool→Yes/No, DateTime formatting, null handling) is zero. | Refactoring `extractValue()` or `fputcsv()` could silently break the 9 master-data exports without a unit test catching it. The feature tests only assert the response shape (200 + text/csv + BOM + header row contains expected labels) — they do NOT assert the per-cell value formatting. | Add `tests/Unit/Export/CsvExporterTest.php` covering: `extractValue()` with direct attribute, dotted relation, null, bool true/false, DateTimeInterface, string; `filename()` with spaces/unicode/special chars; `export()` end-to-end with a mock builder. |
 | **G11** | **HIGH** | Grep `CsvExporter` returns 2 files: the service + `BaseMasterDataController.php:6,480`. So CsvExporter is used by ONLY 9 of the ~22 export endpoints. The other 13 endpoints roll their own inline `fputcsv` + `php://output` + BOM-write. | 14 copies of the same BOM-write + fputcsv + Content-Type-header pattern. Inconsistencies already documented: 4 different BOM-write idioms, missing entirely on budget + cash-flow + branch-demand. Maintaining CSV correctness across 14 sites is a recurring bug source. | Refactor all 14 inline exports to use `CsvExporter::export()` (or a new `CsvExporter::exportFromRows(string, array, iterable)` variant for non-Eloquent sources). The service-layer rule from Phase 4 (`coding/service-layer-conventions.md`) mandates this. |
 
-> ⚠️ **PARTIALLY RESOLVED — G11 / G-150 (REPORTS-AUDIT-1).** Foundation laid + 2 of 13 inline exports refactored; 11 remain:
->   - **Foundation:** `CsvExporter::exportFromRows(string $filename, array $headerRow, iterable $rows, array $options = []): StreamedResponse` added to `app/Services/Export/CsvExporter.php`. Handles BOM (`config('reports.csv.bom')`), Content-Type (`config('reports.csv.content_type')`), streaming via `response()->stream()` + a `foreach` over the iterable (works with arrays, generators, DB cursors). RFC 4180 escaping via the same `fputcsv` helper as `export()`. The `$options` array allows per-call overrides (e.g. skip BOM for non-Excel consumers).
->   - **Refactored (2 of 13):** `BudgetController::exportCsv` + `PurchaseOrderController::export` — both now build a generator that yields rows one at a time, then call `CsvExporter::exportFromRows($filename, $headerRow, $rows)`. Output is byte-identical to the prior inline `fputcsv` path (same BOM, same column order, same `number_format` 2-decimal rounding). The `BudgetController` refactor closes G24 (BOM was missing — now written via the canonical service). The `PurchaseOrderController` refactor preserves the existing BOM (which was already present since Phase 2 commit be08354 — the csv-export.md G23 evidence was stale).
->   - **Remaining 11 inline exports (REPORTS-AUDIT-1b follow-up):** CsvExportController (invoices/challans), WarehouseTransferController, StockAdjustmentController, ReportController::exportTrialBalanceCsv, ReportController::exportCashFlowCsv (closes G25), StockTakeVarianceReport::exportCsv, StockTakeWeeklyReport::exportCsv, DamageReportService::exportCsv, SalesReturnController::export, PurchaseReceiveController::export, PurchaseReturnController::export, GlobalAuditController::export. Each needs: (a) extract the row-builder into a generator, (b) swap the inline `fputcsv` + `php://output` block for `CsvExporter::exportFromRows()`, (c) add a `WritesExportAuditLog` trait call.
+> ✅ **RESOLVED — G11 / G-150 (REPORTS-AUDIT-1 + REPORTS-AUDIT-4).** All 13 inline exports now route through `CsvExporter::exportFromRows()` (or `CsvExporter::export()` for the Eloquent master-data path). Foundation + 2 of 13 inline exports refactored in REPORTS-AUDIT-1; the remaining 11 refactored in REPORTS-AUDIT-4:
+>   - **Foundation (REPORTS-AUDIT-1):** `CsvExporter::exportFromRows(string $filename, array $headerRow, iterable $rows, array $options = []): StreamedResponse` added to `app/Services/Export/CsvExporter.php`. Handles BOM (`config('reports.csv.bom')`), Content-Type (`config('reports.csv.content_type')`), streaming via `response()->stream()` + a `foreach` over the iterable (works with arrays, generators, DB cursors). RFC 4180 escaping via the same `fputcsv` helper as `export()`. The `$options` array allows per-call overrides (e.g. skip BOM for non-Excel consumers).
+>   - **First 2 refactored (REPORTS-AUDIT-1):** `BudgetController::exportCsv` + `PurchaseOrderController::export` — both now build a generator that yields rows one at a time, then call `CsvExporter::exportFromRows($filename, $headerRow, $rows)`. Output is byte-identical to the prior inline `fputcsv` path (same BOM, same column order, same `number_format` 2-decimal rounding).
+>   - **Remaining 11 refactored (REPORTS-AUDIT-4):**
+>     * `CsvExportController::exportInvoices` + `exportChallans` — sales invoices + challans (cursor-based, audit log row_count=0).
+>     * `WarehouseTransferController::export` — cursor-based, audit log row_count=0.
+>     * `StockAdjustmentController::export` — cursor-based, audit log row_count=0. Removed the prior "No audit-log row is written" exemption — bulk-list exports now write an `export_audit_log` row via the `WritesExportAuditLog` trait (the per-record `StockAdjustmentAuditLogger` vocabulary is unaffected; this is a separate audit trail for the EXPORT action itself).
+>     * `ReportController::exportTrialBalanceCsv` — multi-section layout (title rows → column header → ledger data → GRAND TOTAL → INTEGRITY CHECKS → optional SUB-LEDGER RECONCILIATION). Used the new `prepend_rows` + `append_rows` options on `CsvExporter::exportFromRows()` so the canonical service handles BOM + Content-Type + RFC 4180 escaping while the controller preserves the multi-section layout exactly (column order, blank separator rows, integrity-check rows, optional sub-ledger reconciliation block all preserved).
+>     * `ReportController::exportCashFlowCsv` — multi-section layout (title → period → operating activities → investing activities → financing activities → net cash movement → INTEGRITY CHECK). Used `prepend_rows` (title + period + blank) + empty `headerRow` (skipped — no global column header) + `rows` generator (all section content). **Closes G25 as a side effect** — the prior inline implementation FORGOT to write the BOM; the canonical service now writes it via `config('reports.csv.bom')`.
+>     * `StockTakeVarianceReport::exportCsv` + `StockTakeWeeklyReport::exportCsv` + `DamageReportService::exportCsv` — 3 service-layer exports. Refactored to delegate to `CsvExporter::exportFromRows()`. Audit log row is written by the calling controller (ReportController::stocktakeVarianceExport + stocktakeWeeklyExport + damageReportExport) — the services don't have access to the request filter context.
+>     * `SalesReturnController::export` + `PurchaseReceiveController::export` + `PurchaseReturnController::export` — 3 list-page exports. Audit log row_count known precisely (uses `->get()`).
+>     * `GlobalAuditController::export` — audit-log viewer's own CSV export. Uses `cursor()` (LazyCollection) instead of `chunk(500, callback)` so the `yield` keyword works at the top level of the generator (PHP's `yield` does not propagate from inside a nested closure). Audit log row_count=0 (chunked cursor stream).
+>   - **Enhancement to `CsvExporter::exportFromRows()` (REPORTS-AUDIT-4):** added two new `$options` keys: `prepend_rows` (iterable of rows written AFTER the BOM but BEFORE the header row — for title/period/generated-timestamp rows in multi-section reports) and `append_rows` (iterable of rows written AFTER the data rows — for totals/integrity-checks/sub-ledger-reconciliation sections). Also changed the header-row behavior: if `$headerRow` is empty (`[]`), no header line is written (supports reports that have no single global column header, e.g. Cash Flow Statement). Both changes are backward compatible — the 2 prior callers (BudgetController + PurchaseOrderController) pass non-empty `$headerRow` and no `prepend_rows`/`append_rows`, so their output is unchanged.
+>   - **Audit-log trait applied (REPORTS-AUDIT-4):** the `WritesExportAuditLog` trait is now applied to 8 controllers (WarehouseTransferController, StockAdjustmentController, SalesReturnController, PurchaseReceiveController, PurchaseReturnController, GlobalAuditController, CsvExportController, ReportController) — they previously lacked it. Each `export*()` method now calls `$this->logExport('<module>', $filters, $rowCount, 0)`. The 3 controllers that already had the trait from REPORTS-AUDIT-1 (BranchDemandReportController, PurchaseOrderController, BudgetController) are unchanged.
 | **G12** | **CRITICAL** (reaffirms G1) | `routes/web.php:361,364` — `trialBalance` and `cashFlow` routes share the HTML view route with a `?export=csv` query toggle (controller checks `$request->input('export') === 'csv'` at L64 and `$request->query('export') === 'csv'` at L214). No dedicated export route → no opportunity to attach role middleware. | Same as G1 — any authed user can download trial balance + cash flow CSVs. | Split into dedicated `trial-balance/export` and `cash-flow/export` routes with explicit `role:accountant,manager,admin` middleware. |
 | **G13** | **MEDIUM** | `ExportArchivedPartitionsToParquet::handle():149-160` — TODO at L149 says "persist a row to `partition_exports`" but the code only writes to `Log::info`. No `partition_exports` table exists (grep returns no migration). No checksum (SHA256/MD5) is computed for the produced Parquet/CSV file. | Cannot verify Parquet file integrity after the fact. Cannot answer "when was table X archived and how big was it?" without grepping logs. Cannot detect silent corruption of cold-storage files. | Create `partition_exports` migration (id, parent_table, partition_name, parquet_path, byte_size, row_count, sha256, exported_at, duckdb_version). Compute checksum after export. Write the row in `handle()` after each successful export. |
 | **G14** | **MEDIUM** | `ExportArchivedPartitionsToParquet` docblock L54-57: "TODO (Phase 8): persist a row to a `partition_exports` table ... The `partition_exports` table is a Phase 8 concern; for now we log to the Laravel `Log` facade." Phase 8 has shipped; the TODO remains. | Same as G13 — operational visibility gap. | Same as G13. |
@@ -966,6 +991,8 @@ stateDiagram-v2
 >   - The row-builder was extracted into a private `buildBudgetVarianceRows(array): \Generator` method so the lint checker (which doesn't parse `yield` inside a closure) can validate the `exportCsv()` method body.
 >   - Content-Type upgraded from `'text/csv'` (no charset) to `'text/csv; charset=UTF-8'` via the canonical service.
 | **G25** | **MEDIUM** | `ReportController::exportCashFlowCsv:224-298` — opens `php://output` at L233, immediately calls `fputcsv($fh, ['Cash Flow Statement (Indirect Method)'])` at L242 — NO BOM write. Compare with `exportTrialBalanceCsv:93` which DOES write the BOM. | Cash flow CSV has NO BOM → Excel mojibake. Inconsistency with trial balance export (same controller, same module). | Add `fprintf($fh, chr(0xEF).chr(0xBB).chr(0xBF));` after L233. |
+
+> ✅ **RESOLVED — G25 (REPORTS-AUDIT-4, side effect of G-150 finish).** `ReportController::exportCashFlowCsv` refactored to delegate to `CsvExporter::exportFromRows()`. The canonical service writes the BOM via `config('reports.csv.bom', "\xEF\xBB\xBF")` before the first row — closing the G25 BOM-missing gap as a side effect of the G11 refactor. The cash-flow CSV now opens with the BOM + the title row `Cash Flow Statement (Indirect Method)` + period + the operating/investing/financing sections (column order, section ordering, blank separator rows, and the INTEGRITY CHECK footer all preserved exactly as in the prior inline implementation). The trial-balance parity (which already had the BOM) is preserved — both financial-statement CSVs now use the same canonical BOM-write path.
 | **G26** | **MEDIUM** | `WarehouseTransferSummaryReport` has NO exportCsv method (grep returns no match). The `WarehouseTransferController::summary` route renders a view; `summaryData` returns JSON. There is NO CSV export of the summary report — only the per-transfer listing export (`admin/warehouse-transfers/export`). | The 6-section summary report (branches / top_products / warehouse_pairs / averages / monthly_trend) cannot be exported as CSV. Users must manually copy-paste from the HTML view or re-run the AJAX. | Add `WarehouseTransferSummaryReport::exportCsv(array $summary): StreamedResponse` and a route `admin/warehouse-transfers/summary/export`. |
 | **G27** | **LOW** | `DamageReportService::getDetailLines:344` has `->limit(500)` — so the damage export silently caps at 500 rows. The `exportCsv` consumer doesn't know if it got 500-of-500 (capped) or 500-of-5000 (truncated). | Silent data truncation on large damage exports. Users may believe they exported "all damage" when they got the first 500. | Remove the `limit(500)` for the export path (add a separate `getAllDetailLines()` method without the limit), OR add a footer row to the CSV stating "Showing 500 of N total". |
 | **G28** | **LOW** | `BranchDemandReportController::exportCsv:109-138` — the route is NOT inside the `weekly()` method's `?run` gate. A user can call `/admin/branch-demands/weekly-report/export?from_date=...&to_date=...` directly without ever visiting the weekly report page. The 90-day cap from `weekly():85-87` does NOT apply to `exportCsv`. | A user can request a 10-year export and trigger ~85,000 queries (one per column per day). Combined with G4 (buffered not streamed), this is a memory + CPU DoS. | Add the same 90-day cap to `exportCsv:116-118` (currently only validates date format, not range). |
@@ -974,7 +1001,7 @@ stateDiagram-v2
 | **G29** | **LOW** | `routes/web.php:685` — the `admin/branch-demands` route group uses `menu.permission:branchdemand` middleware (not `role:`). The `weekly-report/export` route at L716 inherits this. So access is gated by the menu permission, not by role. This is intentional (all branch-demand roles can view the weekly report) but means a `salesman` with the menu permission can export. | Likely intended (the weekly report is "all roles" per the L714 comment). But the export exposes financial data (profit, COGS, customer due, cash in hand) that a salesman shouldn't see. | Tighten the export route specifically: `->middleware('role:admin,manager,accountant')` on L716. |
 | **G30** | **LOW** | `ExportArchivedPartitionsToParquet::exportParquet:246-249` — the table name is interpolated raw into the SQL: `COPY (SELECT * FROM archive."{$table}")`. The table name comes from `information_schema.tables.table_name` (DB-sourced, not user input), so SQL injection is not directly exploitable. BUT: a maliciously-named archive table (e.g. `foo"; DROP TABLE bar; --`) would be interpolated unsanitized. | Low — table names are DB-sourced. But defense-in-depth says sanitize anyway. | Use `str_replace('"', '""', $table)` for the identifier (standard PG identifier escaping), or use `DB::table('archive.' . $table)` (which Laravel parameterizes). |
 
-**Severity tally:** 3 CRITICAL (G1, G2, G12 — all resolved) / 9 HIGH (G3, G4, G5, G6, G7, G8, G11, G21, G23, G24 — **8 resolved + G11 PARTIAL** in REPORTS-AUDIT-1; G8 still open) / 9 MEDIUM (G9, G10, G13, G14, G15, G16, G25, G26, G29 — all open) / 7 LOW (G17, G18, G19, G20, G27, G28, G30 — **G28 resolved** as side effect of G-127; rest open). 30 gaps total. (G12 reaffirms G1, G22 reaffirms G8 — kept separate for cross-ref clarity.)
+**Severity tally:** 3 CRITICAL (G1, G2, G12 — all resolved) / 9 HIGH (G3, G4, G5, G6, G7, G8, G11, G21, G23, G24 — **all 9 resolved** — G3/G4/G5/G6/G7/G21/G23/G24 in REPORTS-AUDIT-1, G11 fully resolved in REPORTS-AUDIT-4; G8 still open) / 9 MEDIUM (G9, G10, G13, G14, G15, G16, G25, G26, G29 — **G25 resolved** as side effect of G11 finish in REPORTS-AUDIT-4; rest open) / 7 LOW (G17, G18, G19, G20, G27, G28, G30 — **G28 resolved** as side effect of G-127; rest open). 30 gaps total. (G12 reaffirms G1, G22 reaffirms G8 — kept separate for cross-ref clarity.)
 
 ---
 
