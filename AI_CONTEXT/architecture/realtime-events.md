@@ -1036,10 +1036,13 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
   /modify notification rule config directly via SQL, bypassing the controller + audit log.
 - **Fix:** Enable RLS on all 3 tables.
 
-### G6 — HIGH — `fn_financial_audit_trigger` NOT attached to 8/10 monitored tables (STALE — 7/10 now done; only 3 remain)
+### G6 — HIGH — `fn_financial_audit_trigger` NOT attached to 8/10 monitored tables (RESOLVED — 9/10 done; `notifications` excluded)
 
-> ✅ **PARTIALLY RESOLVED — REPORTS-AUDIT-FIX-1 doc-sync.** 7 of the 10 originally-missing
-> tables now have the trigger attached by subsequent migrations:
+> ✅ **RESOLVED — AUDIT-TRAIL-1 (migration `2026_09_06_000005`).** All 9 technically-compatible tables
+> now have the trigger attached. The 10th (`notifications`) is intentionally excluded for
+> a documented technical + domain reason (see below).
+>
+> Attachment history (9 tables across 4 migrations):
 >   - `sales_invoices` / `sales_challans` / `sales_returns` — migration
 >     `2026_09_01_000002_attach_financial_audit_trigger_to_sales_tables.php` (SALES-AUDIT).
 >   - `stock_transactions` / `damage_invoices` — migration
@@ -1048,28 +1051,46 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
 >   - `notification_rules` / `notification_rule_recipients` — migration
 >     `2026_09_05_000010_attach_financial_audit_trigger_to_notification_and_approval_tables.php`
 >     (WORKFLOWS-AUDIT-1, G-181/G-187).
+>   - `system_policies` / `damage_attachments` — migration
+>     `2026_09_06_000005_attach_financial_audit_trigger_to_remaining_tables.php`
+>     (AUDIT-TRAIL-1, this wave).
 >
-> Only **3 tables remain** without the trigger (all verified to exist):
->   - `system_policies` (migration `2025_01_07_000001_create_system_policies_table.php`)
->   - `damage_attachments` (migration `2026_01_03_000001_damage_attachments.php`)
->   - `notifications` (migration `2025_01_06_000001_create_notification_tables.php` — the
->     `notifications` table itself; `notification_rules` + `notification_rule_recipients`
->     are separate tables that were already done).
+> **`notifications` — INTENTIONALLY EXCLUDED (not a regression, a reasoned scope decision):**
+> The `notifications` table (Laravel-standard polymorphic notification queue, migration
+> `2025_01_06_000001`) has a **UUID** primary key (`$table->uuid('id')->primary()`). The
+> trigger function `fn_financial_audit_trigger()` declares `_record_id BIGINT` and executes
+> `_record_id := NEW.id;` on INSERT/UPDATE/DELETE. PostgreSQL has NO implicit cast from
+> `uuid` to `bigint`, and the UUID text form (e.g. `550e8400-e29b-41d4-a716-446655440000`)
+> is not a valid bigint literal. Attaching the trigger to `notifications` would raise
+> `ERROR: invalid input syntax for type bigint` on EVERY notification INSERT — breaking
+> Laravel's notification dispatch (high-frequency, user-facing). This is a hard blocker.
 >
-> A single small migration (~30 lines, same `attachAuditTrigger` private-helper pattern as
-> `2026_09_06_000002`) closes this gap entirely. Status downgraded from "8/10 missing" to
-> "3/10 missing" — the gap is still H1 (cutover-blocking) but the remaining scope is small.
+> Domain rationale for accepting the exclusion: `notifications` is a TRANSIENT dispatch
+> queue (read-once, routinely purged by `notifications:prune`), NOT a crown-jewel financial
+> table. The tamper-evidence that matters for notification SECURITY is on `notification_rules`
+> + `notification_rule_recipients` (the CONFIG tables that determine who gets notified for
+> what event) — both already audited by migration `2026_09_05_000010`. The transient queue
+> itself does not need hash-chain auditing.
+>
+> Remediation path (deferred — only if a future requirement demands auditing the transient
+> queue): either (a) widen `financial_audit_log.record_id` from `BIGINT` to `TEXT`/`varchar`
+> on the large partitioned audit table with 30+ integer-PK consumers (risky — requires a
+> partition-aware ALTER + backfill + index rebuild), or (b) add a separate UUID-aware audit
+> trigger function + a nullable `uuid_record_id` column. Either is a dedicated task with its
+> own migration + test plan, NOT part of G-094.
 
 - **Original evidence:** `database/sql/02_accounting.sql` L446-454 attaches the trigger to 9
   financial tables. NOT attached to `sales_invoices`, `sales_challans`, `sales_returns`,
   `stock_transactions`, `system_policies`, `damage_invoices`, `damage_attachments`,
   `notifications`, `notification_rules`, `notification_rule_recipients`. Partial overlap:
   `customer_payments` + `journal_entries` DO have it (2/10).
-- **Impact:** A direct DB write to any of the 3 remaining tables (bypassing the app) fires
-  the NOTIFY trigger (for realtime SSE) but produces no `financial_audit_log` row — the
-  change appears in SSE but not in the tamper-evident audit chain.
-- **Fix:** Attach `fn_financial_audit_trigger` to the 3 remaining tables
-  (`system_policies`, `damage_attachments`, `notifications`) in a new migration.
+- **Impact (historical):** A direct DB write to any of the originally-missing tables
+  (bypassing the app) fired the NOTIFY trigger (for realtime SSE) but produced no
+  `financial_audit_log` row — the change appeared in SSE but not in the tamper-evident
+  audit chain. Now resolved for all 9 compatible tables.
+- **Fix (done):** Attached `fn_financial_audit_trigger` to the 9 technically-compatible
+  tables across 4 migrations (see attachment history above). `notifications` excluded —
+  see the UUID-PK rationale in the RESOLVED blockquote.
 
 ### G7 — MEDIUM — Heartbeat interval comment/implementation mismatch + 120s false-positive window
 - **Evidence:** `ListenNotifyWorker.php` L37 docstring says "30 seconds"; L138 actual is

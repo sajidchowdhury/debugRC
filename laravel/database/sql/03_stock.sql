@@ -850,3 +850,37 @@ DROP TRIGGER IF EXISTS trg_audit_stock_transactions ON stock_transactions;
 CREATE TRIGGER trg_audit_stock_transactions
 AFTER INSERT OR UPDATE OR DELETE ON stock_transactions
 FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+
+-- ============================================================
+-- AUDIT-TRAIL-1 (G-094 / architecture/realtime-events.md G6)
+-- Attach fn_financial_audit_trigger to damage_attachments.
+-- Mirror of migration 2026_09_06_000005_attach_financial_audit_trigger_to_remaining_tables.php
+-- (DDL baseline mirror — on a fresh DB, `php artisan migrate` is the
+-- canonical install path; this appendix is documentation + DBA
+-- point-in-time recovery use only).
+--
+-- damage_attachments stores photographic / documentary evidence against a
+-- damage invoice. A malicious DB admin could DELETE attachment rows to
+-- erase proof of a fake write-off (insurance fraud vector) with no audit
+-- trail. The trigger makes such deletions tamper-evident in
+-- financial_audit_log.
+--
+-- The damage_attachments table itself is created by migration
+-- 2026_01_03_000001 (NOT in this SQL baseline — it is migration-only).
+-- The trigger is documented here for DBA point-in-time recovery parity
+-- with the 6 inventory triggers above.
+--
+-- NOTE: the `notifications` table (Laravel-standard UUID PK) is
+-- INTENTIONALLY EXCLUDED from audit-trigger coverage — see migration
+-- 2026_09_06_000005 docstring (UUID PK is incompatible with
+-- financial_audit_log.record_id BIGINT NOT NULL; the trigger function
+-- does `_record_id := NEW.id` into a BIGINT variable — attaching would
+-- crash every notification INSERT).
+--
+-- DROP IF EXISTS before CREATE makes the attachment idempotent.
+-- ============================================================
+
+DROP TRIGGER IF EXISTS trg_audit_damage_attachments ON damage_attachments;
+CREATE TRIGGER trg_audit_damage_attachments
+AFTER INSERT OR UPDATE OR DELETE ON damage_attachments
+FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();

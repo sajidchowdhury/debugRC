@@ -268,6 +268,38 @@ CREATE INDEX idx_ual_created_at_brin ON user_audit_log USING BRIN (created_at) W
 CREATE TRIGGER trg_audit_notification_rules AFTER INSERT OR UPDATE OR DELETE ON notification_rules FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
 CREATE TRIGGER trg_audit_notification_rule_recipients AFTER INSERT OR UPDATE OR DELETE ON notification_rule_recipients FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
 
+-- ── Audit trigger: system_policies (AUDIT-TRAIL-1 G-094) ───────────────────
+-- Attach fn_financial_audit_trigger to the Compliance & Security Policy
+-- Framework header table (mode: NORMAL/INVESTIGATION/READ_ONLY/MAINTENANCE/
+-- EMERGENCY, is_active, activated_by/deactivated_by, reason, expires_at).
+-- A malicious DB admin could flip `is_active` or change `mode` to silently
+-- relax investigation/lockdown posture without leaving a hash-chained audit
+-- trail. The trigger makes such changes tamper-evident in financial_audit_log.
+--
+-- Mirror of migration 2026_09_06_000005_attach_financial_audit_trigger_to_remaining_tables.php
+-- (DDL baseline mirror — on a fresh DB, `php artisan migrate` is the
+-- canonical install path; this appendix is documentation + DBA point-in-time
+-- recovery use only).
+--
+-- The system_policies table itself is created by migration
+-- 2025_01_07_000001 (NOT in this SQL baseline — it is migration-only). The
+-- trigger is documented here for DBA point-in-time recovery parity with the
+-- notification config triggers above.
+--
+-- The trigger function reads branch_id from the row's JSONB (works for
+-- tables without a branch_id column — system_policies is system-scoped,
+-- has no branch_id; _branch_id resolves to NULL which is the correct
+-- posture for system-scoped tables).
+--
+-- NOTE: the `notifications` table (Laravel-standard UUID PK) is
+-- INTENTIONALLY EXCLUDED from audit-trigger coverage — see migration
+-- 2026_09_06_000005 docstring (UUID PK is incompatible with
+-- financial_audit_log.record_id BIGINT NOT NULL).
+--
+-- DROP IF EXISTS before CREATE makes the attachment idempotent.
+DROP TRIGGER IF EXISTS trg_audit_system_policies ON system_policies;
+CREATE TRIGGER trg_audit_system_policies AFTER INSERT OR UPDATE OR DELETE ON system_policies FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+
 -- ── Export Audit Log (REPORTS-AUDIT-1 G-132 / csv-export.md G6) ─────────────
 -- Append-only audit trail for every CSV/JSON/HTML export performed by an
 -- authenticated user. Required for SOX/audit-trail compliance on financial-
