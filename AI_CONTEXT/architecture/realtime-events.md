@@ -931,7 +931,7 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
 
 ### G1 — CRITICAL — Per-user Redis queue is dead code (polled, never written)
 
-> ✅ RESOLVED in commit `<pending>` (G-008, REALTIME-1) — adopted fix option (b):
+> ✅ RESOLVED in commit `b780ca7` (G-008, REALTIME-1) — adopted fix option (b):
 > `NotificationService::dispatch` now writes a per-recipient event to the
 > `rcerp:sse:user:{user_id}` Redis list inside the `foreach ($recipients as $user)`
 > loop, via a new `ListenNotifyService::publishToUser(int $userId, string $pgChannel, array $payload)`
@@ -961,7 +961,7 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
 
 ### G2 — CRITICAL — Partition migration regresses LISTEN/NOTIFY trigger payload
 
-> ✅ RESOLVED in commit `<pending>` (G-009, REALTIME-1) — the partition migration
+> ✅ RESOLVED in commit `b780ca7` (G-009, REALTIME-1) — the partition migration
 > `2026_08_02_000004_partition_transaction_headers_low_fk.php` no longer recreates
 > the simplified `trg_notify_sales_returns()` / `trg_notify_damage_invoices()`
 > functions. Both call sites now `DROP FUNCTION IF EXISTS … CASCADE` (idempotent
