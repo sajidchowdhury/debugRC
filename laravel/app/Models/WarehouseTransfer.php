@@ -38,9 +38,10 @@ use App\Models\Scopes\WarehouseTransferBranchScope;
  *   - Per-transfer audit route: /admin/warehouse-transfers/{id}/audit
  *   - Stock reconciliation route: /admin/warehouse-transfers/reconcile
  *
- * NOTE: Cross-branch intercompany GL is handled by Branch Demand module,
- * not by WarehouseTransfer. The postIntercompanyGL() method is retained
- * for potential Branch Demand use but is NEVER called from WarehouseTransfer.
+ * NOTE: Cross-branch intercompany GL is handled by the Branch Demand module
+ * (`BranchIntercompanyService::postDemandFulfillmentJournals`), NOT by
+ * WarehouseTransfer. The former `postIntercompanyGL()` dead-code method was
+ * removed in FINANCE-2 (G-104).
  *
  * @property int $id
  * @property string $transfer_code

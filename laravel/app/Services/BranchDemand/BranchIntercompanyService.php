@@ -377,18 +377,29 @@ class BranchIntercompanyService
      * Marks all non-reversed ledger entries for this reference as is_reversed.
      * Also records a reversal entry pair that reduces the running balance.
      *
-     * @param string $referenceType e.g. 'demand_transfer'
-     * @param int $referenceId The demand ID
-     * @param int $reversedBy User ID
-     * @param string $reason Reversal reason
-     * @param string $entryDate Y-m-d for the reversal entry
+     * FINANCE-2 (G-108): the two counter-rows now carry the GL reversal JE id
+     * (`journal_entry_id`), so the sub-ledger can be traced back to the
+     * specific reversal JE posted by `JournalPostingService::reverseJournalEntry`.
+     * Previously both rows were inserted with `journal_entry_id = null`, making
+     * the `branch_ledger` ↔ GL reversal linkage one-directional (GL → ledger
+     * via `reference_type='reversal'`, but not ledger → GL).
+     *
+     * @param string      $referenceType         e.g. 'demand_transfer'
+     * @param int         $referenceId           The demand ID
+     * @param int         $reversedBy            User ID
+     * @param string      $reason                Reversal reason
+     * @param string      $entryDate             Y-m-d for the reversal entry
+     * @param int|null    $creditorReversalJeId  GL reversal JE id for the creditor row
+     * @param int|null    $debtorReversalJeId    GL reversal JE id for the debtor row
      */
     public function reverseLedgerByReference(
         string $referenceType,
         int $referenceId,
         int $reversedBy,
         string $reason,
-        string $entryDate
+        string $entryDate,
+        ?int $creditorReversalJeId = null,
+        ?int $debtorReversalJeId = null
     ): void {
         // Find all non-reversed ledger entries for this reference
         $entries = DB::table('branch_ledger')
@@ -438,7 +449,7 @@ class BranchIntercompanyService
             'to_branch_id'     => $creditorBranchId,
             'reference_type'   => 'demand_reversal',
             'reference_id'     => $referenceId,
-            'journal_entry_id' => null,
+            'journal_entry_id' => $debtorReversalJeId, // G-108: link to GL reversal JE
             'debit'            => 0,
             'credit'           => $reversalAmount, // Debtor: credit = reversal (owes less)
             'running_balance'  => $newBalance,
@@ -454,7 +465,7 @@ class BranchIntercompanyService
             'to_branch_id'     => $creditorBranchId,
             'reference_type'   => 'demand_reversal',
             'reference_id'     => $referenceId,
-            'journal_entry_id' => null,
+            'journal_entry_id' => $creditorReversalJeId, // G-108: link to GL reversal JE
             'debit'            => $reversalAmount, // Creditor: debit = reversal (owed less)
             'credit'           => 0,
             'running_balance'  => $newBalance,
@@ -1083,24 +1094,29 @@ class BranchIntercompanyService
             ->where($foreignKeyColumn, $referenceId)
             ->delete();
 
-        // Reverse the branch ledger entries for this settlement
-        $this->reverseLedgerByReference(
-            $referenceType,
-            $referenceId,
-            $reversedBy,
-            $reason,
-            now()->format('Y-m-d')
-        );
-
-        // Reverse the settlement journal (if found)
+        // Reverse the settlement journal FIRST (if found) so we can link the
+        // reversal branch_ledger rows to the GL reversal JE (G-108).
+        $settlementReversalJeId = null;
         $journal = $this->journalPosting->findJournalEntryByReference($referenceType, $referenceId);
         if ($journal) {
-            $this->journalPosting->reverseJournalEntry(
+            $settlementReversalJeId = $this->journalPosting->reverseJournalEntry(
                 (int) $journal->id,
                 $reversedBy,
                 "Settlement reversal: {$reason}"
             );
         }
+
+        // Reverse the branch ledger entries for this settlement, linking both
+        // counter-rows to the single settlement reversal JE.
+        $this->reverseLedgerByReference(
+            $referenceType,
+            $referenceId,
+            $reversedBy,
+            $reason,
+            now()->format('Y-m-d'),
+            $settlementReversalJeId,
+            $settlementReversalJeId
+        );
 
         Log::info('BranchDemand settlement reversed', [
             'reference_type'     => $referenceType,

@@ -57,9 +57,13 @@ use Illuminate\Support\Facades\Log;
  *   - NO GL journal (inventory is just reallocated within the same branch;
  *     the branch's total inventory doesn't change)
  *
- * NOTE: The postIntercompanyGL() method is retained for potential future
- * use by the Branch Demand module, but it should NEVER be called from
- * this WarehouseTransfer module due to same-branch enforcement.
+ * NOTE: Cross-branch intercompany GL is handled exclusively by the Branch
+ * Demand module (`BranchIntercompanyService::postDemandFulfillmentJournals`).
+ * The WarehouseTransfer module enforces same-branch only and never posts an
+ * intercompany GL. The former `postIntercompanyGL()` dead-code method was
+ * removed in FINANCE-2 (G-104) — it had fossilized schema bugs (referenced
+ * dropped `branch_ledger` columns `transaction_type` / `amount` / `is_settled`)
+ * and was never called from any code path.
  *
  * Rate semantics (per avg_cost_rule.md §3):
  *   - Source OUT: rate = current avg_cost (cost flows out at average)
@@ -517,103 +521,6 @@ class WarehouseTransferService
 
             return WarehouseTransfer::find($transferId);
         });
-    }
-
-    /**
-     * Post intercompany GL for a cross-branch transfer.
-     * Creates TWO journal entries:
-     *   1. From-branch (creditor): Dr Due-to-Branch / Cr Inventory
-     *   2. To-branch (debtor): Dr Inventory / Cr Due-from-Branch
-     *
-     * @return array [creditor_journal_id, debtor_journal_id]
-     * @throws \RuntimeException If required ledgers not found.
-     */
-    private function postIntercompanyGL(WarehouseTransfer $transfer, int $createdBy): array
-    {
-        $amount = (float) $transfer->total_amount;
-        if ($amount < 0.01) {
-            return [null, null];
-        }
-
-        $inventoryLedgerId = $this->journalPosting->lookupLedgerByNature('inventory');
-        $dueFromLedgerId = $this->journalPosting->lookupLedgerByNature('interbranch_receivable');
-        $dueToLedgerId = $this->journalPosting->lookupLedgerByNature('interbranch_payable');
-
-        if (!$inventoryLedgerId) {
-            throw new \RuntimeException('Inventory ledger not found (nature: inventory).');
-        }
-        if (!$dueFromLedgerId) {
-            throw new \RuntimeException('Interbranch receivable ledger not found (nature: interbranch_receivable).');
-        }
-        if (!$dueToLedgerId) {
-            throw new \RuntimeException('Interbranch payable ledger not found (nature: interbranch_payable).');
-        }
-
-        $transferDate = $transfer->transfer_date->format('Y-m-d');
-        $code = $transfer->transfer_code;
-
-        // 1. From-branch (creditor): Dr Due-to-Branch / Cr Inventory
-        // From-branch loses inventory, gains a payable to to-branch.
-        $creditorEntryId = $this->journalPosting->createJournalEntry([
-            'entry_date' => $transferDate,
-            'reference_type' => 'warehouse_transfer',
-            'reference_id' => $transfer->id,
-            'branch_id' => $transfer->from_branch_id,
-            'description' => "Transfer OUT {$code} — to {$transfer->toBranch->branch_name}",
-            'source' => 'warehouse_transfer',
-            'created_by' => $createdBy,
-        ], [
-            [
-                'ledger_id' => $dueToLedgerId,
-                'debit' => $amount, 'credit' => 0,
-                'memo' => "Stock transfer to {$transfer->toBranch->branch_name} — {$code}",
-            ],
-            [
-                'ledger_id' => $inventoryLedgerId,
-                'debit' => 0, 'credit' => $amount,
-                'memo' => "Stock out — {$code}",
-            ],
-        ]);
-
-        // 2. To-branch (debtor): Dr Inventory / Cr Due-from-Branch
-        // To-branch gains inventory, owes from-branch.
-        $debtorEntryId = $this->journalPosting->createJournalEntry([
-            'entry_date' => $transferDate,
-            'reference_type' => 'warehouse_transfer',
-            'reference_id' => $transfer->id,
-            'branch_id' => $transfer->to_branch_id,
-            'description' => "Transfer IN {$code} — from {$transfer->fromBranch->branch_name}",
-            'source' => 'warehouse_transfer',
-            'created_by' => $createdBy,
-        ], [
-            [
-                'ledger_id' => $inventoryLedgerId,
-                'debit' => $amount, 'credit' => 0,
-                'memo' => "Stock in — {$code}",
-            ],
-            [
-                'ledger_id' => $dueFromLedgerId,
-                'debit' => 0, 'credit' => $amount,
-                'memo' => "Stock transfer from {$transfer->fromBranch->branch_name} — {$code}",
-            ],
-        ]);
-
-        // Record the intercompany settlement in branch_ledger.
-        DB::table('branch_ledger')->insert([
-            'from_branch_id' => $transfer->from_branch_id,
-            'to_branch_id' => $transfer->to_branch_id,
-            'transaction_date' => $transferDate,
-            'transaction_type' => 'warehouse_transfer',
-            'reference_type' => 'warehouse_transfer',
-            'reference_id' => $transfer->id,
-            'amount' => $amount,
-            'description' => "Transfer {$code}",
-            'journal_entry_id' => $creditorEntryId,
-            'is_settled' => false,
-            'created_at' => now(),
-        ]);
-
-        return [$creditorEntryId, $debtorEntryId];
     }
 
     /**
