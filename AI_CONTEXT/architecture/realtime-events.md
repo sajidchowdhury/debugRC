@@ -3,7 +3,7 @@
 > **Module:** Architecture (cross-cutting)
 > **Audience:** Engineers, AI assistants, DevOps, DBAs
 > **Status:** Canonical — expanded in Phase 15 (replaces the Phase 1 high-level summary)
-> **Last reviewed:** REALTIME-1 (post G-008/G-009 fix — both CRITICALs resolved)
+> **Last reviewed:** REALTIME-2 (post G-092 fix — G4 resolved: supervisor + systemd templates added for non-Docker supervision)
 > **Source of truth:** This file + `laravel/app/Services/Notification/ListenNotifyService.php`,
 > `NotificationService.php` + `laravel/app/Http/Controllers/SseController.php` +
 > `laravel/app/Console/Commands/ListenNotifyWorker.php` +
@@ -422,9 +422,17 @@ Writes a JSON heartbeat to Redis key `rcerp:listen_notify:heartbeat` with TTL 12
 
 #### Supervision (G4)
 
+> ✅ **RESOLVED** — see the G4 row in §14 for the full resolution block. In-repo
+> supervisor + systemd config templates now exist under `supervisor/` + `systemd/`.
+
 The worker is **NOT scheduled by Laravel cron** — `routes/console.php` has 5
-`Schedule::command` entries, none for `listen-notify:worker`. Supervision is delegated to
-`docker-compose.yml`:
+`Schedule::command` entries, none for `listen-notify:worker`. This is by design:
+`Schedule::command(...)` runs a command, waits for it to finish, then moves to
+the next scheduled job — every minute, by cron. The worker is a never-ending
+event loop; scheduling it would fork a new instance every minute and block the
+scheduler. Supervision MUST be delegated to a process manager.
+
+**Docker deployments** — handled by `docker-compose.yml`:
 
 ```yaml
 rcerp_listen_notify:
@@ -442,8 +450,22 @@ rcerp_listen_notify:
   working_dir: /var/www/laravel
 ```
 
-There is **no in-repo `supervisor.conf` or systemd unit file**. Non-Docker deployments
-(bare-metal VPS) must hand-roll supervision.
+**Non-Docker deployments (bare-metal VPS / BDIX)** — handled by in-repo
+supervisor OR systemd templates (pick ONE; do not run both for the same
+worker):
+
+| File | Process manager | Notes |
+|---|---|---|
+| `supervisor/rcerp-listen-notify.conf` | supervisord | Companion: `supervisor/rcerp-queue-worker.conf`. Provisioning in `../deployment/vps-bdix-deployment.md` §8.10. |
+| `systemd/rcerp-listen-notify.service` | systemd (Ubuntu-native, pid 1) | Companion: `systemd/rcerp-queue-worker.service` (template unit). Cutover target for F-10. |
+
+Both templates use the same worker command (`php artisan listen-notify:worker`),
+`numprocs=1` / single-instance (PostgreSQL `LISTEN` is connection-scoped —
+multiple workers would each receive every NOTIFY, causing duplicate fanout),
+and `autorestart` / `Restart=on-failure` so transient failures (PG disconnect,
+OOM, PHP fatal) trigger a restart. The worker's Redis heartbeat key
+`rcerp:listen_notify:heartbeat` (TTL 120s, written every 60s) is the
+application-level liveness signal surfaced at `/sse/status`.
 
 ### 7.3 `SseController` — the SSE stream + status
 
@@ -852,8 +874,11 @@ stateDiagram-v2
 - **`push.js` is dead** (BR10 / G15) — 0 bytes, unreferenced. Do NOT load it.
 - **`pg_notify` payload is text** (JSON string, BR7). Keep payloads small; PostgreSQL
   truncates at 8 KB. The largest realistic payload is ~500 bytes — not an active risk.
-- **No in-repo supervisor/systemd config** (G4). Docker's `restart: unless-stopped` is
-  the ONLY supervision. Non-Docker deployments must hand-roll it.
+- **In-repo supervisor + systemd config templates now exist** (G4 — RESOLVED).
+  Docker's `restart: unless-stopped` is the Docker-deployment supervision
+  mechanism. Non-Docker deployments (bare-metal VPS / BDIX) use either
+  `supervisor/rcerp-listen-notify.conf` OR `systemd/rcerp-listen-notify.service`
+  (pick ONE — see `supervisor/README.md` § "Choosing supervisor vs systemd").
 - **Hardcoded constants** (G8): `HEARTBEAT_INTERVAL`, `MAX_CONNECTION_TIME`,
   `POLL_INTERVAL_US`, Redis TTLs, trim sizes — all `private const` in PHP classes. No
   `config/realtime.php` or `.env` vars. Tuning requires code change + redeploy.
@@ -880,9 +905,12 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
    the 10 trigger functions, `rcerp_notify()` helper, `v_listen_notify_channels` view, and
    the Laravel-standard `notifications` table to `database/sql/06_payment_and_misc.sql` +
    `07_views_triggers_constraints.sql`. Add `notification_rule_recipients` to baseline.
-4. **G4 — Add supervisor/systemd config templates to repo.** Create a `supervisor/`
-   directory with `rcerp-listen-notify.conf` + a `systemd/rcerp-listen-notify.service`
-   unit file. Document the choice in the deployment README.
+4. **G4 — Add supervisor/systemd config templates to repo.** ✅ RESOLVED —
+   `supervisor/rcerp-listen-notify.conf` + `supervisor/rcerp-queue-worker.conf`
+   + `systemd/rcerp-listen-notify.service` + `systemd/rcerp-queue-worker.service`
+   (template unit) created. Documented in `supervisor/README.md` +
+   `systemd/README.md`; cross-referenced from
+   `../deployment/vps-bdix-deployment.md` §8.10 + F-10.
 5. **G5 — Enable RLS on `notifications`, `notification_rules`,
    `notification_rule_recipients`.** `notifications`: policy on `notifiable_id =
    current_setting('app.user_id')::int`; `notification_rules` + pivot: admin-bypass-only.
@@ -927,7 +955,7 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
 
 ## 14. Gap catalogue
 
-20 gaps total: 2 CRITICAL (both ✅ resolved in REALTIME-1), 5 HIGH, 6 MEDIUM, 7 LOW.
+20 gaps total: 2 CRITICAL (both ✅ resolved in REALTIME-1), 5 HIGH (4 ✅ resolved: G1 in REALTIME-1, G4 in G-092, G5 in G-093/G-179, G6 in AUDIT-TRAIL-1; G2 + G3 remain open), 6 MEDIUM, 7 LOW.
 
 ### G1 — CRITICAL — Per-user Redis queue is dead code (polled, never written)
 
@@ -1019,12 +1047,57 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
 - **Fix:** Regenerate `database/sql/*.sql` baseline from a migrated DB.
 
 ### G4 — HIGH — Worker not scheduled by Laravel cron; no in-repo supervisor/systemd config
+
+> ✅ **RESOLVED** (G-092). In-repo supervisor + systemd config templates now
+> exist for both workers (LISTEN/NOTIFY + Laravel queue):
+>
+> - `supervisor/rcerp-listen-notify.conf` — supervisord program for the
+>   LISTEN/NOTIFY worker. `numprocs=1` (PG `LISTEN` is connection-scoped;
+>   multiple workers would each receive every NOTIFY → duplicate fanout).
+>   `autorestart=true`, `stopwaitsecs=10`, `stdout_logfile_maxbytes=20MB` × 10
+>   backups, `environment=APP_ENV="production"`.
+> - `supervisor/rcerp-queue-worker.conf` — companion for the Laravel queue
+>   worker. `numprocs=2` (mirrors the snippet in
+>   `../deployment/vps-bdix-deployment.md` §8.10), `stopwaitsecs=3600`,
+>   `--max-time=3600` for hourly self-restart (mitigates PHP long-running
+>   memory growth).
+> - `systemd/rcerp-listen-notify.service` — Ubuntu-native systemd unit
+>   (pid 1, no extra package install). `Restart=on-failure`, `RestartSec=5s`,
+>   `After=postgresql.service redis-server.service` (correct ordering), and
+>   hardened with `NoNewPrivileges` + `ProtectSystem=full` +
+>   `ReadWritePaths=/var/www/rcerp_v2/laravel/storage` + 5 other systemd
+>   security directives.
+> - `systemd/rcerp-queue-worker.service` — systemd template unit
+>   (`rcerp-queue-worker@.service`); instantiate as `rcerp-queue-worker@1` +
+>   `rcerp-queue-worker@2` for 2 workers (systemd has no native `numprocs`).
+> - `supervisor/README.md` + `systemd/README.md` — install + verify + log
+>   access + deploy restart + worker-health (Redis heartbeat) docs, plus a
+>   side-by-side comparison table for choosing between the two.
+>
+> **Why supervisor/systemd, NOT Laravel cron?** The worker is a never-ending
+> event loop. `Schedule::command(...)` in `routes/console.php` runs a command,
+> waits for it to finish, then moves to the next scheduled job every minute.
+> Scheduling a non-exiting command would fork a new instance every minute
+> (process leak) and block the scheduler so no other scheduled job runs. A
+> process manager (supervisor OR systemd) is the correct pattern for
+> long-running PHP workers. The 5 schedulable commands in `routes/console.php`
+> (report refresh, stale-draft cancel, stock-drift reconcile, partition
+> export, depreciation post) are a DIFFERENT category of async work — they
+> exit promptly and ARE cron-managed (see `../deployment/cron-scheduled-jobs.md`).
+>
+> **Doc sync:** §7.2 Supervision block updated to list both Docker and
+> non-Docker supervision paths. §12 caveat updated to reflect in-repo
+> templates now exist. §13 Future improvements item #4 marked RESOLVED.
+> `../deployment/vps-bdix-deployment.md` §8.10 + F-10 cross-referenced to the
+> in-repo templates (F-10 cutover target now exists — migration from
+> supervisord to systemd is a one-step operation).
+
 - **Evidence:** `routes/console.php` L7-74 — 5 `Schedule::command` entries, NONE for
   `listen-notify:worker`. `docker-compose.yml` L251-291 — `rcerp_listen_notify` container
   with `restart: unless-stopped`. Grep repo for `supervisor.conf` / `systemd` /
-  `.service`: **0 in-repo matches**.
+  `.service`: **0 in-repo matches** (pre-resolution; now 4 templates + 2 READMEs).
 - **Impact:** Non-Docker deployments have no documented supervision mechanism.
-- **Fix:** Add `supervisor/` + `systemd/` config templates.
+- **Fix (done):** Added `supervisor/` + `systemd/` config templates + README docs.
 
 ### G5 — HIGH — No RLS on `notifications`, `notification_rules`, `notification_rule_recipients`
 

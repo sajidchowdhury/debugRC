@@ -1,0 +1,73 @@
+# ===========================================================================
+# RC_ERP_v2 — systemd unit for the Laravel queue worker
+# ===========================================================================
+# Purpose:
+#   Ubuntu-native alternative to supervisor/rcerp-queue-worker.conf. The
+#   companion to rcerp-listen-notify.service — the two workers are
+#   provisioned together.
+#
+#   NOTE on concurrency: supervisor uses `numprocs=2` to run 2 worker
+#   processes. systemd does not have a native `numprocs` equivalent for
+#   Type=simple units — instead, EITHER (a) install this unit twice under
+#   different names (rcerp-queue-worker@.service template + 2 instances), OR
+#   (b) accept 1 worker (suitable for low-traffic deployments).
+#
+#   This template uses approach (a): a systemd template unit. Instantiate
+#   with:
+#     sudo systemctl enable --now rcerp-queue-worker@1
+#     sudo systemctl enable --now rcerp-queue-worker@2
+#
+# Install:
+#   sudo cp systemd/rcerp-queue-worker.service \
+#          /etc/systemd/system/rcerp-queue-worker@.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rcerp-queue-worker@1
+#   sudo systemctl enable --now rcerp-queue-worker@2
+#
+# Verify:
+#   sudo systemctl status rcerp-queue-worker@1 rcerp-queue-worker@2
+#   sudo journalctl -u rcerp-queue-worker@1 -f
+# ===========================================================================
+
+[Unit]
+Description=RC_ERP_v2 Laravel queue worker (instance %i)
+Documentation=file:///var/www/rcerp_v2/AI_CONTEXT/deployment/cron-scheduled-jobs.md
+After=network-online.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rcerp
+Group=rcerp
+WorkingDirectory=/var/www/rcerp_v2/laravel
+ExecStart=/usr/bin/php /var/www/rcerp_v2/laravel/artisan queue:work --sleep=3 --tries=3 --max-time=3600
+Restart=on-failure
+RestartSec=5s
+StartLimitBurst=10
+StartLimitIntervalSec=60s
+TimeoutStopSec=3600s
+KillSignal=SIGTERM
+SendSIGKILL=yes
+
+# --max-time=3600 means the worker self-restarts hourly. TimeoutStopSec=3600
+# is a generous ceiling so a worker mid-job is not SIGKILLed during a deploy.
+
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/www/rcerp_v2/laravel/storage
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+Environment=APP_ENV=production
+
+[Install]
+WantedBy=multi-user.target

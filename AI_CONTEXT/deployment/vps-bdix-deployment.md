@@ -461,8 +461,34 @@ php artisan tinker --execute="
 
 ### 8.10 Step 9 — Configure supervisor for the queue + listen-notify workers
 
+> **Canonical templates now live in-repo** (G-092 resolved). The `.conf` blocks
+> below are mirrored verbatim from `supervisor/rcerp-queue-worker.conf` +
+> `supervisor/rcerp-listen-notify.conf`. Prefer copying the in-repo files over
+> hand-typing the heredocs — they include rotation (`stdout_logfile_maxbytes`,
+> `stdout_logfile_backups`) + `startsecs` + `startretries` + `directory` +
+> `environment=APP_ENV="production"` that the inline snippet below omits for
+> brevity. The systemd equivalents (`systemd/rcerp-listen-notify.service` +
+> `systemd/rcerp-queue-worker.service` template unit) are an Ubuntu-native
+> alternative tracked by F-10 — see `supervisor/README.md` § "Choosing
+> supervisor vs systemd" for the trade-off. Pick ONE process manager; do not
+> run both for the same worker.
+>
+> **Why not Laravel cron?** Both workers are long-running event loops that
+> never exit. `Schedule::command(...)` in `routes/console.php` would fork a
+> new instance every minute and block the scheduler. A process manager
+> (supervisor OR systemd) is the correct pattern for non-exiting PHP commands.
+> The schedulable commands (the 5 in `routes/console.php`) are documented in
+> `cron-scheduled-jobs.md` — they are a different category of async work.
+
 ```bash
 sudo apt install -y supervisor
+
+# Copy the in-repo templates (preferred over the inline heredocs below)
+sudo cp supervisor/rcerp-queue-worker.conf   /etc/supervisor/conf.d/
+sudo cp supervisor/rcerp-listen-notify.conf  /etc/supervisor/conf.d/
+
+# --- Inline equivalents (for environments where the in-repo files are not
+#     available at provision time — e.g. a manual disaster-recovery shell) ---
 
 # Queue worker
 sudo cat > /etc/supervisor/conf.d/rcerp-queue-worker.conf <<'CONF'
@@ -495,7 +521,7 @@ CONF
 sudo supervisorctl reread
 sudo supervisorctl update
 sudo supervisorctl start rcerp-queue-worker:*
-sudo supervisorctl start rcerp-listen-notify:*
+sudo supervisorctl start rcerp-listen-notify
 ```
 
 ### 8.11 Step 10 — Configure the Laravel scheduler (cron)
@@ -706,7 +732,13 @@ sudo supervisorctl restart all
 - **F-9 — Add a `php artisan deploy` command.** Would wrap the §9 routine deploy sequence
   into a single command with rollback-on-failure.
 - **F-10 — Migrate from supervisord to systemd.** Supervisor is fine but systemd is the
-  Ubuntu-native process manager. Would eliminate one package dependency.
+  Ubuntu-native process manager. Would eliminate one package dependency. **Cutover target
+  now exists in-repo** (G-092): `systemd/rcerp-listen-notify.service` +
+  `systemd/rcerp-queue-worker.service` (template unit, run 2 instances via
+  `rcerp-queue-worker@1` + `rcerp-queue-worker@2`). Migration is a one-step operation:
+  `systemctl disable --now rcerp-listen-notify rcerp-queue-worker:*` then
+  `systemctl enable --now rcerp-listen-notify rcerp-queue-worker@1 rcerp-queue-worker@2`.
+  See `systemd/README.md` for install + hardening notes.
 
 ---
 

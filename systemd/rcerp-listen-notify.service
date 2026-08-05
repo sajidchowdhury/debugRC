@@ -1,0 +1,102 @@
+# ===========================================================================
+# RC_ERP_v2 — systemd unit for the LISTEN/NOTIFY worker
+# ===========================================================================
+# Purpose:
+#   Ubuntu-native alternative to supervisor/rcerp-listen-notify.conf. systemd
+#   is pid 1 on Ubuntu 22.04 LTS — no extra package install needed. This unit
+#   is the systemd equivalent of docker-compose's `rcerp_listen_notify` service
+#   (with `restart: unless-stopped`) for bare-metal VPS / BDIX deployments.
+#
+#   The worker is NOT schedulable by Laravel cron — it is a never-ending event
+#   loop. See supervisor/README.md for the full rationale.
+#
+# Install:
+#   sudo cp systemd/rcerp-listen-notify.service \
+#          /etc/systemd/system/rcerp-listen-notify.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable rcerp-listen-notify
+#   sudo systemctl start rcerp-listen-notify
+#
+# Verify:
+#   sudo systemctl status rcerp-listen-notify
+#   # Expected: active (running)
+#
+#   sudo journalctl -u rcerp-listen-notify -f
+#   # Tail the worker log (stdout/stderr captured by journald).
+#
+# Tuning notes:
+#   - Restart=on-failure: any non-zero exit (PG disconnect, OOM, PHP fatal)
+#     triggers a restart. RestartSec=5s gives PG/Redis time to come up if the
+#     worker died because of a downstream flap. NOT Restart=always — we want
+#     `systemctl stop` to actually stop, not be overridden.
+#   - The `[Unit]` After= + Requires= ensure the worker starts only after PG
+#     + Redis are up. The Requires= is soft — if postgresql.service is
+#     restarted, systemd will restart this unit too. If you do NOT want that
+#     (e.g. PG planned maintenance window), use Wants= instead.
+#   - User=rcerp: the worker runs as the same user as PHP-FPM (see
+#     `AI_CONTEXT/deployment/vps-bdix-deployment.md` §5.6 — Ubuntu rcerp user,
+#     /var/www/rcerp_v2 ownership).
+#   - WorkingDirectory= MUST be the Laravel root so `artisan` resolves
+#     bootstrap + config. The worker reads DB + Redis credentials from
+#     `.env` here.
+#   - Environment=APP_ENV=production: prevents Laravel from enabling debug
+#     helpers in the worker path. The .env file is the real source of truth;
+#     this is a belt-and-braces default.
+#
+# Cross-references:
+#   - Gap G-092 (architecture/realtime-events.md G4): absence of in-repo
+#     supervisor/systemd config templates. This file is the systemd half of
+#     the canonical fix.
+#   - `supervisor/rcerp-listen-notify.conf`: the supervisord alternative. Pick
+#     ONE; do not run both for the same worker.
+#   - `AI_CONTEXT/deployment/vps-bdix-deployment.md` F-10: tracks "migrate
+#     from supervisord to systemd" — this template is the cutover target.
+# ===========================================================================
+
+[Unit]
+Description=RC_ERP_v2 LISTEN/NOTIFY worker (PostgreSQL -> Redis Pub/Sub -> SSE)
+Documentation=file:///var/www/rcerp_v2/AI_CONTEXT/architecture/realtime-events.md
+After=network-online.target postgresql.service redis-server.service
+Requires=postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rcerp
+Group=rcerp
+WorkingDirectory=/var/www/rcerp_v2/laravel
+ExecStart=/usr/bin/php /var/www/rcerp_v2/laravel/artisan listen-notify:worker
+# No ExecStop: the worker has no pcntl signal handler, so SIGTERM (KillSignal
+# below) terminates PHP immediately. PostgreSQL cleans up LISTEN state on
+# connection close. The worker's in-process cleanup (UNLISTEN + "Worker
+# stopped" log) is best-effort — on graceful shutdown via SIGTERM it does not
+# run, which is acceptable: the next start re-issues LISTEN idempotently.
+Restart=on-failure
+RestartSec=5s
+StartLimitBurst=10
+StartLimitIntervalSec=60s
+TimeoutStopSec=15s
+KillSignal=SIGTERM
+SendSIGKILL=yes
+
+# Stdout/stderr → journald (view with `journalctl -u rcerp-listen-notify`)
+StandardOutput=journal
+StandardError=journal
+
+# Hardening (the worker only needs: PG socket/TCP, Redis TCP, file read of
+# laravel/, file write to laravel/storage/logs/)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/www/rcerp_v2/laravel/storage
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+Environment=APP_ENV=production
+
+[Install]
+WantedBy=multi-user.target
