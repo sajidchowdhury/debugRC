@@ -632,7 +632,18 @@ A user has to know the CTE URL to get the reconciliation-grade version.
 | **G14** | **LOW** | `ReportsCatalog.php:9` docblock (cross-ref `reports/reports-catalog.md` G16) — "all 18 reports across 5 categories" doesn't mention Phase 1E CTE reports. | Stale docblock. | Update docblock to "Phase 5 + Phase 6 + Phase 1E" + actual count. |
 | **G15** | **LOW** | No `?format=csv` on the 4 CTE routes. | Users who want CSV of CTE data have to use the non-CTE route (if it has CSV) or copy-paste from the HTML. | Add `CteReportService::exportCsv()` that wraps the JSON response in a CSV writer. Add `?export=csv` toggle to the 4 routes. |
 
-**Severity tally:** 1 CRITICAL (G1 ✅ b3a9fd7) / 6 HIGH (G2 ✅ G-125/REPORTS-2-1665ae5, G4 ✅ G-128/REPORTS-AUDIT-2, G7, G8 ✅ G-139/G-142, G9 ✅ G-143/G-146, G10 ✅ G-147/G-149 — 5 of 6 HIGH resolved) / 3 MEDIUM (G11, G12, G13) / 2 LOW (G14, G15). 11 gaps total. (G1, G2, G4, G7, G8, G9, G10, G14 cross-reference `reports/reports-catalog.md` for the same findings.)
+> ✅ **RESOLVED — G15 / G-288 (REPORTS-AUDIT-6).** Two-layer fix:
+>   1. **`app/Services/Reports/CteReportService.php`** — added `exportCsv(string $reportName, array $data): StreamedResponse` method that dispatches to a per-report flattener via a `switch ($reportName)`:
+>      - `today_summary` → `exportTodaySummaryCsv()` — 1 row per KPI across 6 sub-sections (today / mtd / outstanding / growth / pending / ar_aging) + top_customers + top_products + branch_revenue data rows.
+>      - `ar_aging` → `exportArAgingCsv()` — 1 row per customer with aging buckets + Currency + GRAND TOTALS + GL RECONCILIATION block via `buildArAgingAppendRows()`.
+>      - `general_ledger` → `exportGeneralLedgerCsv()` — 1 row per journal line with running balance + Currency + GRAND TOTALS + CHECKS block via `buildGeneralLedgerAppendRows()`.
+>      - `gross_margin` → `exportGrossMarginCsv()` — INVOICE MARGIN section + PRODUCT MARGIN section, each with per-row revenue / COGS / gross profit / margin % + Currency + GRAND TOTALS via `buildGrossMarginAppendRows()`.
+>      All 4 flatteners use `CsvExporter::exportFromRows()` with `prepend_rows` (title + period/branch + currency) + per-report row generator. Unknown `$reportName` throws `InvalidArgumentException`. Currency value sourced from `config('accounting.currency', 'BDT')`.
+>   2. **`app/Http/Controllers/Admin/ReportController.php`** — added `?format=csv` toggle to all 4 CTE controller methods (`todaySummaryCte`, `arAgingCte`, `generalLedgerCte`, `grossMarginCte`). When `$request->input('format') === 'csv'`, the method calls `$this->logExport('cte_<name>', $filters, $rowCount, 0)` (the `WritesExportAuditLog` trait was already applied to this controller in REPORTS-AUDIT-4) then delegates to `CteReportService::exportCsv($reportName, $report)`. The `format` field is validated by `ReportRangeRequest` / `ReportAsOfRequest` (`nullable|string|in:csv,json,html`) — already in place from REPORTS-AUDIT-3.
+>
+> Note: the AR Aging CTE CSV has per-customer rows with Currency (consistent with the non-CTE `ReportController::exportReceivableAgingCsv` added in the same wave under G-236/G-239). The CTE version does NOT carry a Branch Code column — the CTE function returns customer-level aggregates without per-row branch data; if needed, a future pass can add a branch join in the CTE function or look up branch_codes client-side like the non-CTE export does.
+
+**Severity tally:** 1 CRITICAL (G1 ✅ b3a9fd7) / 6 HIGH (G2 ✅ G-125/REPORTS-2-1665ae5, G4 ✅ G-128/REPORTS-AUDIT-2, G7, G8 ✅ G-139/G-142, G9 ✅ G-143/G-146, G10 ✅ G-147/G-149 — 5 of 6 HIGH resolved) / 3 MEDIUM (G11, G12, G13) / 2 LOW (G14, G15 ✅ RESOLVED REPORTS-AUDIT-6). 11 gaps total. (G1, G2, G4, G7, G8, G9, G10, G14 cross-reference `reports/reports-catalog.md` for the same findings.)
 
 ---
 

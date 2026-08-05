@@ -477,7 +477,7 @@ abstract class BaseMasterDataController extends Controller
         $columns = $this->exportColumns();
         $label   = $this->label;
 
-        return CsvExporter::export("{$label}s", $columns, $query);
+        return CsvExporter::export(CsvExporter::filename("{$label}s"), $columns, $query);
     }
 
     /**

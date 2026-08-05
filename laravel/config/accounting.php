@@ -39,4 +39,20 @@ return [
     */
     'gl_reconciliation_tolerance' => (float) env('GL_RECONCILIATION_TOLERANCE', 0.02),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Base Currency Code
+    |--------------------------------------------------------------------------
+    | The default currency for financial reports and CSV exports. The system
+    | is multi-currency-capable at the schema level but in practice every
+    | branch operates in BDT (Bangladeshi Taka). Exports surface this code
+    | in a `Currency` column so downstream consumers (auditors, Excel
+    | analysts) can disambiguate amounts without guessing.
+    |
+    | REPORTS-AUDIT-6 (G-236 / csv-export.md G15): added so the financial
+    | CSV exports can call `config('accounting.currency', 'BDT')` instead
+    | of hardcoding the string in every builder method.
+    */
+    'currency' => env('ACCOUNTING_CURRENCY', 'BDT'),
+
 ];

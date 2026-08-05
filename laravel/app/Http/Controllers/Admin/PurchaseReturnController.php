@@ -679,7 +679,7 @@ class PurchaseReturnController extends Controller
 
         $rowGenerator = $this->buildPurchaseReturnCsvRows($returns);
 
-        $filename = 'Purchase_Returns_' . now()->format('Y-m-d_His');
+        $filename = CsvExporter::filename('Purchase_Returns', [$fromDate ?: 'all', 'to', $toDate ?: 'all']);
 
         // Audit log: row count is known precisely (we used ->get()).
         $this->logExport('purchase_returns', [

@@ -75,7 +75,7 @@ class CsvExportController extends Controller
 
         $rowGenerator = $this->buildInvoiceCsvRows($invoices);
 
-        $filename = 'Invoices_' . now()->format('Y-m-d_His');
+        $filename = CsvExporter::filename('Invoices', [$request->input('from_date') ?: 'all', 'to', $request->input('to_date') ?: 'all']);
 
         // Audit log: row count unknown (cursor() stream — we do not
         // pre-count). Pass 0; the audit row records that an export
@@ -158,7 +158,7 @@ class CsvExportController extends Controller
 
         $rowGenerator = $this->buildChallanCsvRows($challans);
 
-        $filename = 'Challans_' . now()->format('Y-m-d_His');
+        $filename = CsvExporter::filename('Challans', [$request->input('from_date') ?: 'all', 'to', $request->input('to_date') ?: 'all']);
 
         // Audit log: row count unknown (cursor() stream — we do not
         // pre-count). Pass 0; the audit row records that an export

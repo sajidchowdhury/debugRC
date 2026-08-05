@@ -199,7 +199,7 @@ class StockTakeVarianceReport
 
         $rowGenerator = $this->buildVarianceCsvRows($rows);
 
-        $filename = 'Stock_Take_Variance_' . now()->format('Y-m-d_His');
+        $filename = CsvExporter::filename('Stock_Take_Variance');
 
         return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
     }

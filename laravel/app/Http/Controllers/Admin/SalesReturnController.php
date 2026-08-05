@@ -693,7 +693,7 @@ class SalesReturnController extends Controller
 
         $rowGenerator = $this->buildSalesReturnCsvRows($returns);
 
-        $filename = 'Sales_Returns_' . now()->format('Y-m-d_His');
+        $filename = CsvExporter::filename('Sales_Returns', [$fromDate ?: 'all', 'to', $toDate ?: 'all']);
 
         // Audit log: row count is known precisely (we used ->get()).
         $this->logExport('sales_returns', [

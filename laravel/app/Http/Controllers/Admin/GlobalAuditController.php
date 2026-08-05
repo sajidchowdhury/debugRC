@@ -134,7 +134,7 @@ class GlobalAuditController extends Controller
 
         $rowGenerator = $this->buildAuditCsvRows($query);
 
-        $filename = 'global_audit_export_' . now()->format('Ymd_His');
+        $filename = CsvExporter::filename('global_audit_export', [$filters['from'] ?? 'all', 'to', $filters['to'] ?? 'all']);
 
         // Audit log: row count unknown (chunked cursor stream — we do
         // not pre-count). Pass 0; the audit row records that an export

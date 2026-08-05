@@ -286,7 +286,7 @@ class PurchaseOrderController extends Controller
             }
         })();
 
-        $filename = 'Purchase_Orders_' . now()->format('Y-m-d_His');
+        $filename = CsvExporter::filename('Purchase_Orders', [$fromDate, 'to', $toDate]);
 
         // Audit log: row count is known precisely (we used ->get(), not cursor()).
         $this->logExport('purchase_orders', [

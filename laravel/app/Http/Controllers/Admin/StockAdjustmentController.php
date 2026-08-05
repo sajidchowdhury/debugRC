@@ -627,7 +627,7 @@ class StockAdjustmentController extends Controller
 
         $rowGenerator = $this->buildAdjustmentCsvRows($adjustments, $categoryLabels, $statusLabels);
 
-        $filename = 'StockAdjustments_' . now()->format('Y-m-d_His');
+        $filename = CsvExporter::filename('StockAdjustments', [$request->input('from_date') ?: 'all', 'to', $request->input('to_date') ?: 'all']);
 
         // Audit log: row count unknown (cursor() stream — we do not
         // pre-count). Pass 0; the audit row records that an export

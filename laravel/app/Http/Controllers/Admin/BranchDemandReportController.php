@@ -145,7 +145,7 @@ class BranchDemandReportController extends Controller
         $headerRow = array_shift($csvData);
         $dataRows = $csvData;
 
-        $filename = "branch_demand_weekly_{$branchId}_{$dateFrom}_to_{$dateTo}";
+        $filename = CsvExporter::filename('branch_demand_weekly', [$branchId, $dateFrom, 'to', $dateTo]);
 
         // Audit log: row count unknown until the stream completes (the report
         // includes a summary row that the user may or may not consider a data row).

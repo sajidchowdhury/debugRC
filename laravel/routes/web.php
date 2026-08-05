@@ -688,6 +688,14 @@ Route::middleware('auth')->group(function () {
         // Phase 6.3 — Transfer Summary Report routes
         Route::get('summary', [WarehouseTransferController::class, 'summary'])->name('summary');
         Route::post('summary-data', [WarehouseTransferController::class, 'summaryData'])->name('summary-data');
+        // REPORTS-AUDIT-6 (G-241 / csv-export.md G26): summary CSV export.
+        // Same filters as summaryData (date_from/date_to/branch_id) but
+        // returns a streamed multi-section CSV instead of JSON. Role
+        // middleware tightened to admin/manager/accountant per the gap
+        // text (salesmen should not bulk-export transfer aggregates).
+        Route::get('summary/export', [WarehouseTransferController::class, 'summaryExport'])
+            ->middleware('role:admin,manager,accountant')
+            ->name('summary.export');
         Route::get('export', [WarehouseTransferController::class, 'export'])->name('export');
         Route::get('{id}/print', [WarehouseTransferController::class, 'print'])->name('print');
         Route::post('{id}/confirm', [WarehouseTransferController::class, 'confirm'])->name('confirm');

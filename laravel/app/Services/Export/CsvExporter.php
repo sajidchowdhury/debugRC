@@ -94,7 +94,13 @@ class CsvExporter
     /**
      * Build a streamed CSV download response from an Eloquent query builder.
      *
-     * @param  string         $filename  Base filename (without extension / timestamp).
+     * REPORTS-AUDIT-6 (G-218 / csv-export.md G9): the caller is now
+     * responsible for building the filename — pass the result of
+     * `CsvExporter::filename($label, $parts)` (or any safe pre-built
+     * string ending in `.csv`). This method uses the passed filename
+     * AS-IS without further slug/timestamp processing.
+     *
+     * @param  string         $filename  Fully-built filename (with .csv extension). Build via CsvExporter::filename($label, $parts).
      * @param  array<string,string> $columns  Column definitions [key => label].
      * @param  EloquentBuilder $query   Eloquent query builder (already scoped + eager-loaded).
      *
@@ -102,11 +108,9 @@ class CsvExporter
      */
     public function export(string $filename, array $columns, EloquentBuilder $query): StreamedResponse
     {
-        $fullFilename = $this->filename($filename);
-
         $headers = [
             'Content-Type'        => $this->contentType,
-            'Content-Disposition' => 'attachment; filename="' . $fullFilename . '"',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
             'Cache-Control'       => 'no-store, no-cache, must-revalidate',
             'Pragma'              => 'no-cache',
             'Expires'             => '0',
@@ -188,7 +192,7 @@ class CsvExporter
      *     instead of one global column header). Pass an explicit blank
      *     row via prepend_rows if a separator line is desired.
      *
-     * @param  string         $filename  Base filename (without extension / timestamp).
+     * @param  string         $filename  Fully-built filename (with .csv extension). Build via CsvExporter::filename($label, $parts).
      * @param  array<string>  $headerRow Column header labels (single row, written once). Pass [] for no header.
      * @param  iterable<array<string,mixed>> $rows Pre-built data rows (each row is an array of cell values, written in iteration order).
      * @param  array{
@@ -202,8 +206,6 @@ class CsvExporter
      */
     public function exportFromRows(string $filename, array $headerRow, iterable $rows, array $options = []): StreamedResponse
     {
-        $fullFilename = $this->filename($filename);
-
         $contentType = (string) ($options['content_type'] ?? $this->contentType);
         $bom = (string) ($options['bom'] ?? $this->bom);
         $prependRows = $options['prepend_rows'] ?? [];
@@ -211,7 +213,7 @@ class CsvExporter
 
         $headers = [
             'Content-Type'        => $contentType,
-            'Content-Disposition' => 'attachment; filename="' . $fullFilename . '"',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
             'Cache-Control'       => 'no-store, no-cache, must-revalidate',
             'Pragma'              => 'no-cache',
             'Expires'             => '0',
@@ -265,22 +267,52 @@ class CsvExporter
     }
 
     /**
-     * Build the timestamped filename.
-     * e.g. "branches" → "branches_export_20250119_143022.csv".
+     * Build a safe timestamped CSV filename from a label + optional parts.
      *
-     * REPORTS-AUDIT-1: filename pattern now configurable via
-     * `config('reports.csv.filename_pattern')`, but the default
-     * `{label}_export_{timestamp}.csv` preserves the original behavior.
+     * REPORTS-AUDIT-6 (G-218 / csv-export.md G9): the helper now accepts
+     * an optional `$parts` array. Each part is slugified individually via
+     * `Str::slug($part, '_')` so user-supplied components (branch_id,
+     * from_date, to_date, fiscal_year, etc.) cannot inject raw characters
+     * into the resulting filename. Even with FormRequest validation
+     * upstream, defense-in-depth dictates the slug runs on every part.
+     *
+     * Output pattern: `{label_slug}_{part1_slug}_{part2_slug}_..._{ts}.csv`
+     * where `{ts}` is `now()->format('Y-m-d_His')` (ISO-friendly timestamp
+     * that sorts lexicographically and is human-readable in a file listing).
+     *
+     * Examples:
+     *   - `filename('branches')`
+     *       → `branches_2026-09-06_143052.csv`
+     *   - `filename('branch_demand_weekly', [$branchId, $dateFrom, 'to', $dateTo])`
+     *       → `branch_demand_weekly_1_2025-01-01_to_2025-01-31_2026-09-06_143052.csv`
+     *   - `filename('Trial_Balance', [$report['meta']['from_date'], 'to', $report['meta']['to_date']])`
+     *       → `Trial_Balance_2025-01-01_to_2025-01-31_2026-09-06_143052.csv`
+     *
+     * Empty parts (slug to '') are skipped so the filename does not gain
+     * spurious double underscores.
+     *
+     * The caller is responsible for invoking this helper BEFORE passing
+     * the resulting string to {@see export()} or {@see exportFromRows()}.
+     * Those methods accept a fully-built filename as-is (no further
+     * processing) — they no longer call `filename()` internally.
+     *
+     * The filename pattern is documented in `config/reports.php` under
+     * `csv.filename_pattern` as `'{label}_{parts}_{timestamp}.csv'`.
      */
-    public function filename(string $base): string
+    public function filename(string $label, array $parts = []): string
     {
-        $base      = Str::slug($base, '_');
-        $timestamp = now()->format('Ymd_His');
+        $segments = [Str::slug($label, '_')];
 
-        // Apply the configured pattern if it's the standard form.
-        // For non-standard patterns we'd need a more sophisticated renderer;
-        // the default pattern matches the original behavior exactly.
-        return "{$base}_export_{$timestamp}.csv";
+        foreach ($parts as $part) {
+            $slug = Str::slug((string) $part, '_');
+            if ($slug !== '') {
+                $segments[] = $slug;
+            }
+        }
+
+        $segments[] = now()->format('Y-m-d_His');
+
+        return implode('_', $segments) . '.csv';
     }
 
     /**

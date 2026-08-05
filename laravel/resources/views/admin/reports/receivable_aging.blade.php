@@ -13,6 +13,10 @@
             <p class="text-muted mb-0 small">Customer due balances by age bucket, as of {{ \Carbon\Carbon::parse($meta['as_of_date'])->format('d M Y') }}.</p>
         </div>
         <div class="d-flex gap-2">
+            <a href="{{ route('admin.reports.receivableAging', array_merge(request()->query(), ['export' => 'csv'])) }}"
+               class="btn btn-outline-success btn-sm">
+                <i class="fas fa-file-csv me-1"></i> CSV
+            </a>
             <a href="{{ route('admin.reports.index') }}" class="btn btn-outline-secondary btn-sm">
                 <i class="fas fa-arrow-left me-1"></i> Reports
             </a>

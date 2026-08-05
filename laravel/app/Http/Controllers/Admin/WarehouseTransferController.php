@@ -425,7 +425,7 @@ class WarehouseTransferController extends Controller
 
         $rowGenerator = $this->buildTransferCsvRows($transfers);
 
-        $filename = 'WarehouseTransfers_' . now()->format('Y-m-d_His');
+        $filename = CsvExporter::filename('WarehouseTransfers', [$request->input('from_date') ?: 'all', 'to', $request->input('to_date') ?: 'all']);
 
         // Audit log: row count unknown (cursor() stream — we do not
         // pre-count). Pass 0; the audit row records that an export
@@ -634,5 +634,71 @@ class WarehouseTransferController extends Controller
                 'error' => 'Failed to run summary report: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Export the 6-section summary report as CSV.
+     *
+     * REPORTS-AUDIT-6 (G-241 / csv-export.md G26): GET endpoint that
+     * mirrors the `summaryData` filter contract (date_from / date_to /
+     * branch_id) but returns a streamed CSV instead of JSON. The CSV
+     * layout is built by WarehouseTransferSummaryReport::exportCsv()
+     * — see that method's docblock for the section layout.
+     *
+     * Uses ReportRangeRequest FormRequest (already applied to the
+     * sibling `index` + `export` methods in REPORTS-AUDIT-5) for input
+     * validation. The `from_date`/`to_date` field names are aliased to
+     * the `date_from`/`date_to` names that the summary viewer uses.
+     *
+     * Writes an `export_audit_log` row via the WritesExportAuditLog
+     * trait (applied to this controller since REPORTS-AUDIT-4).
+     */
+    public function summaryExport(ReportRangeRequest $request)
+    {
+        // The summary viewer uses `date_from`/`date_to` while the rest
+        // of the system uses `from_date`/`to_date`. Accept both.
+        $dateFrom = $request->input('date_from') ?: $request->input('from_date');
+        $dateTo   = $request->input('date_to')   ?: $request->input('to_date');
+
+        if (!$dateFrom || !$dateTo) {
+            return back()->withErrors(['error' => 'Both date_from and date_to are required for CSV export.']);
+        }
+
+        // Determine effective branch: admin can pick any; non-admin uses their own.
+        $userBranchId = $this->getUserBranchId();
+        $effectiveBranchId = $userBranchId;
+        if ($userBranchId === null) {
+            $branchInput = $request->input('branch_id');
+            $effectiveBranchId = $branchInput ? (int) $branchInput : null;
+        }
+
+        try {
+            $summary = $this->summaryReport->getSummary(
+                $effectiveBranchId,
+                $dateFrom,
+                $dateTo
+            );
+        } catch (\Throwable $e) {
+            Log::error('WarehouseTransferSummaryReport exportCsv getSummary failed', [
+                'error'     => $e->getMessage(),
+                'branch_id' => $effectiveBranchId,
+                'date_from' => $dateFrom,
+                'date_to'   => $dateTo,
+            ]);
+
+            return back()->withErrors(['error' => 'Failed to generate summary: ' . $e->getMessage()]);
+        }
+
+        // Audit log: row count is the sum of branches + top_products +
+        // warehouse_pairs + monthly_trend rows + the 1 averages row.
+        // The 6 sections have variable row counts; pass 0 (the audit
+        // row records that an export happened, with the filter context).
+        $this->logExport('warehouse_transfer_summary', [
+            'branch_id' => $effectiveBranchId,
+            'date_from' => $dateFrom,
+            'date_to'   => $dateTo,
+        ], rowCount: 0, byteSize: 0);
+
+        return $this->summaryReport->exportCsv($summary);
     }
 }

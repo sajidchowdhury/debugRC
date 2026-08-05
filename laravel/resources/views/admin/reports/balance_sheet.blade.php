@@ -13,6 +13,10 @@
             </p>
         </div>
         <div class="d-flex gap-2">
+            <a href="{{ route('admin.reports.balanceSheet', array_merge(request()->query(), ['export' => 'csv'])) }}"
+               class="btn btn-outline-success btn-sm">
+                <i class="fas fa-file-csv me-1"></i> CSV
+            </a>
             <a href="{{ route('admin.reports.index') }}" class="btn btn-outline-secondary btn-sm">
                 <i class="fas fa-arrow-left me-1"></i> Reports
             </a>

@@ -407,7 +407,7 @@ class DamageReportService
         $typeLabels = DamageInvoice::DAMAGE_TYPES;
         $rowGenerator = $this->buildDamageCsvRows($rows, $typeLabels);
 
-        $filename = 'Damage_Report_' . now()->format('Y-m-d_His');
+        $filename = CsvExporter::filename('Damage_Report');
 
         return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
     }

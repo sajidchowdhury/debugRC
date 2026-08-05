@@ -2,7 +2,9 @@
 
 namespace App\Services\Stock;
 
+use App\Facades\CsvExporter;
 use Illuminate\Support\Facades\DB;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * Warehouse Transfer Summary Report — Phase 6.3.
@@ -17,6 +19,12 @@ use Illuminate\Support\Facades\DB;
  * Uses raw SQL queries (DB::select) for efficiency, following the same
  * pattern as WarehouseTransferAuditService. Branch isolation applied
  * when branchId is provided.
+ *
+ * REPORTS-AUDIT-6 (G-241 / csv-export.md G26): added exportCsv() method
+ * that produces a multi-section CSV via CsvExporter::exportFromRows()
+ * with `prepend_rows` (title + period + branch) + 6 sections (branches,
+ * top_products, warehouse_pairs, averages, monthly_trend) each with its
+ * own header + data rows.
  */
 class WarehouseTransferSummaryReport
 {
@@ -283,5 +291,155 @@ class WarehouseTransferSummaryReport
             WHERE fw.id = {$alias}.from_warehouse_id
               AND fw.branch_id = " . (int) $branchId . '
         )';
+    }
+
+    // ========================================================================
+    // CSV Export — REPORTS-AUDIT-6 (G-241 / csv-export.md G26)
+    // ========================================================================
+
+    /**
+     * Stream the 6-section summary report as a CSV download.
+     *
+     * The CSV layout is a single multi-section file (NOT a zip of 6
+     * files — simpler for end users to open in Excel). Sections are
+     * separated by blank rows. Each section has its own header row +
+     * data rows. The title block at the top carries the report label +
+     * period + branch scope + currency.
+     *
+     * Layout (top to bottom):
+     *   1. Title: "Warehouse Transfer Summary Report"
+     *   2. Period: from → to
+     *   3. Branch: branch_label (or "All branches")
+     *   4. Currency: BDT
+     *   5. (blank)
+     *   6. BRANCHES section header + per-branch rows
+     *   7. (blank)
+     *   8. TOP PRODUCTS section header + per-product rows
+     *   9. (blank)
+     *  10. WAREHOUSE PAIRS section header + per-pair rows
+     *  11. (blank)
+     *  12. AVERAGES section header + summary row
+     *  13. (blank)
+     *  14. MONTHLY TREND section header + per-month rows
+     *
+     * Uses CsvExporter::exportFromRows() with `prepend_rows` (the title
+     * block) + the rows generator (sections) + no `append_rows`. The
+     * empty `$headerRow` ([] is skipped — no global column header)
+     * because each section carries its own header.
+     *
+     * @param  array $summary The same array returned by getSummary().
+     * @return StreamedResponse
+     */
+    public function exportCsv(array $summary): StreamedResponse
+    {
+        $currency = (string) config('accounting.currency', 'BDT');
+
+        $period = $summary['period'];
+        $prependRows = [
+            ['Warehouse Transfer Summary Report'],
+            ['Period', ($period['from'] ?? '') . ' to ' . ($period['to'] ?? '')],
+            ['Branch', $period['branch_label'] ?? 'All branches'],
+            ['Currency', $currency],
+            [], // blank separator
+        ];
+
+        $rowGenerator = $this->buildSummaryCsvRows($summary);
+
+        $filename = CsvExporter::filename(
+            'Warehouse_Transfer_Summary',
+            [$period['from'] ?? 'all', 'to', $period['to'] ?? 'all']
+        );
+
+        return CsvExporter::exportFromRows($filename, [], $rowGenerator, [
+            'prepend_rows' => $prependRows,
+        ]);
+    }
+
+    /**
+     * Build the row generator for the summary CSV export.
+     *
+     * Yields the 6 sections in order. Each section starts with a
+     * header row (single cell: section title) + a column-label row +
+     * data rows. Sections are separated by blank rows.
+     *
+     * Extracted as a private method so the lint checker can validate
+     * the exportCsv() method body (the linter cannot parse `yield`
+     * inside an inline closure expression).
+     *
+     * @param  array $summary
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildSummaryCsvRows(array $summary): \Generator
+    {
+        // Section 1: Branch-level aggregates.
+        yield ['BRANCHES'];
+        yield ['Branch ID', 'Branch Name', 'Total Transfers', 'Confirmed', 'Draft', 'Cancelled', 'Total Value'];
+        foreach ($summary['branches'] ?? [] as $b) {
+            yield [
+                $b['branch_id'] ?? '',
+                $b['branch_name'] ?? '',
+                $b['total_transfers'] ?? 0,
+                $b['confirmed_count'] ?? 0,
+                $b['draft_count'] ?? 0,
+                $b['cancelled_count'] ?? 0,
+                number_format((float) ($b['total_value'] ?? 0), 2, '.', ''),
+            ];
+        }
+        yield [];
+
+        // Section 2: Top 10 most transferred products.
+        yield ['TOP PRODUCTS (by qty)'];
+        yield ['Product ID', 'Product Code', 'Product Name', 'Total Qty', 'Total Value', 'Transfer Count'];
+        foreach ($summary['top_products'] ?? [] as $p) {
+            yield [
+                $p['product_id'] ?? '',
+                $p['product_code'] ?? '',
+                $p['product_name'] ?? '',
+                number_format((float) ($p['total_qty'] ?? 0), 2, '.', ''),
+                number_format((float) ($p['total_value'] ?? 0), 2, '.', ''),
+                $p['transfer_count'] ?? 0,
+            ];
+        }
+        yield [];
+
+        // Section 3: Most active warehouse pairs.
+        yield ['WAREHOUSE PAIRS'];
+        yield ['From WH ID', 'From WH', 'To WH ID', 'To WH', 'Transfer Count', 'Total Value'];
+        foreach ($summary['warehouse_pairs'] ?? [] as $wp) {
+            yield [
+                $wp['from_warehouse_id'] ?? '',
+                $wp['from_warehouse_name'] ?? '',
+                $wp['to_warehouse_id'] ?? '',
+                $wp['to_warehouse_name'] ?? '',
+                $wp['transfer_count'] ?? 0,
+                number_format((float) ($wp['total_value'] ?? 0), 2, '.', ''),
+            ];
+        }
+        yield [];
+
+        // Section 4: Averages.
+        $avg = $summary['averages'] ?? [];
+        yield ['AVERAGES'];
+        yield ['Total Transfers', 'Avg Items / Transfer', 'Avg Value / Transfer'];
+        yield [
+            $avg['total_transfers'] ?? 0,
+            number_format((float) ($avg['avg_items'] ?? 0), 2, '.', ''),
+            number_format((float) ($avg['avg_value'] ?? 0), 2, '.', ''),
+        ];
+        yield [];
+
+        // Section 5: Monthly trend.
+        yield ['MONTHLY TREND'];
+        yield ['Month', 'Transfer Count', 'Confirmed', 'Draft', 'Cancelled', 'Total Value'];
+        foreach ($summary['monthly_trend'] ?? [] as $m) {
+            yield [
+                $m['month'] ?? '',
+                $m['transfer_count'] ?? 0,
+                $m['confirmed_count'] ?? 0,
+                $m['draft_count'] ?? 0,
+                $m['cancelled_count'] ?? 0,
+                number_format((float) ($m['total_value'] ?? 0), 2, '.', ''),
+            ];
+        }
     }
 }

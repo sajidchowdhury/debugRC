@@ -230,7 +230,7 @@ class PurchaseReceiveController extends Controller
 
         $rowGenerator = $this->buildReceiveCsvRows($receives);
 
-        $filename = 'Purchase_Receives_' . now()->format('Y-m-d_His');
+        $filename = CsvExporter::filename('Purchase_Receives', [$fromDate, 'to', $toDate]);
 
         // Audit log: row count is known precisely (we used ->get()).
         $this->logExport('purchase_receives', [

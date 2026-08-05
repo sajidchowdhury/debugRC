@@ -108,6 +108,16 @@ class ReportController extends Controller
      */
     private function exportTrialBalanceCsv(array $report): \Symfony\Component\HttpFoundation\StreamedResponse
     {
+        // REPORTS-AUDIT-6 (G-236 / csv-export.md G15): Currency column added
+        // at the end of every row so auditors can disambiguate amounts
+        // without guessing. Trial balance is a single-currency report (the
+        // whole report runs in the configured base currency) so every row
+        // carries the same Currency value. Branch Code column is NOT added
+        // here — trial balance aggregates across the selected branch(es)
+        // at the report level, not per-ledger-row. The Branch ID is
+        // surfaced in the title block (prepend rows) when set.
+        $currency = (string) config('accounting.currency', 'BDT');
+
         // Title rows — written AFTER the BOM, BEFORE the column header.
         $prependRows = [
             ['Trial Balance Report'],
@@ -116,6 +126,7 @@ class ReportController extends Controller
         if (!empty($report['meta']['branch_id'])) {
             $prependRows[] = ['Branch ID: ' . $report['meta']['branch_id']];
         }
+        $prependRows[] = ['Currency: ' . $currency];
         $prependRows[] = ['Generated: ' . now()->format('Y-m-d H:i:s')];
         $prependRows[] = []; // blank separator row before the column header
 
@@ -124,14 +135,15 @@ class ReportController extends Controller
             'Opening Dr', 'Opening Cr', 'Opening Balance', 'Opening Side',
             'Period Dr', 'Period Cr',
             'Closing Dr', 'Closing Cr', 'Closing Balance', 'Closing Side',
+            'Currency',
         ];
 
-        $rowGenerator = $this->buildTrialBalanceCsvRows($report['data']);
+        $rowGenerator = $this->buildTrialBalanceCsvRows($report['data'], $currency);
 
         // Append rows — written AFTER the data rows.
-        $appendRows = $this->buildTrialBalanceAppendRows($report);
+        $appendRows = $this->buildTrialBalanceAppendRows($report, $currency);
 
-        $filename = 'Trial_Balance_' . $report['meta']['from_date'] . '_to_' . $report['meta']['to_date'];
+        $filename = CsvExporter::filename('Trial_Balance', [$report['meta']['from_date'], 'to', $report['meta']['to_date']]);
 
         return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator, [
             'prepend_rows' => $prependRows,
@@ -146,10 +158,13 @@ class ReportController extends Controller
      * exportTrialBalanceCsv() method body (the linter cannot parse `yield`
      * inside an inline closure expression).
      *
+     * REPORTS-AUDIT-6 (G-236): a Currency column is appended to each row.
+     *
      * @param  iterable<int, object> $data
+     * @param  string                $currency Currency code from config('accounting.currency').
      * @return \Generator<int, array<int,mixed>>
      */
-    private function buildTrialBalanceCsvRows(iterable $data): \Generator
+    private function buildTrialBalanceCsvRows(iterable $data, string $currency): \Generator
     {
         foreach ($data as $row) {
             yield [
@@ -168,6 +183,7 @@ class ReportController extends Controller
                 number_format($row->closing_credit, 2, '.', ''),
                 number_format($row->closing_balance, 2, '.', ''),
                 $row->closing_side,
+                $currency,
             ];
         }
     }
@@ -180,10 +196,14 @@ class ReportController extends Controller
      * of cell values (variable column count per section is fine — fputcsv
      * writes whatever cells it receives).
      *
-     * @param  array $report
+     * REPORTS-AUDIT-6 (G-236): the GRAND TOTAL row now carries a trailing
+     * Currency cell so its column count matches the header + data rows.
+     *
+     * @param  array  $report
+     * @param  string $currency Currency code from config('accounting.currency').
      * @return array<int, array<int,mixed>>
      */
-    private function buildTrialBalanceAppendRows(array $report): array
+    private function buildTrialBalanceAppendRows(array $report, string $currency): array
     {
         $rows = [];
 
@@ -200,6 +220,7 @@ class ReportController extends Controller
             number_format($t['closing_debit'], 2, '.', ''),
             number_format($t['closing_credit'], 2, '.', ''),
             '', '',
+            $currency,
         ];
 
         // Integrity checks block (with a blank separator row before it).
@@ -232,6 +253,13 @@ class ReportController extends Controller
 
     /**
      * Profit & Loss.
+     *
+     * REPORTS-AUDIT-6 (G-236 / csv-export.md G15): added `?export=csv`
+     * toggle. The CSV export is a multi-section layout (title + period +
+     * currency → per-section ledger rows + section totals → GRAND TOTALS
+     * + margin %). Each row carries a trailing Currency cell. Branch Code
+     * column is not added — P&L aggregates at the report level, not per
+     * ledger row; the Branch ID is surfaced in the title block when set.
      */
     public function profitAndLoss(ReportRangeRequest $request)
     {
@@ -240,11 +268,135 @@ class ReportController extends Controller
 
         $report = $this->reportService->profitAndLoss($data['from'], $data['to'], $branchId);
 
+        if ($request->input('export') === 'csv') {
+            $this->logExport('profit_and_loss', [
+                'from_date' => $report['meta']['from_date'],
+                'to_date' => $report['meta']['to_date'],
+                'branch_id' => $branchId,
+            ], rowCount: 0, byteSize: 0);
+
+            return $this->exportProfitAndLossCsv($report);
+        }
+
         return view('admin.reports.profit_and_loss', $report);
     }
 
     /**
+     * Export Profit & Loss Statement as CSV download.
+     *
+     * REPORTS-AUDIT-6 (G-236 / csv-export.md G15): multi-section layout
+     * (title + period + currency → per-section ledger rows + section
+     * totals → GRAND TOTALS + margin %) via CsvExporter::exportFromRows
+     * with `prepend_rows` (title block) + `append_rows` (GRAND TOTALS +
+     * margin block). Each row carries a trailing Currency cell. BOM +
+     * Content-Type + RFC 4180 escaping handled by the canonical service.
+     */
+    private function exportProfitAndLossCsv(array $report): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        $currency = (string) config('accounting.currency', 'BDT');
+
+        $prependRows = [
+            ['Profit & Loss Statement (Multi-step)'],
+            ['Period', $report['meta']['from_date'] . ' to ' . $report['meta']['to_date']],
+            ['Currency', $currency],
+            [],
+        ];
+
+        $rowGenerator = $this->buildProfitAndLossCsvRows($report, $currency);
+
+        $appendRows = $this->buildProfitAndLossAppendRows($report, $currency);
+
+        $filename = CsvExporter::filename('Profit_and_Loss', [$report['meta']['from_date'], 'to', $report['meta']['to_date']]);
+
+        return CsvExporter::exportFromRows($filename, [], $rowGenerator, [
+            'prepend_rows' => $prependRows,
+            'append_rows' => $appendRows,
+        ]);
+    }
+
+    /**
+     * Build the row generator for the P&L CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * exportProfitAndLossCsv() method body (the linter cannot parse
+     * `yield` inside an inline closure expression).
+     *
+     * Yields the per-section ledger rows + section totals in the order
+     * defined by $report['sections'] (already sorted by `sort` key in
+     * ReportService::profitAndLoss). Each amount row carries a trailing
+     * Currency cell.
+     *
+     * @param  array  $report
+     * @param  string $currency Currency code from config('accounting.currency').
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildProfitAndLossCsvRows(array $report, string $currency): \Generator
+    {
+        foreach ($report['sections'] as $key => $section) {
+            yield [strtoupper($section['label']), 'Amount (' . $currency . ')', $currency];
+
+            if (!empty($section['rows'])) {
+                foreach ($section['rows'] as $row) {
+                    yield [
+                        '    ' . $row->ledger_code . ' - ' . $row->ledger_name,
+                        number_format($row->net_amount, 2, '.', ''),
+                        $currency,
+                    ];
+                }
+            }
+
+            yield [
+                'Total ' . $section['label'],
+                number_format($section['total'], 2, '.', ''),
+                $currency,
+            ];
+            yield [];
+        }
+    }
+
+    /**
+     * Build the append-rows array for the P&L CSV export.
+     *
+     * Carries the GRAND TOTALS block (revenue / cogs / gross profit /
+     * opex / operating income / finance costs / net income before tax /
+     * net income) and the margin % block.
+     *
+     * @param  array  $report
+     * @param  string $currency
+     * @return array<int, array<int,mixed>>
+     */
+    private function buildProfitAndLossAppendRows(array $report, string $currency): array
+    {
+        $t = $report['totals'];
+        $rows = [];
+
+        $rows[] = ['GRAND TOTALS', 'Amount (' . $currency . ')', $currency];
+        $rows[] = ['Total Revenue', number_format($t['revenue'], 2, '.', ''), $currency];
+        $rows[] = ['Total COGS', number_format($t['cogs'], 2, '.', ''), $currency];
+        $rows[] = ['Gross Profit', number_format($t['gross_profit'], 2, '.', ''), $currency];
+        $rows[] = ['Total Operating Expenses', number_format($t['operating_expenses'], 2, '.', ''), $currency];
+        $rows[] = ['Operating Income', number_format($t['operating_income'], 2, '.', ''), $currency];
+        $rows[] = ['Total Finance Costs', number_format($t['finance_costs'], 2, '.', ''), $currency];
+        $rows[] = ['Net Income Before Tax', number_format($t['net_income_before_tax'], 2, '.', ''), $currency];
+        $rows[] = ['Net Income', number_format($t['net_income'], 2, '.', ''), $currency];
+        $rows[] = [];
+        $rows[] = ['MARGIN %'];
+        $rows[] = ['Gross Margin %', number_format($t['gross_margin_pct'], 1, '.', '') . '%'];
+        $rows[] = ['Net Margin %', number_format($t['net_margin_pct'], 1, '.', '') . '%'];
+
+        return $rows;
+    }
+
+    /**
      * Balance Sheet.
+     *
+     * REPORTS-AUDIT-6 (G-236 / csv-export.md G15): added `?export=csv`
+     * toggle. The CSV export is a multi-section layout (title + as-of
+     * date + currency → Assets section → Liabilities section → Equity
+     * section → TOTALS + balance check). Each row carries a trailing
+     * Currency cell. Branch Code column is not added — Balance Sheet
+     * aggregates at the report level; the Branch ID is surfaced in the
+     * title block when set.
      */
     public function balanceSheet(ReportAsOfRequest $request)
     {
@@ -254,7 +406,127 @@ class ReportController extends Controller
 
         $report = $this->reportService->balanceSheet($asOf, $branchId, $includeZero);
 
+        if ($request->input('export') === 'csv') {
+            $this->logExport('balance_sheet', [
+                'as_of_date' => $report['meta']['as_of_date'],
+                'branch_id' => $branchId,
+                'include_zero' => $includeZero,
+            ], rowCount: 0, byteSize: 0);
+
+            return $this->exportBalanceSheetCsv($report);
+        }
+
         return view('admin.reports.balance_sheet', $report);
+    }
+
+    /**
+     * Export Balance Sheet as CSV download.
+     *
+     * REPORTS-AUDIT-6 (G-236 / csv-export.md G15): multi-section layout
+     * (title + as-of + currency → Assets → Liabilities → Equity → TOTALS
+     * + balance check) via CsvExporter::exportFromRows with `prepend_rows`
+     * (title block) + `append_rows` (TOTALS + balance check). Each row
+     * carries a trailing Currency cell.
+     */
+    private function exportBalanceSheetCsv(array $report): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        $currency = (string) config('accounting.currency', 'BDT');
+
+        $prependRows = [
+            ['Balance Sheet'],
+            ['As of', $report['meta']['as_of_date']],
+            ['Currency', $currency],
+            [],
+        ];
+
+        $rowGenerator = $this->buildBalanceSheetCsvRows($report, $currency);
+
+        $appendRows = $this->buildBalanceSheetAppendRows($report, $currency);
+
+        $filename = CsvExporter::filename('Balance_Sheet', [$report['meta']['as_of_date']]);
+
+        return CsvExporter::exportFromRows($filename, [], $rowGenerator, [
+            'prepend_rows' => $prependRows,
+            'append_rows' => $appendRows,
+        ]);
+    }
+
+    /**
+     * Build the row generator for the balance-sheet CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * exportBalanceSheetCsv() method body.
+     *
+     * Yields the Assets / Liabilities / Equity sections in order. Each
+     * ledger row is rendered as `code - name` + net amount + Currency.
+     * Each section ends with a Total row + blank separator.
+     *
+     * @param  array  $report
+     * @param  string $currency
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildBalanceSheetCsvRows(array $report, string $currency): \Generator
+    {
+        // Assets
+        yield ['ASSETS', 'Amount (' . $currency . ')', $currency];
+        foreach ($report['assets'] as $row) {
+            yield [
+                '    ' . $row->ledger_code . ' - ' . $row->ledger_name,
+                number_format($row->net_debit, 2, '.', ''),
+                $currency,
+            ];
+        }
+        yield ['Total Assets', number_format($report['totals']['total_assets'], 2, '.', ''), $currency];
+        yield [];
+
+        // Liabilities
+        yield ['LIABILITIES', 'Amount (' . $currency . ')', $currency];
+        foreach ($report['liabilities'] as $row) {
+            yield [
+                '    ' . $row->ledger_code . ' - ' . $row->ledger_name,
+                number_format($row->net_credit, 2, '.', ''),
+                $currency,
+            ];
+        }
+        yield ['Total Liabilities', number_format($report['totals']['total_liabilities'], 2, '.', ''), $currency];
+        yield [];
+
+        // Equity
+        yield ['EQUITY', 'Amount (' . $currency . ')', $currency];
+        foreach ($report['equity'] as $row) {
+            yield [
+                '    ' . $row->ledger_code . ' - ' . $row->ledger_name,
+                number_format($row->net_credit, 2, '.', ''),
+                $currency,
+            ];
+        }
+        yield ['Current Period Result (unclosed income - expense)', number_format($report['current_period_result'], 2, '.', ''), $currency];
+        yield ['Total Equity', number_format($report['totals']['total_equity'], 2, '.', ''), $currency];
+        yield [];
+    }
+
+    /**
+     * Build the append-rows array for the balance-sheet CSV export.
+     *
+     * Carries the TOTAL LIABILITIES + EQUITY row + the Balance Check block.
+     *
+     * @param  array  $report
+     * @param  string $currency
+     * @return array<int, array<int,mixed>>
+     */
+    private function buildBalanceSheetAppendRows(array $report, string $currency): array
+    {
+        $t = $report['totals'];
+        $c = $report['checks'];
+
+        return [
+            ['TOTAL LIABILITIES + EQUITY', number_format($t['total_liabilities_equity'], 2, '.', ''), $currency],
+            [],
+            ['BALANCE CHECK'],
+            ['Total Assets', number_format($t['total_assets'], 2, '.', ''), $currency],
+            ['Total Liabilities + Equity', number_format($t['total_liabilities_equity'], 2, '.', ''), $currency],
+            ['Reconciled', $c['balanced'] ? 'YES' : 'NO'],
+        ];
     }
 
     /**
@@ -303,18 +575,28 @@ class ReportController extends Controller
      * BOM (Gap G25 — csv-export.md MEDIUM severity) — the refactor
      * closes G25 as a side effect because CsvExporter::exportFromRows
      * always writes the BOM via config('reports.csv.bom').
+     *
+     * REPORTS-AUDIT-6 (G-236 / csv-export.md G15): a Currency cell is
+     * appended to each amount row so the CSV carries currency context
+     * (per-row; cash flow is single-currency so every row carries the
+     * same value). Label-only rows + blank separator rows are unchanged
+     * (1-cell or 0-cell — fputcsv handles variable column counts). The
+     * title block also gains a `Currency: BDT` row.
      */
     private function exportCashFlowCsv(array $report): \Symfony\Component\HttpFoundation\StreamedResponse
     {
+        $currency = (string) config('accounting.currency', 'BDT');
+
         $prependRows = [
             ['Cash Flow Statement (Indirect Method)'],
             ['Period', $report['meta']['from_date'] . ' to ' . $report['meta']['to_date']],
+            ['Currency', $currency],
             [], // blank separator
         ];
 
-        $rowGenerator = $this->buildCashFlowCsvRows($report);
+        $rowGenerator = $this->buildCashFlowCsvRows($report, $currency);
 
-        $filename = 'cash_flow_' . $report['meta']['from_date'] . '_to_' . $report['meta']['to_date'];
+        $filename = CsvExporter::filename('cash_flow', [$report['meta']['from_date'], 'to', $report['meta']['to_date']]);
 
         return CsvExporter::exportFromRows($filename, [], $rowGenerator, [
             'prepend_rows' => $prependRows,
@@ -329,67 +611,70 @@ class ReportController extends Controller
      * inside an inline closure expression).
      *
      * Yields every row of the operating/investing/financing/net-cash/
-     * integrity sections in order. Each row is a 1- or 2-cell array —
-     * fputcsv writes whatever cells it receives, so the variable column
-     * count is preserved exactly as in the prior inline implementation.
+     * integrity sections in order. Each row is a 1-, 2-, or 3-cell array
+     * (label rows = 1 cell; amount rows = 2 cells + 1 Currency cell since
+     * REPORTS-AUDIT-6) — fputcsv writes whatever cells it receives, so
+     * the variable column count is preserved exactly as in the prior
+     * inline implementation, just with Currency appended to amount rows.
      *
-     * @param  array $report
+     * @param  array  $report
+     * @param  string $currency Currency code from config('accounting.currency').
      * @return \Generator<int, array<int,mixed>>
      */
-    private function buildCashFlowCsvRows(array $report): \Generator
+    private function buildCashFlowCsvRows(array $report, string $currency): \Generator
     {
         $op = $report['sections']['operating'];
         $inv = $report['sections']['investing'];
         $fin = $report['sections']['financing'];
 
         // Operating Activities
-        yield ['CASH FLOW FROM OPERATING ACTIVITIES', 'Amount (Tk)'];
-        yield ['Net Profit (from P&L)', number_format($op['net_profit'], 2)];
-        yield ['(+) Depreciation & Amortization', number_format($op['depreciation'], 2)];
+        yield ['CASH FLOW FROM OPERATING ACTIVITIES', 'Amount (' . $currency . ')'];
+        yield ['Net Profit (from P&L)', number_format($op['net_profit'], 2), $currency];
+        yield ['(+) Depreciation & Amortization', number_format($op['depreciation'], 2), $currency];
         yield ['Changes in Working Capital:'];
         foreach ($op['wc_adjustments'] as $wc) {
             $direction = $wc->change >= 0 ? 'Increase' : 'Decrease';
-            yield ['    ' . $direction . ' in ' . $wc->label, number_format($wc->adjustment, 2)];
+            yield ['    ' . $direction . ' in ' . $wc->label, number_format($wc->adjustment, 2), $currency];
         }
-        yield ['Total Working Capital Adjustments', number_format($op['wc_adjustment_total'], 2)];
-        yield ['Net Cash from Operating Activities', number_format($op['net'], 2)];
+        yield ['Total Working Capital Adjustments', number_format($op['wc_adjustment_total'], 2), $currency];
+        yield ['Net Cash from Operating Activities', number_format($op['net'], 2), $currency];
         yield [];
 
         // Investing Activities
-        yield ['CASH FLOW FROM INVESTING ACTIVITIES', 'Amount (Tk)'];
+        yield ['CASH FLOW FROM INVESTING ACTIVITIES', 'Amount (' . $currency . ')'];
         foreach ($inv['rows'] as $row) {
             $label = $row->net_amount < 0 ? 'Purchase of ' . $row->ledger_name : 'Sale of ' . $row->ledger_name;
-            yield ['    ' . $label, number_format($row->net_amount, 2)];
+            yield ['    ' . $label, number_format($row->net_amount, 2), $currency];
         }
         if ($inv['rows']->isEmpty()) {
-            yield ['    (No investing activity in this period)', '0.00'];
+            yield ['    (No investing activity in this period)', '0.00', $currency];
         }
-        yield ['Net Cash from Investing Activities', number_format($inv['net'], 2)];
+        yield ['Net Cash from Investing Activities', number_format($inv['net'], 2), $currency];
         yield [];
 
         // Financing Activities
-        yield ['CASH FLOW FROM FINANCING ACTIVITIES', 'Amount (Tk)'];
+        yield ['CASH FLOW FROM FINANCING ACTIVITIES', 'Amount (' . $currency . ')'];
         foreach ($fin['rows'] as $row) {
             $label = $row->net_amount > 0 ? 'Proceeds from ' . $row->ledger_name : 'Repayment of ' . $row->ledger_name;
-            yield ['    ' . $label, number_format($row->net_amount, 2)];
+            yield ['    ' . $label, number_format($row->net_amount, 2), $currency];
         }
         if ($fin['rows']->isEmpty()) {
-            yield ['    (No financing activity in this period)', '0.00'];
+            yield ['    (No financing activity in this period)', '0.00', $currency];
         }
-        yield ['Net Cash from Financing Activities', number_format($fin['net'], 2)];
+        yield ['Net Cash from Financing Activities', number_format($fin['net'], 2), $currency];
         yield [];
 
         // Net Cash Movement
-        yield ['NET CASH MOVEMENT', 'Amount (Tk)'];
-        yield ['Opening Cash Balance', number_format($report['totals']['cash_opening'], 2)];
-        yield ['Net Increase / (Decrease) in Cash', number_format($report['totals']['net_cash_change'], 2)];
-        yield ['Closing Cash Balance', number_format($report['totals']['cash_closing'], 2)];
+        yield ['NET CASH MOVEMENT', 'Amount (' . $currency . ')'];
+        yield ['Opening Cash Balance', number_format($report['totals']['cash_opening'], 2), $currency];
+        yield ['Net Increase / (Decrease) in Cash', number_format($report['totals']['net_cash_change'], 2), $currency];
+        yield ['Closing Cash Balance', number_format($report['totals']['cash_closing'], 2), $currency];
         yield [];
 
         // Integrity check
         yield ['INTEGRITY CHECK'];
-        yield ['GL Cash Movement', number_format($report['totals']['net_cash_movement'], 2)];
-        yield ['Plug Difference', number_format($report['totals']['plug_difference'], 2)];
+        yield ['GL Cash Movement', number_format($report['totals']['net_cash_movement'], 2), $currency];
+        yield ['Plug Difference', number_format($report['totals']['plug_difference'], 2), $currency];
         yield ['Reconciled', $report['checks']['plugs_to_gl_cash'] ? 'YES' : 'NO'];
     }
 
@@ -468,6 +753,12 @@ class ReportController extends Controller
 
     /**
      * Receivable Aging.
+     *
+     * REPORTS-AUDIT-6 (G-236 + G-239 / csv-export.md G15 + G16): added
+     * `?export=csv` toggle. The CSV export is a per-customer row layout
+     * with Branch Code + Branch Name + Currency columns (AR aging is the
+     * only one of the 5 financial exports in this wave that has per-row
+     * branch data — the others aggregate at the report level).
      */
     public function receivableAging(ReportAsOfRequest $request)
     {
@@ -477,11 +768,144 @@ class ReportController extends Controller
 
         $report = $this->reportService->receivableAging($asOf, $branchId);
 
+        if ($request->input('export') === 'csv') {
+            $this->logExport('receivable_aging', [
+                'as_of_date' => $report['meta']['as_of_date'],
+                'branch_id' => $branchId,
+            ], rowCount: is_countable($report['data']) ? count($report['data']) : 0, byteSize: 0);
+
+            return $this->exportReceivableAgingCsv($report);
+        }
+
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
         return view('admin.reports.receivable_aging', array_merge($report, [
             'branches' => $branches,
         ]));
+    }
+
+    /**
+     * Export Receivable Aging as CSV download.
+     *
+     * REPORTS-AUDIT-6 (G-236 + G-239 / csv-export.md G15 + G16): per-
+     * customer row layout with Branch Code + Branch Name + Currency
+     * columns. The report's data rows already include `branch_id` +
+     * `branch_name` (from the SQL JOIN in ReportService::receivableAging);
+     * we look up the matching `branch_code` from the branches table once
+     * at the start of the export (cheap — at most a few dozen branches)
+     * so each row can carry both the code and the name. Customers with
+     * no branch (head-office-only) get empty strings for both fields.
+     */
+    private function exportReceivableAgingCsv(array $report): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        $currency = (string) config('accounting.currency', 'BDT');
+
+        $prependRows = [
+            ['Receivable Aging Report'],
+            ['As of', $report['meta']['as_of_date']],
+            ['Currency', $currency],
+            [],
+        ];
+
+        // Look up branch_code by branch_id once (cheap cache so the row
+        // generator does not re-query for every customer row).
+        $branchCodes = \Illuminate\Support\Facades\DB::table('branches')
+            ->pluck('branch_code', 'id');
+
+        $headerRow = [
+            'Customer Code', 'Customer Name', 'Mobile',
+            'Branch Code', 'Branch Name',
+            'Bucket 0-30', 'Bucket 31-60', 'Bucket 61-90', 'Bucket 90+',
+            'Total Receivable', 'Currency',
+        ];
+
+        $rowGenerator = $this->buildReceivableAgingCsvRows($report['data'], $branchCodes, $currency);
+
+        $appendRows = $this->buildReceivableAgingAppendRows($report, $currency);
+
+        $filename = CsvExporter::filename('Receivable_Aging', [$report['meta']['as_of_date']]);
+
+        return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator, [
+            'prepend_rows' => $prependRows,
+            'append_rows' => $appendRows,
+        ]);
+    }
+
+    /**
+     * Build the row generator for the receivable-aging CSV export.
+     *
+     * Extracted as a private method so the lint checker can validate the
+     * exportReceivableAgingCsv() method body.
+     *
+     * Each row carries: customer code/name/mobile, branch code/name (looked
+     * up from $branchCodes by branch_id; empty string when branch_id is
+     * null), the 4 aging buckets, total receivable, and the currency code.
+     *
+     * @param  iterable<int, object>        $rows
+     * @param  \Illuminate\Support\Collection<int,string> $branchCodes Map of branch_id => branch_code.
+     * @param  string                        $currency
+     * @return \Generator<int, array<int,mixed>>
+     */
+    private function buildReceivableAgingCsvRows(iterable $rows, $branchCodes, string $currency): \Generator
+    {
+        foreach ($rows as $row) {
+            $branchId = $row->branch_id ?? null;
+            $branchCode = $branchId ? (string) ($branchCodes[$branchId] ?? '') : '';
+            $branchName = $row->branch_name ?? '';
+            // The SQL uses COALESCE(b.branch_name, '—') which yields the
+            // em-dash placeholder when branch_id is null. For CSV export
+            // we prefer the empty string so downstream consumers can
+            // filter "no branch" rows with a simple empty-string check.
+            if ($branchName === '—' || $branchName === null) {
+                $branchName = '';
+            }
+
+            yield [
+                $row->customer_code ?? '',
+                $row->customer_name ?? '',
+                $row->mobile ?? '',
+                $branchCode,
+                $branchName,
+                number_format((float) $row->bucket_0_30, 2, '.', ''),
+                number_format((float) $row->bucket_31_60, 2, '.', ''),
+                number_format((float) $row->bucket_61_90, 2, '.', ''),
+                number_format((float) $row->bucket_90_plus, 2, '.', ''),
+                number_format((float) $row->total_receivable, 2, '.', ''),
+                $currency,
+            ];
+        }
+    }
+
+    /**
+     * Build the append-rows array for the receivable-aging CSV export.
+     *
+     * Carries the GRAND TOTALS row (sum of each bucket across customers)
+     * and the GL RECONCILIATION block.
+     *
+     * @param  array  $report
+     * @param  string $currency
+     * @return array<int, array<int,mixed>>
+     */
+    private function buildReceivableAgingAppendRows(array $report, string $currency): array
+    {
+        $t = $report['totals'];
+        $c = $report['checks'];
+
+        return [
+            [],
+            ['GRAND TOTALS', '', '', '', '',
+                number_format($t['bucket_0_30'], 2, '.', ''),
+                number_format($t['bucket_31_60'], 2, '.', ''),
+                number_format($t['bucket_61_90'], 2, '.', ''),
+                number_format($t['bucket_90_plus'], 2, '.', ''),
+                number_format($t['total_receivable'], 2, '.', ''),
+                $currency],
+            [],
+            ['GL RECONCILIATION'],
+            ['Sub-ledger total', number_format($t['total_receivable'], 2, '.', ''), $currency],
+            ['GL AR control account', number_format($t['gl_ar_control'], 2, '.', ''), $currency],
+            ['Reconciled', $c['matches_gl'] ? 'YES' : 'NO'],
+        ];
     }
 
     /**
@@ -937,6 +1361,12 @@ SQL, [$data['from'], $data['to']]);
 
     /**
      * Today's Summary (CTE) — All dashboard KPIs in one query.
+     *
+     * REPORTS-AUDIT-6 (G-288 / cte-reports.md G15): added `?format=csv`
+     * toggle. When set, delegates to CteReportService::exportCsv() which
+     * flattens the structured CTE response into a multi-section CSV via
+     * CsvExporter::exportFromRows(). The `format` field is validated by
+     * ReportAsOfRequest (nullable|string|in:csv,json,html).
      */
     public function todaySummaryCte(ReportAsOfRequest $request)
     {
@@ -947,6 +1377,15 @@ SQL, [$data['from'], $data['to']]);
 
         $report = $this->cteReportService->todaySummary($date, $branchId);
 
+        if ($request->input('format') === 'csv') {
+            $this->logExport('cte_today_summary', [
+                'date' => $report['meta']['date'] ?? '',
+                'branch_id' => $branchId,
+            ], rowCount: 0, byteSize: 0);
+
+            return $this->cteReportService->exportCsv('today_summary', $report);
+        }
+
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
         return view('admin.reports.today_summary_cte', array_merge($report, [
@@ -956,6 +1395,11 @@ SQL, [$data['from'], $data['to']]);
 
     /**
      * AR Aging (CTE) — Proper sub-ledger based aging with GL reconciliation.
+     *
+     * REPORTS-AUDIT-6 (G-288 / cte-reports.md G15): added `?format=csv`
+     * toggle. When set, delegates to CteReportService::exportCsv() which
+     * produces a per-customer row CSV with aging buckets + totals +
+     * GL reconciliation block.
      */
     public function arAgingCte(ReportAsOfRequest $request)
     {
@@ -963,6 +1407,15 @@ SQL, [$data['from'], $data['to']]);
         $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
 
         $report = $this->cteReportService->arAging($asOf, $branchId);
+
+        if ($request->input('format') === 'csv') {
+            $this->logExport('cte_ar_aging', [
+                'as_of_date' => $report['meta']['as_of_date'] ?? '',
+                'branch_id' => $branchId,
+            ], rowCount: is_countable($report['data']) ? count($report['data']) : 0, byteSize: 0);
+
+            return $this->cteReportService->exportCsv('ar_aging', $report);
+        }
 
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
@@ -973,6 +1426,11 @@ SQL, [$data['from'], $data['to']]);
 
     /**
      * General Ledger (CTE) — With SQL window-function running balance.
+     *
+     * REPORTS-AUDIT-6 (G-288 / cte-reports.md G15): added `?format=csv`
+     * toggle. When set, delegates to CteReportService::exportCsv() which
+     * produces a per-journal-line CSV with running balance + totals +
+     * checks block.
      */
     public function generalLedgerCte(ReportRangeRequest $request)
     {
@@ -981,6 +1439,17 @@ SQL, [$data['from'], $data['to']]);
         $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
 
         $report = $this->cteReportService->generalLedger($data['from'], $data['to'], $ledgerId, $branchId);
+
+        if ($request->input('format') === 'csv') {
+            $this->logExport('cte_general_ledger', [
+                'from_date' => $report['meta']['from_date'] ?? '',
+                'to_date' => $report['meta']['to_date'] ?? '',
+                'ledger_id' => $ledgerId,
+                'branch_id' => $branchId,
+            ], rowCount: is_countable($report['data']) ? count($report['data']) : 0, byteSize: 0);
+
+            return $this->cteReportService->exportCsv('general_ledger', $report);
+        }
 
         $ledgers = \App\Models\Ledger::active()->orderBy('ledger_name')->get();
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
@@ -993,6 +1462,11 @@ SQL, [$data['from'], $data['to']]);
 
     /**
      * Gross Margin (CTE) — Per-invoice and per-product margin with accurate COGS.
+     *
+     * REPORTS-AUDIT-6 (G-288 / cte-reports.md G15): added `?format=csv`
+     * toggle. When set, delegates to CteReportService::exportCsv() which
+     * produces a per-invoice + per-product margin CSV with revenue /
+     * COGS / profit / margin %.
      */
     public function grossMarginCte(ReportRangeRequest $request)
     {
@@ -1000,6 +1474,16 @@ SQL, [$data['from'], $data['to']]);
         $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
 
         $report = $this->cteReportService->grossMargin($data['from'], $data['to'], $branchId);
+
+        if ($request->input('format') === 'csv') {
+            $this->logExport('cte_gross_margin', [
+                'from_date' => $report['meta']['from_date'] ?? '',
+                'to_date' => $report['meta']['to_date'] ?? '',
+                'branch_id' => $branchId,
+            ], rowCount: 0, byteSize: 0);
+
+            return $this->cteReportService->exportCsv('gross_margin', $report);
+        }
 
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 

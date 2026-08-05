@@ -71,10 +71,20 @@ return [
 
         /*
         | Filename template. `{label}` is the module slug (e.g. "branches"),
-        | `{timestamp}` is now()->format('Ymd_His'). Rendered by
-        | CsvExporter::filename().
+        | `{parts}` is the underscore-joined slug parts (e.g. "1_2025-01-01_to_2025-01-31"
+        | — empty when no parts are passed), `{timestamp}` is now()->format('Y-m-d_His').
+        |
+        | Rendered by CsvExporter::filename(string $label, array $parts = []).
+        | The helper slugifies each part individually via Str::slug($part, '_')
+        | so user-supplied components (branch_id, from_date, to_date,
+        | fiscal_year) cannot inject raw characters into the filename
+        | (REPORTS-AUDIT-6 / G-218 / csv-export.md G9).
+        |
+        | Callers must invoke CsvExporter::filename($label, $parts) BEFORE
+        | passing the result to CsvExporter::export() or exportFromRows() —
+        | those methods consume the filename AS-IS without further processing.
         */
-        'filename_pattern' => env('REPORTS_CSV_FILENAME_PATTERN', '{label}_export_{timestamp}.csv'),
+        'filename_pattern' => env('REPORTS_CSV_FILENAME_PATTERN', '{label}_{parts}_{timestamp}.csv'),
 
         /*
         | Default role middleware for export routes. Applied at the route

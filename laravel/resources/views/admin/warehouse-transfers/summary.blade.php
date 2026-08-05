@@ -366,63 +366,33 @@ function renderResults(data) {
 }
 
 function exportCsv() {
-    if (!reportData) return;
+    // REPORTS-AUDIT-6 (G-241 / csv-export.md G26): the CSV export is now
+    // server-side (admin.warehouse-transfers.summary.export route). The
+    // previous client-side JS CSV builder produced unescaped output (no
+    // RFC 4180 quoting for cells containing commas / double-quotes /
+    // newlines), no BOM (Excel mojibake on Bengali branch/warehouse
+    // names), and bypassed the export_audit_log trail. The server-side
+    // route fixes all three: CsvExporter::exportFromRows handles RFC
+    // 4180 + BOM + audit log. We simply redirect the browser to the
+    // route with the current filter params — the server streams the CSV
+    // back as a download.
+    const from = document.getElementById('date_from').value;
+    const to   = document.getElementById('date_to').value;
+    if (!from || !to) {
+        alert('Please select a date range before exporting.');
+        return;
+    }
 
-    const lines = [];
+    const params = new URLSearchParams();
+    params.set('date_from', from);
+    params.set('date_to', to);
 
-    // Header
-    lines.push('Warehouse Transfer Summary Report');
-    lines.push('Period: ' + reportData.period.from + ' to ' + reportData.period.to);
-    lines.push('Branch: ' + reportData.period.branch_label);
-    lines.push('');
+    const branchSelect = document.getElementById('branch_id');
+    if (branchSelect && branchSelect.value) {
+        params.set('branch_id', branchSelect.value);
+    }
 
-    // Averages
-    lines.push('AVERAGES');
-    lines.push('Total Transfers,Avg Items/Transfer,Avg Value/Transfer');
-    lines.push(reportData.averages.total_transfers + ',' + reportData.averages.avg_items + ',' + reportData.averages.avg_value);
-    lines.push('');
-
-    // Branch aggregates
-    lines.push('BRANCH AGGREGATES');
-    lines.push('Branch,Total Transfers,Confirmed,Draft,Cancelled,Total Value');
-    reportData.branches.forEach(b => {
-        lines.push(b.branch_name + ',' + b.total_transfers + ',' + b.confirmed_count + ',' + b.draft_count + ',' + b.cancelled_count + ',' + b.total_value);
-    });
-    lines.push('');
-
-    // Top products
-    lines.push('TOP 10 PRODUCTS');
-    lines.push('#,Product,Code,Total Qty,Total Value,Transfers');
-    reportData.top_products.forEach((p, i) => {
-        lines.push((i+1) + ',' + p.product_name + ',' + p.product_code + ',' + p.total_qty + ',' + p.total_value + ',' + p.transfer_count);
-    });
-    lines.push('');
-
-    // Warehouse pairs
-    lines.push('WAREHOUSE PAIRS');
-    lines.push('#,From Warehouse,To Warehouse,Transfers,Total Value');
-    reportData.warehouse_pairs.forEach((wp, i) => {
-        lines.push((i+1) + ',' + wp.from_warehouse_name + ',' + wp.to_warehouse_name + ',' + wp.transfer_count + ',' + wp.total_value);
-    });
-    lines.push('');
-
-    // Monthly trend
-    lines.push('MONTHLY TREND');
-    lines.push('Month,Total,Confirmed,Draft,Cancelled,Value');
-    reportData.monthly_trend.forEach(m => {
-        lines.push(m.month + ',' + m.transfer_count + ',' + m.confirmed_count + ',' + m.draft_count + ',' + m.cancelled_count + ',' + m.total_value);
-    });
-
-    const csvContent = lines.join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'warehouse-transfer-summary-' + reportData.period.from + '-to-' + reportData.period.to + '.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    window.location.href = '{{ route('admin.warehouse-transfers.summary.export') }}?' + params.toString();
 }
 </script>
 @endpush

@@ -300,7 +300,7 @@ class BudgetController extends Controller
         // can stream them to php://output without buffering the full CSV body.
         $rows = $this->buildBudgetVarianceRows($varianceData);
 
-        $filename = "budget_vs_actual_{$fiscalYear}";
+        $filename = CsvExporter::filename('budget_vs_actual', [$fiscalYear]);
 
         // Audit log: row count is computed by iterating varianceData lines.
         // The generator above does the same iteration, so we reuse the count.

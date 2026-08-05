@@ -174,7 +174,7 @@ class StockTakeWeeklyReport
 
         $rowGenerator = $this->buildWeeklyCsvRows($report['sessions'] ?? []);
 
-        $filename = 'Stock_Take_Weekly_' . now()->format('Y-m-d_His');
+        $filename = CsvExporter::filename('Stock_Take_Weekly');
 
         return CsvExporter::exportFromRows($filename, $headerRow, $rowGenerator);
     }
