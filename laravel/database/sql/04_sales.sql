@@ -41,7 +41,7 @@ CREATE TABLE sales_invoices (
     invoice_code varchar(30) NOT NULL,
     invoice_date date NOT NULL,
     customer_id integer NOT NULL,
-    salesman_id integer,
+    salesman_id integer REFERENCES employees(id) ON DELETE SET NULL,  -- SALES-AUDIT-1 (G-165): FK enforced
     sales_person varchar(100),
     branch_id integer NOT NULL,
     sub_total numeric(14,2) DEFAULT 0,
@@ -234,6 +234,8 @@ CREATE TABLE sales_returns (
     total_amount numeric(14,2) DEFAULT 0,
     cogs_amount numeric(14,2) DEFAULT 0,  -- total COGS to reverse (snapshot)
     status varchar(20) NOT NULL DEFAULT 'created' CHECK (status IN ('created','confirmed','reversed')),
+    confirmed_by integer,  -- SALES-AUDIT-1 (G-170): user who confirmed this return (null for draft)
+    confirmed_at timestamp(0),  -- SALES-AUDIT-1 (G-170): when this return was confirmed (null for draft)
     journal_entry_id integer REFERENCES journal_entries(id),
     cogs_journal_entry_id integer REFERENCES journal_entries(id),
     -- CRITICAL: sales return posts stock IN at ORIGINAL avg cost (not current).

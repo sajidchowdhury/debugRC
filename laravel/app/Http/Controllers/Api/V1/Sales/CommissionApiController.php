@@ -6,6 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\Sales\CommissionEntryResource;
 use App\Http\Resources\Api\V1\Sales\CommissionRuleResource;
 use App\Http\Requests\Api\V1\Sales\StoreCommissionRuleRequest;
+use App\Http\Requests\Api\V1\Sales\SalesmanSummaryRequest;
+use App\Http\Requests\Api\V1\Sales\BranchSummaryRequest;
+use App\Http\Requests\Api\V1\Sales\ConfirmCommissionPeriodRequest;
 use App\Services\Sales\CommissionService;
 use App\Services\Sales\SalesAccess;
 use App\Models\CommissionRule;
@@ -192,12 +195,9 @@ class CommissionApiController extends Controller
      *
      * GET /api/v1/sales/commission/salesman-summary
      */
-    public function salesmanSummary(Request $request): JsonResponse
+    public function salesmanSummary(SalesmanSummaryRequest $request): JsonResponse
     {
-        $validated = $request->validate([
-            'salesman_id' => 'required|integer|exists:employees,id',
-            'period' => 'required|string|regex:/^\d{4}-\d{2}$/',
-        ]);
+        $validated = $request->validated();
 
         $summary = $this->commissionService->getSalesmanSummary(
             $validated['salesman_id'],
@@ -212,12 +212,9 @@ class CommissionApiController extends Controller
      *
      * GET /api/v1/sales/commission/branch-summary
      */
-    public function branchSummary(Request $request): JsonResponse
+    public function branchSummary(BranchSummaryRequest $request): JsonResponse
     {
-        $validated = $request->validate([
-            'period' => 'required|string|regex:/^\d{4}-\d{2}$/',
-            'branch_id' => 'nullable|integer|exists:branches,id',
-        ]);
+        $validated = $request->validated();
 
         $summary = $this->commissionService->getBranchSummary(
             $validated['branch_id'] ?? null,
@@ -236,11 +233,9 @@ class CommissionApiController extends Controller
      *
      * POST /api/v1/sales/commission/confirm-period
      */
-    public function confirmPeriod(Request $request): JsonResponse
+    public function confirmPeriod(ConfirmCommissionPeriodRequest $request): JsonResponse
     {
-        $validated = $request->validate([
-            'period' => 'required|string|regex:/^\d{4}-\d{2}$/',
-        ]);
+        $validated = $request->validated();
 
         $result = $this->commissionService->confirmPeriod(
             $validated['period'],

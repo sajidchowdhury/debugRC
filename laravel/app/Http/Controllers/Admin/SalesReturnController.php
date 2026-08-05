@@ -144,17 +144,35 @@ class SalesReturnController extends Controller
 
         $confirmedMeta = null;
         if ($return->isConfirmed()) {
-            try {
-                $confirmedMeta = DB::table('user_audit_log as ual')
-                    ->leftJoin('users as u', 'u.id', '=', 'ual.user_id')
+            // SALES-AUDIT-1 (G-170): prefer the direct confirmed_by / confirmed_at
+            // columns on sales_returns (fast O(1) lookup). Fall back to the
+            // user_audit_log join ONLY for pre-migration rows (confirmed before
+            // the columns existed — confirmed_at will be NULL on those rows).
+            if ($return->confirmed_by !== null) {
+                $row = DB::table('users as u')
                     ->leftJoin('employees as e', 'e.id', '=', 'u.employee_id')
-                    ->where('ual.action', 'return_confirmed')
-                    ->where('ual.details->>return_id', (string) $return->id)
-                    ->orderBy('ual.created_at', 'desc')
-                    ->select('ual.created_at as confirmed_at', 'u.username', 'e.name as employee_name')
+                    ->where('u.id', $return->confirmed_by)
+                    ->select('u.username', 'e.name as employee_name')
                     ->first();
-            } catch (\Throwable $e) {
-                $confirmedMeta = null;
+                $confirmedMeta = (object) [
+                    'confirmed_at'  => $return->confirmed_at,
+                    'username'      => $row->username ?? null,
+                    'employee_name' => $row->employee_name ?? null,
+                ];
+            } else {
+                // Legacy fallback — pre-migration rows have no confirmed_by.
+                try {
+                    $confirmedMeta = DB::table('user_audit_log as ual')
+                        ->leftJoin('users as u', 'u.id', '=', 'ual.user_id')
+                        ->leftJoin('employees as e', 'e.id', '=', 'u.employee_id')
+                        ->where('ual.action', 'return_confirmed')
+                        ->where('ual.details->>return_id', (string) $return->id)
+                        ->orderBy('ual.created_at', 'desc')
+                        ->select('ual.created_at as confirmed_at', 'u.username', 'e.name as employee_name')
+                        ->first();
+                } catch (\Throwable $e) {
+                    $confirmedMeta = null;
+                }
             }
         }
 

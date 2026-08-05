@@ -34,6 +34,8 @@ use App\Models\Scopes\BranchScope;
  * @property string $total_amount (revenue reversal amount = Σ qty × sales_rate)
  * @property string $cogs_amount (COGS reversal amount = Σ qty × original_cost)
  * @property string $status created|confirmed|reversed
+ * @property int|null $confirmed_by SALES-AUDIT-1 (G-170): user who confirmed this return
+ * @property string|null $confirmed_at SALES-AUDIT-1 (G-170): when this return was confirmed
  * @property int|null $journal_entry_id (revenue reversal journal)
  * @property int|null $cogs_journal_entry_id (COGS reversal journal)
  * @property bool $is_reversed
@@ -66,6 +68,7 @@ class SalesReturn extends Model
     protected $fillable = [
         'return_code', 'return_date', 'sales_invoice_id', 'customer_id', 'branch_id',
         'total_amount', 'cogs_amount', 'status',
+        'confirmed_by', 'confirmed_at',
         'journal_entry_id', 'cogs_journal_entry_id',
         'is_reversed', 'reversed_at', 'reversed_by', 'reverse_reason',
         'reason', 'created_by',
@@ -84,6 +87,8 @@ class SalesReturn extends Model
         'cogs_journal_entry_id' => 'integer',
         'created_by' => 'integer',
         'reversed_by' => 'integer',
+        'confirmed_by' => 'integer',
+        'confirmed_at' => 'datetime',
     ];
 
     public function items(): \Illuminate\Database\Eloquent\Relations\HasMany

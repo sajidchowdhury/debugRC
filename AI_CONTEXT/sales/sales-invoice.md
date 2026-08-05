@@ -416,6 +416,21 @@ return $this->journalPosting->createJournalEntry([...], $lines);
    invoice layer (always 'Good'). Dead column.
 5. **G12 (MAJOR)** — `sales_invoices.salesman_id` has NO FK to `employees(id)`. Orphan
    salesman_id values possible.
+
+   > ✅ RESOLVED in SALES-AUDIT-1 — Migration
+   > `2026_09_05_000005_add_fk_sales_invoices_salesman_id_to_employees.php` adds
+   > `FOREIGN KEY (salesman_id) REFERENCES employees(id) ON DELETE SET NULL`.
+   > Approach: backfill guard NULLs out orphan salesman_id values (any
+   > non-NULL salesman_id that doesn't reference an existing employees.id
+   > row — rare, only happens if an employee was hard-deleted prior to
+   > the FK being added), then adds the FK constraint. `ON DELETE SET NULL`
+   > preserves the invoice row when an employee is deleted (only the
+   > salesman link is severed — matches the existing
+   > `sales_invoice_item_id ON DELETE SET NULL` pattern). SQL baseline
+   > `04_sales.sql` updated to reflect the FK. Partitioning note:
+   > sales_invoices is PARTITION BY RANGE (invoice_date); PostgreSQL 12+
+   > supports FK constraints on partitioned tables natively (the
+   > constraint is declared on the parent and inherited by all partitions).
 6. **G13 (MAJOR)** — API v1 routes have NO role middleware on invoice store/update/cancel —
    only `api.auth` (token). Any authenticated API user can create/edit/cancel invoices.
 

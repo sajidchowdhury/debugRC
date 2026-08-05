@@ -334,6 +334,22 @@ return $this->journalPosting->createJournalEntry([
 5. **G16 (MAJOR)** — `sales_returns` has NO `confirmed_at` / `confirmed_by` columns. The
    confirmer's identity is recoverable only via `user_audit_log`. The `printSlip` controller
    method explicitly works around this by querying `user_audit_log` for `action='return_confirmed'`.
+
+   > ✅ RESOLVED in SALES-AUDIT-1 — Migration
+   > `2026_09_05_000006_add_confirmed_by_at_to_sales_returns.php` adds
+   > `confirmed_by integer NULL` + `confirmed_at timestamp(0) NULL` columns
+   > (placed AFTER `status`, BEFORE `journal_entry_id`). Mirrors the pattern
+   > established by `2026_09_03_000003_add_confirmed_by_at_to_purchase_tables.php`
+   > (PURCHASING-3 G-039) for purchase_receives + purchase_returns. Service
+   > wiring: `SalesReturnService::confirmReturn` UPDATE statement now sets
+   > `confirmed_by` + `confirmed_at` alongside `status='confirmed'` (fast O(1)
+   > lookup — no audit-log join needed). `SalesReturn` model: fillable +
+   > casts + PHPDoc updated. `Admin/SalesReturnController::printSlip` now
+   > PREFERS the direct columns (with a `user_audit_log` fallback for
+   > pre-migration rows where `confirmed_by` is NULL). SQL baseline
+   > `04_sales.sql` updated to reflect the new columns. The API controller
+   > (`SalesReturnApiController::confirm`) delegates to the same service
+   > method — no API-side change needed.
 6. **AuditableMasterData bypass** — the trait is `use`d on `SalesReturn` but bypassed by
    `DB::table('sales_returns')->insertGetId()` in `createReturn`.
 7. **`confirmReturn` now calls `CommissionService::reverseOnReturn`** (SALES-2, commit

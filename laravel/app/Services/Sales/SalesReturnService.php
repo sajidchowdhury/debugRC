@@ -233,10 +233,17 @@ class SalesReturnService
             ]);
 
             // 5. Update return status.
+            // SALES-AUDIT-1 (G-170): persist confirmed_by + confirmed_at
+            // directly on the row — fast O(1) lookup, no audit-log join
+            // needed (the printSlip controller used to work around the
+            // missing columns via user_audit_log, which is month-partitioned
+            // and slow for historical queries).
             DB::table('sales_returns')
                 ->where('id', $returnId)
                 ->update([
                     'status' => 'confirmed',
+                    'confirmed_by' => $confirmedBy,
+                    'confirmed_at' => now(),
                     'journal_entry_id' => $journalEntryId,
                     'cogs_journal_entry_id' => $cogsJournalEntryId,
                     'updated_at' => now(),

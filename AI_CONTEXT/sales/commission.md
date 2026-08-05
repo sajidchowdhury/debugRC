@@ -387,6 +387,18 @@ stateDiagram-v2
    > `commission_rule_tiers` etc. are safe).
 5. **G7 (MAJOR)** — No `config/commission.php` — no knobs for commission batch minimum, max
    rules per salesman, default rule type, target period default, auto-confirm flag.
+
+   > ✅ RESOLVED in SALES-AUDIT-1 — Created `laravel/config/commission.php` with 5
+   > env-overridable knobs: `batch_minimum_amount` (default 0.01 — replaces the
+   > hardcoded threshold in `CommissionService::confirmPeriod` L663),
+   > `max_rules_per_salesman` (default 0 = unlimited, enforced by
+   > `CommissionService::createRule`), `default_rule_type` (default 'flat'),
+   > `default_target_period` (default 'monthly'), `auto_confirm_calculated_entries`
+   > (default false — preserves the month-end batch flow). Wired `batch_minimum_amount`
+   > into `confirmPeriod` (replaces the `0.01` literal). The other 4 knobs are
+   > config-only (read by future service work or seeders — no runtime consumer yet,
+   > but the config surface is now in place so a deployment can tune without a code
+   > change).
 6. **G8 (MAJOR)** — No materialized view for commission summaries. `getSalesmanSummary` and
    `getBranchSummary` recompute from `commission_entries` + `sales_invoices` joins on every API
    call.
@@ -404,6 +416,17 @@ stateDiagram-v2
     reversal entry — NOT the original entry's period. Distorts month-end summaries.
 11. **G15 (MAJOR)** — `CommissionApiController::storeRule` uses inline `$request->validate()`
     — no dedicated FormRequest. Complex rule-type-conditional validation is duplicated inline.
+
+   > ✅ RESOLVED in SALES-AUDIT-1 — `storeRule` was already migrated to
+   > `StoreCommissionRuleRequest` in a prior session (the FormRequest contains
+   > the full rule-type-conditional validation for all 4 rule types). This session
+   > extracted the 3 REMAINING inline `$request->validate()` calls in the same
+   > controller: `salesmanSummary` → `SalesmanSummaryRequest`, `branchSummary` →
+   > `BranchSummaryRequest`, `confirmPeriod` → `ConfirmCommissionPeriodRequest`.
+   > All 4 commission-write/read API methods now use dedicated FormRequests —
+   > zero inline `validate()` calls remain in `CommissionApiController`. The 3 new
+   > FormRequests mirror the validation rules they replaced (1:1, no behavior
+   > change) and add `bodyParameters()` for Scribe/OpenAPI doc generation.
 12. **G16 (MINOR)** — `commission_rule_tiers`, `commission_rule_product_groups`,
     `commission_rule_targets` have NO `updated_at` column. Audit trail for tier rate changes is
     impossible.

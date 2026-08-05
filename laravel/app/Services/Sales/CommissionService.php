@@ -660,8 +660,13 @@ class CommissionService
             foreach ($bySalesman as $salesmanId => $salesmanEntries) {
                 $netCommission = $salesmanEntries->sum(fn($e) => (float) $e->commission_amount);
 
-                if (abs($netCommission) < 0.01) {
-                    // Net zero — just mark as confirmed without GL
+                // SALES-AUDIT-1 (G-158): batch minimum threshold externalised
+                // to config('commission.batch_minimum_amount'). Default 0.01
+                // (preserves prior behaviour). Set to 0 to always post GL.
+                $batchMinimum = (float) config('commission.batch_minimum_amount', 0.01);
+
+                if (abs($netCommission) < $batchMinimum) {
+                    // Net zero (or below threshold) — just mark as confirmed without GL
                     foreach ($salesmanEntries as $entry) {
                         $entry->update(['status' => 'confirmed']);
                     }
