@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-05 (post-FINANCE-3: G-319/G-322/G-326/G-329/G-331/G-336/G-342 resolved in `8cfe7ca`)
+Last reviewed: 2026-09-05 (post-FINANCE-3: G-319/G-322/G-326/G-329/G-331/G-336/G-342 resolved in `8cfe7ca`; G-329 migration DDL hotfix in `588f868` — declarative FK replaced with trigger-based FK because `journal_entries` is partitioned)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 

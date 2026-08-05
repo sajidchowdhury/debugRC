@@ -1351,6 +1351,25 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 > new `debtorJournalEntry()` relationship. See
 > `laravel/app/Services/BranchDemand/BranchDemandRepricingService.php:253-345`
 > and `laravel/app/Models/BranchDemandRepricing.php`.
+>
+> 🔧 MIGRATION DDL HOTFIX in commit `588f868` (post-8cfe7ca) — The original
+> migration added the column with a declarative `REFERENCES journal_entries(id)`
+> clause, which fails at runtime with `SQLSTATE[42830]` because
+> `journal_entries` was partitioned by `entry_date` in migration
+> `2026_08_22_000002` (PK is now `(id, entry_date)`, not `id` alone).
+> PostgreSQL rejects declarative FK references to a partitioned parent unless
+> the partition key is included in the referenced unique constraint. The
+> migration now mirrors the codebase's established trigger-based FK pattern
+> (migrations `2026_08_15_000003` + `2026_08_22_000004`): plain `integer`
+> column + `fn_trg_branch_demand_repricing_journal_entry_id_debtor_je_fk()`
+> trigger function + `BEFORE INSERT OR UPDATE` trigger on the child table +
+> `CONSTRAINT TRIGGER trg_je_del_cascade_branch_demand_repricing_journal_entry_id_debtor`
+> on `journal_entries` (NO_ACTION — matches the `on_delete` behaviour configured
+> for `branch_demand_repricing.journal_entry_id` in `2026_08_22_000004`'s
+> FK_MAP). The SQL baseline retains its declarative `REFERENCES` clause for
+> documentation consistency; on fresh installs the declarative FK is dropped by
+> the partition migration and this migration re-creates enforcement as a
+> trigger-based FK idempotently.
 
 - **Evidence:** `app/Services/BranchDemand/BranchDemandRepricingService.php:333` —
   `postRepricingAdjustmentJournals` returns `creditorJeId` only; `debtorJeId` is created but NOT
