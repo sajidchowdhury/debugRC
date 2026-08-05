@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-04 (post-REALTIME-1: G-008/G-009 resolved in `b780ca7`)
+Last reviewed: 2026-09-04 (post-FINANCE-1: G-098/G-100/G-103/G-109/G-112/G-113/G-323/G-341 resolved in `<pending>`)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -19,12 +19,12 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | Severity | Count | Blocks cutover? |
 |---|---|---|
 | CRITICAL | 2 | Yes — all of them |
-| HIGH | 94 | Most |
+| HIGH | 86 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **232** | |
-| _of which resolved_ | 125 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **224** | |
+| _of which resolved_ | 133 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -32,7 +32,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 |---|---|
 | api | 29 |
 | architecture | 17 |
-| finance | 51 |
+| finance | 43 |
 | purchasing | 11 |
 | reports | 71 |
 | sales | 15 |
@@ -161,22 +161,22 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-095 | G1 | HIGH | finance | finance/fixed-assets.md:171 | — | BR27 \| **RLS MUST block all access for non-admin users.** The single `_admin_policy` on each of the 3 tables only allows `app.is_admin = 't… | cutover, RLS audit | H1 | resolved | dd31590 |
 | G-096 | G6 | HIGH | finance | finance/consolidation-intercompany.md:683 | — | #### G6 — `ConsolidationService::reverseEliminationJournal` explicitly sets `is_reversed=false` on the reversal JE | GL posting | H2 | open | — |
 | G-097 | G7 | HIGH | finance | finance/consolidation-intercompany.md:693 | — | #### G7 — `ConsolidationService::postEliminationEntry` does NOT set `entry_date` on `journal_lines` | GL posting | H2 | open | — |
-| G-098 | G7 | HIGH | finance | finance/fixed-assets.md:173 | — | BR29 \| **`fn_financial_audit_trigger` MUST NOT be attached to any fixed-asset table.** ⚠️ **G7 — only `journal_entries`/`journal_lines` are… | audit-trail phase | H1 | open | — |
+| G-098 | G7 | HIGH | finance | finance/fixed-assets.md:173 | — | BR29 \| **`fn_financial_audit_trigger` MUST NOT be attached to any fixed-asset table.** ⚠️ **G7 — only `journal_entries`/`journal_lines` are… | audit-trail phase | H1 | resolved | `<pending>` |
 | G-099 | G8 | HIGH | finance | finance/consolidation-intercompany.md:707 | — | #### G8 — `ConsolidationService::postEliminationEntry` does NOT set `dimension_value_id` on `journal_lines` | GL posting | H2 | open | — |
-| G-100 | G8 | HIGH | finance | finance/fixed-assets.md:771 | — | **G8 (MAJOR):** No artisan command, no scheduled job. The accountant MUST manually click both buttons every month. | — | H2 | open | — |
+| G-100 | G8 | HIGH | finance | finance/fixed-assets.md:771 | — | **G8 (MAJOR):** No artisan command, no scheduled job. The accountant MUST manually click both buttons every month. | — | H2 | resolved | `<pending>` |
 | G-101 | G9 | HIGH | finance | finance/branch-demand.md:1190 | — | #### G9 — NO `BranchDemandPolicy.php` exists | cutover, RLS audit | H2 | resolved | 1ccc5b6 |
 | G-102 | G9 | HIGH | finance | finance/consolidation-intercompany.md:718 | — | #### G9 — `MoneyTransferService::postIntercompanySettlement` uses non-registered `'intercompany'` nature → silently skips | — | H2 | open | — |
-| G-103 | G9 | HIGH | finance | finance/fixed-assets.md:898 | — | **G9 (MAJOR):** `DELETE FROM asset_disposals` destroys the audit trail. The disposal record vanishes; only the GL reversal JE remains, with … | notifications phase | H2 | open | — |
+| G-103 | G9 | HIGH | finance | finance/fixed-assets.md:898 | — | **G9 (MAJOR):** `DELETE FROM asset_disposals` destroys the audit trail. The disposal record vanishes; only the GL reversal JE remains, with … | notifications phase | H2 | resolved | `<pending>` |
 | G-104 | G10 | HIGH | finance | finance/consolidation-intercompany.md:734 | — | #### G10 — `WarehouseTransferService::postIntercompanyGL` is DEAD CODE with fossilized bugs | — | H2 | open | — |
 | G-105 | G11 | HIGH | finance | finance/consolidation-intercompany.md:750 | app/Http/Middleware/EnforceBranchIsolation.php:165-246 | #### G11 — `EnforceBranchIsolation::inferTableFromUri` does NOT cover consolidation / warehouse-transfers / elimination-rules / companies UR… | cutover, RLS audit | H2 | resolved | `68a9672` |
 | G-106 | G12 | HIGH | finance | finance/consolidation-intercompany.md:775 | routes/web.php:1733 | #### G12 — NO BranchScope on `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `Company` models | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-107 | G13 | HIGH | finance | finance/consolidation-intercompany.md:789 | — | #### G13 — NO Policy classes for `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `MoneyTransfer` / `WarehouseTransfer` / `Comp… | cutover, RLS audit | H2 | resolved | 1ccc5b6 |
 | G-108 | G14 | HIGH | finance | finance/consolidation-intercompany.md:801 | — | #### G14 — `BranchIntercompanyService::reverseLedgerByReference` inserts reversal rows with `journal_entry_id = null` | GL posting | H2 | open | — |
-| G-109 | G14 | HIGH | finance | finance/fixed-assets.md:174 | — | BR30 \| **DepreciationService and AssetDisposalService MUST call `JournalPostingService::reverseJournalEntry` directly** (NOT `JournalRevers… | notifications phase | H2 | open | — |
+| G-109 | G14 | HIGH | finance | finance/fixed-assets.md:174 | — | BR30 \| **DepreciationService and AssetDisposalService MUST call `JournalPostingService::reverseJournalEntry` directly** (NOT `JournalRevers… | notifications phase | H2 | resolved | `<pending>` |
 | G-110 | G15 | HIGH | finance | finance/consolidation-intercompany.md:816 | — | #### G15 — `ConsolidationService::calculateBalanceElimination` queries `branch_ledger` WITHOUT joining `journal_entries` to filter by `is_re… | GL posting | H2 | open | — |
 | G-111 | G16 | HIGH | finance | finance/consolidation-intercompany.md:835 | — | #### G16 — `ConsolidationService::calculateAggregateElimination` uses `min(debitNet, creditNet)` which may eliminate LESS than the true inte… | — | H2 | open | — |
-| G-112 | G16 | HIGH | finance | finance/fixed-assets.md:848 | — | **G16 (MAJOR):** For a fully-depreciated asset, `NBV = salvage_value`. If scrapped for ৳0, the code computes `loss = 0 − salvage = −salvage`… | notifications phase | H2 | open | — |
-| G-113 | G19 | HIGH | finance | finance/fixed-assets.md:899 | — | **G19 (MAJOR):** The force-reversed pending schedules (set during `disposeAsset`) are NOT restored. The accountant must manually re-generate… | notifications phase | H2 | open | — |
+| G-112 | G16 | HIGH | finance | finance/fixed-assets.md:848 | — | **G16 (MAJOR):** For a fully-depreciated asset, `NBV = salvage_value`. If scrapped for ৳0, the code computes `loss = 0 − salvage = −salvage`… | notifications phase | H2 | resolved | `<pending>` |
+| G-113 | G19 | HIGH | finance | finance/fixed-assets.md:899 | — | **G19 (MAJOR):** The force-reversed pending schedules (set during `disposeAsset`) are NOT restored. The accountant must manually re-generate… | notifications phase | H2 | resolved | `<pending>` |
 | G-114 | G27 | HIGH | finance | finance/fixed-assets.md:172 | — | BR28 \| **The subsystem MUST be accessible only to `accountant`, `manager`, `admin` (route middleware).** Superadmin bypasses via `EnsureRol… | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-115 | G6 | HIGH | purchasing | purchasing/purchase-receive.md:409 | — | **G6 — No over-receive guard.** A user can receive 100 units against a PO line that ordered | — | H2 | open | — |
 | G-116 | G7 | HIGH | purchasing | purchasing/purchase-order.md:280 | — | **G7 — No `ApprovalService` integration.** POs are not subject to maker-checker approval | — | H2 | open | — |
@@ -386,7 +386,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-320 | G3 | MEDIUM | finance | finance/dimensions-cost-centers.md:513 | — | **G3 stale DDL:** The column EXISTS in migrated DBs (added by migration L105-112, re-asserted | DDL drift | H2 | open | — |
 | G-321 | G4 | MEDIUM | finance | finance/dimensions-cost-centers.md:84 | — | **G4:** "Tag journal line with dimension" is currently NOT wired to any business module. | GL posting | H2 | open | — |
 | G-322 | G5 | HIGH | finance | finance/budgeting.md:114 | — | BR3 \| A budget MUST NOT be activated if another active budget exists for the same `(fiscal_year, branch_id)`. ⚠️ **G5 — check is buggy; all… | — | H2 | open | — |
-| G-323 | G5 | HIGH | finance | finance/fixed-assets.md:154 | — | BR20 \| **`disposal_code` MUST be generated via `LIKE` + `ORDER BY DESC` + 1** (format `DSP-YYYY-NNNNN`). ⚠️ **G5 — race-prone; should use `… | — | H2 | open | — |
+| G-323 | G5 | HIGH | finance | finance/fixed-assets.md:154 | — | BR20 \| **`disposal_code` MUST be generated via `LIKE` + `ORDER BY DESC` + 1** (format `DSP-YYYY-NNNNN`). ⚠️ **G5 — race-prone; should use `… | — | H2 | resolved | `<pending>` |
 | G-324 | G7 | HIGH | finance | finance/dimensions-cost-centers.md:100 | — | **G7:** `EnforceBranchIsolation::inferTableFromUri` does NOT include `dimensions`. Cross-branch | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-325 | G8 | LOW | finance | finance/budgeting.md:66 | — | **G8:** There is no artisan command and no scheduled job for variance reporting. The | — | H4 | open | — |
 | G-326 | G9 | HIGH | finance | finance/budgeting.md:117 | routes/web.php:1647-1662 | BR6 \| Budget activation MUST set `approved_at = now()` and `approved_by = auth()->id()`. ⚠️ **G9 — no maker-checker separation.** \| `Budge… | — | H2 | open | — |
@@ -404,7 +404,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-338 | G18 | WONTFIX | finance | finance/branch-demand.md:1276 | app/Services/BranchDemand/BranchDemandWeeklyReportService.php:280 | #### G18 — `BranchDemandWeeklyReportService::getWarehouseWiseSales` may reference nonexistent column | — | H3 | open | — |
 | G-339 | G18 | MEDIUM | finance | finance/budgeting.md:130 | — | BR14 \| A budget's `period` MUST be in range `1..maxPeriod` (12 monthly / 4 quarterly / 1 yearly). Application-enforced via `Budget::maxPeri… | — | H2 | open | — |
 | G-340 | G18 | MEDIUM | finance | finance/dimensions-cost-centers.md:96 | — | **Manager** \| Intended: reviews segment reports, manages dimensions \| ⚠️ **G1 — cannot see NULL-branch dimension values** (BranchScope exc… | — | H2 | open | — |
-| G-341 | G18 | HIGH | finance | finance/fixed-assets.md:144 | — | BR15 \| **Disposal MUST reverse all `pending` depreciation schedules for the asset** (bulk update `status='reversed'`). `posted` schedules a… | notifications phase | H2 | open | — |
+| G-341 | G18 | HIGH | finance | finance/fixed-assets.md:144 | — | BR15 \| **Disposal MUST reverse all `pending` depreciation schedules for the asset** (bulk update `status='reversed'`). `posted` schedules a… | notifications phase | H2 | resolved | `<pending>` |
 | G-342 | G19 | HIGH | finance | finance/branch-demand.md:1283 | app/Services/BranchDemand/BranchDemandWeeklyReportService.php:347-360 | #### G19 — `BranchDemandWeeklyReportService::getProfit` has dead code | — | H2 | open | — |
 | G-343 | G19 | LOW | finance | finance/dimensions-cost-centers.md:135 | — | BR4 \| A dimension MUST NOT be hard-deleted via the UI (only soft-deactivated). ⚠️ **G19 — no `destroy` endpoint.** \| controller has no `de… | — | H4 | open | — |
 | G-344 | G21 | CRITICAL | finance | finance/branch-demand.md:1300 | app/Services/Accounting/MoneyTransferService.php:442 | #### G21 — `MoneyTransfer` model uses `'intercompany'` ledger nature; `BranchIntercompanyService` uses `'interbranch_payable'/'interbranch_r… | — | H1 | resolved | 5905123 |

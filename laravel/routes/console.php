@@ -80,3 +80,20 @@ Schedule::command('partition:measure-perf')
     ->runInBackground()
     ->name('partition-measure-perf')
     ->description('Measure partition query performance vs targets (weekly)');
+
+// FINANCE-1 / G-100: Post monthly depreciation on the 1st at 01:00.
+// Generates pending schedules for the previous month + posts them to GL
+// (Dr dep_expense / Cr accumulated_depreciation). Previously the accountant
+// had to manually click both buttons every month — a missed month silently
+// left depreciation unposted (asset NBV drifted, GL missing the entry).
+// Offset from the 02:00 stale-draft cancel + 03:00 stock-reconcile so the
+// three heavy jobs don't pile up. withoutOverlapping prevents a slow run
+// (many assets) from stacking; runInBackground frees the schedule worker.
+// Exits non-zero on partial failure so the scheduler log surfaces it.
+Schedule::command('depreciation:post-monthly')
+    ->monthlyOn(1, '01:00')
+    ->withoutOverlapping()
+    ->runInBackground()
+    ->name('depreciation-post-monthly')
+    ->description('Generate + post monthly depreciation schedules for all active fixed assets');
+

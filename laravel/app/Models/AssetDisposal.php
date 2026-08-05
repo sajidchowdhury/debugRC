@@ -63,6 +63,13 @@ class AssetDisposal extends Model
         'proceeds_ledger_id',
         'gain_loss_ledger_id',
         'journal_entry_id',
+        // G-103 (FINANCE-1): reversal columns added by migration
+        // 2026_09_04_000003. reverseDisposal now soft-deletes (sets
+        // status='reversed') instead of hard-deleting the row.
+        'status',
+        'reversed_by',
+        'reversed_at',
+        'reverse_reason',
         'reason',
         'notes',
         'created_by',
@@ -75,6 +82,8 @@ class AssetDisposal extends Model
         'accumulated_depreciation_at_disposal' => 'decimal:2',
         'gain_loss_amount' => 'decimal:2',
         'created_by' => 'integer',
+        'reversed_by' => 'integer',
+        'reversed_at' => 'datetime',
     ];
 
     // ── Relationships ───────────────────────────────────────────────

@@ -70,6 +70,35 @@ class AssetDisposalService
             $bookValueAtDisposal = (float) $asset->net_book_value;
             $accumulatedDepAtDisposal = (float) $asset->accumulated_depreciation;
             $acquisitionCost = (float) $asset->acquisition_cost;
+            $salvageValue = (float) $asset->salvage_value;
+
+            // G-112 (FINANCE-1): salvage-value loss guard.
+            // For a fully-depreciated asset (NBV == salvage), a ৳0 scrap
+            // computes loss = 0 − salvage = −salvage → loss_amount = salvage.
+            // This records a P&L loss equal to the salvage value, even though
+            // the asset was already fully depreciated. The accounting
+            // treatment is correct (the estimated residual value didn't
+            // materialize → recognize the loss), but it's a noisy entry
+            // that accountants may expect to route through retained earnings
+            // instead of P&L. We log a warning so the accountant can review
+            // + confirm the treatment before the JE posts. The check is
+            // informational only — the JE still posts through loss_on_disposal
+            // (the registered nature). A future config flag could route it
+            // to a retained-earnings ledger instead.
+            if ($bookValueAtDisposal <= $salvageValue + 0.01
+                && $disposalProceeds < $salvageValue
+                && $salvageValue > 0
+            ) {
+                Log::warning('AssetDisposal: fully-depreciated asset scrapped below salvage', [
+                    'asset_id' => $asset->id,
+                    'asset_code' => $asset->asset_code,
+                    'net_book_value' => $bookValueAtDisposal,
+                    'salvage_value' => $salvageValue,
+                    'disposal_proceeds' => $disposalProceeds,
+                    'expected_loss_amount' => round($disposalProceeds - $bookValueAtDisposal, 2),
+                    'treatment' => 'P&L loss_on_disposal (default); accountant may reclassify to retained earnings',
+                ]);
+            }
 
             // Calculate gain/loss
             $gainLossAmount = round($disposalProceeds - $bookValueAtDisposal, 2);
@@ -81,8 +110,13 @@ class AssetDisposalService
                 $gainLossAmount = abs($gainLossAmount); // Store as positive number
             }
 
-            // Generate disposal code
-            $disposalCode = $this->generateDisposalCode($disposalDate);
+            // G-323 (FINANCE-1): generate disposal_code atomically via
+            // DocumentSequenceService (advisory-locked) instead of the
+            // race-prone LIKE + ORDER BY DESC + 1 pattern. Format is
+            // unchanged: DSP-YYYY-NNNNN. The legacy generateDisposalCode()
+            // is retained for backward compatibility but is no longer the
+            // primary path.
+            $disposalCode = $this->generateDisposalCodeAtomic($disposalDate);
 
             // Resolve gain/loss ledger
             $gainLossLedgerId = $data['gain_loss_ledger_id'] ?? null;
@@ -164,6 +198,16 @@ class AssetDisposalService
 
             // Post the journal entry
             $userId = Auth::id();
+
+            // G-109 (FINANCE-1): this service calls
+            // JournalPostingService::createJournalEntry + reverseJournalEntry
+            // DIRECTLY (not JournalReversalService::reverseByJournalEntry).
+            // Rationale: depreciation/disposal JEs have NO sub-ledger
+            // entries (no customer/supplier/employee ledger rows reference
+            // them), so the cascade that JournalReversalService performs is
+            // unnecessary. This is an intentional, documented deviation from
+            // the canonical reversal pattern in
+            // `accounting/reversal-vs-cancellation.md` — see BR30.
             $journalEntryId = $this->journalService->createJournalEntry(
                 [
                     'entry_date' => $disposalDate,
@@ -177,7 +221,7 @@ class AssetDisposalService
                 $journalLines
             );
 
-            // Create the disposal record
+            // Create the disposal record (status='posted' — JE is in the GL)
             $disposal = AssetDisposal::create([
                 'disposal_code' => $disposalCode,
                 'fixed_asset_id' => $asset->id,
@@ -191,6 +235,7 @@ class AssetDisposalService
                 'proceeds_ledger_id' => $proceedsLedgerId,
                 'gain_loss_ledger_id' => $gainLossLedgerId,
                 'journal_entry_id' => $journalEntryId,
+                'status' => 'posted',
                 'reason' => $data['reason'] ?? null,
                 'notes' => $data['notes'] ?? null,
                 'created_by' => $userId,
@@ -201,13 +246,27 @@ class AssetDisposalService
                 'status' => 'disposed',
             ]);
 
-            // Reverse any pending depreciation schedules for future periods
+            // G-341 (FINANCE-1): reverse all pending depreciation schedules
+            // for the asset (BR15). Previously this bulk update set only
+            // `status='reversed'` — no `reversed_by` / `reversed_at` /
+            // `reverse_reason`. That broke the audit trail (the schedule
+            // showed "reversed" with no provenance) AND made it impossible
+            // for reverseDisposal to find + restore the right schedules
+            // (G-113). Now we stamp the full reversal metadata, including a
+            // `reverse_reason` that cites the disposal_code so G-113's
+            // restoration query can find them by exact string match.
             $pendingSchedules = AssetDepreciationSchedule::where('fixed_asset_id', $asset->id)
                 ->where('status', 'pending')
                 ->get();
 
+            $forceReverseReason = "Force reversed by disposal {$disposalCode}";
             foreach ($pendingSchedules as $schedule) {
-                $schedule->update(['status' => 'reversed']);
+                $schedule->update([
+                    'status' => 'reversed',
+                    'reversed_by' => $userId,
+                    'reversed_at' => now(),
+                    'reverse_reason' => $forceReverseReason,
+                ]);
             }
 
             return $disposal;
@@ -215,7 +274,26 @@ class AssetDisposalService
     }
 
     /**
-     * Reverse a disposal — restore the asset and reverse the journal entry.
+     * Reverse a disposal — restore the asset, reverse the journal entry,
+     * restore force-reversed pending schedules, and soft-delete the disposal
+     * record (mark status='reversed' — do NOT hard-delete).
+     *
+     * G-103 (FINANCE-1): the previous implementation called `$disposal->delete()`
+     * which fired `DELETE FROM asset_disposals` — destroying the audit trail.
+     * The GL reversal JE's `reference_id` was left pointing at nothing. Now
+     * we set `status='reversed'` + `reversed_by` + `reversed_at` +
+     * `reverse_reason` and leave the row in place. The disposal history is
+     * preserved; auditors can see the full disposal → reversal chain.
+     *
+     * G-113 (FINANCE-1): the previous implementation did NOT restore the
+     * pending schedules that `disposeAsset` force-reversed (BR18). The
+     * accountant had to manually re-generate them. Now we find the
+     * force-reversed schedules by their `reverse_reason` (stamped with the
+     * disposal_code by G-341's fix) and restore them to `pending`.
+     *
+     * G-109 (FINANCE-1): calls `JournalPostingService::reverseJournalEntry`
+     * directly (not `JournalReversalService::reverseByJournalEntry`). See
+     * the documented deviation in `disposeAsset` + BR30.
      *
      * @param AssetDisposal $disposal
      * @param int $userId
@@ -225,7 +303,7 @@ class AssetDisposalService
     public function reverseDisposal(AssetDisposal $disposal, int $userId, string $reason): void
     {
         DB::transaction(function () use ($disposal, $userId, $reason) {
-            // Reverse the journal entry
+            // Reverse the journal entry (G-109: direct call, no cascade)
             if ($disposal->journal_entry_id) {
                 $this->journalService->reverseJournalEntry(
                     $disposal->journal_entry_id,
@@ -248,13 +326,82 @@ class AssetDisposalService
                 ]);
             }
 
-            // Delete the disposal record (or mark as reversed)
-            $disposal->delete();
+            // G-113 (FINANCE-1): restore the pending schedules that
+            // disposeAsset force-reversed. We find them by the exact
+            // `reverse_reason` string that G-341's fix stamps on them
+            // ("Force reversed by disposal {disposal_code}"). This is
+            // precise — it will NOT restore schedules that were reversed
+            // by a real DepreciationService::reverseDepreciation call
+            // (those carry the accountant-supplied reason string).
+            $forceReverseReason = "Force reversed by disposal {$disposal->disposal_code}";
+            $restoredSchedules = AssetDepreciationSchedule::where('fixed_asset_id', $disposal->fixed_asset_id)
+                ->where('status', 'reversed')
+                ->where('reverse_reason', $forceReverseReason)
+                ->get();
+
+            foreach ($restoredSchedules as $schedule) {
+                $schedule->update([
+                    'status' => 'pending',
+                    'reversed_by' => null,
+                    'reversed_at' => null,
+                    'reverse_reason' => null,
+                ]);
+            }
+
+            // G-103 (FINANCE-1): soft-delete the disposal record. Set
+            // status='reversed' + stamp reversal metadata. The row stays
+            // in the table so the GL reversal JE's reference_id resolves
+            // + the audit trail is preserved.
+            $disposal->update([
+                'status' => 'reversed',
+                'reversed_by' => $userId,
+                'reversed_at' => now(),
+                'reverse_reason' => $reason,
+            ]);
         });
     }
 
     /**
+     * Generate a unique disposal code atomically via advisory lock.
+     *
+     * G-323 (FINANCE-1): the legacy `generateDisposalCode()` used a
+     * race-prone `LIKE + ORDER BY DESC + 1` pattern — two concurrent
+     * disposals in the same year could read the same `lastCode`, both
+     * compute `nextSeq = lastSeq + 1`, and both INSERT the same
+     * `disposal_code`, hitting the UNIQUE constraint with a 50% failure
+     * rate. This method delegates to `DocumentSequenceService::nextCode()`
+     * which acquires a transaction-scoped `pg_advisory_xact_lock` keyed on
+     * (doc_type, branch_id, period_key), so only one disposal per
+     * year-per-branch can allocate a sequence number at a time.
+     *
+     * Format is unchanged: `DSP-YYYY-NNNNN` (5-digit zero-padded sequence,
+     * branch-scoped, yearly reset). The `branch_id=0` default makes the
+     * sequence global (disposals are rare + cross-branch in multi-entity
+     * consolidation); pass an explicit branch_id if per-branch isolation
+     * is later required.
+     */
+    private function generateDisposalCodeAtomic(string $disposalDate): string
+    {
+        $year = substr($disposalDate, 0, 4);
+
+        return DocumentSequenceService::nextCode(
+            docType: 'asset_disposal',
+            prefix: 'DSP',
+            datePart: $year,
+            padLength: 5,
+            periodKey: $year,         // yearly sequence reset
+            branchId: 0,              // global sequence (disposals are rare)
+        );
+    }
+
+    /**
      * Generate a unique disposal code.
+     *
+     * @deprecated G-323 (FINANCE-1): use `generateDisposalCodeAtomic()`
+     *     instead. This legacy method is retained for backward
+     *     compatibility (e.g., data-migration scripts that pre-date the
+     *     DocumentSequenceService adoption). It is NOT called by the
+     *     primary `disposeAsset` path.
      */
     private function generateDisposalCode(string $disposalDate): string
     {

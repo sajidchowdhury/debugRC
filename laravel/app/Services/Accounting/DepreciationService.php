@@ -437,7 +437,14 @@ class DepreciationService
         }
 
         return DB::transaction(function () use ($schedule, $userId, $reason) {
-            // Reverse the journal entry
+            // G-109 (FINANCE-1): calls JournalPostingService::reverseJournalEntry
+            // DIRECTLY (not JournalReversalService::reverseByJournalEntry).
+            // Rationale: depreciation JEs have NO sub-ledger entries (no
+            // customer/supplier/employee ledger rows reference them), so the
+            // cascade that JournalReversalService performs is unnecessary.
+            // This is an intentional, documented deviation from the canonical
+            // reversal pattern in `accounting/reversal-vs-cancellation.md`
+            // — see BR30. Same deviation in AssetDisposalService::reverseDisposal.
             $reversalId = $this->journalService->reverseJournalEntry(
                 $schedule->journal_entry_id,
                 $userId,
