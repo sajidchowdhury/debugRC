@@ -3,7 +3,6 @@
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\PasswordResetLinkController;
 use App\Http\Controllers\Auth\NewPasswordController;
-use App\Http\Controllers\LegacyDashboardController;
 use App\Http\Controllers\UserPerformanceDashboardController;
 use App\Http\Controllers\Admin\ProductController;
 use App\Http\Controllers\Admin\ProductCategoryController;
@@ -92,10 +91,11 @@ Route::middleware('auth')->group(function () {
         ->name('logout');
 
     // ============================================================
-    // User Performance Dashboard (Phase 0+ — replaces legacy
-    // company-wide DashboardController for the /dashboard route).
+    // User Performance Dashboard (Phase 0+ — per-user attribution
+    // dashboard for the /dashboard route).
     // See docs/USER_PERFORMANCE_DASHBOARD_PLAN.md for the full plan.
-    // Legacy controller kept as LegacyDashboardController for reference.
+    // The legacy company-wide DashboardController was deleted in
+    // REPORTS-AUDIT-3 G-136 (query patterns retrievable from git history).
     // ============================================================
     // G-043 (CRITICAL, defense-in-depth): dashboard routes had only `auth`
     // middleware — any authed user could hit /dashboard. The dashboard is

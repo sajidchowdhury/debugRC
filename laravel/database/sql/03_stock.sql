@@ -783,3 +783,70 @@ CREATE INDEX idx_bdi_demand ON branch_demand_items(branch_demand_id);
 CREATE INDEX idx_bdi_product ON branch_demand_items(product_id);
 CREATE INDEX idx_bdi_from_warehouse ON branch_demand_items(from_warehouse_id);
 CREATE INDEX idx_bdi_to_warehouse ON branch_demand_items(to_warehouse_id);
+
+-- ============================================================
+-- REPORTS-AUDIT-3 (G-131 / reports-catalog.md G5)
+-- Attach fn_financial_audit_trigger to 6 inventory tables.
+-- Mirror of migration 2026_09_06_000002_attach_financial_audit_trigger_to_inventory_tables.php
+-- (DDL baseline mirror — on a fresh DB, `php artisan migrate` is the
+-- canonical install path; this appendix is documentation + DBA
+-- point-in-time recovery use only).
+--
+-- Tables covered (6):
+--   1. stock_adjustments       — manual stock increase/decrease documents
+--   2. damage_invoices         — inventory loss/damage header documents
+--   3. damage_invoice_items    — per-product line items for damage_invoices
+--   4. stock_take_sessions     — stock-take (cycle count) session header
+--   5. stock_take_items        — per-product count lines for stock-take sessions
+--   6. stock_transactions      — the SSOT inventory ledger (PARTITION BY
+--                                RANGE(transaction_date) — PG 12+ auto-inherits
+--                                the trigger to all existing + future monthly
+--                                partitions when attached to the parent)
+--
+-- NOTE: the prior list in reports-catalog.md G5 had 8 tables; 2 of them
+-- (purchase_receives + purchase_return_items) were already attached by
+-- migration 2026_09_03_000002 (PURCHASING-1). Only the 6 inventory tables
+-- above remained uncovered. With this attachment, EVERY transactional table
+-- that feeds financial reports is now hash-chain-audited via
+-- financial_audit_log.
+--
+-- The trigger function fn_financial_audit_trigger() is defined in
+-- 02_accounting.sql (lines 381-443) and was hardened by migrations
+-- 2026_08_08_000005/000006/000007. It reads branch_id from the row's JSONB
+-- representation (works for tables with OR without a branch_id column).
+--
+-- DROP IF EXISTS before CREATE makes each attachment idempotent.
+-- ============================================================
+
+DROP TRIGGER IF EXISTS trg_audit_stock_adjustments ON stock_adjustments;
+CREATE TRIGGER trg_audit_stock_adjustments
+AFTER INSERT OR UPDATE OR DELETE ON stock_adjustments
+FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+
+DROP TRIGGER IF EXISTS trg_audit_damage_invoices ON damage_invoices;
+CREATE TRIGGER trg_audit_damage_invoices
+AFTER INSERT OR UPDATE OR DELETE ON damage_invoices
+FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+
+DROP TRIGGER IF EXISTS trg_audit_damage_invoice_items ON damage_invoice_items;
+CREATE TRIGGER trg_audit_damage_invoice_items
+AFTER INSERT OR UPDATE OR DELETE ON damage_invoice_items
+FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+
+DROP TRIGGER IF EXISTS trg_audit_stock_take_sessions ON stock_take_sessions;
+CREATE TRIGGER trg_audit_stock_take_sessions
+AFTER INSERT OR UPDATE OR DELETE ON stock_take_sessions
+FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+
+DROP TRIGGER IF EXISTS trg_audit_stock_take_items ON stock_take_items;
+CREATE TRIGGER trg_audit_stock_take_items
+AFTER INSERT OR UPDATE OR DELETE ON stock_take_items
+FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+
+-- stock_transactions is PARTITION BY RANGE(transaction_date) — PG 12+
+-- auto-creates the trigger on all existing AND future partitions when
+-- attached to the parent.
+DROP TRIGGER IF EXISTS trg_audit_stock_transactions ON stock_transactions;
+CREATE TRIGGER trg_audit_stock_transactions
+AFTER INSERT OR UPDATE OR DELETE ON stock_transactions
+FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();

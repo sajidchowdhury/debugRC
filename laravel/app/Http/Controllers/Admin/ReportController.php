@@ -4,6 +4,9 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Helpers\ReportsCatalog;
+use App\Http\Requests\Reports\ReportAsOfRequest;
+use App\Http\Requests\Reports\ReportRangeRequest;
+use App\Http\Requests\Reports\StocktakeVarianceRequest;
 use App\Services\Reports\ReportService;
 use App\Services\Reports\CteReportService;
 use App\Services\Stock\StockTakeVarianceReport;
@@ -49,7 +52,7 @@ class ReportController extends Controller
     /**
      * Trial Balance.
      */
-    public function trialBalance(Request $request)
+    public function trialBalance(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         $accountType = $request->input('account_type');
@@ -176,7 +179,7 @@ class ReportController extends Controller
     /**
      * Profit & Loss.
      */
-    public function profitAndLoss(Request $request)
+    public function profitAndLoss(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
@@ -189,7 +192,7 @@ class ReportController extends Controller
     /**
      * Balance Sheet.
      */
-    public function balanceSheet(Request $request)
+    public function balanceSheet(ReportAsOfRequest $request)
     {
         $asOf = $this->parseAsOfDate($request);
         $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
@@ -203,7 +206,7 @@ class ReportController extends Controller
     /**
      * Cash Flow Statement (Indirect Method — Xero-style).
      */
-    public function cashFlow(Request $request)
+    public function cashFlow(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
@@ -373,7 +376,7 @@ class ReportController extends Controller
     /**
      * Receivable Aging.
      */
-    public function receivableAging(Request $request)
+    public function receivableAging(ReportAsOfRequest $request)
     {
         $asOf = $this->parseAsOfDate($request);
         // G-044: read-site branch filtering — non-admins pinned to session branch.
@@ -391,7 +394,7 @@ class ReportController extends Controller
     /**
      * Payable Aging.
      */
-    public function payableAging(Request $request)
+    public function payableAging(ReportAsOfRequest $request)
     {
         $asOf = $this->parseAsOfDate($request);
         // G-044: read-site branch filtering — non-admins pinned to session branch.
@@ -648,7 +651,7 @@ SQL, [$data['from'], $data['to']]);
      * physical ≠ system, with filters (session / branch / warehouse /
      * product / date range) and CSV export.
      */
-    public function stocktakeVariance(Request $request)
+    public function stocktakeVariance(StocktakeVarianceRequest $request)
     {
         $data = $this->parseDateRange($request);
 
@@ -701,7 +704,7 @@ SQL, [$data['from'], $data['to']]);
     /**
      * CSV export of the variance detail report (Excel-friendly, BOM-prefixed).
      */
-    public function stocktakeVarianceExport(Request $request)
+    public function stocktakeVarianceExport(StocktakeVarianceRequest $request)
     {
         $data = $this->parseDateRange($request);
 
@@ -828,7 +831,7 @@ SQL, [$data['from'], $data['to']]);
     /**
      * Today's Summary (CTE) — All dashboard KPIs in one query.
      */
-    public function todaySummaryCte(Request $request)
+    public function todaySummaryCte(ReportAsOfRequest $request)
     {
         $date = $request->input('date')
             ? Carbon::parse($request->input('date'))
@@ -847,7 +850,7 @@ SQL, [$data['from'], $data['to']]);
     /**
      * AR Aging (CTE) — Proper sub-ledger based aging with GL reconciliation.
      */
-    public function arAgingCte(Request $request)
+    public function arAgingCte(ReportAsOfRequest $request)
     {
         $asOf = $this->parseAsOfDate($request);
         $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
@@ -864,7 +867,7 @@ SQL, [$data['from'], $data['to']]);
     /**
      * General Ledger (CTE) — With SQL window-function running balance.
      */
-    public function generalLedgerCte(Request $request)
+    public function generalLedgerCte(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         $ledgerId = $request->input('ledger_id') ? (int) $request->input('ledger_id') : null;
@@ -884,7 +887,7 @@ SQL, [$data['from'], $data['to']]);
     /**
      * Gross Margin (CTE) — Per-invoice and per-product margin with accurate COGS.
      */
-    public function grossMarginCte(Request $request)
+    public function grossMarginCte(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;

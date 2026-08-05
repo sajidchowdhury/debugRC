@@ -42,29 +42,42 @@ RC_ERP_v2 has **3 dashboard tiers** + **1 dead demo asset**:
 - **Class docblock (L16-25):** *"Lightweight summary endpoints for mobile apps and the AI
   sidecar."*
 
-### 1.3 Legacy dashboard (DEAD CODE — Gap G7)
+### 1.3 Legacy dashboard (DEAD CODE — Gap G7 ✅ RESOLVED REPORTS-AUDIT-3 G-136)
 
 - **Controller:** `App\Http\Controllers\LegacyDashboardController`
-  (`laravel/app/Http/Controllers/LegacyDashboardController.php`, 502L).
-- **Routes:** NONE — `routes/web.php:6` imports the class but `:98` only mentions it in a
-  comment. **No route maps to `LegacyDashboardController@index` or `salesTrendAjax`.**
+  (`laravel/app/Http/Controllers/LegacyDashboardController.php`, 502L — **DELETED in
+  REPORTS-AUDIT-3 commit, see git history**).
+- **Routes:** NONE — `routes/web.php:6` previously imported the class but `:98` only
+  mentioned it in a comment. The import + comment were removed in REPORTS-AUDIT-3
+  G-136. **No route ever mapped to `LegacyDashboardController@index` or
+  `salesTrendAjax`** — verified via `rg "LegacyDashboard" routes/` before deletion.
 - **Class docblock (L9-37):** *"SUPERSEDED — kept for reference only"*.
-- **View reference:** `index()` at `:99` returns `view('dashboard.index', ...)` — but
-  **there is no `dashboard/index.blade.php`**. The blade files are `index_legacy.blade.php`
-  (634L) and `performance.blade.php` (4272L). Calling `LegacyDashboardController::index()`
-  would throw `InvalidArgumentException: View [dashboard.index] not found.`
+- **View reference:** `index()` at `:99` returned `view('dashboard.index', ...)` — but
+  there was never a `dashboard/index.blade.php`. The blade files were `index_legacy.blade.php`
+  (634L — **DELETED in REPORTS-AUDIT-3 G-136**) and `performance.blade.php` (4272L —
+  retained, used by `UserPerformanceDashboardController`). Calling
+  `LegacyDashboardController::index()` would have thrown `InvalidArgumentException:
+  View [dashboard.index] not found.`
+- **Query patterns preserved in git history:** the docblock said "query patterns
+  reusable as templates" — the deleted file remains accessible via
+  `git show <REPORTS-AUDIT-3-commit>^:laravel/app/Http/Controllers/LegacyDashboardController.php`
+  for anyone wanting to copy the patterns.
 
-### 1.4 Dead static demo asset (Gap G8)
+### 1.4 Dead static demo asset (Gap G8 ✅ RESOLVED REPORTS-AUDIT-3 G-140)
 
-- **File:** `laravel/public/assets/dashboard/intelligent-sales-cockpit.html` (1700L).
-- **Access:** Direct URL `/assets/dashboard/intelligent-sales-cockpit.html` — no auth gate
-  because it's in `/public/`.
-- **Content:** Hardcoded demo data — "Ayesha Rahman" (L239), "$185k" (L885), "1.84M" (L295),
-  "Apex Engineering – Phase 2" (L883), "Industrial Pump 3000" (L930), "Only 14 units left"
-  (L931). The `setDateRange()` function (L1080-1118) swaps hardcoded numbers
-  (`revenueEl.textContent = '1.84' / '4.12' / '9.84'`). NO `fetch()` calls, NO Laravel route
-  references, NO `@json` directives.
-- **Same gap pattern as Phase 15's `public/assets/js/push.js`** (also a dead demo asset).
+- **File:** `laravel/public/assets/dashboard/intelligent-sales-cockpit.html` (1700L —
+  **DELETED in REPORTS-AUDIT-3 commit, see git history**).
+- **Access (former):** Direct URL `/assets/dashboard/intelligent-sales-cockpit.html`
+  — no auth gate because it was in `/public/`.
+- **Content (former):** Hardcoded demo data — "Ayesha Rahman" (L239), "$185k" (L885),
+  "1.84M" (L295), "Apex Engineering – Phase 2" (L883), "Industrial Pump 3000" (L930),
+  "Only 14 units left" (L931). The `setDateRange()` function (L1080-1118) swapped
+  hardcoded numbers (`revenueEl.textContent = '1.84' / '4.12' / '9.84'`). NO `fetch()`
+  calls, NO Laravel route references, NO `@json` directives.
+- **Pre-deletion verification:** `rg "intelligent-sales-cockpit" app/ resources/ routes/ config/`
+  returned 0 matches (no references outside `/public/`). The `public/assets/dashboard/`
+  directory became empty after deletion — git does not track empty directories so it
+  disappeared from the working tree; can be re-created when a new asset is added.
 
 ---
 
@@ -684,17 +697,34 @@ sequenceDiagram
 |---|---|---|---|---|
 | **G1** | **CRITICAL** (cross-ref `reports/reports-catalog.md` G1) | `routes/web.php:100-108` — dashboard routes have only `auth` middleware, no `role:` gate. | Any authenticated user can hit `/dashboard`. Role-section visibility enforced in PHP via `resolveRoleSections()`, not at route level. Defense-in-depth gap. | Add `->middleware('role:...')` if dashboard access should be role-restricted. (Currently permissive by design — all authed users see their own dashboard.) |
 | **G7** | **HIGH** | `LegacyDashboardController.php` (502L) — imported at `routes/web.php:6` but NO route maps to it. `index():99` returns `view('dashboard.index', ...)` but no `dashboard/index.blade.php` exists. Class docblock says "SUPERSEDED — kept for reference only". | 502 lines of dead code. Misleading — the docblock says "query patterns reusable as templates" but the controller would crash if invoked. The blade `index_legacy.blade.php` (634L) is also dead. | Either delete `LegacyDashboardController.php` + `index_legacy.blade.php` (preferred — live patterns in Git history), OR fix the view reference (`view('dashboard.index_legacy', ...)`), wire a route, and document as a reference-only `/dashboard/legacy` endpoint. |
+
+> ✅ **RESOLVED — G-136 (REPORTS-AUDIT-3).** Pre-deletion verification (all 3 checks PASS):
+>   - `rg "LegacyDashboard" routes/` → only `routes/web.php:6` import + `routes/web.php:98` comment. Both removed (import line + comment).
+>   - `rg "LegacyDashboard" app/` → 2 self-references in `LegacyDashboardController.php` itself + 2 docblock references in `UserPerformanceDashboardController.php` (L21 `@see LegacyDashboardController` + L1114 `Same CASE expression as LegacyDashboardController::getReceivableAging()` — both are documentation-only, NOT code dependencies). Both docblock references updated to remove the {@see} tag + reworded to "deleted in REPORTS-AUDIT-3 G-136 — see git history" so IDE PHPDoc tools no longer warn about unresolved references.
+>   - `rg "index_legacy" resources/` → 0 matches (the blade file itself has no self-reference).
+>
+> `git rm` executed on both files: `app/Http/Controllers/LegacyDashboardController.php` (502L) + `resources/views/dashboard/index_legacy.blade.php` (634L). The `routes/web.php` import line was removed + the comment at L98 was rewritten to note the deletion + reference git history for the query patterns. The "query patterns reusable as templates" rationale is preserved in git history (commit `REPORTS-AUDIT-3` + the prior commits that introduced the controller) — deletion is safe.
 | **G8** | **HIGH** | `laravel/public/assets/dashboard/intelligent-sales-cockpit.html` (1700L) — grep for `intelligent-sales-cockpit` across `laravel/` → only self-references. Hardcoded demo data ("Ayesha Rahman", "$185k", "1.84M"). NO `fetch()` calls, NO Laravel route references. Accessible at `/assets/dashboard/intelligent-sales-cockpit.html` without auth (in `/public/`). | Misleading — anyone who finds this URL thinks it's a real dashboard. Demo data could be screenshot-ed and mistaken for real production data. 1700L of untested dead HTML. Same gap pattern as Phase 15's `public/assets/js/push.js`. | Delete the file. If kept as a design reference, move to `docs/design/intelligent-sales-cockpit-mockup.html` (out of `/public/`) and add a "DO NOT DEPLOY" header. |
+
+> ✅ **RESOLVED — G-140 (REPORTS-AUDIT-3).** Pre-deletion verification: `rg "intelligent-sales-cockpit" app/ resources/ routes/ config/` returned 0 matches (no references outside `/public/`). `git rm public/assets/dashboard/intelligent-sales-cockpit.html` (1700L) executed. The `public/assets/dashboard/` directory became empty after deletion — git does not track empty directories, so the directory itself disappeared from the working tree; it can be re-created when a new asset is added (no further cleanup needed).
 | **G9** | **HIGH** | `UserPerformanceDashboardController.php` is 2246L with 16 private metric methods, each containing 1-3 inline `DB::table(...)` / `DB::select($sql, $bindings)` queries. `getWorkPattern` L1489-1545 + `getActivitySummary` L1560-1654 build raw SQL UNION ALLs across 6 tables by string interpolation. No metric method delegates to a service — all queries inline. | Violates Phase 4 coding-standards (controllers should be thin; SQL belongs in services). Hard to unit-test (no service to mock). Any schema change requires editing the controller. The class is 5× the size of the largest service (`ReportService.php` 1171L). | Extract each Phase's metric methods into a service: `SalesPerformanceMetricsService`, `CollectionMetricsService`, `OperationalMetricsService`, `CommissionMetricsService`, `StockDisciplineMetricsService`, `ApprovalWorkloadService`. Controller becomes a thin orchestrator. |
 | **G10** | **HIGH** | `UserPerformanceDashboardController::index` L92 accepts bare `Request $request`. `resolvePeriod` L561-601 reads `?period`, `?from`, `?to` — validated inline via `isValidDate()` regex L606-613 (manual `preg_match` + `checkdate`). `salesTrendAjax` L518 reads `?days` via `min(max((int)$request->input('days', 7), 7), 90)` — inline clamp. `fragmentAjax` L229 inherits same resolution. No `FormRequest` class exists. `DashboardApiController` index/salesTrend/topProducts take NO request parameter — they hardcode `now()` / `7 days` / `30 days`. `resolveRoleSections` default for unknown roles is permissive. | Unvalidated input flows into SQL `WHERE` clauses. The `isValidDate` regex protects against SQL injection (parameterized via `?` bindings) but doesn't catch semantically invalid ranges. Any new role auto-gets dashboard access (permissive default). | Create `app/Http/Requests/Dashboard/PerformanceDashboardRequest.php` with rules. Tighten `resolveRoleSections` default to restrictive (no sections enabled for unknown roles). |
+
+> ✅ **RESOLVED — G-148 (REPORTS-AUDIT-3).** New FormRequest `app/Http/Requests/Dashboard/PerformanceDashboardRequest.php` created with rules: `period` nullable|string|in:today,mtd,qtd,last30,custom; `from` nullable|date|before_or_equal:today; `to` nullable|date|after_or_equal:from|before_or_equal:today; `employee_id` nullable|integer|exists:employees,id; `days` nullable|integer|min:7|max:90. The `withValidator()` hook enforces the semantic constraint: when `period=custom`, BOTH `from` AND `to` are required (otherwise the controller's `resolvePeriod()` falls through to MTD — the FormRequest now returns a 422 instead so the user knows the request was malformed). Applied to 3 controller methods: `index`, `salesTrendAjax`, `fragmentAjax` (all changed from `Request $request` → `PerformanceDashboardRequest $request`). The existing `resolvePeriod()` helper continues reading from `$request->input(...)` — the FormRequest validation runs FIRST so invalid input gets a 422 instead of relying on the manual `isValidDate()` regex fallback to MTD.
+>
+> `resolveRoleSections()` default tightened from permissive (4 sections enabled: sales + collections + operational + accuracy) to RESTRICTIVE (0 sections enabled for unknown roles). The 'hr' + 'other' cases were split out of the default into their own explicit case that preserves the prior permissive behavior for those KNOWN roles — only the catch-all default changed. A `Log::warning("Unknown role {$role} denied dashboard sections")` is emitted for unknown roles so an unexpected role value shows up in logs for follow-up (the user sees an empty dashboard — administrators can add an explicit case for the new role above to grant appropriate access).
+>
+> Note: the `DashboardApiController` (REST API counterpart) hardcodes `now()` / `7 days` / `30 days` and takes NO request parameters — it does NOT need a FormRequest (no user input to validate). Documented here for clarity.
 | **G12** | **MEDIUM** (cross-ref `reports/materialized-views.md` G12) | `UserPerformanceDashboardController::cached():450` has `int $ttl = 60` default. `timed():481` has hardcoded `200.0` ms threshold. No `config/reports.php` file exists. | Tuning the cache TTL or slow-query threshold requires a code change + redeploy. | Create `config/reports.php` with `'dashboard_cache_ttl'`, `'slow_query_threshold_ms'`, `'mv_refresh_concurrently'`. |
 | **G13** | **MEDIUM** | `routes/api.php:115-120` — all 3 dashboard endpoints have `->middleware('api.rate:120')`. Compare to other API endpoints: `branches` at 60 req/min, `lookups/*` at 120 req/min, most write endpoints at 30 req/min. No documentation in `routes/api.php` header (L20-90) explaining the rate-tier conventions. | Phase 17 (API Layer) will need to document the 4 rate tiers (30/60/120 + default) in `api/api-conventions.md`. Without that, the choice of 120 for dashboard looks arbitrary. | Defer to Phase 17. Flag for cross-reference: `api/api-conventions.md` §rate-limits should enumerate the tiers. |
 | **G15** | **MEDIUM** | `DashboardApiController::index` L34-78 fires 6 active-count queries + 2 today-aggregate queries on every request — no `Cache::remember`. Compare to `UserPerformanceDashboardController::index` L92-210 which wraps every metric in 60s `Cache::remember`. The API is rate-limited at 120 req/min but each request hits the DB 8×. | A mobile app polling `/api/v1/dashboard` every 5s would generate 24 req/min × 8 DB queries = 192 DB queries/min just for one client. The 120 req/min rate limit caps this at 960 DB queries/min per token. | Add `Cache::remember('api:dashboard:summary', 30, fn() => [...])` to `index()`. Same for `salesTrend` (5 min cache) and `topProducts` (15 min cache). |
 | **G16** | **LOW** | `LegacyDashboardController` private methods end with `catch (\Throwable $e) { return [...zeros...]; }` (L60-62, L205-213, L253-255, L287-289, L331-333, L368-370, L406-408, L493-500). No `Log::warning` — errors silently swallowed. Same pattern in `UserPerformanceDashboardController` BUT that controller DOES `Log::warning`. | A broken query in `LegacyDashboardController` produces a dashboard with all zeros and no log entry — impossible to debug. | Add `Log::warning('Legacy getX failed: ' . $e->getMessage())` to each catch. (Moot if G7 is fixed by deleting the controller.) |
+
+> ✅ **RESOLVED — G-136 (REPORTS-AUDIT-3).** `LegacyDashboardController.php` + `index_legacy.blade.php` deleted (see G7 row above for full pre-deletion verification). G16 (the missing `Log::warning` in the catch blocks) is therefore MOOT — the controller no longer exists in the codebase.
 | **G17** | **LOW** | `tests/Feature/Api/V1/DashboardApiTest.php` L108-125, L175-192, L232-249 — uses `DB::table('sales_invoices')->insert([...])` with hardcoded column lists instead of `SalesInvoice::factory()->create()` or `SalesInvoiceService::create(...)`. Missing columns like `created_by`, `salesman_id`, `sub_total` (uses `sub_total=100` but `total_amount=250.50` without explaining the discrepancy). | Tests don't exercise the real sales-invoice creation path (which posts journal entries + updates customer_ledger + fires notifications + triggers MV refresh). A regression in `SalesInvoiceService` wouldn't be caught. | Refactor tests to use `SalesInvoice::factory()` or call `SalesInvoiceService::create()` with a fixture. (Lower priority — tests pass and verify the dashboard reads correctly.) |
 | **G18** | **LOW** | No tests for `UserPerformanceDashboardController`. Grep `tests/` for `UserPerformanceDashboard` → 0 matches. Only the API dashboard has tests (`DashboardApiTest.php`). | The 2246L web dashboard with 16 metric methods + 60s cache + role-section logic is untested. Refactoring (G9) would be risky without test coverage. | Add `tests/Feature/Dashboard/UserPerformanceDashboardTest.php` covering: (a) GET /dashboard as 3 roles (salesman, manager, superadmin), (b) assert 200 + view data keys, (c) `?employee_id=X` as superadmin switches employee, (d) `?employee_id=X` as salesman is ignored, (e) `?period=today/mtd/qtd/last30/custom` resolves correctly, (f) cache invalidation on period change. |
 
-**Severity tally:** 1 CRITICAL (G1, cross-ref) / 4 HIGH (G7, G8, G9, G10) / 3 MEDIUM (G12, G13, G15) / 3 LOW (G16, G17, G18). 11 gaps total. (G1, G12 cross-reference sibling docs for the same findings.)
+**Severity tally:** 1 CRITICAL (G1, cross-ref) / 4 HIGH (G7 ✅ G-136, G8 ✅ G-140, G9, G10 ✅ G-148 — 3 of 4 resolved REPORTS-AUDIT-3) / 3 MEDIUM (G12, G13, G15) / 3 LOW (G16 ✅ G-136 side-effect (controller deleted), G17, G18). 11 gaps total. (G1, G12 cross-reference sibling docs for the same findings.)
 
 ---
 

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\Dashboard\PerformanceDashboardRequest;
 use App\Models\Employee;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -18,7 +19,8 @@ use Illuminate\Support\Facades\Log;
  * Phase 5 (Role-Aware Refinement & Approval Workload) +
  * Phase 6 (Polish, Performance & Post-Launch Gaps).
  *
- * Replaces {@see LegacyDashboardController} for the `/dashboard` route.
+ * Replaces the legacy dashboard (deleted in REPORTS-AUDIT-3 G-136 — see
+ * git history) for the `/dashboard` route.
  *
  * KEY DESIGN PRINCIPLES (per docs/USER_PERFORMANCE_DASHBOARD_PLAN.md):
  *   1. NO company-wide metrics anywhere. Every metric is attributed to a
@@ -89,7 +91,7 @@ class UserPerformanceDashboardController extends Controller
      * Route: GET /dashboard
      * Name:  dashboard
      */
-    public function index(Request $request)
+    public function index(PerformanceDashboardRequest $request)
     {
         $ctx = $this->resolveContext($request);
 
@@ -226,7 +228,7 @@ class UserPerformanceDashboardController extends Controller
      * On any error → 200 OK with {error: '...'} so the caller can fall
      * back to a full page reload (window.location = url).
      */
-    public function fragmentAjax(Request $request)
+    public function fragmentAjax(PerformanceDashboardRequest $request)
     {
         try {
             $ctx = $this->resolveContext($request);
@@ -513,7 +515,7 @@ class UserPerformanceDashboardController extends Controller
      * the resolved target user over the last N days (7/30/90 toggle).
      * Honors ?employee_id=X for super-admin (same resolution as index()).
      */
-    public function salesTrendAjax(Request $request)
+    public function salesTrendAjax(PerformanceDashboardRequest $request)
     {
         $days = min(max((int) $request->input('days', 7), 7), 90);
 
@@ -1111,8 +1113,9 @@ class UserPerformanceDashboardController extends Controller
     /**
      * Receivable aging snapshot — 5 buckets, scoped to the user's book.
      *
-     * Same CASE expression as LegacyDashboardController::getReceivableAging()
-     * but with `AND created_by = $userId`. Point-in-time (no period filter).
+     * Same CASE expression as the legacy dashboard's getReceivableAging
+     * (deleted in REPORTS-AUDIT-3 G-136 — see git history), but with
+     * `AND created_by = $userId`. Point-in-time (no period filter).
      *
      * @return array{Current:float,1-30:float,31-60:float,61-90:float,90+:float,total:float}
      */
@@ -2080,9 +2083,13 @@ class UserPerformanceDashboardController extends Controller
      *   superadmin         → all + approval_workload
      *   hr / other         → sales + collections + operational (their own work)
      *
-     * Intentionally permissive: unknown roles get a sensible default
-     * (sales + collections + operational + accuracy) rather than an
-     * empty dashboard.
+     * REPORTS-AUDIT-3 (G-148): the default case is RESTRICTIVE for unknown
+     * roles (no sections enabled) + Log::warning so an unknown role shows up
+     * in the logs for follow-up. Previously the default was permissive (sales
+     * + collections + operational + accuracy) which silently granted any
+     * newly-invented role a sensible-looking dashboard. Known roles listed
+     * above keep their current section visibility — only the catch-all
+     * default changed.
      *
      * @return array<string,bool>  Map of section_key => visible
      */
@@ -2135,12 +2142,24 @@ class UserPerformanceDashboardController extends Controller
 
             case 'hr':
             case 'other':
-            default:
-                // Permissive default for unknown roles.
+                // Explicit known role: same permissive set as before
+                // (sales + collections + operational + accuracy) so existing
+                // behavior for these roles is preserved.
                 $sections['sales']            = true;
                 $sections['collections']      = true;
                 $sections['operational']      = true;
                 $sections['accuracy']         = true;
+                break;
+
+            default:
+                // Unknown role: NO sections enabled (REPORTS-AUDIT-3 G-148).
+                // Previously the default was permissive (4 sections enabled),
+                // which silently granted any newly-invented role a
+                // sensible-looking dashboard. Log::warning so an unknown
+                // role is visible in logs for follow-up (the user will see
+                // an empty dashboard — administrators can add an explicit
+                // case for the new role above to grant appropriate access).
+                Log::warning("Unknown role {$role} denied dashboard sections");
                 break;
         }
 
