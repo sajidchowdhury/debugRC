@@ -80,14 +80,43 @@ class ListenNotifyService
     /**
      * Map PG channel → Laravel notification event name.
      * Used when forwarding DB events to the rule-based notification system.
+     *
+     * G-076/G-078/G-079 (CRITICAL, WORKFLOWS-NOTIFICATION): the worker-forward
+     * path is now DISABLED — this map is emptied. The 4 entries that were
+     * here (`rcerp_sales_invoice` → `sales_finalize`, `rcerp_sales_challan`
+     * → `challan_create`, `rcerp_sales_return` → `return_created`,
+     * `rcerp_customer_payment` → `payment_receive`) caused three bugs:
+     *
+     *   - G-076: DOUBLE DISPATCH. Each of the 4 events was dispatched BOTH
+     *     by direct PHP (SalesInvoiceService, SalesChallanService,
+     *     CustomerPaymentService, SalesReturnService — which pass full
+     *     $context) AND by the worker-forward path here (which passes no
+     *     $context). Admins got 2 notifications per action; `times_fired`
+     *     was incremented twice.
+     *   - G-078: WRONG EVENT FORWARDED on UPDATE. The DB trigger fired
+     *     `rcerp_sales_return` on BOTH INSERT and UPDATE, but the static
+     *     map always translated it to `return_created`. So
+     *     `SalesReturnService::confirmReturn` (which UPDATEs sales_returns
+     *     + dispatches `return_confirmed`) ALSO triggered a spurious
+     *     `return_created` via the worker. Same for `reverseReturn`.
+     *   - G-079: WORKER-FORWARDED EVENTS HAVE NO $context. The pg_notify
+     *     payload only carries `table/action/id/branch_id/changes` — no
+     *     `salesman_id`, no `created_by`. Context-aware recipient types
+     *     (`warehouse_manager_of_branch`, `salesman_of_invoice`,
+     *     `invoice_creator`) silently returned empty collections.
+     *
+     * Fix: rely solely on direct PHP dispatch (which carries full context
+     * + fires the correct sub-event: created vs confirmed vs reversed).
+     * The DB trigger → pg_notify → Redis → SSE path is UNAFFECTED — it
+     * still powers real-time page refresh via `publishToRedis()`. Only the
+     * rule-based notification dispatch is removed from the worker.
+     *
+     * The `forwardToNotificationService()` method + the worker's
+     * `--no-dispatch` flag are retained for backward compatibility, but
+     * `forwardToNotificationService()` now early-returns (the
+     * `if (!$eventName) return;` guard fires for every channel).
      */
-    private const CHANNEL_EVENT_MAP = [
-        'rcerp_sales_invoice'   => 'sales_finalize',
-        'rcerp_sales_challan'   => 'challan_create',
-        'rcerp_sales_return'    => 'return_created',
-        'rcerp_customer_payment'=> 'payment_receive',
-        'rcerp_system'          => 'system_policy_change',
-    ];
+    private const CHANNEL_EVENT_MAP = [];
 
     /**
      * Publish a notification payload to Redis.
@@ -175,7 +204,12 @@ class ListenNotifyService
         $eventName = self::CHANNEL_EVENT_MAP[$pgChannel] ?? null;
 
         if (!$eventName) {
-            return; // No mapping — skip notification dispatch
+            // G-076/G-078/G-079: CHANNEL_EVENT_MAP is intentionally empty —
+            // the worker-forward path is disabled. Direct PHP dispatch
+            // (SalesInvoiceService, SalesChallanService, CustomerPaymentService,
+            // SalesReturnService) handles rule-based notification with full
+            // $context. This early-return fires for every channel now.
+            return;
         }
 
         // Build a human-readable body from the payload

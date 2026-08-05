@@ -240,6 +240,15 @@ class ListenNotifyWorker extends Command
             $listenNotify->publishToRedis($channel, $data);
 
             // 2. Forward to NotificationService (for rule-based dispatch)
+            //    G-076/G-078/G-079 (WORKFLOWS-NOTIFICATION): the
+            //    worker-forward path is disabled — CHANNEL_EVENT_MAP is
+            //    empty, so forwardToNotificationService() early-returns.
+            //    Rule-based notification dispatch is handled by direct PHP
+            //    calls in the service layer (SalesInvoiceService,
+            //    SalesChallanService, CustomerPaymentService,
+            //    SalesReturnService) which carry full $context. The call is
+            //    retained for backward compatibility + future re-enablement
+            //    if trigger payloads are ever enriched.
             if (!$noDispatch) {
                 $listenNotify->forwardToNotificationService($channel, $data, $notificationService);
             }
