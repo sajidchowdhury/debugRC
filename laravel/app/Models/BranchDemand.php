@@ -73,6 +73,11 @@ class BranchDemand extends Model
         'reverse_reason',
         'received_at',
         'received_by',
+        // G-354 (G28) FINANCE-BD-1: structured rejection columns (replaces
+        // the prior notes-concat pattern in BranchDemandService::rejectDemand).
+        'rejection_reason',
+        'rejected_at',
+        'rejected_by',
         'notes',
         'created_by',
     ];
@@ -84,6 +89,9 @@ class BranchDemand extends Model
         'is_reversed' => 'boolean',
         'reversed_at' => 'datetime',
         'received_at' => 'datetime',
+        // G-354 (G28) FINANCE-BD-1
+        'rejected_at' => 'datetime',
+        'rejected_by' => 'integer',
         'from_branch_id' => 'integer',
         'to_branch_id' => 'integer',
         'warehouse_transfer_id' => 'integer',

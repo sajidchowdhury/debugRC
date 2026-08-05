@@ -208,6 +208,114 @@ class VerifyBranchDemandSchema extends Command
             $errors++;
         }
 
+        // G-351 (G26) FINANCE-BD-1: checks 11-16 — 4 missing table-existence
+        // checks + 1 CHECK-constraint check + 1 RLS-policy check. The original
+        // command checked 10 things; this extends it to 16, covering the full
+        // branch-demand schema surface.
+        // 11. Check branch_demand_customer_payment_settlements table
+        $this->info('11. Checking branch_demand_customer_payment_settlements table...');
+        if (Schema::hasTable('branch_demand_customer_payment_settlements')) {
+            $this->info('   ✓ branch_demand_customer_payment_settlements table exists');
+        } else {
+            $this->error('   ✗ branch_demand_customer_payment_settlements table does NOT exist!');
+            $this->warn('   → Run migration 2026_07_29_000015_create_branch_demand_customer_payment_settlements_table');
+            $errors++;
+        }
+
+        // 12. Check branch_demand_money_transfer_settlements table
+        $this->info('12. Checking branch_demand_money_transfer_settlements table...');
+        if (Schema::hasTable('branch_demand_money_transfer_settlements')) {
+            $this->info('   ✓ branch_demand_money_transfer_settlements table exists');
+        } else {
+            $this->error('   ✗ branch_demand_money_transfer_settlements table does NOT exist!');
+            $this->warn('   → Run migration 2026_07_29_000014_create_branch_demand_money_transfer_settlements_table');
+            $errors++;
+        }
+
+        // 13. Check shadow_demand_comparisons table
+        $this->info('13. Checking shadow_demand_comparisons table...');
+        if (Schema::hasTable('shadow_demand_comparisons')) {
+            $this->info('   ✓ shadow_demand_comparisons table exists');
+        } else {
+            $this->error('   ✗ shadow_demand_comparisons table does NOT exist!');
+            $this->warn('   → Run migration 2026_07_29_000020_create_shadow_demand_comparisons_table');
+            $errors++;
+        }
+
+        // 14. Check shadow_cutover_log table
+        $this->info('14. Checking shadow_cutover_log table...');
+        if (Schema::hasTable('shadow_cutover_log')) {
+            $this->info('   ✓ shadow_cutover_log table exists');
+        } else {
+            $this->error('   ✗ shadow_cutover_log table does NOT exist!');
+            $this->warn('   → Run migration 2026_07_29_000021_create_shadow_cutover_log_table');
+            $errors++;
+        }
+
+        // 15. Check branch_demand_audit_log.action CHECK constraint
+        $this->info('15. Checking branch_demand_audit_log.action CHECK constraint...');
+        try {
+            $constraint = DB::selectOne("
+                SELECT pg_get_constraintdef(oid) AS definition
+                FROM pg_constraint
+                WHERE conrelid = 'branch_demand_audit_log'::regclass
+                  AND contype = 'c'
+                  AND conname LIKE '%action%'
+                LIMIT 1
+            ");
+            if ($constraint && str_contains(strtolower($constraint->definition), 'create')) {
+                $this->info('   ✓ branch_demand_audit_log.action CHECK constraint exists');
+            } else {
+                $this->warn('   ⚠ branch_demand_audit_log.action CHECK constraint NOT found (or does not include all expected actions).');
+                $this->warn('   → Verify migration 2026_07_29_000017 created the CHECK constraint.');
+            }
+        } catch (\Throwable $e) {
+            $this->warn('   ⚠ Could not check action CHECK constraint: ' . $e->getMessage());
+        }
+
+        // 16. Check RLS policies on branch_demand* tables
+        $this->info('16. Checking RLS policies on branch_demand* tables...');
+        $rlsTables = [
+            'branch_demands', 'branch_demand_items', 'branch_demand_repricing',
+            'branch_demand_audit_log', 'branch_demand_customer_payment_settlements',
+            'branch_demand_money_transfer_settlements', 'branch_ledger',
+            'shadow_demand_comparisons', 'shadow_cutover_log',
+        ];
+        $missingRls = 0;
+        foreach ($rlsTables as $tbl) {
+            try {
+                $policyCount = DB::table('pg_policies')
+                    ->where('schemaname', 'public')
+                    ->where('tablename', $tbl)
+                    ->count();
+                if ($policyCount === 0) {
+                    $this->warn("   ⚠ No RLS policies on {$tbl}");
+                    $missingRls++;
+                }
+            } catch (\Throwable $e) {
+                // pg_policies may not exist if RLS is not set up at all.
+                $this->warn("   ⚠ Could not check RLS policies on {$tbl}: " . $e->getMessage());
+                $missingRls++;
+            }
+        }
+        if ($missingRls === 0) {
+            $this->info('   ✓ RLS policies exist on all ' . count($rlsTables) . ' branch_demand* tables');
+        } else {
+            $this->warn("   ⚠ {$missingRls} table(s) missing RLS policies. Run migration 2026_08_30_000001_add_rls_missing_tables.");
+        }
+
+        // G-352 + G-354 cross-ref: verify the new columns exist.
+        if (Schema::hasColumn('branch_demand_items', 'created_at')) {
+            $this->info('   ✓ branch_demand_items.created_at exists (G-352)');
+        } else {
+            $this->warn('   ⚠ branch_demand_items.created_at missing — run migration 2026_09_06_000009 (G-352)');
+        }
+        if (Schema::hasColumn('branch_demands', 'rejection_reason')) {
+            $this->info('   ✓ branch_demands.rejection_reason exists (G-354)');
+        } else {
+            $this->warn('   ⚠ branch_demands.rejection_reason missing — run migration 2026_09_06_000010 (G-354)');
+        }
+
         $this->newLine();
 
         if ($errors === 0) {

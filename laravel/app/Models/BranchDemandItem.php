@@ -26,8 +26,12 @@ class BranchDemandItem extends Model
 {
     protected $table = 'branch_demand_items';
 
-    public $timestamps = false;
-
+    // G-352 (G27) FINANCE-BD-1: timestamps now enabled. Migration
+    // 2026_09_06_000009 added created_at + updated_at columns. Existing rows
+    // were backfilled with created_at = NOW(). Note: service-layer code that
+    // uses DB::table('branch_demand_items')->update() bypasses Eloquent
+    // timestamps — those call sites need to manually set 'updated_at' => now()
+    // if per-item modification tracking is needed for forensics.
     protected $fillable = [
         'branch_demand_id',
         'product_id',

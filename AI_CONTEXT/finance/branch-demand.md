@@ -1533,6 +1533,10 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 #### G22 — `BranchDemandResource` excludes internal audit fields
 
+> ✅ **RESOLVED in FINANCE-BD-1 (G-345)** — `BranchDemandResource` now exposes `reversed_by`, `received_by`, and `rejected_by` (G-354) behind an opt-in `?with=audit` flag. Pass `?with=audit` as a query param OR `?with.audit=1` (array-style). The default payload stays small; mobile consumers who need the full audit trail can request it. Rejection fields (`rejection_reason`, `rejected_at`) are always included (lightweight nullable fields useful for the mobile UI to show a rejection badge without a second request). Class docblock updated. Note: the gap text claimed `reverse_reason` was excluded — it was already included at L39 (pre-existing). The real remaining exclusions were `reversed_by` + `received_by`, now behind the opt-in flag.
+
+> ✅ **RESOLVED in FINANCE-BD-1 (G-345)** — `BranchDemandResource` now exposes `reversed_by`, `received_by`, and `rejected_by` (G-354) behind an opt-in `?with=audit` flag. Pass `?with=audit` as a query param OR `?with.audit=1` (array-style). The default payload stays small; mobile consumers who need the full audit trail can request it. Rejection fields (`rejection_reason`, `rejected_at`) are always included (lightweight nullable fields useful for the mobile UI to show a rejection badge without a second request). Class docblock updated. Note: the gap text claimed `reverse_reason` was excluded — it was already included at L39 (pre-existing). The real remaining exclusions were `reversed_by` + `received_by`, now behind the opt-in flag.
+
 - **Evidence:** `app/Http/Resources/Api/V1/BranchDemand/BranchDemandResource.php:14-52` —
   excludes `reversed_by`, `reverse_reason`, `received_by` from API responses. Mobile consumers
   can't see who reversed a demand or why.
@@ -1571,6 +1575,10 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 #### G26 — `VerifyBranchDemandSchema` command checks only 10 things — misses 6 tables
 
+> ✅ **RESOLVED in FINANCE-BD-1 (G-351)** — Command extended from 10 to 16 checks. New checks 11-16: (11) `branch_demand_customer_payment_settlements` table existence; (12) `branch_demand_money_transfer_settlements` table existence; (13) `shadow_demand_comparisons` table existence; (14) `shadow_cutover_log` table existence; (15) `branch_demand_audit_log.action` CHECK constraint (queries `pg_constraint` by `conrelid` + `contype='c'` + `conname LIKE '%action%'`, verifies the definition includes 'create'); (16) RLS policies on 9 branch_demand* tables (queries `pg_policies` by `schemaname='public'` + `tablename`, warns if zero policies). Cross-ref checks: `branch_demand_items.created_at` (G-352) + `branch_demands.rejection_reason` (G-354) verified. Each missing table/error increments `$errors`; missing RLS policies are warnings (not errors) since RLS may be intentionally disabled in dev. The command's final exit code is SUCCESS only if `$errors === 0`.
+
+> ✅ **RESOLVED in FINANCE-BD-1 (G-351)** — Command extended from 10 to 16 checks. New checks 11-16: (11) `branch_demand_customer_payment_settlements` table existence; (12) `branch_demand_money_transfer_settlements` table existence; (13) `shadow_demand_comparisons` table existence; (14) `shadow_cutover_log` table existence; (15) `branch_demand_audit_log.action` CHECK constraint (queries `pg_constraint` by `conrelid` + `contype='c'` + `conname LIKE '%action%'`, verifies the definition includes 'create'); (16) RLS policies on 9 branch_demand* tables (queries `pg_policies` by `schemaname='public'` + `tablename`, warns if zero policies). Cross-ref checks: `branch_demand_items.created_at` (G-352) + `branch_demands.rejection_reason` (G-354) verified. Each missing table/error increments `$errors`; missing RLS policies are warnings (not errors) since RLS may be intentionally disabled in dev. The command's final exit code is SUCCESS only if `$errors === 0`.
+
 - **Evidence:** `app/Console/Commands/VerifyBranchDemandSchema.php`. Checks `branch_demands`
   columns, `branch_demand_items` columns, `branch_ledger` existence, `branch_demand_repricing`
   existence, `branch_demand_audit_log` existence, `stock_transactions.reference_type` CHECK,
@@ -1583,6 +1591,10 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 #### G27 — `BranchDemandItem` model `$timestamps = false`
 
+> ✅ **RESOLVED in FINANCE-BD-1 (G-352)** — Migration `2026_09_06_000009_add_timestamps_to_branch_demand_items` adds nullable `created_at` + `updated_at` columns (idempotent `Schema::hasColumn` guard). Existing rows backfilled with `created_at = NOW()`. `BranchDemandItem` model drops `public $timestamps = false;` so Eloquent's timestamp magic fires on future creates/updates. SQL baseline `03_stock.sql` `CREATE TABLE branch_demand_items` updated to include the columns. Caveat: service-layer code using `DB::table('branch_demand_items')->update()` bypasses Eloquent timestamps — those call sites need to manually set `'updated_at' => now()` if per-item modification tracking is needed for forensics (documented in the model docblock).
+
+> ✅ **RESOLVED in FINANCE-BD-1 (G-352)** — Migration `2026_09_06_000009_add_timestamps_to_branch_demand_items` adds nullable `created_at` + `updated_at` columns (idempotent `Schema::hasColumn` guard). Existing rows backfilled with `created_at = NOW()`. `BranchDemandItem` model drops `public $timestamps = false;` so Eloquent's timestamp magic fires on future creates/updates. SQL baseline `03_stock.sql` `CREATE TABLE branch_demand_items` updated to include the columns. Caveat: service-layer code using `DB::table('branch_demand_items')->update()` bypasses Eloquent timestamps — those call sites need to manually set `'updated_at' => now()` if per-item modification tracking is needed for forensics (documented in the model docblock).
+
 - **Evidence:** `app/Models/BranchDemandItem.php:29`. No `created_at`/`updated_at` on items
   table. Tracking when an item was last modified (e.g. when `from_warehouse_id` was set at send
   time) is impossible. The migration also doesn't add timestamps.
@@ -1590,6 +1602,8 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
   `$timestamps = false`.
 
 #### G28 — `BranchDemandService::rejectDemand` appends `"[Rejected: {reason}]"` to notes via text concatenation
+
+> ✅ **RESOLVED in FINANCE-BD-1 (G-354)** — Structured rejection columns replace the notes-concat pattern. Migration `2026_09_06_000010_add_rejection_columns_to_branch_demands` adds `rejection_reason` (text) + `rejected_at` (timestamp) + `rejected_by` (integer) — mirroring the existing `reverse_*` pattern. `BranchDemandService::rejectDemand` now updates the 3 structured columns instead of concatenating `[Rejected: {reason}]` into `notes`. The `notes` field is no longer polluted with structured metadata. Rejection metadata is now queryable via `WHERE rejection_reason ILIKE '%out of stock%'`. `BranchDemand` model adds the 3 columns to `$fillable` + `$casts` (`rejected_at => datetime`, `rejected_by => integer`). `BranchDemandResource` exposes `rejection_reason` + `rejected_at` always (lightweight) + `rejected_by` behind the `?with=audit` opt-in (G-345). SQL baseline `03_stock.sql` updated. Existing rejected demands (pre-migration) have NULL rejection_reason — historical rejections stay in the audit log + notes.
 
 - **Evidence:** `app/Services/BranchDemand/BranchDemandService.php:626-630`. Uses text concat
   (`trim(($demand->notes ?? '') . "\n[Rejected: {$reason}]")`) rather than a dedicated
@@ -1838,7 +1852,7 @@ sequenceDiagram
     `sendGoodsWithWarehouses` and `createRepricingAdjustment`.
 21. **G21** — Consolidate `MoneyTransferService` on the `interbranch_payable` +
     `interbranch_receivable` ledger natures.
-22. **G22** — Add a `?with=audit` query param to `BranchDemandResource` to opt-in to the audit
+22. **G22** — ✅ RESOLVED in FINANCE-BD-1 (G-345). `?with=audit` opt-in flag added; exposes reversed_by/received_by/rejected_by.
     fields.
 23. **G23** — Standardize on one GUC key (`app.branch_id`) across all branch-demand RLS
     policies.
@@ -1846,7 +1860,7 @@ sequenceDiagram
     them from the config.
 25. **G25** — Add `if (str_contains($path, 'branch-demand-shadow')) return null;` to
     `EnforceBranchIsolation::inferTableFromUri`.
-26. **G26** — Extend `VerifyBranchDemandSchema` to check all 8 tables + the action CHECK + RLS
+26. **G26** — ✅ RESOLVED in FINANCE-BD-1 (G-351). Command extended from 10 to 16 checks (4 tables + CHECK constraint + RLS policies + G-352/G-354 column cross-refs).
     policies.
 27. **G27** — Add `created_at` + `updated_at` columns to `branch_demand_items` via a new
     migration + remove `$timestamps = false`.

@@ -756,6 +756,11 @@ CREATE TABLE branch_demands (
     reversed_by integer,
     reverse_reason text,
     is_reversed boolean NOT NULL DEFAULT false,
+    -- G-354 (G28) FINANCE-BD-1: structured rejection columns (mirror reverse_*).
+    -- Replaces the prior notes-concat pattern in BranchDemandService::rejectDemand.
+    rejection_reason text,
+    rejected_at timestamp(0),
+    rejected_by integer,
     notes text,
     created_by integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -777,7 +782,13 @@ CREATE TABLE branch_demand_items (
     price_min numeric(12,2) DEFAULT 0,
     price_max numeric(12,2) DEFAULT 0,
     price_default numeric(12,2) DEFAULT 0,
-    notes text
+    notes text,
+    -- G-352 (G27) FINANCE-BD-1: timestamps added (was missing). Enables
+    -- tracking when an item was last modified (e.g., from_warehouse_id set
+    -- at send time, cost_rate locked). Migration 2026_09_06_000009 adds
+    -- these columns post-hoc; this canonical DDL now includes them.
+    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_bdi_demand ON branch_demand_items(branch_demand_id);
 CREATE INDEX idx_bdi_product ON branch_demand_items(product_id);

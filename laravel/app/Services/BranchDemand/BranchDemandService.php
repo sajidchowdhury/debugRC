@@ -783,9 +783,19 @@ class BranchDemandService
             DB::table('branch_demands')
                 ->where('id', $demandId)
                 ->update([
-                    'status'     => 'rejected',
-                    'notes'      => trim(($demand->notes ?? '') . "\n[Rejected: {$reason}]"),
-                    'updated_at' => now(),
+                    'status'           => 'rejected',
+                    // G-354 (G28) FINANCE-BD-1: structured rejection columns
+                    // replace the prior notes-concat pattern. The notes field
+                    // is no longer polluted with "[Rejected: {reason}]" text.
+                    // Rejection metadata is now queryable via WHERE rejection_reason
+                    // ILIKE '%...%' + the rejected_at / rejected_by columns mirror
+                    // the reverse_* pattern. Existing rejected demands (pre-migration)
+                    // have NULL rejection_reason — historical rejections stay in
+                    // the audit log + notes.
+                    'rejection_reason' => $reason,
+                    'rejected_at'      => now(),
+                    'rejected_by'      => $rejectedBy,
+                    'updated_at'       => now(),
                 ]);
 
             Log::info('BranchDemand rejected', [
