@@ -82,7 +82,11 @@ class User extends Authenticatable
      */
     public function generateApiToken(): string
     {
-        $plain = \Illuminate\Support\Str::random(60);
+        // G-191 (MEDIUM): standardized to 64 chars to match the
+        // GenerateApiToken artisan command (was 60). Both code paths now
+        // produce tokens of identical length, so the API reference can
+        // document a single token length.
+        $plain = \Illuminate\Support\Str::random(64);
 
         $this->api_token = hash('sha256', $plain);
         $this->save();

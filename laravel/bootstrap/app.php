@@ -108,5 +108,44 @@ return Application::configure(basePath: dirname(__DIR__))
             }
             return redirect()->back()->withInput()->with('error', $e->getMessage());
         });
+
+        // G-205 (MEDIUM): global catch-all for API routes. Several API
+        // controllers wrap their body in `try { ... } catch (\Throwable $e)
+        // { return response()->json(['error' => $e->getMessage()], 422); }`,
+        // which leaks raw exception messages to clients. Uncaught
+        // exceptions on api/* would otherwise fall through to Laravel's
+        // default handler — which, under APP_DEBUG=true, renders the full
+        // stack trace (a security leak in production). This renderer is the
+        // safety net: for any \Throwable reaching the framework on an api/*
+        // request (or any JSON-expecting request), return a sanitized JSON
+        // 500. In production (APP_DEBUG=false) the raw message is NEVER
+        // sent to the client — only a generic "Server Error" + the exception
+        // short class name for triage. In debug mode the message is included
+        // to aid development. The original exception is still logged by the
+        // framework's default logger before this renderer runs. NOTE: the
+        // per-exception renderers above (WarehouseFrozenForCountException,
+        // SystemPolicyWriteBlockedException) still take precedence for their
+        // specific types because Laravel matches renderers in registration
+        // order and more specific closures run first.
+        $exceptions->render(function (\Throwable $e, \Illuminate\Http\Request $request) {
+            if (! ($request->expectsJson() || $request->is('api/*'))) {
+                return null; // defer to Laravel's default web handler
+            }
+
+            // Validation exceptions already produce a structured 422 via
+            // Laravel's own renderer — don't shadow them.
+            if ($e instanceof \Illuminate\Validation\ValidationException) {
+                return null;
+            }
+
+            $debug    = (bool) config('app.debug');
+            $status   = method_exists($e, 'getStatusCode') ? $e->getStatusCode() : 500;
+            $payload  = [
+                'message' => $debug ? $e->getMessage() : 'Server Error.',
+                'error'   => (new \ReflectionClass($e))->getShortName(),
+            ];
+
+            return response()->json($payload, $status >= 400 && $status < 600 ? $status : 500);
+        });
     })
     ->create();

@@ -57,9 +57,11 @@
                                 <td><span class="badge bg-warning text-dark">{{ $step->role }}</span></td>
                                 <td>
                                     @if ($step->is_parallel)
-                                        <span class="badge bg-info">All must approve</span>
+                                        <span class="badge bg-secondary" title="Configured for all-must-approve, but parallel enforcement is not yet implemented. Currently a single approver advances the level.">
+                                            Parallel (reserved)
+                                        </span>
                                     @else
-                                        <span class="badge bg-light text-dark">Any one</span>
+                                        <span class="badge bg-light text-dark">Single approver</span>
                                     @endif
                                 </td>
                                 <td class="text-muted small">{{ $step->description }}</td>

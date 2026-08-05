@@ -31,14 +31,18 @@ class BranchApiController extends Controller
      * List branches with pagination + optional search.
      *
      * Query params:
-     *   ?q=        search term (matches branch_code or branch_name)
+     *   ?search=   search term (matches branch_code or branch_name)
+     *             — ?q= is accepted as a deprecated alias (G-193).
      *   ?page=     page number (default 1)
      *   ?per_page= page size (default 25, max 100)
      */
     public function index(Request $request): JsonResponse
     {
         $perPage = min(100, max(1, (int) $request->input('per_page', 25)));
-        $search  = trim((string) $request->input('q', ''));
+        // G-193 (MEDIUM): standardized on `search` (the majority param name
+        // across all paginated API endpoints). `q` is kept as a backward-compat
+        // alias for one release so existing mobile clients don't break.
+        $search  = trim((string) $request->input('search', $request->input('q', '')));
 
         $query = Branch::query()->whereNull('deleted_at');
 
@@ -58,14 +62,12 @@ class BranchApiController extends Controller
                 'last_page'    => $paginator->lastPage(),
                 'per_page'     => $paginator->perPage(),
                 'total'        => $paginator->total(),
-                'from'         => $paginator->firstItem(),
-                'to'           => $paginator->lastItem(),
             ],
         ]);
-        // NOTE: index() previously returned raw Eloquent models via
-        // $paginator->items(), leaking internal audit columns (created_by,
-        // deleted_by, updated_at). Now standardized through BranchResource.
-        // The meta shape (incl. from/to) is intentionally preserved.
+        // G-189 (MEDIUM): pagination `meta` standardized across all paginated
+        // API endpoints to {current_page, last_page, per_page, total}. The
+        // non-portable `from`/`to` (firstItem/lastItem) keys were removed so
+        // every list endpoint returns an identical shape — see api-conventions.md.
     }
 
     /**

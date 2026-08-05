@@ -114,14 +114,22 @@
                 params.set('from_date', d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-01');
                 params.set('to_date', today);
             } else if (lens === 'last7') {
+                // "Last 7" = 7 days inclusive ending today (today-6 .. today).
                 const d = new Date();
                 d.setDate(d.getDate() - 6);
                 params.set('from_date', d.toISOString().split('T')[0]);
                 params.set('to_date', today);
             } else {
+                // G-223 (MEDIUM): default lens uses the catalog's preset_days.
+                // Semantic: preset_days=N means "N days INCLUSIVE ending today"
+                // (today-(N-1) .. today), consistent with the `last7` lens above.
+                // Previously this used `today - days` (an off-by-one that produced
+                // N+1 days for preset_days=N — e.g. daily_cash_book preset_days=7
+                // yielded an 8-day window while the `last7` lens yielded 7). Now
+                // both code paths agree. preset_days=0 collapses to today-only.
                 const days = parseInt(a.dataset.presetDays || '30', 10);
                 const d = new Date();
-                d.setDate(d.getDate() - Math.max(1, days));
+                d.setDate(d.getDate() - Math.max(0, days - 1));
                 params.set('from_date', d.toISOString().split('T')[0]);
                 params.set('to_date', today);
             }

@@ -1252,6 +1252,27 @@ Stored + cast + rendered in UI as "All must approve" badge, but `ApprovalService
 reads it. A single `ApprovalAction` row advances the level regardless of `is_parallel=true`. The UI
 badge misleads admins into thinking parallel approval is enforced.
 
+> ✅ **RESOLVED — G-245 / G9 (MEDIUM-WAVE-1).** The misleading UI was the
+> actionable harm; true parallel approval (all role members must act before
+> advancing) is a future enhancement beyond single-session scope. Two changes
+> make the system honest about current behavior:
+>   1. **`resources/views/admin/approvals/workflows.blade.php`** — the
+>      `@if ($step->is_parallel)` badge was relabeled from "All must approve"
+>      (a false claim) to "Parallel (reserved)" with a `title` tooltip
+>      explaining "Configured for all-must-approve, but parallel enforcement
+>      is not yet implemented. Currently a single approver advances the
+>      level." The `@else` branch was relabeled "Any one" → "Single
+>      approver". Admins are no longer misled.
+>   2. **`ApprovalService::approve()`** — added an explicit code comment
+>      (G-245 marker) documenting that `is_parallel` is intentionally NOT
+>      read; single-approver-per-level is the enforced behavior; parallel
+>      approval is reserved for a future enhancement. Cross-refs this §G9.
+>
+> The `is_parallel` column + cast are KEPT (no migration) so a future
+> parallel-approval implementation only needs to add the counting logic in
+> `approve()`, not a schema change. The column is no longer "dead config"
+> silently — it is documented reserved config with an honest UI.
+
 ### G10 — MEDIUM — approval_steps model has $timestamps=false but migration adds timestamps() columns
 
 `ApprovalStep.php` L22 `$timestamps = false`. Migration L50 `$table->timestamps()`. Eloquent will
@@ -1336,6 +1357,20 @@ before reading `current_level` and `status`. Two concurrent calls to `approve()`
 could both pass `isPending()`, both insert an `ApprovalAction`, and both update the request —
 creating duplicate approval actions. Contrast with `StockAdjustmentService::approveAdjustment` L347
 which correctly does `lockForUpdate()->find($adjustmentId)`.
+
+> ✅ **RESOLVED — G-254 / G16 (MEDIUM-WAVE-1).** `ApprovalService::approve()`
+> now re-fetches the `ApprovalRequest` with `SELECT ... FOR UPDATE` at the
+> start of the `DB::transaction` closure:
+> `$request = ApprovalRequest::lockForUpdate()->find($request->id);`. The
+> `isPending()` check is re-run INSIDE the transaction after the lock is
+> acquired, so a concurrent call that already advanced/closed the request
+> fails the recheck and returns `{success: false, message: 'Request is not
+> pending.'}` instead of inserting a duplicate `ApprovalAction`. Mirrors the
+> canonical pattern in `StockAdjustmentService::approveAdjustment` (L347).
+> The outer `isPending()` check (before the transaction) is retained as an
+> early-exit optimization. The `reject()` + other transactional methods share
+> the same shape but were left as-is per the gap's approve-only scope; they
+> can adopt the same lock in a future hardening pass.
 
 ### Other edge cases (not gaps, but worth noting)
 

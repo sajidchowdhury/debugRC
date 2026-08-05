@@ -112,6 +112,28 @@ class ApprovalService
         }
 
         return DB::transaction(function () use ($request, $user, $comments) {
+            // G-254 (MEDIUM): re-fetch with SELECT ... FOR UPDATE to serialize
+            // concurrent approve() calls on the same request. Without this
+            // lock, two concurrent calls both pass the isPending() check
+            // above (read outside the transaction), both insert an
+            // ApprovalAction, and both advance the level — producing
+            // duplicate approval actions + a skipped level. Mirrors
+            // StockAdjustmentService::approveAdjustment (L347) which
+            // correctly does `lockForUpdate()->find($adjustmentId)`.
+            $request = \App\Models\ApprovalRequest::lockForUpdate()->find($request->id);
+
+            if (!$request || !$request->isPending()) {
+                return ['success' => false, 'message' => 'Request is not pending.'];
+            }
+
+            // G-245 (MEDIUM): is_parallel is intentionally NOT enforced here.
+            // The approval engine is single-approver-per-level: one
+            // ApprovalAction advances the level regardless of
+            // approval_steps.is_parallel. True parallel approval (all users
+            // with the step's role must act before advancing) is reserved
+            // for a future enhancement; the UI badge was made honest in
+            // resources/views/admin/approvals/workflows.blade.php. See
+            // AI_CONTEXT/workflows/approval-workflow.md §G9.
             $workflow = $request->workflow;
             $currentLevel = $request->current_level;
             $maxLevel = $workflow->maxLevel();

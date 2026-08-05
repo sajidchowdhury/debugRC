@@ -177,7 +177,12 @@ class NotificationService
                 }
             }
 
-            $rule->increment('times_fired');
+            // G-248 (MEDIUM): atomic SQL UPDATE — avoids the read-modify-write
+            // race where two concurrent dispatches both load times_fired = N,
+            // both increment to N+1, and one increment is lost. The model-level
+            // `$rule->increment()` re-fetches the row then writes; this query
+            // issues a single `UPDATE ... SET times_fired = times_fired + 1`.
+            NotificationRule::where('id', $rule->id)->increment('times_fired');
 
             Log::info('Notification dispatched', [
                 'rule_id'      => $rule->id,

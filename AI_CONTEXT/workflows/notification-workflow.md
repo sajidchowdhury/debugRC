@@ -1510,6 +1510,18 @@ flowchart LR
   → `invoice_creator` with `['created_by' => $request->requested_by]` as context — NOT
   `['specific_user' => ...]` which is a recipient_type, not a context key).
 
+> ✅ **RESOLVED — G-247 / G10 (MEDIUM-WAVE-1, backfill).** This gap's evidence
+> was stale by the time of triage: the 4 `approval_request_*` events were
+> ALREADY added to `NotificationRule::EVENTS` (L85-88) +
+> `NotificationService::EVENT_META` (L73-76) + the `NotificationRuleSeeder`
+> (4 default rules: submitted + next_level → admins + sales managers;
+> approved + rejected → `invoice_creator`) as part of the G4 fix in commit
+> `d84a5a8` (see the RESOLVED note at the top of this cluster, §G4). The
+> dispatch call sites in `ApprovalService::notifyApprovers/notifyRequester`
+> now match registered events + seeded rules, so approval submit/approve/reject
+> notifications fire out of the box. This row is closed as a backfill — no
+> code change was needed in MEDIUM-WAVE-1, only this register/doc update.
+
 ### G11 — MEDIUM — `times_fired` counter race condition
 - **Evidence:** `NotificationService.php:128` `$rule->increment('times_fired')` is NOT
   wrapped in `lockForUpdate()` or a transaction. The `$rules` collection was loaded at
@@ -1521,6 +1533,16 @@ flowchart LR
   (atomic SQL UPDATE, no race). OR wrap the foreach loop body in `DB::transaction` +
   `NotificationRule::lockForUpdate()->find($rule->id)`.
 
+> ✅ **RESOLVED — G-248 / G11 (MEDIUM-WAVE-1).** Adopted the atomic-SQL
+> option. `NotificationService::dispatch` now calls
+> `NotificationRule::where('id', $rule->id)->increment('times_fired');`
+> instead of the Eloquent-model `$rule->increment('times_fired')`. The
+> query-builder form issues a single `UPDATE notification_rules SET
+> times_fired = times_fired + 1 WHERE id = ?` — atomic at the DB level, no
+> read-modify-write window, so two concurrent dispatches both succeed
+> (N → N+1 → N+2) instead of both writing N+1. The in-memory `$rule` model
+> is not re-read after the increment, so the staleness is harmless.
+
 ### G12 — MEDIUM — `read_at` marking race (low impact)
 - **Evidence:** `NotificationController.php:207`
   `auth()->user()->unreadNotifications->markAsRead()` — the `markAsRead` on a collection
@@ -1530,6 +1552,17 @@ flowchart LR
   idempotent (both set `read_at` to ~now), no data corruption. Low impact.
 - **Fix:** Optional — use a single bulk UPDATE:
   `DB::table('notifications')->where('notifiable_id', $user->id)->whereNull('read_at')->update(['read_at' => now()])`.
+
+> ✅ **RESOLVED — G-249 / G12 (MEDIUM-WAVE-1).** Adopted the bulk-UPDATE
+> option. `NotificationController::markAllRead` now issues a single
+> `UPDATE notifications SET read_at = now() WHERE notifiable_type = 'App\Models\User'
+> AND notifiable_id = ? AND read_at IS NULL` via `DB::table('notifications')`
+> instead of the collection `markAsRead()` (which iterated + issued one
+> UPDATE per row). The bulk query is atomic + idempotent — two concurrent
+> "Mark all read" tabs both set `read_at = now()` on the same rows with no
+> corruption + only one round-trip. The `notifiable_type` predicate is
+> included for correctness (the polymorphic `notifications` table can hold
+> other notifiable types in principle, though only `User` is used today).
 
 ### G13 — MEDIUM — (Revised: NOT a gap) `/admin/notifications/recent` endpoint is bounded
 - **Evidence:** `NotificationController.php:227-229`

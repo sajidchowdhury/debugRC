@@ -262,7 +262,16 @@ class NotificationController extends Controller
      */
     public function markAllRead()
     {
-        auth()->user()->unreadNotifications->markAsRead();
+        // G-249 (MEDIUM): single bulk UPDATE replaces the collection
+        // `markAsRead()` (which iterates + issues one UPDATE per row). The
+        // bulk query is atomic + idempotent — two concurrent "Mark all read"
+        // tabs both set read_at = now() on the same rows with no corruption.
+        $userId = auth()->id();
+        DB::table('notifications')
+            ->where('notifiable_type', 'App\\Models\\User')
+            ->where('notifiable_id', $userId)
+            ->whereNull('read_at')
+            ->update(['read_at' => now()]);
 
         return back()->with('success', 'All notifications marked as read.');
     }
