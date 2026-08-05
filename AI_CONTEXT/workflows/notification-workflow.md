@@ -5,12 +5,18 @@
 > **Status:** Draft — pending review. **NOT SAFETY-CRITICAL** in the GL-posting sense (notifications
 > do not post to the GL); but **business-critical** because they drive operational visibility
 > (warehouse managers learn of new invoices, accountants learn of payments, submitters learn of
-> approval decisions, admins learn of customer-limit increases). **3 CRITICAL gaps** (G1
+> approval decisions, admins learn of customer-limit increases). ~~**3 CRITICAL gaps** (G1
 > double-dispatch, G2 wrong-event-on-update, G3 worker-forward-missing-context) mean the system
 > is only partially production-ready — admins receive duplicate notifications while
 > context-aware recipients (warehouse manager of branch, salesman of invoice) receive only the
-> direct-call copy, and sales-return confirm/reverse fire spurious "return created" toasts.
-> **Last reviewed:** Phase 20 (cross-cutting enhancement appended §18)
+> direct-call copy, and sales-return confirm/reverse fire spurious "return created" toasts.~~
+> **WORKFLOWS-NOTIFICATION (commit `053609b`):** all 3 CRITICALs in this file resolved
+> (G-076/G1, G-078/G2, G-079/G3) by disabling the worker-forward path. The rule-based
+> notification system is now production-ready — direct PHP dispatch (with full $context)
+> is the single dispatch path; the DB trigger → pg_notify → Redis → SSE path still
+> powers real-time page refresh. Remaining HIGH/MEDIUM gaps (G4-G15) are non-blocking
+> hardening items.
+> **Last reviewed:** Phase 20 (cross-cutting enhancement appended §18) + WORKFLOWS-NOTIFICATION session
 > **Source of truth:** This file is the canonical reference for the rule-based notification
 > system. The implementation lives in:
 > - `laravel/app/Services/Notification/NotificationService.php` (262L — the dispatcher crown jewel),
@@ -1203,6 +1209,8 @@ flowchart LR
   entirely. The DB trigger still fires `pg_notify` for SSE refresh (`publishToRedis`) —
   that path is unaffected.
 
+> ✅ **RESOLVED — G-076 / G1 (WORKFLOWS-NOTIFICATION, commit `053609b`).** Applied the recommended fix: `ListenNotifyService::CHANNEL_EVENT_MAP` is emptied to `[]`. The `forwardToNotificationService()` method's existing `if (!$eventName) return;` guard now fires for every channel, so the worker-forward path is dead. Direct PHP dispatch (SalesInvoiceService:336, SalesChallanService:525, CustomerPaymentService:245, SalesReturnService:147 — all of which pass full `$context`) is now the single dispatch path. Admins receive exactly 1 notification per action; `times_fired` increments once. The DB trigger → `pg_notify` → Redis → SSE path (`publishToRedis`) is unaffected — real-time page refresh still works.
+
 ### G2 — CRITICAL — WRONG EVENT FORWARDED on UPDATE
 - **Evidence:** DB trigger fires on INSERT AND UPDATE:
   `2025_01_21_000001_add_listen_notify_triggers.php:211` (INSERT) + L225 (UPDATE) both
@@ -1218,6 +1226,8 @@ flowchart LR
 - **Fix:** Same as G1 — remove `CHANNEL_EVENT_MAP` entries (the worker-forward path is
   fundamentally broken because `pg_notify` payloads don't carry enough info to distinguish
   INSERT vs UPDATE vs which sub-event). Rely on direct PHP dispatch.
+
+> ✅ **RESOLVED — G-078 / G2 (WORKFLOWS-NOTIFICATION, commit `053609b`).** Same fix as G-076 — `CHANNEL_EVENT_MAP` is empty, so the worker no longer forwards `rcerp_sales_return` (or any other channel). The spurious `return_created` notification on `confirmReturn`/`reverseReturn` UPDATEs is eliminated. The correct sub-event (`return_confirmed` from `SalesReturnService:278` or `return_reversed` from `SalesReturnService:403`) is now the only notification fired, because those are direct PHP dispatches that carry the right event name.
 
 ### G3 — CRITICAL — WORKER-FORWARDED EVENTS HAVE NO `$context`
 - **Evidence:** `ListenNotifyService.php:187` calls
@@ -1236,6 +1246,8 @@ flowchart LR
   `forwardToNotificationService` to pass `$context` derived from the payload. Option (a)
   is simpler and matches the design intent (direct PHP dispatch already carries full
   context).
+
+> ✅ **RESOLVED — G-079 / G3 (WORKFLOWS-NOTIFICATION, commit `053609b`).** Applied option (a) — the worker-forward path is removed (same `CHANNEL_EVENT_MAP = []` change as G-076/G-078). This makes the missing-`$context` bug moot: the worker no longer dispatches notifications at all, so there's no path that could omit `$context`. All 4 direct-PHP dispatch sites pass full `$context` (SalesInvoiceService passes `salesman_id` + `created_by`; SalesChallanService passes `warehouse_manager_id`; CustomerPaymentService passes `received_by`; SalesReturnService passes `created_by`), so context-aware recipient types (`warehouse_manager_of_branch`, `salesman_of_invoice`, `invoice_creator`) resolve correctly via the single direct-dispatch path. Option (b) (enriching trigger payloads) was rejected as unnecessary complexity — the direct path already has the data.
 
 ### G4 — HIGH — 8 events are dead config (declared/forwarded but never fire)
 - **Evidence:** `godown_create`, `soft_delete`, `accounts_entry`: declared in
