@@ -10,6 +10,12 @@ use Illuminate\Foundation\Http\FormRequest;
  * Mirrors the web controller's store() validation (StockTakeController@store).
  * The service (StockTakeService::createSession) does the deeper validation
  * (warehouse existence, scope-payload shape, freeze-outbound overlap check).
+ *
+ * Idempotency (PURCHASING-API-4, G7 Medium-risk): the client SHOULD
+ * send an `idempotency_token` (UUID). If present, a retry within 5 min
+ * returns the cached result instead of creating a duplicate draft
+ * session. The field is `sometimes` (not `required`) for backward-compat
+ * with deployed mobile clients. See api-conventions.md §11.1.
  */
 class StoreSessionRequest extends FormRequest
 {
@@ -29,6 +35,7 @@ class StoreSessionRequest extends FormRequest
             'freeze_outbound'        => 'sometimes|boolean',
             'count_scope'            => 'sometimes|string|in:full,category,abc,group,ad_hoc,negative_only,zero_only',
             'count_scope_payload'    => 'nullable|array',
+            'idempotency_token'      => 'sometimes|string|uuid',
         ];
     }
 
@@ -40,6 +47,7 @@ class StoreSessionRequest extends FormRequest
             'warehouse_ids'   => ['description' => 'Warehouses to count (at least one).', 'example' => [1, 2]],
             'freeze_outbound' => ['description' => 'Lock outbound movements while counting. Default false.', 'example' => false],
             'count_scope'     => ['description' => 'Cycle-count scope. Default "full".', 'example' => 'full'],
+            'idempotency_token' => ['description' => 'Client-generated UUID; if present, retries within 5 min return the cached result (PURCHASING-API-4)', 'example' => '550e8400-e29b-41d4-a716-446655440000'],
         ];
     }
 }

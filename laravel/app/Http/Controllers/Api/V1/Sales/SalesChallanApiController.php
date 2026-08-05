@@ -100,10 +100,29 @@ class SalesChallanApiController extends Controller
      *
      * Takes a sales_invoice_id and an array of warehouse assignments.
      * Invoice must be in draft status. After this, invoice status → confirmed.
+     *
+     * Idempotency (PURCHASING-API-4, G7 Medium-risk): if the client
+     * sends an `idempotency_token`, a retry within 5 min returns the
+     * cached result instead of re-running prepareGodown (which would
+     * otherwise hit the "invoice not draft" 409 path on the second
+     * call). The token is optional (`sometimes`) so already-deployed
+     * mobile clients that omit it are not broken. See api-conventions.md §11.1.
      */
     public function godown(PrepareGodownRequest $request): JsonResponse
     {
         $validated = $request->validated();
+
+        // Idempotency replay check (only when token is present).
+        $idempotencyToken = $validated['idempotency_token'] ?? null;
+        if ($idempotencyToken !== null) {
+            $cacheKey = 'api:challan_godown:' . $idempotencyToken;
+            $cached = Cache::get($cacheKey);
+            if ($cached !== null) {
+                return response()->json(array_merge($cached, [
+                    'idempotent_replay' => true,
+                ]));
+            }
+        }
 
         $invoiceId = (int) ($request->input('sales_invoice_id') ?? 0);
         if ($invoiceId <= 0) {
@@ -120,7 +139,7 @@ class SalesChallanApiController extends Controller
                 Auth::id()
             );
 
-            return response()->json([
+            $response = [
                 'message' => 'Godown prepared successfully',
                 'data'    => [
                     'invoice_id'         => $invoiceId,
@@ -128,7 +147,14 @@ class SalesChallanApiController extends Controller
                     'status'             => 'confirmed',
                     'assignments'        => $validated['assignments'],
                 ],
-            ]);
+            ];
+
+            // Cache the result for 5 minutes (idempotency window).
+            if ($idempotencyToken !== null) {
+                Cache::put('api:challan_godown:' . $idempotencyToken, $response, now()->addMinutes(5));
+            }
+
+            return response()->json($response);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 409);
         }

@@ -15,6 +15,7 @@ use App\Services\Stock\StockTakeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -94,10 +95,28 @@ class StockTakeSessionApiController extends Controller
      * Create a new session (draft).
      *
      * POST /api/v1/stock-take/sessions
+     *
+     * Idempotency (PURCHASING-API-4, G7 Medium-risk): if the client
+     * sends an `idempotency_token`, a retry within 5 min returns the
+     * cached result instead of creating a duplicate draft session.
+     * The token is optional (`sometimes`) so already-deployed mobile
+     * clients that omit it are not broken. See api-conventions.md §11.1.
      */
     public function store(StoreSessionRequest $request): JsonResponse
     {
         $validated = $request->validated();
+
+        // Idempotency replay check (only when token is present).
+        $idempotencyToken = $validated['idempotency_token'] ?? null;
+        if ($idempotencyToken !== null) {
+            $cacheKey = 'api:stock_take_session:' . $idempotencyToken;
+            $cached = Cache::get($cacheKey);
+            if ($cached !== null) {
+                return response()->json(array_merge($cached, [
+                    'idempotent_replay' => true,
+                ]));
+            }
+        }
 
         try {
             $session = $this->stockTakeService->createSession([
@@ -111,10 +130,17 @@ class StockTakeSessionApiController extends Controller
                 'created_by'           => Auth::id(),
             ]);
 
-            return response()->json([
+            $result = [
                 'message' => "Session {$session->session_code} created.",
                 'data'    => new StockTakeSessionResource($session->load(['branch', 'warehouses'])),
-            ], 201);
+            ];
+
+            // Cache the result for 5 minutes (idempotency window).
+            if ($idempotencyToken !== null) {
+                Cache::put('api:stock_take_session:' . $idempotencyToken, $result, now()->addMinutes(5));
+            }
+
+            return response()->json($result, 201);
         } catch (\Throwable $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }

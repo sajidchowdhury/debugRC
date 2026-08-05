@@ -333,10 +333,30 @@ class BranchDemandApiController extends Controller
      *     items[].to_warehouse_id: int (required, requester warehouse)
      *
      * Requires: admin, manager, or warehouse_manager role.
+     *
+     * Idempotency (PURCHASING-API-4, G7 Medium-risk): if the client
+     * sends an `idempotency_token`, a retry within 5 min returns the
+     * cached result instead of re-sending the demand (which would
+     * otherwise move stock + post GL a second time, or hit a 409).
+     * The cache key is namespaced per demand id so the same token
+     * reused across different demands does not collide. See
+     * api-conventions.md §11.1.
      */
     public function send(SendBranchDemandRequest $request, int $id): JsonResponse
     {
         $validated = $request->validated();
+
+        // Idempotency replay check (only when token is present).
+        $idempotencyToken = $validated['idempotency_token'] ?? null;
+        if ($idempotencyToken !== null) {
+            $cacheKey = 'api:branch_demand_send:' . $id . ':' . $idempotencyToken;
+            $cached = Cache::get($cacheKey);
+            if ($cached !== null) {
+                return response()->json(array_merge($cached, [
+                    'idempotent_replay' => true,
+                ]));
+            }
+        }
 
         try {
             $demand = $this->demandService->sendGoodsWithWarehouses(
@@ -347,10 +367,17 @@ class BranchDemandApiController extends Controller
 
             $demand->load(['fromBranch', 'toBranch', 'items.product', 'items.fromWarehouse', 'items.toWarehouse', 'createdBy']);
 
-            return response()->json([
+            $result = [
                 'data'    => new BranchDemandResource($demand),
                 'message' => "Goods sent for demand {$demand->demand_code}. Stock moved + GL posted.",
-            ]);
+            ];
+
+            // Cache the result for 5 minutes (idempotency window).
+            if ($idempotencyToken !== null) {
+                Cache::put('api:branch_demand_send:' . $id . ':' . $idempotencyToken, $result, now()->addMinutes(5));
+            }
+
+            return response()->json($result);
         } catch (\RuntimeException $e) {
             return response()->json([
                 'message' => $e->getMessage(),
@@ -545,6 +572,23 @@ class BranchDemandApiController extends Controller
     {
         $validated = $request->validated();
 
+        // Idempotency replay check (PURCHASING-API-4, G7 Medium-risk).
+        // Only engages when the client sends an `idempotency_token`; a
+        // retry within 5 min returns the cached result instead of
+        // posting a second GL adjustment journal. Cache key is namespaced
+        // per demand id so the same token reused across different demands
+        // does not collide. See api-conventions.md §11.1.
+        $idempotencyToken = $validated['idempotency_token'] ?? null;
+        if ($idempotencyToken !== null) {
+            $cacheKey = 'api:branch_demand_reprice:' . $id . ':' . $idempotencyToken;
+            $cached = Cache::get($cacheKey);
+            if ($cached !== null) {
+                return response()->json(array_merge($cached, [
+                    'idempotent_replay' => true,
+                ]));
+            }
+        }
+
         try {
             $repricing = $this->repricingService->createRepricingAdjustment(
                 $id,
@@ -557,7 +601,7 @@ class BranchDemandApiController extends Controller
             $demand = BranchDemand::with(['fromBranch', 'toBranch', 'items.product', 'createdBy'])
                 ->find($id);
 
-            return response()->json([
+            $result = [
                 'data'    => new BranchDemandResource($demand),
                 'message' => "Demand repriced. Adjustment: " . number_format((float) $repricing->adjustment_amount, 2),
                 'repricing' => [
@@ -567,7 +611,14 @@ class BranchDemandApiController extends Controller
                     'adjustment_amount' => (float) $repricing->adjustment_amount,
                     'journal_entry_id'  => $repricing->journal_entry_id,
                 ],
-            ]);
+            ];
+
+            // Cache the result for 5 minutes (idempotency window).
+            if ($idempotencyToken !== null) {
+                Cache::put('api:branch_demand_reprice:' . $id . ':' . $idempotencyToken, $result, now()->addMinutes(5));
+            }
+
+            return response()->json($result);
         } catch (\RuntimeException $e) {
             return response()->json([
                 'message' => $e->getMessage(),

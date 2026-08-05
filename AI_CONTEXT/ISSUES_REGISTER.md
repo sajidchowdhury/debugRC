@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-05 (post-PURCHASING-API-3: G-088/G-089/G-090 resolved — idempotency retrofitted on 4 High-risk endpoints `/sales/returns`, `/stock-adjustments`, `/warehouse-transfers`, `/branch-demands`; G-082 doc-synced to `51c2386`; prior: post-PURCHASING-API-2: G-116/G-123/G-124 resolved in `1cfa5d8`; G-115/G-119 doc-synced to `dab0a4c`; prior: post-PURCHASING-API-1: G-117/G-118/G-120/G-121/G-122 resolved in `efecc66`)
+Last reviewed: 2026-09-05 (post-PURCHASING-API-4: G-088/G-089/G-090 Medium-risk follow-up — idempotency retrofitted on `/sales/challans/godown`, `/branch-demands/{id}/send`, `/branch-demands/{id}/reprice`, `/stock-take/sessions`; G7 now FULLY resolved (11 of ~14 transactional write endpoints idempotent; only Low-risk intentionally skipped); prior: post-PURCHASING-API-3: G-088/G-089/G-090 High-risk resolved — idempotency retrofitted on 4 High-risk endpoints `/sales/returns`, `/stock-adjustments`, `/warehouse-transfers`, `/branch-demands`; G-082 doc-synced to `51c2386`; prior: post-PURCHASING-API-2: G-116/G-123/G-124 resolved in `1cfa5d8`; G-115/G-119 doc-synced to `dab0a4c`; prior: post-PURCHASING-API-1: G-117/G-118/G-120/G-121/G-122 resolved in `efecc66`)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -151,9 +151,9 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-085 | G4 | HIGH | api | api/api-modules.md:722 | — | G4 \| HIGH \| `CommissionApiController::listRules` does not clamp `per_page` (OOM risk). \| Add `min((int) ..., 100)`. \| | — | H2 | resolved | 1a36086 |
 | G-086 | G6 | HIGH | api | api/api-modules.md:724 | — | G6 \| HIGH \| Role-gate inconsistency: Sales Cart/Invoices/Returns/Payments write endpoints have NO route-level `api.auth:role` gate. \| Add… | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-087 | G6 | HIGH | api | api/api-overview.md:576 | — | G6 \| HIGH \| Role-gate inconsistency: write endpoints on Sales Cart/Invoices/Returns/Payments rely ONLY on the controller's `SalesAccess::a… | cutover, RLS audit | H2 | resolved | c4acdb0 |
-| G-088 | G7 | HIGH | api | api/api-conventions.md:703 | — | G7 \| HIGH \| Idempotency implemented on only 3 of ~14 transactional write endpoints. See §11.3. \| Add `idempotency_token` to the 6 endpoin… | — | H2 | resolved | PURCHASING-API-3 |
-| G-089 | G7 | HIGH | api | api/api-modules.md:725 | — | G7 \| HIGH \| Idempotency implemented on only 3 of ~14 transactional write endpoints. See `api-conventions.md` §11.3. \| Add `idempotency_to… | API Phase 17 | H2 | resolved | PURCHASING-API-3 |
-| G-090 | G7 | HIGH | api | api/api-overview.md:577 | — | G7 \| HIGH \| Idempotency is implemented on only 3 of ~10 transactional write endpoints (`POST /sales/invoices`, `POST /sales/challans/issue… | — | H2 | resolved | PURCHASING-API-3 |
+| G-088 | G7 | HIGH | api | api/api-conventions.md:703 | — | G7 \| HIGH \| Idempotency implemented on only 3 of ~14 transactional write endpoints. See §11.3. \| Add `idempotency_token` to the 6 endpoin… | — | H2 | resolved | PURCHASING-API-3+4 |
+| G-089 | G7 | HIGH | api | api/api-modules.md:725 | — | G7 \| HIGH \| Idempotency implemented on only 3 of ~14 transactional write endpoints. See `api-conventions.md` §11.3. \| Add `idempotency_to… | API Phase 17 | H2 | resolved | PURCHASING-API-3+4 |
+| G-090 | G7 | HIGH | api | api/api-overview.md:577 | — | G7 \| HIGH \| Idempotency is implemented on only 3 of ~10 transactional write endpoints (`POST /sales/invoices`, `POST /sales/challans/issue… | — | H2 | resolved | PURCHASING-API-3+4 |
 | G-091 | G3 | HIGH | architecture | architecture/realtime-events.md:975 | — | ### G3 — HIGH — DDL stale (recurring cross-phase gap) | DDL drift | H2 | open | — |
 | G-092 | G4 | HIGH | architecture | architecture/realtime-events.md:987 | — | ### G4 — HIGH — Worker not scheduled by Laravel cron; no in-repo supervisor/systemd config | notifications phase | H2 | open | — |
 | G-093 | G5 | HIGH | architecture | architecture/realtime-events.md:995 | — | ### G5 — HIGH — No RLS on `notifications`, `notification_rules`, `notification_rule_recipients` | cutover, RLS audit | H1 | resolved | 278a03d |

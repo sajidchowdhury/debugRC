@@ -536,7 +536,7 @@ to the framework's 500 handler with `APP_DEBUG=true`. **Mitigation:** production
 
 ### 11.1 The pattern (canonical)
 
-Seven transactional write endpoints accept an `idempotency_token` (client-generated UUID) and
+Eleven transactional write endpoints accept an `idempotency_token` (client-generated UUID) and
 replay the cached result on retry within a 5-minute window:
 
 1. `POST /api/v1/sales/invoices` — `SalesInvoiceApiController::store` (lines 98–132). Token **required**.
@@ -546,7 +546,20 @@ replay the cached result on retry within a 5-minute window:
 5. `POST /api/v1/stock-adjustments` — `StockAdjustmentApiController::store`. Token **optional**.
 6. `POST /api/v1/warehouse-transfers` — `WarehouseTransferApiController::store`. Token **optional**.
 7. `POST /api/v1/branch-demands` — `BranchDemandApiController::store`. Token **optional**.
+8. `POST /api/v1/sales/challans/godown` — `SalesChallanApiController::godown`. Token **optional**.
+9. `POST /api/v1/branch-demands/{id}/send` — `BranchDemandApiController::send`. Token **optional** (cache key namespaced per demand id).
+10. `POST /api/v1/branch-demands/{id}/reprice` — `BranchDemandApiController::reprice`. Token **optional** (cache key namespaced per demand id).
+11. `POST /api/v1/stock-take/sessions` — `StockTakeSessionApiController::store`. Token **optional**.
 
+> **PURCHASING-API-4 (G7 Medium-risk) — 2026-09-05:** endpoints 8–11 were retrofitted with
+> idempotency, completing the G7 fix started in PURCHASING-API-3. Same `sometimes|string|uuid`
+> contract as endpoints 4–7 (optional token for backward-compat with deployed mobile clients).
+> For path-parameterized endpoints (`/branch-demands/{id}/send` and `/branch-demands/{id}/reprice`),
+> the cache key includes the demand id so the same client-generated token reused against a
+> different demand does not collide (`api:branch_demand_send:{id}:{token}`,
+> `api:branch_demand_reprice:{id}:{token}`). All 11 endpoints now implement idempotency;
+> only the Low-risk endpoints (second-call hits 409) intentionally skip the pattern.
+>
 > **PURCHASING-API-3 (G-088/G-089/G-090) — 2026-09-05:** endpoints 4–7 were retrofitted with
 > idempotency. The token is `sometimes|string|uuid` (not `required`) on these four so
 > already-deployed mobile clients that omit the field are not broken; new clients SHOULD
@@ -612,9 +625,17 @@ Clients MUST check `idempotent_replay` to know whether the work was actually don
 > `POST /sales/returns`, `POST /stock-adjustments`, `POST /warehouse-transfers`,
 > `POST /branch-demands` — all now accept an optional `idempotency_token` (UUID) and
 > replay the cached 201 result on retry within 5 min. See §11.1 above for the full
-> pattern + the namespaced cache-key convention. The Medium-risk endpoints
-> (`/sales/challans/godown`, `/branch-demands/{id}/send`, `/branch-demands/{id}/reprice`,
-> `/stock-take/sessions`) are still open — they are queued for a follow-up session.
+> pattern + the namespaced cache-key convention.
+>
+> ✅ RESOLVED in PURCHASING-API-4 (2026-09-05) for the 4 **Medium**-risk endpoints:
+> `POST /sales/challans/godown`, `POST /branch-demands/{id}/send`,
+> `POST /branch-demands/{id}/reprice`, `POST /stock-take/sessions` — all now accept
+> an optional `idempotency_token` (UUID) and replay the cached result on retry within
+> 5 min. The path-parameterized endpoints (`/branch-demands/{id}/send` and
+> `/branch-demands/{id}/reprice`) namespace the cache key with the demand id to avoid
+> token reuse across demands colliding. See §11.1 above. All 11 transactional write
+> endpoints now implement idempotency; only the Low-risk endpoints (second-call hits
+> 409) intentionally skip the pattern.
 
 The following transactional write endpoints do NOT implement idempotency. A network retry on
 any of them could create a duplicate:
@@ -624,20 +645,21 @@ any of them could create a duplicate:
 | `POST /sales/cart` | `SalesCartApiController::store` | Low — cart is idempotent by design (upsert by product_id) |
 | ~~`POST /sales/returns`~~ ✅ | ~~`SalesReturnApiController::store`~~ | ~~High — creates a return + reversal journal~~ **RESOLVED in PURCHASING-API-3** (cache key `api:sales_return:`) |
 | `POST /sales/invoices/{id}/cancel` | `SalesInvoiceApiController::cancel` | Low — second cancel hits "not draft" 409 |
-| `POST /sales/challans/godown` | `SalesChallanApiController::godown` | Medium — creates a godown preparation |
+| ~~`POST /sales/challans/godown`~~ ✅ | ~~`SalesChallanApiController::godown`~~ | ~~Medium — creates a godown preparation~~ **RESOLVED in PURCHASING-API-4** (cache key `api:challan_godown:`) |
 | ~~`POST /stock-adjustments`~~ ✅ | ~~`StockAdjustmentApiController::store`~~ | ~~High — creates a draft adjustment~~ **RESOLVED in PURCHASING-API-3** (cache key `api:stock_adjustment:`) |
 | `POST /stock-adjustments/{id}/confirm` | `StockAdjustmentApiController::confirm` | Low — second confirm hits "already confirmed" 409 |
 | ~~`POST /warehouse-transfers`~~ ✅ | ~~`WarehouseTransferApiController::store`~~ | ~~High — creates a draft transfer~~ **RESOLVED in PURCHASING-API-3** (cache key `api:warehouse_transfer:`) |
 | `POST /warehouse-transfers/{id}/confirm` | `WarehouseTransferApiController::confirm` | Low — second confirm hits 409 |
 | ~~`POST /branch-demands`~~ ✅ | ~~`BranchDemandApiController::store`~~ | ~~High — creates a demand + intercompany journals~~ **RESOLVED in PURCHASING-API-3** (cache key `api:branch_demand:`) |
-| `POST /branch-demands/{id}/send` | `BranchDemandApiController::send` | Medium — sends a demand |
-| `POST /branch-demands/{id}/reprice` | `BranchDemandApiController::reprice` | Medium — posts a GL adjustment |
-| `POST /stock-take/sessions` | `StockTakeSessionApiController::store` | Medium — creates a draft session |
+| ~~`POST /branch-demands/{id}/send`~~ ✅ | ~~`BranchDemandApiController::send`~~ | ~~Medium — sends a demand~~ **RESOLVED in PURCHASING-API-4** (cache key `api:branch_demand_send:{id}:`) |
+| ~~`POST /branch-demands/{id}/reprice`~~ ✅ | ~~`BranchDemandApiController::reprice`~~ | ~~Medium — posts a GL adjustment~~ **RESOLVED in PURCHASING-API-4** (cache key `api:branch_demand_reprice:{id}:`) |
+| ~~`POST /stock-take/sessions`~~ ✅ | ~~`StockTakeSessionApiController::store`~~ | ~~Medium — creates a draft session~~ **RESOLVED in PURCHASING-API-4** (cache key `api:stock_take_session:`) |
 | `POST /stock-take/sessions/{id}/post` | `StockTakeSessionApiController::post` | Low — second post hits 409 |
 | `POST /sales/commission/confirm-period` | `CommissionApiController::confirmPeriod` | Low — second confirm hits 409 |
 
 **Recommended fix:** add an `idempotency_token` field + 5-min cache lookup to every endpoint
-marked High or Medium above.
+marked High or Medium above. ✅ All High + Medium endpoints are now resolved; only Low-risk
+endpoints (intentionally skipped — second-call hits 409) remain without idempotency.
 
 ### 11.4 Idempotency cache durability
 
@@ -738,7 +760,7 @@ Gap IDs are stable references shared with `api-overview.md` §13 and `api-module
 | G4 | HIGH | `CommissionApiController::listRules` does NOT clamp `per_page` to 100. OOM risk. | Add `min((int) $request->input('per_page', 25), 100)`. |
 | G5 | MEDIUM | Search param name drift: `q` (Branches, Stock Take) vs `search` (Sales, Stock Adjustment, Branch Demand). | Pick `search` (majority) and migrate the `q` endpoints. Backward-compat: accept both for one release. |
 | G6 | MEDIUM | No sort convention. No endpoint accepts `?sort=field` or `?order=asc`. All list endpoints hard-code `orderBy('created_at', 'desc')` or similar. | Add `?sort=field&order=asc|desc` to list endpoints, with a whitelist of sortable fields. |
-| ~~G7~~ ✅ | ~~HIGH~~ RESOLVED | ~~Idempotency implemented on only 3 of ~14 transactional write endpoints. See §11.3.~~ **PURCHASING-API-3** retrofitted the 4 High-risk endpoints (`POST /sales/returns`, `/stock-adjustments`, `/warehouse-transfers`, `/branch-demands`) with an optional `idempotency_token` (UUID) + 5-min cache lookup. The 4 Medium-risk endpoints (`/sales/challans/godown`, `/branch-demands/{id}/send`, `/branch-demands/{id}/reprice`, `/stock-take/sessions`) remain open — queued for a follow-up session. See §11.1 + §11.3. | Medium-risk endpoints still pending; Low-risk endpoints intentionally skipped (second-call hits 409). |
+| ~~G7~~ ✅ | ~~HIGH~~ RESOLVED | ~~Idempotency implemented on only 3 of ~14 transactional write endpoints. See §11.3.~~ **PURCHASING-API-3** retrofitted the 4 High-risk endpoints (`POST /sales/returns`, `/stock-adjustments`, `/warehouse-transfers`, `/branch-demands`) with an optional `idempotency_token` (UUID) + 5-min cache lookup. **PURCHASING-API-4** retrofitted the 4 Medium-risk endpoints (`POST /sales/challans/godown`, `/branch-demands/{id}/send`, `/branch-demands/{id}/reprice`, `/stock-take/sessions`) with the same pattern; the path-parameterized endpoints namespace the cache key with the demand id. Total idempotent endpoints: 11 of ~14 (3 required + 8 optional). Only Low-risk endpoints (second-call hits 409) intentionally skip the pattern. See §11.1 + §11.3. | Fully resolved — only Low-risk endpoints intentionally skipped. |
 | G8 | MEDIUM | No ETag / conditional-GET support on read endpoints. Mobile clients re-download full lists on every poll. | Add `ETag` + `If-None-Match` handling on `GET /lookups/*` + `GET /dashboard` (the polled endpoints). |
 | G9 | MEDIUM | No `Accept` negotiation. API always returns JSON regardless of `Accept` header. A future `v2` cannot be selected via `Accept: application/vnd.rcerp.v2+json`. | Decide on a versioning strategy before v2 is needed. See `api-overview.md` §14. |
 | G10 | LOW | No `application/problem+json` (RFC 7807) error shape. The `{message, errors}` shape is a Laravel convention, not a standard. | Optional — adopt RFC 7807 if a standards-compliant client requires it. Low priority. |
