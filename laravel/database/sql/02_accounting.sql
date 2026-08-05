@@ -61,6 +61,16 @@ CREATE TABLE journal_lines (
     entity_type varchar(30),
     entity_id integer,
     memo text,
+    -- G-320 (G3) FINANCE-DIM-1: dimension tagging column. FK to dimension_values(id)
+    -- is defined in 08_budgeting_and_dimensions.sql (DEFERRABLE INITIALLY DEFERRED
+    -- so the FK check happens at commit, not at INSERT — allows posting JEs where
+    -- the dimension_value row is created in the same transaction). Nullable because
+    -- most journal lines are NOT dimension-tagged (only manual-journal lines tagged
+    -- by the accountant + future business-module wiring carry a non-null value).
+    -- The migration 2026_08_10_000002 L105-112 adds this column post-hoc; this
+    -- canonical DDL now includes it so fresh `psql -f database/sql/*.sql` installs
+    -- have the column without needing the migration.
+    dimension_value_id integer,
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT jl_balanced_check CHECK (debit >= 0 AND credit >= 0),
     CONSTRAINT jl_not_both_zero_check CHECK (debit > 0 OR credit > 0)
@@ -68,6 +78,7 @@ CREATE TABLE journal_lines (
 CREATE INDEX idx_jl_journal_entry ON journal_lines(journal_entry_id);
 CREATE INDEX idx_jl_ledger ON journal_lines(ledger_id);
 CREATE INDEX idx_jl_entity ON journal_lines(entity_type, entity_id);
+CREATE INDEX idx_jl_dim_value ON journal_lines(dimension_value_id);
 
 -- DB-level enforcement: every journal entry MUST have balanced debits = credits.
 -- This is the crown-jewel invariant of double-entry bookkeeping.

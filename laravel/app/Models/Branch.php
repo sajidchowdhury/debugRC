@@ -55,6 +55,22 @@ class Branch extends Model
     }
 
     /**
+     * Dimension values scoped to this branch.
+     *
+     * G-346 (G22) FINANCE-DIM-1: the dimension_values table has a nullable
+     * branch_id FK (migration 2026_08_10_000002 L84). A NULL branch_id means
+     * "all branches" (company-wide dimension value); a non-null branch_id
+     * means "specific to this branch". This relationship returns ONLY the
+     * branch-specific values. Callers needing company-wide values must query
+     * DimensionValue::whereNull('branch_id') separately (or use the
+     * DimensionValueBranchScope global scope which returns both).
+     */
+    public function dimensionValues(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Models\DimensionValue::class, 'branch_id');
+    }
+
+    /**
      * Scope: active, non-deleted branches.
      */
     public function scopeActive(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder

@@ -64,7 +64,13 @@ class DimensionController extends Controller
         $validated = $request->validate([
             'name'        => 'required|string|max:100',
             'type'        => 'required|in:cost_center,profit_center,department,project,location',
-            'code'        => 'required|string|max:20|unique:dimensions,code',
+            // G-332 (G13) FINANCE-DIM-1: partial-unique validation — allows
+            // code reuse after soft-delete. The DB constraint was changed from
+            // a plain UNIQUE to a partial UNIQUE INDEX ... WHERE deleted_at IS
+            // NULL by migration 2026_09_06_000008. The Laravel unique rule's
+            // 4th+ args add a WHERE clause: deleted_at IS NULL means the rule
+            // only considers non-deleted rows when checking uniqueness.
+            'code'        => 'required|string|max:20|unique:dimensions,code,NULL,id,deleted_at,NULL',
             'description' => 'nullable|string',
         ]);
 
@@ -168,6 +174,47 @@ class DimensionController extends Controller
 
         return redirect()->route('admin.dimensions.show', $dimension)
             ->with('success', "Dimension value '{$value->name}' " . ($value->is_active ? 'activated' : 'deactivated') . '.');
+    }
+
+    /**
+     * Soft-delete a dimension and its values (G-343 / G19).
+     *
+     * Refuses if any journal_lines are tagged to the dimension's values —
+     * the dimension must remain visible in the segment-report dropdown for
+     * historical reporting. The dimension + its values are soft-deleted in
+     * a single DB::transaction (atomic). Use deactivate (toggle is_active)
+     * for the non-destructive path; use destroy only for mistakenly-created
+     * dimensions that have never been used.
+     */
+    public function destroy(Dimension $dimension)
+    {
+        // Pre-check: refuse if any journal_lines reference this dimension's values.
+        $taggedCount = DB::table('journal_lines')
+            ->whereIn('dimension_value_id', function ($q) use ($dimension) {
+                $q->select('id')->from('dimension_values')
+                  ->where('dimension_id', $dimension->id);
+            })
+            ->whereNotNull('dimension_value_id')
+            ->count();
+
+        if ($taggedCount > 0) {
+            return back()->with('error',
+                "Cannot delete dimension '{$dimension->name}': {$taggedCount} journal line(s) are tagged to its values. "
+                . 'Deactivate the dimension instead (toggle is_active) to hide it from new entries while preserving historical reporting.');
+        }
+
+        try {
+            DB::transaction(function () use ($dimension) {
+                // Soft-delete values first, then the dimension (preserves the FK).
+                $dimension->values()->each(fn ($v) => $v->delete());
+                $dimension->delete();
+            });
+
+            return redirect()->route('admin.dimensions.index')
+                ->with('success', "Dimension '{$dimension->name}' deleted.");
+        } catch (\Throwable $e) {
+            return back()->with('error', 'Failed to delete dimension: ' . $e->getMessage());
+        }
     }
 
     /**

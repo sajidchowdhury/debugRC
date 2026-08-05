@@ -1744,20 +1744,36 @@ Route::middleware('auth')->group(function () {
         ->middleware('role:accountant,manager,admin');
 
     // Dimensions & Cost Centers
+    // G-340 (G18) FINANCE-DIM-1: split into read + write groups. Read routes
+    // (index, segment reports, create form, show, edit) stay accessible to
+    // accountant,manager,admin. Write routes (store, update, storeValue,
+    // toggleValue, destroy) are elevated to manager,admin — accountants can
+    // view + run segment reports but cannot mutate master data. Policy per
+    // dimensions-cost-centers.md §13.3 #18 (the less-disruptive option;
+    // managers retain write access). The stricter §4 table alternative
+    // (admin-only writes) would require a product decision; this wave uses
+    // the documented §13.3 #18 policy.
     Route::prefix('admin/dimensions')->name('admin.dimensions.')->middleware('role:accountant,manager,admin')->group(function () {
         Route::get('segment-pnl', [DimensionController::class, 'segmentPnl'])->name('segment-pnl');
         Route::get('segment-bs', [DimensionController::class, 'segmentBs'])->name('segment-bs');
         Route::get('create', [DimensionController::class, 'create'])->name('create');
-        Route::post('/', [DimensionController::class, 'store'])->name('store');
         Route::get('{dimension}', [DimensionController::class, 'show'])->name('show');
         Route::get('{dimension}/edit', [DimensionController::class, 'edit'])->name('edit');
-        Route::put('{dimension}', [DimensionController::class, 'update'])->name('update');
-        Route::post('{dimension}/values', [DimensionController::class, 'storeValue'])->name('store-value');
-        Route::patch('{dimension}/values/{value}/toggle', [DimensionController::class, 'toggleValue'])->name('toggle-value');
     });
     Route::get('admin/dimensions', [DimensionController::class, 'index'])
         ->name('admin.dimensions.index')
         ->middleware('role:accountant,manager,admin');
+
+    // G-340 (G18) FINANCE-DIM-1: write routes — manager + admin only.
+    // G-343 (G19) FINANCE-DIM-1: destroy route added (soft-delete dimension
+    // + its values; pre-check refuses if any journal_lines are tagged).
+    Route::prefix('admin/dimensions')->name('admin.dimensions.')->middleware('role:manager,admin')->group(function () {
+        Route::post('/', [DimensionController::class, 'store'])->name('store');
+        Route::put('{dimension}', [DimensionController::class, 'update'])->name('update');
+        Route::delete('{dimension}', [DimensionController::class, 'destroy'])->name('destroy');
+        Route::post('{dimension}/values', [DimensionController::class, 'storeValue'])->name('store-value');
+        Route::patch('{dimension}/values/{value}/toggle', [DimensionController::class, 'toggleValue'])->name('toggle-value');
+    });
 
     // ============================================================
     // Phase 7: Enhanced Period & Fiscal Year Controls

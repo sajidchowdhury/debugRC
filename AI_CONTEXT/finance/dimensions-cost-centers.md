@@ -84,6 +84,18 @@ Three management-accounting drivers:
 > **G4:** "Tag journal line with dimension" is currently NOT wired to any business module.
 > The only way to populate `journal_lines.dimension_value_id` is via direct SQL. Segment
 > reports will return 0 until tagging is wired.
+>
+> ⏳ **G-321 DEFERRED** (FINANCE-DIM-1 wave): the manual-journal wiring (approach a
+> from the research report) is deferred to a follow-up wave. It touches the GL posting
+> path (`ManualJournalService::createJournal` → `JournalPostingService::createJournalEntry`)
+> and needs careful testing. The minimum viable wiring requires: (1) migration adding
+> `dimension_value_id` to `manual_journal_lines`; (2) `StoreManualJournalRequest`
+> validation + `toServicePayload()` pass-through; (3) Blade form dropdown per line-row;
+> (4) `ManualJournalLine` model `$fillable`. `JournalPostingService::createJournalEntry`
+> already reads `$line['dimension_value_id'] ?? null` at L156, so the pass-through is
+> automatic once the manual-journal path populates the key. The full-rollout approach
+> (b) — wiring into sales/purchase/stock/expense/income modules — is a separate
+> larger effort (~3-4h). Tracked as the last open gap in the dimensions cluster.
 
 ---
 
@@ -131,7 +143,7 @@ Three management-accounting drivers:
 | Outbound | [`../accounting/fiscal-year-period-close.md`](../accounting/fiscal-year-period-close.md) | Period-close enforcement via `JournalPostingService::validatePeriod`. Dimensions are NOT period-scoped (no `fiscal_year_id` column; raw `entry_date` filter only). |
 | Outbound | [`../accounting/reversal-vs-cancellation.md`](../accounting/reversal-vs-cancellation.md) | Append-only reversal semantics. G14 documents that reversal JEs lose the dimension tag → segment reports double-count reversed postings. |
 | Outbound | [`../architecture/branch-isolation-rls.md`](../architecture/branch-isolation-rls.md) | `BranchScope` global scope + RLS policies. G1 documents the NULL-branch exclusion conflict on `DimensionValue`. |
-| Outbound | [`../database/triggers-views-constraints.md`](../database/triggers-views-constraints.md) | `budget_vs_actual` view definition (currently only in migration — G3 stale DDL). |
+| Outbound | [`../database/triggers-views-constraints.md`](../database/triggers-views-constraints.md) | `budget_vs_actual` view definition (✅ G-320 RESOLVED — now in `database/sql/08_budgeting_and_dimensions.sql` canonical baseline). |
 | Sibling | [`./budgeting.md`](./budgeting.md) | The `budgets` + `budget_lines` tables created by the SAME migration; the `budget_vs_actual` view is ledger-only (NOT dimension-aware — BR18); budget lines have NO `dimension_value_id` column (G6 in sibling doc). |
 | Inbound (future) | `../reports/reports-catalog.md` (Phase 16) | Segment P&L and Segment BS are reports; should be catalogued. |
 | Inbound (future) | `../reports/materialized-views.md` (Phase 16) | G9 — no MV for segment reporting; future MV proposal. |
@@ -148,9 +160,9 @@ Three management-accounting drivers:
 | # | Rule | Evidence |
 |---|---|---|
 | BR1 | A dimension's `type` MUST be one of `cost_center`, `profit_center`, `department`, `project`, `location`. | migration L66-67 CHECK constraint; controller L66, L127 `validate()` |
-| BR2 | A dimension's `code` MUST be unique across ALL dimensions (including soft-deleted ones). ⚠️ **G13 — plain UNIQUE, not partial; soft-deleted codes can't be reused.** | migration L68 `$table->string('code', 20)->unique()` |
+| BR2 | A dimension's `code` MUST be unique across ALL dimensions (including soft-deleted ones). ✅ **G13 RESOLVED in FINANCE-DIM-1 (G-332)** — migration `2026_09_06_000008` drops the plain `dimensions_code_unique` constraint + creates partial UNIQUE index `uq_dim_code_active ON dimensions (code) WHERE deleted_at IS NULL`. `DimensionController::store` validation rule updated to `unique:dimensions,code,NULL,id,deleted_at,NULL` so the validation layer matches the new DB constraint (only considers non-deleted rows). Mirrors the sibling `dimension_values.uq_dv_dim_code_active` pattern. Soft-deleted dimension codes can now be reused. | migration L68 `$table->string('code', 20)->unique()` (now superseded by migration `2026_09_06_000008`) |
 | BR3 | A dimension's `code` MUST NOT be editable after creation. | controller L125-130 `update` validate does not include `code`; edit.blade.php has no `code` field |
-| BR4 | A dimension MUST NOT be hard-deleted via the UI (only soft-deactivated). ⚠️ **G19 — no `destroy` endpoint.** | controller has no `destroy` action |
+| BR4 | A dimension MUST NOT be hard-deleted via the UI (only soft-deactivated). ✅ **G19 RESOLVED in FINANCE-DIM-1 (G-343)** — `DimensionController::destroy(Dimension $dimension)` method added. Pre-check refuses if any `journal_lines.dimension_value_id` references the dimension's values (the dimension must remain visible in the segment-report dropdown for historical reporting). The dimension + its values are soft-deleted in a single `DB::transaction` (atomic). Route `DELETE admin/dimensions/{dimension}` added to the elevated `role:manager,admin` write-routes group (G-340). Use deactivate (`toggleValue` on `is_active`) for the non-destructive path; use `destroy` only for mistakenly-created dimensions that have never been used. | `DimensionController::destroy` L189-218 |
 | BR5 | Dimension types are NOT user-extensible (hardcoded enum in 3 places: migration CHECK, model `typeOptions()`, controller `validate()`). ⚠️ **G14.** | migration L67, model L64-73, controller L66/L127 |
 
 ### 6.2 Dimension values
@@ -190,7 +202,7 @@ Three management-accounting drivers:
 
 | # | Rule | Evidence |
 |---|---|---|
-| BR24 | The `role:accountant,manager,admin` middleware MUST be applied to every dimension route. ⚠️ **G18 — no per-action differentiation.** | `web.php:1665, 1678` |
+| BR24 | The `role:accountant,manager,admin` middleware MUST be applied to every dimension route. ✅ **G18 RESOLVED in FINANCE-DIM-1 (G-340)** — routes split into read + write groups. Read routes (`index`, `segment-pnl`, `segment-bs`, `create` form, `show`, `edit`) stay accessible to `role:accountant,manager,admin`. Write routes (`store`, `update`, `destroy`, `storeValue`, `toggleValue`) elevated to `role:manager,admin` — accountants can view + run segment reports but cannot mutate master data. Policy per §13.3 #18 (the less-disruptive option; managers retain write access). The stricter §4 table alternative (admin-only writes) would require a product decision; this wave uses the documented §13.3 #18 policy. See `routes/web.php` L1746-1776. | `web.php:1746-1776` |
 | BR25 | `fn_financial_audit_trigger` MUST NOT be attached to `dimensions` or `dimension_values`. ⚠️ **G2.** | `02_accounting.sql:446-455` (10 tables, no dim tables) |
 | BR26 | The system MUST seed 3 default dimensions (Department, Project, Location) and 5 department values on migration. | migration L194-247 |
 | BR27 | Dimensions are global (NOT branch-scoped) — `BranchScope` is NOT applied to the `Dimension` model. | `Dimension.php` (no `booted()` call) |
@@ -528,6 +540,8 @@ Route::get('admin/dimensions', [DimensionController::class, 'index'])
 
 **Index:** `idx_jl_dim_value` (B-tree on `dimension_value_id`). **FK constraint name:** `fk_jl_dim_value`.
 
+> ✅ **G3 RESOLVED in FINANCE-DIM-1 (G-320)** — The column is now in the canonical DDL. `database/sql/02_accounting.sql` `CREATE TABLE journal_lines` includes `dimension_value_id integer` + the `idx_jl_dim_value` index. New file `database/sql/08_budgeting_and_dimensions.sql` declares the FK (`fk_jl_dim_value` REFERENCES `dimension_values(id)` ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED) + the canonical DDL for `dimensions`, `dimension_values`, `budgets`, `budget_lines`, the `budget_vs_actual` view, and RLS policies on `budgets` + `dimension_values`. A fresh `psql -f database/sql/*.sql` load now has the column + all dimension/budget tables. `php artisan migrate` remains the canonical install path; this SQL baseline mirrors the migration's schema for fresh installs + DB snapshots.
+>
 > **G3 stale DDL:** The column EXISTS in migrated DBs (added by migration L105-112, re-asserted
 > in partition migration L530/L558-565/L648) but is NOT in `database/sql/02_accounting.sql`
 > L55-67 (the canonical DDL). A fresh `psql -f database/sql/*.sql` load will NOT have the column.
@@ -566,7 +580,7 @@ erDiagram
 | `DimensionValue` | `app/Models/DimensionValue.php` (69L) | See §7.1. |
 | `JournalLine` | `app/Models/Accounting/JournalLine.php` (44L) | Holds `dimension_value_id` in `$fillable` (L15) + `dimensionValue()` belongsTo (L35-38). |
 | `Ledger` | `app/Models/Ledger.php` | `account_type`, `normal_balance`, `ledger_nature` used by `DimensionReportingService`. |
-| `Branch` | `app/Models/Branch.php` | `dimension_values.branch_id` FK. **G22 — `Branch` model has no `dimensionValues()` hasMany.** |
+| `Branch` | `app/Models/Branch.php` | `dimension_values.branch_id` FK. ✅ **G22 RESOLVED in FINANCE-DIM-1 (G-346)** — `Branch::dimensionValues(): HasMany` method added (returns `$this->hasMany(DimensionValue::class, 'branch_id')`). Returns ONLY branch-specific values (non-null `branch_id`); callers needing company-wide values query `DimensionValue::whereNull('branch_id')` separately (or use the `DimensionValueBranchScope` global scope which returns both). |
 
 ---
 
@@ -668,8 +682,8 @@ Dimensions are analytical-only (no GL posting). No Dr/Cr matrix applies. The seg
 
 1. **G1 — Fix `BranchScope` on `DimensionValue`.** Either (a) remove `BranchScope` from `DimensionValue` and rely solely on RLS (which correctly handles NULL), or (b) create a `DimensionValueBranchScope` that filters `WHERE branch_id IS NULL OR branch_id = ?` (mirrors the RLS policy), or (c) seed dimension values per-branch instead of NULL-branch.
 2. **G2 — Attach `fn_financial_audit_trigger` to `dimensions` + `dimension_values`.** Add a migration: `CREATE TRIGGER trg_audit_dimensions AFTER INSERT OR UPDATE OR DELETE ON dimensions FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();` and same for `dimension_values`.
-3. **G3 — Update stale DDL.** Create `database/sql/08_budgeting_and_dimensions.sql` with the 4 CREATE TABLE statements, the partial UNIQUE index, the `ALTER TABLE journal_lines ADD COLUMN dimension_value_id`, the FK, the `budget_vs_actual` view, and the RLS policies.
-4. **G4 — Wire dimension tagging into at least one business module.** Quickest win: add a `dimension_value_id` field to the manual journal line UI (`manual_journal_lines` table needs a new column — G8; `ManualJournalController::postJournal` needs to pass it through). Then extend to sales invoice finalize, sales challan issue, purchase receive, stock adjustment, expense/income entry. Or: add a post-posting "dimension tagging" UI that lets an accountant bulk-tag existing journal lines by date range + ledger + reference.
+3. **G3 — Update stale DDL.** ✅ RESOLVED in FINANCE-DIM-1 (G-320). `database/sql/02_accounting.sql` `journal_lines` now includes `dimension_value_id` + `idx_jl_dim_value` index. New `database/sql/08_budgeting_and_dimensions.sql` declares the FK + the 4 CREATE TABLE statements (dimensions, dimension_values, budgets, budget_lines) + the partial UNIQUE index `uq_dim_code_active` + the `budget_vs_actual` view + RLS policies on budgets + dimension_values.
+4. **G4 — Wire dimension tagging into at least one business module.** ⏳ DEFERRED (FINANCE-DIM-1 wave). The manual-journal wiring (approach a) is deferred to a follow-up wave — touches the GL posting path + needs careful testing. See §3 callout for the deferral rationale + the minimum viable wiring steps.
 
 ### 13.2 MAJOR remediations
 
@@ -681,7 +695,7 @@ Dimensions are analytical-only (no GL posting). No Dr/Cr matrix applies. The seg
 10. **G10 — Add CSV/Excel export for segment reports.** Add `?format=csv` query param handling in `segmentPnl`/`segmentBs` actions; return a `StreamedResponse` with CSV.
 11. **G11 — Add approval workflow (Phase 14).** Add `is_approved`, `approved_by`, `approved_at` to `dimensions`. Require approval before dimensions become taggable in journal lines.
 12. **G12 — Add dimension-value merge.** `POST admin/dimensions/{dimension}/values/{source}/merge` with `target_value_id`. Service: `UPDATE journal_lines SET dimension_value_id = $target WHERE dimension_value_id = $source;` then soft-delete `$source`.
-13. **G13 — Change `dimensions.code` to partial UNIQUE.** Drop the plain UNIQUE, add `CREATE UNIQUE INDEX uq_dim_code_active ON dimensions (code) WHERE deleted_at IS NULL`.
+13. **G13 — Change `dimensions.code` to partial UNIQUE.** ✅ RESOLVED in FINANCE-DIM-1 (G-332). Migration `2026_09_06_000008` drops plain UNIQUE + creates `uq_dim_code_active ON dimensions (code) WHERE deleted_at IS NULL`; controller validation rule updated to match.
 14. **G14 — Propagate `dimension_value_id` to reversal lines.** Add `'dimension_value_id' => $line->dimension_value_id` to the reversal line array in `JournalPostingService::reverseJournalEntry` (after L200).
 15. **G15 — Log `toggleValue`.** Add `user_audit_log` insert in `toggleValue`. Or fix G2 first (audit trigger would capture it).
 
@@ -689,11 +703,11 @@ Dimensions are analytical-only (no GL posting). No Dr/Cr matrix applies. The seg
 
 16. **G16** — Create `config/dimensions.php` with `types` array; reference from model + controller.
 17. **G17** — Rewrite `dimensionComparison` as a single `GROUP BY dimension_value_id` query with `CASE WHEN ledger_nature IN (...) THEN ... END` buckets.
-18. **G18** — Split route middleware: read routes keep `role:accountant,manager,admin`; write routes use `role:manager,admin`.
-19. **G19** — Add `destroy` action with a pre-check (refuse if any `journal_lines.dimension_value_id` references its values). Soft-delete the dimension + its values.
+18. **G18** — Split route middleware: read routes keep `role:accountant,manager,admin`; write routes use `role:manager,admin`. ✅ RESOLVED in FINANCE-DIM-1 (G-340).
+19. **G19** — Add `destroy` action with a pre-check (refuse if any `journal_lines.dimension_value_id` references its values). Soft-delete the dimension + its values. ✅ RESOLVED in FINANCE-DIM-1 (G-343).
 20. **G20** — Log the full exception in `store`; show a generic "Failed to create dimension" message.
 21. **G21** — Add a `BranchAccessible` rule, or check `auth()->user()->isAdmin() || $branchId === session('branch_id')` in `storeValue`.
-22. **G22** — Add `public function dimensionValues(): HasMany` to `Branch` model.
+22. **G22** — Add `public function dimensionValues(): HasMany` to `Branch` model. ✅ RESOLVED in FINANCE-DIM-1 (G-346).
 23. **G24** — Add a UI warning "This dimension value is inactive" on segment reports, but still allow the report.
 24. **G25** — Add `?int $branchId = null` to `getDimensionUsageSummary` signature; pass from controller.
 25. **G26** — Add `tests/Unit/Services/Budgeting/DimensionReportingServiceTest.php`.
