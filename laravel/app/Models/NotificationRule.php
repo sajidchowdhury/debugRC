@@ -74,6 +74,16 @@ class NotificationRule extends Model
         // — Sales-return sub-flows (already dispatched; keep configurable) —
         'return_confirmed'          => 'Sales Return Confirmed',
         'return_reversed'           => 'Sales Return Reversed',
+        // — Phase 5 approval workflow events (G-080, WORKFLOWS-APPROVAL) —
+        // Dispatched by ApprovalService::notifyApprovers/notifyRequester.
+        // Previously these 4 events were dispatched but NOT in EVENTS, so
+        // NotificationService::dispatch silently returned 0 (no rule matched)
+        // and approvers/requesters never received notifications. Now
+        // configurable + seeded with default rules (see NotificationRuleSeeder).
+        'approval_request_submitted'    => 'Approval Request Submitted',
+        'approval_request_next_level'   => 'Approval Request Advanced to Next Level',
+        'approval_request_approved'     => 'Approval Request Approved',
+        'approval_request_rejected'     => 'Approval Request Rejected',
     ];
 
     /**

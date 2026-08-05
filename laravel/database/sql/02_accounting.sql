@@ -288,12 +288,25 @@ CREATE TABLE manual_journals (
     description text,
     total_debit numeric(15,2) NOT NULL DEFAULT 0,
     total_credit numeric(15,2) NOT NULL DEFAULT 0,
-    status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','posted','reversed')),
+    -- G-081 (WORKFLOWS-APPROVAL): expanded from ('draft','posted','reversed')
+    -- to 6 states by migration 2026_08_10_000001 (approval workflow engine).
+    -- draft → submitted → approved → posted (or rejected → draft resubmit).
+    status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','submitted','approved','posted','reversed','rejected')),
     journal_entry_id integer REFERENCES journal_entries(id),
     created_by integer,
     reversed_by integer,
     reversed_at timestamp(0),
     reverse_reason varchar(500),
+    -- G-081: 7 approval-workflow columns added by migration
+    -- 2026_08_10_000001. submitted_by/at + approved_by/at + approval_comments
+    -- + rejected_by/at track the maker-checker gate.
+    submitted_by integer,
+    submitted_at timestamp(0),
+    approved_by integer,
+    approved_at timestamp(0),
+    approval_comments text,
+    rejected_by integer,
+    rejected_at timestamp(0),
     deleted_at timestamp(0),
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
@@ -301,6 +314,8 @@ CREATE TABLE manual_journals (
 );
 CREATE INDEX idx_mj_branch_date ON manual_journals(branch_id, journal_date);
 CREATE INDEX idx_mj_journal ON manual_journals(journal_entry_id);
+CREATE INDEX idx_mj_status ON manual_journals(status);
+CREATE INDEX idx_mj_submitted ON manual_journals(branch_id, submitted_at) WHERE status = 'submitted';
 
 -- Phase 1.1: manual_journal_lines table (draft line persistence)
 CREATE TABLE manual_journal_lines (

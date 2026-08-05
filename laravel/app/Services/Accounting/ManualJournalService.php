@@ -147,8 +147,17 @@ class ManualJournalService
             if (!$journal) {
                 throw new \RuntimeException("Manual journal {$journalId} not found.");
             }
-            if (!$journal->isDraft()) {
-                throw new \RuntimeException("Only draft journals can be posted (current status: {$journal->status}).");
+            // G-077 (CRITICAL, WORKFLOWS-APPROVAL): previously this guard was
+            // `if (!$journal->isDraft())` — which rejected 'approved' journals,
+            // dead-ending the entire approval workflow. A user who submitted +
+            // got approval could NOT post (the UI showed a Post button via
+            // `canBePosted()` which returns true for approved, but the service
+            // threw). Now matches the model's own contract: `canBePosted()`
+            // returns true for both 'draft' AND 'approved'. Draft = post
+            // directly (no approval needed); approved = post after approval
+            // gate cleared. Both paths converge on the same GL posting logic.
+            if (!$journal->canBePosted()) {
+                throw new \RuntimeException("Only draft or approved journals can be posted (current status: {$journal->status}).");
             }
 
             // Load draft lines from manual_journal_lines.

@@ -679,6 +679,22 @@ CREATE TABLE damage_invoices (
     branch_id integer NOT NULL REFERENCES branches(id),
     reason text,
     journal_entry_id integer REFERENCES journal_entries(id),
+    -- G-081 (WORKFLOWS-APPROVAL): status column + 6-state CHECK added by
+    -- migration 2025_01_09_000002 (initial: draft/confirmed/cancelled),
+    -- then expanded by 2026_01_05_000001 to include the 3 approval states.
+    -- draft → submitted → approved → confirmed (or cancelled / rejected).
+    status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','submitted','approved','confirmed','cancelled','rejected')),
+    -- G-081: 7 approval-workflow columns added by migration
+    -- 2026_01_05_000001. Note: damage_invoices uses approval_rejected_by/at
+    -- (NOT rejected_by/at) and approval_notes (NOT approval_comments) —
+    -- different from manual_journals.
+    submitted_by integer,
+    submitted_at timestamp(0),
+    approved_by integer,
+    approved_at timestamp(0),
+    approval_rejected_by integer,
+    approval_rejected_at timestamp(0),
+    approval_notes text,
     is_reversed boolean NOT NULL DEFAULT false,
     reversed_at timestamp(0),
     reversed_by integer,
@@ -689,6 +705,8 @@ CREATE TABLE damage_invoices (
     CONSTRAINT damage_invoices_code_unique UNIQUE (damage_code)
 );
 CREATE INDEX idx_dmg_journal ON damage_invoices(journal_entry_id);
+CREATE INDEX idx_dmg_submitted ON damage_invoices(branch_id, submitted_at) WHERE status = 'submitted';
+CREATE INDEX idx_dmg_approved_pending ON damage_invoices(branch_id, approved_at) WHERE status = 'approved';
 
 CREATE TABLE damage_invoice_items (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

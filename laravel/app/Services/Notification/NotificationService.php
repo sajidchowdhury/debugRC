@@ -63,6 +63,13 @@ class NotificationService
         'return_created'            => ['icon' => 'fa-arrow-rotate-left', 'color' => 'info', 'title' => 'Sales Return Created'],
         'return_confirmed'          => ['icon' => 'fa-check', 'color' => 'primary', 'title' => 'Sales Return Confirmed'],
         'return_reversed'           => ['icon' => 'fa-rotate-left', 'color' => 'danger', 'title' => 'Sales Return Reversed'],
+        // G-080 (WORKFLOWS-APPROVAL): Phase 5 approval workflow events.
+        // `submitted` + `next_level` route to managers/admins (the approval
+        // worklist). `approved` + `rejected` route back to the submitter.
+        'approval_request_submitted'    => ['icon' => 'fa-paper-plane',      'color' => 'warning', 'title' => 'Approval Request Submitted'],
+        'approval_request_next_level'   => ['icon' => 'fa-forward-step',     'color' => 'warning', 'title' => 'Approval Advanced to Next Level'],
+        'approval_request_approved'     => ['icon' => 'fa-circle-check',     'color' => 'success', 'title' => 'Approval Request Approved'],
+        'approval_request_rejected'     => ['icon' => 'fa-circle-xmark',     'color' => 'danger',  'title' => 'Approval Request Rejected'],
     ];
 
     /**

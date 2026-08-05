@@ -107,6 +107,37 @@ class NotificationRuleSeeder extends Seeder
             'desc'     => 'Fires when a customer credit limit is increased. Notifies admins and accountants.',
             'types'    => ['admin', 'accountant'],
         ],
+        // G-080 (WORKFLOWS-APPROVAL): Phase 5 approval workflow events.
+        // Previously dispatched by ApprovalService but with NO seeded
+        // NotificationRule rows — dispatch silently returned 0. These 4
+        // defaults make the approval pipeline fire notifications out of the
+        // box. `submitted` + `next_level` → managers + admins (the approval
+        // worklist). `approved` + `rejected` → the submitter (via
+        // specific_user context, resolved at dispatch time).
+        [
+            'event'    => 'approval_request_submitted',
+            'name'     => 'Approval Request Submitted — default',
+            'desc'     => 'Fires when an entity is submitted for approval. Notifies managers and admins (the approval worklist).',
+            'types'    => ['admin', 'sales_manager'],
+        ],
+        [
+            'event'    => 'approval_request_next_level',
+            'name'     => 'Approval Advanced to Next Level — default',
+            'desc'     => 'Fires when a level is approved but a next level remains. Notifies managers and admins of the next-level approver pool.',
+            'types'    => ['admin', 'sales_manager'],
+        ],
+        [
+            'event'    => 'approval_request_approved',
+            'name'     => 'Approval Request Approved — default',
+            'desc'     => 'Fires when an approval request is fully approved. Notifies the submitter so they know the entity can now be posted.',
+            'types'    => ['invoice_creator'],
+        ],
+        [
+            'event'    => 'approval_request_rejected',
+            'name'     => 'Approval Request Rejected — default',
+            'desc'     => 'Fires when an approval request is rejected. Notifies the submitter with the rejection reason.',
+            'types'    => ['invoice_creator'],
+        ],
     ];
 
     /**

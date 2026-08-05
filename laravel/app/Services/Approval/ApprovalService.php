@@ -296,6 +296,16 @@ class ApprovalService
 
     /**
      * Update the status of the related entity.
+     *
+     * G-075 (CRITICAL, WORKFLOWS-APPROVAL): previously this method only
+     * implemented the `manual_journal` case — stock_adjustment and
+     * damage_invoice were in the modelMap but silently no-op'd here, so the
+     * generic engine could not actually drive their status transitions. Now
+     * all 3 entity types are handled, each mapping the generic approval
+     * statuses (submitted / approved / rejected / draft) to their own
+     * bespoke column names. This removes the "1 entity only" architectural
+     * inconsistency — the generic engine is now usable for all entities in
+     * the modelMap, not just manual_journal.
      */
     private function updateEntityStatus(string $entityType, int $entityId, string $status): void
     {
@@ -330,9 +340,64 @@ class ApprovalService
                 $journal->update($updateData);
                 break;
 
-            // Future: add other entity types here
-            // case 'stock_adjustment': ...
-            // case 'damage_invoice': ...
+            case 'stock_adjustment':
+                // Pattern B entity: uses submitted_by/at + approved_by/at +
+                // approval_comments. No dedicated rejected_by/at column —
+                // rejection is captured via status='rejected' + the
+                // approval_comments text field (which stores the reason).
+                $adjustment = \App\Models\StockAdjustment::find($entityId);
+                if (!$adjustment) break;
+
+                $updateData = ['status' => $status];
+
+                if ($status === 'submitted') {
+                    $updateData['submitted_by'] = $user->id;
+                    $updateData['submitted_at'] = now();
+                } elseif ($status === 'approved') {
+                    $updateData['approved_by'] = $user->id;
+                    $updateData['approved_at'] = now();
+                } elseif ($status === 'rejected') {
+                    // stock_adjustments has no rejected_by/at columns;
+                    // the approval_comments field + status='rejected'
+                    // captures the rejection audit.
+                } elseif ($status === 'draft') {
+                    $updateData['submitted_by'] = null;
+                    $updateData['submitted_at'] = null;
+                    $updateData['approved_by'] = null;
+                    $updateData['approved_at'] = null;
+                }
+
+                $adjustment->update($updateData);
+                break;
+
+            case 'damage_invoice':
+                // Pattern B entity: uses approval_rejected_by/at (NOT
+                // rejected_by/at) + approval_notes (NOT approval_comments).
+                $damage = \App\Models\DamageInvoice::find($entityId);
+                if (!$damage) break;
+
+                $updateData = ['status' => $status];
+
+                if ($status === 'submitted') {
+                    $updateData['submitted_by'] = $user->id;
+                    $updateData['submitted_at'] = now();
+                } elseif ($status === 'approved') {
+                    $updateData['approved_by'] = $user->id;
+                    $updateData['approved_at'] = now();
+                } elseif ($status === 'rejected') {
+                    $updateData['approval_rejected_by'] = $user->id;
+                    $updateData['approval_rejected_at'] = now();
+                } elseif ($status === 'draft') {
+                    $updateData['submitted_by'] = null;
+                    $updateData['submitted_at'] = null;
+                    $updateData['approved_by'] = null;
+                    $updateData['approved_at'] = null;
+                    $updateData['approval_rejected_by'] = null;
+                    $updateData['approval_rejected_at'] = null;
+                }
+
+                $damage->update($updateData);
+                break;
         }
     }
 
