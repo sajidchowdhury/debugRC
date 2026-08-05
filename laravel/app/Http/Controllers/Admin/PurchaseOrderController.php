@@ -2,7 +2,10 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Facades\CsvExporter;
+use App\Http\Controllers\Concerns\WritesExportAuditLog;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Export\PurchaseOrderExportRequest;
 use App\Http\Requests\PurchaseOrder\CancelPurchaseOrderRequest;
 use App\Http\Requests\PurchaseOrder\StorePurchaseOrderRequest;
 use App\Http\Requests\PurchaseOrder\UpdatePurchaseOrderRequest;
@@ -28,6 +31,8 @@ use Illuminate\Support\Carbon;
  */
 class PurchaseOrderController extends Controller
 {
+    use WritesExportAuditLog;
+
     public function __construct(
         private PurchaseOrderService $poService
     ) {}
@@ -207,8 +212,23 @@ class PurchaseOrderController extends Controller
     /**
      * Phase 2 — CSV export of filtered POs.
      * Mirrors legacy `PurchaseOrderController::export()`.
+     *
+     * REPORTS-AUDIT-1 (G-152/G-132/G-150-partial / csv-export.md G23+G6+G11):
+     *   - Uses PurchaseOrderExportRequest FormRequest (closes G-134) — adds
+     *     `status` enum validation + `supplier_id` exists check.
+     *   - Refactored to CsvExporter::exportFromRows() (closes G-150 partial)
+     *     which handles BOM + Content-Type + streaming in one place. The
+     *     BOM write was already present at the prior L241 since Phase 2's
+     *     CSV audit pass (G-152 evidence was stale — the BOM has been there
+     *     since commit be08354, but the AI_CONTEXT doc was never updated).
+     *   - Writes an export_audit_log row (closes G-132) — previously no
+     *     audit trail existed for exports.
+     *   - NOTE: still uses ->get() (loads all rows into memory) — refactoring
+     *     to cursor() is a separate memory-strategy concern (csv-export.md
+     *     §6.3 BR-CSV-3 chunking recommendation). The audit log row count
+     *     is therefore known precisely (unlike streamed exports).
      */
-    public function export(Request $request)
+    public function export(PurchaseOrderExportRequest $request)
     {
         $branchId = $this->resolveBranchIdForRead($request->input('branch_id') ? (int) $request->input('branch_id') : null);
 
@@ -233,17 +253,15 @@ class PurchaseOrderController extends Controller
             ->orderBy('id', 'desc')
             ->get();
 
-        $filename = 'Purchase_Orders_' . now()->format('Y-m-d_His') . '.csv';
+        $headerRow = [
+            'PO Code', 'Supplier', 'Branch', 'Warehouse',
+            'PO Date', 'Expected Date', 'Total Amount',
+            'Status', 'Created By', 'Notes',
+        ];
 
-        return response()->stream(function () use ($pos) {
-            $out = fopen('php://output', 'w');
-            // UTF-8 BOM for Excel compatibility.
-            fwrite($out, "\xEF\xBB\xBF");
-            fputcsv($out, [
-                'PO Code', 'Supplier', 'Branch', 'Warehouse',
-                'PO Date', 'Expected Date', 'Total Amount',
-                'Status', 'Created By', 'Notes',
-            ]);
+        // Generator yields rows one at a time so CsvExporter::exportFromRows
+        // can stream them to php://output without buffering the full CSV body.
+        $rows = (function () use ($pos): \Generator {
             foreach ($pos as $po) {
                 $statusLabel = [
                     'draft'     => 'Draft',
@@ -253,7 +271,7 @@ class PurchaseOrderController extends Controller
                     'cancelled' => 'Cancelled',
                 ][$po->status] ?? ucfirst($po->status);
 
-                fputcsv($out, [
+                yield [
                     $po->po_code,
                     $po->supplier?->supplier_name ?? '',
                     $po->branch?->branch_name ?? '',
@@ -264,15 +282,22 @@ class PurchaseOrderController extends Controller
                     $statusLabel,
                     $po->created_by ? ('User #' . $po->created_by) : 'System',
                     $po->notes ?? '',
-                ]);
+                ];
             }
-            fclose($out);
-        }, 200, [
-            'Content-Type'        => 'text/csv; charset=utf-8',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-            'Pragma'              => 'no-cache',
-            'Expires'             => '0',
-        ]);
+        })();
+
+        $filename = 'Purchase_Orders_' . now()->format('Y-m-d_His');
+
+        // Audit log: row count is known precisely (we used ->get(), not cursor()).
+        $this->logExport('purchase_orders', [
+            'branch_id' => $branchId,
+            'from_date' => $fromDate,
+            'to_date' => $toDate,
+            'status' => $status,
+            'search' => $search,
+        ], rowCount: $pos->count(), byteSize: 0);
+
+        return CsvExporter::exportFromRows($filename, $headerRow, $rows);
     }
 
     public function create()

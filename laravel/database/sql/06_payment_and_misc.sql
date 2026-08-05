@@ -267,3 +267,33 @@ CREATE INDEX idx_ual_created_at_brin ON user_audit_log USING BRIN (created_at) W
 -- have no branch_id).
 CREATE TRIGGER trg_audit_notification_rules AFTER INSERT OR UPDATE OR DELETE ON notification_rules FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
 CREATE TRIGGER trg_audit_notification_rule_recipients AFTER INSERT OR UPDATE OR DELETE ON notification_rule_recipients FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
+
+-- ── Export Audit Log (REPORTS-AUDIT-1 G-132 / csv-export.md G6) ─────────────
+-- Append-only audit trail for every CSV/JSON/HTML export performed by an
+-- authenticated user. Required for SOX/audit-trail compliance on financial-
+-- data exports (invoices, trial balance, GL, budget, branch-demand weekly, etc.)
+-- — fn_financial_audit_trigger only fires on INSERT/UPDATE/DELETE, NOT on
+-- SELECT/COPY, so exports were previously invisible to the audit trail.
+--
+-- Written by the WritesExportAuditLog trait from any controller that performs
+-- a CSV/JSON/HTML export. The trait is non-blocking: a failure to write the
+-- audit row is logged via Log::warning and the export proceeds.
+--
+-- No fn_financial_audit_trigger attachment — this table IS itself an audit log.
+-- A separate audit-of-the-auditor trail would be redundant. Reads of this
+-- table are restricted to admins via a future /admin/export-audit-log page
+-- (not yet built — out of scope for this wave).
+CREATE TABLE export_audit_log (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    route VARCHAR(255) NOT NULL,
+    module VARCHAR(100) NOT NULL,
+    filters_json JSONB,
+    row_count INTEGER,
+    byte_size BIGINT,
+    ip_address INET,
+    user_agent TEXT,
+    exported_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_export_audit_log_user ON export_audit_log(user_id, exported_at DESC);
+CREATE INDEX idx_export_audit_log_module ON export_audit_log(module, exported_at DESC);

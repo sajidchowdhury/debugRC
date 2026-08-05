@@ -34,6 +34,15 @@ class AppServiceProvider extends ServiceProvider
         // Phase 12: Register Archive Layer (Anti-Corruption Layer).
         $this->app->singleton(\App\Archive\Repositories\ArchiveRepositoryInterface::class, \App\Archive\Repositories\LegacyMySQLRepository::class);
         $this->app->singleton(\App\Archive\Services\ArchiveService::class);
+
+        // REPORTS-AUDIT-1 (G-126 / csv-export.md G3): Register CsvExporter
+        // as a singleton. The class was converted from all-static methods to
+        // an instance class so it can read config values at construction
+        // (BOM bytes, Content-Type, chunk size from config/reports.php) and
+        // so it can be mocked in tests. The 9 master-data controllers
+        // continue to call `CsvExporter::export(...)` via the
+        // \App\Facades\CsvExporter Facade — call-site syntax unchanged.
+        $this->app->singleton(\App\Services\Export\CsvExporter::class);
     }
 
     /**
