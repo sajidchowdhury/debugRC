@@ -535,10 +535,81 @@ flowchart TD
 ## 12. Known edge cases
 
 ### G1 — `ApplySystemPolicyScope` is unused (MAJOR)
-INVESTIGATION mode does NOT currently clamp model queries by fiscal year. The trait exists but no
-model calls `use ApplySystemPolicyScope;`. The hard enforcement layer is scaffolding only.
-Evidence: `ApplySystemPolicyScope.php:29-63`; grep `use ApplySystemPolicyScope` across
-`app/Models/` returns 0 hits.
+
+> ✅ **RESOLVED — AUDIT-TRAIL-2 (commit pending).** The trait is now wired into
+> 6 core date-bounded transactional document models, each overriding
+> `policyDateColumn()` to declare its primary business date column:
+>   - `SalesInvoice` → `invoice_date` (the table's RANGE partition key, so
+>     INVESTIGATION-mode clamping also enables partition pruning — a bonus).
+>   - `SalesReturn` → `return_date`
+>   - `PurchaseReceive` → `receive_date`
+>   - `PurchaseReturn` → `return_date`
+>   - `CustomerPayment` → `payment_date`
+>   - `SupplierPayment` → `payment_date`
+>
+> In NORMAL mode (the default): the global scope returns early — zero
+> behavioral change, zero query overhead beyond a cached `isInvestigation()`
+> lookup (the `CheckSystemPolicy` middleware already warms
+> `system_policy:active` in the cache on every web request; console/queue
+> contexts warm it on first query).
+> In INVESTIGATION mode: each query on a traited model gets
+> `WHERE <date_col> >= <fiscal_year_start>` (Bangladesh FY July 1 → June 30,
+> or the `metadata.fiscal_year_start` override set at activation time). This
+> is the intended forensic posture — "all users (including superadmin) see
+> only current fiscal year data."
+>
+> **Trait refactor (PHP 8.2 compatibility):** the trait's per-model date
+> column was originally a `protected string $policyDateColumn = 'created_at'`
+> property that models would redeclare with their own value. PHP < 8.3
+> forbids redeclaring a trait property with a different initial value (fatal
+> error); this project targets `php: ^8.2`, so the property approach was
+> unusable. Refactored to an overridable **method**
+> `protected function policyDateColumn(): string` (default `'created_at'`)
+> — method override is always allowed in PHP. Also added a fail-open
+> `try/catch` around the scope body: if the policy service / cache / DB is
+> unavailable (cache outage, edge-case bootstrap), the scope logs a warning
+> and applies NO restriction rather than breaking every Eloquent query on the
+> 6 traited models (worst case = INVESTIGATION mode temporarily does not
+> clamp reads, which is preferable to a total query failure).
+>
+> **Scope decision — GL plumbing EXCLUDED:** the trait was intentionally NOT
+> wired to `JournalEntry` / `JournalLine` / `ManualJournal` (the GL plumbing)
+> or `StockTransaction` (the SSOT inventory ledger) in this wave. Rationale:
+> those tables feed opening-balance, trial-balance, reconciliation, and
+> stock-valuation computations that REQUIRE full history; clamping them in
+> INVESTIGATION mode would silently break those computations unless every
+> consumer is audited and retrofitted with `withoutPolicy()` where needed
+> (a large, separate effort). The 6 transactional DOCUMENT models wired here
+> are the primary "business activity" records that INVESTIGATION mode is most
+> meant to restrict, and their Eloquent consumers are list/detail views where
+> current-FY clamping is the desired forensic behavior. The GL-plumbing +
+> MV/CTE report paths are unaffected (they read via raw SQL / materialized
+> views, not Eloquent — global scopes only apply to Eloquent queries).
+>
+> **Bypass for audit/admin views:** consumers that need full history during
+> an investigation (e.g. a superadmin audit page) can use
+> `Model::withoutPolicy()->get()` (the `scopeWithoutPolicy` scope removes the
+> `system_policy` global scope for that query).
+>
+> **Follow-up (G-175, separate task):** this wiring makes INVESTIGATION mode
+> restrict READS on the 6 transactional document models. G-175 ("INVESTIGATION
+> mode has NO business-logic consumer") remains open — it covers WRITE-side
+> enforcement (e.g. `JournalPostingService` / `StockService` checking
+> `isInvestigation()` before posting, or blocking destructive ops). Read-side
+> clamping (this gap, G-171) + write-side enforcement (G-175) together would
+> make INVESTIGATION mode fully functional.
+
+- **Original evidence:** `ApplySystemPolicyScope.php:29-63`; grep `use
+  ApplySystemPolicyScope` across `app/Models/` returned 0 hits.
+- **Impact (historical):** INVESTIGATION mode did NOT clamp model queries by
+  fiscal year. The trait existed but no model used it. The hard enforcement
+  layer was scaffolding only — activating INVESTIGATION mode in production
+  did NOTHING to reads (all financial operations continued to see full
+  history).
+- **Fix (done):** refactored the trait (property → method + fail-open
+  try/catch) + wired it into 6 core transactional document models with
+  per-model `policyDateColumn()` overrides. GL plumbing intentionally
+  excluded (see scope-decision note above).
 
 ### G2 — No write-blocking in INVESTIGATION mode (MAJOR)
 Destructive operations (DELETE/UPDATE on financial records) are NOT blocked during INVESTIGATION.

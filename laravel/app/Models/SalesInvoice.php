@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Traits\AuditableMasterData;
+use App\Traits\ApplySystemPolicyScope;
 use App\Models\Scopes\BranchScope;
 
 /**
@@ -69,7 +70,7 @@ use App\Models\Scopes\BranchScope;
  */
 class SalesInvoice extends Model
 {
-    use SoftDeletes, AuditableMasterData;
+    use SoftDeletes, AuditableMasterData, ApplySystemPolicyScope;
 
     protected $table = 'sales_invoices';
 
@@ -85,6 +86,16 @@ class SalesInvoice extends Model
     protected static function booted(): void
     {
         static::addGlobalScope(new BranchScope);
+    }
+
+    /**
+     * G-171 (AUDIT-TRAIL-2): the date column clamped by INVESTIGATION mode.
+     * sales_invoices is PARTITION BY RANGE (invoice_date), so clamping on
+     * invoice_date also enables partition pruning (a pleasant side effect).
+     */
+    protected function policyDateColumn(): string
+    {
+        return 'invoice_date';
     }
 
     protected $fillable = [

@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Models\Scopes\BranchScope;
 use App\Traits\AuditableMasterData;
+use App\Traits\ApplySystemPolicyScope;
 
 /**
  * Purchase Return — Phase 7.3.
@@ -41,7 +42,7 @@ use App\Traits\AuditableMasterData;
  */
 class PurchaseReturn extends Model
 {
-    use SoftDeletes, AuditableMasterData;
+    use SoftDeletes, AuditableMasterData, ApplySystemPolicyScope;
 
     protected $table = 'purchase_returns';
 
@@ -59,6 +60,14 @@ class PurchaseReturn extends Model
     protected static function booted(): void
     {
         static::addGlobalScope(new BranchScope);
+    }
+
+    /**
+     * G-171 (AUDIT-TRAIL-2): the date column clamped by INVESTIGATION mode.
+     */
+    protected function policyDateColumn(): string
+    {
+        return 'return_date';
     }
 
     protected $fillable = [

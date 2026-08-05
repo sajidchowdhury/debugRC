@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Models\Scopes\BranchScope;
 use App\Traits\AuditableMasterData;
+use App\Traits\ApplySystemPolicyScope;
 
 /**
  * Purchase Receive (GRN) — Phase 7.2.
@@ -46,7 +47,7 @@ use App\Traits\AuditableMasterData;
  */
 class PurchaseReceive extends Model
 {
-    use SoftDeletes, AuditableMasterData;
+    use SoftDeletes, AuditableMasterData, ApplySystemPolicyScope;
 
     protected $table = 'purchase_receives';
 
@@ -64,6 +65,14 @@ class PurchaseReceive extends Model
     protected static function booted(): void
     {
         static::addGlobalScope(new BranchScope);
+    }
+
+    /**
+     * G-171 (AUDIT-TRAIL-2): the date column clamped by INVESTIGATION mode.
+     */
+    protected function policyDateColumn(): string
+    {
+        return 'receive_date';
     }
 
     protected $fillable = [

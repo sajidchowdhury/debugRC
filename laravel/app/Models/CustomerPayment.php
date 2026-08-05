@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Traits\AuditableMasterData;
+use App\Traits\ApplySystemPolicyScope;
 use App\Models\Scopes\BranchScope;
 
 /**
@@ -49,7 +50,7 @@ use App\Models\Scopes\BranchScope;
  */
 class CustomerPayment extends Model
 {
-    use SoftDeletes, AuditableMasterData;
+    use SoftDeletes, AuditableMasterData, ApplySystemPolicyScope;
 
     protected $table = 'customer_payments';
 
@@ -65,6 +66,14 @@ class CustomerPayment extends Model
     protected static function booted(): void
     {
         static::addGlobalScope(new BranchScope);
+    }
+
+    /**
+     * G-171 (AUDIT-TRAIL-2): the date column clamped by INVESTIGATION mode.
+     */
+    protected function policyDateColumn(): string
+    {
+        return 'payment_date';
     }
 
     protected $fillable = [
