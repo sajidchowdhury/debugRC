@@ -164,6 +164,8 @@ Five business + one engineering drivers:
 > There is no `BranchDemandPolicy` class. Per-action role differentiation (e.g. "only manager+
 > can reprice", "only admin can delete") is missing.
 >
+> ✅ **G14 RESOLVED in FINANCE-5 (G-333)** — `BranchDemandController::index` now uses `BranchDemand::forBranch($branchId)` (both directions) instead of `myDemands($branchId)` (requester-only). Optional `?direction=requester|supplier|both` filter (default `both`). Mirrors the API controller's `forBranch` scope. The separate `pending()` method is preserved.
+
 > **G14 — index inconsistency:** `BranchDemandController::index` uses the `myDemands($branchId)`
 > scope (requester view only); `BranchDemandApiController::index` uses the `forBranch($branchId)`
 > scope (either direction). The web UI forces the user to switch context to see incoming
@@ -1415,6 +1417,8 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 #### G14 — `BranchDemandController::show()` hard-aborts 403 if user not in either branch; `index()` only shows `myDemands` (requester view)
 
+> ✅ **RESOLVED in FINANCE-5 (G-333)** — `BranchDemandController::index` now uses `BranchDemand::forBranch($branchId)` (both directions) instead of `myDemands($branchId)` (requester-only). Optional `?direction=requester|supplier|both` filter (default `both`). Mirrors the API controller's `forBranch` scope. The separate `pending()` method is preserved as a status-filtered shortcut. Web users now see both outgoing + incoming demands in a single list without context-switching.
+
 - **Evidence:** `app/Http/Controllers/Admin/BranchDemandController.php:221-225` (show) + L94
   (`BranchDemand::myDemands($branchId)` scope at `app/Models/BranchDemand.php:179-182`).
   Supplier-side demands viewable via separate `pending()` method only (status='pending' filter).
@@ -1425,6 +1429,8 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
   `?direction=requester|supplier|both` query param.
 
 #### G15 — `createDocumentaryWarehouseTransfer` uses first item's `from_warehouse_id`/`to_warehouse_id` for WT header
+
+> ✅ **RESOLVED in FINANCE-5 (G-334)** — DOCUMENTARY ONLY: the WT header warehouses are now explicitly documented as DECORATIVE (taken from the first item's from_warehouse_id / to_warehouse_id). The per-item `warehouse_transfer_items` rows are the source of truth for which warehouse each product moved between. The WT exists only to provide a single audit-traceable document for the demand; stock movements are posted per-item via StockService::applyTransaction. Option (a) (one WT per warehouse pair) was considered but rejected as too invasive (requires schema change to branch_demands.warehouse_transfer_id → array + cascade rewrite of cancel/reversal flows). The comment block in `BranchDemandService::createDocumentaryWarehouseTransfer` (L1042-1056) now carries the full documentary-only rationale.
 
 - **Evidence:** `app/Services/BranchDemand/BranchDemandService.php:956-958`. Multi-item demands
   with different per-item warehouses have a WT header that doesn't match all items. WT is
@@ -1477,6 +1483,8 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 #### G18 — `BranchDemandWeeklyReportService::getWarehouseWiseSales` may reference nonexistent column
 
+> 🚫 **WONTFIX — false-positive confirmed (G-338)** — Triage confirmed in `TRIAGE_FINANCE_UNKNOWN.md:67` + reverified in FINANCE-5. The gap speculated `sii.amount` "may be `total` not `amount`". Verification: `database/sql/04_sales.sql:114` declares `amount numeric(14,2) GENERATED ALWAYS AS (qty * rate) STORED` on `sales_invoice_items`. There is NO `total` column on the table. The code at `BranchDemandWeeklyReportService::getWarehouseWiseSales` is CORRECT. The "other sales services use `sii.total`" claim in the gap evidence referred to `BranchDemandRepricingService.php:705` — a DIFFERENT code path, which WAS buggy (`sii.total` → `sii.amount`), filed as G-357 (doc G29) and resolved in commit `2aefa26` (FINANCE-2). No fix needed for G18 as written.
+
 - **Evidence:** `app/Services/BranchDemand/BranchDemandWeeklyReportService.php:280` —
   `->sum('sii.amount')` — the actual column may be `total` not `amount` (inconsistent with L708
   which uses `sii.discount_amount`, and other sales services use `sii.total`).
@@ -1509,6 +1517,8 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 ### 11.3 MINOR (6)
 
 #### G20 — Demand send does NOT consult `FiscalPeriod` status before posting GL
+
+> ✅ **RESOLVED in FINANCE-5 (G-281)** — `FiscalYearService::assertPeriodOpen(string $date, ?int $branchId = null): void` method added (L452-461). Throws RuntimeException if the date is not in an open fiscal period. Mirrors the private `ManualJournalService::assertPeriodOpen` pattern but uses the public `FiscalYearService` (which queries `fiscal_periods.status`, not just `accounting_periods.closed_through_date`). Wired into `BranchDemandService::sendGoodsWithWarehouses` (L263-266, after lockForUpdate + status checks, before stock movements) + `BranchDemandRepricingService::createRepricingAdjustment` (L131-134, after status checks, before GL posting). Both services now inject `FiscalYearService` via constructor DI. The `accounting_periods.closed_through_date` check via `JournalPostingService::validatePeriod` remains (transitively invoked via `createJournalEntry`); this new check closes the `fiscal_periods.status` gap.
 
 - **Evidence:** `app/Services/BranchDemand/BranchDemandService.php:336-345` (send) +
   `app/Services/BranchDemand/BranchDemandRepricingService.php:135-200` (reprice). Same gap as
@@ -1556,6 +1566,8 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
   branch-demand RLS policies.
 
 #### G24 — `config` `comparison_scope` keys `gl_postings`/`ledger`/`settlements`/`stock_movements`/`repricing` NEVER consulted
+
+> ✅ **RESOLVED in FINANCE-5 (G-348)** — CONFIG PRUNE: the 5 dead `comparison_scope` keys (gl_postings, ledger, settlements, stock_movements, repricing) were removed from `config/branch_demand_shadow.php`. They were declared but NEVER consulted by `BranchDemandShadowService::computeDiffs` (which only reads `demand_header`). Only `demand_header` remains. The config docblock now explains the prune + the re-add path (implement in computeDiffs when the cutover needs deep-diff comparison beyond the demand header). Option (a) (full implementation of all 5 scope checks) was considered but rejected as too invasive (requires new read paths for legacy GL postings / branch_ledger / settlements / stock_transactions / repricing data from the MySQL archive connection — ~3-4h effort, recommended only when cutover sign-off requires deep diffing).
 
 - **Evidence:** `config/branch_demand_shadow.php:88-95` vs
   `app/Services/BranchDemand/BranchDemandShadowService.php:399-437`. `computeDiffs` only checks
@@ -1831,7 +1843,7 @@ sequenceDiagram
 13. **G13** — Either document the explicit two-step reversal pattern (current — acceptable if
     documented) or extend `JournalReversalService::reverseByJournalEntry` to accept a
     sub-ledger-reversal callback.
-14. **G14** — Unify the web `index` to use `forBranch($branchId)` (either direction) with a
+14. **G14** — ✅ RESOLVED in FINANCE-5 (G-333). `BranchDemandController::index` now uses `forBranch` + `?direction` filter.
     `?direction=requester|supplier|both` query param.
 15. **G15** — Either (a) one WT per warehouse pair, or (b) accept the documentary-only nature
     and document that the WT header warehouses are decorative.

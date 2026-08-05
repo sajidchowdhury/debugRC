@@ -97,6 +97,13 @@ class BudgetController extends Controller
             'lines'       => 'required|array',
             'lines.*.ledger_id' => 'required|exists:ledgers,id',
             'lines.*.periods'   => 'required|array',
+            // G-339 (G18) FINANCE-5: per-period validation. Upper bound is 12
+            // (max across all period_types). The per-period_type upper bound
+            // (12 monthly / 4 quarterly / 1 yearly) is enforced at the service
+            // layer via Budget::maxPeriod(). The DB CHECK constraint
+            // chk_bl_period_range (migration 2026_09_06_000011) is the final
+            // defense-in-depth layer.
+            'lines.*.periods.*' => 'required|numeric|integer|min:1|max:12',
         ]);
 
         try {
@@ -179,6 +186,8 @@ class BudgetController extends Controller
             'lines'       => 'required|array',
             'lines.*.ledger_id' => 'required|exists:ledgers,id',
             'lines.*.periods'   => 'required|array',
+            // G-339 (G18) FINANCE-5: per-period validation (same as store).
+            'lines.*.periods.*' => 'required|numeric|integer|min:1|max:12',
         ]);
 
         try {

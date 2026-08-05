@@ -78,20 +78,18 @@ return [
     /**
      * Comparison scope — which aspects to compare.
      *
+     * G-348 (G24) FINANCE-5: only `demand_header` is currently implemented in
+     * BranchDemandShadowService::computeDiffs. The other 5 scope keys
+     * (gl_postings, ledger, settlements, stock_movements, repricing) were
+     * dead config flags — declared here but NEVER consulted by the service.
+     * Removed to avoid implying coverage that doesn't exist. Re-add as
+     * separate config keys (and implement in computeDiffs) when the cutover
+     * needs deep-diff comparison beyond the demand header.
+     *
      * demand_header:  Compare demand status, total_value, settlement_amount
-     * gl_postings:    Compare journal entries (debit/credit amounts)
-     * ledger:         Compare branch_ledger running balance
-     * settlements:    Compare settlement amounts and FIFO ordering
-     * stock_movements: Compare stock_transactions (qty, rate, warehouse)
-     * repricing:      Compare repricing adjustments
      */
     'comparison_scope' => [
         'demand_header'    => true,
-        'gl_postings'      => true,
-        'ledger'           => true,
-        'settlements'      => true,
-        'stock_movements'  => true,
-        'repricing'        => true,
     ],
 
     /**

@@ -160,6 +160,8 @@ Three management-accounting drivers:
 | BR11 | A `budget_line` MUST have a non-zero `amount` (zero-amount lines are silently skipped in `syncBudgetLines`). | `BudgetService.php:145-147` |
 | BR12 | A budget's `total_amount` MUST equal the sum of its `budget_lines.amount`. Recalculated in `updateBudget()` (L66) but NOT in `createBudget()` if `lines` is empty. | `BudgetService.php:34, 66` |
 | BR13 | A `budget_line` MUST reference an active Expense or Income ledger (parent/control ledgers and Asset/Liability/Equity ledgers are excluded from the grid). | `BudgetService.php:317-323` (`whereIn('account_type', ['Expense','Income'])->whereNotNull('ledger_nature')`) |
+> ✅ **G18 RESOLVED in FINANCE-5 (G-339)** — Three-layer period validation: (1) DB CHECK constraint `chk_bl_period_range` (migration `2026_09_06_000011`, `CHECK (period BETWEEN 1 AND 12)`); (2) `BudgetController::store` + `update` validation rule `lines.*.periods.* => 'required|numeric|integer|min:1|max:12'`; (3) service-layer guard via `Budget::maxPeriod()` (per-period_type upper bound: 12 monthly / 4 quarterly / 1 yearly). The DB CHECK is the final defense-in-depth layer — catches direct SQL inserts, seeders, test code. Pre-migration audit: `SELECT COUNT(*) FROM budget_lines WHERE period < 1 OR period > 12` should return 0 for a clean DB.
+
 | BR14 | A budget's `period` MUST be in range `1..maxPeriod` (12 monthly / 4 quarterly / 1 yearly). Application-enforced via `Budget::maxPeriod()`; NOT DB-enforced. ⚠️ **G18 — no server-side validation.** | `Budget.php:98-105` |
 | BR15 | Budget lines MUST be hard-deleted on sync (no soft-delete, no append-only audit trail). | `BudgetService.php:139` (`$budget->lines()->delete();`) |
 

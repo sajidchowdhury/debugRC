@@ -63,6 +63,11 @@ class BranchDemandService
         private StockAvailabilityService $stockAvailabilityService,
         private BranchIntercompanyService $intercompanyService,
         private BranchDemandAuditLogger $auditLogger,
+        // G-281 (G20) FINANCE-5: inject FiscalYearService for period-status
+        // checks in send/reprice paths. JournalPostingService::validatePeriod
+        // checks accounting_periods.closed_through_date but NOT fiscal_periods
+        // .status — this service closes that gap.
+        private \App\Services\Accounting\FiscalYearService $fiscalYearService,
     ) {}
 
     // ===================== CREATE =====================
@@ -249,6 +254,16 @@ class BranchDemandService
             if ($demand->is_reversed) {
                 throw new \RuntimeException("Cannot send goods for a reversed demand #{$demandId}.");
             }
+
+            // G-281 (G20) FINANCE-5: assert the demand_date is in an open
+            // fiscal period BEFORE posting any stock movements or GL entries.
+            // JournalPostingService::validatePeriod checks
+            // accounting_periods.closed_through_date but NOT fiscal_periods
+            // .status — this closes the gap. Throws RuntimeException if closed.
+            $this->fiscalYearService->assertPeriodOpen(
+                $demand->demand_date,
+                (int) $demand->to_branch_id
+            );
 
             Log::info('BranchDemand sendGoodsWithWarehouses: demand found', [
                 'demand_id'      => $demandId,
@@ -1038,6 +1053,21 @@ class BranchDemandService
      * cross-branch only). The same-branch enforcement in WarehouseTransfer
      * is bypassed because we create this row directly via DB::table(),
      * not through WarehouseTransferService.
+     *
+     * G-334 (G15) FINANCE-5 — DOCUMENTARY ONLY: in a multi-item demand with
+     * different per-item warehouse pairs, the WT header warehouses are
+     * DECORATIVE (taken from the first item's from_warehouse_id /
+     * to_warehouse_id). The per-item warehouse_transfer_items rows are the
+     * source of truth for which warehouse each product moved between. The
+     * WT exists only to provide a single audit-traceable document for the
+     * demand; stock movements are posted per-item via StockService::
+     * applyTransaction. The header warehouses are NOT used for stock
+     * valuation, warehouse_stock updates, or any accounting purpose — they
+     * are display-only metadata. Option (a) (one WT per warehouse pair)
+     * was considered but rejected as too invasive (requires schema change
+     * to branch_demands.warehouse_transfer_id → array + cascade rewrite
+     * of cancel/reversal flows). Accept the documentary nature; document
+     * it here.
      */
     private function createDocumentaryWarehouseTransfer(
         object $demand,

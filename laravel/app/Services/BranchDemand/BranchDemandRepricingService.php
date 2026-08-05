@@ -56,6 +56,9 @@ class BranchDemandRepricingService
         private JournalPostingService $journalPosting,
         private BranchIntercompanyService $intercompanyService,
         private BranchDemandAuditLogger $auditLogger,
+        // G-281 (G20) FINANCE-5: inject FiscalYearService for period-status
+        // checks in the repricing path (mirrors BranchDemandService).
+        private \App\Services\Accounting\FiscalYearService $fiscalYearService,
     ) {}
 
     // ===================== REPRICING ADJUSTMENT =====================
@@ -121,6 +124,14 @@ class BranchDemandRepricingService
                     "Cannot reprice demand #{$demandId}: the demand has been reversed."
                 );
             }
+
+            // G-281 (G20) FINANCE-5: assert the demand_date is in an open
+            // fiscal period BEFORE posting the repricing GL entry. Mirrors
+            // the check in BranchDemandService::sendGoodsWithWarehouses.
+            $this->fiscalYearService->assertPeriodOpen(
+                $demand->demand_date,
+                (int) $demand->to_branch_id
+            );
 
             $originalTotalValue = (float) ($demand->total_value ?? 0);
             $adjustmentAmount = round($newTotalValue - $originalTotalValue, 2);

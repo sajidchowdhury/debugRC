@@ -80,7 +80,18 @@ class BranchDemandController extends Controller
     public function index(Request $request)
     {
         $branchId = $this->currentBranchId();
-        $query = BranchDemand::myDemands($branchId)
+
+        // G-333 (G14) FINANCE-5: use forBranch (both directions) instead of
+        // myDemands (requester-only). The web UI now shows both outgoing
+        // (requester) + incoming (supplier) demands in a single list, with
+        // an optional ?direction=requester|supplier|both filter (default
+        // 'both'). Mirrors the API controller's BranchDemand::forBranch
+        // scope. The separate pending() method is preserved as a status-
+        // filtered shortcut.
+        $direction = $request->input('direction', 'both');
+        $query = BranchDemand::forBranch($branchId)
+            ->when($direction === 'requester', fn($q) => $q->where('from_branch_id', $branchId))
+            ->when($direction === 'supplier', fn($q) => $q->where('to_branch_id', $branchId))
             ->with(['fromBranch', 'toBranch', 'items.product', 'createdBy']);
 
         // Filters

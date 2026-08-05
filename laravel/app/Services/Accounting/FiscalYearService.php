@@ -436,6 +436,31 @@ class FiscalYearService
     }
 
     /**
+     * G-281 (G20) FINANCE-5: Assert that a posting date is within an open fiscal period.
+     *
+     * Throws RuntimeException if the date is NOT in an open period. Mirrors the
+     * private ManualJournalService::assertPeriodOpen pattern but uses the public
+     * FiscalYearService (which queries fiscal_periods.status, not just
+     * accounting_periods.closed_through_date). Called by BranchDemandService
+     * send/reprice paths to enforce the fiscal_period.status check that the
+     * JournalPostingService::validatePeriod check does NOT cover.
+     *
+     * @param string $date Y-m-d posting date
+     * @param int|null $branchId Optional branch filter
+     * @throws \RuntimeException When the date is not in an open period
+     */
+    public function assertPeriodOpen(string $date, ?int $branchId = null): void
+    {
+        if (! $this->isDateInOpenPeriod($date, $branchId)) {
+            throw new \RuntimeException(
+                "Posting date {$date} is not within an open fiscal period"
+                . ($branchId ? " for branch {$branchId}." : '.')
+                . ' Reopen the period or use a different date.'
+            );
+        }
+    }
+
+    /**
      * Get the close log history for a fiscal year.
      */
     public function getCloseLogHistory(int $fiscalYearId, int $limit = 50): array
