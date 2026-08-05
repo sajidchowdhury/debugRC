@@ -730,7 +730,7 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 
 ### 11.2 MAJOR (11) — 11 resolved, 0 open
 
-> **Resolved (11):** G6 ✅ `5905123` (FINANCE-3) · G7 ✅ `5905123` (FINANCE-3) · G8 ✅ `5905123` (FINANCE-3) · G9 ✅ `5905123` (FINANCE-3) · G10 ✅ `eb590fb` (FINANCE-2) · G11 ✅ `68a9672` · G12 ✅ `c4acdb0` · G13 ✅ `1ccc5b6` · G14 ✅ `eb590fb` (FINANCE-2) · G15 ✅ `e1e1f3e` (FINANCE-2) · G16 ✅ `e1e1f3e` (FINANCE-2). **Open (0)** — the MAJOR tier for this doc is now fully closed.
+> **Resolved (11):** G6 ✅ `5905123` (FINANCE-3) · G7 ✅ `5905123` (FINANCE-3) · G8 ✅ `5905123` (FINANCE-3) · G9 ✅ `5905123` (FINANCE-3) · G10 ✅ `eb590fb` (FINANCE-2) · G11 ✅ `68a9672` · G12 ✅ `c4acdb0` · G13 ✅ `1ccc5b6` · G14 ✅ `eb590fb` (FINANCE-2) · G15 ✅ `e74cf67` (FINANCE-2) · G16 ✅ `e74cf67` (FINANCE-2). **Open (0)** — the MAJOR tier for this doc is now fully closed.
 
 #### G6 — `ConsolidationService::reverseEliminationJournal` explicitly sets `is_reversed=false` on the reversal JE
 
@@ -883,7 +883,7 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 
 #### G15 — `ConsolidationService::calculateBalanceElimination` queries `branch_ledger` WITHOUT joining `journal_entries` to filter by `is_reversed`
 
-> ✅ RESOLVED in commit `e1e1f3e` (FINANCE-2) — Documentation resolution confirming the design decision. `branch_ledger.is_reversed` is the canonical state for the intercompany sub-ledger; the GL JE reversal (`journal_entries.is_reversed`) is a separate concern. `calculateBalanceElimination` correctly trusts `branch_ledger.is_reversed` as the source of truth. If the two diverge (e.g. someone calls `JournalPostingService::reverseJournalEntry` directly without going through `BranchIntercompanyService::reverseLedgerByReference`), the elimination calculation reflects the `branch_ledger` state — this is intended because `branch_ledger` is the sub-ledger that tracks the interbranch obligation independently of the GL. The canonical reversal path (`BranchDemandService::reverseDemand`) always calls both `reverseDemandJournals` (GL) + `reverseLedgerByReference` (sub-ledger) together, keeping them in sync.
+> ✅ RESOLVED in commit `e74cf67` (FINANCE-2) — Documentation resolution confirming the design decision. `branch_ledger.is_reversed` is the canonical state for the intercompany sub-ledger; the GL JE reversal (`journal_entries.is_reversed`) is a separate concern. `calculateBalanceElimination` correctly trusts `branch_ledger.is_reversed` as the source of truth. If the two diverge (e.g. someone calls `JournalPostingService::reverseJournalEntry` directly without going through `BranchIntercompanyService::reverseLedgerByReference`), the elimination calculation reflects the `branch_ledger` state — this is intended because `branch_ledger` is the sub-ledger that tracks the interbranch obligation independently of the GL. The canonical reversal path (`BranchDemandService::reverseDemand`) always calls both `reverseDemandJournals` (GL) + `reverseLedgerByReference` (sub-ledger) together, keeping them in sync.
 
 - **Severity:** MAJOR.
 - **Evidence:** `ConsolidationService.php:148-159` — the SQL filters
@@ -904,7 +904,7 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 
 #### G16 — `ConsolidationService::calculateAggregateElimination` uses `min(debitNet, creditNet)` which may eliminate LESS than the true intercompany amount
 
-> ✅ RESOLVED in commit `e1e1f3e` (FINANCE-2) — Documented as business rule **BR14** (§6.3, line 205). The `min(debitNet, creditNet)` elimination is a deliberate conservative rule: when the two sides don't match (timing differences, FX rounding, data entry errors), the elimination takes the lesser to avoid over-elimination. A residual balance may remain on both ledgers; this is expected and signals a reconciliation discrepancy the accountant should investigate. The residual is visible in the consolidation run's elimination summary (`elimination_amount` < gross debit/credit net when the sides are unequal).
+> ✅ RESOLVED in commit `e74cf67` (FINANCE-2) — Documented as business rule **BR14** (§6.3, line 205). The `min(debitNet, creditNet)` elimination is a deliberate conservative rule: when the two sides don't match (timing differences, FX rounding, data entry errors), the elimination takes the lesser to avoid over-elimination. A residual balance may remain on both ledgers; this is expected and signals a reconciliation discrepancy the accountant should investigate. The residual is visible in the consolidation run's elimination summary (`elimination_amount` < gross debit/credit net when the sides are unequal).
 
 - **Severity:** MAJOR.
 - **Evidence:** `ConsolidationService.php:231` — `$eliminationAmount = min($debitNet, $creditNet)`.

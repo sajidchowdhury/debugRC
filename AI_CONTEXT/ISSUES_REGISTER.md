@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-04 (post-FINANCE-2: G-096/G-097/G-099/G-102/G-104/G-108/G-110/G-111 resolved in `eb590fb`+`e1e1f3e`)
+Last reviewed: 2026-09-04 (post-FINANCE-2: G-096/G-097/G-099/G-102/G-104/G-108/G-110/G-111 resolved in `eb590fb`+`e74cf67`)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -173,8 +173,8 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-107 | G13 | HIGH | finance | finance/consolidation-intercompany.md:789 | — | #### G13 — NO Policy classes for `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `MoneyTransfer` / `WarehouseTransfer` / `Comp… | cutover, RLS audit | H2 | resolved | 1ccc5b6 |
 | G-108 | G14 | HIGH | finance | finance/consolidation-intercompany.md:801 | — | #### G14 — `BranchIntercompanyService::reverseLedgerByReference` inserts reversal rows with `journal_entry_id = null` | GL posting | H2 | resolved | `eb590fb` |
 | G-109 | G14 | HIGH | finance | finance/fixed-assets.md:174 | — | BR30 \| **DepreciationService and AssetDisposalService MUST call `JournalPostingService::reverseJournalEntry` directly** (NOT `JournalRevers… | notifications phase | H2 | resolved | `4b0ece7` |
-| G-110 | G15 | HIGH | finance | finance/consolidation-intercompany.md:816 | — | #### G15 — `ConsolidationService::calculateBalanceElimination` queries `branch_ledger` WITHOUT joining `journal_entries` to filter by `is_re… | GL posting | H2 | resolved | `e1e1f3e` |
-| G-111 | G16 | HIGH | finance | finance/consolidation-intercompany.md:835 | — | #### G16 — `ConsolidationService::calculateAggregateElimination` uses `min(debitNet, creditNet)` which may eliminate LESS than the true inte… | — | H2 | resolved | `e1e1f3e` |
+| G-110 | G15 | HIGH | finance | finance/consolidation-intercompany.md:816 | — | #### G15 — `ConsolidationService::calculateBalanceElimination` queries `branch_ledger` WITHOUT joining `journal_entries` to filter by `is_re… | GL posting | H2 | resolved | `e74cf67` |
+| G-111 | G16 | HIGH | finance | finance/consolidation-intercompany.md:835 | — | #### G16 — `ConsolidationService::calculateAggregateElimination` uses `min(debitNet, creditNet)` which may eliminate LESS than the true inte… | — | H2 | resolved | `e74cf67` |
 | G-112 | G16 | HIGH | finance | finance/fixed-assets.md:848 | — | **G16 (MAJOR):** For a fully-depreciated asset, `NBV = salvage_value`. If scrapped for ৳0, the code computes `loss = 0 − salvage = −salvage`… | notifications phase | H2 | resolved | `4b0ece7` |
 | G-113 | G19 | HIGH | finance | finance/fixed-assets.md:899 | — | **G19 (MAJOR):** The force-reversed pending schedules (set during `disposeAsset`) are NOT restored. The accountant must manually re-generate… | notifications phase | H2 | resolved | `4b0ece7` |
 | G-114 | G27 | HIGH | finance | finance/fixed-assets.md:172 | — | BR28 \| **The subsystem MUST be accessible only to `accountant`, `manager`, `admin` (route middleware).** Superadmin bypasses via `EnsureRol… | cutover, RLS audit | H2 | resolved | c4acdb0 |
