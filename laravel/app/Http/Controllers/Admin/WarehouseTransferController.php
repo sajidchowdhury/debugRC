@@ -524,12 +524,12 @@ class WarehouseTransferController extends Controller
         $transfer = WarehouseTransfer::findOrFail($id);
         $checks = $this->auditService->runTransferChecks($id);
 
-        // Also get the audit history for this transfer from user_audit_log.
-        $auditEvents = $this->auditLogger->recentTransferEvents(100, $this->getUserBranchId())
-            ->filter(function ($event) {
-                $details = json_decode($event->details, true);
-                return isset($details['transfer_id']) && (int) $details['transfer_id'] === $id;
-            });
+        // G-284 (G22) FINANCE-CONSOLIDATION-1: use the new transferEvents()
+        // method (native JSONB filter on details->>'transfer_id') instead of
+        // the prior recentTransferEvents(100)->filter() pattern that capped
+        // at 100 rows and silently dropped history for old transfers. The new
+        // query returns ALL events for this transfer, regardless of age.
+        $auditEvents = $this->auditLogger->transferEvents($id, $this->getUserBranchId());
 
         return view('admin.warehouse-transfers.audit', [
             'title'        => 'Transfer Audit: ' . $transfer->transfer_code,

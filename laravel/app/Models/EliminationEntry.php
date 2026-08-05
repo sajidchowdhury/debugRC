@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 /**
  * EliminationEntry — a single elimination adjustment within a consolidation run.
@@ -16,12 +17,24 @@ use Illuminate\Database\Eloquent\Model;
  *   - The debit and credit ledgers being eliminated
  *   - The elimination amount
  *
- * Elimination entries are NOT soft-deleted — they are permanent records
- * of the consolidation process. If a consolidation is reversed, the
- * journal_entry is reversed but the elimination_entry record remains.
+ * G-279 (G18) FINANCE-CONSOLIDATION-1: EliminationEntry now uses SoftDeletes
+ * in lockstep with its parent ConsolidationRun (which has SoftDeletes) and
+ * sibling EliminationRule (which also has SoftDeletes). Previously, soft-
+ * deleting a ConsolidationRun left orphaned elimination_entries because the
+ * FK cascade (fk_ee_consolidation_run REFERENCES consolidation_runs(id) ON
+ * DELETE CASCADE) only fires on HARD delete — Laravel's SoftDeletes issues
+ * UPDATE ... SET deleted_at = NOW(), not DELETE. The companion migration
+ * 2026_09_06_000007_add_soft_deletes_to_elimination_entries adds the
+ * deleted_at column; ConsolidationRun's deleting event cascades the soft-
+ * delete to its entries (defense-in-depth, registered in ConsolidationRun
+ * boot()). The historical rationale ("permanent records") is preserved by
+ * the soft-delete pattern: rows remain in the table with deleted_at set,
+ * so the GL → elimination_entry → consolidation_run chain stays auditable.
  */
 class EliminationEntry extends Model
 {
+    use SoftDeletes;
+
     protected $table = 'elimination_entries';
 
     protected $fillable = [

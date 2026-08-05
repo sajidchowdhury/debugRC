@@ -53,9 +53,21 @@ class Company extends Model
         return $this->hasMany(Branch::class, 'company_id');
     }
 
-    public function consolidationRuns(): \Illuminate\Database\Eloquent\Relations\HasMany
+    public function consolidationRuns(): \Illuminate\Database\Eloquent\Builder
     {
-        return $this->hasMany(ConsolidationRun::class, 'created_by');
+        // G-278 (G17) FINANCE-CONSOLIDATION-1: the prior implementation used
+        // `hasMany(ConsolidationRun::class, 'created_by')` which incorrectly
+        // linked companies.id to consolidation_runs.created_by (a user ID,
+        // not a company ID). consolidation_runs has no company_id column — it
+        // stores the included companies as a JSON array in company_ids. The
+        // fixed method uses JSON containment (whereJsonContains) to match
+        // runs where this company's ID appears in the company_ids array.
+        //
+        // Returns a Builder (not a HasMany Relation) since the JSON-containment
+        // query is not a traditional FK relationship. Callers can chain scopes
+        // or call get()/paginate() on the result:
+        //   $company->consolidationRuns()->posted()->orderByDesc('id')->get();
+        return ConsolidationRun::whereJsonContains('company_ids', $this->id);
     }
 
     public function creator(): \Illuminate\Database\Eloquent\Relations\BelongsTo

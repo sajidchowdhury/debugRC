@@ -921,6 +921,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 
 #### G17 — `ConsolidationRun` ↔ `Company` relationship is broken
 
+> ✅ **RESOLVED in FINANCE-CONSOLIDATION-1 (G-278)** — `Company::consolidationRuns()` now returns a `Builder` filtered by `whereJsonContains('company_ids', $this->id)` instead of the broken `hasMany(ConsolidationRun::class, 'created_by')` that linked `companies.id` to `consolidation_runs.created_by` (a user ID, not a company ID). `consolidation_runs` has no `company_id` column — it stores the included companies as a JSON array in `company_ids`. The fixed method uses native PostgreSQL JSONB containment (`whereJsonContains` compiles to `company_ids @> ?`), so callers can chain scopes: `$company->consolidationRuns()->posted()->orderByDesc('id')->get()`. The return type changed from `HasMany` to `Builder` — safe because the method had zero callers at filing time (verified via grep). The historical `hasMany` form is preserved in the code comment for traceability.
+
 - **Severity:** MINOR.
 - **Evidence:** `Company.php:56-59` — `return $this->hasMany(ConsolidationRun::class, 'created_by');`.
   This links `companies.id` to `consolidation_runs.created_by` (a user ID, not a company ID).
@@ -930,6 +932,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
   contains the company ID (JSON containment query).
 
 #### G18 — `EliminationEntry` has NO SoftDeletes, but `EliminationRule` and `ConsolidationRun` DO
+
+> ✅ **RESOLVED in FINANCE-CONSOLIDATION-1 (G-279)** — `EliminationEntry` now uses `SoftDeletes` (in lockstep with `EliminationRule` and `ConsolidationRun`). Three-layer fix: (1) migration `2026_09_06_000007_add_soft_deletes_to_elimination_entries` adds the nullable `deleted_at` column (idempotent `Schema::hasColumn` guard); (2) `EliminationEntry` model adds `use SoftDeletes;` + updated docblock; (3) `ConsolidationRun::booted()` registers a `deleting` event listener that cascades the soft-delete to its entries (defense-in-depth — the DB FK `fk_ee_consolidation_run ON DELETE CASCADE` only fires on HARD delete; Laravel's SoftDeletes issues `UPDATE ... SET deleted_at = NOW()`, not `DELETE`, so without the listener, soft-deleting a run would leave orphaned entries). The `deleting` listener short-circuits on `isForceDeleting()` so hard deletes still rely on the DB cascade. The historical rationale ("permanent records") is preserved: rows remain in the table with `deleted_at` set, so the GL → elimination_entry → consolidation_run chain stays auditable; Eloquent's default query scope excludes soft-deleted rows, so existing reports that sum elimination amounts are unaffected.
 
 - **Severity:** MINOR.
 - **Evidence:** `EliminationEntry.php:23` (no `use SoftDeletes`), `EliminationRule.php:22` (has
@@ -943,6 +947,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 
 #### G19 — `MoneyTransfer` ↔ `ConsolidationRun` no direct model relationship
 
+> ✅ **RESOLVED in FINANCE-CONSOLIDATION-1 (G-280)** — Documentation resolution confirming the deliberate design decision. No direct FK between `money_transfers` and `consolidation_runs` is needed because the two subsystems are linked indirectly via the GL: `money_transfers.intercompany_journal_entry_id` → `journal_entries.id` → `elimination_entries.journal_entry_id` (same JE, posted by `ConsolidationService::postEliminationEntry`). The intercompany obligation itself is tracked in `branch_ledger` (sub-ledger) independently of the GL JE. A direct model relationship would be redundant and would duplicate the canonical linkage. The gap text's own recommendation ("Fix: none needed. Document the indirect relationship.") is hereby applied. No code change.
+
 - **Severity:** MINOR.
 - **Evidence:** `MoneyTransfer.php` has no `consolidationRuns` method. `ConsolidationRun` has no
   `moneyTransfers` method. The two subsystems are disconnected at the model level.
@@ -953,6 +959,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 
 #### G20 — `WarehouseTransferItem` has NO timestamps and NO SoftDeletes
 
+> ✅ **RESOLVED in FINANCE-CONSOLIDATION-1 (G-282)** — Documentation resolution confirming the deliberate design decision. `warehouse_transfer_items` is a pure line-item child table: 5 columns (id / warehouse_transfer_id / product_id / qty / rate), no timestamps, no soft-deletes. Verified in SQL baseline `database/sql/03_stock.sql:665-671`. Lifecycle is wholly owned by the parent `warehouse_transfers` row — when the parent is hard-deleted, the FK `ON DELETE CASCADE` (03_stock.sql:667) removes the line items atomically. The parent model `WarehouseTransfer` does not use SoftDeletes either (it uses a `status` column with cancelled/confirmed lifecycle states), so there is no soft-delete orphan risk. Adding timestamps or SoftDeletes here would be unnecessary schema bloat for no functional benefit. The gap text's own recommendation ("Fix: none needed.") is hereby applied. No code change.
+
 - **Severity:** MINOR.
 - **Evidence:** `WarehouseTransferItem.php:21` (`public $timestamps = false;`), no
   `use SoftDeletes`.
@@ -961,6 +969,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 - **Fix:** none needed.
 
 #### G21 — `BranchDemandMoneyTransferSettlement` model doc-block is stale
+
+> ✅ **RESOLVED in FINANCE-CONSOLIDATION-1 (G-283)** — The stale docblock ("No MoneyTransfer Eloquent model exists yet") and the commented-out `transfer()` method are both replaced. The `transfer()` belongsTo relationship is now properly defined: `$this->belongsTo(MoneyTransfer::class, 'transfer_id')`. The `MoneyTransfer` model has existed since Phase 4 (app/Models/MoneyTransfer.php, 153L, uses `MoneyTransferBranchScope`). The FK column `transfer_id REFERENCES money_transfers(id) ON DELETE CASCADE` (migration `2026_07_29_000014` L25). Purely additive — existing service-layer code that uses `DB::table('money_transfers')` directly (BranchDemandAuditService L590-610/638/709, BranchIntercompanyService L847/972) is unaffected. Cross-ref: the same underlying issue was also documented as G11 in finance/branch-demand.md (register G-328) — both register rows are marked resolved by this single fix.
 
 - **Severity:** MINOR.
 - **Evidence:** `BranchDemandMoneyTransferSettlement.php:42-46` — comment says *"Note: No
@@ -971,7 +981,11 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 - **Impact:** stale comment. The `transfer()` relationship is commented out.
 - **Fix:** uncomment the `transfer()` relationship and update the doc-block.
 
+> **Note on register tag cleanup:** the register row G-283 carried a `DDL drift` tag, but the gap is about a stale *model doc-block*, not DDL drift (the schema is correct; only the model comment was wrong). The tag was misapplied; the resolved row drops the `DDL drift` tag.
+
 #### G22 — `WarehouseTransferController::audit` action filters `auditEvents` by parsing JSON `details.transfer_id` in PHP — fragile
+
+> ✅ **RESOLVED in FINANCE-CONSOLIDATION-1 (G-284)** — `WarehouseTransferAuditLogger::transferEvents(int $transferId, ?int $branchId)` method added — uses a native JSONB containment filter (`WHERE details->>'transfer_id' = ?`) instead of the prior `recentTransferEvents(100)->filter()` pattern that loaded the most-recent 100 transfer events and filtered in PHP by `json_decode`-ing each row's `details` column. The old pattern silently dropped history for old transfers whose events had been pushed out of the most-recent-100 window — the per-transfer audit page would show ZERO history for any transfer older than ~33 transfers ago (3 events per transfer × 100 = ~33 transfers). The new query returns ALL events for the transfer, regardless of age. `WarehouseTransferController::audit` (L527-532) now calls `$this->auditLogger->transferEvents($id, $this->getUserBranchId())` — one line replaces the 5-line filter closure. The existing `idx_ual_action` index on `action` pre-filters to the 3 transfer_* actions; the JSONB filter then narrows to the single transfer. `recentTransferEvents()` is retained for the dashboard "recent activity" widget (legitimately different use-case). The bind value is cast to `(string) $transferId` because `details->>transfer_id` returns text.
 
 - **Severity:** MINOR.
 - **Evidence:** `WarehouseTransferController.php:508-512` —

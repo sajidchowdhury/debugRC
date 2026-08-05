@@ -39,12 +39,22 @@ class BranchDemandMoneyTransferSettlement extends Model
 
     /**
      * The money transfer that created this settlement.
-     * Note: No MoneyTransfer Eloquent model exists yet. Access the
-     * money_transfers table via DB::table('money_transfers') in services.
-     * When a MoneyTransfer model is created later, this relationship
-     * can be properly defined.
+     *
+     * G-283 (G21) FINANCE-CONSOLIDATION-1 + G-328 (G11) FINANCE-BD-1:
+     * the prior docblock was stale — it claimed "No MoneyTransfer Eloquent
+     * model exists yet" and left the relationship commented out. The
+     * MoneyTransfer model has existed since Phase 4 (app/Models/MoneyTransfer.php,
+     * 153L, uses MoneyTransferBranchScope). The FK column transfer_id
+     * REFERENCES money_transfers(id) ON DELETE CASCADE (migration
+     * 2026_07_29_000014 L25). The relationship is now properly defined.
+     * Existing service-layer code that uses DB::table('money_transfers')
+     * directly (BranchDemandAuditService, BranchIntercompanyService) is
+     * unaffected — this relationship is purely additive.
      */
-    // public function transfer(): BelongsTo { ... }
+    public function transfer(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(MoneyTransfer::class, 'transfer_id');
+    }
 
     public function demand(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {

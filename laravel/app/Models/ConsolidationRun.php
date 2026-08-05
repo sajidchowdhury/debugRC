@@ -25,6 +25,27 @@ class ConsolidationRun extends Model
 
     protected $table = 'consolidation_runs';
 
+    // G-279 (G18) FINANCE-CONSOLIDATION-1: cascade soft-delete to elimination
+    // entries. The FK fk_ee_consolidation_run REFERENCES consolidation_runs(id)
+    // ON DELETE CASCADE only fires on HARD delete — Laravel's SoftDeletes issues
+    // UPDATE ... SET deleted_at = NOW(), not DELETE, so without this event
+    // listener, soft-deleting a run would leave orphaned elimination_entries
+    // (still queryable, still pointing at a "deleted" run). This listener
+    // iterates the run's eliminationEntries and soft-deletes each one in
+    // lockstep. The EliminationEntry model now uses SoftDeletes (G-279) +
+    // migration 2026_09_06_000007 adds the deleted_at column.
+    protected static function booted(): void
+    {
+        static::deleting(function (ConsolidationRun $run) {
+            if ($run->isForceDeleting()) {
+                // Force delete — let the DB FK ON DELETE CASCADE handle children.
+                return;
+            }
+            // Soft delete — cascade to children (Eloquent SoftDeletes, not DB cascade).
+            $run->eliminationEntries()->each(fn (EliminationEntry $entry) => $entry->delete());
+        });
+    }
+
     protected $fillable = [
         'run_code',
         'name',

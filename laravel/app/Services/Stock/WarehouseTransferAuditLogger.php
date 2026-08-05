@@ -129,6 +129,48 @@ class WarehouseTransferAuditLogger
     }
 
     /**
+     * Query audit events for a single warehouse transfer.
+     *
+     * G-284 (G22) FINANCE-CONSOLIDATION-1: replaces the prior
+     * recentTransferEvents(100, ...)->filter() pattern in
+     * WarehouseTransferController::audit that loaded the most-recent 100
+     * transfer events and filtered in PHP by parsing JSON details.transfer_id.
+     * The old pattern silently dropped history for old transfers whose events
+     * had been pushed out of the most-recent-100 window — the per-transfer
+     * audit page would show ZERO history for any transfer older than ~33
+     * transfers ago (3 events per transfer × 100 = ~33 transfers).
+     *
+     * The new method uses a native JSONB containment filter
+     * (WHERE details->>'transfer_id' = ?) which is supported on PG 12+.
+     * The existing idx_ual_action index on `action` pre-filters to the 3
+     * transfer_* actions; the JSONB filter then narrows to the single
+     * transfer. Returns ALL events for the transfer (no 100-row cap).
+     *
+     * @param int $transferId
+     * @param int|null $branchId
+     * @return \Illuminate\Support\Collection
+     */
+    public function transferEvents(int $transferId, ?int $branchId = null)
+    {
+        $actions = [
+            'transfer_created',
+            'transfer_confirmed',
+            'transfer_cancelled',
+        ];
+
+        $query = DB::table('user_audit_log')
+            ->whereIn('action', $actions)
+            ->where('details->>transfer_id', '=', (string) $transferId)
+            ->orderByDesc('id');
+
+        if ($branchId !== null && $branchId > 0) {
+            $query->where('branch_id', $branchId);
+        }
+
+        return $query->get();
+    }
+
+    /**
      * Internal: delegate to UserAuditLogger (dual-write: DB + file).
      */
     private function log(int $userId, string $action, int $branchId, array $details): void
