@@ -3,7 +3,7 @@
 > **Module:** Finance / Analytical Accounting
 > **Audience:** Engineers, AI assistants, accountants
 > **Status:** Draft — pending accountant sign-off (NOT SAFETY-CRITICAL — read-only reporting + master-data CRUD; no GL posting)
-> **Last reviewed:** Phase 12 (initial creation)
+> **Last reviewed:** 2026-09-05 (post-FINANCE-3: G-319 resolved in `8cfe7ca`)
 > **Source of truth:** This file is the canonical reference for the analytical-dimensions
 > subsystem. The implementation lives in `laravel/app/Models/{Dimension,DimensionValue}.php`,
 > `laravel/app/Services/Budgeting/DimensionReportingService.php`,
@@ -96,6 +96,22 @@ Three management-accounting drivers:
 | **Manager** | Intended: reviews segment reports, manages dimensions | ⚠️ **G1 — cannot see NULL-branch dimension values** (BranchScope excludes them); **G18 — can create/edit dimensions (should arguably be admin-only)** |
 | **Accountant** | Intended: tags postings, runs segment reports | ⚠️ **G1 — cannot see NULL-branch dimension values**; cannot tag postings (G4 — no business module exposes the field) |
 | **API consumer** | — | ❌ No REST API exists |
+
+> ✅ RESOLVED in commit `8cfe7ca` (FINANCE-3, G-319) — Created
+> `App\Models\Scopes\DimensionValueBranchScope` (new file) that filters
+> `WHERE branch_id IS NULL OR branch_id = ?` for non-admin users, mirroring
+> the RLS policy semantics (BR7/BR10/BR11). Replaced the generic
+> `BranchScope` (hard equality `branch_id = ?`) with this new scope in
+> `DimensionValue::booted()`. Non-admin Managers/Accountants can now see
+> AND route-model-bind NULL-branch (company-wide) dimension values — the
+> 404-on-NULL-branch bug is closed. Admin/superadmin bypass is preserved
+> (they see all branches + all NULL-branch rows). The generic `BranchScope`
+> is unchanged for all other branch-scoped models (SalesInvoice,
+> SalesChallan, etc.) where NULL-branch rows do not exist by design.
+> Remediation option (b) from §13.1 was chosen (create a dedicated
+> `DimensionValueBranchScope` that mirrors the RLS policy). See
+> `laravel/app/Models/Scopes/DimensionValueBranchScope.php` and
+> `laravel/app/Models/DimensionValue.php:36-42`.
 
 > **G7:** `EnforceBranchIsolation::inferTableFromUri` does NOT include `dimensions`. Cross-branch
 > dimension value creation is NOT request-level guarded (a non-admin accountant in Branch A can

@@ -3,7 +3,7 @@
 > **Module:** Finance / Budgeting
 > **Audience:** Engineers, AI assistants, accountants
 > **Status:** Draft — pending accountant sign-off (analytical-only — no GL posting, NOT SAFETY-CRITICAL)
-> **Last reviewed:** Phase 12 (initial creation)
+> **Last reviewed:** 2026-09-05 (post-FINANCE-3: G-322 + G-326 resolved in `8cfe7ca`)
 > **Source of truth:** This file is the canonical reference for the budgeting subsystem. The
 > implementation lives in `laravel/app/Models/{Budget,BudgetLine}.php`,
 > `laravel/app/Services/Budgeting/BudgetService.php`,
@@ -122,6 +122,35 @@ Three management-accounting drivers:
 | BR7 | Budget closure MUST NOT set `closed_by` or `closed_at` (no such columns exist). ⚠️ **G16.** | migration L28-46 (no columns); `BudgetService.php:111` |
 | BR8 | Budget cancellation MUST NOT set `cancelled_by` / `cancelled_at` / `cancel_reason` (no such columns). ⚠️ **G16.** | migration L28-46; `BudgetService.php:124` |
 | BR9 | Budgets MUST NOT be hard-deleted via the UI (no `destroy` route exists). Soft-deletes are applied via the model, but no UI surface triggers them. | `routes/web.php:1647-1662` (no `Route::delete`) |
+
+> ✅ RESOLVED in commit `8cfe7ca` (FINANCE-3, G-322) — The duplicate-active-budget check in
+> `BudgetService::activateBudget` was rewritten. The old `->when($budget->branch_id, ...)`
+> clause was a no-op (it re-applied the same branch filter that the outer `where('branch_id', ...)`
+> already applied), so the check passed whenever a company-wide (NULL-branch) budget was
+> activated alongside an existing branch-specific one (or vice versa). The `budget_vs_actual`
+> view then double-counted actuals across both budgets. The new check blocks ANY coexistence:
+> a company-wide budget cannot coexist with any branch-specific budget for the same fiscal
+> year, and two branch-specific budgets for the same (year, branch) cannot coexist either.
+> The check is now wrapped in `DB::transaction` + `lockForUpdate` to close the TOCTOU race
+> (G10 — concurrent activations could previously slip between the SELECT and the UPDATE).
+> A partial UNIQUE index `uq_budgets_active_per_year_branch ON budgets (fiscal_year,
+> COALESCE(branch_id, 0)) WHERE status = 'active' AND deleted_at IS NULL` is added by
+> migration `2026_09_05_000001` as the DB-level backstop for same-scope duplicates. The
+> accountant checklist item ("Confirm whether a company-wide budget AND a branch-specific
+> budget can both be active") is now answered: NO — they cannot coexist, because variance
+> would double-count. See `laravel/app/Services/Budgeting/BudgetService.php:100-170`.
+
+> ✅ RESOLVED in commit `8cfe7ca` (FINANCE-3, G-326) — Added a maker-checker guard to
+> `BudgetService::activateBudget`: the user who activates the budget MUST NOT be the same
+> user who created it (`created_by`). This is the minimal enforcement of the maker-checker
+> principle without introducing a full `BudgetApproval` model (which is deferred to Phase 14
+> per the budgeting gap catalogue §13.2 remediation #9). The full workflow will add a
+> `BudgetApproval` model with `requested_by` / `approved_by` / `status` columns and a
+> multi-step approval flow; until then, this guard prevents the most common self-approval
+> case. The guard throws `RuntimeException("Maker-checker violation: the user who created
+> this budget cannot activate it. Have another manager or admin review and activate it.")`
+> which the controller's existing try/catch surfaces as a user-facing error. See
+> `laravel/app/Services/Budgeting/BudgetService.php:106-113`.
 
 ### 6.2 Budget lines
 

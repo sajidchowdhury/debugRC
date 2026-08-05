@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-04 (post-FINANCE-2: G-096/G-097/G-099/G-102/G-104/G-108/G-110/G-111 resolved in `eb590fb`+`e74cf67`)
+Last reviewed: 2026-09-05 (post-FINANCE-3: G-319/G-322/G-326/G-329/G-331/G-336/G-342 resolved in `8cfe7ca`)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -19,12 +19,12 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | Severity | Count | Blocks cutover? |
 |---|---|---|
 | CRITICAL | 2 | Yes — all of them |
-| HIGH | 78 | Most |
+| HIGH | 71 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **216** | |
-| _of which resolved_ | 141 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **209** | |
+| _of which resolved_ | 148 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -32,7 +32,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 |---|---|
 | api | 29 |
 | architecture | 17 |
-| finance | 35 |
+| finance | 28 |
 | purchasing | 11 |
 | reports | 71 |
 | sales | 15 |
@@ -382,30 +382,30 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-316 | G14 | LOW | workflows | workflows/approval-workflow.md:1198 | — | ### G14 — LOW — ApprovalService::cancel() is dead code | — | H4 | open | — |
 | G-317 | G17 | LOW | workflows | workflows/notification-workflow.md:1405 | — | ### G17 — LOW — `push.js` is empty + unreferenced (dead file) | — | H4 | open | — |
 | G-318 | G18 | LOW | workflows | workflows/notification-workflow.md:1411 | — | ### G18 — LOW — `notification_rules.created_by` nullable + seeder sets NULL | notifications phase | H4 | open | — |
-| G-319 | G1 | HIGH | finance | finance/dimensions-cost-centers.md:96 | — | **Manager** \| Intended: reviews segment reports, manages dimensions \| ⚠️ **G1 — cannot see NULL-branch dimension values** (BranchScope exc… | — | H2 | open | — |
+| G-319 | G1 | HIGH | finance | finance/dimensions-cost-centers.md:96 | — | **Manager** \| Intended: reviews segment reports, manages dimensions \| ⚠️ **G1 — cannot see NULL-branch dimension values** (BranchScope exc… | — | H2 | resolved | `8cfe7ca` |
 | G-320 | G3 | MEDIUM | finance | finance/dimensions-cost-centers.md:513 | — | **G3 stale DDL:** The column EXISTS in migrated DBs (added by migration L105-112, re-asserted | DDL drift | H2 | open | — |
 | G-321 | G4 | MEDIUM | finance | finance/dimensions-cost-centers.md:84 | — | **G4:** "Tag journal line with dimension" is currently NOT wired to any business module. | GL posting | H2 | open | — |
-| G-322 | G5 | HIGH | finance | finance/budgeting.md:114 | — | BR3 \| A budget MUST NOT be activated if another active budget exists for the same `(fiscal_year, branch_id)`. ⚠️ **G5 — check is buggy; all… | — | H2 | open | — |
+| G-322 | G5 | HIGH | finance | finance/budgeting.md:114 | — | BR3 \| A budget MUST NOT be activated if another active budget exists for the same `(fiscal_year, branch_id)`. ⚠️ **G5 — check is buggy; all… | — | H2 | resolved | `8cfe7ca` |
 | G-323 | G5 | HIGH | finance | finance/fixed-assets.md:154 | — | BR20 \| **`disposal_code` MUST be generated via `LIKE` + `ORDER BY DESC` + 1** (format `DSP-YYYY-NNNNN`). ⚠️ **G5 — race-prone; should use `… | — | H2 | resolved | `4b0ece7` |
 | G-324 | G7 | HIGH | finance | finance/dimensions-cost-centers.md:100 | — | **G7:** `EnforceBranchIsolation::inferTableFromUri` does NOT include `dimensions`. Cross-branch | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-325 | G8 | LOW | finance | finance/budgeting.md:66 | — | **G8:** There is no artisan command and no scheduled job for variance reporting. The | — | H4 | open | — |
-| G-326 | G9 | HIGH | finance | finance/budgeting.md:117 | routes/web.php:1647-1662 | BR6 \| Budget activation MUST set `approved_at = now()` and `approved_by = auth()->id()`. ⚠️ **G9 — no maker-checker separation.** \| `Budge… | — | H2 | open | — |
+| G-326 | G9 | HIGH | finance | finance/budgeting.md:117 | routes/web.php:1647-1662 | BR6 \| Budget activation MUST set `approved_at = now()` and `approved_by = auth()->id()`. ⚠️ **G9 — no maker-checker separation.** \| `Budge… | — | H2 | resolved | `8cfe7ca` |
 | G-327 | G10 | CRITICAL | finance | finance/branch-demand.md:1202 | app/Services/Sales/CustomerPaymentService.php:808-815 | #### G10 — `CustomerPaymentService::postIntercompanySettlement` dead-code below `return null;` references nonexistent `branch_ledger` column… | — | H1 | resolved | 2aefa26 |
 | G-328 | G11 | LOW | finance | finance/branch-demand.md:1212 | app/Models/BranchDemandMoneyTransferSettlement.php:40-47 | #### G11 — `BranchDemandMoneyTransferSettlement` model has NO `belongsTo transfer()` relationship | — | H4 | open | — |
-| G-329 | G12 | HIGH | finance | finance/branch-demand.md:1220 | app/Services/BranchDemand/BranchDemandRepricingService.php:333 | #### G12 — `BranchDemandRepricing.journal_entry_id` stores only `creditor_je_id` | GL posting | H2 | open | — |
+| G-329 | G12 | HIGH | finance | finance/branch-demand.md:1220 | app/Services/BranchDemand/BranchDemandRepricingService.php:333 | #### G12 — `BranchDemandRepricing.journal_entry_id` stores only `creditor_je_id` | GL posting | H2 | resolved | `8cfe7ca` |
 | G-330 | G12 | CRITICAL | finance | finance/fixed-assets.md:134 | — | BR10 \| **A schedule MUST NOT be generated if a non-reversed schedule already exists for the same `(asset, period_from, period_to)`.** Appli… | notifications phase | H1 | resolved | 5905123 |
-| G-331 | G13 | HIGH | finance | finance/branch-demand.md:1229 | app/Services/BranchDemand/BranchIntercompanyService.php:317 | #### G13 — `reverseDemand` uses `JournalPostingService::reverseJournalEntry` directly, not `JournalReversalService::reverseByJournalEntry` | GL posting | H2 | open | — |
+| G-331 | G13 | HIGH | finance | finance/branch-demand.md:1229 | app/Services/BranchDemand/BranchIntercompanyService.php:317 | #### G13 — `reverseDemand` uses `JournalPostingService::reverseJournalEntry` directly, not `JournalReversalService::reverseByJournalEntry` | GL posting | H2 | resolved | `8cfe7ca` |
 | G-332 | G13 | MEDIUM | finance | finance/dimensions-cost-centers.md:133 | — | BR2 \| A dimension's `code` MUST be unique across ALL dimensions (including soft-deleted ones). ⚠️ **G13 — plain UNIQUE, not partial; soft-d… | DDL drift | H2 | open | — |
 | G-333 | G14 | LOW | finance | finance/branch-demand.md:166 | — | **G14 — index inconsistency:** `BranchDemandController::index` uses the `myDemands($branchId)` | — | H4 | open | — |
 | G-334 | G15 | MEDIUM | finance | finance/branch-demand.md:1251 | app/Services/BranchDemand/BranchDemandService.php:956-958 | #### G15 — `createDocumentaryWarehouseTransfer` uses first item's `from_warehouse_id`/`to_warehouse_id` for WT header | — | H2 | open | — |
 | G-335 | G15 | CRITICAL | finance | finance/fixed-assets.md:155 | — | BR21 \| **Asset `acquisition_cost`, `salvage_value`, `useful_life_months`, `depreciation_method` ARE editable after depreciation has been po… | notifications phase | H1 | resolved | 5905123 |
-| G-336 | G16 | HIGH | finance | finance/branch-demand.md:1260 | app/Services/BranchDemand/BranchDemandAuditLogger.php:101 | #### G16 — `BranchDemandAuditLogger::log` uses `DB::table()->insert()` outside try/catch | audit-trail phase | H2 | open | — |
+| G-336 | G16 | HIGH | finance | finance/branch-demand.md:1260 | app/Services/BranchDemand/BranchDemandAuditLogger.php:101 | #### G16 — `BranchDemandAuditLogger::log` uses `DB::table()->insert()` outside try/catch | audit-trail phase | H2 | resolved | `8cfe7ca` |
 | G-337 | G17 | CRITICAL | finance | finance/branch-demand.md:823 | — | **G17 — bug:** `getSalesBelowLockedCost` (called by `getDemandAntiGamingFlags`) references | — | H1 | resolved | 2aefa26 |
 | G-338 | G18 | WONTFIX | finance | finance/branch-demand.md:1276 | app/Services/BranchDemand/BranchDemandWeeklyReportService.php:280 | #### G18 — `BranchDemandWeeklyReportService::getWarehouseWiseSales` may reference nonexistent column | — | H3 | open | — |
 | G-339 | G18 | MEDIUM | finance | finance/budgeting.md:130 | — | BR14 \| A budget's `period` MUST be in range `1..maxPeriod` (12 monthly / 4 quarterly / 1 yearly). Application-enforced via `Budget::maxPeri… | — | H2 | open | — |
 | G-340 | G18 | MEDIUM | finance | finance/dimensions-cost-centers.md:96 | — | **Manager** \| Intended: reviews segment reports, manages dimensions \| ⚠️ **G1 — cannot see NULL-branch dimension values** (BranchScope exc… | — | H2 | open | — |
 | G-341 | G18 | HIGH | finance | finance/fixed-assets.md:144 | — | BR15 \| **Disposal MUST reverse all `pending` depreciation schedules for the asset** (bulk update `status='reversed'`). `posted` schedules a… | notifications phase | H2 | resolved | `4b0ece7` |
-| G-342 | G19 | HIGH | finance | finance/branch-demand.md:1283 | app/Services/BranchDemand/BranchDemandWeeklyReportService.php:347-360 | #### G19 — `BranchDemandWeeklyReportService::getProfit` has dead code | — | H2 | open | — |
+| G-342 | G19 | HIGH | finance | finance/branch-demand.md:1283 | app/Services/BranchDemand/BranchDemandWeeklyReportService.php:347-360 | #### G19 — `BranchDemandWeeklyReportService::getProfit` has dead code | — | H2 | resolved | `8cfe7ca` |
 | G-343 | G19 | LOW | finance | finance/dimensions-cost-centers.md:135 | — | BR4 \| A dimension MUST NOT be hard-deleted via the UI (only soft-deactivated). ⚠️ **G19 — no `destroy` endpoint.** \| controller has no `de… | — | H4 | open | — |
 | G-344 | G21 | CRITICAL | finance | finance/branch-demand.md:1300 | app/Services/Accounting/MoneyTransferService.php:442 | #### G21 — `MoneyTransfer` model uses `'intercompany'` ledger nature; `BranchIntercompanyService` uses `'interbranch_payable'/'interbranch_r… | — | H1 | resolved | 5905123 |
 | G-345 | G22 | LOW | finance | finance/branch-demand.md:1308 | app/Http/Resources/Api/V1/BranchDemand/BranchDemandResource.php:14-52 | #### G22 — `BranchDemandResource` excludes internal audit fields | API Phase 17 | H4 | open | — |

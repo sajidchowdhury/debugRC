@@ -6,7 +6,7 @@
 > reverses stock, settles intercompany balances. **8 CRITICAL gaps** originally catalogued; **ALL 8 now resolved**
 > (G1+G2+G7 in `5905123`/FINANCE-3, G3+G4 in `2aefa26`/FINANCE-2, G5+G6 in `0385b87`/FINANCE-1, G8 in `dd31590`).
 > **0 remain open** — the CRITICAL tier for this doc is closed. MAJOR + MINOR tiers still have open items.
-> **Last reviewed:** Phase 13 (initial creation)
+> **Last reviewed:** 2026-09-05 (post-FINANCE-3: G-329/G-331/G-336/G-342 resolved in `8cfe7ca`)
 > **Source of truth:** This file is the canonical reference for the branch-demand subsystem. The
 > implementation lives in
 > `laravel/app/Models/{BranchDemand,BranchDemandItem,BranchDemandRepricing,BranchDemandCustomerPaymentSettlement,BranchDemandMoneyTransferSettlement}.php`,
@@ -1337,6 +1337,21 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 
 #### G12 — `BranchDemandRepricing.journal_entry_id` stores only `creditor_je_id`
 
+> ✅ RESOLVED in commit `8cfe7ca` (FINANCE-3, G-329) — Added
+> `journal_entry_id_debtor` column to `branch_demand_repricing` via migration
+> `2026_09_05_000002` (mirrors the `branch_demands.journal_entry_id_debtor`
+> pattern from migration `2026_07_29_000010`). `postRepricingAdjustmentJournals`
+> now returns `['creditor_je_id' => ..., 'debtor_je_id' => ...]` instead of a
+> single int. The caller persists BOTH ids: `journal_entry_id` (creditor /
+> supplier side) and `journal_entry_id_debtor` (debtor / requester side). The
+> audit trail can now trace both sides of a repricing adjustment. The SQL
+> baseline `database/sql/09_branch_demand.sql` is updated to mirror the
+> migration (new column + `idx_bdr_journal_debtor` index). The
+> `BranchDemandRepricing` model is updated with `$fillable`, `$casts`, and a
+> new `debtorJournalEntry()` relationship. See
+> `laravel/app/Services/BranchDemand/BranchDemandRepricingService.php:253-345`
+> and `laravel/app/Models/BranchDemandRepricing.php`.
+
 - **Evidence:** `app/Services/BranchDemand/BranchDemandRepricingService.php:333` —
   `postRepricingAdjustmentJournals` returns `creditorJeId` only; `debtorJeId` is created but NOT
   persisted to `branch_demand_repricing.journal_entry_id`. The audit trail loses the debtor-side
@@ -1345,6 +1360,30 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
   `branch_demands`, and store both IDs.
 
 #### G13 — `reverseDemand` uses `JournalPostingService::reverseJournalEntry` directly, not `JournalReversalService::reverseByJournalEntry`
+
+> ✅ RESOLVED in commit `8cfe7ca` (FINANCE-3, G-331) — Documented the explicit
+> two-step reversal pattern (remediation option (a) from the gap evidence)
+> AND added a new `reverseDemandCascade()` method to
+> `BranchIntercompanyService` that calls both `reverseDemandJournals` (GL)
+> and `reverseLedgerByReference` (sub-ledger) atomically. The
+> `BranchDemandService::reverseDemand` caller now uses
+> `reverseDemandCascade()` instead of calling the two methods separately,
+> so the "risk of forgetting the sub-ledger call" is eliminated by
+> construction. The `reverseDemandJournals` doc-block now explains WHY it
+> calls `JournalPostingService::reverseJournalEntry` directly instead of
+> routing through `JournalReversalService::reverseByJournalEntry`:
+> `JournalReversalService`'s cascade only covers `customer_ledger`,
+> `supplier_ledger`, and `employee_ledger` — it does NOT cascade to
+> `branch_ledger` (the intercompany sub-ledger), because intercompany
+> entries use a `reference_type` + `reference_id` pair instead of a
+> direct `journal_entry_id` FK. Therefore the canonical BranchDemand
+> reversal path is the explicit two-step cascade, not the generic
+> `JournalReversalService` cascade. This pattern is now documented as the
+> reference for any future intercompany-reversal service. See
+> `laravel/app/Services/BranchDemand/BranchIntercompanyService.php:320-434`
+> (doc-block + new `reverseDemandCascade` method) and
+> `laravel/app/Services/BranchDemand/BranchDemandService.php:519-531`
+> (updated caller).
 
 - **Evidence:** `app/Services/BranchDemand/BranchIntercompanyService.php:317, 325, 1090`.
   `CustomerPaymentService` uses `JournalReversalService::reverseByJournalEntry` for cascade
@@ -1376,6 +1415,20 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
   of truth).
 
 #### G16 — `BranchDemandAuditLogger::log` uses `DB::table()->insert()` outside try/catch
+
+> ✅ RESOLVED in commit `8cfe7ca` (FINANCE-3, G-336) — Wrapped the
+> `branch_demand_audit_log` INSERT in `try/catch (\Throwable $e)` with a
+> `Log::warning` on failure. The catch block does NOT re-throw — the audit
+> row is forensic, not a gate, so a failed INSERT (CHECK constraint
+> violation on `action` enum, RLS policy violation, connection drop, etc.)
+> no longer rolls back the caller's `DB::transaction`. The parent
+> transaction commits the data change; the missing audit row is surfaced
+> for follow-up via the `Log::warning` entry, which includes the full
+> context (demand_id, branch_id, action, actor_id, actor_role, payload,
+> error_class, error_msg). This enforces the "audit is forensic, not a
+> gate" design principle documented in the class doc-block by construction,
+> rather than relying on the INSERT never failing. See
+> `laravel/app/Services/BranchDemand/BranchDemandAuditLogger.php:102-137`.
 
 - **Evidence:** `app/Services/BranchDemand/BranchDemandAuditLogger.php:101`. If the audit row
   INSERT fails (e.g. CHECK constraint violation on `action` enum, or RLS policy violation), the
@@ -1411,6 +1464,22 @@ UPDATE/DELETE (immutable). ⚠️ G23 — uses `app.branch_id` GUC.
 - **Fix:** verify the schema and use the correct column name.
 
 #### G19 — `BranchDemandWeeklyReportService::getProfit` has dead code
+
+> ✅ RESOLVED in commit `8cfe7ca` (FINANCE-3, G-342) — Included `$demandCogs`
+> in the returned profit calculation. The method previously computed
+> `$demandCogs` (sum of `qty * cost_rate` for demand items received by the
+> branch on the report date) but returned `$netSales - $cogsFromReturns`,
+> excluding demand COGS entirely. The correct formula is now:
+> `Profit = $netSales - $demandCogs + $cogsFromReturns`. The
+> `$cogsFromReturns` term is ADDED (not subtracted) because
+> `sales_returns.cogs_amount` is a positive snapshot of "total COGS to
+> reverse" (per the schema comment in `database/sql/04_sales.sql:235`) — a
+> return reverses the original COGS entry, so the returned goods' cost
+> should be added back to profit (the goods came back into inventory). The
+> old formula had two bugs: (1) missing `$demandCogs` (the dead code), and
+> (2) wrong sign on `$cogsFromReturns` (subtracted instead of added). Both
+> are now fixed. See
+> `laravel/app/Services/BranchDemand/BranchDemandWeeklyReportService.php:373-389`.
 
 - **Evidence:** `app/Services/BranchDemand/BranchDemandWeeklyReportService.php:347-360` —
   `$demandCogs` is computed (joins `branch_demand_items` to `branch_demands`, sums
