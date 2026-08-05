@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\PurchaseReturn\CancelPurchaseReturnRequest;
 use App\Http\Requests\PurchaseReturn\ConfirmPurchaseReturnRequest;
 use App\Http\Requests\PurchaseReturn\GetReceiveDetailsRequest;
+use App\Http\Requests\PurchaseReturn\SearchReceivesRequest;
 use App\Http\Requests\PurchaseReturn\StorePurchaseReturnRequest;
 use App\Models\PurchaseReturn;
 use App\Services\Purchase\PurchaseReturnService;
@@ -548,13 +549,13 @@ class PurchaseReturnController extends Controller
      * Returns a list of confirmed non-reversed GRNs with at least one
      * returnable item, matching $term against receive_code or supplier_name.
      * Branch-scoped for non-admins.
+     *
+     * PURCHASING-API-1 (G-122): validation extracted into a dedicated
+     * FormRequest (SearchReceivesRequest) — was the lone inline
+     * `$request->validate(...)` in the Purchase module.
      */
-    public function searchReceives(Request $request)
+    public function searchReceives(SearchReceivesRequest $request)
     {
-        $request->validate([
-            'term' => 'nullable|string|max:100',
-        ]);
-
         $branchId = $this->resolveBranchIdForRead($request->input('branch_id') ? (int) $request->input('branch_id') : null);
 
         $term = trim((string) $request->input('term', ''));

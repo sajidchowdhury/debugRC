@@ -77,7 +77,23 @@ class PurchaseReturnService
         }
 
         $items = $this->validateItems($data['items'], $receiveId);
-        $totalAmount = collect($items)->sum(fn($i) => $i['qty'] * $i['rate']);
+        $subTotal = collect($items)->sum(fn($i) => $i['qty'] * $i['rate']);
+        // PURCHASING-API-1 (G-120): write sub_total + discount_amount +
+        // tax_amount on the purchase_returns row. Previously only
+        // total_amount was persisted — the 3 columns existed in the schema
+        // but were always NULL/0, breaking VAT-compliance reporting.
+        //
+        // Input contract (all optional, default 0):
+        //   - discount_amount: header-level discount on the return document.
+        //   - tax_amount:      header-level input-VAT reclaim amount.
+        // The GL still posts a single Dr AP / Cr Inventory at the NET total
+        // (sub_total - discount + tax) — adding a separate input-VAT ledger
+        // entry is a larger scope change deferred to a future phase. The
+        // columns are now populated so the audit trail + VAT reports can
+        // surface the breakdown.
+        $discount = (float) ($data['discount_amount'] ?? 0);
+        $tax = (float) ($data['tax_amount'] ?? 0);
+        $totalAmount = $subTotal - $discount + $tax;
 
         $returnCode = $this->generateReturnCode();
         $supplierId = (int) $receive->supplier_id;
@@ -92,7 +108,7 @@ class PurchaseReturnService
         $warehouseId = (int) $receive->warehouse_id;
 
         return DB::transaction(function () use (
-            $data, $items, $totalAmount, $returnCode,
+            $data, $items, $subTotal, $discount, $tax, $totalAmount, $returnCode,
             $receiveId, $supplierId, $branchId, $warehouseId
         ) {
             $returnId = DB::table('purchase_returns')->insertGetId([
@@ -102,6 +118,9 @@ class PurchaseReturnService
                 'supplier_id' => $supplierId,
                 'branch_id' => $branchId,
                 'warehouse_id' => $warehouseId,
+                'sub_total' => round($subTotal, 2),
+                'discount_amount' => round($discount, 2),
+                'tax_amount' => round($tax, 2),
                 'total_amount' => round($totalAmount, 2),
                 'status' => 'draft',
                 'is_reversed' => false,
@@ -122,6 +141,9 @@ class PurchaseReturnService
                 'supplier_id' => $supplierId,
                 'branch_id' => $branchId,
                 'warehouse_id' => $warehouseId,
+                'sub_total' => round($subTotal, 2),
+                'discount_amount' => round($discount, 2),
+                'tax_amount' => round($tax, 2),
                 'total_amount' => round($totalAmount, 2),
                 'status' => 'draft',
                 'is_reversed' => false,

@@ -328,10 +328,11 @@ class PurchaseOrderService
             $poId = (int) $item->purchase_order_id;
 
             // PURCHASING-3 (G-038): over-receive guard.
-            // Tolerance 0.0001 absorbs floating-point noise (numeric(14,4) column).
+            // PURCHASING-API-1 (G-118): tolerance now read from config/purchase.php.
+            $overReceiveTolerance = (float) config('purchase.over_receive_tolerance', 0.0001);
             $newReceived = (float) $item->received_qty + $additionalReceivedQty;
             $orderedQty = (float) $item->qty;
-            if ($newReceived > $orderedQty + 0.0001) {
+            if ($newReceived > $orderedQty + $overReceiveTolerance) {
                 throw new \RuntimeException(
                     "Over-receive guard tripped for PO item {$poItemId}: "
                     . "ordered {$orderedQty}, already received {$item->received_qty}, "
@@ -349,8 +350,10 @@ class PurchaseOrderService
                 ->where('purchase_order_id', $poId)
                 ->get();
 
-            $allReceived = $allItems->every(fn($i) => (float) $i->received_qty >= (float) $i->qty - 0.0001);
-            $anyReceived = $allItems->some(fn($i) => (float) $i->received_qty > 0.0001);
+            // PURCHASING-API-1 (G-118): status-flip tolerance now read from config/purchase.php.
+            $statusTolerance = (float) config('purchase.below_tolerance_status_threshold', 0.0001);
+            $allReceived = $allItems->every(fn($i) => (float) $i->received_qty >= (float) $i->qty - $statusTolerance);
+            $anyReceived = $allItems->some(fn($i) => (float) $i->received_qty > $statusTolerance);
 
             $newStatus = $allReceived ? 'received' : ($anyReceived ? 'partial' : null);
 
@@ -374,16 +377,20 @@ class PurchaseOrderService
     }
 
     /**
-     * Generate atomic PO code: PO-YYYYMMDD-NNNN.
+     * Generate atomic PO code: <prefix>-YYYYMMDD-<padded-seq>.
      * Uses DocumentSequenceService with advisory locks (Task 20).
+     *
+     * PURCHASING-API-1 (G-118): prefix + pad length + docType are now read
+     * from `config/purchase.php` (env-overridable). Previously hardcoded
+     * as 'PO' / 4 / 'purchase_order'.
      */
     private function generatePoCode(): string
     {
         return DocumentSequenceService::nextCode(
-            docType:  'purchase_order',
-            prefix:   'PO',
+            docType:  config('purchase.po_doc_type', 'purchase_order'),
+            prefix:   config('purchase.po_prefix', 'PO'),
             datePart: now()->format('Ymd'),
-            padLength: 4,
+            padLength: (int) config('purchase.po_code_pad_length', 4),
         );
     }
 

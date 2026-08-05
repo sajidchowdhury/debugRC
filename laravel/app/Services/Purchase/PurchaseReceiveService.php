@@ -204,13 +204,71 @@ class PurchaseReceiveService
 
             $receiveDate = $receive->receive_date->format('Y-m-d');
 
+            // PURCHASING-API-1 (G-117): compute net-of-discount rate per line.
+            //
+            // The GL posts a SINGLE Dr Inventory line at `total_amount`
+            // (= sub_total - discount_amount + tax_amount). The legacy code
+            // fed `applyTransaction` the per-line GROSS `rate`, so avg_cost
+            // diverged from the GL whenever a GRN had a header discount or
+            // tax. The fix: allocate the header discount + tax pro-rata to
+            // each line based on its gross share, producing a per-line NET
+            // rate whose (net_rate × qty) sum equals total_amount.
+            //
+            // Allocation formula (pro-rata by gross line amount):
+            //   lineGross      = qty × rate
+            //   grossShare     = lineGross / subTotal        (0..1)
+            //   netDiscount    = grossShare × discount_amount
+            //   netTax         = grossShare × tax_amount
+            //   lineNetAmount  = lineGross - netDiscount + netTax
+            //   netRate        = lineNetAmount / qty
+            //
+            // Edge cases:
+            //   - subTotal == 0 (all-zero rates): grossShare is undefined;
+            //     fall back to the gross rate (no discount/tax to allocate
+            //     anyway). Avoids divide-by-zero.
+            //   - qty == 0 (shouldn't happen — FormRequest rejects it, but
+            //     defensive): skip the line entirely (StockService would
+            //     no-op anyway).
+            //   - Rounding: lineNetAmount is rounded to 2 dp before dividing
+            //     by qty. The sum of (netRate × qty) may differ from
+            //     total_amount by ≤ ₹0.01 per GRN (absorbed by avg_cost's
+            //     numeric(14,4) precision). The GL total is unaffected
+            //     (it uses $receive->total_amount directly).
+            $subTotal = (float) $receive->sub_total;
+            $discount = (float) $receive->discount_amount;
+            $tax = (float) $receive->tax_amount;
+            $hasHeaderAdjustment = ($discount > 0 || $tax > 0) && $subTotal > 0;
+
             // 1. Apply stock IN for each item via StockService.
             foreach ($receive->items as $item) {
+                $qty = (float) $item->qty;
+                if ($qty <= 0) {
+                    // Defensive: skip zero-qty lines (FormRequest should have
+                    // rejected them, but a direct service call could slip one
+                    // through). StockService::applyTransaction would no-op on
+                    // qty=0 anyway, but skipping avoids polluting the stock
+                    // ledger with a 0-qty row.
+                    continue;
+                }
+
+                $grossRate = (float) $item->rate;
+                if ($hasHeaderAdjustment) {
+                    $lineGross = $qty * $grossRate;
+                    $grossShare = $lineGross / $subTotal;
+                    $lineNetAmount = $lineGross - ($grossShare * $discount) + ($grossShare * $tax);
+                    $netRate = round($lineNetAmount, 2) / $qty;
+                } else {
+                    // No header discount/tax → gross rate IS the net rate.
+                    // Skipping the pro-rata math avoids float noise on the
+                    // common path (most GRNs have no header adjustment).
+                    $netRate = $grossRate;
+                }
+
                 $this->stockService->applyTransaction([
                     'warehouse_id' => $item->warehouse_id,
                     'product_id' => $item->product_id,
-                    'qty' => (float) $item->qty, // positive = IN
-                    'rate' => (float) $item->rate, // purchase rate → avg_cost recalculated
+                    'qty' => $qty, // positive = IN
+                    'rate' => $netRate, // net-of-discount rate → avg_cost recalculated (G-117)
                     'reference_type' => 'purchase_receive',
                     'reference_id' => $receive->id,
                     'notes' => 'GRN ' . $receive->receive_code,

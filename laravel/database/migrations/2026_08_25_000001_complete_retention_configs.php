@@ -64,6 +64,7 @@ use Illuminate\Support\Facades\Log;
  *   | Transaction headers   | customer_payments, supplier_payments, money_transfers, employee_transactions, other_incomes,        | 84     |
  *   |                       | other_expenses, sales_returns, purchase_receives, purchase_returns, damage_invoices,               |        |
  *   |                       | manual_journals, sales_challans, warehouse_transfers, stock_adjustments, stock_take_sessions        |        |
+     *   |                       | purchase_orders (G-121: partitioning deferred; retention pre-registered)                            |        |
  *   | Stock transactions    | stock_transactions                                                                                  | 84     |
  *   | Sales invoices        | sales_invoices                                                                                      | 84     |
  *   | Daily warehouse sum.  | daily_warehouse_stock_summary                                                                       | 36     |
@@ -117,6 +118,19 @@ return new class extends Migration
         'warehouse_transfers'                   => 84,
         'stock_adjustments'                     => 84,
         'stock_take_sessions'                   => 84,
+        // PURCHASING-API-1 (G-121): purchase_orders was missing from the
+        // retention matrix — the archival engine never archived old POs
+        // (operational bloat over time). POs are NOT yet partitioned by
+        // pg_partman (partitioning purchase_orders is a separate, larger
+        // task — it has inbound FKs from purchase_order_items, purchase_receives,
+        // and supplier_payment_settlements that would all need to be made
+        // DEFERRABLE first). This entry ensures that the MOMENT purchase_orders
+        // is registered with pg_partman, the 84-month retention will auto-apply
+        // via the idempotent UPDATE below (the partman.part_config row will
+        // be created by the partitioning migration, and this UPDATE will set
+        // its retention on the next run). The Log::warning branch below
+        // already handles the "part_config row not found yet" case gracefully.
+        'purchase_orders'                       => 84,
 
         // ── Stock transactions — 84 months (7-year compliance) ─────────────
         'stock_transactions'                    => 84,
