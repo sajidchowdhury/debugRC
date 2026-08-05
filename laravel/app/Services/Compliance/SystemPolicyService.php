@@ -2,6 +2,7 @@
 
 namespace App\Services\Compliance;
 
+use App\Exceptions\SystemPolicyWriteBlockedException;
 use App\Models\SystemPolicy;
 use App\Models\User;
 use App\Events\SystemPolicyChanged;
@@ -46,6 +47,57 @@ class SystemPolicyService
     public function isNormal(): bool
     {
         return $this->getCurrentMode() === 'NORMAL';
+    }
+
+    /**
+     * Assert that a destructive (write) operation is allowed under the
+     * current system policy. Throws SystemPolicyWriteBlockedException when
+     * INVESTIGATION mode is active.
+     *
+     * This is the SERVICE-LAYER write block (AUDIT-TRAIL-3 / G-175). It
+     * complements the BlockWritesDuringInvestigation HTTP middleware
+     * (G-172): the middleware catches HTTP-driven writes, this method
+     * catches writes that bypass HTTP middleware (console commands, queued
+     * jobs, scheduled tasks, and any code path that posts a GL entry
+     * directly).
+     *
+     * Primary call site: JournalPostingService::createJournalEntry() (the
+     * single GL chokepoint — reverseJournalEntry calls it internally, so
+     * reversals are also blocked). Future write-side enforcement hooks
+     * (StockService, PaymentService, etc.) can call this method too.
+     *
+     * Fail-open posture: if the policy lookup itself throws (cache outage,
+     * DB unavailable, edge-case bootstrap), the method logs a warning and
+     * ALLOWS the write rather than breaking every GL posting during a cache
+     * outage. This mirrors the ApplySystemPolicyScope trait fail-open
+     * posture (G-171). Worst case = INVESTIGATION mode temporarily does
+     * not block writes, which is preferable to a total GL posting failure.
+     *
+     * @param string      $operation A short label for the blocked operation
+     *                               (e.g. 'journal_entry_create',
+     *                               'stock_transaction', 'payment_post').
+     * @param string|null $context   Optional context (e.g. reference_type,
+     *                               command class name).
+     * @throws SystemPolicyWriteBlockedException When INVESTIGATION mode is
+     *         active and the policy lookup succeeds.
+     */
+    public function assertWriteAllowed(string $operation, ?string $context = null): void
+    {
+        try {
+            if ($this->isInvestigation()) {
+                throw new SystemPolicyWriteBlockedException('INVESTIGATION', $operation, $context);
+            }
+        } catch (SystemPolicyWriteBlockedException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            // Fail-open: policy lookup itself failed (cache/DB outage).
+            // Log + allow the write rather than breaking GL posting.
+            Log::warning('SystemPolicyService::assertWriteAllowed failed to look up policy; failing open', [
+                'operation' => $operation,
+                'context'   => $context,
+                'error'     => $e->getMessage(),
+            ]);
+        }
     }
 
     public function activate(

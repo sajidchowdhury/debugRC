@@ -528,9 +528,18 @@ flowchart TD
     DEACT --> NEXT
 ```
 
-> **Phase 14 re-audit note:** the middleware loads + shares + auto-deactivates, but NO downstream
-> business logic (controllers, services, commands) consults `isInvestigation()`. The shared vars
-> are consumed ONLY by `admin/compliance/index.blade.php`. See G13 + G14.
+> **Phase 14 re-audit note (UPDATED — AUDIT-TRAIL-2 + AUDIT-TRAIL-3):** the
+> middleware loads + shares + auto-deactivates. As of AUDIT-TRAIL-2 (G-171),
+> the `ApplySystemPolicyScope` trait is wired into 6 transactional document
+> models (read-side clamp). As of AUDIT-TRAIL-3 (G-172 + G-175), the
+> `BlockWritesDuringInvestigation` middleware + the
+> `SystemPolicyService::assertWriteAllowed()` hook in
+> `JournalPostingService::createJournalEntry()` provide write-side
+> enforcement. The shared `$isInvestigation` var is still consumed ONLY by
+> `admin/compliance/index.blade.php` (G14 — no global banner — remains
+> open). The original "NO downstream business logic consults
+> `isInvestigation()`" claim is now stale — see G1/G2/G13 for the current
+> enforcement posture.
 
 ## 12. Known edge cases
 
@@ -591,12 +600,14 @@ flowchart TD
 > `Model::withoutPolicy()->get()` (the `scopeWithoutPolicy` scope removes the
 > `system_policy` global scope for that query).
 >
-> **Follow-up (G-175, separate task):** this wiring makes INVESTIGATION mode
-> restrict READS on the 6 transactional document models. G-175 ("INVESTIGATION
-> mode has NO business-logic consumer") remains open — it covers WRITE-side
-> enforcement (e.g. `JournalPostingService` / `StockService` checking
-> `isInvestigation()` before posting, or blocking destructive ops). Read-side
-> clamping (this gap, G-171) + write-side enforcement (G-175) together would
+> **Follow-up (G-175, resolved in AUDIT-TRAIL-3):** this wiring made
+> INVESTIGATION mode restrict READS on the 6 transactional document models.
+> G-175 ("INVESTIGATION mode has NO business-logic consumer") — WRITE-side
+> enforcement — has since been resolved in AUDIT-TRAIL-3 by (1) the
+> `BlockWritesDuringInvestigation` HTTP middleware (G-172) and (2)
+> `SystemPolicyService::assertWriteAllowed()` called from
+> `JournalPostingService::createJournalEntry()` (the GL chokepoint).
+> Read-side clamping (G-171) + write-side enforcement (G-172/G-175) together
 > make INVESTIGATION mode fully functional.
 
 - **Original evidence:** `ApplySystemPolicyScope.php:29-63`; grep `use
@@ -612,10 +623,62 @@ flowchart TD
   excluded (see scope-decision note above).
 
 ### G2 — No write-blocking in INVESTIGATION mode (MAJOR)
-Destructive operations (DELETE/UPDATE on financial records) are NOT blocked during INVESTIGATION.
-The compliance gate is policy + audit + a single admin-page banner (NOT a global banner — G14), not
-DB enforcement.
-Evidence: `CheckSystemPolicy.php:33-58` — middleware only loads + shares + auto-deactivates.
+
+> ✅ **RESOLVED — AUDIT-TRAIL-3.** Two-layer write freeze implemented:
+>
+>   1. **HTTP layer — `BlockWritesDuringInvestigation` middleware** (new,
+>      `app/Http/Middleware/BlockWritesDuringInvestigation.php`). Appended
+>      to the global middleware stack in `bootstrap/app.php` AFTER
+>      `CheckSystemPolicy` (so `app('system_policy_mode')` is available).
+>      When INVESTIGATION mode is active, blocks ALL non-GET/HEAD/OPTIONS
+>      requests with `SystemPolicyWriteBlockedException`. Allowlist (URI
+>      prefix match): `login`, `logout`, `forgot`, `reset` (auth flows),
+>      `admin/compliance*` (so the superadmin can DEACTIVATE investigation
+>      mode — otherwise self-inflicted lockout), `api/docs*` (public docs),
+>      `up` (health check). Covers BOTH web + API requests (middleware is
+>      global).
+>
+>   2. **Service layer — `SystemPolicyService::assertWriteAllowed()`**
+>      (new method). Called from `JournalPostingService::createJournalEntry()`
+>      at the top — the single GL chokepoint (`reverseJournalEntry` calls
+>      it internally, so reversals are also blocked). Catches writes that
+>      bypass HTTP middleware: console commands, queued jobs, scheduled
+>      tasks, and any code path that posts a GL entry directly. Fail-open
+>      try/catch: if the policy lookup itself throws (cache/DB outage), the
+>      method logs a warning and ALLOWS the write rather than breaking
+>      every GL posting during a cache outage (mirrors the
+>      `ApplySystemPolicyScope` trait fail-open posture from G-171).
+>
+>   3. **Exception rendering** — `SystemPolicyWriteBlockedException` (new,
+>      `app/Exceptions/SystemPolicyWriteBlockedException.php`, mirrors the
+>      `WarehouseFrozenForCountException` pattern). Registered in
+>      `bootstrap/app.php` exception handler: renders as 422 JSON for
+>      API/AJAX callers, redirect-back-with-error for web. In console/queue
+>      contexts (no request), the exception propagates as a plain
+>      `RuntimeException` — logged + failing the job/command, which is the
+>      correct forensic posture (a scheduled job that tries to post during
+>      an investigation should fail loudly, not silently skip).
+>
+> **Forensic posture rationale:** INVESTIGATION mode is "freeze the books" —
+> the investigator must examine a stable, uncontaminated data set. Allowing
+> writes would (a) contaminate the evidence and (b) defeat the read-side
+> clamping done by `ApplySystemPolicyScope` (G-171): if writes were allowed,
+> the clamp would hide newly-created rows on the next read, producing
+> confusing "I created it but cannot see it" behavior.
+>
+> **Resolution path for the user:** a superadmin deactivates INVESTIGATION
+> mode via `/admin/compliance/deactivate` (allowlisted, so the toggle itself
+> is never blocked). This is a soft block — the user escalates by toggling
+> the policy off, not by escalating privileges.
+
+- **Original evidence:** `CheckSystemPolicy.php:33-58` — middleware only
+  loaded + shared + auto-deactivated; no write enforcement.
+- **Impact (historical):** INVESTIGATION mode did NOT block destructive
+  operations (DELETE/UPDATE on financial records). The compliance gate was
+  policy + audit + a single admin-page banner (NOT a global banner — G14),
+  not DB/service enforcement.
+- **Fix (done):** two-layer write freeze (HTTP middleware + service-layer
+  GL chokepoint hook) + custom exception + exception-handler render.
 
 ### G3 — Route group lacks `role:superadmin` middleware (MAJOR)
 The `/admin/compliance/*` routes (`routes/web.php:1601-1605`, inside the outer `auth` group at
@@ -696,17 +759,66 @@ policy changes is dead code.
 Evidence: `2025_01_21_000001_add_listen_notify_triggers.php:344`; `SystemPolicyService.php:67-86,109-113`.
 
 ### G13 — NEW — INVESTIGATION mode has NO business-logic consumer (HIGH)
-Grep across `app/` for `isInvestigation()|getCurrentMode()` consumers (outside the service itself
-+ middleware + unused trait + admin controller view share) returns ZERO hits. No controller checks
-`$service->isInvestigation()` before allowing a destructive operation. No service checks it before
-posting a GL entry. No command checks it. No scheduled job pauses. The `ApplySystemPolicyScope`
-trait — the only mechanism that would actually clamp queries — is unused on any model. **Activating
-INVESTIGATION mode in production currently does NOTHING except change the compliance admin page
-banner + write an audit log row.** All financial operations continue normally.
-Evidence: grep `policyService->isInvestigation\|->getCurrentMode` returns hits ONLY in:
-`SystemPolicyService.php:36-49,128-140` (self), `CheckSystemPolicy.php:36-37` (load+share),
-`ApplySystemPolicyScope.php:44,48` (unused trait), `SystemPolicyController.php:26-28` (admin view
-share). NO business-logic consumer.
+
+> ✅ **RESOLVED — AUDIT-TRAIL-3** (cross-ref G2, resolved in the same wave).
+> The FIRST business-logic write-side consumers of `isInvestigation()` are
+> now in place:
+>
+>   1. `BlockWritesDuringInvestigation::handle()` — checks
+>      `app('system_policy_mode') === 'INVESTIGATION'` on every non-GET
+>      HTTP request (web + API). The first HTTP-layer business-logic
+>      consumer of the policy mode outside the loading/sharing middleware.
+>
+>   2. `SystemPolicyService::assertWriteAllowed()` — checks
+>      `$this->isInvestigation()` and throws
+>      `SystemPolicyWriteBlockedException`. Called from
+>      `JournalPostingService::createJournalEntry()` — the FIRST
+>      service-layer business-logic consumer. This is the single GL
+>      chokepoint: every business module (sales, purchase, stock,
+>      accounting) that posts a GL entry funnels through
+>      `createJournalEntry()`, so one hook covers all GL write paths
+>      including reversals (`reverseJournalEntry` calls
+>      `createJournalEntry` internally).
+>
+> **Grep evidence refuted:** `rg -n 'isInvestigation\b' laravel/app/` now
+> returns hits in `BlockWritesDuringInvestigation.php` (indirectly, via
+> `app('system_policy_mode')`) and `SystemPolicyService.php` (the new
+> `assertWriteAllowed` method) + the pre-existing
+> `ApplySystemPolicyScope` trait (G-171 read-side consumer) +
+> `JournalPostingService.php` (calls `assertWriteAllowed`). The
+> business-logic-consumer count is now 3 distinct layers (read-side trait,
+> HTTP middleware, service-layer GL hook), up from 0 at the time the gap
+> was filed.
+>
+> **Future write-side hooks (NOT in scope for AUDIT-TRAIL-3):** the GL
+> chokepoint covers all journal postings, but a few non-GL write paths
+> remain unguarded by the service-layer hook (they ARE guarded by the HTTP
+> middleware when invoked via web/API, but not when invoked via
+> console/queue):
+>   - `StockService::applyTransaction()` — SSOT inventory ledger (non-GL).
+>   - `SalesInvoiceService::confirm()` etc. — status transitions that
+>     don't immediately post a GL entry.
+>   - Direct Eloquent `update()`/`delete()` on the 6 transactional document
+>     models wired in G-171 (these bypass `JournalPostingService` until
+>     confirmation).
+> These are defense-in-depth gaps, not primary gaps — the HTTP middleware
+> catches the vast majority of real-world write attempts (web UI + mobile
+> API). A follow-up task can add `assertWriteAllowed()` calls to these
+> services if the forensic posture ever needs to block console/queue-driven
+> non-GL writes too. For now, the GL chokepoint + HTTP middleware together
+> close G-175.
+
+- **Original evidence:** grep `policyService->isInvestigation\|->getCurrentMode`
+  returned hits ONLY in `SystemPolicyService.php` (self),
+  `CheckSystemPolicy.php` (load+share), `ApplySystemPolicyScope.php`
+  (unused trait), `SystemPolicyController.php` (admin view share). NO
+  business-logic consumer.
+- **Impact (historical):** activating INVESTIGATION mode in production did
+  NOTHING except change the compliance admin page banner + write an audit
+  log row. All financial operations continued normally.
+- **Fix (done):** added the first 2 business-logic write-side consumers
+  (HTTP middleware + service-layer GL chokepoint hook). Read-side consumer
+  (ApplySystemPolicyScope trait) was wired in G-171 (AUDIT-TRAIL-2).
 
 ### G14 — NEW — No global investigation-mode banner (LOW — doc accuracy)
 The Phase 5 doc §4 claimed "All users — see the investigation banner (Blade `$isInvestigation`

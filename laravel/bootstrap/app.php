@@ -32,6 +32,14 @@ return Application::configure(basePath: dirname(__DIR__))
         // Phase 11: System Policy — loads current policy (cached) and shares with app.
         $middleware->append(\App\Http\Middleware\CheckSystemPolicy::class);
 
+        // AUDIT-TRAIL-3 (G-172): block all non-GET requests during INVESTIGATION
+        // mode. Runs AFTER CheckSystemPolicy so app('system_policy_mode') is
+        // available. Allowlist: auth flows + compliance admin (so superadmin
+        // can deactivate) + public docs + health check. See
+        // BlockWritesDuringInvestigation. Service-layer defense-in-depth hook
+        // lives in JournalPostingService::createJournalEntry (G-175).
+        $middleware->append(\App\Http\Middleware\BlockWritesDuringInvestigation::class);
+
         // Phase 3: Trust proxies (VPS behind Nginx reverse proxy).
         $middleware->trustProxies(at: '*');
 
@@ -70,6 +78,30 @@ return Application::configure(basePath: dirname(__DIR__))
                     'name' => $e->getWarehouseName(),
                 ],
                 'sessions' => $e->getSessions(),
+            ];
+            if ($request->expectsJson() || $request->is('api/*')) {
+                return response()->json($payload, 422);
+            }
+            return redirect()->back()->withInput()->with('error', $e->getMessage());
+        });
+
+        // AUDIT-TRAIL-3 (G-172 + G-175): render the INVESTIGATION-mode write
+        // block as a clear 422 — JSON for API/AJAX callers, a
+        // redirect-back-with-error for web. Mirrors the
+        // WarehouseFrozenForCountException render. Thrown by (1) the
+        // BlockWritesDuringInvestigation HTTP middleware (G-172) and (2)
+        // SystemPolicyService::assertWriteAllowed() called from
+        // JournalPostingService::createJournalEntry() (G-175). The latter
+        // can fire in console/queue contexts where no request exists — the
+        // exception then propagates as a plain RuntimeException (logged +
+        // failing the job/command), which is the correct forensic posture.
+        $exceptions->render(function (\App\Exceptions\SystemPolicyWriteBlockedException $e, \Illuminate\Http\Request $request) {
+            $payload = [
+                'message'   => $e->getMessage(),
+                'error'     => 'system_policy_write_blocked',
+                'mode'      => $e->getMode(),
+                'operation' => $e->getOperation(),
+                'context'   => $e->getContext(),
             ];
             if ($request->expectsJson() || $request->is('api/*')) {
                 return response()->json($payload, 422);

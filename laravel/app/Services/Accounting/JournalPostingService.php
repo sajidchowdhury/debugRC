@@ -2,6 +2,7 @@
 
 namespace App\Services\Accounting;
 
+use App\Services\Compliance\SystemPolicyService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -24,12 +25,23 @@ use Illuminate\Support\Facades\Log;
  * the posting methods directly. The posting methods are convenience
  * wrappers that build the correct lines for each business event.
  *
+ * AUDIT-TRAIL-3 (G-175): createJournalEntry() calls
+ * SystemPolicyService::assertWriteAllowed() at the top — this is the single
+ * GL chokepoint (reverseJournalEntry calls it internally, so reversals are
+ * also blocked). When INVESTIGATION mode is active, ALL GL postings are
+ * blocked with SystemPolicyWriteBlockedException (caught by the
+ * bootstrap/app.php exception handler — 422 JSON for API/AJAX,
+ * redirect-back-with-error for web). This is the service-layer
+ * defense-in-depth that catches writes bypassing HTTP middleware (console
+ * commands, queued jobs, scheduled tasks).
+ *
  * See docs/migration/journal_posting_rules.md for the full rules.
  */
 class JournalPostingService
 {
     public function __construct(
-        private LedgerNatureService $natureService
+        private LedgerNatureService $natureService,
+        private SystemPolicyService $policyService
     ) {}
 
     // ============================================================
@@ -59,6 +71,17 @@ class JournalPostingService
      */
     public function createJournalEntry(array $entry, array $lines): int
     {
+        // AUDIT-TRAIL-3 (G-175): enforce the INVESTIGATION-mode write freeze
+        // at the GL chokepoint. reverseJournalEntry() calls this method
+        // internally, so reversals are also blocked. Console commands, queued
+        // jobs, and scheduled tasks that bypass the HTTP middleware are
+        // caught here. Fail-open if the policy lookup itself throws (cache
+        // outage) — see SystemPolicyService::assertWriteAllowed().
+        $this->policyService->assertWriteAllowed(
+            'journal_entry_create',
+            $entry['reference_type'] ?? null
+        );
+
         // 1. Validate balance: Dr must equal Cr.
         $totalDebit = round((float) collect($lines)->sum('debit'), 2);
         $totalCredit = round((float) collect($lines)->sum('credit'), 2);
