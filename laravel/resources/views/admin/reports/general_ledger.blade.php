@@ -4,6 +4,10 @@
 <div class="container-fluid py-2">
 
     {{-- Hero header --}}
+    {{-- Note: The CTE version (admin.reports.generalLedgerCte → rcerp_general_ledger_cte) is
+        canonical — it uses a SQL window function for O(n log n) server-side running balance.
+        This view is retained as a fallback when the CTE function is unavailable.
+        G-147/G-149 (REPORTS-AUDIT-2). --}}
     <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
             <h2 class="h4 mb-1"><i class="fas fa-book-open me-2 text-primary"></i> General Ledger</h2>

@@ -4,6 +4,9 @@
 <div class="container-fluid py-2">
 
     {{-- Hero header --}}
+    {{-- Note: The CTE version (admin.reports.arAgingCte → rcerp_ar_aging_cte) is canonical.
+        This view is retained for the MV-accelerated today's-aging path (mv_ar_aging) and as
+        a fallback when the CTE function is unavailable. G-139/G-142 (REPORTS-AUDIT-2). --}}
     <div class="d-flex justify-content-between align-items-center mb-3">
         <div>
             <h2 class="h4 mb-1"><i class="fas fa-clock me-2 text-primary"></i> Receivable Aging</h2>

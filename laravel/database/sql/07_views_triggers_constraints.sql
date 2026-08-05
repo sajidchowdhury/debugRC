@@ -910,3 +910,888 @@ CREATE INDEX IF NOT EXISTS idx_doc_seq_covering
 -- the pg_cron extension before scheduling jobs. Defining them here
 -- (during 2025_01_01_000001 execution) would fail with
 -- "schema 'cron' does not exist" because pg_cron is not yet installed.
+
+-- ============================================================
+-- MATERIALIZED VIEWS + CTE FUNCTIONS BASELINE MIRROR
+-- ============================================================
+-- SOURCED FROM MIGRATIONS:
+--   * database/migrations/2025_01_03_000001_create_report_materialized_views.php
+--     (7 MVs + refresh_all_report_views() + indexes)
+--   * database/migrations/2025_01_21_000002_add_cte_complex_queries.php
+--     (4 rcerp_*_cte PL/pgSQL functions + 2 convenience views)
+--
+-- This section is maintained here as a CANONICAL BASELINE MIRROR so that
+-- developers reading the SQL file (rather than running `php artisan migrate`)
+-- have full visibility into the MV + CTE DDL that powers financial reports.
+--
+-- ON A FRESH DATABASE: run `php artisan migrate` — the migrations use
+-- CREATE MATERIALIZED VIEW IF NOT EXISTS / CREATE OR REPLACE FUNCTION,
+-- so they are idempotent. The statements below are kept verbatim from the
+-- migrations for documentation + DBA point-in-time recovery use cases.
+--
+-- G-128/G-129 (REPORTS-AUDIT-2): previously this file had ZERO matches for
+-- mv_/rcerp_/refresh_all_report_views, so DBAs reading this file for fresh
+-- provisioning would miss the 7 MVs + 4 CTE functions entirely.
+
+-- ============================================================
+-- 1. MATERIALIZED VIEWS (from 2025_01_03_000001_create_report_materialized_views.php)
+-- ============================================================
+
+-- 1.1 mv_ledger_balances — per-ledger opening/period/closing.
+--     Foundation for Trial Balance, P&L, Balance Sheet.
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_ledger_balances AS
+SELECT
+    l.id AS ledger_id,
+    l.ledger_code,
+    l.ledger_name,
+    l.account_type,
+    l.ledger_nature,
+    l.is_control_account,
+    l.is_active,
+    l.parent_id,
+    COALESCE(SUM(jl.debit), 0) AS total_debit,
+    COALESCE(SUM(jl.credit), 0) AS total_credit,
+    COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0) AS net_debit,
+    COUNT(jl.id) AS line_count,
+    MAX(je.entry_date) AS last_entry_date
+FROM ledgers l
+LEFT JOIN journal_lines jl ON jl.ledger_id = l.id
+LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id AND COALESCE(je.is_reversed, false) = false
+GROUP BY l.id, l.ledger_code, l.ledger_name, l.account_type, l.ledger_nature,
+         l.is_control_account, l.is_active, l.parent_id;
+
+CREATE UNIQUE INDEX IF NOT EXISTS mv_ledger_balances_ledger_id_idx ON mv_ledger_balances (ledger_id);
+CREATE INDEX IF NOT EXISTS mv_ledger_balances_account_type_idx ON mv_ledger_balances (account_type);
+CREATE INDEX IF NOT EXISTS mv_ledger_balances_nature_idx ON mv_ledger_balances (ledger_nature);
+
+-- 1.2 mv_ar_aging — customer receivable aging buckets.
+--     Computed as of the latest refresh (CURRENT_DATE at refresh time).
+--     For as-of-date queries, ReportService::receivableAging falls back to direct query.
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_ar_aging AS
+SELECT
+    c.id AS customer_id,
+    c.customer_code,
+    c.customer_name,
+    c.mobile,
+    cl.branch_id,
+    b.branch_name,
+    SUM(CASE WHEN (CURRENT_DATE - cl.transaction_date) <= 30
+        THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_0_30,
+    SUM(CASE WHEN (CURRENT_DATE - cl.transaction_date) BETWEEN 31 AND 60
+        THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_31_60,
+    SUM(CASE WHEN (CURRENT_DATE - cl.transaction_date) BETWEEN 61 AND 90
+        THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_61_90,
+    SUM(CASE WHEN (CURRENT_DATE - cl.transaction_date) > 90
+        THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_90_plus,
+    SUM(cl.debit - cl.credit) AS total_receivable
+FROM customer_ledger cl
+INNER JOIN customers c ON c.id = cl.customer_id
+LEFT JOIN branches b ON b.id = cl.branch_id
+WHERE COALESCE(cl.is_reversed, false) = false
+GROUP BY c.id, c.customer_code, c.customer_name, c.mobile, cl.branch_id, b.branch_name
+HAVING SUM(cl.debit - cl.credit) > 0.005;
+
+CREATE UNIQUE INDEX IF NOT EXISTS mv_ar_aging_customer_branch_idx ON mv_ar_aging (customer_id, branch_id);
+CREATE INDEX IF NOT EXISTS mv_ar_aging_branch_idx ON mv_ar_aging (branch_id);
+
+-- 1.3 mv_ap_aging — supplier payable aging buckets.
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_ap_aging AS
+SELECT
+    s.id AS supplier_id,
+    s.supplier_code,
+    s.supplier_name,
+    s.mobile,
+    sl.branch_id,
+    b.branch_name,
+    SUM(CASE WHEN (CURRENT_DATE - sl.transaction_date) <= 30
+        THEN (sl.credit - sl.debit) ELSE 0 END) AS bucket_0_30,
+    SUM(CASE WHEN (CURRENT_DATE - sl.transaction_date) BETWEEN 31 AND 60
+        THEN (sl.credit - sl.debit) ELSE 0 END) AS bucket_31_60,
+    SUM(CASE WHEN (CURRENT_DATE - sl.transaction_date) BETWEEN 61 AND 90
+        THEN (sl.credit - sl.debit) ELSE 0 END) AS bucket_61_90,
+    SUM(CASE WHEN (CURRENT_DATE - sl.transaction_date) > 90
+        THEN (sl.credit - sl.debit) ELSE 0 END) AS bucket_90_plus,
+    SUM(sl.credit - sl.debit) AS total_payable
+FROM supplier_ledger sl
+INNER JOIN suppliers s ON s.id = sl.supplier_id
+LEFT JOIN branches b ON b.id = sl.branch_id
+WHERE COALESCE(sl.is_reversed, false) = false
+GROUP BY s.id, s.supplier_code, s.supplier_name, s.mobile, sl.branch_id, b.branch_name
+HAVING SUM(sl.credit - sl.debit) > 0.005;
+
+CREATE UNIQUE INDEX IF NOT EXISTS mv_ap_aging_supplier_branch_idx ON mv_ap_aging (supplier_id, branch_id);
+CREATE INDEX IF NOT EXISTS mv_ap_aging_branch_idx ON mv_ap_aging (branch_id);
+
+-- 1.4 mv_stock_valuation — per-warehouse product stock with value.
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_stock_valuation AS
+SELECT
+    ws.warehouse_id,
+    ws.product_id,
+    p.product_code,
+    p.product_name,
+    p.unit,
+    w.warehouse_name,
+    w.branch_id,
+    b.branch_name,
+    ws.qty AS on_hand_qty,
+    ws.avg_cost,
+    (ws.qty * ws.avg_cost) AS stock_value
+FROM warehouse_stock ws
+INNER JOIN products p ON p.id = ws.product_id
+INNER JOIN warehouses w ON w.id = ws.warehouse_id
+INNER JOIN branches b ON b.id = w.branch_id
+WHERE ws.qty > 0;
+
+CREATE UNIQUE INDEX IF NOT EXISTS mv_stock_valuation_wh_prod_idx ON mv_stock_valuation (warehouse_id, product_id);
+CREATE INDEX IF NOT EXISTS mv_stock_valuation_branch_idx ON mv_stock_valuation (branch_id);
+CREATE INDEX IF NOT EXISTS mv_stock_valuation_product_idx ON mv_stock_valuation (product_id);
+
+-- 1.5 mv_journal_entry_summary — per-entry debit/credit totals.
+--     For Journal Entries report + reconciliation.
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_journal_entry_summary AS
+SELECT
+    je.id AS journal_entry_id,
+    je.entry_no,
+    je.entry_date,
+    je.reference_type,
+    je.reference_id,
+    je.branch_id,
+    je.description,
+    je.is_reversed,
+    je.created_by,
+    je.created_at,
+    b.branch_name,
+    COALESCE(SUM(jl.debit), 0) AS total_debit,
+    COALESCE(SUM(jl.credit), 0) AS total_credit,
+    COUNT(jl.id) AS line_count
+FROM journal_entries je
+LEFT JOIN journal_lines jl ON jl.journal_entry_id = je.id
+LEFT JOIN branches b ON b.id = je.branch_id
+GROUP BY je.id, je.entry_no, je.entry_date, je.reference_type, je.reference_id,
+         je.branch_id, je.description, je.is_reversed, je.created_by, je.created_at, b.branch_name;
+
+CREATE UNIQUE INDEX IF NOT EXISTS mv_journal_entry_summary_je_id_idx ON mv_journal_entry_summary (journal_entry_id);
+CREATE INDEX IF NOT EXISTS mv_journal_entry_summary_date_idx ON mv_journal_entry_summary (entry_date);
+CREATE INDEX IF NOT EXISTS mv_journal_entry_summary_branch_idx ON mv_journal_entry_summary (branch_id);
+CREATE INDEX IF NOT EXISTS mv_journal_entry_summary_ref_idx ON mv_journal_entry_summary (reference_type, reference_id);
+
+-- 1.6 mv_branch_intercompany — Due-from/Due-to balances per branch pair.
+--     NOTE: references the NEW branch_ledger schema (debit / credit / is_reversed)
+--     created directly by 02_accounting.sql. Earlier versions of the migration
+--     referenced the OLD schema (amount, is_settled) and were later rewritten by
+--     migration 2026_07_29_000013 — that double-write is no longer needed because
+--     02_accounting.sql now creates the NEW schema directly. CREATE MATERIALIZED
+--     VIEW IF NOT EXISTS makes this statement a no-op if 2026_07_29_000013
+--     already ran first.
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_branch_intercompany AS
+SELECT
+    bl.from_branch_id,
+    bl.to_branch_id,
+    fb.branch_name AS from_branch_name,
+    tb.branch_name AS to_branch_name,
+    SUM(bl.debit) AS total_debit,
+    SUM(bl.credit) AS total_credit,
+    SUM(bl.debit) - SUM(bl.credit) AS net_balance,
+    SUM(CASE WHEN NOT bl.is_reversed THEN bl.debit - bl.credit ELSE 0 END) AS outstanding_amount,
+    COUNT(*) AS entry_count
+FROM branch_ledger bl
+INNER JOIN branches fb ON fb.id = bl.from_branch_id
+INNER JOIN branches tb ON tb.id = bl.to_branch_id
+GROUP BY bl.from_branch_id, bl.to_branch_id, fb.branch_name, tb.branch_name;
+
+CREATE UNIQUE INDEX IF NOT EXISTS mv_branch_intercompany_from_to_idx ON mv_branch_intercompany (from_branch_id, to_branch_id);
+
+-- 1.7 mv_product_movement_summary — per-product in/out totals.
+--     For Product Stock Analysis + Product Movement reports.
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_product_movement_summary AS
+SELECT
+    st.product_id,
+    p.product_code,
+    p.product_name,
+    p.unit,
+    st.warehouse_id,
+    w.warehouse_name,
+    w.branch_id,
+    b.branch_name,
+    SUM(CASE WHEN st.qty > 0 THEN st.qty ELSE 0 END) AS total_in_qty,
+    SUM(CASE WHEN st.qty < 0 THEN ABS(st.qty) ELSE 0 END) AS total_out_qty,
+    SUM(st.qty) AS net_qty,
+    SUM(CASE WHEN st.qty > 0 THEN st.total_value ELSE 0 END) AS total_in_value,
+    SUM(CASE WHEN st.qty < 0 THEN st.total_value ELSE 0 END) AS total_out_value,
+    MIN(st.transaction_date) AS first_movement_date,
+    MAX(st.transaction_date) AS last_movement_date,
+    COUNT(*) AS movement_count
+FROM stock_transactions st
+INNER JOIN products p ON p.id = st.product_id
+INNER JOIN warehouses w ON w.id = st.warehouse_id
+INNER JOIN branches b ON b.id = w.branch_id
+GROUP BY st.product_id, p.product_code, p.product_name, p.unit,
+         st.warehouse_id, w.warehouse_name, w.branch_id, b.branch_name;
+
+CREATE UNIQUE INDEX IF NOT EXISTS mv_pms_prod_wh_idx ON mv_product_movement_summary (product_id, warehouse_id);
+CREATE INDEX IF NOT EXISTS mv_pms_branch_idx ON mv_product_movement_summary (branch_id);
+
+-- 1.8 refresh_all_report_views() — refreshes all 7 MVs concurrently.
+--     Called by the Laravel scheduler (every 5 min via pg_cron + reports:refresh
+--     artisan command) and on-demand after journal postings.
+--     NOTE: migration 2026_09_04_000001_rewrite_refresh_all_report_views_with_isolation_and_audit
+--     supersedes this with a version that adds transaction isolation + audit logging.
+--     The simple version below is the original baseline (still valid for fresh installs
+--     that have not yet applied the rewrite migration).
+CREATE OR REPLACE FUNCTION refresh_all_report_views()
+RETURNS void AS $$
+BEGIN
+    REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ledger_balances;
+    REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ar_aging;
+    REFRESH MATERIALIZED VIEW CONCURRENTLY mv_ap_aging;
+    REFRESH MATERIALIZED VIEW CONCURRENTLY mv_stock_valuation;
+    REFRESH MATERIALIZED VIEW CONCURRENTLY mv_journal_entry_summary;
+    REFRESH MATERIALIZED VIEW CONCURRENTLY mv_branch_intercompany;
+    REFRESH MATERIALIZED VIEW CONCURRENTLY mv_product_movement_summary;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================================
+-- 2. CTE FUNCTIONS (from 2025_01_21_000002_add_cte_complex_queries.php)
+--    All 4 functions are LANGUAGE plpgsql STABLE — STABLE volatility
+--    allows query plan caching and is safe for read-only reports.
+-- ============================================================
+
+-- 2.1 rcerp_today_summary(p_branch_id, p_date) — All dashboard KPIs in a single
+--     CTE query. Replaces DashboardController::getRevenueKPIs() which made 6+
+--     separate SQL queries.
+CREATE OR REPLACE FUNCTION rcerp_today_summary(
+    p_branch_id integer DEFAULT NULL,
+    p_date      date    DEFAULT CURRENT_DATE
+)
+RETURNS jsonb AS $$
+DECLARE
+    v_result jsonb;
+BEGIN
+    WITH
+    -- CTE 1: Active invoices (not cancelled, not reversed)
+    active_invoices AS (
+        SELECT *
+        FROM sales_invoices
+        WHERE is_reversed = false
+          AND status NOT IN ('cancelled', 'reversed')
+          AND deleted_at IS NULL
+          AND (p_branch_id IS NULL OR branch_id = p_branch_id)
+    ),
+
+    -- CTE 2: Today's sales summary
+    today_sales AS (
+        SELECT
+            COUNT(*)          AS invoice_count,
+            COALESCE(SUM(total_amount), 0) AS total_sales,
+            COALESCE(SUM(due_amount), 0)   AS total_due
+        FROM active_invoices
+        WHERE invoice_date = p_date
+    ),
+
+    -- CTE 3: MTD sales summary
+    mtd_sales AS (
+        SELECT
+            COUNT(*)          AS invoice_count,
+            COALESCE(SUM(total_amount), 0) AS total_sales,
+            COALESCE(SUM(due_amount), 0)   AS total_due
+        FROM active_invoices
+        WHERE invoice_date BETWEEN DATE_TRUNC('month', p_date)::date AND p_date
+    ),
+
+    -- CTE 4: MTD collection
+    mtd_collection AS (
+        SELECT COALESCE(SUM(amount), 0) AS total_collection
+        FROM customer_payments
+        WHERE payment_date BETWEEN DATE_TRUNC('month', p_date)::date AND p_date
+          AND is_reversed = false
+          -- Note: customer_payments has no deleted_at column (no soft-delete);
+          -- only is_reversed is used to exclude reversed payments.
+          AND (p_branch_id IS NULL OR branch_id = p_branch_id)
+    ),
+
+    -- CTE 5: All-time outstanding (non-draft active invoices with due > 0)
+    all_time_outstanding AS (
+        SELECT COALESCE(SUM(due_amount), 0) AS total_outstanding
+        FROM active_invoices
+        WHERE status NOT IN ('draft')
+          AND due_amount > 0
+    ),
+
+    -- CTE 6: Previous month revenue (for growth calc)
+    prev_month_sales AS (
+        SELECT COALESCE(SUM(total_amount), 0) AS total_sales
+        FROM active_invoices
+        WHERE invoice_date BETWEEN
+            DATE_TRUNC('month', p_date - INTERVAL '1 month')::date AND
+            (DATE_TRUNC('month', p_date) - INTERVAL '1 day')::date
+    ),
+
+    -- CTE 7: Pending operations
+    pending_ops AS (
+        SELECT
+            (SELECT COUNT(*) FROM active_invoices WHERE is_godown_prepared = false AND status = 'confirmed') AS pending_godown,
+            (SELECT COUNT(*) FROM active_invoices WHERE is_godown_prepared = true AND is_challan_issued = false AND status = 'confirmed') AS pending_challan,
+            (SELECT COUNT(*) FROM active_invoices WHERE status = 'draft') AS draft_count
+    ),
+
+    -- CTE 8: Top 5 customers by MTD revenue
+    top_customers AS (
+        SELECT
+            c.id AS customer_id,
+            c.customer_name,
+            COUNT(*) AS invoice_count,
+            COALESCE(SUM(ai.total_amount), 0) AS total_revenue,
+            COALESCE(SUM(ai.due_amount), 0) AS total_due
+        FROM active_invoices ai
+        INNER JOIN customers c ON c.id = ai.customer_id
+        WHERE ai.invoice_date BETWEEN DATE_TRUNC('month', p_date)::date AND p_date
+        GROUP BY c.id, c.customer_name
+        ORDER BY total_revenue DESC
+        LIMIT 5
+    ),
+
+    -- CTE 9: Top 5 products by MTD qty sold
+    top_products AS (
+        SELECT
+            p.id AS product_id,
+            p.product_code,
+            p.product_name,
+            SUM(sii.qty) AS qty_sold,
+            SUM(sii.qty * sii.rate) AS revenue
+        FROM sales_invoice_items sii
+        INNER JOIN active_invoices ai ON ai.id = sii.sales_invoice_id
+        INNER JOIN products p ON p.id = sii.product_id
+        WHERE ai.invoice_date BETWEEN DATE_TRUNC('month', p_date)::date AND p_date
+        GROUP BY p.id, p.product_code, p.product_name
+        ORDER BY qty_sold DESC
+        LIMIT 5
+    ),
+
+    -- CTE 10: AR aging buckets (proper sub-ledger based)
+    ar_aging AS (
+        SELECT
+            SUM(CASE WHEN (p_date - cl.transaction_date) <= 30 THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_0_30,
+            SUM(CASE WHEN (p_date - cl.transaction_date) BETWEEN 31 AND 60 THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_31_60,
+            SUM(CASE WHEN (p_date - cl.transaction_date) BETWEEN 61 AND 90 THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_61_90,
+            SUM(CASE WHEN (p_date - cl.transaction_date) > 90 THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_90_plus
+        FROM customer_ledger cl
+        WHERE cl.transaction_date <= p_date
+          AND COALESCE(cl.is_reversed, false) = false
+          AND (p_branch_id IS NULL OR cl.branch_id = p_branch_id)
+    ),
+
+    -- CTE 11: Branch revenue comparison (MTD)
+    branch_revenue AS (
+        SELECT
+            b.id AS branch_id,
+            b.branch_name,
+            COUNT(*) AS invoice_count,
+            COALESCE(SUM(ai.total_amount), 0) AS revenue
+        FROM active_invoices ai
+        INNER JOIN branches b ON b.id = ai.branch_id
+        WHERE ai.invoice_date BETWEEN DATE_TRUNC('month', p_date)::date AND p_date
+        GROUP BY b.id, b.branch_name
+        ORDER BY revenue DESC
+    )
+
+    -- Final aggregation: assemble all CTEs into a single JSON result
+    SELECT jsonb_build_object(
+        'date', p_date,
+        'branch_id', p_branch_id,
+        'today', jsonb_build_object(
+            'invoice_count', (SELECT invoice_count FROM today_sales),
+            'total_sales', (SELECT total_sales FROM today_sales),
+            'total_due', (SELECT total_due FROM today_sales)
+        ),
+        'mtd', jsonb_build_object(
+            'invoice_count', (SELECT invoice_count FROM mtd_sales),
+            'total_sales', (SELECT total_sales FROM mtd_sales),
+            'total_due', (SELECT total_due FROM mtd_sales),
+            'total_collection', (SELECT total_collection FROM mtd_collection),
+            'collection_rate', CASE
+                WHEN (SELECT total_sales FROM mtd_sales) > 0
+                THEN ROUND(((SELECT total_collection FROM mtd_collection) / (SELECT total_sales FROM mtd_sales) * 100)::numeric, 1)
+                ELSE 0
+            END
+        ),
+        'outstanding', jsonb_build_object(
+            'total_outstanding', (SELECT total_outstanding FROM all_time_outstanding)
+        ),
+        'growth', jsonb_build_object(
+            'prev_month_sales', (SELECT total_sales FROM prev_month_sales),
+            'revenue_growth_pct', CASE
+                WHEN (SELECT total_sales FROM prev_month_sales) > 0
+                THEN ROUND((((SELECT total_sales FROM mtd_sales) - (SELECT total_sales FROM prev_month_sales)) / (SELECT total_sales FROM prev_month_sales) * 100)::numeric, 1)
+                ELSE 0
+            END
+        ),
+        'pending', (SELECT jsonb_build_object(
+            'pending_godown', pending_godown,
+            'pending_challan', pending_challan,
+            'draft_count', draft_count
+        ) FROM pending_ops),
+        'top_customers', COALESCE((SELECT jsonb_agg(row_to_json(tc)::jsonb) FROM top_customers tc), '[]'::jsonb),
+        'top_products', COALESCE((SELECT jsonb_agg(row_to_json(tp)::jsonb) FROM top_products tp), '[]'::jsonb),
+        'ar_aging', (SELECT jsonb_build_object(
+            'bucket_0_30', bucket_0_30,
+            'bucket_31_60', bucket_31_60,
+            'bucket_61_90', bucket_61_90,
+            'bucket_90_plus', bucket_90_plus
+        ) FROM ar_aging),
+        'branch_revenue', COALESCE((SELECT jsonb_agg(row_to_json(br)::jsonb) FROM branch_revenue br), '[]'::jsonb)
+    ) INTO v_result;
+
+    RETURN v_result;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- 2.2 rcerp_ar_aging_cte(p_as_of_date, p_branch_id) — Proper sub-ledger
+--     based AR aging with GL reconciliation. Single CTE query replaces 2
+--     queries (aging + GL check).
+CREATE OR REPLACE FUNCTION rcerp_ar_aging_cte(
+    p_as_of_date date,
+    p_branch_id  integer DEFAULT NULL
+)
+RETURNS jsonb AS $$
+DECLARE
+    v_result jsonb;
+BEGIN
+    WITH
+    -- CTE 1: Customer sub-ledger balances with aging buckets
+    customer_balances AS (
+        SELECT
+            c.id AS customer_id,
+            c.customer_code,
+            c.customer_name,
+            c.mobile,
+            cl.branch_id,
+            COALESCE(b.branch_name, '—') AS branch_name,
+            SUM(CASE WHEN (p_as_of_date - cl.transaction_date) <= 30
+                THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_0_30,
+            SUM(CASE WHEN (p_as_of_date - cl.transaction_date) BETWEEN 31 AND 60
+                THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_31_60,
+            SUM(CASE WHEN (p_as_of_date - cl.transaction_date) BETWEEN 61 AND 90
+                THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_61_90,
+            SUM(CASE WHEN (p_as_of_date - cl.transaction_date) > 90
+                THEN (cl.debit - cl.credit) ELSE 0 END) AS bucket_90_plus,
+            SUM(cl.debit - cl.credit) AS total_receivable
+        FROM customer_ledger cl
+        INNER JOIN customers c ON c.id = cl.customer_id
+        LEFT JOIN branches b ON b.id = cl.branch_id
+        WHERE cl.transaction_date <= p_as_of_date
+          AND COALESCE(cl.is_reversed, false) = false
+          AND (p_branch_id IS NULL OR cl.branch_id = p_branch_id)
+        GROUP BY c.id, c.customer_code, c.customer_name, c.mobile, cl.branch_id, b.branch_name
+        HAVING SUM(cl.debit - cl.credit) > 0.005
+    ),
+
+    -- CTE 2: GL AR control account balance
+    gl_ar_control AS (
+        SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS gl_balance
+        FROM ledgers l
+        JOIN journal_lines jl ON jl.ledger_id = l.id
+        JOIN journal_entries je ON je.id = jl.journal_entry_id
+        WHERE l.ledger_nature = 'ar'
+          AND COALESCE(je.is_reversed, false) = false
+          AND je.entry_date <= p_as_of_date
+          AND (p_branch_id IS NULL OR je.branch_id = p_branch_id)
+    ),
+
+    -- CTE 3: Per-bucket invoice detail (top overdue invoices)
+    overdue_invoices AS (
+        SELECT
+            si.id,
+            si.invoice_code,
+            si.invoice_date,
+            (p_as_of_date - si.invoice_date) AS days_overdue,
+            si.due_amount,
+            c.customer_name,
+            b.branch_name
+        FROM sales_invoices si
+        INNER JOIN customers c ON c.id = si.customer_id
+        LEFT JOIN branches b ON b.id = si.branch_id
+        WHERE si.is_reversed = false
+          AND si.status NOT IN ('draft', 'cancelled', 'reversed')
+          AND si.deleted_at IS NULL
+          AND si.due_amount > 0
+          AND si.invoice_date < p_as_of_date - INTERVAL '30 days'
+          AND (p_branch_id IS NULL OR si.branch_id = p_branch_id)
+        ORDER BY si.due_amount DESC
+        LIMIT 20
+    ),
+
+    -- CTE 4: Aging summary totals
+    aging_totals AS (
+        SELECT
+            SUM(bucket_0_30)   AS total_bucket_0_30,
+            SUM(bucket_31_60)  AS total_bucket_31_60,
+            SUM(bucket_61_90)  AS total_bucket_61_90,
+            SUM(bucket_90_plus) AS total_bucket_90_plus,
+            SUM(total_receivable) AS grand_total
+        FROM customer_balances
+    ),
+
+    -- CTE 5: Aging by branch (for multi-branch analysis)
+    aging_by_branch AS (
+        SELECT
+            cb.branch_id,
+            cb.branch_name,
+            SUM(cb.bucket_0_30)   AS bucket_0_30,
+            SUM(cb.bucket_31_60)  AS bucket_31_60,
+            SUM(cb.bucket_61_90)  AS bucket_61_90,
+            SUM(cb.bucket_90_plus) AS bucket_90_plus,
+            SUM(cb.total_receivable) AS total_receivable
+        FROM customer_balances cb
+        GROUP BY cb.branch_id, cb.branch_name
+        ORDER BY total_receivable DESC
+    )
+
+    -- Final: assemble into JSON
+    SELECT jsonb_build_object(
+        'meta', jsonb_build_object(
+            'title', 'Receivable Aging (CTE)',
+            'as_of_date', p_as_of_date,
+            'branch_id', p_branch_id,
+            'source', 'cte_query'
+        ),
+        'customers', COALESCE((SELECT jsonb_agg(jsonb_build_object(
+            'customer_id', customer_id,
+            'customer_code', customer_code,
+            'customer_name', customer_name,
+            'mobile', mobile,
+            'branch_id', branch_id,
+            'branch_name', branch_name,
+            'bucket_0_30', bucket_0_30,
+            'bucket_31_60', bucket_31_60,
+            'bucket_61_90', bucket_61_90,
+            'bucket_90_plus', bucket_90_plus,
+            'total_receivable', total_receivable
+        ) ORDER BY total_receivable DESC) FROM customer_balances), '[]'::jsonb),
+        'totals', jsonb_build_object(
+            'bucket_0_30', (SELECT total_bucket_0_30 FROM aging_totals),
+            'bucket_31_60', (SELECT total_bucket_31_60 FROM aging_totals),
+            'bucket_61_90', (SELECT total_bucket_61_90 FROM aging_totals),
+            'bucket_90_plus', (SELECT total_bucket_90_plus FROM aging_totals),
+            'total_receivable', (SELECT grand_total FROM aging_totals),
+            'gl_ar_control', (SELECT gl_balance FROM gl_ar_control)
+        ),
+        'checks', jsonb_build_object(
+            'matches_gl', (SELECT ABS(grand_total - gl_balance) < 0.01 FROM aging_totals, gl_ar_control)
+        ),
+        'overdue_invoices', COALESCE((SELECT jsonb_agg(row_to_json(oi)::jsonb ORDER BY due_amount DESC) FROM overdue_invoices oi), '[]'::jsonb),
+        'aging_by_branch', COALESCE((SELECT jsonb_agg(row_to_json(ab)::jsonb ORDER BY total_receivable DESC) FROM aging_by_branch ab), '[]'::jsonb)
+    ) INTO v_result;
+
+    RETURN v_result;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- 2.3 rcerp_general_ledger_cte(p_from_date, p_to_date, p_ledger_id, p_branch_id)
+--     General ledger with SQL window-function running balance. Replaces
+--     PHP-side running balance computation in ReportService::generalLedger().
+CREATE OR REPLACE FUNCTION rcerp_general_ledger_cte(
+    p_from_date  date,
+    p_to_date    date,
+    p_ledger_id  integer DEFAULT NULL,
+    p_branch_id  integer DEFAULT NULL
+)
+RETURNS jsonb AS $$
+DECLARE
+    v_result jsonb;
+BEGIN
+    WITH
+    -- CTE 1: Opening balances per ledger (before the from_date)
+    opening AS (
+        SELECT
+            jl.ledger_id,
+            COALESCE(SUM(jl.debit - jl.credit), 0) AS opening_balance
+        FROM journal_lines jl
+        JOIN journal_entries je ON je.id = jl.journal_entry_id
+        WHERE je.entry_date < p_from_date
+          AND COALESCE(je.is_reversed, false) = false
+          AND (p_ledger_id IS NULL OR jl.ledger_id = p_ledger_id)
+          AND (p_branch_id IS NULL OR je.branch_id = p_branch_id)
+        GROUP BY jl.ledger_id
+    ),
+
+    -- CTE 2: Period activity with running balance (window function)
+    period_activity AS (
+        SELECT
+            je.id AS journal_entry_id,
+            je.entry_no,
+            je.entry_date,
+            je.reference_type,
+            je.reference_id,
+            je.description,
+            je.branch_id,
+            COALESCE(b.branch_name, '—') AS branch_name,
+            je.is_reversed,
+            jl.id AS journal_line_id,
+            jl.ledger_id,
+            l.ledger_code,
+            l.ledger_name,
+            l.account_type,
+            jl.debit,
+            jl.credit,
+            jl.entity_type,
+            jl.entity_id,
+            jl.memo,
+            -- Running balance: opening + cumulative sum of (debit - credit) partitioned by ledger
+            COALESCE(o.opening_balance, 0) +
+                SUM(jl.debit - jl.credit) OVER (
+                    PARTITION BY jl.ledger_id
+                    ORDER BY je.entry_date, je.entry_no, jl.id
+                    ROWS UNBOUNDED PRECEDING
+                ) AS running_balance
+        FROM journal_lines jl
+        JOIN journal_entries je ON je.id = jl.journal_entry_id
+        JOIN ledgers l ON l.id = jl.ledger_id
+        LEFT JOIN branches b ON b.id = je.branch_id
+        LEFT JOIN opening o ON o.ledger_id = jl.ledger_id
+        WHERE je.entry_date BETWEEN p_from_date AND p_to_date
+          AND COALESCE(je.is_reversed, false) = false
+          AND (p_ledger_id IS NULL OR jl.ledger_id = p_ledger_id)
+          AND (p_branch_id IS NULL OR je.branch_id = p_branch_id)
+        ORDER BY l.ledger_code, je.entry_date, je.entry_no, jl.id
+    ),
+
+    -- CTE 3: Closing balances per ledger
+    closing AS (
+        SELECT
+            pa.ledger_id,
+            MAX(pa.running_balance) AS closing_balance,
+            -- The last row's running_balance IS the closing balance
+            SUM(pa.debit) AS period_debit,
+            SUM(pa.credit) AS period_credit
+        FROM period_activity pa
+        GROUP BY pa.ledger_id
+    ),
+
+    -- CTE 4: Ledger summary for header section
+    ledger_summary AS (
+        SELECT
+            l.id AS ledger_id,
+            l.ledger_code,
+            l.ledger_name,
+            l.account_type,
+            COALESCE(o.opening_balance, 0) AS opening_balance,
+            COALESCE(c.period_debit, 0) AS period_debit,
+            COALESCE(c.period_credit, 0) AS period_credit,
+            COALESCE(c.closing_balance, COALESCE(o.opening_balance, 0)) AS closing_balance
+        FROM ledgers l
+        LEFT JOIN opening o ON o.ledger_id = l.id
+        LEFT JOIN closing c ON c.ledger_id = l.id
+        WHERE l.is_active = true
+          AND (p_ledger_id IS NULL OR l.id = p_ledger_id)
+          AND (
+              -- Only include ledgers that have activity or opening balance
+              o.opening_balance IS NOT NULL
+              OR c.period_debit IS NOT NULL
+              OR c.period_credit IS NOT NULL
+          )
+        ORDER BY l.ledger_code
+    )
+
+    -- Final: assemble into JSON
+    SELECT jsonb_build_object(
+        'meta', jsonb_build_object(
+            'title', 'General Ledger (CTE)',
+            'from_date', p_from_date,
+            'to_date', p_to_date,
+            'ledger_id', p_ledger_id,
+            'branch_id', p_branch_id,
+            'source', 'cte_window_function'
+        ),
+        'entries', COALESCE((SELECT jsonb_agg(jsonb_build_object(
+            'journal_entry_id', journal_entry_id,
+            'entry_no', entry_no,
+            'entry_date', entry_date,
+            'reference_type', reference_type,
+            'reference_id', reference_id,
+            'description', description,
+            'branch_id', branch_id,
+            'branch_name', branch_name,
+            'ledger_id', ledger_id,
+            'ledger_code', ledger_code,
+            'ledger_name', ledger_name,
+            'debit', debit,
+            'credit', credit,
+            'running_balance', running_balance,
+            'memo', memo
+        )) FROM period_activity), '[]'::jsonb),
+        'ledger_summary', COALESCE((SELECT jsonb_agg(row_to_json(ls)::jsonb) FROM ledger_summary ls), '[]'::jsonb),
+        'totals', jsonb_build_object(
+            'total_debit', (SELECT COALESCE(SUM(debit), 0) FROM period_activity),
+            'total_credit', (SELECT COALESCE(SUM(credit), 0) FROM period_activity),
+            'total_opening', (SELECT COALESCE(SUM(opening_balance), 0) FROM ledger_summary),
+            'total_closing', (SELECT COALESCE(SUM(closing_balance), 0) FROM ledger_summary)
+        ),
+        'checks', jsonb_build_object(
+            'balanced', (SELECT ABS(SUM(debit) - SUM(credit)) < 0.01 FROM period_activity)
+        )
+    ) INTO v_result;
+
+    RETURN v_result;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- 2.4 rcerp_gross_margin_cte(p_from_date, p_to_date, p_branch_id)
+--     Gross margin analysis with per-item COGS via CTE. Joins invoice_items
+--     → sales_challan_items → stock_transactions for accurate per-product COGS.
+--     Schema fixes applied (preserved verbatim from migration):
+--       * sales_challan_items has sales_challan_id (not challan_id)
+--       * sales_invoice_id lives on sales_challans, not sales_challan_items
+--       * stock_transactions uses qty (not qty_change) and rate (not avg_cost)
+--       * sales_challans has no deleted_at column (only sales_invoices does)
+CREATE OR REPLACE FUNCTION rcerp_gross_margin_cte(
+    p_from_date  date,
+    p_to_date    date,
+    p_branch_id  integer DEFAULT NULL
+)
+RETURNS jsonb AS $$
+DECLARE
+    v_result jsonb;
+BEGIN
+    WITH
+    -- CTE 1: Active invoices in the period
+    active_invoices AS (
+        SELECT
+            si.id, si.invoice_code, si.invoice_date,
+            si.customer_id, si.branch_id,
+            si.sub_total, si.discount_amount,
+            si.transport_cost, si.total_amount,
+            c.customer_name,
+            b.branch_name
+        FROM sales_invoices si
+        INNER JOIN customers c ON c.id = si.customer_id
+        LEFT JOIN branches b ON b.id = si.branch_id
+        WHERE si.invoice_date BETWEEN p_from_date AND p_to_date
+          AND si.status NOT IN ('draft', 'cancelled')
+          AND si.is_reversed = false
+          AND si.deleted_at IS NULL
+          AND (p_branch_id IS NULL OR si.branch_id = p_branch_id)
+    ),
+
+    -- CTE 2: Invoice items with revenue
+    invoice_items AS (
+        SELECT
+            ai.id AS invoice_id,
+            ai.invoice_code,
+            ai.invoice_date,
+            ai.customer_name,
+            ai.branch_name,
+            sii.product_id,
+            p.product_code,
+            p.product_name,
+            sii.qty,
+            sii.rate,
+            sii.amount AS line_amount,
+            sii.discount_amount AS line_discount
+        FROM active_invoices ai
+        INNER JOIN sales_invoice_items sii ON sii.sales_invoice_id = ai.id
+        INNER JOIN products p ON p.id = sii.product_id
+    ),
+
+    -- CTE 3: COGS per invoice item (from stock transactions via challan)
+    item_cogs AS (
+        SELECT
+            sc.sales_invoice_id AS invoice_id,
+            sci.product_id,
+            SUM(st.qty) AS cogs_qty,  -- negative (stock OUT)
+            SUM(ABS(st.qty) * st.rate) AS cogs_amount
+        FROM sales_challan_items sci
+        INNER JOIN sales_challans sc ON sc.id = sci.sales_challan_id
+        INNER JOIN stock_transactions st ON st.reference_type = 'sales_challan'
+            AND st.reference_id = sc.id
+            AND st.product_id = sci.product_id
+        WHERE sc.is_reversed = false
+        GROUP BY sc.sales_invoice_id, sci.product_id
+    ),
+
+    -- CTE 4: Per-invoice margin (aggregated from items)
+    invoice_margin AS (
+        SELECT
+            ii.invoice_id,
+            ii.invoice_code,
+            ii.invoice_date,
+            ii.customer_name,
+            ii.branch_name,
+            SUM(ii.line_amount) AS total_revenue,
+            SUM(ii.line_discount) AS total_line_discount,
+            COALESCE(SUM(ic.cogs_amount), 0) AS total_cogs,
+            SUM(ii.line_amount) - COALESCE(SUM(ic.cogs_amount), 0) AS gross_profit,
+            CASE WHEN SUM(ii.line_amount) > 0
+                THEN ROUND(((SUM(ii.line_amount) - COALESCE(SUM(ic.cogs_amount), 0)) / SUM(ii.line_amount) * 100)::numeric, 2)
+                ELSE 0
+            END AS margin_pct
+        FROM invoice_items ii
+        LEFT JOIN item_cogs ic ON ic.invoice_id = ii.invoice_id AND ic.product_id = ii.product_id
+        GROUP BY ii.invoice_id, ii.invoice_code, ii.invoice_date, ii.customer_name, ii.branch_name
+    ),
+
+    -- CTE 5: Per-product margin summary
+    product_margin AS (
+        SELECT
+            ii.product_id,
+            ii.product_code,
+            ii.product_name,
+            SUM(ii.qty) AS total_qty,
+            SUM(ii.line_amount) AS total_revenue,
+            COALESCE(SUM(ic.cogs_amount), 0) AS total_cogs,
+            SUM(ii.line_amount) - COALESCE(SUM(ic.cogs_amount), 0) AS gross_profit,
+            CASE WHEN SUM(ii.line_amount) > 0
+                THEN ROUND(((SUM(ii.line_amount) - COALESCE(SUM(ic.cogs_amount), 0)) / SUM(ii.line_amount) * 100)::numeric, 2)
+                ELSE 0
+            END AS margin_pct
+        FROM invoice_items ii
+        LEFT JOIN item_cogs ic ON ic.invoice_id = ii.invoice_id AND ic.product_id = ii.product_id
+        GROUP BY ii.product_id, ii.product_code, ii.product_name
+        ORDER BY gross_profit DESC
+    ),
+
+    -- CTE 6: Grand totals
+    grand_totals AS (
+        SELECT
+            SUM(total_revenue) AS total_revenue,
+            SUM(total_cogs) AS total_cogs,
+            SUM(gross_profit) AS total_gross_profit,
+            CASE WHEN SUM(total_revenue) > 0
+                THEN ROUND((SUM(gross_profit) / SUM(total_revenue) * 100)::numeric, 2)
+                ELSE 0
+            END AS overall_margin_pct
+        FROM invoice_margin
+    )
+
+    -- Final: assemble into JSON
+    SELECT jsonb_build_object(
+        'meta', jsonb_build_object(
+            'title', 'Gross Margin Analysis (CTE)',
+            'from_date', p_from_date,
+            'to_date', p_to_date,
+            'branch_id', p_branch_id,
+            'source', 'cte_query'
+        ),
+        'invoice_margin', COALESCE((SELECT jsonb_agg(row_to_json(im)::jsonb ORDER BY invoice_date DESC, invoice_code) FROM invoice_margin im), '[]'::jsonb),
+        'product_margin', COALESCE((SELECT jsonb_agg(row_to_json(pm)::jsonb ORDER BY gross_profit DESC) FROM product_margin pm), '[]'::jsonb),
+        'totals', (SELECT jsonb_build_object(
+            'total_revenue', total_revenue,
+            'total_cogs', total_cogs,
+            'total_gross_profit', total_gross_profit,
+            'overall_margin_pct', overall_margin_pct
+        ) FROM grand_totals)
+    ) INTO v_result;
+
+    RETURN v_result;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- 2.5 Convenience views wrapping the CTE functions for direct SQL access.
+--     For psql / DBA smoke tests: SELECT * FROM v_today_summary;
+CREATE OR REPLACE VIEW v_today_summary AS
+SELECT rcerp_today_summary(NULL, CURRENT_DATE) AS summary_data;
+
+CREATE OR REPLACE VIEW v_ar_aging_today AS
+SELECT rcerp_ar_aging_cte(CURRENT_DATE, NULL) AS aging_data;
+
+-- End of MV + CTE baseline mirror (G-128/G-129, REPORTS-AUDIT-2).

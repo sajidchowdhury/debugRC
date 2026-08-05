@@ -838,6 +838,19 @@ SQL;
      * Receivable Aging — customer balances by age bucket (as of date).
      * Uses the mv_ar_aging materialized view for "as of today";
      * falls back to direct query for historical as-of dates.
+     *
+     * @deprecated The CTE version (CteReportService::arAging →
+     *             rcerp_ar_aging_cte) is the canonical AR aging. This
+     *             non-CTE method is retained for the MV-accelerated
+     *             today's-aging path (mv_ar_aging) and as a fallback
+     *             when the CTE function is unavailable. Future: collapse
+     *             to one route with MV-or-CTE auto-selection based on
+     *             as_of_date (today → MV; historical → CTE).
+     *
+     *             G-139/G-142 (REPORTS-AUDIT-2): deprecation policy
+     *             documented; route + method intentionally kept.
+     *
+     * @see \App\Services\Reports\CteReportService::arAging()
      */
     public function receivableAging(Carbon $asOfDate, ?int $branchId = null): array
     {
@@ -975,6 +988,21 @@ SQL, [$asOfDate])->balance ?? 0;
 
     /**
      * General Ledger — account activity with running balance.
+     *
+     * @deprecated The CTE version (CteReportService::generalLedger →
+     *             rcerp_general_ledger_cte) is canonical — it uses a
+     *             SQL `SUM() OVER (PARTITION BY ledger_id ORDER BY
+     *             entry_date, entry_no, jl.id ROWS UNBOUNDED PRECEDING)`
+     *             window function for O(n log n) server-side running
+     *             balance. This non-CTE method uses a PHP-side running
+     *             balance loop (O(n), allocates a $running array).
+     *             Retained as a fallback when the CTE function is
+     *             unavailable. Future: collapse to one route.
+     *
+     *             G-147/G-149 (REPORTS-AUDIT-2): deprecation policy
+     *             documented; route + method intentionally kept.
+     *
+     * @see \App\Services\Reports\CteReportService::generalLedger()
      */
     public function generalLedger(Carbon $fromDate, Carbon $toDate, ?int $ledgerId = null, ?int $branchId = null): array
     {

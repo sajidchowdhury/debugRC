@@ -492,36 +492,27 @@ SQL;
         ]);
     }
 
+    /**
+     * @deprecated Use grossMarginCte() instead. The non-CTE version used an
+     *             inaccurate single-column COGS (sales_challans.issue_cost — a
+     *             parent-challan summary column, not a per-item COGS). The CTE
+     *             version (rcerp_gross_margin_cte) joins
+     *             invoice_items → sales_challan_items → stock_transactions
+     *             for true per-product COGS. This method is retained as a 301
+     *             redirect so existing bookmarks + URL query params (from_date,
+     *             to_date, branch_id) survive the deprecation hop.
+     *
+     *             G-143/G-146 (REPORTS-AUDIT-2): catalog entry `gross_margin`
+     *             now points at admin.reports.grossMarginCte; the
+     *             admin.reports.grossMargin route is preserved as a
+     *             redirect-only route for backward compatibility.
+     *
+     * @see \App\Http\Controllers\Admin\ReportController::grossMarginCte()
+     * @see \App\Services\Reports\CteReportService::grossMargin()
+     */
     public function grossMargin(Request $request)
     {
-        $data = $this->parseDateRange($request);
-        $rows = \Illuminate\Support\Facades\DB::select(<<<SQL
-SELECT
-    si.id, si.invoice_code, si.invoice_date, c.customer_name,
-    si.total_amount AS revenue,
-    COALESCE(sc.issue_cost, 0) AS cogs,
-    si.total_amount - COALESCE(sc.issue_cost, 0) AS gross_profit,
-    CASE WHEN si.total_amount > 0
-        THEN ROUND(((si.total_amount - COALESCE(sc.issue_cost, 0)) / si.total_amount * 100)::numeric, 2)
-        ELSE 0 END AS margin_pct
-FROM sales_invoices si
-LEFT JOIN customers c ON c.id = si.customer_id
-LEFT JOIN sales_challans sc ON sc.sales_invoice_id = si.id
-WHERE si.invoice_date BETWEEN ? AND ?
-    AND si.status NOT IN ('draft', 'cancelled')
-    AND si.deleted_at IS NULL
-ORDER BY si.invoice_date DESC
-SQL, [$data['from'], $data['to']]);
-
-        return view('admin.reports.gross_margin', [
-            'meta' => ['title' => 'Gross Margin', 'from_date' => $data['from']->format('Y-m-d'), 'to_date' => $data['to']->format('Y-m-d')],
-            'data' => collect($rows),
-            'totals' => [
-                'revenue' => collect($rows)->sum('revenue'),
-                'cogs' => collect($rows)->sum('cogs'),
-                'gross_profit' => collect($rows)->sum('gross_profit'),
-            ],
-        ]);
+        return redirect()->route('admin.reports.grossMarginCte', $request->query(), 301);
     }
 
     public function customerPerformance(Request $request)

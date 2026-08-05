@@ -103,9 +103,15 @@ class CteReportService
      *   - Top 20 overdue invoices
      *   - Aging breakdown by branch
      *
+     * Canonical AR aging per G-139/G-142 (REPORTS-AUDIT-2). The non-CTE
+     * ReportService::receivableAging is kept as a deprecation-policy
+     * fallback for the MV-accelerated today's-aging path.
+     *
      * @param Carbon   $asOfDate  As-of date for aging calculation
      * @param int|null $branchId  Branch filter
      * @return array
+     *
+     * @see \App\Services\Reports\ReportService::receivableAging()
      */
     public function arAging(Carbon $asOfDate, ?int $branchId = null): array
     {
@@ -157,11 +163,17 @@ class CteReportService
      *   - Total debit/credit
      *   - Balance check (Dr = Cr)
      *
+     * Canonical General Ledger per G-147/G-149 (REPORTS-AUDIT-2). The
+     * non-CTE ReportService::generalLedger is kept as a deprecation-policy
+     * fallback when the CTE function is unavailable.
+     *
      * @param Carbon   $fromDate
      * @param Carbon   $toDate
      * @param int|null $ledgerId
      * @param int|null $branchId
      * @return array
+     *
+     * @see \App\Services\Reports\ReportService::generalLedger()
      */
     public function generalLedger(
         Carbon $fromDate,
@@ -216,10 +228,16 @@ class CteReportService
      *   - Per-product margin summary
      *   - Grand totals with overall margin%
      *
+     * Canonical Gross Margin per G-143/G-146 (REPORTS-AUDIT-2). The
+     * non-CTE ReportController::grossMargin is retained as a 301
+     * redirect-only route to this CTE route.
+     *
      * @param Carbon   $fromDate
      * @param Carbon   $toDate
      * @param int|null $branchId
      * @return array
+     *
+     * @see \App\Http\Controllers\Admin\ReportController::grossMargin()
      */
     public function grossMargin(
         Carbon $fromDate,

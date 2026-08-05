@@ -39,7 +39,7 @@ class ReportsCatalog
                 'reports' => [
                     self::r('revenue_overview', 'Revenue Overview', 'Invoice-level register with customer & salesman filters', 'admin.reports.revenueOverview', 'fa-file-invoice-dollar', ['invoice', 'export'], 30, true),
                     self::r('sales_funnel', 'Sales Funnel / Pipeline', 'Pipeline stages, conversion rates, velocity & forecast', 'admin.reports.salesFunnel', 'fa-filter', ['pipeline', 'funnel', 'forecast'], 30, true),
-                    self::r('gross_margin', 'Gross Margin (invoice vs COGS)', 'True margin on delivery basis', 'admin.reports.grossMargin', 'fa-percent', ['margin', 'cogs', 'export'], 30, true),
+                    self::r('gross_margin', 'Gross Margin (CTE)', 'True per-product margin via invoice-item → challan-item → stock-transaction COGS join', 'admin.reports.grossMarginCte', 'fa-percent', ['margin', 'cogs', 'cte', 'export'], 30, true),
                     self::r('customer_performance', 'Customer Performance', '360° customer value, loyalty, CLV, churn risk', 'admin.reports.customerPerformance', 'fa-users', ['customer', 'clv', 'churn'], 30, true),
                 ],
             ],

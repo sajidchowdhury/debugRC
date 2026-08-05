@@ -1,5 +1,10 @@
 @extends('layouts.admin')
 
+{{-- DEPRECATED: Superseded by gross_margin_cte.blade.php. The non-CTE route
+    admin.reports.grossMargin is now a 301 redirect to admin.reports.grossMarginCte.
+    This view is retained for git history only — it is no longer rendered.
+    G-143/G-146 (REPORTS-AUDIT-2). --}}
+
 @php
     $avgMargin = $totals['revenue'] > 0 ? ($totals['gross_profit'] / $totals['revenue'] * 100) : 0;
 @endphp
