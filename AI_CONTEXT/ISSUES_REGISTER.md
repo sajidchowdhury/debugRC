@@ -21,10 +21,10 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | CRITICAL | 2 | Yes — all of them |
 | HIGH | 18 | Most |
 | MEDIUM | 49 | Some |
-| LOW | 64 | No |
+| LOW | 59 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **132** | |
-| _of which resolved_ | 224 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **127** | |
+| _of which resolved_ | 229 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -34,7 +34,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | architecture | 17 |
 | finance | 28 |
 | purchasing | 1 |
-| reports | 24 |
+| reports | 19 |
 | sales | 7 |
 | security | 14 |
 | workflows | 18 |
@@ -350,15 +350,15 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-284 | G22 | LOW | finance | finance/consolidation-intercompany.md:902 | — | #### G22 — `WarehouseTransferController::audit` action filters `auditEvents` by parsing JSON `details.transfer_id` in PHP — fragile | — | H4 | open | — |
 | G-285 | G26 | LOW | finance | finance/fixed-assets.md:738 | — | **G26 (MINOR):** `nextCode` is called BEFORE `FixedAsset::create`. If `create` throws, the sequence is already incremented — non-contiguous … | notifications phase | H4 | open | — |
 | G-286 | G18 | LOW | purchasing | purchasing/purchase-receive.md:420 | — | **G18 — `purchase_receive_items.warehouse_id` nullable in DDL but required by FormRequest.** | DDL drift | H4 | open | — |
-| G-287 | G14 | LOW | reports | reports/cte-reports.md:622 | — | **G14** \| **LOW** \| `ReportsCatalog.php:9` docblock (cross-ref `reports/reports-catalog.md` G16) — "all 18 reports across 5 categories" do… | DDL drift | H4 | open | — |
+| G-287 | G14 | LOW | reports | reports/cte-reports.md:622 | — | **G14** \| **LOW** \| `ReportsCatalog.php:9` docblock (cross-ref `reports/reports-catalog.md` G16) — "all 18 reports across 5 categories" do… | DDL drift | H4 | resolved | REPORTS-AUDIT-8 (STALE — ReportsCatalog docblock already updated by G-048/REPORTS-2 to "Phase 5 + Phase 6 + Phase 1E" + "32 reports across 6 categories") |
 | G-288 | G15 | LOW | reports | reports/cte-reports.md:623 | — | **G15** \| **LOW** \| No `?format=csv` on the 4 CTE routes. \| Users who want CSV of CTE data have to use the non-CTE route (if it has CSV) … | reports phase | H4 | resolved | REPORTS-AUDIT-6 (CteReportService::exportCsv(string $reportName, array $data) added — switch dispatches to per-report flattener: today_summary/ar_aging/general_ledger/gross_margin. Each flattener uses CsvExporter::exportFromRows() with prepend_rows (title + period/branch + currency) + per-report row generator + append_rows (totals/checks). Unknown reportName throws InvalidArgumentException. All 4 CTE controller methods (todaySummaryCte, arAgingCte, generalLedgerCte, grossMarginCte) now check `$request->input('format') === 'csv'` and delegate to the service — logExport('cte_<name>', $filters, $rowCount, 0) writes the audit row via the WritesExportAuditLog trait already applied since REPORTS-AUDIT-4. format field validation (nullable|string|in:csv,json,html) was already in place from REPORTS-AUDIT-3.) |
-| G-289 | G15 | LOW | reports | reports/reports-catalog.md:654 | — | **G15** \| **LOW** \| `ReportsHub.js:7` `PIN_KEY = 'rc_erp_report_pins'` has no namespace prefix beyond `rc_erp_`. `localStorage` is shared … | — | H4 | open | — |
-| G-290 | G16 | LOW | reports | reports/cte-reports.md:622 | — | **G14** \| **LOW** \| `ReportsCatalog.php:9` docblock (cross-ref `reports/reports-catalog.md` G16) — "all 18 reports across 5 categories" do… | DDL drift | H4 | open | — |
+| G-289 | G15 | LOW | reports | reports/reports-catalog.md:654 | — | **G15** \| **LOW** \| `ReportsHub.js:7` `PIN_KEY = 'rc_erp_report_pins'` has no namespace prefix beyond `rc_erp_`. `localStorage` is shared … | — | H4 | resolved | REPORTS-AUDIT-8 (PIN_KEY prefixed with window.appEnv so staging + production on same origin do not collide) |
+| G-290 | G16 | LOW | reports | reports/cte-reports.md:622 | — | **G14** \| **LOW** \| `ReportsCatalog.php:9` docblock (cross-ref `reports/reports-catalog.md` G16) — "all 18 reports across 5 categories" do… | DDL drift | H4 | resolved | REPORTS-AUDIT-8 (STALE — duplicate of G-287; ReportsCatalog docblock already updated by G-048/REPORTS-2) |
 | G-291 | G16 | LOW | reports | reports/dashboards.md:693 | routes/api.php:115-120 | **G16** \| **LOW** \| `LegacyDashboardController` private methods end with `catch (\Throwable $e) { return [...zeros...]; }` (L60-62, L205-2… | API Phase 17 | H4 | resolved | REPORTS-AUDIT-3 (STALE — LegacyDashboardController.php was deleted in REPORTS-AUDIT-3 commit 7487cde as part of G-136 dead-code cleanup. The catch-block Log::warning gap no longer applies — the controller no longer exists in the codebase. Formally marked resolved in ISSUES_REGISTER post-REPORTS-AUDIT-5.)
-| G-292 | G16 | LOW | reports | reports/materialized-views.md:748 | — | **G16** \| **LOW** \| `RefreshReportViews.php:11` docblock says "Phase 5" — the MVs have been extended in Phase 6 (running-balance checks), … | DDL drift | H4 | open | — |
+| G-292 | G16 | LOW | reports | reports/materialized-views.md:748 | — | **G16** \| **LOW** \| `RefreshReportViews.php:11` docblock says "Phase 5" — the MVs have been extended in Phase 6 (running-balance checks), … | DDL drift | H4 | resolved | REPORTS-AUDIT-8 (STALE — RefreshReportViews docblock already updated to "Phase 5 + Phase 6 + Phase 8 + Phase 13" by REPORTS-1) |
 | G-293 | G17 | LOW | reports | reports/csv-export.md:879 | — | **G17** \| **LOW** \| `CsvExporter::extractValue():120-147` reads model attributes via `$record->{$key}`. If a model's `$fillable` or DB sch… | DDL drift | H4 | open | — |
 | G-294 | G17 | LOW | reports | reports/dashboards.md:694 | routes/api.php:115-120 | **G17** \| **LOW** \| `tests/Feature/Api/V1/DashboardApiTest.php` L108-125, L175-192, L232-249 — uses `DB::table('sales_invoices')->insert([… | API Phase 17 | H3 | open | — |
-| G-295 | G17 | LOW | reports | reports/materialized-views.md:749 | — | **G17** \| **LOW** \| `RefreshReportViews.php:43` `protected $description = 'Refresh all report materialized views (concurrently)';` — but t… | — | H4 | open | — |
+| G-295 | G17 | LOW | reports | reports/materialized-views.md:749 | — | **G17** \| **LOW** \| `RefreshReportViews.php:43` `protected $description = 'Refresh all report materialized views (concurrently)';` — but t… | — | H4 | resolved | REPORTS-AUDIT-8 (STALE — RefreshReportViews description already accurate: "Refresh all report materialized views (concurrently, per-MV isolated, audit-logged)") |
 | G-296 | G18 | LOW | reports | reports/csv-export.md:880 | — | **G18** \| **LOW** \| Content-Type header is `text/csv; charset=UTF-8` (capital) in `CsvExporter:56` + `GlobalAuditController:120`, but `tex… | reports phase | H4 | resolved | REPORTS-AUDIT-1 + REPORTS-AUDIT-4 (RESOLVED via commit 2480a04 + commit df90557. All 13 inline CSV exports now route through CsvExporter::exportFromRows which reads config('reports.csv.content_type', 'text/csv; charset=UTF-8'). The 12 controllers that previously set their own Content-Type header inline (with mixed-case UTF-8 vs lowercase utf-8) now delegate to the canonical service. Case is centralized + consistent across every export endpoint in the codebase.)
 | G-297 | G18 | LOW | reports | reports/dashboards.md:695 | — | **G18** \| **LOW** \| No tests for `UserPerformanceDashboardController`. Grep `tests/` for `UserPerformanceDashboard` → 0 matches. Only the … | test debt | H3 | open | — |
 | G-298 | G19 | LOW | reports | reports/csv-export.md:881 | — | **G19** \| **LOW** \| No export sets a `Content-Length` header. Acceptable for streamed responses (the size is unknown until the stream comp… | reports phase | H4 | open | — |

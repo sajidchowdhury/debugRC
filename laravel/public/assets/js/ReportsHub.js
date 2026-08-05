@@ -4,7 +4,12 @@
 (function () {
     'use strict';
 
-    const PIN_KEY = 'rc_erp_report_pins';
+    // REPORTS-AUDIT-8 (G-289 / reports-catalog.md G15): prefix with the app
+    // env so staging + production on the same origin do not collide on the
+    // shared localStorage namespace. Falls back to 'production' when the
+    // global is not set (e.g. during local dev without a layout that sets it).
+    const APP_ENV = (window.appEnv || 'production');
+    const PIN_KEY = 'rc_erp_' + APP_ENV + '_report_pins';
 
     function getPins() {
         try {
