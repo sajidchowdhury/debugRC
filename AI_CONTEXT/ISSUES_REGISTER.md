@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-05 (post-PURCHASING-API-1: G-117/G-118/G-120/G-121/G-122 resolved in `efecc66`; prior: post-FINANCE-3 in `8cfe7ca` + G-329 hotfix in `588f868`)
+Last reviewed: 2026-09-05 (post-PURCHASING-API-2: G-116/G-123/G-124 resolved in `1cfa5d8`; G-115/G-119 doc-synced to `dab0a4c`; prior: post-PURCHASING-API-1: G-117/G-118/G-120/G-121/G-122 resolved in `efecc66`)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -19,12 +19,12 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | Severity | Count | Blocks cutover? |
 |---|---|---|
 | CRITICAL | 2 | Yes — all of them |
-| HIGH | 66 | Most |
+| HIGH | 61 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **204** | |
-| _of which resolved_ | 153 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **199** | |
+| _of which resolved_ | 158 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -33,7 +33,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | api | 29 |
 | architecture | 17 |
 | finance | 28 |
-| purchasing | 6 |
+| purchasing | 1 |
 | reports | 71 |
 | sales | 15 |
 | security | 14 |
@@ -178,16 +178,16 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-112 | G16 | HIGH | finance | finance/fixed-assets.md:848 | — | **G16 (MAJOR):** For a fully-depreciated asset, `NBV = salvage_value`. If scrapped for ৳0, the code computes `loss = 0 − salvage = −salvage`… | notifications phase | H2 | resolved | `4b0ece7` |
 | G-113 | G19 | HIGH | finance | finance/fixed-assets.md:899 | — | **G19 (MAJOR):** The force-reversed pending schedules (set during `disposeAsset`) are NOT restored. The accountant must manually re-generate… | notifications phase | H2 | resolved | `4b0ece7` |
 | G-114 | G27 | HIGH | finance | finance/fixed-assets.md:172 | — | BR28 \| **The subsystem MUST be accessible only to `accountant`, `manager`, `admin` (route middleware).** Superadmin bypasses via `EnsureRol… | cutover, RLS audit | H2 | resolved | c4acdb0 |
-| G-115 | G6 | HIGH | purchasing | purchasing/purchase-receive.md:409 | — | **G6 — No over-receive guard.** A user can receive 100 units against a PO line that ordered | — | H2 | open | — |
-| G-116 | G7 | HIGH | purchasing | purchasing/purchase-order.md:280 | — | **G7 — No `ApprovalService` integration.** POs are not subject to maker-checker approval | — | H2 | open | — |
+| G-115 | G6 | HIGH | purchasing | purchasing/purchase-receive.md:409 | — | **G6 — No over-receive guard.** A user can receive 100 units against a PO line that ordered | — | H2 | resolved | `dab0a4c` |
+| G-116 | G7 | HIGH | purchasing | purchasing/purchase-order.md:280 | — | **G7 — No `ApprovalService` integration.** POs are not subject to maker-checker approval | — | H2 | resolved | `1cfa5d8` |
 | G-117 | G8 | HIGH | purchasing | purchasing/purchase-receive.md:411 | — | **G8 — avg_cost uses per-line gross rate, not net-of-discount.** If a GRN has header | — | H2 | resolved | `efecc66` |
 | G-118 | G10 | HIGH | purchasing | purchasing/purchase-order.md:283 | — | **G10 — No `config/purchase.php`.** The PO code prefix `PO`, pad length `4`, qty tolerance | — | H2 | resolved | `efecc66` |
-| G-119 | G11 | HIGH | purchasing | purchasing/purchase-receive.md:415 | — | **G11 — No `confirmed_by` / `confirmed_at` columns.** The confirmer's identity is recoverable | — | H2 | open | — |
+| G-119 | G11 | HIGH | purchasing | purchasing/purchase-receive.md:415 | — | **G11 — No `confirmed_by` / `confirmed_at` columns.** The confirmer's identity is recoverable | — | H2 | resolved | `dab0a4c` |
 | G-120 | G12 | HIGH | purchasing | purchasing/purchase-return.md:393 | — | **G12 — `sub_total`, `discount_amount`, `tax_amount` columns exist but are NEVER written.** | — | H2 | resolved | `efecc66` |
 | G-121 | G13 | HIGH | purchasing | purchasing/purchase-order.md:285 | — | **G13 — POs not in retention config.** `2026_08_25_000001_complete_retention_configs.php` lists | — | H2 | resolved | `efecc66` |
 | G-122 | G14 | HIGH | purchasing | purchasing/purchase-return.md:397 | — | **G14 — `searchReceives` uses inline `$request->validate` instead of a FormRequest.** Every | — | H2 | resolved | `efecc66` |
-| G-123 | G17 | HIGH | purchasing | purchasing/purchase-order.md:288 | — | **G17 — `warehouse_id` nullable mismatch.** `purchase_orders.warehouse_id` is nullable but | DDL drift | H2 | open | — |
-| G-124 | G17 | HIGH | purchasing | purchasing/purchase-receive.md:418 | — | **G17 — `warehouse_id` nullable mismatch with PO.** A PO can be created without a warehouse | DDL drift | H2 | open | — |
+| G-123 | G17 | HIGH | purchasing | purchasing/purchase-order.md:288 | — | **G17 — `warehouse_id` nullable mismatch.** `purchase_orders.warehouse_id` is nullable but | DDL drift | H2 | resolved | `1cfa5d8` |
+| G-124 | G17 | HIGH | purchasing | purchasing/purchase-receive.md:418 | — | **G17 — `warehouse_id` nullable mismatch with PO.** A PO can be created without a warehouse | DDL drift | H2 | resolved | `1cfa5d8` |
 | G-125 | G2 | HIGH | reports | reports/cte-reports.md:613 | routes/web.php:405-408 | **G2** \| **HIGH** (cross-ref `reports/reports-catalog.md` G2) \| The 4 CTE reports are NOT in `ReportsCatalog::categories()`. Users cannot … | — | H2 | open | — |
 | G-126 | G3 | HIGH | reports | reports/csv-export.md:865 | routes/web.php:359-409 | **G3** \| **HIGH** \| `AppServiceProvider.php` (125L) — NO binding for `CsvExporter`. No Facade (no `app/Facades/` directory exists). `CsvEx… | reports phase | H2 | open | — |
 | G-127 | G4 | HIGH | reports | reports/csv-export.md:866 | routes/web.php:359-409 | **G4** \| **HIGH** \| `BranchDemandReportController::exportCsv` L109-138 — uses `php://temp` + `stream_get_contents` pattern (L125-133): the… | reports phase | H2 | open | — |

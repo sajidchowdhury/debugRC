@@ -485,6 +485,14 @@ return $this->journalPosting->createJournalEntry([
    > instead of a slow month-partitioned `user_audit_log` join. Closes G-039.
 9. **G17 — `warehouse_id` nullable mismatch with PO.** A PO can be created without a warehouse
    (nullable), but the GRN against it must specify a warehouse at the header level. MINOR.
+
+   > ✅ RESOLVED in commit `1cfa5d8` (PURCHASING-API-2, G-123/G-124) — Fixed
+   > by aligning the schema UP: `purchase_orders.warehouse_id` is now NOT
+   > NULL (matching `purchase_receives.warehouse_id` which was already NOT
+   > NULL). The asymmetry is eliminated — both PO and GRN now require a
+   > warehouse at the header level. See the G-123 entry in `purchase-order.md`
+   > §11 for the full migration + FormRequest + service + SQL baseline
+   > change details. Closes G-124 (and G-123 from `purchase-order.md`).
 10. **G18 — `purchase_receive_items.warehouse_id` nullable in DDL but required by FormRequest.**
     A direct DB insert could create a line with NULL `warehouse_id`, which would crash
     `StockService::applyTransaction`. MINOR.

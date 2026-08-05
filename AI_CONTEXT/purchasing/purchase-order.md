@@ -299,6 +299,47 @@ If any step fails, the whole PO rolls back — no orphan items, no orphan audit 
 4. **G7 — No `ApprovalService` integration.** POs are not subject to maker-checker approval
    despite their financial significance. A single `manager` can create + send + receive a
    BDT 10M PO without a second-person review. MAJOR — control gap.
+
+   > ✅ RESOLVED in commit `1cfa5d8` (PURCHASING-API-2, G-116) — Integrated the
+   > generic `ApprovalService` engine (Pattern A, mirrors `ManualJournal`).
+   > Migration `2026_09_05_000003_add_purchase_order_approval_columns.php`:
+   >   - Expanded `purchase_orders.status` CHECK to include `submitted` /
+   >     `approved` / `rejected` (8 states total).
+   >   - Added 7 approval audit columns: `submitted_by/at`,
+   >     `approved_by/at`, `approval_comments`, `rejected_by/at`.
+   >   - Seeded a default `purchase_order` workflow (`min_amount` from
+   >     `config('purchase.approval_threshold')`, default 50000 BDT) + a
+   >     level-1 `manager` approval step.
+   > `ApprovalRequest::getEntity()` modelMap: added `'purchase_order' =>
+   > PurchaseOrder::class` so the generic engine can resolve PO entities.
+   > `ApprovalService::updateEntityStatus()`: added `case 'purchase_order'`
+   > mapping generic states to PO column writes (mirrors `manual_journal`).
+   > `PurchaseOrder` model: added 7 columns to `$fillable`+`$casts`; added
+   > `isSubmitted/isApproved/isRejected/canBeSubmitted/canBeSent/approvalRequest()`
+   > helpers; expanded `canEdit` (draft||rejected) + `canCancel`
+   > (draft||submitted||approved||sent) for the new states.
+   > `PurchaseOrderService`: injected `ApprovalService`; added
+   > `submitForApproval()` (auto-approves if below threshold); gated
+   > `markAsSent` on `canBeSent()` (isApproved||isDraft); `cancelOrder`
+   > now cancels any pending approval request.
+   > `PurchaseOrderController`: added `submitForApproval/approve/reject`
+   > methods mirroring `ManualJournalController`.
+   > `routes/web.php`: added `POST {id}/submit`, `{id}/approve`,
+   > `{id}/reject` routes (role:admin,manager,warehouse_manager for submit;
+   > role:manager,admin for approve/reject; all + branch.isolation).
+   > `PurchaseOrderPolicy`: added `submitForApproval` + `approve` methods.
+   > `config/purchase.php`: added `approval_threshold` key (env-overridable).
+   > SQL baseline `05_purchase.sql`: added 7 columns + expanded CHECK +
+   > `idx_po_status` + `idx_po_submitted` indexes.
+   >
+   > Lifecycle: `draft → submitted → approved → sent → partial → received → cancelled`
+   >                  └── rejected (must edit + resubmit)
+   > Auto-approve: POs below the threshold skip the queue entirely (stay in
+   > `draft`, can be marked sent directly). Backward-compatible with the
+   > pre-approval flow. The generic `/admin/approvals` queue picks up
+   > `purchase_order` requests automatically. Segregation of duties
+   > (submitter ≠ approver) enforced by `ApprovalRequest::canBeActedBy()`.
+   > Closes G-116.
 5. **G10 — No `config/purchase.php`.** The PO code prefix `PO`, pad length `4`, qty tolerance
    `0.0001`, etc. are all hardcoded in service code. Cannot be tuned without a code change.
 
@@ -335,6 +376,30 @@ If any step fails, the whole PO rolls back — no orphan items, no orphan audit 
    `purchase_receives.warehouse_id` is NOT NULL. A PO without a warehouse can be created but the
    GRN against it must specify a warehouse at the header level (the controller's FormRequest
    masks this by making `warehouse_id` required on the GRN).
+
+   > ✅ RESOLVED in commit `1cfa5d8` (PURCHASING-API-2, G-123/G-124) — Aligned
+   > the schema UP to the GRN's strictness: `purchase_orders.warehouse_id`
+   > is now NOT NULL. The alternative (make GRN nullable) was rejected
+   > because `StockService::applyTransaction` hard-requires a positive
+   > `warehouse_id` on every stock movement — a GRN without a warehouse is
+   > non-functional.
+   > Migration `2026_09_05_000004_make_purchase_orders_warehouse_id_not_null.php`:
+   >   - Backfill guard: any existing NULL `warehouse_id` is resolved to
+   >     the branch's first active warehouse before the ALTER. If a branch
+   >     has NO active warehouse, the migration throws (the PO must be
+   >     manually resolved first).
+   >   - `ALTER TABLE purchase_orders ALTER COLUMN warehouse_id SET NOT NULL`.
+   > `StorePurchaseOrderRequest` + `UpdatePurchaseOrderRequest`:
+   > `warehouse_id` rule changed from `nullable` to `required` (aligns
+   > FormRequest with the now-NOT-NULL schema invariant).
+   > `PurchaseOrderController` `store()` + `update()`: dropped the
+   > `?? null` fallback on `warehouse_id` (FormRequest guarantees it).
+   > `PurchaseOrderService` `createOrder()` + `updateOrder()`: dropped
+   > `?? null` fallback; `validateCreateInput()` now requires
+   > `warehouse_id > 0` (fails fast before the DB constraint).
+   > `PurchaseOrder` model PHPDoc: `warehouse_id` is now `int` (not `int|null`).
+   > SQL baseline `05_purchase.sql`: `warehouse_id` column gains `NOT NULL`.
+   > Closes G-123 (and G-124 from `purchase-receive.md`).
 8. **No `confirmed_by` / `cancelled_by` on the row.** Only `created_by`. The identity of the
    user who cancelled a PO is recoverable only via `user_audit_log` (partitioned by month — slow
    join for historical queries). MAJOR for auditability.
