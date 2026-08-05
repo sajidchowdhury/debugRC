@@ -449,10 +449,15 @@ class UserPerformanceDashboardController extends Controller
      * @param callable $fn      The metric computation
      * @param int      $ttl     Cache TTL in seconds (default 60)
      */
-    private function cached(string $metric, int $id, string $period, array $range, callable $fn, int $ttl = 60)
+    private function cached(string $metric, int $id, string $period, array $range, callable $fn, ?int $ttl = null)
     {
+        // REPORTS-AUDIT-7 (G-225/G-226 / dashboards.md G12): TTL now sourced
+        // from config('reports.dashboard.cache_ttl_seconds', 60) so deployments
+        // can tune without a code change. Null falls through to the config
+        // value (keeps backward compat for any caller still passing null).
+        $ttl = $ttl ?? (int) config('reports.dashboard.cache_ttl_seconds', 60);
         if ($id <= 0) {
-            // No user → just compute (and time) without caching. Avoids
+            // No user -> just compute (and time) without caching. Avoids
             // polluting the cache with junk keys for unauthenticated /
             // scaffolding-only requests.
             return $this->timed($metric, $fn);
@@ -480,7 +485,10 @@ class UserPerformanceDashboardController extends Controller
             return $fn();
         } finally {
             $elapsedMs = (microtime(true) - $start) * 1000;
-            if ($elapsedMs > 200.0) {
+            // REPORTS-AUDIT-7 (G-225/G-226): threshold sourced from config
+            // so deployments can tune the slow-query log noise without a code change.
+            $thresholdMs = (float) config('reports.dashboard.slow_query_threshold_ms', 200.0);
+            if ($elapsedMs > $thresholdMs) {
                 try {
                     $req = request();
                     $userId = $req?->user()?->id ?? 0;

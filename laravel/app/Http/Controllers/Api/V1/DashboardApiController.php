@@ -11,6 +11,7 @@ use App\Models\SalesInvoice;
 use App\Models\Supplier;
 use App\Models\Warehouse;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -33,32 +34,38 @@ class DashboardApiController extends Controller
      */
     public function index(): JsonResponse
     {
-        $today = now()->toDateString();
+        // REPORTS-AUDIT-7 (G-237 / dashboards.md G15): wrap the 8 DB queries
+        // in a 30-second cache so a mobile app polling every 5s does not
+        // generate 8 DB queries per request (960 queries/min at the 120
+        // req/min rate limit). The cache key is scoped per user id so
+        // branch-specific data does not leak across users.
+        $userId = request()?->user()?->id ?? 0;
+        $data = Cache::remember("api:dashboard:summary:user:{$userId}", 30, function () {
+            $today = now()->toDateString();
 
-        // Active master-data counts.
-        $activeBranches   = Branch::active()->count();
-        $activeWarehouses = Warehouse::active()->count();
-        $activeProducts   = Product::active()->count();
-        $activeCustomers  = Customer::active()->count();
-        $activeSuppliers  = Supplier::active()->count();
-        $activeEmployees  = Employee::active()->count();
+            // Active master-data counts.
+            $activeBranches   = Branch::active()->count();
+            $activeWarehouses = Warehouse::active()->count();
+            $activeProducts   = Product::active()->count();
+            $activeCustomers  = Customer::active()->count();
+            $activeSuppliers  = Supplier::active()->count();
+            $activeEmployees  = Employee::active()->count();
 
-        // Today's sales — non-reversed, non-cancelled.
-        $todaySales = DB::table('sales_invoices')
-            ->where('invoice_date', $today)
-            ->where('is_reversed', false)
-            ->whereNotIn('status', ['cancelled', 'reversed'])
-            ->selectRaw('COUNT(*) AS invoice_count, COALESCE(SUM(total_amount), 0) AS total_sales')
-            ->first();
+            // Today sales — non-reversed, non-cancelled.
+            $todaySales = DB::table('sales_invoices')
+                ->where('invoice_date', $today)
+                ->where('is_reversed', false)
+                ->whereNotIn('status', ['cancelled', 'reversed'])
+                ->selectRaw('COUNT(*) AS invoice_count, COALESCE(SUM(total_amount), 0) AS total_sales')
+                ->first();
 
-        // Today's collection — non-reversed customer payments.
-        $todayCollection = (float) DB::table('customer_payments')
-            ->whereDate('payment_date', $today)
-            ->where('is_reversed', false)
-            ->sum('amount');
+            // Today collection — non-reversed customer payments.
+            $todayCollection = (float) DB::table('customer_payments')
+                ->whereDate('payment_date', $today)
+                ->where('is_reversed', false)
+                ->sum('amount');
 
-        return response()->json([
-            'data' => [
+            return [
                 'counts' => [
                     'active_branches'   => $activeBranches,
                     'active_warehouses'  => $activeWarehouses,
@@ -73,8 +80,10 @@ class DashboardApiController extends Controller
                     'total_sales'    => (float) $todaySales->total_sales,
                     'collection'     => $todayCollection,
                 ],
-            ],
-        ]);
+            ];
+        });
+
+        return response()->json(['data' => $data]);
     }
 
     /**
@@ -86,40 +95,43 @@ class DashboardApiController extends Controller
      */
     public function salesTrend(): JsonResponse
     {
-        $days = 7;
-        $start = now()->subDays($days - 1)->toDateString();
-        $end   = now()->toDateString();
+        // REPORTS-AUDIT-7 (G-237): 5-minute cache — the 7-day trend does not
+        // change minute-to-minute, so a 300s cache absorbs polling traffic.
+        $data = Cache::remember('api:dashboard:sales-trend:7d', 300, function () {
+            $days = 7;
+            $start = now()->subDays($days - 1)->toDateString();
+            $end   = now()->toDateString();
 
-        $rows = DB::table('sales_invoices')
-            ->whereBetween('invoice_date', [$start, $end])
-            ->where('is_reversed', false)
-            ->whereNotIn('status', ['cancelled', 'reversed'])
-            ->selectRaw("
-                invoice_date::text AS date,
-                COUNT(*) AS invoice_count,
-                COALESCE(SUM(total_amount), 0) AS total_sales
-            ")
-            ->groupBy('invoice_date')
-            ->orderBy('invoice_date')
-            ->get()
-            ->keyBy('date');
+            $rows = DB::table('sales_invoices')
+                ->whereBetween('invoice_date', [$start, $end])
+                ->where('is_reversed', false)
+                ->whereNotIn('status', ['cancelled', 'reversed'])
+                ->selectRaw("
+                    invoice_date::text AS date,
+                    COUNT(*) AS invoice_count,
+                    COALESCE(SUM(total_amount), 0) AS total_sales
+                ")
+                ->groupBy('invoice_date')
+                ->orderBy('invoice_date')
+                ->get()
+                ->keyBy('date');
 
-        // Fill missing days with zero.
-        $series = [];
-        for ($i = $days - 1; $i >= 0; $i--) {
-            $date = now()->subDays($i)->toDateString();
-            $row  = $rows->get($date);
-            $series[] = [
-                'date'          => $date,
-                'invoice_count' => $row ? (int) $row->invoice_count : 0,
-                'total_sales'   => $row ? (float) $row->total_sales : 0.0,
-            ];
-        }
+            // Fill missing days with zero.
+            $series = [];
+            for ($i = $days - 1; $i >= 0; $i--) {
+                $date = now()->subDays($i)->toDateString();
+                $row  = $rows->get($date);
+                $series[] = [
+                    'date'          => $date,
+                    'invoice_count' => $row ? (int) $row->invoice_count : 0,
+                    'total_sales'   => $row ? (float) $row->total_sales : 0.0,
+                ];
+            }
 
-        return response()->json([
-            'data'   => $series,
-            'meta'   => ['range_days' => $days, 'start' => $start, 'end' => $end],
-        ]);
+            return ['data' => $series, 'meta' => ['range_days' => $days, 'start' => $start, 'end' => $end]];
+        });
+
+        return response()->json($data);
     }
 
     /**
@@ -131,37 +143,40 @@ class DashboardApiController extends Controller
      */
     public function topProducts(): JsonResponse
     {
-        $since = now()->subDays(30)->toDateString();
+        // REPORTS-AUDIT-7 (G-237): 15-minute cache — top-10 products over a
+        // 30-day window change slowly, so a 900s cache is safe.
+        $data = Cache::remember('api:dashboard:top-products:30d', 900, function () {
+            $since = now()->subDays(30)->toDateString();
 
-        $rows = DB::table('sales_invoice_items as sii')
-            ->join('sales_invoices as si', 'si.id', '=', 'sii.sales_invoice_id')
-            ->join('products as p', 'p.id', '=', 'sii.product_id')
-            ->where('si.invoice_date', '>=', $since)
-            ->where('si.is_reversed', false)
-            ->whereNotIn('si.status', ['cancelled', 'reversed'])
-            ->selectRaw("
-                p.id AS product_id,
-                p.product_code,
-                p.product_name,
-                SUM(sii.qty) AS qty_sold,
-                SUM(sii.qty * sii.rate) AS revenue
-            ")
-            ->groupBy('p.id', 'p.product_code', 'p.product_name')
-            ->orderByDesc('revenue')
-            ->limit(10)
-            ->get();
+            $rows = DB::table('sales_invoice_items as sii')
+                ->join('sales_invoices as si', 'si.id', '=', 'sii.sales_invoice_id')
+                ->join('products as p', 'p.id', '=', 'sii.product_id')
+                ->where('si.invoice_date', '>=', $since)
+                ->where('si.is_reversed', false)
+                ->whereNotIn('si.status', ['cancelled', 'reversed'])
+                ->selectRaw("
+                    p.id AS product_id,
+                    p.product_code,
+                    p.product_name,
+                    SUM(sii.qty) AS qty_sold,
+                    SUM(sii.qty * sii.rate) AS revenue
+                ")
+                ->groupBy('p.id', 'p.product_code', 'p.product_name')
+                ->orderByDesc('revenue')
+                ->limit(10)
+                ->get();
 
-        $data = $rows->map(fn ($r) => [
-            'product_id'   => (int) $r->product_id,
-            'product_code' => $r->product_code,
-            'product_name' => $r->product_name,
-            'qty_sold'     => (float) $r->qty_sold,
-            'revenue'      => (float) $r->revenue,
-        ])->values();
+            $items = $rows->map(fn ($r) => [
+                'product_id'   => (int) $r->product_id,
+                'product_code' => $r->product_code,
+                'product_name' => $r->product_name,
+                'qty_sold'     => (float) $r->qty_sold,
+                'revenue'      => (float) $r->revenue,
+            ])->values();
 
-        return response()->json([
-            'data' => $data,
-            'meta' => ['range_days' => 30, 'since' => $since],
-        ]);
+            return ['data' => $items, 'meta' => ['range_days' => 30, 'since' => $since]];
+        });
+
+        return response()->json($data);
     }
 }

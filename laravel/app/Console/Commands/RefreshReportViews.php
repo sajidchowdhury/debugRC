@@ -28,7 +28,17 @@ use Illuminate\Support\Facades\Log;
  * chain captures MV recomputes (not just row mutations).
  *
  * Scheduled to run every 5 minutes (see routes/console.php).
- * Also run on-demand after journal postings.
+ *
+ * REPORTS-AUDIT-7 (G-238 / materialized-views.md G15): the prior claim
+ * "Also run on-demand after journal postings" was aspirational — no caller
+ * wired JournalPostingService to the refresh. The wiring now exists but is
+ * opt-in via `config('reports.dashboard.refresh_mvs_after_posting', false)`
+ * (default OFF to avoid per-posting performance regression on high-volume
+ * deployments). When the flag is true, JournalPostingService::createJournalEntry()
+ * calls ReportService::refreshMaterializedViews() after the journal_entry +
+ * journal_lines insert, wrapped in try/catch so a refresh failure does not
+ * roll back the posting. The 5-minute scheduler remains the canonical
+ * refresh path for most deployments.
  *
  * Usage:
  *   php artisan reports:refresh

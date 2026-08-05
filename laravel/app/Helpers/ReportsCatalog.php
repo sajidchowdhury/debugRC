@@ -95,7 +95,7 @@ class ReportsCatalog
                 'tagline' => 'Control reports outside the standard register',
                 'reports' => [
                     self::r('sales_audit_checklist', 'Sales Audit Checklist', 'Invoice, payment, and dispatch control checks', 'admin.reports.salesAuditChecklist', 'fa-clipboard-check', ['control', 'audit'], 0, false, 'range'),
-                    self::r('purchase_audit', 'Purchase Audit Checklist', 'GRN, supplier ledger, and purchase posting integrity', 'admin.reports.purchaseAudit', 'fa-truck', ['control', 'audit'], 0, false, 'range'),
+                    self::r('purchase_audit', 'Purchase Audit Checklist', 'GRN, supplier ledger, and purchase posting integrity', 'admin.purchase-audit.checklist', 'fa-truck', ['control', 'audit'], 0, false, 'range'),
                     self::r('stocktake_variance', 'Stock Take Variance', 'Line-level count vs system by session with GL drill-down', 'admin.reports.stocktakeVariance', 'fa-table', ['detail', 'variance'], 30, false, 'range'),
                     self::r('stocktake_weekly', 'Stock Take — Weekly Control', 'Posted sessions, gain/loss totals & top SKU variances', 'admin.reports.stocktakeWeekly', 'fa-chart-line', ['control', 'variance'], 7, false, 'range'),
                     self::r('branch_demand_weekly', 'Branch Demand — Weekly', 'Inter-branch demand, settlement & floor stock — 23-column Excel-audit replication', 'admin.branch-demands.weekly-report', 'fa-share-nodes', ['branch'], 7, false, 'range'),

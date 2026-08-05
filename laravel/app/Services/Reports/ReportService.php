@@ -1169,7 +1169,20 @@ SQL;
     public function branchIntercompany(?int $branchId = null): array
     {
         $rows = DB::table('mv_branch_intercompany')
-            ->when($branchId, fn($q) => $q->where('from_branch_id', $branchId)->orWhere('to_branch_id', $branchId))
+            ->when($branchId, function ($q) use ($branchId) {
+                // REPORTS-AUDIT-7 (G-227 / reports-catalog.md G12): the orWhere
+                // MUST be wrapped in a grouped closure so that any future ->where()
+                // added to this query applies as AND (not OR). Without the grouping,
+                // `where(from_branch_id, X)->orWhere(to_branch_id, X)->where(active, true)`
+                // would produce `from_branch_id=X OR (to_branch_id=X AND active=true)`
+                // instead of `(from_branch_id=X OR to_branch_id=X) AND active=true`.
+                // Currently safe (no other wheres) but fragile — the grouped closure
+                // makes the intent explicit and future-proof.
+                $q->where(function ($q2) use ($branchId) {
+                    $q2->where('from_branch_id', $branchId)
+                       ->orWhere('to_branch_id', $branchId);
+                });
+            })
             ->orderBy('from_branch_name')
             ->orderBy('to_branch_name')
             ->get();

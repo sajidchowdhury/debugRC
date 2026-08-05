@@ -144,6 +144,23 @@ class JournalPostingService
             'remarks' => $entry['source'] ?? 'manual',
         ]);
 
+        // 8. REPORTS-AUDIT-7 (G-238 / materialized-views.md G15): optionally
+        // refresh report MVs after the posting. Default OFF (the 5-minute
+        // scheduler is the canonical refresh path). When the config flag is
+        // true, the refresh runs synchronously here — wrapped in try/catch
+        // so a refresh failure does NOT roll back the journal posting (the
+        // JE + lines are already committed; the MV refresh is best-effort).
+        if (config('reports.dashboard.refresh_mvs_after_posting', false)) {
+            try {
+                app(\App\Services\Reports\ReportService::class)->refreshMaterializedViews();
+            } catch (\Throwable $e) {
+                Log::warning('JournalPostingService: on-demand MV refresh failed (non-fatal — scheduler will catch up)', [
+                    'journal_entry_id' => $journalEntryId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         return $journalEntryId;
     }
 

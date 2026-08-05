@@ -145,4 +145,66 @@ return [
         */
         'retention_days' => (int) env('REPORTS_AUDIT_RETENTION_DAYS', 365),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Dashboard Settings — REPORTS-AUDIT-7 (G-225/G-226 / dashboards.md G12)
+    |--------------------------------------------------------------------------
+    |
+    | Knobs consumed by UserPerformanceDashboardController (the 2246-line web
+    | dashboard) for cache TTL + slow-query threshold. Previously hardcoded
+    | as `int $ttl = 60` (cached() L450) + `200.0` ms (timed() L481).
+    |
+    | Surfaced knobs:
+    |   - dashboard.cache_ttl_seconds   (default 60)   — Cache::remember TTL for metric blocks
+    |   - dashboard.slow_query_threshold_ms (default 200.0) — perf.log threshold for slow metric queries
+    |   - dashboard.mv_refresh_concurrently (default true) — whether REFRESH MATERIALIZED VIEW uses CONCURRENTLY
+    |
+    */
+
+    'dashboard' => [
+
+        /*
+        | Cache TTL (seconds) for UserPerformanceDashboardController metric
+        | blocks. Every getSalesKPIs / getCollectionKPIs / etc. wraps its
+        | query in `Cache::remember($key, $ttl, fn() => ...)`. 60s is the
+        | default — short enough for near-real-time freshness, long enough
+        | to absorb a dashboard refresh spam. Increase for read-heavy
+        | deployments; decrease for real-time-critical environments.
+        */
+        'cache_ttl_seconds' => (int) env('REPORTS_DASHBOARD_CACHE_TTL', 60),
+
+        /*
+        | Slow-query threshold (milliseconds) for the perf.log. The
+        | UserPerformanceDashboardController::timed() helper measures each
+        | metric query; if it takes longer than this threshold, a row is
+        | written to storage/logs/perf.log. 200ms is the baseline — lower
+        | it to catch more slow queries, raise it to reduce log noise.
+        */
+        'slow_query_threshold_ms' => (float) env('REPORTS_DASHBOARD_SLOW_QUERY_MS', 200.0),
+
+        /*
+        | Whether REFRESH MATERIALIZED VIEW uses CONCURRENTLY (requires a
+        | unique index on the MV). When true, the refresh does not block
+        | reads. When false, the refresh takes an exclusive lock (faster
+        | but readers wait). All 7 financial MVs + mv_product_abc_classification
+        | have unique indexes, so CONCURRENTLY is safe.
+        */
+        'mv_refresh_concurrently' => (bool) env('REPORTS_MV_REFRESH_CONCURRENTLY', true),
+
+        /*
+        | Whether to refresh MVs on-demand after every journal posting
+        | (G-238 / materialized-views.md G15). Default OFF because the
+        | 5-minute scheduler is the canonical refresh path + per-posting
+        | refresh could regress performance on high-volume deployments.
+        | Enable for deployments that need near-real-time MV freshness
+        | (e.g. a dashboard that MUST show the just-posted entry).
+        |
+        | When true, JournalPostingService::createJournalEntry() calls
+        | ReportService::refreshMaterializedViews() after the insert,
+        | wrapped in try/catch so a refresh failure does not roll back
+        | the posting.
+        */
+        'refresh_mvs_after_posting' => (bool) env('REPORTS_MV_REFRESH_AFTER_POSTING', false),
+    ],
 ];

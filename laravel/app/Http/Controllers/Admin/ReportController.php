@@ -1373,7 +1373,11 @@ SQL, [$data['from'], $data['to']]);
         $date = $request->input('date')
             ? Carbon::parse($request->input('date'))
             : Carbon::today();
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        // REPORTS-AUDIT-7 (G-224 / cte-reports.md G12): use resolveBranchScope()
+        // so non-admin users cannot bypass branch isolation by passing ?branch_id=
+        // (empty) to get NULL (all branches). Admins retain the ability to view
+        // any branch or all branches.
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->cteReportService->todaySummary($date, $branchId);
 
@@ -1404,7 +1408,9 @@ SQL, [$data['from'], $data['to']]);
     public function arAgingCte(ReportAsOfRequest $request)
     {
         $asOf = $this->parseAsOfDate($request);
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        // REPORTS-AUDIT-7 (G-224): resolveBranchScope() pins non-admin users to
+        // their session branch_id (defense-in-depth against ?branch_id= bypass).
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->cteReportService->arAging($asOf, $branchId);
 
@@ -1436,7 +1442,9 @@ SQL, [$data['from'], $data['to']]);
     {
         $data = $this->parseDateRange($request);
         $ledgerId = $request->input('ledger_id') ? (int) $request->input('ledger_id') : null;
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        // REPORTS-AUDIT-7 (G-224): resolveBranchScope() pins non-admin users to
+        // their session branch_id.
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->cteReportService->generalLedger($data['from'], $data['to'], $ledgerId, $branchId);
 
@@ -1471,7 +1479,9 @@ SQL, [$data['from'], $data['to']]);
     public function grossMarginCte(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        // REPORTS-AUDIT-7 (G-224): resolveBranchScope() pins non-admin users to
+        // their session branch_id.
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->cteReportService->grossMargin($data['from'], $data['to'], $branchId);
 

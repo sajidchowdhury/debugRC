@@ -158,6 +158,41 @@ class ExportArchivedPartitionsToParquet extends Command
 
                 $this->info(sprintf('      exported %s (%s)', $exportName, $this->formatBytes($bytes)));
 
+                // REPORTS-AUDIT-7 (G-228 + G-233 / csv-export.md G13/G14):
+                // persist a row to partition_exports (replaces the prior
+                // TODO that only wrote to Log::info). The manifest table
+                // lets operators answer "when was table X archived and how
+                // big was it?" without grepping logs, and the sha256 column
+                // lets downstream integrity checks detect silent corruption
+                // of cold-storage files.
+                $rowCount = $this->countArchivedRows($table);
+                $sha256 = $this->computeFileSha256($relative);
+                $duckdbVersion = $useParquet ? $this->getDuckdbVersion($duckdbPath) : null;
+
+                try {
+                    DB::table('partition_exports')->insert([
+                        'parent_table'    => $table,
+                        'partition_name'  => $table,
+                        'parquet_path'    => $relative,
+                        'byte_size'       => $bytes,
+                        'row_count'       => $rowCount,
+                        'sha256'          => $sha256,
+                        'duckdb_version'  => $duckdbVersion,
+                        'format'          => $useParquet ? 'parquet' : 'csv',
+                        'exported_at'     => now(),
+                    ]);
+                } catch (\Throwable $e) {
+                    // Manifest write failure is non-fatal — the export
+                    // itself succeeded. Log + continue so the DROP below
+                    // still runs (we do NOT want to leave the typed archive
+                    // table hanging if the manifest insert failed).
+                    $this->warn('      partition_exports insert failed: ' . $e->getMessage());
+                    Log::warning('partition:export-parquet: manifest insert failed', [
+                        'table' => $table,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+
                 // Drop the archived table after a successful export — unless
                 // the operator passed --keep. Use CASCADE so any dependent
                 // views (unlikely, but possible) go quietly.
@@ -166,11 +201,6 @@ class ExportArchivedPartitionsToParquet extends Command
                     $this->line("      dropped archive.{$table}");
                 }
 
-                // TODO (Phase 8): persist a row to `partition_exports`:
-                //   INSERT INTO partition_exports
-                //     (parent_table, partition_name, parquet_path, byte_size,
-                //      row_count, exported_at, duckdb_version)
-                //   VALUES (...)
                 Log::info('partition:export-parquet: exported', [
                     'table'  => $table,
                     'path'   => $relative,
@@ -227,6 +257,67 @@ class ExportArchivedPartitionsToParquet extends Command
             return trim($which);
         }
         return null;
+    }
+
+    /**
+     * Get the DuckDB CLI version string (for the partition_exports manifest).
+     *
+     * REPORTS-AUDIT-7 (G-228 + G-233): recorded so future readers of the
+     * manifest can detect format-compatibility drift (a Parquet file
+     * produced by DuckDB v1.0 may not be readable by DuckDB v2.0+).
+     */
+    private function getDuckdbVersion(string $duckdbPath): ?string
+    {
+        $version = @exec(escapeshellarg($duckdbPath) . ' --version 2>/dev/null', $output, $resultCode);
+        if ($resultCode === 0 && $version !== '') {
+            return trim($version);
+        }
+        return null;
+    }
+
+    /**
+     * Count rows in an archived partition table (for the manifest).
+     *
+     * REPORTS-AUDIT-7 (G-228 + G-233): runs BEFORE the DROP TABLE so the
+     * row count is captured even if the archive table is dropped after
+     * export. Uses COUNT(*) which is fast on archive tables (they are
+     * typically < 1M rows per monthly partition).
+     */
+    private function countArchivedRows(string $table): int
+    {
+        try {
+            $result = DB::selectOne("SELECT COUNT(*) AS cnt FROM archive.\"{$table}\"");
+            return (int) ($result->cnt ?? 0);
+        } catch (\Throwable $e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Compute the SHA-256 hash of an exported file (for integrity checking).
+     *
+     * REPORTS-AUDIT-7 (G-228 + G-233): stored in partition_exports.sha256
+     * so downstream integrity checks can detect silent corruption of
+     * cold-storage Parquet/CSV files (bit rot, accidental truncation,
+     * storage-layer degradation). Returns null if the file is unreadable
+     * or the hash function is unavailable.
+     */
+    private function computeFileSha256(string $relative): ?string
+    {
+        try {
+            $disk = Storage::disk(self::DISK);
+            if (!$disk->exists($relative)) {
+                return null;
+            }
+            $absolutePath = $disk->path($relative);
+            if (!is_readable($absolutePath)) {
+                return null;
+            }
+            $hash = hash_file('sha256', $absolutePath);
+            return $hash !== false ? $hash : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /**
