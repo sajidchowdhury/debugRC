@@ -457,6 +457,22 @@ return $this->journalPosting->createJournalEntry([
    `discount_amount` or `tax_amount`, the GL posts the net total (Dr Inventory = sub_total −
    discount + tax) but the stock's `avg_cost` uses the per-line gross `rate`. The two diverge
    over time, breaking `reconcileInventory`. MAJOR — accounting integrity.
+
+   > ✅ RESOLVED in commit `efecc66` (PURCHASING-API-1, G-117) —
+   > `PurchaseReceiveService::confirmReceive` now computes a per-line NET-OF-DISCOUNT
+   > rate and feeds that to `StockService::applyTransaction` instead of the per-line
+   > gross `rate`. Allocation formula (pro-rata by gross line amount):
+   > `lineGross = qty × rate; grossShare = lineGross / subTotal;
+   > lineNetAmount = lineGross − (grossShare × discount) + (grossShare × tax);
+   > netRate = lineNetAmount / qty`. The sum of (netRate × qty) across lines now equals
+   > `total_amount`, so `avg_cost` and the GL Inventory debit converge. Edge cases
+   > handled: `subTotal == 0` (fall back to gross rate, avoids divide-by-zero),
+   > `qty == 0` (skip line, defensive), rounding (`lineNetAmount` rounded to 2dp
+   > before dividing by qty; ≤ ₹0.01 variance per GRN absorbed by `avg_cost`'s
+   > `numeric(14,4)` precision; GL total unaffected). Fast path: when no header
+   > discount/tax, gross rate IS the net rate — skips the pro-rata math to avoid
+   > float noise on the common case. See
+   > `laravel/app/Services/Purchase/PurchaseReceiveService.php:207-278`.
 8. **G11 — No `confirmed_by` / `confirmed_at` columns.** The confirmer's identity is recoverable
    only via `user_audit_log` (partitioned by month — slow join for historical queries). MAJOR
    for auditability.

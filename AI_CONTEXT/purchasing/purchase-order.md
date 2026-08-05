@@ -301,9 +301,36 @@ If any step fails, the whole PO rolls back — no orphan items, no orphan audit 
    BDT 10M PO without a second-person review. MAJOR — control gap.
 5. **G10 — No `config/purchase.php`.** The PO code prefix `PO`, pad length `4`, qty tolerance
    `0.0001`, etc. are all hardcoded in service code. Cannot be tuned without a code change.
+
+   > ✅ RESOLVED in commit `efecc66` (PURCHASING-API-1, G-118) — Created
+   > `laravel/config/purchase.php` as the single source of truth for the hardcoded
+   > constants previously scattered across `PurchaseOrderService`. Env-overridable
+   > knobs: `po_prefix` (default `'PO'`), `po_code_pad_length` (default `4`),
+   > `po_doc_type` (default `'purchase_order'`), `over_receive_tolerance`
+   > (default `0.0001`), `below_tolerance_status_threshold` (default `0.0001`).
+   > `PurchaseOrderService::generatePoCode` now reads prefix/pad/docType from
+   > config (was hardcoded `'PO'` / `4` / `'purchase_order'`).
+   > `updateReceivedQty` now reads `over_receive_tolerance` +
+   > `below_tolerance_status_threshold` from config (was hardcoded `0.0001` in
+   > 3 places). Deployments can now tune the knobs via env without a code change.
+   > See `laravel/config/purchase.php` and
+   > `laravel/app/Services/Purchase/PurchaseOrderService.php:330-392`.
 6. **G13 — POs not in retention config.** `2026_08_25_000001_complete_retention_configs.php` lists
    `purchase_receives` and `purchase_returns` (84 months) but NOT `purchase_orders`. The archival
    engine never archives old POs. MAJOR — operational bloat over time.
+
+   > ✅ RESOLVED in commit `efecc66` (PURCHASING-API-1, G-121) — Added
+   > `'purchase_orders' => 84` to `RETENTION_CONFIGS` in
+   > `2026_08_25_000001_complete_retention_configs.php`. POs are NOT yet partitioned
+   > by pg_partman (partitioning `purchase_orders` is a larger task — it has inbound
+   > FKs from `purchase_order_items`, `purchase_receives`, and
+   > `supplier_payment_settlements` that would all need to be made DEFERRABLE
+   > first). This entry ensures the MOMENT `purchase_orders` is registered with
+   > pg_partman, the 84-month retention will auto-apply via the idempotent UPDATE.
+   > The `Log::warning` branch already handles the "part_config row not found yet"
+   > case gracefully. Updated the retention matrix doc-block comment to include
+   > `purchase_orders`. See
+   > `laravel/database/migrations/2026_08_25_000001_complete_retention_configs.php:120-132`.
 7. **G17 — `warehouse_id` nullable mismatch.** `purchase_orders.warehouse_id` is nullable but
    `purchase_receives.warehouse_id` is NOT NULL. A PO without a warehouse can be created but the
    GRN against it must specify a warehouse at the header level (the controller's FormRequest

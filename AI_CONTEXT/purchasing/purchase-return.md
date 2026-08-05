@@ -418,9 +418,37 @@ return $this->journalPosting->createJournalEntry([
    `createReturn` only sets `total_amount`. The GL posts a single Dr `ap` / Cr `inventory` at
    the net total — no input-VAT reclaim ledger entry. MAJOR — VAT compliance gap. Either write
    the columns (requires UI changes to capture tax/discount) or drop them from the schema.
+
+   > ✅ RESOLVED in commit `efecc66` (PURCHASING-API-1, G-120) —
+   > `PurchaseReturnService::createReturn` now accepts optional `discount_amount` +
+   > `tax_amount` from input (default 0), computes `sub_total` from items,
+   > `total_amount = sub_total - discount + tax`, and persists all 4 columns.
+   > Previously only `total_amount` was written; the 3 columns existed in the
+   > schema but were always NULL/0, breaking VAT-compliance reporting. The GL
+   > still posts a single Dr AP / Cr Inventory at the net total — adding a
+   > separate input-VAT ledger entry is a larger scope change deferred to a
+   > future phase. The columns are now populated so the audit trail + VAT
+   > reports can surface the breakdown. The manual master_data audit row
+   > (`$returnRow`) is also updated to include the 3 new columns. See
+   > `laravel/app/Services/Purchase/PurchaseReturnService.php:79-152`.
 6. **G14 — `searchReceives` uses inline `$request->validate` instead of a FormRequest.** Every
    other Purchase write endpoint uses a dedicated FormRequest class (Phase 7 refactor). This is
    the lone outlier. MAJOR — coding-standards violation.
+
+   > ✅ RESOLVED in commit `efecc66` (PURCHASING-API-1, G-122) — Created
+   > `laravel/app/Http/Requests/PurchaseReturn/SearchReceivesRequest.php` — a
+   > dedicated FormRequest for the AJAX GRN typeahead endpoint. Was the lone
+   > inline `$request->validate(...)` in the Purchase module (every other
+   > endpoint already used a FormRequest per the Phase 7 refactor). Wired into
+   > `PurchaseReturnController::searchReceives` — replaced `Request` typehint
+   > with `SearchReceivesRequest`, removed the inline `validate` call.
+   > Validation rules mirror the original exactly (`term: nullable|string|max:100`)
+   > plus an optional `branch_id` filter rule (`nullable|integer|min:1`) that the
+   > controller already reads. Authorisation is deferred to route middleware
+   > (admin/manager/warehouse_manager per `routes/web.php:1020-1021`) — same
+   > pattern as every other Purchase FormRequest. See
+   > `laravel/app/Http/Requests/PurchaseReturn/SearchReceivesRequest.php` and
+   > `laravel/app/Http/Controllers/Admin/PurchaseReturnController.php:545-561`.
 7. **Damage condition's GL treatment is non-obvious.** A Damage line posts Dr `ap` / Cr
    `inventory` at the line's `amount` (qty × rate), even though no stock was moved. This
    effectively writes down the inventory by the Damage line's cost. Confirm this is the desired
