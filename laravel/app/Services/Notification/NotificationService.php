@@ -40,14 +40,18 @@ class NotificationService
      *
      * F-18b: added the 4 new events (user_logout, damage_invoice_created,
      * branch_demand_created, customer_limit_increased).
+     *
+     * WORKFLOWS-AUDIT-2 (G-177): removed 3 dead infrastructure events
+     * (godown_create / soft_delete / accounts_entry) — they were declared
+     * here + in NotificationRule::EVENTS but had NO dispatch call site.
+     * The 3 damage_invoice_* approval events remain here (they ARE
+     * dispatched by DamageService::dispatchApprovalNotification) and are
+     * now also in NotificationRule::EVENTS so admins can configure rules.
      */
     private const EVENT_META = [
         'sales_finalize'            => ['icon' => 'fa-file-invoice-dollar', 'color' => 'success', 'title' => 'Sales Invoice Confirmed'],
         'challan_create'            => ['icon' => 'fa-truck', 'color' => 'info', 'title' => 'Challan Created'],
-        'godown_create'             => ['icon' => 'fa-warehouse', 'color' => 'primary', 'title' => 'Godown Copy Created'],
         'payment_receive'           => ['icon' => 'fa-hand-holding-dollar', 'color' => 'success', 'title' => 'Payment Received'],
-        'soft_delete'               => ['icon' => 'fa-trash', 'color' => 'warning', 'title' => 'Record Deleted'],
-        'accounts_entry'            => ['icon' => 'fa-book', 'color' => 'primary', 'title' => 'Accounting Entry Posted'],
         'user_login'                => ['icon' => 'fa-user', 'color' => 'secondary', 'title' => 'User Login'],
         'user_logout'               => ['icon' => 'fa-right-from-bracket', 'color' => 'secondary', 'title' => 'User Logout'],
         'damage_invoice_created'    => ['icon' => 'fa-triangle-exclamation', 'color' => 'danger', 'title' => 'Damage Invoice Created'],

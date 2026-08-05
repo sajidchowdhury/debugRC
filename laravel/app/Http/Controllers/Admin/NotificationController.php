@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\StoreNotificationRuleRequest;
+use App\Http\Requests\UpdateNotificationRuleRequest;
 use App\Models\NotificationRule;
 use App\Models\NotificationRuleRecipient;
 use App\Models\User;
@@ -60,55 +62,111 @@ class NotificationController extends Controller
 
     /**
      * Store a new notification rule (F-18b: multi-select recipient types).
+     *
+     * WORKFLOWS-AUDIT-2 (G-184): validation moved into the typed
+     * StoreNotificationRuleRequest FormRequest (mirrors the pattern
+     * established by the sibling accounting FormRequests + the
+     * WORKFLOWS-AUDIT-1 approval FormRequests).
      */
-    public function storeRule(Request $request)
+    public function storeRule(StoreNotificationRuleRequest $request)
     {
-        $validated = $request->validate([
-            'name'              => 'required|string|max:100',
-            'event'             => 'required|string|in:' . implode(',', array_keys(NotificationRule::EVENTS)),
-            'recipient_types'   => 'required|array|min:1',
-            'recipient_types.*' => 'required|string|in:' . implode(',', array_keys(NotificationRule::RECIPIENTS)),
-            'recipient_user_id' => 'nullable|integer|exists:users,id',
-            'description'       => 'nullable|string|max:500',
-            'is_active'         => 'boolean',
-            // channel kept for backward-compat but forced to 'database' (F-18b).
-            'channel'           => 'sometimes|string|in:' . implode(',', array_keys(NotificationRule::CHANNELS)),
-        ]);
-
-        $recipientTypes = array_values(array_unique($validated['recipient_types']));
+        $payload = $request->toServicePayload();
+        $recipientTypes = $payload['recipient_types'];
 
         // If specific_user is among the selections, a recipient_user_id is required.
-        if (in_array('specific_user', $recipientTypes, true) && empty($validated['recipient_user_id'])) {
+        // (Checked here rather than in the FormRequest so the error message can
+        // reference the recipient_type context — the FormRequest can't tell
+        // which selection triggered the requirement.)
+        if (in_array('specific_user', $recipientTypes, true) && empty($payload['recipient_user_id'])) {
             return back()->withInput()->with('error', 'Specific User recipient requires a user selection.');
         }
 
-        DB::transaction(function () use ($validated, $recipientTypes, &$rule) {
+        DB::transaction(function () use ($payload, $recipientTypes, &$rule) {
             $rule = NotificationRule::create([
-                'name'        => $validated['name'],
-                'event'       => $validated['event'],
+                'name'        => $payload['name'],
+                'event'       => $payload['event'],
                 'channel'     => 'database', // F-18b: database-only (broadcast removed)
-                'is_active'   => $validated['is_active'] ?? true,
-                'description' => $validated['description'] ?? null,
+                'is_active'   => $payload['is_active'],
+                'description' => $payload['description'],
                 'created_by'  => auth()->id(),
             ]);
 
             // Sync the multi-select recipient types to the pivot (F-18b).
-            $now = now();
-            $rows = [];
-            foreach ($recipientTypes as $type) {
-                $rows[] = [
-                    'notification_rule_id' => $rule->id,
-                    'recipient_type'       => $type,
-                    'recipient_user_id'    => ($type === 'specific_user') ? ($validated['recipient_user_id'] ?? null) : null,
-                    'created_at'           => $now,
-                    'updated_at'           => $now,
-                ];
-            }
-            DB::table('notification_rule_recipients')->insert($rows);
+            $this->syncRecipientTypes($rule->id, $recipientTypes, $payload['recipient_user_id']);
         });
 
         return redirect()->route('admin.notifications.rules')
-            ->with('success', "Rule '{$validated['name']}' created.");
+            ->with('success', "Rule '{$payload['name']}' created.");
+    }
+
+    /**
+     * Update an existing notification rule (F-18b: multi-select recipients).
+     *
+     * WORKFLOWS-AUDIT-2 (G-184): NEW — previously no `updateRule` route
+     * existed (rules could only be created/toggled/deleted, never edited).
+     * Admins had to delete + recreate a rule to change its name/event/
+     * recipients/description, losing `times_fired` history + `created_at` +
+     * `created_by`. This method does a FULL replacement of the editable
+     * fields + re-syncs the pivot (delete old recipient types, insert new),
+     * preserving `times_fired`, `created_at`, `created_by`.
+     */
+    public function updateRule(int $id, UpdateNotificationRuleRequest $request)
+    {
+        $rule = NotificationRule::findOrFail($id);
+        $payload = $request->toServicePayload();
+        $recipientTypes = $payload['recipient_types'];
+
+        if (in_array('specific_user', $recipientTypes, true) && empty($payload['recipient_user_id'])) {
+            return back()->withInput()->with('error', 'Specific User recipient requires a user selection.');
+        }
+
+        DB::transaction(function () use ($rule, $payload, $recipientTypes) {
+            $rule->update([
+                'name'        => $payload['name'],
+                'event'       => $payload['event'],
+                'channel'     => 'database', // F-18b: database-only
+                'is_active'   => $payload['is_active'],
+                'description' => $payload['description'],
+                // created_by + times_fired + created_at are intentionally
+                // NOT updated — preserve attribution + history.
+            ]);
+
+            // Re-sync the pivot (delete old recipient types, insert new).
+            $this->syncRecipientTypes($rule->id, $recipientTypes, $payload['recipient_user_id'], $replace = true);
+        });
+
+        return redirect()->route('admin.notifications.rules')
+            ->with('success', "Rule '{$payload['name']}' updated.");
+    }
+
+    /**
+     * Sync the multi-select recipient types to the pivot (F-18b).
+     *
+     * WORKFLOWS-AUDIT-2 (G-184): factored out of storeRule so updateRule
+     * can re-use the same insert logic. When $replace=true, deletes the
+     * existing pivot rows first (update path); when false, the table is
+     * empty for a fresh rule so no delete is needed (store path).
+     */
+    private function syncRecipientTypes(int $ruleId, array $recipientTypes, ?int $recipientUserId = null, bool $replace = false): void
+    {
+        if ($replace) {
+            DB::table('notification_rule_recipients')
+                ->where('notification_rule_id', $ruleId)
+                ->delete();
+        }
+
+        $now = now();
+        $rows = [];
+        foreach ($recipientTypes as $type) {
+            $rows[] = [
+                'notification_rule_id' => $ruleId,
+                'recipient_type'       => $type,
+                'recipient_user_id'    => ($type === 'specific_user') ? $recipientUserId : null,
+                'created_at'           => $now,
+                'updated_at'           => $now,
+            ];
+        }
+        DB::table('notification_rule_recipients')->insert($rows);
     }
 
     /**

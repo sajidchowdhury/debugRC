@@ -1637,6 +1637,12 @@ Route::middleware('auth')->group(function () {
         Route::middleware('role:admin')->group(function () {
             Route::get('rules', [NotificationController::class, 'rules'])->name('rules');
             Route::post('rules', [NotificationController::class, 'storeRule'])->name('storeRule');
+            // WORKFLOWS-AUDIT-2 (G-184): NEW — PUT/PATCH updateRule route.
+            // Previously rules could only be created/toggled/deleted, never
+            // edited. Admins had to delete + recreate to change name/event/
+            // recipients/description, losing times_fired + created_at +
+            // created_by. Both verbs map to the same updateRule method.
+            Route::match(['put', 'patch'], 'rules/{id}', [NotificationController::class, 'updateRule'])->name('updateRule');
             Route::post('rules/reset-defaults', [NotificationController::class, 'resetDefaults'])->name('resetDefaults');
             Route::post('rules/{id}/toggle', [NotificationController::class, 'toggleRule'])->name('toggleRule');
             Route::delete('rules/{id}', [NotificationController::class, 'destroyRule'])->name('destroyRule');

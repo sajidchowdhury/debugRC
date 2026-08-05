@@ -48,13 +48,19 @@ class NotificationRule extends Model
      *
      * F-18b: expanded to cover the user's 9 predefined business events.
      * The first 10 keys (sales_finalize … customer_limit_increased) are
-     * the canonical business events; the trailing return_confirmed /
-     * return_reversed are sub-flows of "After Sales return" that are
-     * already dispatched by SalesReturnService and worth configuring
-     * separately. soft_delete / accounts_entry / godown_create are kept
-     * as additional infrastructure events (already in the original
-     * Phase-10 set) — admins may configure them but they are not in the
-     * user's 9.
+     * the canonical business events; return_confirmed / return_reversed
+     * are sub-flows of "After Sales return" that are already dispatched
+     * by SalesReturnService and worth configuring separately.
+     *
+     * WORKFLOWS-AUDIT-2 (G-177): cleanup — removed 3 dead infrastructure
+     * events (godown_create / soft_delete / accounts_entry) that were
+     * declared here + in NotificationService::EVENT_META but had NO
+     * dispatch call site in the entire codebase. Admins saw them in the
+     * dropdown but they never fired. Added 3 damage_invoice_* approval
+     * events (submitted / approved / rejected) that DamageService
+     * dispatches (DamageService::dispatchApprovalNotification L611/L633/
+     * L700/L767) and that were already in EVENT_META but missing from
+     * EVENTS — so admins could not create rules for them.
      */
     public const EVENTS = [
         // — User's 9 predefined business events —
@@ -67,10 +73,6 @@ class NotificationRule extends Model
         'return_created'            => 'After Sales Return',
         'branch_demand_created'     => 'After Branch Demand',
         'customer_limit_increased'  => 'After Increasing Customer Limit',
-        // — Additional infrastructure events (pre-existing) —
-        'godown_create'             => 'Godown Copy Created',
-        'soft_delete'               => 'Record Soft-Deleted',
-        'accounts_entry'            => 'Accounting Entry Posted',
         // — Sales-return sub-flows (already dispatched; keep configurable) —
         'return_confirmed'          => 'Sales Return Confirmed',
         'return_reversed'           => 'Sales Return Reversed',
@@ -84,6 +86,15 @@ class NotificationRule extends Model
         'approval_request_next_level'   => 'Approval Request Advanced to Next Level',
         'approval_request_approved'     => 'Approval Request Approved',
         'approval_request_rejected'     => 'Approval Request Rejected',
+        // — Damage invoice approval events (G-177, WORKFLOWS-AUDIT-2) —
+        // Dispatched by DamageService::dispatchApprovalNotification
+        // (L611/L633/L700/L767) for the Pattern-B maker-checker flow on
+        // damage invoices. Previously in EVENT_META but NOT in EVENTS —
+        // admins couldn't create rules. Now configurable + seeded with
+        // default rules (see NotificationRuleSeeder).
+        'damage_invoice_submitted'  => 'Damage Invoice Submitted for Approval',
+        'damage_invoice_approved'   => 'Damage Invoice Approved',
+        'damage_invoice_rejected'   => 'Damage Invoice Rejected',
     ];
 
     /**

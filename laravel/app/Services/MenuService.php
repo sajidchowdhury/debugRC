@@ -183,6 +183,8 @@ class MenuService
             'fixedasset' => $this->resolveFixedAssetRoute($action),
             // WORKFLOWS-AUDIT-1 (G-186): Approval Queue + Workflows menus.
             'approval' => $action === 'workflows' ? 'admin.approvals.workflows' : 'admin.approvals.queue',
+            // WORKFLOWS-AUDIT-2 (G-185): Notification Rules sidebar menu.
+            'notification' => 'admin.notifications.rules',
         ];
 
         $routeName = $routeMap[$controller] ?? null;

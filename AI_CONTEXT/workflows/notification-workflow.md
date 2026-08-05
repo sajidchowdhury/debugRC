@@ -1250,15 +1250,66 @@ flowchart LR
 > ✅ **RESOLVED — G-079 / G3 (WORKFLOWS-NOTIFICATION, commit `053609b`).** Applied option (a) — the worker-forward path is removed (same `CHANNEL_EVENT_MAP = []` change as G-076/G-078). This makes the missing-`$context` bug moot: the worker no longer dispatches notifications at all, so there's no path that could omit `$context`. All 4 direct-PHP dispatch sites pass full `$context` (SalesInvoiceService passes `salesman_id` + `created_by`; SalesChallanService passes `warehouse_manager_id`; CustomerPaymentService passes `received_by`; SalesReturnService passes `created_by`), so context-aware recipient types (`warehouse_manager_of_branch`, `salesman_of_invoice`, `invoice_creator`) resolve correctly via the single direct-dispatch path. Option (b) (enriching trigger payloads) was rejected as unnecessary complexity — the direct path already has the data.
 
 ### G4 — HIGH — 8 events are dead config (declared/forwarded but never fire)
-- **Evidence:** `godown_create`, `soft_delete`, `accounts_entry`: declared in
-  `NotificationRule::EVENTS` (L71-73) + `EVENT_META` (L47, L49, L50) — NO dispatch call
-  site, NO seeder entry. `branch_demand_created`: declared + seeder rule
-  (`NotificationRuleSeeder.php:99-103`) — but `BranchDemandService.php` does NOT call
-  `dispatch()` (seeder comment L101 is OUTDATED). `system_policy_change`: forwarded by
-  `CHANNEL_EVENT_MAP` (L89) but NOT in EVENTS, NOT in EVENT_META, NO seeder —
-  `dispatch()` returns 0 silently. `damage_invoice_submitted`/`approved`/`rejected`: in
-  EVENT_META (L57-59) + dispatched by `DamageService::dispatchApprovalNotification` (L611,
-  L633, L700, L767) — but NOT in `NotificationRule::EVENTS`. The `storeRule` validation
+
+> ✅ **RESOLVED — G-177 / G4 (WORKFLOWS-AUDIT-2).** Re-scoped the 8 events
+> against the current codebase — several had already been fixed by prior
+> waves (FINANCE-3 wired `branch_demand_created` dispatch in
+> `BranchDemandService::createDemand` L175; G-076 emptied
+> `CHANNEL_EVENT_MAP` so `system_policy_change` is no longer forwarded by
+> the worker). The remaining dead config was cleaned up as follows:
+>
+> **Removed (3 dead infrastructure events)** — declared in `EVENTS` +
+> `EVENT_META` but NO dispatch call site in the entire codebase:
+>   - `godown_create` — removed from `NotificationRule::EVENTS` (was L71)
+>     + `NotificationService::EVENT_META` (was L47).
+>   - `soft_delete` — removed from `EVENTS` (was L72) + `EVENT_META`
+>     (was L49).
+>   - `accounts_entry` — removed from `EVENTS` (was L73) + `EVENT_META`
+>     (was L50).
+>
+> **Already-wired (no code change, doc/comment update only)**:
+>   - `branch_demand_created` — IS dispatched by
+>     `BranchDemandService::createDemand` (FINANCE-3 / G-021, L175-188)
+>     + has a seeder entry (`NotificationRuleSeeder::DEFAULTS` L98-103).
+>     Updated the stale seeder comment (was "no Laravel creation path
+>     exists yet") to reflect that FINANCE-3 wired the dispatch.
+>   - `system_policy_change` — was forwarded by `CHANNEL_EVENT_MAP` but
+>     NOT in `EVENTS`/`EVENT_META`/seeder. G-076 (WORKFLOWS-NOTIFICATION)
+>     emptied `CHANNEL_EVENT_MAP` to `[]`, so the worker-forward path is
+>     dead — this event is no longer forwarded at all. No dispatch site
+>     exists, no rule can match (it's not in `EVENTS`), so it's fully
+>     inert. No code action needed (the G-076 fix already neutralized it);
+>     this entry is now closed by cross-reference to G-076.
+>
+> **Added (3 damage-invoice approval events)** — already dispatched by
+> `DamageService::dispatchApprovalNotification` (L611/L633/L700/L767) +
+> already in `EVENT_META` (L57-59), but were NOT in `NotificationRule::EVENTS`
+> + NOT seeded — so `dispatch()` silently returned 0 (no rule matched)
+> and approvers/requesters never received notifications. Added to
+> `EVENTS` + seeded 3 default rules:
+>   - `damage_invoice_submitted` → `admin` + `sales_manager` (the
+>     approval worklist — same pattern as `approval_request_submitted`).
+>   - `damage_invoice_approved` → `invoice_creator` (the submitter, via
+>     the `created_by` context key DamageService passes at L808).
+>   - `damage_invoice_rejected` → `invoice_creator` (same context).
+>
+> **Net effect**: `NotificationRule::EVENTS` now contains exactly the
+> events that actually fire (16 events, all with dispatch call sites).
+> The 3 damage-invoice approval events now produce notifications out of
+> the box. The 3 dead infrastructure events no longer clutter the admin
+> dropdown. The `system_policy_change` non-event is closed by cross-ref
+> to G-076.
+
+- **Evidence (HISTORICAL — pre-WORKFLOWS-AUDIT-2):** `godown_create`, `soft_delete`,
+  `accounts_entry`: declared in `NotificationRule::EVENTS` (L71-73) + `EVENT_META`
+  (L47, L49, L50) — NO dispatch call site, NO seeder entry. `branch_demand_created`:
+  declared + seeder rule (`NotificationRuleSeeder.php:99-103`) — but
+  `BranchDemandService.php` does NOT call `dispatch()` (seeder comment L101 was
+  OUTDATED). `system_policy_change`: forwarded by `CHANNEL_EVENT_MAP` (L89) but NOT
+  in EVENTS, NOT in EVENT_META, NO seeder — `dispatch()` returns 0 silently.
+  `damage_invoice_submitted`/`approved`/`rejected`: in EVENT_META (L57-59) +
+  dispatched by `DamageService::dispatchApprovalNotification` (L611, L633, L700,
+  L767) — but NOT in `NotificationRule::EVENTS`. The `storeRule` validation
   (`NotificationController.php:68`) blocks admins from creating rules for these events.
 - **Impact:** Dead config clutters the EVENTS/EVENT_META constants. The 3
   `damage_invoice_*` approval events misleadingly appear in EVENT_META as if functional
@@ -1326,10 +1377,65 @@ flowchart LR
   default seeder rules + their pivot rows.
 
 ### G8 — HIGH — NO FormRequest for `NotificationController::storeRule` + NO `updateRule` route
-- **Evidence:** `NotificationController.php:66-76` uses inline `$request->validate([…])`.
-  No `app/Http/Requests/StoreNotificationRuleRequest.php` exists. No `updateRule` method
-  on the controller + no `PUT/PATCH /admin/notifications/rules/{id}` route
-  (`routes/web.php:1577-1585`). Rules can only be created/toggled/deleted — never edited.
+
+> ✅ **RESOLVED — G-184 / G8 (WORKFLOWS-AUDIT-2).** Created 2 typed
+> FormRequests + added the `updateRule` controller method + route:
+>
+> **FormRequests (2 NEW files)**:
+>   - `app/Http/Requests/StoreNotificationRuleRequest.php` — mirrors the
+>     inline `$request->validate([…])` that used to live in
+>     `NotificationController::storeRule()` (L66-76). Validates `name`
+>     (required|string|max:100), `event` (required|in:<EVENTS keys>),
+>     `recipient_types` (required|array|min:1, each entry in RECIPIENTS),
+>     `recipient_user_id` (nullable|integer|exists:users,id),
+>     `description` (nullable|string|max:500), `is_active` (boolean),
+>     `channel` (sometimes|string|in:CHANNELS — kept for backward-compat,
+>     forced to 'database' in `toServicePayload()`). Includes
+>     `toServicePayload()` that de-duplicates recipient_types + forces
+>     channel='database' (F-18b database-only). Uses `Rule::in()` instead
+>     of the inline `implode(',', …)` string for cleaner validation.
+>   - `app/Http/Requests/UpdateNotificationRuleRequest.php` — sibling of
+>     Store, validates PUT/PATCH `/admin/notifications/rules/{id}`. Same
+>     rules (FULL replacement of editable fields — `times_fired`,
+>     `created_at`, `created_by` are preserved, NOT in the update payload).
+>
+> **Controller (NotificationController.php)**:
+>   - `storeRule(Request $request)` → `storeRule(StoreNotificationRuleRequest
+>     $request)` — inline `$request->validate([…])` removed; reads
+>     `$request->toServicePayload()` instead.
+>   - NEW `updateRule(int $id, UpdateNotificationRuleRequest $request)` —
+>     loads rule via `findOrFail`, calls `toServicePayload()`, updates
+>     editable fields (name/event/channel/is_active/description),
+>     re-syncs the pivot (delete old recipient types, insert new) via
+>     `syncRecipientTypes($replace=true)`. `times_fired`, `created_at`,
+>     `created_by` are intentionally NOT updated.
+>   - NEW private `syncRecipientTypes(int $ruleId, array $recipientTypes,
+>     ?int $recipientUserId = null, bool $replace = false): void` —
+>     factored out of `storeRule()` so `updateRule()` reuses the same
+>     insert logic. When `$replace=true`, deletes existing pivot rows
+>     first (update path); when false, table is empty for a fresh rule
+>     (store path).
+>   - The `specific_user` requires-`recipient_user_id` check stays in
+>     the controller (not the FormRequest) so the error message can
+>     reference the recipient_type context.
+>
+> **Route (routes/web.php L1645)**:
+>   - NEW `Route::match(['put', 'patch'], 'rules/{id}',
+>     [NotificationController::class, 'updateRule'])->name('updateRule')`
+>     inside the existing `role:admin` group. Both verbs map to the same
+>     `updateRule` method (Laravel convention).
+>
+> **Pattern**: mirrors the WORKFLOWS-AUDIT-1 approval FormRequests
+> (`ApproveRequest`, `RejectRequest`, `UpdateWorkflowRequest`,
+> `QueueIndexRequest`) + the sibling accounting FormRequests
+> (`StoreMoneyTransferRequest`, `StoreManualJournalRequest`, …).
+
+- **Evidence (HISTORICAL):** `NotificationController.php:66-76` uses inline
+  `$request->validate([…])`. No `app/Http/Requests/StoreNotificationRuleRequest.php`
+  exists. No `updateRule` method on the controller + no
+  `PUT/PATCH /admin/notifications/rules/{id}` route
+  (`routes/web.php:1577-1585`). Rules can only be created/toggled/deleted —
+  never edited.
 - **Impact:** Inline validation is harder to test + reuse. The missing `updateRule` forces
   admins to delete + recreate a rule to change its name/event/recipients/description
   (losing `times_fired` history + `created_at` + `created_by`). Same gap pattern as Phase
@@ -1339,11 +1445,48 @@ flowchart LR
   route inside the `role:admin` group.
 
 ### G9 — HIGH — NO sidebar menu entry for `/admin/notifications/rules`
-- **Evidence:** Grep of `laravel/database/migrations/*menu*` (11 menu-seed migrations) +
-  `laravel/database/sql/basic_data_snapshot.sql` for "notification" or
-  "admin/notifications" returns ZERO menu-row hits. The ONLY UI entry point is the gear
-  icon in the bell dropdown (`top-nav.blade.php:135-141` `@can('view-notification-rules')`).
-  Same gap as Phase 14 G11 (Pattern A approval menu missing).
+
+> ✅ **RESOLVED — G-185 / G9 (WORKFLOWS-AUDIT-2).** Added a
+> "Notification Rules" sidebar menu under the existing "Administration"
+> parent (menu id=2 in `basic_data_snapshot.sql`), mirroring the
+> WORKFLOWS-AUDIT-1 approval-queue menu pattern
+> (`2026_09_05_000009_add_approval_queue_menus.php`):
+>
+> **Migration (NEW)**: `2026_09_06_000001_add_notification_rules_menu.php`.
+>   - Inserts a single menu row: `menu_label='Notification Rules'`,
+>     `controller='notification'`, `action='rules'`, `icon='fas fa-bell'`,
+>     `parent_id=<Administration id>`, `sort_order=96` (after Approval
+>     Queue at 95, before the Settings tail at 100+).
+>   - Idempotent via `updateOrInsert` on `(controller, action)`.
+>   - Grants superadmin (E0001, or first `role='superadmin'` employee)
+>     full `can_view` + `can_edit` via `user_menu_permissions` upsert
+>     (`ON CONFLICT (user_id, menu_id) DO UPDATE`). Other admins gain
+>     access via the `role:admin` route middleware + the
+>     `view-notification-rules` Gate (AppServiceProvider L71-73, which
+>     returns true for admin + superadmin via `User::isAdmin()`).
+>   - `down()` deletes the `user_menu_permissions` rows for the menu
+>     IDs, then deletes the menu rows (mirrors the approval-queue
+>     migration's `down()`).
+>
+> **MenuService::resolveMenuUrl() routeMap (app/Services/MenuService.php
+> L186-187)**: added `'notification' => 'admin.notifications.rules'` —
+> the menu controller resolves the legacy `controller='notification'` +
+> `action='rules'` pair to the Laravel named route
+> `admin.notifications.rules` (defined in `routes/web.php` L1638). Same
+> pattern as the WORKFLOWS-AUDIT-1 approval-queue routeMap entry
+> (`'approval' => $action === 'workflows' ? … : …`).
+>
+> **Note on parent**: the gap doc suggested "parent: Settings", but the
+> codebase has no "Settings" menu parent — every recent admin module
+> (Approval Queue, Bank Reconciliation, Consolidation, Fixed Asset,
+> Budget/Dimension, Fiscal Year) is a child of "Administration" (id=2).
+> Used Administration for consistency with the sibling admin menus.
+
+- **Evidence (HISTORICAL):** Grep of `laravel/database/migrations/*menu*`
+  (11 menu-seed migrations) + `laravel/database/sql/basic_data_snapshot.sql`
+  for "notification" or "admin/notifications" returns ZERO menu-row hits.
+  The ONLY UI entry point was the gear icon in the bell dropdown
+  (`top-nav.blade.php:135-141` `@can('view-notification-rules')`).
 - **Impact:** Admins have no sidebar shortcut — they must click the bell → gear.
   Inconsistent with every other admin module.
 - **Fix:** Add a menu-seed migration inserting a row into `menu_items` (parent: Settings,

@@ -98,7 +98,7 @@ class NotificationRuleSeeder extends Seeder
         [
             'event'    => 'branch_demand_created',
             'name'     => 'After Branch Demand — default',
-            'desc'     => 'Fires when a branch demand is created. Notifies admins and the warehouse manager of the event branch. NOTE: no Laravel creation path exists yet — this rule is ready for when a BranchDemandService is built.',
+            'desc'     => 'Fires when a branch demand is created. Notifies admins and the warehouse manager of the event branch. (FINANCE-3 / G-021 wired the dispatch in BranchDemandService::createDemand — previously this rule existed but had no caller.)',
             'types'    => ['admin', 'warehouse_manager_of_branch'],
         ],
         [
@@ -136,6 +136,34 @@ class NotificationRuleSeeder extends Seeder
             'event'    => 'approval_request_rejected',
             'name'     => 'Approval Request Rejected — default',
             'desc'     => 'Fires when an approval request is rejected. Notifies the submitter with the rejection reason.',
+            'types'    => ['invoice_creator'],
+        ],
+        // G-177 (WORKFLOWS-AUDIT-2): Damage invoice approval events.
+        // Dispatched by DamageService::dispatchApprovalNotification
+        // (L611/L633/L700/L767) for the Pattern-B maker-checker flow.
+        // Previously these 3 events were in NotificationService::EVENT_META
+        // + dispatched by DamageService but NOT in NotificationRule::EVENTS
+        // + NOT seeded — so dispatch silently returned 0 (no rule matched)
+        // and approvers/requesters never received notifications. `submitted`
+        // routes to managers/admins (the approval worklist). `approved` /
+        // `rejected` route back to the submitter (invoice_creator context,
+        // resolved via the created_by key DamageService passes).
+        [
+            'event'    => 'damage_invoice_submitted',
+            'name'     => 'Damage Invoice Submitted — default',
+            'desc'     => 'Fires when a damage invoice is submitted for approval. Notifies managers and admins (the approval worklist).',
+            'types'    => ['admin', 'sales_manager'],
+        ],
+        [
+            'event'    => 'damage_invoice_approved',
+            'name'     => 'Damage Invoice Approved — default',
+            'desc'     => 'Fires when a damage invoice approval is approved. Notifies the submitter so they know the entity can now be posted.',
+            'types'    => ['invoice_creator'],
+        ],
+        [
+            'event'    => 'damage_invoice_rejected',
+            'name'     => 'Damage Invoice Rejected — default',
+            'desc'     => 'Fires when a damage invoice approval is rejected. Notifies the submitter with the rejection reason.',
             'types'    => ['invoice_creator'],
         ],
     ];
