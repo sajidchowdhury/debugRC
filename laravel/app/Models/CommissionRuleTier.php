@@ -24,15 +24,16 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $threshold Cumulative sales amount at which this tier starts
  * @property string $rate Commission rate for the portion of sales in this tier
  * @property int $sort_order
+ * @property \Illuminate\Support\Carbon|null $created_at
+ * @property \Illuminate\Support\Carbon|null $updated_at G-305: added by migration 2026_09_07_000001 (tier rate-change audit trail)
  */
 class CommissionRuleTier extends Model
 {
     protected $table = 'commission_rule_tiers';
 
-    public $timestamps = false;
-
-    public const CREATED_AT = null;
-    public const UPDATED_AT = null;
+    // G-305 (LOW-E): timestamps now enabled. `created_at` was always present
+    // in the DDL; `updated_at` was added by migration 2026_09_07_000001.
+    // Tier-rate / threshold / sort_order edits now bump updated_at for audit.
 
     protected $fillable = [
         'commission_rule_id', 'threshold', 'rate', 'sort_order',

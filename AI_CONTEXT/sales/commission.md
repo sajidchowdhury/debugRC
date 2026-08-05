@@ -456,6 +456,8 @@ stateDiagram-v2
    > zero inline `validate()` calls remain in `CommissionApiController`. The 3 new
    > FormRequests mirror the validation rules they replaced (1:1, no behavior
    > change) and add `bodyParameters()` for Scribe/OpenAPI doc generation.
+> ✅ **RESOLVED — LOW-E.** Migration `2026_09_07_000001_add_timestamps_to_commission_rule_child_tables` adds nullable `created_at` + `updated_at` to `commission_rule_tiers`, `commission_rule_product_groups`, `commission_rule_targets`. Eloquent models updated to enable timestamps. SQL baseline updated. Tier rate changes are now timestamped.
+
 12. **G16 (MINOR)** — `commission_rule_tiers`, `commission_rule_product_groups`,
     `commission_rule_targets` have NO `updated_at` column. Audit trail for tier rate changes is
     impossible.

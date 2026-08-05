@@ -22,15 +22,16 @@ use Illuminate\Database\Eloquent\Model;
  * @property int $commission_rule_id
  * @property int $product_group_id
  * @property string $rate Commission rate for this product group
+ * @property \Illuminate\Support\Carbon|null $created_at
+ * @property \Illuminate\Support\Carbon|null $updated_at G-305: added by migration 2026_09_07_000001 (group-rate-change audit trail)
  */
 class CommissionRuleProductGroup extends Model
 {
     protected $table = 'commission_rule_product_groups';
 
-    public $timestamps = false;
-
-    public const CREATED_AT = null;
-    public const UPDATED_AT = null;
+    // G-305 (LOW-E): timestamps now enabled. `created_at` was always present
+    // in the DDL; `updated_at` was added by migration 2026_09_07_000001.
+    // Per-group rate edits now bump updated_at for audit.
 
     protected $fillable = [
         'commission_rule_id', 'product_group_id', 'rate',

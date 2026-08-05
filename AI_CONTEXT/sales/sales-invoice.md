@@ -458,6 +458,8 @@ return $this->journalPosting->createJournalEntry([...], $lines);
    > ✅ RESOLVED in commit b3a9fd7 — Added `api.auth:salesman,manager,admin` role gate to the 3 invoice write endpoints (`POST sales/invoices`, `PUT sales/invoices/{id}`, `POST sales/invoices/{id}/cancel`) at `routes/api.php:173,175,178`. Mirrors the web RBAC at `routes/web.php:1177,1182` (cancel + update use `role:salesman,manager,admin`) and the docblock role requirement at `api.php:139`. Superadmin passes via `ApiAuth`'s superadmin bypass. Sub-problem A (Session 1, Security/RLS cluster).
 7. **G14 (MINOR)** — `saleUpdated` audit event documented but NO `SalesAuditLogger::saleUpdated()`
    method. `updateInvoice` writes directly to `user_audit_log` via `DB::table()->insert()`.
+
+   > ✅ **RESOLVED — LOW-G.** `SalesAuditLogger::saleUpdated()` method added (mirrors `saleCreated()`/`saleCancelled()` pattern). `SalesInvoiceService::updateInvoice()` now calls the new method instead of inline `DB::table('user_audit_log')->insert()`. The `saleUpdated` audit event is now wired through the canonical audit-logger path.
 8. **AuditableMasterData bypass** — the trait is `use`d on `SalesInvoice` but bypassed by
    `DB::table('sales_invoices')->insertGetId()` in `finalizeFromCart`. `master_data_*` rows are
    NEVER written through the canonical path.

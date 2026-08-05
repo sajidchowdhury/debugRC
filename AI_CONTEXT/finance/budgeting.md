@@ -63,6 +63,8 @@ Three management-accounting drivers:
 | Budget cancellation | Abandoned plan / error correction | Rare | Any (draft or active) |
 | CSV export | Board / management reporting | Monthly/Quarterly | Any |
 
+> ✅ **RESOLVED — LOW-G.** New artisan command `budget:variance-report` generates the variance report (CSV by default, optional --email + --format + --output flags). Scheduled monthly in `routes/console.php` (`monthlyOn(1, '04:00')` — offset past the 01:00 depreciation + 02:00 stale-draft + 03:00 stock-reconcile daily jobs). Accountants can now run `php artisan budget:variance-report` from CLI or wait for the scheduled run — no UI click required.
+
 > **G8:** There is no artisan command and no scheduled job for variance reporting. The
 > accountant must manually click *Variance* in the UI.
 

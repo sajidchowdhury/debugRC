@@ -69,10 +69,19 @@
           eventSource.addEventListener('rcerp_notification_dispatched', function(e) {
               const data = JSON.parse(e.data);
               const changes = data.changes || {};
+              // LOW-F (G-273): pass reference_type + reference_id so the toast
+              // can derive the correct detail-route URL for ALL notification
+              // types (sales_invoice, sales_challan, sales_return,
+              // customer_payment, damage_invoice, manual_journal,
+              // purchase_receive, purchase_return, branch_demand) — not just
+              // sales_invoice. Previously only sales_invoice was wired and
+              // the toast link was hardcoded to the (non-existent)
+              // `sales/today` route for every other type.
               showBeautifulNotification(
                   changes.title || 'New Notification',
                   changes.body || 'You have a new notification',
-                  changes.reference_type === 'sales_invoice' ? changes.reference_id : null
+                  changes.reference_type || null,
+                  changes.reference_id || null
               );
               // Refresh unread count from server (source of truth)
               lightCheckNotifications();
@@ -86,18 +95,21 @@
                   showBeautifulNotification(
                       'Invoice Updated',
                       `Invoice #${data.id} status changed to ${changes.status}`,
+                      'sales_invoice',
                       data.id
                   );
               } else if (changes.is_challan_issued === true) {
                   showBeautifulNotification(
                       'Challan Issued',
                       `Challan issued for Invoice #${data.id}`,
+                      'sales_invoice',
                       data.id
                   );
               } else if (changes.is_reversed === true) {
                   showBeautifulNotification(
                       'Invoice Reversed',
                       `Invoice #${data.id} has been reversed`,
+                      'sales_invoice',
                       data.id
                   );
               }
@@ -112,7 +124,8 @@
                   showBeautifulNotification(
                       'Payment Received',
                       `Payment #${data.id} recorded`,
-                      null
+                      'customer_payment',
+                      data.id
                   );
               }
               // Refresh payment-related UI
@@ -126,6 +139,7 @@
                   showBeautifulNotification(
                       'Return Updated',
                       `Return #${data.id} status: ${changes.status}`,
+                      'sales_return',
                       data.id
                   );
               }
@@ -227,9 +241,39 @@
       } catch (e) { /* no audio element — silent */ }
   }
 
-  function showBeautifulNotification(title, message, invoiceId = null) {
+  // LOW-F (G-273): Maps a notification's reference_type + reference_id to
+  // the matching admin detail-route URL. Route prefixes verified against
+  // routes/web.php. Returns null for unknown types or missing IDs, in
+  // which case the toast renders without a link (cleaner than redirecting
+  // to dashboard for system / policy / approval events that have no
+  // single detail page).
+  function buildReferenceUrl(referenceType, referenceId) {
+      if (!referenceType || !referenceId) return null;
+      const routesByType = {
+          sales_invoice:    'admin/sales-invoices/',
+          sales_challan:    'admin/sales-challans/',
+          sales_return:     'admin/sales-returns/',
+          customer_payment: 'admin/customer-payments/',
+          damage_invoice:   'admin/damages/',
+          manual_journal:   'admin/manual-journals/',
+          purchase_receive: 'admin/purchase-receives/',
+          purchase_return:  'admin/purchase-returns/',
+          branch_demand:    'admin/branch-demands/',
+      };
+      const base = routesByType[referenceType];
+      if (!base) return null; // Unknown type — no link rendered
+      return BASE_URL + base + encodeURIComponent(referenceId);
+  }
+
+  function showBeautifulNotification(title, message, referenceType = null, referenceId = null) {
       const container = document.getElementById('notificationContainer');
       if (!container) return; // No container on this page
+
+      // LOW-F (G-273): derive the toast link from reference_type (was
+      // hardcoded to `sales/today` — a non-existent route — for every
+      // notification type, not just sales_invoice). Generic "View →" label
+      // replaces the misleading "View Invoice →".
+      const linkUrl = buildReferenceUrl(referenceType, referenceId);
 
       const toast = document.createElement('div');
       toast.className = 'custom-toast';
@@ -243,7 +287,7 @@
           </div>
           <div class="toast-body">
               ${message}
-              ${invoiceId ? `<hr class="my-2"><a href="sales/today" class="btn btn-sm btn-outline-light w-100">View Invoice →</a>` : ''}
+              ${linkUrl ? `<hr class="my-2"><a href="${linkUrl}" class="btn btn-sm btn-outline-light w-100">View →</a>` : ''}
           </div>
       `;
       container.appendChild(toast);

@@ -287,3 +287,15 @@ CREATE INDEX idx_sri_damage_invoice ON sales_return_items(damage_invoice_id) WHE
 --   3. The dedicated migration also installs the trigger-based FK
 --      (trg_fk_ce_si) for commission_entries → sales_invoices (partitioned),
 --      following the same pattern as other child tables of sales_invoices.
+--
+-- G-305 (LOW-E) — 2026_09_07_000001_add_timestamps_to_commission_rule_child_tables:
+--   The 3 commission-rule child tables (commission_rule_tiers,
+--   commission_rule_product_groups, commission_rule_targets) were created
+--   with `created_at` but NO `updated_at`. That migration adds a nullable
+--   `updated_at` column to each, so tier-rate / group-rate / target edits
+--   are timestamped. The 3 Eloquent models (CommissionRuleTier,
+--   CommissionRuleProductGroup, CommissionRuleTarget) drop
+--   `$timestamps = false` so Eloquent manages both columns going forward.
+--   This note is here so fresh-install DBAs know the canonical DDL lives in
+--   the migration file (not in this baseline) and includes the updated_at
+--   column added by 2026_09_07_000001.

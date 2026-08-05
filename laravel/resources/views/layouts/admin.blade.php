@@ -196,6 +196,41 @@
 </head>
 <body class="bg-gradient-to-b from-amber-50/30 to-white min-h-screen flex flex-col font-sans text-gray-900">
 
+    {{-- LOW-F (G-313): Global investigation-mode banner. Renders only when
+         INVESTIGATION mode is active ($isInvestigation shared by the
+         CheckSystemPolicy middleware). Sticky-top, full-width, prominent red
+         styling, a11y attributes (role="alert" + aria-live="assertive") so
+         regular users see the mode change immediately on every page — not
+         just on admin/compliance. The scoped <style> shifts the sticky
+         top-nav + sidebars down by the banner's height (~36px) so they
+         don't overlap. Uses :has() (modern browsers, 2023+); older browsers
+         fall back to the banner overlaying the top-nav (banner still visible). --}}
+    @if ($isInvestigation ?? false)
+        <style>
+            body:has(> .investigation-banner) > .sticky.top-0.z-50 {
+                top: 36px !important;
+            }
+            @media (min-width: 992px) {
+                body:has(> .investigation-banner) #sidebar {
+                    top: 92px !important;
+                    height: calc(100vh - 92px) !important;
+                }
+            }
+            @media (max-width: 991.98px) {
+                body:has(> .investigation-banner) #sidebar,
+                body:has(> .investigation-banner) #sidebarOverlay {
+                    top: 92px !important;
+                    height: calc(100vh - 92px) !important;
+                }
+            }
+        </style>
+        <div role="alert" aria-live="assertive"
+             class="investigation-banner sticky top-0 z-[1070] w-full bg-red-700 text-white py-2 px-4 text-center text-sm font-semibold shadow-md no-print">
+            <i class="fas fa-triangle-exclamation me-2"></i>
+            ⚠ INVESTIGATION MODE ACTIVE — All financial writes are blocked. Reads are clamped to current fiscal year. Contact your administrator.
+        </div>
+    @endif
+
     {{-- ==================== HEADER (unified top-nav component — shared with x-layouts.erp) ==================== --}}
     <x-erp.top-nav />
 

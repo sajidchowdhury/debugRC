@@ -38,7 +38,7 @@ class ReconciliationService
 
     public function __construct()
     {
-        $this->tolerance = (float) config('app.gl_reconciliation_tolerance', 0.02);
+        $this->tolerance = (float) config('accounting.gl_reconciliation_tolerance', 0.02);
     }
 
     /**

@@ -3,7 +3,7 @@
 > **Module:** Security / Audit
 > **Audience:** Engineers + AI assistants + accountants + security reviewers
 > **Status:** Draft
-> **Last reviewed:** 2025-08-03
+> **Last reviewed:** 2026-09-06 (LOW-H / G-314: added `period_close_override` to §7.2 tracked-actions list)
 > **Source of truth:** this file + `laravel/app/Traits/AuditableMasterData.php` + `laravel/app/Services/Auth/UserAuditLogger.php` + `laravel/database/sql/02_accounting.sql` (financial_audit_log)
 
 ## 1. What is it?
@@ -43,6 +43,9 @@ warehouse transfer, sales, branch demand, purchase) for lifecycle transitions.
   on 10 financial tables.
 - **On every cross-branch override** — `EnforceBranchIsolation::logBranchOverrideIfCrossBranch()`.
 - **On system-policy activate/deactivate** — `SystemPolicyService::writeAuditLog()`.
+- **On admin period-close override** — `JournalPostingService::validatePeriod` writes a
+  `period_close_override` row when an admin forces a journal entry through to a closed accounting
+  period (see §7.2).
 - **On module-specific lifecycle transitions** — per-module audit loggers (stock, sales, purchase,
   branch demand).
 
@@ -161,7 +164,40 @@ user_agent, created_at`. `user_agent` is sanitized (CRLF stripped, 255-char trun
 
 **Tracked actions:** `login_success, login_failed, logout, password_change, role_change,
 user_created, user_updated, user_deleted, account_locked`, plus `password_reset,
-system_policy_activate, system_policy_deactivate, branch_override, master_data_*`.
+system_policy_activate, system_policy_deactivate, branch_override, period_close_override,
+master_data_*`.
+
+> **`period_close_override`** (LOW-H / G-314, G15) — **Severity: HIGH (write-block bypass).**
+> Admin bypassed the period-close check (an admin forced a journal entry through to a closed
+> accounting period). Triggered by `JournalPostingService::validatePeriod` (L438-470) when
+> `config('accounting.period_close_admin_override')` is true AND the authenticated user passes
+> `$user->isAdmin()`. The audit row is written **directly** via
+> `DB::table('user_audit_log')->insert(...)` inside `validatePeriod` itself — it is NOT routed
+> through `UserAuditLogger::log()`, so the dual-write (PG + file) defense-in-depth is bypassed
+> for this action (same pattern flagged in G16 for `SystemPolicyService::writeAuditLog`).
+>
+> **Audit-row payload** (the row lives in `user_audit_log`):
+> - `user_id` — the admin user's `users.id`.
+> - `action` — `'period_close_override'`.
+> - `target_user_id` — `null` (this is a self-action, not a target-user action).
+> - `branch_id` — the branch whose period was overridden (top-level column).
+> - `details` (JSONB) — `{
+>     posting_date: <Y-m-d>,
+>     closed_through: <accounting_periods.closed_through_date>,
+>     branch_id: <int>,
+>     reason: 'Admin override: posting to closed period'
+> }`.
+> - `ip_address` — `request()->ip()`.
+> - `user_agent` — `request()->userAgent()` truncated to 255 chars.
+> - `created_at` — `now()`.
+>
+> **What triggers it:** `createJournalEntry()` (L100-102) calls `validatePeriod($entry['entry_date'],
+> $entry['branch_id'])` for every journal entry that has a `branch_id` and does NOT set the
+> `skip_period_check` flag. If the posting date is `<= accounting_periods.closed_through_date` for
+> that branch AND the admin-override config is enabled AND the current user is an admin, the
+> override audit row is written and the posting proceeds. Reversals bypass the period check
+> entirely via the `'skip_period_check'` flag (so a reversal against a closed-period posting can
+> still proceed without firing this audit action).
 
 Static signature:
 

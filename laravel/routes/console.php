@@ -97,3 +97,23 @@ Schedule::command('depreciation:post-monthly')
     ->name('depreciation-post-monthly')
     ->description('Generate + post monthly depreciation schedules for all active fixed assets');
 
+// LOW-G / G-325: Generate the budget variance report on the 1st at 04:00.
+// Writes a CSV (default) to storage/app/budget-variance-{YYYY-MM-DD}.csv.
+// Previously the accountant HAD to manually click "Variance" in the admin
+// UI every month — no artisan command, no scheduled job. A missed month
+// silently left the report un-generated. Offset past the 01:00 depreciation
+// post + 02:00 stale-draft cancel + 03:00 stock-reconcile so the four
+// month-start jobs don't pile up. withoutOverlapping prevents a slow run
+// (large budget grid) from stacking; runInBackground frees the schedule
+// worker. The report is read-only (single query against the budget_vs_actual
+// VIEW) so concurrent execution with the 04:30 quarterly partition export
+// (Jan/Apr/Jul/Oct only) is safe. Returns SUCCESS even when no active
+// budget exists for the fiscal year (early-month gap) — see the command
+// docblock for rationale.
+Schedule::command('budget:variance-report --format=csv')
+    ->monthlyOn(1, '04:00')
+    ->withoutOverlapping()
+    ->runInBackground()
+    ->name('budget-variance-report')
+    ->description('Generate monthly budget variance report (G-325)');
+

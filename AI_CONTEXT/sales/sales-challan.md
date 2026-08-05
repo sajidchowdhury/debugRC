@@ -349,6 +349,18 @@ return $this->journalPosting->createJournalEntry([
 5. **G18 (MINOR)** — `sales_challans.transport_name` / `transport_phone` / `vehicle_number` /
    `driver_name` are free-text fields — no `transport_vendors` master table. Typos fragment
    reporting.
+
+   > ✅ **RESOLVED — LOW-A (acceptance as documented).** The free-text transport fields are
+   > accepted as the documented design decision: challan volume is low (a handful per day per
+   > branch), and grouping in reports via `ILIKE` / `DISTINCT transport_name` is acceptable for
+   > the expected volume — a `transport_vendors` master table would add UI + master-management
+   > overhead (vendor CRUD, drop-downs on the challan form, FK constraints on rename) without
+   > meaningful reporting gain at this scale. The DDL comment in §7 (`free text — no
+   > transport_vendors table (G18)`) already documents this as an intentional design choice. If
+   > volume grows or reporting needs shift, a `transport_vendors` master can be introduced later
+   > (additive migration + back-fill from `DISTINCT transport_name`). Cross-ref: same rationale
+   > applied to `transport-cost.md` §11 G18. No code change; this is a documentation-acceptance
+   > resolution.
 6. **AuditableMasterData bypass** — the trait is `use`d on `SalesChallan` but bypassed by
    `DB::table('sales_challans')->insertGetId()` in `issueChallan`.
 7. **NO `status` column** — the binary `is_reversed` lifecycle is simpler but provides no

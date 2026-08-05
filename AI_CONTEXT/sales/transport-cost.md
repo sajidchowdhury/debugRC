@@ -222,6 +222,19 @@ return $this->journalPosting->createJournalEntry([
    mutations are now hash-chain-audited.
 2. **G18 (MINOR)** — No `transport_vendors` master table — free-text `transport_name` fragments
    reporting.
+
+   > ✅ **RESOLVED — LOW-A (acceptance as documented).** The free-text transport fields are
+   > accepted as the documented design decision, mirroring the acceptance of G-306 (G18) in
+   > `sales-challan.md` §11 #5: challan volume is low, transport-vendor write volume is low, and
+   > grouping in reports via `ILIKE` / `DISTINCT transport_name` is acceptable for the expected
+   > volume. A `transport_vendors` master table would add UI + master-management overhead without
+   > meaningful reporting gain at this scale. This trade-off is already documented in §1
+   > (`free-text transport_name + transport_phone fields, no transport_vendors master table — gap
+   > G18`) and §2 ("Free-text transport vendor fields mirror the legacy schema — no
+   > `transport_vendors` master"). If volume grows or reporting needs shift, the master table can
+   > be introduced as an additive migration + back-fill. Cross-ref: G-306 (sales-challan.md §11
+   > #5) for the same acceptance rationale. No code change; this is a documentation-acceptance
+   > resolution.
 3. **NO `transport_cost_items` table** — transport is header-level only, cannot capture per-line
    transport allocation. If per-line transport is needed (e.g. multi-warehouse invoice with
    different transport per line), this is a limitation.

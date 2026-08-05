@@ -23,15 +23,16 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $target_amount Cumulative sales target
  * @property string $bonus_rate Additional rate above the target
  * @property string $period monthly|quarterly|yearly
+ * @property \Illuminate\Support\Carbon|null $created_at
+ * @property \Illuminate\Support\Carbon|null $updated_at G-305: added by migration 2026_09_07_000001 (target-change audit trail)
  */
 class CommissionRuleTarget extends Model
 {
     protected $table = 'commission_rule_targets';
 
-    public $timestamps = false;
-
-    public const CREATED_AT = null;
-    public const UPDATED_AT = null;
+    // G-305 (LOW-E): timestamps now enabled. `created_at` was always present
+    // in the DDL; `updated_at` was added by migration 2026_09_07_000001.
+    // Target amount / bonus rate / period edits now bump updated_at for audit.
 
     protected $fillable = [
         'commission_rule_id', 'target_amount', 'bonus_rate', 'period',

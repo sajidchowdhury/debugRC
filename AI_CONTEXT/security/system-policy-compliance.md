@@ -689,6 +689,8 @@ link — `layouts/admin.blade.php:306` + `components/layouts/erp.blade.php:329`)
 
 > ✅ RESOLVED in commit b3a9fd7 — Added `role:superadmin` middleware to the `admin/compliance` prefix group at `routes/web.php:1601`. `EnsureRole` rejects any non-superadmin at the route layer before the controller is invoked; the in-controller `isSuperadmin()` check now serves as defense-in-depth layer 2. Sub-problem A (Session 1, Security/RLS cluster).
 
+> ✅ **RESOLVED — LOW-D.** Dead `SystemPolicyPolicy.php` file deleted. The Gate uses a closure (per §7.6) — the policy class was never registered via `Gate::policy()` and misled readers into thinking `$this->authorize('manage', SystemPolicy::class)` would resolve to it. Grep confirms 0 references to `SystemPolicyPolicy` in `laravel/app/` post-deletion.
+
 ### G4 — `SystemPolicyPolicy` class is dead code (LOW)
 Defined in `app/Policies/SystemPolicyPolicy.php` but never registered via `Gate::policy()`. The
 Gate uses a closure. Don't assume `$this->authorize('manage', SystemPolicy::class)` resolves to
@@ -701,6 +703,11 @@ would attach here. No `app/Listeners/` directory; no `#[Listen]` or `#[AsEventLi
 attributes; no `EventServiceProvider`.
 
 ### G6 — `gl_reconciliation_tolerance` is duplicated + consumers inconsistent (LOW)
+> ✅ **RESOLVED — LOW-C.** `gl_reconciliation_tolerance` consolidated to a single key in
+> `config/accounting.php` only. The duplicate in `config/app.php` is removed. The 2
+> consumers that read from `app.` (`ReconciliationService` + `RunningBalanceReconcile`)
+> now read from `accounting.` — consistent with `SubLedgerReconcile`. Grep confirms 0
+> remaining `config('app.gl_reconciliation_tolerance')` references.
 Same key in `config/accounting.php:40` AND `config/app.php:27`. Both must be updated together (or
 consolidate). Additionally, consumers are inconsistent: `ReconciliationService.php:41` +
 `RunningBalanceReconcile.php:49` read `config('app.gl_reconciliation_tolerance')`;
@@ -713,6 +720,18 @@ reason as "Policy expired automatically at <ts>".
 Evidence: `CheckSystemPolicy.php:49-55`; `SystemPolicyService.php:51-58`.
 
 ### G8 — Cache stale window (LOW)
+
+> ✅ **RESOLVED — LOW-A (acceptance as documented).** The 5-minute TTL with immediate
+> invalidation on activation is accepted as the documented trade-off: in the single-instance
+> deployment posture (the documented baseline — see §1), activation calls `forget()` + `re-put()`
+> so the new mode is visible to the very next request, and the 5-minute TTL only bounds the
+> worst-case staleness if a cache write fails. The multi-instance stale-window (a cache write on
+> instance A is not visible to instance B's local cache) is a known limitation that would require
+> a cross-instance cache-invalidation broadcast (e.g. Redis pub/sub or a `SystemPolicyChanged`
+> listener — see §13 #14) — that is a separate effort, not in scope for this acceptance. This
+> trade-off is already documented in §3 BR row (cache 5 min + invalidate on activation) and in
+> §5 (`CACHE_TTL = 300` (5 min)). No code change; this is a documentation-acceptance resolution.
+
 Active policy cached for 5 minutes. Activation invalidates immediately (forget + re-put), but if
 the cache write fails or another app instance is involved, stale cached policy may be served for
 up to 5 minutes.
@@ -821,11 +840,30 @@ Evidence: `2025_01_21_000001_add_listen_notify_triggers.php:344`; `SystemPolicyS
   (ApplySystemPolicyScope trait) was wired in G-171 (AUDIT-TRAIL-2).
 
 ### G14 — NEW — No global investigation-mode banner (LOW — doc accuracy)
+> ✅ **RESOLVED — LOW-F.** Global investigation-mode banner added to BOTH
+> `layouts/admin.blade.php` AND `components/layouts/erp.blade.php`. Banner renders only when
+> `$isInvestigation` is true (shared by middleware). Sticky-top, full-width, prominent
+> red/orange styling, `role="alert"` + `aria-live="assertive"` for accessibility. Text:
+> "⚠ INVESTIGATION MODE ACTIVE — All financial writes are blocked. Reads are clamped to
+> current fiscal year. Contact your administrator." Regular users now see the mode change
+> immediately.
+
 The Phase 5 doc §4 claimed "All users — see the investigation banner (Blade `$isInvestigation`
 shared var)". This is INCORRECT. The `$isInvestigation` shared var is consumed ONLY in
 `admin/compliance/index.blade.php` (the admin page itself). Neither `layouts/admin.blade.php` nor
 `components/layouts/erp.blade.php` renders a global banner. Regular users see NO indication that
 INVESTIGATION mode is active.
+
+> ✅ **RESOLVED — LOW-H.** `period_close_override` added to the tracked-actions list in
+> `audit-trails.md` §7.2 (UserAuditLogger service / Tracked actions, L165-168). The entry
+> describes the trigger (admin bypasses period-close check via
+> `config('accounting.period_close_admin_override')` + `$user->isAdmin()`), the source code
+> location (`JournalPostingService::validatePeriod` L438-470 — current line numbers; the
+> original gap evidence cited L317-331/L319 from an earlier revision), and the full audit-row
+> payload (`user_id`, `branch_id`, `details` JSONB with `posting_date`/`closed_through`/
+> `branch_id`/`reason`, plus `ip_address`/`user_agent`/`created_at`). A corresponding bullet was
+> also added to `audit-trails.md` §3 (When is it used?) and the doc's `Last reviewed` header was
+> refreshed to `2026-09-06`. Doc-only resolution — no code change.
 
 ### G15 — NEW — `period_close_override` audit action not documented in audit-trails.md (LOW)
 `JournalPostingService::validatePeriod` L317-331 writes a `user_audit_log` row with

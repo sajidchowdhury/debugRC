@@ -699,23 +699,18 @@ class SalesInvoiceService
             }
 
             // Audit log for the edit itself.
-            DB::table('user_audit_log')->insert([
-                'user_id' => $updatedBy,
-                'action' => 'sale_updated',
-                'target_user_id' => null,
-                'branch_id' => $branchId,
-                'details' => json_encode([
-                    'invoice_id' => $invoiceId,
-                    'invoice_code' => $invoice->invoice_code,
-                    'old_total' => $oldTotal,
-                    'new_total' => $newTotal,
-                    'items_count' => count($items),
-                    'credit_override' => $isOverride && $creditCheck['exceeds'],
-                ]),
-                'ip_address' => request()?->ip(),
-                'user_agent' => request()?->userAgent() ? mb_substr(request()->userAgent(), 0, 255) : null,
-                'created_at' => now(),
-            ]);
+            // G-304 (LOW-G): route through SalesAuditLogger::saleUpdated()
+            // (canonical logger path) instead of an inline DB::table insert.
+            $this->auditLogger->saleUpdated(
+                $updatedBy,
+                $invoiceId,
+                $invoice->invoice_code,
+                $branchId,
+                $oldTotal,
+                $newTotal,
+                count($items),
+                $isOverride && $creditCheck['exceeds']
+            );
 
             // P2-7: Invalidate pipeline cache (dispatches were deleted + re-inserted).
             $this->availabilityService->invalidatePipelineForInvoice($invoiceId);

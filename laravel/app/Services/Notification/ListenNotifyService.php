@@ -345,20 +345,16 @@ class ListenNotifyService
     {
         try {
             $results = DB::select("
-                SELECT channel, pid, listen_count
-                FROM (
-                    SELECT channel, pid,
-                           COUNT(*) OVER (PARTITION BY channel) AS listen_count
-                    FROM pg_listening_channels()
-                ) sub
+                SELECT channel, COUNT(*) AS listener_count, MIN(pid) AS pid
+                FROM pg_listening_channels()
                 WHERE channel LIKE 'rcerp_%'
-                GROUP BY channel, pid, listen_count
+                GROUP BY channel
                 ORDER BY channel
             ");
             return collect($results)->map(fn($r) => [
                 'channel' => $r->channel,
                 'pid' => $r->pid,
-                'listener_count' => $r->listen_count,
+                'listener_count' => $r->listener_count,
             ])->all();
         } catch (\Throwable $e) {
             return [];

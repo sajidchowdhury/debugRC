@@ -1306,6 +1306,13 @@ trigger).
 `status='approved'` forever. The approval timeline becomes stale/misleading (shows approved with no
 indication the journal was later reversed).
 
+> ⚠️ **FALSE POSITIVE — LOW-D.** Agent LOW-D was tasked with deleting `ApprovalService::cancel()` as dead code, but the verification step (`grep -r '\->cancel\(' laravel/`) found **1 live call site** that contradicts the gap's evidence. The method is NOT dead code — it is reachable from HTTP via the Purchase Order cancellation flow:
+> - **Route:** `routes/web.php:961` — `Route::post('{id}/cancel', [PurchaseOrderController::class, 'cancel'])` (gated by `role:admin,manager` + `branch.isolation`)
+> - **Controller:** `app/Http/Controllers/Admin/PurchaseOrderController.php:594-603` — `cancel()` calls `$this->poService->cancelOrder($id, auth()->id(), $request->validated('cancel_reason'))`
+> - **Service:** `app/Services/Purchase/PurchaseOrderService.php:362-409` — `cancelOrder()` queries for a pending `approval_request` (L375-378) and, if one exists, calls `$this->approvalService->cancel($pendingApproval)` at **L380** (introduced by PURCHASING-API-2 / G-116 — comment at L372-374 explains it cancels pending approval_request rows so the approver's queue doesn't show stale entries).
+>
+> The gap text's claim that "NO controller action + NO route is registered. Unreachable from any HTTP request." is factually wrong — the PO cancel route has been registered since PURCHASING-API-2 (G-116). Deleting `cancel()` would break PO cancellation whenever a PO has a pending approval request. **Method KEPT intact.** `ApprovalService.php` brace/paren/bracket counts: 71/71, 178/178, 83/83 ✓. Orchestrator should reclassify G-316 from `open` to `wontfix` (false positive) in ISSUES_REGISTER.md and refresh the source line ref.
+
 ### G14 — LOW — ApprovalService::cancel() is dead code
 
 `cancel` method exists (sets `status='cancelled'`, resets entity to 'draft') but NO controller

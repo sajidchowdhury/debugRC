@@ -493,6 +493,9 @@ return $this->journalPosting->createJournalEntry([
    > warehouse at the header level. See the G-123 entry in `purchase-order.md`
    > §11 for the full migration + FormRequest + service + SQL baseline
    > change details. Closes G-124 (and G-123 from `purchase-order.md`).
+
+> ✅ **RESOLVED — LOW-E.** Migration `2026_09_07_000002_make_purchase_receive_items_warehouse_id_not_null` backfills any NULL `warehouse_id` from the parent `purchase_receives.warehouse_id` (defensive — should be 0 rows in practice), then adds `NOT NULL` constraint. Aligns DDL with the FormRequest requirement. SQL baseline `05_purchase.sql` updated.
+
 10. **G18 — `purchase_receive_items.warehouse_id` nullable in DDL but required by FormRequest.**
     A direct DB insert could create a line with NULL `warehouse_id`, which would crash
     `StockService::applyTransaction`. MINOR.

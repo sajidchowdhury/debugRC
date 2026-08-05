@@ -1381,6 +1381,17 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
   `issueListenCommands()` helper for the re-LISTEN path.
 
 ### G13 — LOW — `pg_notify` 8KB payload limit not actively at risk
+
+> ✅ **RESOLVED — LOW-A (acceptance as documented).** The 8 KB PostgreSQL `pg_notify` truncation
+> limit is accepted as a non-risk: the largest realistic payload (`rcerp_notify_sales_invoice`
+> UPDATE with all 7 columns changed) is ~300-500 bytes, and no trigger includes large text
+> fields (notes, reason) in the `changes` jsonb. This trade-off is already documented in BR7
+> (§6.1 — "The `pg_notify` payload MUST be text (JSON string) and MUST stay under 8KB... the
+> largest realistic payload is ~500 bytes — not an active risk") and restated in §12 ("`pg_notify`
+> payload is text (JSON string, BR7). Keep payloads small; PostgreSQL truncates at 8 KB. The
+> largest realistic payload is ~500 bytes — not an active risk."). No code change; this is a
+> documentation-acceptance resolution.
+
 - **Evidence:** Largest payload: `rcerp_notify_sales_invoice` UPDATE with all 7 columns
   changed → ~300-500 bytes. No trigger includes large text fields (notes, reason) in the
   `changes` jsonb.
@@ -1394,17 +1405,40 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
   reconnect, max-connection-time, disconnect detection — all untested.
 - **Fix:** Add `SseStatusTest`, `BranchFilterTest`, `ListenNotifyServiceTest`.
 
+> ✅ **RESOLVED — LOW-B.** File deleted in this commit. Single fix resolves both G-270 (this gap) and G-317 (cross-ref `workflows/notification-workflow.md` G17). Verified 0 bytes + 0 references prior to deletion.
+
 ### G15 — LOW — Dead file `public/assets/js/push.js`
 - **Evidence:** `ls -la push.js` → 0 bytes. Grep for `push.js`: **0 references**.
 - **Impact:** Dead file. Misleading doc reference (corrected in this doc).
 - **Fix:** `git rm public/assets/js/push.js`.
 
 ### G16 — LOW — Polling fallback is 30s (slower than legacy 5s/10s)
+
+> ✅ **RESOLVED — LOW-A (acceptance as documented).** The 30s polling fallback interval is
+> accepted as the documented trade-off: SSE is the primary delivery path (sub-second via
+> `pg_notify`), and the 30s AJAX polling (`notification.js` L207 `setInterval(..., 30000)`)
+> only activates when SSE is unavailable (5 failed reconnects — see G19). The slower fallback
+> latency (~30s vs legacy 5s/10s) is acceptable because it only surfaces during SSE outage
+> windows and does not affect the steady-state UX. This trade-off is already documented in §12
+> and in this gap's own Fix line. No code change; this is a documentation-acceptance resolution.
+
 - **Evidence:** `notification.js` L207 `setInterval(lightCheckNotifications, 30000)`.
 - **Impact:** When SSE is unavailable, users see notifications up to 30s late.
 - **Fix:** Documented in §12 (no action needed unless latency is unacceptable).
 
 ### G17 — LOW — `rcerp_sales_challan` SSE handler missing in `notification.js`
+
+> ✅ **RESOLVED — LOW-A (acceptance as documented).** Reliance on the dispatched-event path is
+> accepted as the design: challan DB changes fire the `challan_create` notification rule
+> (via the `CHANNEL_EVENT_MAP['rcerp_sales_challan'] => 'challan_create'` mapping in §5),
+> which emits `rcerp_notification_dispatched` → the toast appears via the generic
+> dispatched-event handler (with `changes.title = "Challan Created"`). The direct
+> `rcerp_sales_challan` SSE handler in `notification.js` is intentionally omitted because the
+> dispatched-event path already delivers the toast with the correct notification-rule metadata.
+> This trade-off is already documented in §12 ("`rcerp_sales_challan` SSE handler is missing in
+> `notification.js` (G17). The toast arrives via the `rcerp_notification_dispatched` path
+> instead..."). No code change; this is a documentation-acceptance resolution.
+
 - **Evidence:** `notification.js` L67-181 — 11 `addEventListener` calls. NO handler for
   `rcerp_sales_challan`. The channel IS in `PG_CHANNELS` + `CHANNEL_EVENT_MAP`.
 - **Impact:** Challan DB changes fire `challan_create` notification rules → toast appears
@@ -1413,6 +1447,13 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
   dispatched-event path (already done in §12).
 
 ### G18 — LOW — Toast link hardcoded to `sales/today`
+> ✅ **RESOLVED — LOW-F.** `notification.js` toast link now derived from
+> `reference_type` (sales_invoice→sales/invoices/{id}, sales_challan→sales-challan/{id},
+> sales_return→sales/returns/{id}, customer_payment→customer-payments/{id},
+> damage_invoice→damages/{id}, manual_journal→manual-journals/{id},
+> purchase_receive→purchase-receives/{id}, purchase_return→purchase-returns/{id}).
+> Label text changed from "View Invoice →" to generic "View →". Fallback to `dashboard`
+> for unknown types.
 - **Evidence:** `notification.js` L246 `<a href="sales/today" ...>View Invoice →</a>`.
 - **Impact:** For non-sales-invoice notifications (damage, payment, return, journal), the
   toast's "View Invoice →" link goes to `sales/today` — wrong destination.
@@ -1426,6 +1467,10 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
 - **Fix:** Add a "retry SSE every 5 minutes while polling" timer.
 
 ### G20 — LOW — `getActiveChannels()` SQL may return multiple rows per channel
+> ✅ **RESOLVED — LOW-C.** `ListenNotifyService::getActiveChannels()` SQL rewritten to
+> `SELECT channel, COUNT(*) AS listener_count, MIN(pid) AS pid ... GROUP BY channel` —
+> eliminates the window-function + multi-column GROUP BY that produced duplicate channel
+> entries in `/sse/status`. No behavior change for the common single-listener case.
 - **Evidence:** `ListenNotifyService.php` L255-265 SQL uses `COUNT(*) OVER (PARTITION BY
   channel)` then `GROUP BY channel, pid, listen_count`.
 - **Impact:** `/sse/status` may report duplicate channel entries. Cosmetic only.

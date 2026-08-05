@@ -110,7 +110,12 @@ CREATE TABLE purchase_receive_items (
     purchase_receive_id integer NOT NULL REFERENCES purchase_receives(id) ON DELETE CASCADE,
     purchase_order_item_id integer REFERENCES purchase_order_items(id),
     product_id integer NOT NULL REFERENCES products(id),
-    warehouse_id integer REFERENCES warehouses(id),
+    -- G-286 (LOW-E) — 2026_09_07_000002: NOT NULL. Previously nullable
+    -- (mismatch with the FormRequest requirement + StockService::applyTransaction
+    -- which hard-requires a positive warehouse_id). Migration backfills any
+    -- legacy NULL rows from the parent purchase_receives.warehouse_id (defensive
+    -- — should be 0 rows in practice) before applying the constraint.
+    warehouse_id integer NOT NULL REFERENCES warehouses(id),
     qty numeric(14,4) NOT NULL,
     return_qty numeric(14,4) DEFAULT 0,
     rate numeric(12,2) NOT NULL DEFAULT 0,

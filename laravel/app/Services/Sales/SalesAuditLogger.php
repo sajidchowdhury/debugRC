@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Log;
  * restoring the 9+ business-event audit trail that legacy had:
  *
  *   1. sale_created          — invoice finalize
- *   2. sale_updated          — invoice edit (already added in P1-1)
+ *   2. sale_updated          — invoice edit (added in LOW-G / G-304)
  *   3. sale_cancelled        — invoice cancel
  *   4. credit_limit_override — override used (already in P0-6/P1-1)
  *   5. payment_received      — customer payment confirmed
@@ -80,6 +80,43 @@ class SalesAuditLogger
             'invoice_code' => $invoiceCode,
             'total_amount' => round($totalAmount, 2),
             'reason' => $reason,
+        ]);
+    }
+
+    /**
+     * Log a sales invoice edit (update).
+     *
+     * G-304 (LOW-G): the `sale_updated` event was documented in the class
+     * header above (item 2) and listed in recentSalesEvents() but no
+     * dedicated method existed — SalesInvoiceService::updateInvoice()
+     * wrote directly to user_audit_log via DB::table()->insert(). This
+     * method restores the canonical logger path so the event flows
+     * through UserAuditLogger (dual-write DB + file, session-isolated
+     * branch_id, ip/user-agent capture).
+     *
+     * Captures old/new totals + item count + whether the edit triggered
+     * a credit-limit override so the change is fully auditable.
+     *
+     * @param int    $userId          The user performing the edit.
+     * @param int    $invoiceId
+     * @param string $invoiceCode
+     * @param int    $branchId
+     * @param float  $oldTotal        Invoice total before the edit.
+     * @param float  $newTotal        Invoice total after the edit.
+     * @param int    $itemsCount      Number of line items on the edited invoice.
+     * @param bool   $creditOverride  True if this edit triggered a credit-limit override.
+     */
+    public function saleUpdated(
+        int $userId, int $invoiceId, string $invoiceCode, int $branchId,
+        float $oldTotal, float $newTotal, int $itemsCount, bool $creditOverride = false
+    ): void {
+        $this->log($userId, 'sale_updated', $branchId, [
+            'invoice_id'      => $invoiceId,
+            'invoice_code'    => $invoiceCode,
+            'old_total'       => round($oldTotal, 2),
+            'new_total'       => round($newTotal, 2),
+            'items_count'     => $itemsCount,
+            'credit_override' => $creditOverride,
         ]);
     }
 

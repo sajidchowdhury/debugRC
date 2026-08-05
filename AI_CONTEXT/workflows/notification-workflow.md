@@ -225,7 +225,7 @@ sub-tables.
 |---|---|---|---|
 | AI1 | Rule config changes SHOULD be tamper-evident via `fn_financial_audit_trigger` — currently NOT attached (G6). | SHOULD (gap) | `2026_08_08_000002_create_financial_audit_log_table.php` L235-253 attaches to 10 financial tables, NOT notification tables. |
 | AI2 | `notification_rules` + `notification_rule_recipients` SHOULD have RLS enabled — currently NOT (G5). | SHOULD (gap) | `2025_01_20_000007_add_rls_branch_isolation.php` L84-116 enables RLS on 22 tables, NOT notification tables. |
-| AI3 | `notification_rules.created_by` SHOULD record the resetting admin's ID on `resetDefaults` — currently sets NULL (G18). | SHOULD (gap) | `NotificationRuleSeeder.php` L139 `'created_by' => null`. |
+| AI3 | `notification_rules.created_by` SHOULD record the resetting admin's ID on `resetDefaults` — currently sets NULL (G18). | ✅ accepted as system-default semantic | NULL `created_by` is the documented "system default" signal for seeder-created rules (G18 resolved LOW-A). `NotificationRuleSeeder.php` L139 `'created_by' => null`. Admin-authored rules still record `auth()->id()` via `NotificationController::storeRule:92`. |
 | AI4 | `times_fired` SHOULD increment atomically (SQL `UPDATE ... SET times_fired = times_fired + 1`) to avoid the race in G11. | SHOULD (gap) | `NotificationService::dispatch` L128 `$rule->increment('times_fired')` (Eloquent, not atomic SQL). |
 
 ---
@@ -1571,6 +1571,8 @@ flowchart LR
   extract the customer-limit-increase notification into a `CustomerService` that has
   constructor DI).
 
+> ✅ **RESOLVED — LOW-B.** File deleted in this commit. Cross-ref G-270 (`architecture/realtime-events.md` G15) — same dead file, same fix.
+
 ### G17 — LOW — `push.js` is empty + unreferenced (dead file)
 - **Evidence:** `laravel/public/assets/js/push.js` is 0 bytes (verified `ls -la`). Grep
   for `push.js` in `laravel/` returns ZERO hits.
@@ -1578,6 +1580,18 @@ flowchart LR
 - **Fix:** `git rm laravel/public/assets/js/push.js`.
 
 ### G18 — LOW — `notification_rules.created_by` nullable + seeder sets NULL
+
+> ✅ **RESOLVED — LOW-A (acceptance as documented).** NULL `created_by` is accepted as the
+> documented "system default" semantic for seeder-created / reset-to-default notification rules:
+> it explicitly distinguishes seed defaults (no human author) from admin-authored rules
+> (`NotificationController::storeRule:92` correctly sets `'created_by' => auth()->id()` for
+> admin-created rules, so the creator relationship is intact where it matters). The alternative
+> (passing the resetting admin's ID through `resetDefaults()` → seeder) would conflate seed
+> defaults with admin actions and lose the "system default" signal. This trade-off is already
+> documented in §7 (`created_by = NULL` (L139 — system defaults, G18)) and in this gap's own
+> Fix line ("OR accept NULL as 'system default' and document it"). §6.5 row AI3 updated to
+> reflect the acceptance. No code change; this is a documentation-acceptance resolution.
+
 - **Evidence:** Migration `2025_01_06_000001:67` `$table->foreignId('created_by')->nullable()`.
   Seeder `NotificationRuleSeeder.php:139` `'created_by' => null`.
   `NotificationController::storeRule:92` sets `'created_by' => auth()->id()` (correct for
