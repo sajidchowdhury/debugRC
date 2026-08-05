@@ -141,14 +141,20 @@ class ListenNotifyService
             'published_at' => now()->toISOString(),
         ], JSON_UNESCAPED_UNICODE);
 
+        // G8 (G-212, REALTIME-3): Redis TTL + trim sizes read from
+        // config/realtime.php (env-overridable). Previously hardcoded 600 / 500 / 200.
+        $redisTtl = (int) config('realtime.listen_notify.redis_ttl', 600);
+        $globalTrim = (int) config('realtime.listen_notify.global_trim', 500);
+        $branchTrim = (int) config('realtime.listen_notify.branch_trim', 200);
+
         // --- Redis List delivery (for SSE polling) ---
         // LPUSH to global queue (all SSE clients poll this)
         try {
             $redis = Redis::connection('default');
             $redis->lpush(self::REDIS_PREFIX . 'global', $message);
-            $redis->expire(self::REDIS_PREFIX . 'global', 600); // TTL 10 min
-            // Trim to prevent unbounded growth (keep last 500 events)
-            $redis->ltrim(self::REDIS_PREFIX . 'global', 0, 499);
+            $redis->expire(self::REDIS_PREFIX . 'global', $redisTtl);
+            // Trim to prevent unbounded growth
+            $redis->ltrim(self::REDIS_PREFIX . 'global', 0, $globalTrim - 1);
         } catch (\Throwable $e) {
             Log::warning('LISTEN/NOTIFY: Redis LPUSH to global queue failed', [
                 'channel' => $pgChannel,
@@ -163,8 +169,8 @@ class ListenNotifyService
                 $branchKey = self::REDIS_PREFIX . "branch:{$branchId}";
                 $redis = Redis::connection('default');
                 $redis->lpush($branchKey, $message);
-                $redis->expire($branchKey, 600);
-                $redis->ltrim($branchKey, 0, 199);
+                $redis->expire($branchKey, $redisTtl);
+                $redis->ltrim($branchKey, 0, $branchTrim - 1);
             } catch (\Throwable $e) {
                 Log::warning('LISTEN/NOTIFY: Redis LPUSH to branch queue failed', [
                     'channel' => $pgChannel,
@@ -217,13 +223,18 @@ class ListenNotifyService
             'published_at' => now()->toISOString(),
         ], JSON_UNESCAPED_UNICODE);
 
+        // G8 (G-212, REALTIME-3): Redis TTL + trim read from config (was
+        // hardcoded 600 / 199). Matches the publishToRedis discipline.
+        $redisTtl = (int) config('realtime.listen_notify.redis_ttl', 600);
+        $userTrim = (int) config('realtime.listen_notify.user_trim', 200);
+
         try {
             $redis = Redis::connection('default');
             $userKey = self::REDIS_PREFIX . "user:{$userId}";
             $redis->lpush($userKey, $message);
-            $redis->expire($userKey, 600); // TTL 10 min (matches SseController::QUEUE_TTL)
-            // Trim to prevent unbounded growth (keep last 200 per-user events).
-            $redis->ltrim($userKey, 0, 199);
+            $redis->expire($userKey, $redisTtl);
+            // Trim to prevent unbounded growth.
+            $redis->ltrim($userKey, 0, $userTrim - 1);
         } catch (\Throwable $e) {
             Log::warning('LISTEN/NOTIFY: Redis LPUSH to per-user queue failed', [
                 'channel' => $pgChannel,

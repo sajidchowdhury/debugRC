@@ -3,7 +3,7 @@
 > **Module:** Architecture (cross-cutting)
 > **Audience:** Engineers, AI assistants, DevOps, DBAs
 > **Status:** Canonical — expanded in Phase 15 (replaces the Phase 1 high-level summary)
-> **Last reviewed:** REALTIME-2 (post G-092 fix — G4 resolved: supervisor + systemd templates added for non-Docker supervision)
+> **Last reviewed:** REALTIME-3 (post G-211/G-212/G-213/G-216 fix — 4 realtime MEDIUM gaps resolved: heartbeat tuning + config-extraction + null-branch-id filter + PDO reconnection)
 > **Source of truth:** This file + `laravel/app/Services/Notification/ListenNotifyService.php`,
 > `NotificationService.php` + `laravel/app/Http/Controllers/SseController.php` +
 > `laravel/app/Console/Commands/ListenNotifyWorker.php` +
@@ -879,11 +879,12 @@ stateDiagram-v2
   mechanism. Non-Docker deployments (bare-metal VPS / BDIX) use either
   `supervisor/rcerp-listen-notify.conf` OR `systemd/rcerp-listen-notify.service`
   (pick ONE — see `supervisor/README.md` § "Choosing supervisor vs systemd").
-- **Hardcoded constants** (G8): `HEARTBEAT_INTERVAL`, `MAX_CONNECTION_TIME`,
-  `POLL_INTERVAL_US`, Redis TTLs, trim sizes — all `private const` in PHP classes. No
-  `config/realtime.php` or `.env` vars. Tuning requires code change + redeploy.
-- **`QUEUE_TTL` is a dead constant** (G8) — declared in `SseController` L64 but never
-  used (the worker sets its own 600s TTL on LPUSH).
+- **Hardcoded constants** (G8) — ✅ RESOLVED (REALTIME-3): all tuning
+  constants now live in `config/realtime.php` (11 env-overridable knobs).
+  See §14 G8 for the full inventory.
+- **`QUEUE_TTL` dead constant** (G8) — ✅ RESOLVED (REALTIME-3): deleted
+  from `SseController`. The worker sets its own TTL on LPUSH via
+  `config('realtime.listen_notify.redis_ttl')`.
 
 ---
 
@@ -919,21 +920,33 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
    `sales_challans`, `sales_returns`, `stock_transactions`, `system_policies`,
    `damage_invoices`, `damage_attachments`, `notifications`, `notification_rules`,
    `notification_rule_recipients`) lack tamper-evident audit at the DB level.
-7. **G7 — Align heartbeat docstring with code** (change "30 seconds" → "60 seconds" at
-   `ListenNotifyWorker.php` L37). Reduce Redis TTL to 90s (1.5× heartbeat). Add a
-   `last_heartbeat_age_seconds` field to `/sse/status`.
-8. **G8 — Move hardcoded constants to `config/realtime.php` with `env()` defaults.** Add
-   `SSE_POLL_INTERVAL_US`, `SSE_HEARTBEAT_INTERVAL`, `SSE_MAX_CONNECTION_TIME`,
-   `LISTEN_NOTIFY_REDIS_TTL`, `LISTEN_NOTIFY_GLOBAL_TRIM`, `LISTEN_NOTIFY_BRANCH_TRIM` to
-   `.env.example`. Delete the dead `QUEUE_TTL` constant.
-9. **G9 — Fix null `branch_id` bypass in SSE filter.** Change
-   `SseController::events` L148 to explicit filtering (if user has a branch, only forward
-   matching events; null `branch_id` events get filtered OUT unless user is
-   admin/superadmin). OR add an explicit `is_global` flag to the payload.
-10. **G12 — Add try/catch + reconnection logic to the worker.** On `\PDOException`, log +
-    close + reconnect via `getDedicatedConnection()` + re-issue LISTEN commands. Add a
-    `worker_pdo_healthy` field to `/sse/status` (worker writes `pdo_last_success_at` as
-    part of heartbeat JSON).
+7. **G7 — Align heartbeat docstring with code + reduce TTL + add age field.** ✅
+   RESOLVED (REALTIME-3) — docstring now references the config key
+   (`LISTEN_NOTIFY_HEARTBEAT_INTERVAL`, default 60); Redis TTL reduced 120s →
+   90s (`LISTEN_NOTIFY_HEARTBEAT_TTL`); `last_heartbeat_age_seconds` +
+   `heartbeat_stale` fields added to `/sse/status` (operators can see a
+   worker degrading before the TTL expires, not just the binary flip).
+8. **G8 — Move hardcoded constants to `config/realtime.php` with `env()` defaults.** ✅
+   RESOLVED (REALTIME-3) — new `config/realtime.php` with 11 env-overridable knobs
+   (3 SSE + 8 LISTEN_NOTIFY); all 3 consumer classes (`SseController`,
+   `ListenNotifyService`, `ListenNotifyWorker`) refactored to read from config;
+   dead `QUEUE_TTL` constant deleted; `.env.example` updated with a new
+   "Realtime subsystem" section.
+9. **G9 — Fix null `branch_id` bypass in SSE filter.** ✅ RESOLVED (REALTIME-3) —
+   `SseController::events` now uses an explicit 5-case filter: cross-branch
+   events skipped, null-branch_id events skipped for non-admin branch-bound
+   clients (the NEW case), null-branch_id events forwarded to admins +
+   head-office users. Defense-in-depth: closes the leak independently of G2
+   (partition-migration payload regression).
+10. **G12 — Add try/catch + reconnection logic to the worker.** ✅ RESOLVED
+    (REALTIME-3) — main event loop wraps `pollNotifications()` in try/catch; on
+    `\PDOException`, logs + closes + sleeps `LISTEN_NOTIFY_RECONNECT_DELAY` (5s)
+    + reconnects via `getDedicatedConnection()` + re-LISTEN via factored
+    `issueListenCommands()` + resumes. New `pdo_last_success_at` field in the
+    heartbeat JSON surfaces `worker_pdo_healthy` (bool|null) in `/sse/status` —
+    distinguishes "worker process alive but PDO stale" from "worker process
+    dead". Separate `catch (\Throwable)` handles non-PDO exceptions without
+    killing the worker.
 11. **G14 — Add tests for the realtime pipeline.** `tests/Feature/Realtime/SseStatusTest.php`,
     `tests/Feature/Realtime/BranchFilterTest.php`,
     `tests/Unit/Services/Notification/ListenNotifyServiceTest.php`.
@@ -955,7 +968,7 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
 
 ## 14. Gap catalogue
 
-20 gaps total: 2 CRITICAL (both ✅ resolved in REALTIME-1), 5 HIGH (4 ✅ resolved: G1 in REALTIME-1, G4 in G-092, G5 in G-093/G-179, G6 in AUDIT-TRAIL-1; G2 + G3 remain open), 6 MEDIUM, 7 LOW.
+20 gaps total: 2 CRITICAL (both ✅ resolved in REALTIME-1), 5 HIGH (4 ✅ resolved: G1 in REALTIME-1, G4 in G-092, G5 in G-093/G-179, G6 in AUDIT-TRAIL-1; G2 + G3 remain open), 6 MEDIUM (4 ✅ resolved: G7/G8/G9/G12 in REALTIME-3; G10 + G11 remain open — both "correct by design" documentation items), 7 LOW.
 
 ### G1 — CRITICAL — Per-user Redis queue is dead code (polled, never written)
 
@@ -1166,27 +1179,132 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
   see the UUID-PK rationale in the RESOLVED blockquote.
 
 ### G7 — MEDIUM — Heartbeat interval comment/implementation mismatch + 120s false-positive window
-- **Evidence:** `ListenNotifyWorker.php` L37 docstring says "30 seconds"; L138 actual is
-  60s. L282 Redis key TTL = 120s. `SseController::status` L226 `worker_running =>
-  !empty($channels) || $workerHeartbeat !== null`.
-- **Impact:** Dead worker still appears "running" for up to 120s.
-- **Fix:** Align docstring with code; reduce TTL to 90s; add `last_heartbeat_age_seconds`
-  field.
+
+> ✅ **RESOLVED** (G-211, REALTIME-3). Three changes:
+>
+> 1. **Docstring aligned with code.** The `ListenNotifyWorker` class docblock
+>    previously said "Reports to Redis key 'rcerp:listen_notify:heartbeat'
+>    every 30 seconds" while the actual heartbeat interval was 60s (L138).
+>    The docblock now reads "every `LISTEN_NOTIFY_HEARTBEAT_INTERVAL` seconds
+>    (default 60)" — the value is now config-driven (see G8) so the docstring
+>    references the config key rather than a hardcoded number.
+>
+> 2. **Redis TTL reduced 120s → 90s.** The heartbeat key TTL was 120s (2× the
+>    60s heartbeat interval). A dead worker appeared "running" in `/sse/status`
+>    for up to 120s. The TTL is now `LISTEN_NOTIFY_HEARTBEAT_TTL` (default 90s
+>    — 1.5× the heartbeat interval), tight enough to surface a dead worker
+>    within 90s while tolerating one missed beat. The `sendHeartbeat()` method
+>    reads the TTL from `config('realtime.listen_notify.heartbeat_ttl', 90)`.
+>
+> 3. **`last_heartbeat_age_seconds` + `heartbeat_stale` fields added to
+>    `/sse/status`.** Previously the only signal was `worker_running` (bool) —
+>    a dead worker still appeared "running" until the TTL expired. The status
+>    endpoint now computes the age of the heartbeat timestamp and exposes:
+>    - `last_heartbeat_age_seconds` (int|null) — seconds since the last
+>      heartbeat write. null when no heartbeat has ever been written.
+>    - `heartbeat_stale` (bool) — true when `last_heartbeat_age_seconds >
+>      heartbeat_ttl`. `worker_running` now factors this in: a stale heartbeat
+>      no longer counts as "running".
+>
+>    This means operators can see a worker degrading BEFORE the TTL expires
+>    (e.g. a 75s age with a 90s TTL is a warning sign), rather than waiting
+>    for the binary flip.
+
+- **Evidence:** `ListenNotifyWorker.php` L37 docstring said "30 seconds";
+  L138 actual was 60s. L282 Redis key TTL = 120s. `SseController::status`
+  L226 `worker_running => !empty($channels) || $workerHeartbeat !== null`.
+- **Impact:** Dead worker still appeared "running" for up to 120s.
+- **Fix (done):** Docstring aligned; TTL reduced to 90s (config-driven);
+  `last_heartbeat_age_seconds` + `heartbeat_stale` added to `/sse/status`.
 
 ### G8 — MEDIUM — Hardcoded constants that should be env-configurable
-- **Evidence:** `SseController.php` L46-64 four `private const`; `ListenNotifyService.php`
-  L120, L137, L122, L138 hardcoded TTLs + trims. `.env.example` (77L) has NO `SSE_*` or
-  `LISTEN_NOTIFY_*` env vars. `QUEUE_TTL` declared at L64 but NEVER USED — dead constant.
-- **Impact:** Tuning requires code change + redeploy.
-- **Fix:** Move to `config/realtime.php` with `env()` defaults; delete dead `QUEUE_TTL`.
+
+> ✅ **RESOLVED** (G-212, REALTIME-3). All hardcoded constants extracted to a
+> new `config/realtime.php` with `env()` defaults. Tuning now requires a
+> `.env` change + `php artisan config:cache` — no code change or redeploy.
+>
+> **New `config/realtime.php`** (2 sections, 11 env-overridable knobs):
+>
+> - `realtime.sse.heartbeat_interval` → `SSE_HEARTBEAT_INTERVAL` (default 30)
+> - `realtime.sse.max_connection_time` → `SSE_MAX_CONNECTION_TIME` (default 300)
+> - `realtime.sse.poll_interval_us` → `SSE_POLL_INTERVAL_US` (default 100000)
+> - `realtime.listen_notify.heartbeat_interval` → `LISTEN_NOTIFY_HEARTBEAT_INTERVAL` (default 60)
+> - `realtime.listen_notify.heartbeat_ttl` → `LISTEN_NOTIFY_HEARTBEAT_TTL` (default 90 — see G7)
+> - `realtime.listen_notify.redis_ttl` → `LISTEN_NOTIFY_REDIS_TTL` (default 600)
+> - `realtime.listen_notify.global_trim` → `LISTEN_NOTIFY_GLOBAL_TRIM` (default 500)
+> - `realtime.listen_notify.branch_trim` → `LISTEN_NOTIFY_BRANCH_TRIM` (default 200)
+> - `realtime.listen_notify.user_trim` → `LISTEN_NOTIFY_USER_TRIM` (default 200)
+> - `realtime.listen_notify.reconnect_delay` → `LISTEN_NOTIFY_RECONNECT_DELAY` (default 5 — see G12)
+> - `realtime.listen_notify.max_reconnect_attempts` → `LISTEN_NOTIFY_MAX_RECONNECT_ATTEMPTS` (default 0 = infinite — see G12)
+>
+> **Refactored consumers:**
+> - `SseController` — 4 `private const` (`HEARTBEAT_INTERVAL`, `MAX_CONNECTION_TIME`,
+>   `POLL_INTERVAL_US`, `QUEUE_TTL`) removed. The first 3 now read from config
+>   inside `events()`. `QUEUE_TTL` was a **dead constant** (declared at L64 but
+>   never referenced — the worker sets its own 600s TTL on LPUSH) → deleted
+>   entirely, not replaced. A new `POLL_BATCH_SIZE = 10` constant replaces the
+>   3 hardcoded `10` literals in `rpop()` calls (not env-tunable — it's a
+>   batch-size, not a tuning knob).
+> - `ListenNotifyService` — `publishToRedis()` + `publishToUser()` now read
+>   `redis_ttl` + `global_trim` / `branch_trim` / `user_trim` from config.
+>   Previously hardcoded `600` / `499` / `199` / `199`. The trim values changed
+>   from 0-indexed (`499` = keep 500) to count-based (`global_trim = 500` →
+>   `ltrim(0, 499)`) — the config value is the COUNT to keep, the code
+>   subtracts 1 for the 0-indexed `ltrim` end. No behavioral change.
+> - `ListenNotifyWorker` — heartbeat interval + poll interval read from config.
+>   Reconnect delay + max-reconnect-attempts added (see G12).
+>
+> **`.env.example`** — new "Realtime subsystem" section with all 11 env vars
+> + defaults + a note pointing to `config/realtime.php`.
+
+- **Evidence:** `SseController.php` L46-64 four `private const`;
+  `ListenNotifyService.php` L120, L137, L122, L138 hardcoded TTLs + trims.
+  `.env.example` (77L) had NO `SSE_*` or `LISTEN_NOTIFY_*` env vars.
+  `QUEUE_TTL` declared at L64 but NEVER USED — dead constant.
+- **Impact:** Tuning required a code change + redeploy.
+- **Fix (done):** New `config/realtime.php` (11 env-overridable knobs);
+  all 3 consumer classes refactored; dead `QUEUE_TTL` deleted; `.env.example`
+  updated.
 
 ### G9 — MEDIUM — Null `branch_id` bypasses SSE branch filter
-- **Evidence:** `SseController.php` L148 `if ($eventBranchId && $branchId && (int)
-  $eventBranchId !== (int) $branchId) continue;`. Null `$eventBranchId` short-circuits
-  to false.
-- **Impact:** Combined with G2, partitioned `sales_returns` and `damage_invoices` events
-  leak to ALL branches via the global queue.
-- **Fix:** Change filter to explicit (null `branch_id` filtered OUT unless admin).
+
+> ✅ **RESOLVED** (G-213, REALTIME-3). The SSE branch filter in
+> `SseController::events()` was rewritten from a permissive short-circuit
+> to an explicit 5-case filter. The user's role is resolved once at
+> connection time (`$isAdmin = in_array($user->role->slug ?? null,
+> ['admin', 'superadmin'], true)`) and consulted for every event.
+>
+> **New filter logic** (replaces the old `if ($eventBranchId && $branchId
+> && (int) $eventBranchId !== (int) $branchId) continue;`):
+>
+> 1. **Event has a branch_id, client has a branch_id, they differ** → skip
+>    (cross-branch leak — the original case the filter handled).
+> 2. **Event has NO branch_id (null) AND client is NOT admin AND client has
+>    a branch_id** → skip (the NEW case — prevents null-branch events from
+>    leaking to non-admin branch-bound clients via the global queue).
+> 3. **Event has NO branch_id AND client IS admin** → forward (admins see
+>    system-wide events like journal entries, stock changes resolved to a
+>    warehouse branch, etc.).
+> 4. **Event has a branch_id matching the client's branch** → forward
+>    (same-branch — the normal case).
+> 5. **Event has a branch_id AND client has NO branch_id (head-office user)**
+>    → forward (head-office sees all branches; `session('branch_id')` is
+>    null for head-office users by convention).
+>
+> **Defense-in-depth:** this fix closes the null-branch leak INDEPENDENTLY
+> of G2 (the partition-migration trigger regression that loses `branch_id`
+> from `sales_returns` + `damage_invoices` payloads). Once G2 is fixed
+> (rich payloads restored), case 2 becomes a no-op for those tables; until
+> then, case 2 prevents the leak.
+
+- **Evidence:** `SseController.php` L148 `if ($eventBranchId && $branchId
+  && (int) $eventBranchId !== (int) $branchId) continue;`. Null
+  `$eventBranchId` short-circuited to false.
+- **Impact:** Combined with G2, partitioned `sales_returns` and
+  `damage_invoices` events leaked to ALL branches via the global queue.
+- **Fix (done):** Explicit 5-case filter; null `branch_id` events filtered
+  OUT for non-admin branch-bound clients; admins + head-office users still
+  see null-branch events.
 
 ### G10 — MEDIUM — 5 PG channels are pure SSE refresh signals (no notification mapping)
 - **Evidence:** `CHANNEL_EVENT_MAP` L84-90 maps only 5 channels. The other 5
@@ -1207,17 +1325,60 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
 - **Fix:** None — confirming safety (documented in §7.1).
 
 ### G12 — MEDIUM — Worker has no reconnection logic; stale PDO risk
+
+> ✅ **RESOLVED** (G-216, REALTIME-3). The main event loop in
+> `ListenNotifyWorker::handle()` now wraps `pollNotifications()` in a
+> try/catch with reconnection logic. A new `$pdoLastSuccessAt` property
+> tracks the timestamp of the last successful PDO poll; it's written into
+> the heartbeat JSON as `pdo_last_success_at` so `/sse/status` can report
+> `worker_pdo_healthy`.
+>
+> **Reconnection flow** (on `\PDOException` from `pollNotifications`):
+> 1. Log the error with the attempt counter.
+> 2. Set `$pdoLastSuccessAt = null` so the next heartbeat reports
+>    `worker_pdo_healthy: false` (the worker process is alive but its PDO
+>    is stale — a distinct state from "worker process dead").
+> 3. Increment `$reconnectAttempts`; bail with `self::FAILURE` if
+>    `max_reconnect_attempts > 0` is exceeded (default 0 = infinite — the
+>    process manager is the supervisor).
+> 4. `sleep(reconnect_delay)` (default 5s — gives the PG primary time to
+>    come back up without hammering reconnect).
+> 5. Close the stale PDO (`$pdo = null` — PHP GC closes the socket).
+> 6. Open a fresh dedicated connection via `getDedicatedConnection()`.
+> 7. Re-issue `LISTEN` on every channel via the new factored
+>    `issueListenCommands()` helper.
+> 8. Resume the poll loop.
+>
+> A separate `catch (\Throwable)` handles non-PDO exceptions (e.g. a bad
+> JSON payload) without killing the worker — logs the error + keeps looping.
+>
+> **`/sse/status` new field:** `worker_pdo_healthy` (bool|null):
+> - `true` — the heartbeat JSON contains a `pdo_last_success_at` timestamp
+>   (the last poll succeeded).
+> - `false` — the heartbeat JSON has `pdo_last_success_at: null` (the worker
+>   is in reconnect-backoff).
+> - `null` — the worker predates this field (old heartbeat JSON shape —
+>   treated as unknown, not as false).
+>
+> This distinguishes "worker process alive but PDO stale" from "worker
+> process dead" — previously both looked identical in `/sse/status` for up
+> to 120s (now 90s per G7).
+>
+> **Config knobs** (G8): `LISTEN_NOTIFY_RECONNECT_DELAY` (default 5s) +
+> `LISTEN_NOTIFY_MAX_RECONNECT_ATTEMPTS` (default 0 = infinite).
+
 - **Evidence:** `ListenNotifyWorker.php` L107 `$pdo = $this->getDedicatedConnection()`
   opened once, never reconnected. L127 `while(true)` no try/catch around
-  `pollNotifications`. L212 `$pdo->pgsqlGetNotify(...)` may throw or silently return
-  false on stale PDO. L139 `sendHeartbeat` uses Redis (separate connection) — keeps
-  writing even if PDO is dead. `SseController::status` L198 queries Laravel's DB pool
-  (NOT the worker's PDO).
-- **Impact:** PG primary failover → worker's PDO dead → no notifications processed → SSE
-  clients receive nothing → but `/sse/status` still reports `pg_available: true` +
-  `worker_running: true` for up to 120s.
-- **Fix:** Wrap `pollNotifications` in try/catch; on `\PDOException`, log + close +
-  reconnect + re-LISTEN. Add `worker_pdo_healthy` field to `/sse/status`.
+  `pollNotifications`. L212 `$pdo->pgsqlGetNotify(...)` may throw or silently
+  return false on stale PDO. L139 `sendHeartbeat` uses Redis (separate
+  connection) — keeps writing even if PDO is dead. `SseController::status`
+  L198 queries Laravel's DB pool (NOT the worker's PDO).
+- **Impact:** PG primary failover → worker's PDO dead → no notifications
+  processed → SSE clients receive nothing → but `/sse/status` still reported
+  `pg_available: true` + `worker_running: true` for up to 120s.
+- **Fix (done):** try/catch + reconnect + re-LISTEN; `pdo_last_success_at`
+  in heartbeat JSON; `worker_pdo_healthy` in `/sse/status`; factored
+  `issueListenCommands()` helper for the re-LISTEN path.
 
 ### G13 — LOW — `pg_notify` 8KB payload limit not actively at risk
 - **Evidence:** Largest payload: `rcerp_notify_sales_invoice` UPDATE with all 7 columns

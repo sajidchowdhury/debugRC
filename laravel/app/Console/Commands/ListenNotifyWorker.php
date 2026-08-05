@@ -33,9 +33,24 @@ use Illuminate\Support\Facades\Log;
  *     php artisan listen-notify:worker
  *
  * Health monitoring:
- *   - Logs heartbeat every 60 seconds
- *   - Reports to Redis key 'rcerp:listen_notify:heartbeat' every 30 seconds
- *   - SSE /sse/status endpoint reports worker status
+ *   - Logs heartbeat every LISTEN_NOTIFY_HEARTBEAT_INTERVAL seconds (default 60).
+ *   - Reports to Redis key 'rcerp:listen_notify:heartbeat' with TTL
+ *     LISTEN_NOTIFY_HEARTBEAT_TTL (default 90s — reduced from 120s in
+ *     REALTIME-3 G7 so /sse/status surfaces a dead worker faster).
+ *   - The heartbeat JSON includes `pdo_last_success_at` (G12) so /sse/status
+ *     can report `worker_pdo_healthy` — distinguishes "worker process alive
+ *     but PDO stale" from "worker process dead".
+ *   - SSE /sse/status endpoint reports worker status + heartbeat age.
+ *
+ * Reconnection (G12 / G-216, REALTIME-3):
+ *   The main event loop wraps pollNotifications() in a try/catch. On
+ *   \PDOException (PG primary failover, connection reset, idle-timeout kill),
+ *   the worker logs the error, closes the stale PDO, sleeps
+ *   LISTEN_NOTIFY_RECONNECT_DELAY seconds (default 5s), opens a fresh
+ *   dedicated connection, re-issues LISTEN on every channel, and resumes
+ *   polling. Without this, a stale PDO silently returns false from
+ *   pgsqlGetNotify() forever while the Redis heartbeat (separate connection)
+ *   keeps writing — masking the failure from /sse/status.
  */
 class ListenNotifyWorker extends Command
 {
@@ -68,6 +83,17 @@ class ListenNotifyWorker extends Command
     private int $lastHeartbeatAt = 0;
 
     /**
+     * Timestamp of the last successful PDO poll (G12).
+     *
+     * Written into the heartbeat JSON as `pdo_last_success_at` so /sse/status
+     * can report `worker_pdo_healthy`. Reset to null on a caught
+     * \PDOException; restored to the current timestamp on the next successful
+     * poll. null = worker is in reconnect-backoff or has never polled
+     * successfully.
+     */
+    private ?string $pdoLastSuccessAt = null;
+
+    /**
      * Execute the console command.
      */
     public function handle(
@@ -88,15 +114,23 @@ class ListenNotifyWorker extends Command
             ? array_map('trim', explode(',', $channelOption))
             : ListenNotifyService::PG_CHANNELS;
 
+        // G8 (G-212, REALTIME-3): tunables read from config/realtime.php.
+        $heartbeatInterval = (int) config('realtime.listen_notify.heartbeat_interval', 60);
+        $reconnectDelay = (int) config('realtime.listen_notify.reconnect_delay', 5);
+        $maxReconnectAttempts = (int) config('realtime.listen_notify.max_reconnect_attempts', 0);
+
         $this->info('Starting LISTEN/NOTIFY worker...');
         $this->info('  Channels: ' . implode(', ', $channels));
         $this->info('  Dispatch to NotificationService: ' . ($noDispatch ? 'NO' : 'YES'));
         $this->info('  Timeout: ' . ($timeout > 0 ? "{$timeout}s" : 'infinite'));
+        $this->info('  Heartbeat interval: ' . $heartbeatInterval . 's');
+        $this->info('  Reconnect delay: ' . $reconnectDelay . 's');
 
         Log::info('LISTEN/NOTIFY worker starting', [
             'channels' => $channels,
             'no_dispatch' => $noDispatch,
             'timeout' => $timeout,
+            'heartbeat_interval' => $heartbeatInterval,
         ]);
 
         $startTime = time();
@@ -112,18 +146,18 @@ class ListenNotifyWorker extends Command
         }
 
         // Issue LISTEN commands for each channel
-        foreach ($channels as $channel) {
-            $pdo->exec("LISTEN {$channel}");
-            $this->info("  LISTEN {$channel}");
-        }
+        $this->issueListenCommands($pdo, $channels);
 
         $this->info('Worker is ready. Waiting for notifications...');
         $this->newLine();
 
-        // Set non-blocking mode
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        // Main event loop — G12: wraps pollNotifications in try/catch with
+        // reconnection logic. On \PDOException, reconnect + re-LISTEN +
+        // resume. The loop counter bounds the reconnection attempts when
+        // max_reconnect_attempts > 0 (default 0 = infinite — the process
+        // manager is the supervisor).
+        $reconnectAttempts = 0;
 
-        // Main event loop
         while (true) {
             // Check timeout
             if ($timeout > 0 && (time() - $startTime) >= $timeout) {
@@ -131,22 +165,95 @@ class ListenNotifyWorker extends Command
                 break;
             }
 
-            // Poll for notifications (non-blocking with 1-second sleep)
-            $this->pollNotifications($pdo, $listenNotify, $notificationService, $noDispatch);
+            try {
+                // Poll for notifications (non-blocking with 1-second sleep)
+                $this->pollNotifications($pdo, $listenNotify, $notificationService, $noDispatch);
 
-            // Send heartbeat every 60 seconds
-            if (time() - $this->lastHeartbeatAt >= 60) {
+                // G12: a successful poll (or clean empty return) means the PDO
+                // is still healthy. Record the timestamp for the heartbeat.
+                $this->pdoLastSuccessAt = now()->toISOString();
+
+                // Reset the reconnect-attempt counter on a successful poll —
+                // we're back to a healthy state.
+                $reconnectAttempts = 0;
+            } catch (\PDOException $e) {
+                // G12: the PDO died (PG failover, connection reset, idle-timeout
+                // kill). Log + close + reconnect + re-LISTEN. Without this, the
+                // worker would silently return false from pgsqlGetNotify()
+                // forever while the Redis heartbeat kept writing — masking the
+                // failure from /sse/status.
+                $reconnectAttempts++;
+                Log::error('LISTEN/NOTIFY: PDO error during poll — attempting reconnect', [
+                    'error' => $e->getMessage(),
+                    'attempt' => $reconnectAttempts,
+                    'max_attempts' => $maxReconnectAttempts === 0 ? 'infinite' : $maxReconnectAttempts,
+                ]);
+                $this->error('  PDO error: ' . $e->getMessage());
+                $this->warn('  Attempting reconnect #' . $reconnectAttempts . '...');
+
+                // Mark PDO as unhealthy so the next heartbeat reflects it.
+                $this->pdoLastSuccessAt = null;
+
+                // Bail if the operator set a finite reconnect budget.
+                if ($maxReconnectAttempts > 0 && $reconnectAttempts > $maxReconnectAttempts) {
+                    $this->error('  Max reconnect attempts (' . $maxReconnectAttempts . ') exceeded. Exiting.');
+                    Log::critical('LISTEN/NOTIFY worker: max reconnect attempts exceeded, exiting', [
+                        'attempts' => $reconnectAttempts,
+                    ]);
+                    return self::FAILURE;
+                }
+
+                // Sleep before reconnecting (gives the PG primary time to come
+                // back up without hammering reconnect).
+                sleep($reconnectDelay);
+
+                // Close the stale PDO + open a fresh one.
+                $pdo = null; // release the reference; PHP GC closes the socket
+                $pdo = $this->getDedicatedConnection();
+
+                if (!$pdo) {
+                    // Reconnect failed — loop again (the try/catch will catch
+                    // the next failure on poll). The heartbeat below will still
+                    // fire, reporting pdo_last_success_at=null so /sse/status
+                    // surfaces the unhealthy state.
+                    $this->warn('  Reconnect failed. Will retry on next iteration.');
+                    continue;
+                }
+
+                // Re-issue LISTEN on the fresh connection.
+                $this->issueListenCommands($pdo, $channels);
+                $this->info('  Reconnected + re-LISTEN. Resuming poll loop.');
+            } catch (\Throwable $e) {
+                // Non-PDO exception — log + keep looping so a single bad
+                // payload does not kill the worker.
+                Log::error('LISTEN/NOTIFY: Unexpected error during poll', [
+                    'error' => $e->getMessage(),
+                    'exception' => get_class($e),
+                ]);
+                $this->error('  Unexpected error: ' . $e->getMessage());
+            }
+
+            // Send heartbeat every $heartbeatInterval seconds (G7: was
+            // hardcoded 60s; now reads from config, default still 60s).
+            if (time() - $this->lastHeartbeatAt >= $heartbeatInterval) {
                 $this->sendHeartbeat($listenNotify);
                 $this->lastHeartbeatAt = time();
             }
 
-            // Sleep briefly to avoid CPU spin
-            usleep(100000); // 100ms
+            // Sleep briefly to avoid CPU spin (G8: was hardcoded 100000μs; the
+            // SSE poll interval config is reused here since both loops poll at
+            // the same cadence — a worker poll is cheap, but 100ms is a sane
+            // floor).
+            usleep((int) config('realtime.sse.poll_interval_us', 100000));
         }
 
         // Cleanup: UNLISTEN all channels
-        foreach ($channels as $channel) {
-            $pdo->exec("UNLISTEN {$channel}");
+        try {
+            foreach ($channels as $channel) {
+                $pdo->exec("UNLISTEN {$channel}");
+            }
+        } catch (\Throwable $e) {
+            // Best-effort cleanup — the connection may already be closed.
         }
 
         $this->info("Worker stopped. Processed {$this->processedCount} notifications.");
@@ -191,10 +298,28 @@ class ListenNotifyWorker extends Command
     }
 
     /**
+     * Issue LISTEN commands for each channel on the given PDO connection.
+     *
+     * G12 (G-216, REALTIME-3): factored out of handle() so the reconnection
+     * path can re-issue LISTEN on a fresh PDO without duplicating the loop.
+     */
+    private function issueListenCommands(\PDO $pdo, array $channels): void
+    {
+        foreach ($channels as $channel) {
+            $pdo->exec("LISTEN {$channel}");
+            $this->info("  LISTEN {$channel}");
+        }
+    }
+
+    /**
      * Poll for pending PostgreSQL notifications.
      *
      * Uses PDO::pgsqlGetNotify() which is non-blocking and returns
      * immediately if no notifications are pending.
+     *
+     * G12 (G-216, REALTIME-3): this method is called inside a try/catch in
+     * handle(). A stale PDO will raise \PDOException here — the caller
+     * handles reconnection.
      *
      * @param \PDO                  $pdo
      * @param ListenNotifyService   $listenNotify
@@ -272,10 +397,23 @@ class ListenNotifyWorker extends Command
      * Updates a Redis key that the SSE status endpoint can check
      * to verify the worker is alive.
      *
+     * G7 (G-211, REALTIME-3): TTL reduced from 120s to 90s (1.5× the 60s
+     * heartbeat interval) so /sse/status surfaces a dead worker within 90s
+     * instead of 120s. The TTL is read from config/realtime.php
+     * (LISTEN_NOTIFY_HEARTBEAT_TTL, default 90).
+     *
+     * G12 (G-216, REALTIME-3): the heartbeat JSON now includes
+     * `pdo_last_success_at` — null when the worker's PDO is in
+     * reconnect-backoff, an ISO timestamp when the last poll succeeded.
+     * /sse/status surfaces this as `worker_pdo_healthy`.
+     *
      * @param ListenNotifyService $listenNotify
      */
     private function sendHeartbeat(ListenNotifyService $listenNotify): void
     {
+        // G7: TTL read from config (was hardcoded 120).
+        $heartbeatTtl = (int) config('realtime.listen_notify.heartbeat_ttl', 90);
+
         try {
             \Illuminate\Support\Facades\Redis::set(
                 'rcerp:listen_notify:heartbeat',
@@ -286,9 +424,12 @@ class ListenNotifyWorker extends Command
                         ? now()->setTimestamp($this->lastNotificationAt)->toISOString()
                         : null,
                     'pid' => getmypid(),
+                    // G12: self-reported PDO health. null = reconnect-backoff
+                    // or never-polled; ISO timestamp = last successful poll.
+                    'pdo_last_success_at' => $this->pdoLastSuccessAt,
                 ]),
                 'EX',
-                120 // TTL 2 minutes — if worker dies, key expires
+                $heartbeatTtl
             );
         } catch (\Throwable $e) {
             Log::warning('LISTEN/NOTIFY: Heartbeat failed', [
@@ -297,6 +438,7 @@ class ListenNotifyWorker extends Command
         }
 
         // Also log to console (visible in docker logs)
-        $this->line('  ❤ Heartbeat — processed: ' . $this->processedCount . ' notifications');
+        $pdoStatus = $this->pdoLastSuccessAt ? 'pdo:ok' : 'pdo:RECONNECTING';
+        $this->line('  ❤ Heartbeat — processed: ' . $this->processedCount . ' notifications (' . $pdoStatus . ')');
     }
 }
