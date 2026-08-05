@@ -544,6 +544,18 @@ class CommissionService
                 : (float) $originalEntries->first()->commission_rate;
         }
 
+        // G-168 (SALES-AUDIT-2): Use the ORIGINAL entry's commission_period,
+        // NOT now()->format('Y-m'). A return processed in October for a sale
+        // made in September must reverse against the September period —
+        // otherwise month-end summaries are distorted (September shows
+        // inflated commission, October shows a spurious negative).
+        // All original entries share the same period (they were calculated
+        // in the same batch for the same invoice), so the first entry's
+        // period is canonical. Fallback to now() only if the original
+        // entries somehow have NULL period (defensive — should never happen
+        // since calculateForInvoice always sets it).
+        $originalPeriod = $originalEntries->first()->commission_period ?: now()->format('Y-m');
+
         $entry = CommissionEntry::create([
             'salesman_id' => $invoice->salesman_id,
             'branch_id' => $invoice->branch_id,
@@ -556,8 +568,8 @@ class CommissionService
             'commission_amount' => number_format(-$reversalAmount, 2, '.', ''), // NEGATIVE
             'status' => 'calculated',
             'entry_date' => now()->toDateString(),
-            'commission_period' => now()->format('Y-m'),
-            'notes' => "Reversal for return {$return->return_code}",
+            'commission_period' => $originalPeriod,
+            'notes' => "Reversal for return {$return->return_code} (period {$originalPeriod})",
             'created_by' => auth()->id(),
         ]);
 

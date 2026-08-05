@@ -269,11 +269,17 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
     // ======================================================================
 
     // ---------- Commission Rules — 30/60 req/min ----------
+    // G-162 (SALES-AUDIT-2): Read endpoints now require manager+admin.
+    // Commission rules + entries expose sensitive financial config
+    // (rates, targets, per-salesman earnings) — any authenticated
+    // bearer token should NOT be able to list them. Matches the
+    // route-group comment ("Admin/manager endpoints") + the
+    // CommissionEntryPolicy::view() intent matrix.
     Route::get('sales/commission/rules', [CommissionApiController::class, 'listRules'])
-        ->middleware('api.rate:60');
+        ->middleware('api.auth:manager,admin', 'api.rate:60');
     Route::get('sales/commission/rules/{id}', [CommissionApiController::class, 'showRule'])
         ->where('id', '[0-9]+')
-        ->middleware('api.rate:60');
+        ->middleware('api.auth:manager,admin', 'api.rate:60');
     Route::post('sales/commission/rules', [CommissionApiController::class, 'storeRule'])
         ->middleware('api.auth:admin', 'api.rate:30');
     Route::post('sales/commission/rules/{id}/deactivate', [CommissionApiController::class, 'deactivateRule'])
@@ -281,14 +287,18 @@ Route::prefix('v1')->middleware('api.auth')->group(function (): void {
         ->middleware('api.auth:admin', 'api.rate:30');
 
     // ---------- Commission Entries — 60 req/min (read-only) ----------
+    // G-162 (SALES-AUDIT-2): manager+admin only — entries expose
+    // per-salesman commission amounts across all branches.
     Route::get('sales/commission/entries', [CommissionApiController::class, 'listEntries'])
-        ->middleware('api.rate:60');
+        ->middleware('api.auth:manager,admin', 'api.rate:60');
 
     // ---------- Commission Summaries — 60 req/min ----------
+    // G-162 (SALES-AUDIT-2): manager+admin only — summaries aggregate
+    // earnings across all salesmen/branches in the period.
     Route::get('sales/commission/salesman-summary', [CommissionApiController::class, 'salesmanSummary'])
-        ->middleware('api.rate:60');
+        ->middleware('api.auth:manager,admin', 'api.rate:60');
     Route::get('sales/commission/branch-summary', [CommissionApiController::class, 'branchSummary'])
-        ->middleware('api.rate:60');
+        ->middleware('api.auth:manager,admin', 'api.rate:60');
 
     // ---------- Commission Confirmation — 30 req/min (admin only) ----------
     Route::post('sales/commission/confirm-period', [CommissionApiController::class, 'confirmPeriod'])

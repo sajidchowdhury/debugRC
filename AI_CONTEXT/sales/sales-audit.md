@@ -397,6 +397,27 @@ Render admin.reports.sales_audit_checklist with 3 pass/warn/fail badges
    OMITS the 4 R4 cart events (`cart_item_added`, `cart_item_updated`, `cart_item_removed`,
    `cart_cleared`) that `SalesAuditLogger::recentSalesEvents` properly includes. The audit-trail
    web view silently hides cart tampering events.
+
+   > ✅ RESOLVED in SALES-AUDIT-2 — `SalesInvoiceController::auditTrail`
+   > action list now mirrors `SalesAuditLogger::recentSalesEvents()` exactly
+   > + adds the 5 commission events that fire since SALES-2 wired the
+   > auto-calc pipeline. The inline `whereIn` array was expanded from 14
+   > actions to 26:
+   > - Added 3 payment allocation sub-types: `payment_discount`,
+   >   `payment_write_off`, `payment_refund` (were in `recentSalesEvents`
+   >   but omitted from the controller)
+   > - Added 4 R4 cart events: `cart_item_added`, `cart_item_updated`,
+   >   `cart_item_removed`, `cart_cleared` (the gap G9 specifically called
+   >   these out — cart tampering events were silently hidden)
+   > - Added 5 commission events: `commission_rule_created`,
+   >   `commission_calculated`, `commission_reversed_on_return`,
+   >   `commission_reversed_on_payment_reversal`,
+   >   `commission_period_confirmed` (fire since SALES-2 commit 2f686c0)
+   > The `$actionLabels` display map was expanded with matching labels,
+   > icons, + colors for all 12 new actions. The blade view uses
+   > `$actionLabels` dynamically (no blade changes needed). The audit-trail
+   > web view now shows the complete sales event timeline — no more silent
+   > gaps for cart tampering or commission lifecycle events.
 4. **Commission events NEVER fire** (gap G2 in `commission.md`) — the 5 commission audit events
    are dead code.
 5. **No scheduled job for the checklist.** The checklist runs only on-demand. A FAIL item (e.g.

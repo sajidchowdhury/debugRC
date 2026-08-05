@@ -77,7 +77,7 @@
                                         <tr data-row="{{ $idx }}">
                                             <td>
                                                 <input type="hidden" name="items[{{ $idx }}][product_id]" value="{{ $item->product_id }}" class="form-control form-control-sm product-id">
-                                                <input type="hidden" name="items[{{ $idx }}][condition_state]" value="{{ $item->condition_state ?? 'Good' }}">
+                                                {{-- G-160 (SALES-AUDIT-2): condition_state hidden input REMOVED — column dropped, was always 'Good'. --}}
                                                 <span class="fw-semibold">{{ $item->product?->product_name ?? 'Product #' . $item->product_id }}</span>
                                                 @if ($item->product?->product_code)
                                                     <br><small class="text-muted">{{ $item->product->product_code }}</small>
@@ -293,7 +293,7 @@
             $(this).find('.product-id').attr('name', 'items[' + idx + '][product_id]');
             $(this).find('input[name*="[qty]"]').attr('name', 'items[' + idx + '][qty]');
             $(this).find('input[name*="[rate]"]').attr('name', 'items[' + idx + '][rate]');
-            $(this).find('input[name*="[condition_state]"]').attr('name', 'items[' + idx + '][condition_state]');
+            // G-160 (SALES-AUDIT-2): condition_state attr rename REMOVED — column dropped.
         });
         recalcAll();
     }
@@ -354,7 +354,7 @@
             '<tr data-row="' + idx + '">' +
                 '<td>' +
                     '<input type="hidden" name="items[' + idx + '][product_id]" value="' + productId + '" class="form-control form-control-sm product-id">' +
-                    '<input type="hidden" name="items[' + idx + '][condition_state]" value="Good">' +
+                    {{-- G-160 (SALES-AUDIT-2): condition_state hidden input REMOVED — column dropped. --}}
                     '<span class="fw-semibold">' + $('<div>').text(name).html() + '</span>' +
                     (code ? '<br><small class="text-muted">' + $('<div>').text(code).html() + '</small>' : '') +
                 '</td>' +

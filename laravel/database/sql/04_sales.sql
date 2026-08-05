@@ -112,8 +112,7 @@ CREATE TABLE sales_invoice_items (
     rate numeric(12,2) NOT NULL DEFAULT 0,
     -- FIX: MySQL was missing `amount` column (computed in app). PG: GENERATED STORED.
     amount numeric(14,2) GENERATED ALWAYS AS (qty * rate) STORED,
-    discount_amount numeric(14,2) DEFAULT 0,
-    condition_state varchar(10) DEFAULT 'Good' CHECK (condition_state IN ('Good','Damage'))
+    discount_amount numeric(14,2) DEFAULT 0  -- G-160 (SALES-AUDIT-2): condition_state column DROPPED (was always 'Good' — dead at invoice layer; damage tracked via sales_return_items.condition_state + damage_invoices)
 );
 CREATE INDEX idx_sii_invoice ON sales_invoice_items(sales_invoice_id);
 CREATE INDEX idx_sii_product ON sales_invoice_items(product_id);

@@ -79,9 +79,7 @@
                         <td>{{ ++$globalSl }}</td>
                         <td>
                             {{ $item->product?->product_name ?? 'Product #' . $item->product_id }}
-                            @if ($item->condition_state === 'Damage')
-                                <span class="badge bg-danger-subtle text-danger ms-1">Damage</span>
-                            @endif
+                            {{-- G-160 (SALES-AUDIT-2): condition_state badge REMOVED — column dropped, was always 'Good' at invoice layer. --}}
                         </td>
                         <td class="text-end">{{ number_format((float) $item->qty, 4) }}</td>
                         <td class="text-end">{{ number_format((float) $item->rate, 2) }}</td>

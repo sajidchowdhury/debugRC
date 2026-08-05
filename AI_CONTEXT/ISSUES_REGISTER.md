@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-05 (post-WORKFLOWS-AUDIT-1: resolved 6 workflows HIGH gaps — G-176 ApprovalController 4 FormRequests (Approve/Reject/UpdateWorkflow/QueueIndex); G-180 approval_requests.entity_id polymorphic design documented + 5 partial indexes + cleanup_orphan_approval_requests() SQL function; G-181 fn_financial_audit_trigger attached to notification_rules + notification_rule_recipients; G-183 approval_workflows.branch_id string→integer + FK to branches(id); G-186 Approval Queue + Workflows sidebar menus added; G-187 fn_financial_audit_trigger attached to 4 approval engine tables; prior: post-SALES-AUDIT-1: resolved 4 sales HIGH gaps — G-158 config/commission.php created with 5 env-overridable knobs; G-165 FK on sales_invoices.salesman_id → employees(id) (migration 2026_09_05_000005); G-169 CommissionApiController 3 remaining inline validate() extracted to FormRequests (SalesmanSummaryRequest / BranchSummaryRequest / ConfirmCommissionPeriodRequest); G-170 sales_returns.confirmed_at + confirmed_by columns added (migration 2026_09_05_000006) + wired into SalesReturnService::confirmReturn + SalesReturn model + Admin/SalesReturnController::printSlip; prior: post-PURCHASING-API-4: G-088/G-089/G-090 Medium-risk follow-up — idempotency retrofitted on `/sales/challans/godown`, `/branch-demands/{id}/send`, `/branch-demands/{id}/reprice`, `/stock-take/sessions`; G7 now FULLY resolved (11 of ~14 transactional write endpoints idempotent; only Low-risk intentionally skipped); prior: post-PURCHASING-API-3: G-088/G-089/G-090 High-risk resolved — idempotency retrofitted on 4 High-risk endpoints `/sales/returns`, `/stock-adjustments`, `/warehouse-transfers`, `/branch-demands`; G-082 doc-synced to `51c2386`; prior: post-PURCHASING-API-2: G-116/G-123/G-124 resolved in `1cfa5d8`; G-115/G-119 doc-synced to `dab0a4c`; prior: post-PURCHASING-API-1: G-117/G-118/G-120/G-121/G-122 resolved in `efecc66`)
+Last reviewed: 2026-09-05 (post-SALES-AUDIT-2: resolved 4 sales HIGH gaps — G-160 sales_invoice_items.condition_state dead column DROPPED (migration 2026_09_05_000011) + all 6 code references removed (model fillable, API controller validation, service insert arrays ×2, edit blade ×3, print blade); G-162 Commission API 5 read endpoints (listRules/showRule/listEntries/salesmanSummary/branchSummary) now require api.auth:manager,admin middleware (was: no role gate — any authenticated bearer could list all commission rules+entries); G-168 CommissionService::reverseOnReturn now uses original entry's commission_period instead of now()->format('Y-m') (cross-period returns no longer distort month-end summaries); G-161 SalesInvoiceController::auditTrail action list expanded from 14 to 26 actions — added 3 payment allocation sub-types + 4 R4 cart events + 5 commission events (cart tampering + commission lifecycle no longer silently hidden from audit-trail web view); prior: post-WORKFLOWS-HOTFIX-1: migration 000007 RLS policy dependency fix (drop/recreate 5 policies around branch_id type change with ::integer cast); prior: post-WORKFLOWS-AUDIT-1: resolved 6 workflows HIGH gaps — G-176 ApprovalController 4 FormRequests (Approve/Reject/UpdateWorkflow/QueueIndex); G-180 approval_requests.entity_id polymorphic design documented + 5 partial indexes + cleanup_orphan_approval_requests() SQL function; G-181 fn_financial_audit_trigger attached to notification_rules + notification_rule_recipients; G-183 approval_workflows.branch_id string→integer + FK to branches(id); G-186 Approval Queue + Workflows sidebar menus added; G-187 fn_financial_audit_trigger attached to 4 approval engine tables; prior: post-SALES-AUDIT-1: resolved 4 sales HIGH gaps — G-158 config/commission.php created with 5 env-overridable knobs; G-165 FK on sales_invoices.salesman_id → employees(id) (migration 2026_09_05_000005); G-169 CommissionApiController 3 remaining inline validate() extracted to FormRequests (SalesmanSummaryRequest / BranchSummaryRequest / ConfirmCommissionPeriodRequest); G-170 sales_returns.confirmed_at + confirmed_by columns added (migration 2026_09_05_000006) + wired into SalesReturnService::confirmReturn + SalesReturn model + Admin/SalesReturnController::printSlip; prior: post-PURCHASING-API-4: G-088/G-089/G-090 Medium-risk follow-up — idempotency retrofitted on `/sales/challans/godown`, `/branch-demands/{id}/send`, `/branch-demands/{id}/reprice`, `/stock-take/sessions`; G7 now FULLY resolved (11 of ~14 transactional write endpoints idempotent; only Low-risk intentionally skipped); prior: post-PURCHASING-API-3: G-088/G-089/G-090 High-risk resolved — idempotency retrofitted on 4 High-risk endpoints `/sales/returns`, `/stock-adjustments`, `/warehouse-transfers`, `/branch-demands`; G-082 doc-synced to `51c2386`; prior: post-PURCHASING-API-2: G-116/G-123/G-124 resolved in `1cfa5d8`; G-115/G-119 doc-synced to `dab0a4c`; prior: post-PURCHASING-API-1: G-117/G-118/G-120/G-121/G-122 resolved in `efecc66`)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -19,12 +19,12 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | Severity | Count | Blocks cutover? |
 |---|---|---|
 | CRITICAL | 2 | Yes — all of them |
-| HIGH | 47 | Most |
+| HIGH | 43 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **185** | |
-| _of which resolved_ | 172 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **181** | |
+| _of which resolved_ | 176 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -35,7 +35,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | finance | 28 |
 | purchasing | 1 |
 | reports | 71 |
-| sales | 11 |
+| sales | 7 |
 | security | 14 |
 | workflows | 18 |
 
@@ -223,15 +223,15 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-157 | G6 | HIGH | sales | sales/sales-return.md:323 | — | **G6 (MAJOR)** — No `SalesReturnPolicy` class. RBAC via route middleware + RLS only. | cutover, RLS audit | H1 | resolved | 1ccc5b6 |
 | G-158 | G7 | HIGH | sales | sales/commission.md:339 | — | **G7 (MAJOR)** — No `config/commission.php` — no knobs for commission batch minimum, max | — | H2 | resolved | SALES-AUDIT-1 |
 | G-159 | G8 | HIGH | sales | sales/commission.md:341 | — | **G8 (MAJOR)** — No materialized view for commission summaries. `getSalesmanSummary` and | — | H2 | open | — |
-| G-160 | G8 | HIGH | sales | sales/sales-invoice.md:400 | — | **G8 (MAJOR)** — `sales_invoice_items.condition_state` column exists but is NEVER used at the | — | H2 | open | — |
-| G-161 | G9 | HIGH | sales | sales/sales-audit.md:360 | — | **G9 (MAJOR)** — `SalesInvoiceController::auditTrail` inlines its own action list that | — | H2 | open | — |
-| G-162 | G10 | HIGH | sales | sales/commission.md:344 | — | **G10 (MAJOR)** — Commission API read endpoints (`listRules`, `showRule`, `listEntries`, | — | H2 | open | — |
+| G-160 | G8 | HIGH | sales | sales/sales-invoice.md:400 | — | **G8 (MAJOR)** — `sales_invoice_items.condition_state` column exists but is NEVER used at the | — | H2 | resolved | SALES-AUDIT-2 |
+| G-161 | G9 | HIGH | sales | sales/sales-audit.md:360 | — | **G9 (MAJOR)** — `SalesInvoiceController::auditTrail` inlines its own action list that | — | H2 | resolved | SALES-AUDIT-2 |
+| G-162 | G10 | HIGH | sales | sales/commission.md:344 | — | **G10 (MAJOR)** — Commission API read endpoints (`listRules`, `showRule`, `listEntries`, | — | H2 | resolved | SALES-AUDIT-2 |
 | G-163 | G11 | HIGH | sales | sales/commission.md:347 | — | **G11 (MAJOR)** — No `CommissionPolicy` class. Per-row policy gates (e.g. "a salesman can | cutover, RLS audit | H2 | resolved | 1ccc5b6 |
 | G-164 | G12 | HIGH | sales | sales/commission.md:349 | — | **G12 (MAJOR)** — No web UI for commission rule management. Commission rules can ONLY be | — | H2 | open | — |
 | G-165 | G12 | HIGH | sales | sales/sales-invoice.md:402 | — | **G12 (MAJOR)** — `sales_invoices.salesman_id` has NO FK to `employees(id)`. Orphan | — | H2 | resolved | SALES-AUDIT-1 |
 | G-166 | G13 | HIGH | sales | sales/sales-invoice.md:404 | routes/api.php:173,175,178 | **G13 (MAJOR)** — API v1 routes have NO role middleware on invoice store/update/cancel — | cutover, RLS audit | H2 | resolved | `b3a9fd7` |
 | G-167 | G13 | HIGH | sales | sales/sales-return.md:324 | routes/api.php:208,210,213 | **G13 (MAJOR)** — API v1 routes have NO role middleware on return store/confirm/reverse — | cutover, RLS audit | H2 | resolved | `b3a9fd7` |
-| G-168 | G14 | HIGH | sales | sales/commission.md:352 | — | **G14 (MAJOR)** — `reverseOnReturn` uses `commission_period = now()->format('Y-m')` for the | — | H2 | open | — |
+| G-168 | G14 | HIGH | sales | sales/commission.md:352 | — | **G14 (MAJOR)** — `reverseOnReturn` uses `commission_period = now()->format('Y-m')` for the | — | H2 | resolved | SALES-AUDIT-2 |
 | G-169 | G15 | HIGH | sales | sales/commission.md:354 | — | **G15 (MAJOR)** — `CommissionApiController::storeRule` uses inline `$request->validate()` | — | H2 | resolved | SALES-AUDIT-1 |
 | G-170 | G16 | HIGH | sales | sales/sales-return.md:328 | routes/api.php:208,210,213 | **G16 (MAJOR)** — `sales_returns` has NO `confirmed_at` / `confirmed_by` columns. The | API Phase 17 | H2 | resolved | SALES-AUDIT-1 |
 | G-171 | G1 | HIGH | security | security/system-policy-compliance.md:537 | — | ### G1 — `ApplySystemPolicyScope` is unused (MAJOR) | cutover, RLS audit | H2 | open | — |

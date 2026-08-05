@@ -405,6 +405,22 @@ stateDiagram-v2
 7. **G10 (MAJOR)** — Commission API read endpoints (`listRules`, `showRule`, `listEntries`,
    `salesmanSummary`, `branchSummary`) have NO `api.auth:admin` middleware — any authenticated
    bearer token can list ALL commission rules and entries.
+
+   > ✅ RESOLVED in SALES-AUDIT-2 — All 5 commission API read endpoints now
+   > require `api.auth:manager,admin` middleware (manager OR admin). The
+   > route-group comment already declared "Admin/manager endpoints for
+   > commission rule management and reporting" but the reads had no role
+   > gate — any authenticated bearer token could list ALL commission rules
+   > and entries across all branches. Fixed in `routes/api.php`:
+   > - `GET /sales/commission/rules` (listRules) → `api.auth:manager,admin`
+   > - `GET /sales/commission/rules/{id}` (showRule) → `api.auth:manager,admin`
+   > - `GET /sales/commission/entries` (listEntries) → `api.auth:manager,admin`
+   > - `GET /sales/commission/salesman-summary` (salesmanSummary) → `api.auth:manager,admin`
+   > - `GET /sales/commission/branch-summary` (branchSummary) → `api.auth:manager,admin`
+   > Write endpoints (`storeRule`, `deactivateRule`, `confirmPeriod`) already
+   > had `api.auth:admin` and are unchanged. The `CommissionEntryPolicy::view()`
+   > method (commit 1ccc5b6) mirrors this intent matrix — defense-in-depth
+   > at both the route middleware + policy layers.
 8. **G11 (MAJOR)** — No `CommissionPolicy` class. Per-row policy gates (e.g. "a salesman can
    only see their own commission entries") are impossible.
 
@@ -414,6 +430,19 @@ stateDiagram-v2
    access cannot configure commission rules.
 10. **G14 (MAJOR)** — `reverseOnReturn` uses `commission_period = now()->format('Y-m')` for the
     reversal entry — NOT the original entry's period. Distorts month-end summaries.
+
+    > ✅ RESOLVED in SALES-AUDIT-2 — `CommissionService::reverseOnReturn` now
+    > uses the ORIGINAL entry's `commission_period` for the reversal entry,
+    > NOT `now()->format('Y-m')`. A return processed in October for a sale
+    > made in September now correctly reverses against the September period.
+    > The fix reads `$originalEntries->first()->commission_period` (all
+    > original entries share the same period — they were calculated in the
+    > same batch for the same invoice) with a defensive fallback to
+    > `now()->format('Y-m')` only if the original entries somehow have NULL
+    > period (should never happen since `calculateForInvoice` always sets it).
+    > The `notes` field now includes the period for traceability:
+    > `"Reversal for return {code} (period {YYYY-MM})"`. Month-end summaries
+    > are no longer distorted by cross-period returns.
 11. **G15 (MAJOR)** — `CommissionApiController::storeRule` uses inline `$request->validate()`
     — no dedicated FormRequest. Complex rule-type-conditional validation is duplicated inline.
 

@@ -208,7 +208,7 @@ class SalesInvoiceService
                     'warehouse_id' => null, // assigned at godown (Phase 8.3)
                     'qty' => (float) $item['qty'],
                     'rate' => (float) $item['rate'],
-                    'condition_state' => 'Good',
+                    // G-160 (SALES-AUDIT-2): condition_state DROPPED — was always 'Good'.
                 ];
             }
             DB::table('sales_invoice_items')->insert($itemRows);
@@ -588,7 +588,7 @@ class SalesInvoiceService
                     'warehouse_id' => null, // reset to NULL — godown must re-assign after edit
                     'qty' => (float) $item['qty'],
                     'rate' => (float) $item['rate'],
-                    'condition_state' => $item['condition_state'] ?? 'Good',
+                    // G-160 (SALES-AUDIT-2): condition_state DROPPED — was always 'Good'.
                 ];
             }
             DB::table('sales_invoice_items')->insert($itemRows);

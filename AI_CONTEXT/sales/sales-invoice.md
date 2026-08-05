@@ -414,6 +414,27 @@ return $this->journalPosting->createJournalEntry([...], $lines);
    blank-godown-print columns + the 4 dispatch columns listed above.
 4. **G8 (MAJOR)** — `sales_invoice_items.condition_state` column exists but is NEVER used at the
    invoice layer (always 'Good'). Dead column.
+
+   > ✅ RESOLVED in SALES-AUDIT-2 — Migration
+   > `2026_09_05_000011_drop_condition_state_from_sales_invoice_items.php`
+   > drops the `condition_state` column from `sales_invoice_items`.
+   > The column was always 'Good' at the invoice layer —
+   > `SalesInvoiceService::create` hardcoded `'condition_state' => 'Good'`
+   > (L211), `update` read `$item['condition_state'] ?? 'Good'` (L591),
+   > and the web edit form submitted it as a hidden input always set to
+   > 'Good' (edit.blade.php L80, L357). Damage is tracked via a DIFFERENT
+   > column on a DIFFERENT table: `sales_return_items.condition_state`
+   > (actively used by `StoreSalesReturnRequest`) + `damage_invoices`.
+   > No invoice ever had a 'Damage' item — the column carried zero
+   > information. All 6 code references removed:
+   > - `SalesInvoiceItem` model: removed from `$fillable` + `@property`
+   > - `SalesInvoiceApiController`: removed `items.*.condition_state` validation rule
+   > - `SalesInvoiceService`: removed from both create + update insert arrays
+   > - `edit.blade.php`: removed hidden input (L80), JS attr rename (L296), JS row template (L357)
+   > - `print_invoice.blade.php`: removed `@if ($item->condition_state === 'Damage')` badge
+   > - SQL baseline `04_sales.sql`: removed column from CREATE TABLE
+   > Idempotent migration (Schema::hasColumn guard); `down()` recreates the
+   > column with its original DEFAULT + CHECK constraint.
 5. **G12 (MAJOR)** — `sales_invoices.salesman_id` has NO FK to `employees(id)`. Orphan
    salesman_id values possible.
 

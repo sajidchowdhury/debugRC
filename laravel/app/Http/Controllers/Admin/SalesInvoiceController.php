@@ -419,12 +419,25 @@ class SalesInvoiceController extends Controller
 
         $query = DB::table('user_audit_log')
             ->whereIn('action', [
+                // G-161 (SALES-AUDIT-2): action list now mirrors
+                // SalesAuditLogger::recentSalesEvents() exactly, so the
+                // audit-trail web view no longer silently hides cart
+                // tampering events (R4) or payment allocation sub-types.
                 'sale_created', 'sale_updated', 'sale_cancelled', 'sale_call_a_day',
                 'credit_limit_override',
                 'payment_received', 'payment_reversed',
+                'payment_discount', 'payment_write_off', 'payment_refund',
                 'return_created', 'return_confirmed', 'return_reversed',
                 'godown_prepared', 'challan_issued', 'challan_reversed',
                 'stale_drafts_cancelled',
+                // R4: cart mutation events (were OMITTED — gap G9/G-161)
+                'cart_item_added', 'cart_item_updated',
+                'cart_item_removed', 'cart_cleared',
+                // Commission events (fire since SALES-2 wired the pipeline)
+                'commission_rule_created', 'commission_calculated',
+                'commission_reversed_on_return',
+                'commission_reversed_on_payment_reversal',
+                'commission_period_confirmed',
             ]);
 
         if ($branchId) {
@@ -446,6 +459,9 @@ class SalesInvoiceController extends Controller
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
         // Action labels for display.
+        // G-161 (SALES-AUDIT-2): added labels for the 3 payment allocation
+        // sub-types + 4 R4 cart events + 5 commission events that were
+        // previously omitted from the inline action list.
         $actionLabels = [
             'sale_created' => ['label' => 'Invoice Created', 'icon' => 'fa-file-circle-plus', 'color' => 'success'],
             'sale_updated' => ['label' => 'Invoice Updated', 'icon' => 'fa-pen-to-square', 'color' => 'primary'],
@@ -454,6 +470,9 @@ class SalesInvoiceController extends Controller
             'credit_limit_override' => ['label' => 'Credit Override', 'icon' => 'fa-shield-halved', 'color' => 'warning'],
             'payment_received' => ['label' => 'Payment Received', 'icon' => 'fa-money-bill-wave', 'color' => 'success'],
             'payment_reversed' => ['label' => 'Payment Reversed', 'icon' => 'fa-rotate-left', 'color' => 'danger'],
+            'payment_discount' => ['label' => 'Payment Discount', 'icon' => 'fa-tag', 'color' => 'info'],
+            'payment_write_off' => ['label' => 'Payment Write-off', 'icon' => 'fa-file-circle-xmark', 'color' => 'warning'],
+            'payment_refund' => ['label' => 'Payment Refund', 'icon' => 'fa-arrow-rotate-left', 'color' => 'danger'],
             'return_created' => ['label' => 'Return Created', 'icon' => 'fa-arrow-rotate-left', 'color' => 'info'],
             'return_confirmed' => ['label' => 'Return Confirmed', 'icon' => 'fa-check', 'color' => 'primary'],
             'return_reversed' => ['label' => 'Return Reversed', 'icon' => 'fa-rotate-left', 'color' => 'danger'],
@@ -461,6 +480,17 @@ class SalesInvoiceController extends Controller
             'challan_issued' => ['label' => 'Challan Issued', 'icon' => 'fa-truck', 'color' => 'success'],
             'challan_reversed' => ['label' => 'Challan Reversed', 'icon' => 'fa-rotate-left', 'color' => 'danger'],
             'stale_drafts_cancelled' => ['label' => 'Stale Drafts Cleaned', 'icon' => 'fa-broom', 'color' => 'secondary'],
+            // R4: cart mutation events (were HIDDEN — gap G9/G-161)
+            'cart_item_added' => ['label' => 'Cart Item Added', 'icon' => 'fa-cart-plus', 'color' => 'info'],
+            'cart_item_updated' => ['label' => 'Cart Item Updated', 'icon' => 'fa-pen-to-square', 'color' => 'primary'],
+            'cart_item_removed' => ['label' => 'Cart Item Removed', 'icon' => 'fa-cart-arrow-down', 'color' => 'warning'],
+            'cart_cleared' => ['label' => 'Cart Cleared', 'icon' => 'fa-trash-can', 'color' => 'danger'],
+            // Commission events (fire since SALES-2)
+            'commission_rule_created' => ['label' => 'Commission Rule Created', 'icon' => 'fa-gavel', 'color' => 'primary'],
+            'commission_calculated' => ['label' => 'Commission Calculated', 'icon' => 'fa-calculator', 'color' => 'success'],
+            'commission_reversed_on_return' => ['label' => 'Commission Reversed (Return)', 'icon' => 'fa-rotate-left', 'color' => 'danger'],
+            'commission_reversed_on_payment_reversal' => ['label' => 'Commission Reversed (Payment)', 'icon' => 'fa-rotate-left', 'color' => 'danger'],
+            'commission_period_confirmed' => ['label' => 'Commission Period Confirmed', 'icon' => 'fa-check-circle', 'color' => 'success'],
         ];
 
         return view('admin.sales-audit.index', [

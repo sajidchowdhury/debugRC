@@ -14,7 +14,6 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $qty
  * @property string $rate
  * @property string $amount GENERATED: qty × rate
- * @property string|null $condition_state
  */
 class SalesInvoiceItem extends Model
 {
@@ -22,9 +21,12 @@ class SalesInvoiceItem extends Model
 
     public $timestamps = false;
 
+    // G-160 (SALES-AUDIT-2): condition_state DROPPED — was always 'Good',
+    // never 'Damage' at the invoice layer. Damage is tracked via
+    // sales_return_items.condition_state + damage_invoices.
     protected $fillable = [
         'sales_invoice_id', 'product_id', 'warehouse_id',
-        'qty', 'rate', 'condition_state',
+        'qty', 'rate',
     ];
 
     protected $casts = [

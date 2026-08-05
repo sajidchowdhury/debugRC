@@ -153,7 +153,7 @@ class SalesInvoiceApiController extends Controller
             'items.*.product_id'    => 'required|integer|exists:products,id',
             'items.*.qty'           => 'required|numeric|min:0.01',
             'items.*.rate'          => 'required|numeric|min:0',
-            'items.*.condition_state' => 'nullable|string|in:Good,Damage',
+            // G-160 (SALES-AUDIT-2): condition_state DROPPED from invoice items — was always 'Good'.
 
             // Header-level fields the service consumes.
             'invoice_date'          => 'nullable|date',
