@@ -10,6 +10,17 @@ use Illuminate\Support\Facades\Schema;
 /**
  * REPORTS-AUDIT-7 (G-228 + G-233 + G-234 / csv-export.md G13/G14 + materialized-views.md G14).
  *
+ * REPORTS-AUDIT-FIX-1 (this revision): the original G-234 implementation
+ * attempted `ALTER MATERIALIZED VIEW ... ADD COLUMN computed_at` which is
+ * NOT supported by PostgreSQL in any version (materialized views cannot
+ * have columns added via ALTER — only via DROP + CREATE with the new
+ * column baked into the SELECT). The original migration docstring's claim
+ * that this works in PG 11+ was factually wrong and blocked
+ * `php artisan migrate` in production. This revision replaces the
+ * impossible ALTER with an equivalent staleness-detection mechanism:
+ * a lightweight `mv_refresh_log` table populated by a trigger on
+ * `financial_audit_log`.
+ *
  * Three DDL gaps closed in one migration:
  *
  *   1. partition_exports table (G-228 + G-233) — append-only manifest of every
@@ -21,39 +32,53 @@ use Illuminate\Support\Facades\Schema;
  *      downstream integrity checks verify cold-storage files have not been
  *      silently corrupted.
  *
- *   2. computed_at column on the 7 financial MVs (G-234) — lets reports detect
- *      staleness programmatically (e.g. "MV is older than 1 hour" → show a
- *      "stale data" badge). The column is populated by refresh_all_report_views()
- *      AFTER each REFRESH — but that function update is a separate concern
- *      (the function reads now() at the end of its body and sets computed_at
- *      via UPDATE). Here we only add the column + a default of now() so
- *      existing rows get a non-null value on backfill.
+ *   2. mv_refresh_log table + trigger (G-234) — lets reports detect MV
+ *      staleness programmatically (e.g. "MV is older than 1 hour" -> show a
+ *      "stale data" badge). The existing `refresh_all_report_views()`
+ *      function already INSERTs a row into `financial_audit_log` with
+ *      `operation='REFRESH'`, `table_name='mv_X'`, and
+ *      `after_data = jsonb_build_object('status','ok','elapsed_ms',N)` after
+ *      every successful refresh (and a 'failed' row on exception). An
+ *      AFTER INSERT trigger on `financial_audit_log` mirrors those REFRESH
+ *      rows into `mv_refresh_log` (UPSERT keyed on mv_name). Reports query
+ *      `SELECT refreshed_at, status FROM mv_refresh_log WHERE mv_name = ?`
+ *      to determine freshness. This achieves the same goal as a `computed_at`
+ *      column on each MV WITHOUT requiring DROP+CREATE of 8 MVs (which would
+ *      be risky and lose indexes).
  *
- * MVs touched (the 7 financial + mv_product_abc_classification for completeness):
- *   - mv_ledger_balances
- *   - mv_ar_aging
- *   - mv_ap_aging
- *   - mv_stock_valuation
- *   - mv_journal_entry_summary
- *   - mv_branch_intercompany
- *   - mv_product_movement_summary
- *   - mv_product_abc_classification
+ *      MVs tracked (the 8 financial + mv_consolidated_trial_balance):
+ *        - mv_ledger_balances
+ *        - mv_ar_aging
+ *        - mv_ap_aging
+ *        - mv_stock_valuation
+ *        - mv_journal_entry_summary
+ *        - mv_branch_intercompany
+ *        - mv_product_movement_summary
+ *        - mv_product_abc_classification  (already has its own computed_at column; also tracked here for uniformity)
+ *        - mv_consolidated_trial_balance
  *
- * Idempotent: Schema::hasColumn guards every ALTER TABLE; Schema::hasTable
- * guards the CREATE TABLE. Safe to re-run.
+ * Idempotent: Schema::hasTable / IF NOT EXISTS / IF EXISTS guards on every
+ * statement. Safe to re-run.
  *
- * NOTE: PostgreSQL does NOT support adding a column with a default of now()
- * via ALTER MATERIALIZED VIEW ... ADD COLUMN in all versions — but
- * `ALTER MATERIALIZED VIEW ... ADD COLUMN computed_at timestamptz DEFAULT now()`
- * IS supported in PG 11+. We use raw DB::statement for the MV ALTERs because
- * Schema::table does not work on materialized views (Blueprint expects a
- * regular table).
+ * NOTE on the trigger guard: `trg_fn_audit_log_to_mv_refresh_log()` checks
+ * `to_regclass('public.mv_refresh_log') IS NULL` before touching the log
+ * table. If the table is ever dropped manually (without dropping the
+ * trigger first), the trigger becomes a safe no-op rather than erroring on
+ * every `financial_audit_log` insert (which would break inventory
+ * mutations that audit through the same table).
  */
 return new class extends Migration
 {
     private const PARTITION_EXPORTS_TABLE = 'partition_exports';
 
-    private const MATERIALIZED_VIEWS_WITH_COMPUTED_AT = [
+    private const MV_REFRESH_LOG_TABLE = 'mv_refresh_log';
+
+    /**
+     * MVs tracked by mv_refresh_log. Backfilled on up() so the table is not
+     * empty before the first refresh. The trigger populates refreshed_at +
+     * status on every subsequent refresh.
+     */
+    private const TRACKED_MATERIALIZED_VIEWS = [
         'mv_ledger_balances',
         'mv_ar_aging',
         'mv_ap_aging',
@@ -62,6 +87,7 @@ return new class extends Migration
         'mv_branch_intercompany',
         'mv_product_movement_summary',
         'mv_product_abc_classification',
+        'mv_consolidated_trial_balance',
     ];
 
     public function up(): void
@@ -84,71 +110,103 @@ return new class extends Migration
             });
         }
 
-        // 2. computed_at column on the financial MVs (G-234).
-        //    Schema::table does not work on materialized views, so use raw
-        //    ALTER MATERIALIZED VIEW with information_schema guards.
-        foreach (self::MATERIALIZED_VIEWS_WITH_COMPUTED_AT as $mvName) {
-            $mvExists = DB::selectOne("
-                SELECT 1
-                FROM pg_matviews
-                WHERE matviewname = ?
-            ", [$mvName]);
-
-            if ($mvExists === null) {
-                continue;
-            }
-
-            $hasColumn = DB::selectOne("
-                SELECT 1
-                FROM information_schema.columns
-                WHERE table_name = ?
-                  AND column_name = 'computed_at'
-            ", [$mvName]);
-
-            if ($hasColumn === null) {
-                // Add the column with a default of now() so existing rows get
-                // a non-null value on backfill. REFRESH MATERIALIZED VIEW
-                // repopulates all rows, so after the next refresh every row
-                // will have computed_at set by the refresh function (or by
-                // the DEFAULT if the function does not set it explicitly).
-                DB::statement(
-                    'ALTER MATERIALIZED VIEW "' . $mvName . '" ' .
-                    'ADD COLUMN computed_at timestamptz NOT NULL DEFAULT now()'
-                );
-            }
+        // 2. mv_refresh_log table (G-234).
+        //    Replaces the impossible ALTER MATERIALIZED VIEW ADD COLUMN
+        //    approach. One row per MV, UPSERTed by the trigger below.
+        if (!Schema::hasTable(self::MV_REFRESH_LOG_TABLE)) {
+            Schema::create(self::MV_REFRESH_LOG_TABLE, function (Blueprint $table): void {
+                $table->string('mv_name', 80)->primary();
+                $table->timestampTz('refreshed_at')->useCurrent()->comment('When the MV was last refreshed (mirrored from financial_audit_log.created_at).');
+                $table->integer('duration_ms')->nullable()->comment('Refresh duration in milliseconds (from after_data.elapsed_ms); null on failure.');
+                $table->string('status', 10)->default('backfill')->comment('ok / failed / backfill / unknown.');
+            });
         }
+
+        // 2a. Backfill one row per tracked MV so the table is not empty
+        //     before the first refresh. ON CONFLICT DO NOTHING keeps this
+        //     idempotent (re-running the migration will not overwrite a
+        //     real refreshed_at with the backfill timestamp).
+        foreach (self::TRACKED_MATERIALIZED_VIEWS as $mvName) {
+            DB::table(self::MV_REFRESH_LOG_TABLE)
+                ->insertOrIgnore([
+                    'mv_name' => $mvName,
+                    'refreshed_at' => now(),
+                    'duration_ms' => null,
+                    'status' => 'backfill',
+                ]);
+        }
+
+        // 2b. Trigger function: mirrors REFRESH rows from financial_audit_log
+        //     into mv_refresh_log. The existing refresh_all_report_views()
+        //     function already writes one audit-log row per refresh with
+        //     operation='REFRESH', table_name='mv_X', and
+        //     after_data={status, elapsed_ms}. This trigger captures those
+        //     rows and UPSERTs mv_refresh_log. No function rewrite needed.
+        DB::statement(<<<'SQL'
+CREATE OR REPLACE FUNCTION trg_fn_audit_log_to_mv_refresh_log()
+RETURNS trigger AS $$
+BEGIN
+    -- Guard: if mv_refresh_log was dropped manually, no-op so the parent
+    -- financial_audit_log insert (which fires this trigger) does not fail.
+    -- Without this guard, dropping mv_refresh_log without dropping the
+    -- trigger would break every inventory mutation that audits through
+    -- financial_audit_log.
+    IF to_regclass('public.mv_refresh_log') IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    -- Only mirror REFRESH operations on materialized views (table_name
+    -- starting with 'mv_'). The 'mv\_' pattern escapes the underscore so
+    -- it matches literally (otherwise '_' is a single-char wildcard in
+    -- LIKE and would also match e.g. 'mvXfoo').
+    IF NEW.operation = 'REFRESH' AND NEW.table_name LIKE 'mv\_%' THEN
+        INSERT INTO mv_refresh_log (mv_name, refreshed_at, duration_ms, status)
+        VALUES (
+            NEW.table_name,
+            COALESCE(NEW.created_at, now()),
+            (NEW.after_data ->> 'elapsed_ms')::integer,
+            COALESCE(NEW.after_data ->> 'status', 'unknown')
+        )
+        ON CONFLICT (mv_name) DO UPDATE SET
+            refreshed_at = EXCLUDED.refreshed_at,
+            duration_ms  = EXCLUDED.duration_ms,
+            status       = EXCLUDED.status;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql
+SQL);
+
+        // 2c. Attach the trigger to financial_audit_log. The table is
+        //     partitioned by RANGE(created_at); AFTER ROW triggers on the
+        //     partitioned parent fire for inserts into any partition
+        //     (supported in PostgreSQL 11+). DROP IF EXISTS first for
+        //     idempotency.
+        DB::statement(
+            'DROP TRIGGER IF EXISTS trg_audit_log_mv_refresh ON financial_audit_log'
+        );
+        DB::statement(<<<'SQL'
+CREATE TRIGGER trg_audit_log_mv_refresh
+    AFTER INSERT ON financial_audit_log
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_fn_audit_log_to_mv_refresh_log()
+SQL);
     }
 
     public function down(): void
     {
-        // Drop the computed_at column from each MV (if it exists).
-        foreach (self::MATERIALIZED_VIEWS_WITH_COMPUTED_AT as $mvName) {
-            $mvExists = DB::selectOne("
-                SELECT 1
-                FROM pg_matviews
-                WHERE matviewname = ?
-            ", [$mvName]);
+        // 2. Drop the trigger + trigger function + mv_refresh_log table.
+        //    Order matters: trigger first, then function, then table.
+        DB::statement(
+            'DROP TRIGGER IF EXISTS trg_audit_log_mv_refresh ON financial_audit_log'
+        );
+        DB::statement(
+            'DROP FUNCTION IF EXISTS trg_fn_audit_log_to_mv_refresh_log()'
+        );
+        Schema::dropIfExists(self::MV_REFRESH_LOG_TABLE);
 
-            if ($mvExists === null) {
-                continue;
-            }
-
-            $hasColumn = DB::selectOne("
-                SELECT 1
-                FROM information_schema.columns
-                WHERE table_name = ?
-                  AND column_name = 'computed_at'
-            ", [$mvName]);
-
-            if ($hasColumn !== null) {
-                DB::statement(
-                    'ALTER MATERIALIZED VIEW "' . $mvName . '" ' .
-                    'DROP COLUMN computed_at'
-                );
-            }
-        }
-
-        // Drop the partition_exports table.
+        // 1. Drop the partition_exports table.
         Schema::dropIfExists(self::PARTITION_EXPORTS_TABLE);
     }
 };

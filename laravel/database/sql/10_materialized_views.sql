@@ -473,6 +473,71 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- ── 9. mv_refresh_log + audit-log trigger (G-234 / REPORTS-AUDIT-FIX-1) ─────
+-- Lightweight staleness tracker for the 8 financial MVs + mv_consolidated_trial_balance.
+--
+-- The original G-234 plan added a `computed_at` column to each MV via
+-- `ALTER MATERIALIZED VIEW ... ADD COLUMN` — but PostgreSQL does NOT support
+-- adding columns to materialized views in any version (the only way is
+-- DROP + CREATE with the new column baked into the SELECT). That approach
+-- was attempted in migration 2026_09_06_000003 and blocked `php artisan
+-- migrate` in production. This revision uses a separate log table + a
+-- trigger on financial_audit_log instead.
+--
+-- How it works:
+--   - refresh_all_report_views() (section 8 above) already INSERTs a row
+--     into financial_audit_log after every MV refresh with:
+--       operation   = 'REFRESH'
+--       table_name  = 'mv_X'
+--       after_data  = jsonb_build_object('status','ok'|'failed','elapsed_ms',N)
+--   - The AFTER INSERT trigger below mirrors those REFRESH rows into
+--     mv_refresh_log (UPSERT keyed on mv_name).
+--   - Reports query `SELECT refreshed_at, status FROM mv_refresh_log
+--     WHERE mv_name = ?` to determine freshness.
+--
+-- The trigger function guards on `to_regclass('public.mv_refresh_log') IS NULL`
+-- so that if the log table is ever dropped manually (without dropping the
+-- trigger first), the trigger becomes a safe no-op rather than erroring on
+-- every financial_audit_log insert (which would break inventory mutations
+-- that audit through the same table).
+CREATE TABLE IF NOT EXISTS mv_refresh_log (
+    mv_name      VARCHAR(80) PRIMARY KEY,
+    refreshed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    duration_ms  INTEGER,
+    status       VARCHAR(10) NOT NULL DEFAULT 'backfill'
+);
+
+CREATE OR REPLACE FUNCTION trg_fn_audit_log_to_mv_refresh_log()
+RETURNS trigger AS $$
+BEGIN
+    IF to_regclass('public.mv_refresh_log') IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.operation = 'REFRESH' AND NEW.table_name LIKE 'mv\_%' THEN
+        INSERT INTO mv_refresh_log (mv_name, refreshed_at, duration_ms, status)
+        VALUES (
+            NEW.table_name,
+            COALESCE(NEW.created_at, now()),
+            (NEW.after_data ->> 'elapsed_ms')::integer,
+            COALESCE(NEW.after_data ->> 'status', 'unknown')
+        )
+        ON CONFLICT (mv_name) DO UPDATE SET
+            refreshed_at = EXCLUDED.refreshed_at,
+            duration_ms  = EXCLUDED.duration_ms,
+            status       = EXCLUDED.status;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_audit_log_mv_refresh ON financial_audit_log;
+CREATE TRIGGER trg_audit_log_mv_refresh
+    AFTER INSERT ON financial_audit_log
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_fn_audit_log_to_mv_refresh_log();
+
 -- ============================================================================
 -- End of 10_materialized_views.sql
 -- ============================================================================

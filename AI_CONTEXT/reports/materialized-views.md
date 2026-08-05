@@ -645,11 +645,15 @@ sequenceDiagram
    against the new partitioned `branch_ledger` parent. Each recreation DROPs the MV + its
    indexes + recreates against the new parent. During the DROP-CREATE window, reports reading
    the MV get an error. See `database/partitioning.md` §"MV recreation after partitioning".
-5. **`mv_consolidated_trial_balance` orphaned refresh (Gap G3 — CRITICAL).** No scheduled
-   refresh. If consolidation hasn't been run in N days, the MV reflects stale data from the
-   last `ConsolidationService::refreshMaterializedViews()` call. No `computed_at` column to
-   detect staleness (unlike `mv_product_abc_classification` which has
-   `CURRENT_TIMESTAMP AS computed_at`).
+5. **`mv_consolidated_trial_balance` orphaned refresh (Gap G3 — CRITICAL, RESOLVED).**
+   Now refreshed by both the Laravel scheduler (`reports:refresh` every 5 min) and the
+   pg_cron `refresh_all_report_views()` function. Staleness is detectable via the
+   `mv_refresh_log` table (G14 fix, REPORTS-AUDIT-FIX-1) — query
+   `SELECT refreshed_at, status FROM mv_refresh_log WHERE mv_name = 'mv_consolidated_trial_balance'`.
+   (`mv_product_abc_classification` additionally has a `CURRENT_TIMESTAMP AS computed_at`
+   column baked into its own SELECT definition; the other 8 MVs are tracked via
+   `mv_refresh_log` instead because PostgreSQL does not support
+   `ALTER MATERIALIZED VIEW ... ADD COLUMN`.)
 6. **ABC MV nightly cadence vs financial MVs 5-min (Gap G11).** `mv_product_abc_classification`
    refreshes nightly at 01:30 — ABC classification can be up to 24 hours stale. A product that
    became a top-seller at 09:00 today won't show as 'A' class until 01:30 tomorrow. Acceptable
@@ -694,9 +698,18 @@ sequenceDiagram
    policies on every MV (`CREATE POLICY ... ON mv_stock_valuation FOR SELECT USING (branch_id
    = current_setting('app.branch_id')::int)`), OR (b) require every read site to filter
    `WHERE branch_id = ?` explicitly (current partial approach in `ReportService`).
-3. **Add `mv_refresh_log` table for auditability (Gap G14 fix).** INSERT into
-   `mv_refresh_log` after each successful refresh with `mv_name`, `refreshed_at`,
-   `duration_ms`, `row_count`, `triggered_by` (artisan/pg_cron/manual).
+3. **~~Add `mv_refresh_log` table for auditability (Gap G14 fix).~~** ✅ DONE —
+   REPORTS-AUDIT-FIX-1 (migration `2026_09_06_000003` revision 2). Created
+   `mv_refresh_log(mv_name PK, refreshed_at, duration_ms, status)` + an AFTER INSERT
+   trigger on `financial_audit_log` that mirrors `operation='REFRESH'` rows into the
+   log table (UPSERT keyed on `mv_name`). The existing `refresh_all_report_views()`
+   function already writes one audit-log row per refresh, so NO function rewrite was
+   needed — the trigger captures them automatically. Reports query
+   `SELECT refreshed_at, status FROM mv_refresh_log WHERE mv_name = ?` for freshness.
+   The `row_count` + `triggered_by` columns from the original recommendation were
+   omitted (the audit-log `after_data` JSONB already carries `elapsed_ms` + `status`;
+   `row_count` would require a separate `COUNT(*)` per MV per refresh which is
+   non-trivial cost for marginal value).
 4. **Consolidate scheduler — pick Laravel OR pg_cron (Gap G5 fix).** Recommendation: keep
    pg_cron (DB-level, survives app crashes, runs even if Laravel queue worker is down) and
    remove the Laravel scheduler entry. OR: keep Laravel scheduler and
@@ -712,9 +725,15 @@ sequenceDiagram
    Tradeoff: adds ~200ms to every journal post. Alternative: dispatch a queued job.
 7. **Add `REFRESH MATERIALIZED VIEW CONCURRENTLY mv_consolidated_trial_balance` to
    `refresh_all_report_views()` (Gap G3 fix).** OR add a separate pg_cron job (e.g. hourly).
-8. **Add `computed_at` column to all MVs.** Currently only `mv_product_abc_classification`
-   has `CURRENT_TIMESTAMP AS computed_at`. Adding it to all MVs lets reports detect staleness
-   programmatically (e.g. "data is 7 minutes old, refresh in progress").
+8. **~~Add `computed_at` column to all MVs.~~** ✅ SUPERSEDED — the original G-234
+   implementation attempted `ALTER MATERIALIZED VIEW ... ADD COLUMN computed_at` which
+   is NOT supported by PostgreSQL in any version (materialized views cannot have
+   columns added via ALTER — only via DROP + CREATE with the new column in the SELECT).
+   That migration blocked `php artisan migrate` in production. The goal (staleness
+   detection) is now achieved via the `mv_refresh_log` table + audit-log trigger (see
+   item #3 above). `mv_product_abc_classification` retains its existing
+   `CURRENT_TIMESTAMP AS computed_at` column (baked into its SELECT at creation); the
+   other 8 MVs are tracked via `mv_refresh_log` instead.
 9. **Add tests for `reports:refresh` command + MV integrity (Gap G4 fix).** Add
    `tests/Feature/Reports/RefreshReportViewsTest.php` (invoke command, assert SUCCESS, assert
    each MV row count > 0 with seeded data) + `tests/Feature/Reports/MaterializedViewIntegrityTest.php`
@@ -809,7 +828,10 @@ sequenceDiagram
 >
 > The ad-hoc `ConsolidationService::refreshMaterializedViews()` path is preserved for the immediate-refresh-after-consolidation-run use case, but now also logs to `financial_audit_log` (see G7).
 >
-> NB: the `computed_at` column for staleness detection is part of G14 (MEDIUM, still open) — not in scope for this CRITICAL cluster.
+> NB: the `computed_at` column for staleness detection was part of G14 (MEDIUM). G14 is
+> now RESOLVED via the `mv_refresh_log` table + audit-log trigger (REPORTS-AUDIT-FIX-1) —
+> see the G14 row below. The original `ALTER MATERIALIZED VIEW ADD COLUMN` approach was
+> abandoned because PostgreSQL does not support adding columns to materialized views.
 | **G4** | **CRITICAL** | Grep `tests/` for `refresh_all_report_views \| reports:refresh \| mv_ledger_balances \| RefreshReportViews` → 0 matches. | No tests verify: (a) the command runs successfully; (b) `refresh_all_report_views()` actually refreshes each MV (row counts change); (c) CONCURRENTLY works (no error when run inside PL/pgSQL function); (d) the 7 MVs reconcile to their source tables; (e) MV integrity is maintained after schema changes. | Add `tests/Feature/Reports/RefreshReportViewsTest.php` (invoke command, assert SUCCESS, assert each MV row count > 0 with seeded data) + `tests/Feature/Reports/MaterializedViewIntegrityTest.php` (assert `mv_ledger_balances.total_debit` reconciles to `SUM(journal_lines.debit)`, etc.). |
 | **G5** | **HIGH** | Laravel scheduler (`console.php:12-17`) + pg_cron (`2025_01_20_000009:222-228`) both invoke `SELECT refresh_all_report_views()` every 5 minutes. `withoutOverlapping()` only protects the Laravel side. | If both fire at the same minute, both invoke the function. `CONCURRENTLY` allows one to proceed; the second blocks on the MV `ShareLock` until the first commits. ~2× wall-clock time for one refresh cycle. | Pick ONE scheduler. Recommendation: keep pg_cron (DB-level, survives app crashes) and remove the Laravel scheduler entry. OR: keep Laravel scheduler and `SELECT cron.unschedule('refresh-report-views')` in a migration. |
 | **G6** | **HIGH** | Migration `2025_01_03_000001:254-267` — function body is a single BEGIN…END block with 7 consecutive `REFRESH MATERIALIZED VIEW CONCURRENTLY` statements. PostgreSQL docs explicitly state: *"REFRESH MATERIALIZED VIEW CONCURRENTLY ... cannot be executed inside a transaction block."* A PL/pgSQL function body IS a transaction block. | If PG rejects the CONCURRENTLY-in-function pattern, every invocation of `refresh_all_report_views()` fails — the `RefreshReportViews.php:36` catch fires, `Log::error('Report MV refresh failed')` is logged, but no MV is ever refreshed. Reports silently read stale data forever (until someone notices the log). **Runtime verification needed.** | Verify by running `php artisan reports:refresh` against a real DB and checking the log. If it fails, refactor: issue 7 separate `DB::statement('REFRESH MATERIALIZED VIEW CONCURRENTLY mv_X')` from PHP (each in its own autocommit statement — bypasses the function-transaction issue). OR change the function to use plain `REFRESH MATERIALIZED VIEW` (no CONCURRENTLY — blocks readers but works inside functions). |
@@ -840,6 +862,19 @@ sequenceDiagram
 | **G12** | **MEDIUM** | `UserPerformanceDashboardController::cached():450` has `int $ttl = 60` default. `timed():481` has hardcoded `200.0` ms threshold. No `config/reports.php` file exists. | Tuning the cache TTL or slow-query threshold requires a code change + redeploy. | Create `config/reports.php` with `'dashboard_cache_ttl' => env('DASHBOARD_CACHE_TTL', 60)`, `'slow_query_threshold_ms' => env('PERF_SLOW_QUERY_MS', 200)`, `'mv_refresh_concurrently' => env('MV_REFRESH_CONCURRENTLY', true)`. |
 | **G13** | **MEDIUM** | `mv_product_abc_classification` has NO unique index. | `REFRESH CONCURRENTLY` is not possible — the nightly refresh uses plain `REFRESH MATERIALIZED VIEW` which blocks readers. | Add `CREATE UNIQUE INDEX mv_abc_product_idx ON mv_product_abc_classification (product_id)`. |
 | **G14** | **MEDIUM** | None of the 7 financial MVs have a `computed_at` column. | Reports cannot detect staleness programmatically. Only `mv_product_abc_classification` has `CURRENT_TIMESTAMP AS computed_at`. | Add `CURRENT_TIMESTAMP AS computed_at` to all MV definitions. |
+
+> ✅ **RESOLVED — G-234 / G14 (REPORTS-AUDIT-7 commit `2ce07e5` had a DEFECTIVE resolution; truly fixed by REPORTS-AUDIT-FIX-1).** The REPORTS-AUDIT-7 migration `2026_09_06_000003` attempted `ALTER MATERIALIZED VIEW ... ADD COLUMN computed_at timestamptz NOT NULL DEFAULT now()` on 8 MVs — but PostgreSQL does NOT support `ALTER MATERIALIZED VIEW ... ADD COLUMN` in any version (the command simply does not exist; the only way to add a column to a MV is DROP + CREATE with the new column baked into the SELECT). The migration's own docstring incorrectly claimed it works in PG 11+. This blocked `php artisan migrate --force` in production with `SQLSTATE[42809]: Wrong object type: 7 ERROR: ALTER action ADD COLUMN cannot be performed on relation "mv_ledger_balances"`.
+>
+> REPORTS-AUDIT-FIX-1 rewrites migration `2026_09_06_000003` to achieve the SAME staleness-detection goal via a different, PG-supported mechanism:
+>   - **`mv_refresh_log` table** — `(mv_name VARCHAR(80) PK, refreshed_at TIMESTAMPTZ, duration_ms INTEGER, status VARCHAR(10))`. One row per tracked MV (8 financial + `mv_consolidated_trial_balance` = 9 rows). Backfilled with `status='backfill'` on migration so the table is not empty before the first refresh.
+>   - **AFTER INSERT trigger on `financial_audit_log`** — the existing `refresh_all_report_views()` PL/pgSQL function already INSERTs a row into `financial_audit_log` after every MV refresh with `operation='REFRESH'`, `table_name='mv_X'`, `after_data=jsonb_build_object('status','ok'|'failed','elapsed_ms',N)`. The new trigger `trg_audit_log_mv_refresh` mirrors those REFRESH rows into `mv_refresh_log` (UPSERT keyed on `mv_name`). No function rewrite was needed — the trigger captures the audit-log inserts automatically.
+>   - **Robustness guard** — the trigger function checks `to_regclass('public.mv_refresh_log') IS NULL` before touching the log table, so if the table is ever dropped manually (without dropping the trigger first), the trigger becomes a safe no-op rather than erroring on every `financial_audit_log` insert (which would break inventory mutations that audit through the same table).
+>
+> Reports detect staleness via `SELECT refreshed_at, status FROM mv_refresh_log WHERE mv_name = ?` (e.g. "MV is older than 1 hour" → show a stale-data badge). This is functionally equivalent to a `computed_at` column but avoids the risky DROP+CREATE of 8 MVs + their ~15 indexes.
+>
+> The SQL baseline `database/sql/10_materialized_views.sql` was updated with the `mv_refresh_log` table + trigger DDL (section 9) so external readers (BI, replication, DBAs) can discover the staleness-tracking infra from the SQL baseline.
+>
+> `mv_product_abc_classification` retains its existing `CURRENT_TIMESTAMP AS computed_at` column (baked into its SELECT in `03_stock.sql:584`); it is ALSO tracked in `mv_refresh_log` for uniformity.
 | **G15** | **MEDIUM** | `RefreshReportViews.php:11` docblock claims "Also run on-demand after journal postings." `ReportService::refreshMaterializedViews():1167-1170` is the API hook. Grep for callers returns 0 matches. | The on-demand refresh path is aspirational, not wired. Reports read stale MV data for up to 5 min after a journal post. | Wire `ReportService::refreshMaterializedViews()` into `JournalPostingService::post()` after commit. OR dispatch a queued job. OR remove the docblock claim. |
 | **G16** | **LOW** | `RefreshReportViews.php:11` docblock says "Phase 5" — the MVs have been extended in Phase 6 (running-balance checks), Phase 8 (ABC), Phase 13 (consolidated trial balance). | Stale docblock. | Update to "Phase 5 + Phase 6 + Phase 8 + Phase 13". |
 | **G17** | **LOW** | `RefreshReportViews.php:43` `protected $description = 'Refresh all report materialized views (concurrently)';` — but the function might not actually use CONCURRENTLY (G6). | Misleading description if G6 is confirmed. | Update description after G6 verification. |
