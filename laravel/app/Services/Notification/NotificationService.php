@@ -130,6 +130,47 @@ class NotificationService
                     channels: $channels,
                 ));
                 $sentCount++;
+
+                // G-008 (CRITICAL, architecture/realtime-events.md G1):
+                // per-user Redis queue was polled by SseController but never
+                // written. Write a per-recipient SSE event directly here so
+                // the recipient's browser receives a real-time toast via
+                // their own `rcerp:sse:user:{id}` queue — independent of the
+                // global `rcerp_notification_dispatched` pg_notify path
+                // (which still fires below for branch/global SSE clients).
+                if ($this->listenNotify) {
+                    try {
+                        $this->listenNotify->publishToUser(
+                            $user->id,
+                            'rcerp_notification_dispatched',
+                            [
+                                'table'     => 'notifications',
+                                'action'    => 'INSERT',
+                                'id'        => 0,
+                                'branch_id' => $context['branch_id'] ?? $user->employee?->branch_id,
+                                'changes'   => [
+                                    'event'           => $event,
+                                    'rule_id'         => $rule->id,
+                                    'rule_name'       => $rule->name,
+                                    'recipient_count' => $recipients->count(),
+                                    'recipient_user_id' => $user->id,
+                                    'title'           => $title,
+                                    'body'            => $body,
+                                    'reference_type'  => $referenceType,
+                                    'reference_id'    => $referenceId,
+                                    'icon'            => $meta['icon'],
+                                    'color'           => $meta['color'],
+                                ],
+                            ]
+                        );
+                    } catch (\Throwable $e) {
+                        Log::warning('NotificationService: per-user SSE queue write failed', [
+                            'event' => $event,
+                            'user_id' => $user->id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
             }
 
             $rule->increment('times_fired');

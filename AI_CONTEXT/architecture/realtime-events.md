@@ -3,7 +3,7 @@
 > **Module:** Architecture (cross-cutting)
 > **Audience:** Engineers, AI assistants, DevOps, DBAs
 > **Status:** Canonical — expanded in Phase 15 (replaces the Phase 1 high-level summary)
-> **Last reviewed:** Phase 15 (Notifications & Realtime)
+> **Last reviewed:** REALTIME-1 (post G-008/G-009 fix — both CRITICALs resolved)
 > **Source of truth:** This file + `laravel/app/Services/Notification/ListenNotifyService.php`,
 > `NotificationService.php` + `laravel/app/Http/Controllers/SseController.php` +
 > `laravel/app/Console/Commands/ListenNotifyWorker.php` +
@@ -927,9 +927,23 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
 
 ## 14. Gap catalogue
 
-20 gaps total: 2 CRITICAL, 5 HIGH, 6 MEDIUM, 7 LOW.
+20 gaps total: 2 CRITICAL (both ✅ resolved in REALTIME-1), 5 HIGH, 6 MEDIUM, 7 LOW.
 
 ### G1 — CRITICAL — Per-user Redis queue is dead code (polled, never written)
+
+> ✅ RESOLVED in commit `<pending>` (G-008, REALTIME-1) — adopted fix option (b):
+> `NotificationService::dispatch` now writes a per-recipient event to the
+> `rcerp:sse:user:{user_id}` Redis list inside the `foreach ($recipients as $user)`
+> loop, via a new `ListenNotifyService::publishToUser(int $userId, string $pgChannel, array $payload)`
+> helper. The helper mirrors `publishToRedis`'s envelope (`{channel, payload, published_at}`)
+> and uses the same LPUSH + `expire(600)` + `ltrim(0, 199)` discipline, so the existing
+> `SseController::pollRedisQueues` RPOP at L253 now returns per-user events instead of
+> polling a permanently-empty queue. The payload carries `recipient_user_id` so the
+> browser can de-dupe against the global `rcerp_notification_dispatched` pg_notify path
+> (which still fires unchanged for branch/global SSE clients). Per-user targeting now
+> works end-to-end: a notification meant for User A in Branch 1 is delivered ONLY to
+> User A's SSE stream, not to every user in Branch 1.
+
 - **Evidence:** `SseController.php` L99 `$userQueueKey = "rcerp:sse:user:{$userId}"`; L253
   `$userEvents = $redis->rpop($userQueueKey, 10)`. Grep for `lpush.*rcerp:sse:user`
   across entire codebase: **0 matches**. `ListenNotifyService::publishToRedis` L107-158
@@ -946,6 +960,26 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
   doc, OR (b) implement per-user writes in `NotificationService::dispatch`.
 
 ### G2 — CRITICAL — Partition migration regresses LISTEN/NOTIFY trigger payload
+
+> ✅ RESOLVED in commit `<pending>` (G-009, REALTIME-1) — the partition migration
+> `2026_08_02_000004_partition_transaction_headers_low_fk.php` no longer recreates
+> the simplified `trg_notify_sales_returns()` / `trg_notify_damage_invoices()`
+> functions. Both call sites now `DROP FUNCTION IF EXISTS … CASCADE` (idempotent
+> against DBs where the simplified function was already created) and then
+> `CREATE TRIGGER … EXECUTE FUNCTION rcerp_notify_sales_return()` /
+> `rcerp_notify_damage()` — reattaching the trigger to the EXISTING rich
+> payload-producing functions defined by migrations `2025_01_21_000001` and
+> `2026_01_02_000001` (functions are not table-bound, so they survive the
+> `ALTER TABLE … RENAME TO …_unpartitioned` step). The damage trigger also
+> restores the original `AFTER INSERT OR UPDATE OR DELETE` event mask (the
+> simplified version had regressed to INSERT/UPDATE only, so DELETE events
+> stopped firing SSE refresh). Net effect: the rich payload
+> `{table, action, id, branch_id, changes, triggered_at}` is preserved across
+> the partitioning migration, so `publishToRedis` continues to write to the
+> correct branch queue, `SseController::events` L148 branch filter stays
+> accurate, and `buildNotificationBody` / `forwardToNotificationService` see
+> the real `table` name instead of falling back to `'record'` / null.
+
 - **Evidence:** `2026_08_02_000004_partition_transaction_headers_low_fk.php` L955 renames
   `sales_returns` → `sales_returns_unpartitioned` (original trigger now attached to
   renamed table). L1043-1051 recreates a NEW trigger on the partitioned parent with a

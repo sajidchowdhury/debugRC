@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-04 (post-WORKFLOWS-NOTIFICATION: G-076/G-078/G-079 resolved in `053609b`)
+Last reviewed: 2026-09-04 (post-REALTIME-1: G-008/G-009 resolved in `<pending>`)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -18,20 +18,20 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | Severity | Count | Blocks cutover? |
 |---|---|---|
-| CRITICAL | 4 | Yes — all of them |
+| CRITICAL | 2 | Yes — all of them |
 | HIGH | 94 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **234** | |
-| _of which resolved_ | 123 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **232** | |
+| _of which resolved_ | 125 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
 | Sector | Open issues |
 |---|---|
 | api | 29 |
-| architecture | 19 |
+| architecture | 17 |
 | finance | 51 |
 | purchasing | 11 |
 | reports | 71 |
@@ -71,8 +71,8 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-005 | G2 | CRITICAL | api | api/api-overview.md:572 | — | G2 \| CRITICAL \| `ApiDocController::endpoints()` (the `/api/docs` page) hardcodes 23 of 100 endpoint cards (77% drift). New endpoints added… | — | H1 | resolved | 7fc2882 |
 | G-006 | G2 | CRITICAL | api | api/api-reference-index.md:264 | — | G2 \| CRITICAL \| `ApiDocController::endpoints()` hardcodes 23 of 100 endpoint cards (77% drift). The interactive docs page is missing 77 en… | API Phase 17 | H1 | resolved | 7fc2882 |
 | G-007 | G3 | CRITICAL | api | api/api-modules.md:721 | — | G3 \| CRITICAL \| ZERO tests for 8 of 14 modules: Sales Cart, Sales Invoices, Sales Challans, Sales Returns, Customer Payments, Commission, … | test debt | H1 | open | — |
-| G-008 | G1 | CRITICAL | architecture | architecture/realtime-events.md:932 | — | ### G1 — CRITICAL — Per-user Redis queue is dead code (polled, never written) | notifications phase | H1 | open | — |
-| G-009 | G2 | CRITICAL | architecture | architecture/realtime-events.md:948 | — | ### G2 — CRITICAL — Partition migration regresses LISTEN/NOTIFY trigger payload | DDL drift | H1 | open | — |
+| G-008 | G1 | CRITICAL | architecture | architecture/realtime-events.md:932 | — | ### G1 — CRITICAL — Per-user Redis queue is dead code (polled, never written) | notifications phase | H1 | resolved | `<pending>` |
+| G-009 | G2 | CRITICAL | architecture | architecture/realtime-events.md:948 | — | ### G2 — CRITICAL — Partition migration regresses LISTEN/NOTIFY trigger payload | DDL drift | H1 | resolved | `<pending>` |
 | G-010 | G1 | CRITICAL | finance | finance/branch-demand.md:1073 | app/Services/Sales/CustomerPaymentService.php:770 | #### G1 — `CustomerPaymentService::postIntercompanySettlement` early-returns null | — | H1 | resolved | 5905123 |
 | G-011 | G1 | CRITICAL | finance | finance/consolidation-intercompany.md:594 | app/Services/Consolidation/ConsolidationService.php:364-390 | #### G1 — `ConsolidationService` BYPASSES `JournalPostingService` for elimination JE creation + reversal | notifications phase | H1 | resolved | 5905123 |
 | G-012 | G2 | CRITICAL | finance | finance/branch-demand.md:1089 | app/Services/Accounting/MoneyTransferService.php:442 | #### G2 — `MoneyTransferService::postIntercompanySettlement` uses wrong ledger nature + never calls `settleFromMoneyTransfer` | — | H1 | resolved | 5905123 |

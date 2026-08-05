@@ -1040,19 +1040,22 @@ return new class extends Migration
         SQL);
 
         // Recreate LISTEN/NOTIFY trigger
-        DB::statement(<<<'SQL'
-            CREATE OR REPLACE FUNCTION trg_notify_sales_returns()
-            RETURNS TRIGGER AS $$
-            BEGIN
-                PERFORM pg_notify('rcerp_sales_return', json_build_object('action', TG_OP, 'id', NEW.id)::text);
-                RETURN NEW;
-            END;
-            $$ LANGUAGE plpgsql
-        SQL);
+        // G-009 (CRITICAL, architecture/realtime-events.md G2): the previous
+        // version of this block recreated a SIMPLIFIED function `trg_notify_sales_returns()`
+        // that emitted only `{action, id}` — regressing from the original rich
+        // payload `{table, action, id, branch_id, changes, triggered_at}` produced
+        // by `rcerp_notify_sales_return()` (defined in migration 2025_01_21_000001).
+        // The simplified payload broke: (a) `publishToRedis` branch-id extraction
+        // (null → no branch queue write → branch isolation breach), (b)
+        // `SseController::events` branch filter short-circuit, (c) notification
+        // body + reference_type derivation. Fix: drop the simplified function
+        // and reattach the trigger to the EXISTING rich `rcerp_notify_sales_return()`
+        // function (it survives the rename because functions are not table-bound).
+        DB::statement('DROP FUNCTION IF EXISTS trg_notify_sales_returns() CASCADE');
         DB::statement(<<<'SQL'
             CREATE TRIGGER trg_notify_sales_returns
                 AFTER INSERT OR UPDATE ON sales_returns
-                FOR EACH ROW EXECUTE FUNCTION trg_notify_sales_returns()
+                FOR EACH ROW EXECUTE FUNCTION rcerp_notify_sales_return()
         SQL);
 
         // Recreate trigger-based FK: sales_returns.sales_invoice_id → sales_invoices(id)
@@ -1573,19 +1576,23 @@ return new class extends Migration
                 FOR EACH ROW EXECUTE FUNCTION trg_damage_invoices_updated_at()
         SQL);
 
-        DB::statement(<<<'SQL'
-            CREATE OR REPLACE FUNCTION trg_notify_damage_invoices()
-            RETURNS TRIGGER AS $$
-            BEGIN
-                PERFORM pg_notify('rcerp_damage_change', json_build_object('action', TG_OP, 'id', NEW.id)::text);
-                RETURN NEW;
-            END;
-            $$ LANGUAGE plpgsql
-        SQL);
+        // G-009 (CRITICAL, architecture/realtime-events.md G2): the previous
+        // version of this block recreated a SIMPLIFIED function `trg_notify_damage_invoices()`
+        // that emitted only `{action, id}` — regressing from the original rich
+        // payload `{table, action, id, branch_id, changes, triggered_at}` produced
+        // by `rcerp_notify_damage()` (defined in migration 2026_01_02_000001).
+        // The simplified payload broke branch isolation + notification body
+        // derivation (see G-009 evidence block in architecture/realtime-events.md).
+        // Fix: drop the simplified function and reattach the trigger to the
+        // EXISTING rich `rcerp_notify_damage()` function. Also restore the
+        // DELETE branch (`AFTER INSERT OR UPDATE OR DELETE`) that the original
+        // migration defined — the simplified version regressed to INSERT/UPDATE
+        // only, so damage deletions stopped firing SSE refresh events.
+        DB::statement('DROP FUNCTION IF EXISTS trg_notify_damage_invoices() CASCADE');
         DB::statement(<<<'SQL'
             CREATE TRIGGER trg_notify_damage_invoices
-                AFTER INSERT OR UPDATE ON damage_invoices
-                FOR EACH ROW EXECUTE FUNCTION trg_notify_damage_invoices()
+                AFTER INSERT OR UPDATE OR DELETE ON damage_invoices
+                FOR EACH ROW EXECUTE FUNCTION rcerp_notify_damage()
         SQL);
 
         DB::statement('ALTER TABLE damage_invoices ENABLE ROW LEVEL SECURITY');

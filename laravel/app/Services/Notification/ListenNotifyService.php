@@ -187,6 +187,53 @@ class ListenNotifyService
     }
 
     /**
+     * Publish a notification payload to a specific user's Redis queue.
+     *
+     * G-008 (CRITICAL, architecture/realtime-events.md G1): the per-user
+     * Redis queue `rcerp:sse:user:{user_id}` was polled by `SseController`
+     * (RPOP L253) but NEVER written — `publishToRedis()` only writes to the
+     * global + branch queues, and `NotificationService::dispatch` only emits
+     * a global `rcerp_notification_dispatched` pg_notify. The result: every
+     * per-user SSE poll returned an empty list, and a notification meant for
+     * User A in Branch 1 was delivered to ALL users in Branch 1 (no per-user
+     * targeting at the SSE layer).
+     *
+     * Fix: `NotificationService::dispatch` now calls this method once per
+     * resolved recipient (inside the `foreach ($recipients as $user)` loop),
+     * LPUSHing the same JSON envelope shape that `publishToRedis` uses, so
+     * the recipient's SSE connection picks it up via RPOP. The global +
+     * branch writes from `publishToRedis` are unchanged (they still fire via
+     * the `emitNotify('rcerp_notification_dispatched', …)` path).
+     *
+     * @param int    $userId    The recipient user ID (matches SseController's `$userQueueKey`)
+     * @param string $pgChannel The PostgreSQL channel name (e.g. rcerp_notification_dispatched)
+     * @param array  $payload   The decoded JSON payload
+     */
+    public function publishToUser(int $userId, string $pgChannel, array $payload): void
+    {
+        $message = json_encode([
+            'channel' => $pgChannel,
+            'payload' => $payload,
+            'published_at' => now()->toISOString(),
+        ], JSON_UNESCAPED_UNICODE);
+
+        try {
+            $redis = Redis::connection('default');
+            $userKey = self::REDIS_PREFIX . "user:{$userId}";
+            $redis->lpush($userKey, $message);
+            $redis->expire($userKey, 600); // TTL 10 min (matches SseController::QUEUE_TTL)
+            // Trim to prevent unbounded growth (keep last 200 per-user events).
+            $redis->ltrim($userKey, 0, 199);
+        } catch (\Throwable $e) {
+            Log::warning('LISTEN/NOTIFY: Redis LPUSH to per-user queue failed', [
+                'channel' => $pgChannel,
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
      * Forward a pg_notify event to Laravel's NotificationService
      * for rule-based dispatch (database + broadcast channels).
      *
