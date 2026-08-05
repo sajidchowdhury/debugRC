@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-04 (post-FINANCE-1: G-098/G-100/G-103/G-109/G-112/G-113/G-323/G-341 resolved in `4b0ece7`)
+Last reviewed: 2026-09-04 (post-FINANCE-2: G-096/G-097/G-099/G-102/G-104/G-108/G-110/G-111 resolved in `eb590fb`+`e1e1f3e`)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -19,12 +19,12 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | Severity | Count | Blocks cutover? |
 |---|---|---|
 | CRITICAL | 2 | Yes — all of them |
-| HIGH | 86 | Most |
+| HIGH | 78 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **224** | |
-| _of which resolved_ | 133 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **216** | |
+| _of which resolved_ | 141 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -32,7 +32,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 |---|---|
 | api | 29 |
 | architecture | 17 |
-| finance | 43 |
+| finance | 35 |
 | purchasing | 11 |
 | reports | 71 |
 | sales | 15 |
@@ -159,22 +159,22 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-093 | G5 | HIGH | architecture | architecture/realtime-events.md:995 | — | ### G5 — HIGH — No RLS on `notifications`, `notification_rules`, `notification_rule_recipients` | cutover, RLS audit | H1 | resolved | 278a03d |
 | G-094 | G6 | HIGH | architecture | architecture/realtime-events.md:1002 | — | ### G6 — HIGH — `fn_financial_audit_trigger` NOT attached to 8/10 monitored tables | audit-trail phase | H1 | open | — |
 | G-095 | G1 | HIGH | finance | finance/fixed-assets.md:171 | — | BR27 \| **RLS MUST block all access for non-admin users.** The single `_admin_policy` on each of the 3 tables only allows `app.is_admin = 't… | cutover, RLS audit | H1 | resolved | dd31590 |
-| G-096 | G6 | HIGH | finance | finance/consolidation-intercompany.md:683 | — | #### G6 — `ConsolidationService::reverseEliminationJournal` explicitly sets `is_reversed=false` on the reversal JE | GL posting | H2 | open | — |
-| G-097 | G7 | HIGH | finance | finance/consolidation-intercompany.md:693 | — | #### G7 — `ConsolidationService::postEliminationEntry` does NOT set `entry_date` on `journal_lines` | GL posting | H2 | open | — |
+| G-096 | G6 | HIGH | finance | finance/consolidation-intercompany.md:683 | — | #### G6 — `ConsolidationService::reverseEliminationJournal` explicitly sets `is_reversed=false` on the reversal JE | GL posting | H2 | resolved | `5905123` |
+| G-097 | G7 | HIGH | finance | finance/consolidation-intercompany.md:693 | — | #### G7 — `ConsolidationService::postEliminationEntry` does NOT set `entry_date` on `journal_lines` | GL posting | H2 | resolved | `5905123` |
 | G-098 | G7 | HIGH | finance | finance/fixed-assets.md:173 | — | BR29 \| **`fn_financial_audit_trigger` MUST NOT be attached to any fixed-asset table.** ⚠️ **G7 — only `journal_entries`/`journal_lines` are… | audit-trail phase | H1 | resolved | `4b0ece7` |
-| G-099 | G8 | HIGH | finance | finance/consolidation-intercompany.md:707 | — | #### G8 — `ConsolidationService::postEliminationEntry` does NOT set `dimension_value_id` on `journal_lines` | GL posting | H2 | open | — |
+| G-099 | G8 | HIGH | finance | finance/consolidation-intercompany.md:707 | — | #### G8 — `ConsolidationService::postEliminationEntry` does NOT set `dimension_value_id` on `journal_lines` | GL posting | H2 | resolved | `5905123` |
 | G-100 | G8 | HIGH | finance | finance/fixed-assets.md:771 | — | **G8 (MAJOR):** No artisan command, no scheduled job. The accountant MUST manually click both buttons every month. | — | H2 | resolved | `4b0ece7` |
 | G-101 | G9 | HIGH | finance | finance/branch-demand.md:1190 | — | #### G9 — NO `BranchDemandPolicy.php` exists | cutover, RLS audit | H2 | resolved | 1ccc5b6 |
-| G-102 | G9 | HIGH | finance | finance/consolidation-intercompany.md:718 | — | #### G9 — `MoneyTransferService::postIntercompanySettlement` uses non-registered `'intercompany'` nature → silently skips | — | H2 | open | — |
+| G-102 | G9 | HIGH | finance | finance/consolidation-intercompany.md:718 | — | #### G9 — `MoneyTransferService::postIntercompanySettlement` uses non-registered `'intercompany'` nature → silently skips | — | H2 | resolved | `5905123` |
 | G-103 | G9 | HIGH | finance | finance/fixed-assets.md:898 | — | **G9 (MAJOR):** `DELETE FROM asset_disposals` destroys the audit trail. The disposal record vanishes; only the GL reversal JE remains, with … | notifications phase | H2 | resolved | `4b0ece7` |
-| G-104 | G10 | HIGH | finance | finance/consolidation-intercompany.md:734 | — | #### G10 — `WarehouseTransferService::postIntercompanyGL` is DEAD CODE with fossilized bugs | — | H2 | open | — |
+| G-104 | G10 | HIGH | finance | finance/consolidation-intercompany.md:734 | — | #### G10 — `WarehouseTransferService::postIntercompanyGL` is DEAD CODE with fossilized bugs | — | H2 | resolved | `eb590fb` |
 | G-105 | G11 | HIGH | finance | finance/consolidation-intercompany.md:750 | app/Http/Middleware/EnforceBranchIsolation.php:165-246 | #### G11 — `EnforceBranchIsolation::inferTableFromUri` does NOT cover consolidation / warehouse-transfers / elimination-rules / companies UR… | cutover, RLS audit | H2 | resolved | `68a9672` |
 | G-106 | G12 | HIGH | finance | finance/consolidation-intercompany.md:775 | routes/web.php:1733 | #### G12 — NO BranchScope on `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `Company` models | cutover, RLS audit | H2 | resolved | c4acdb0 |
 | G-107 | G13 | HIGH | finance | finance/consolidation-intercompany.md:789 | — | #### G13 — NO Policy classes for `ConsolidationRun` / `EliminationRule` / `EliminationEntry` / `MoneyTransfer` / `WarehouseTransfer` / `Comp… | cutover, RLS audit | H2 | resolved | 1ccc5b6 |
-| G-108 | G14 | HIGH | finance | finance/consolidation-intercompany.md:801 | — | #### G14 — `BranchIntercompanyService::reverseLedgerByReference` inserts reversal rows with `journal_entry_id = null` | GL posting | H2 | open | — |
+| G-108 | G14 | HIGH | finance | finance/consolidation-intercompany.md:801 | — | #### G14 — `BranchIntercompanyService::reverseLedgerByReference` inserts reversal rows with `journal_entry_id = null` | GL posting | H2 | resolved | `eb590fb` |
 | G-109 | G14 | HIGH | finance | finance/fixed-assets.md:174 | — | BR30 \| **DepreciationService and AssetDisposalService MUST call `JournalPostingService::reverseJournalEntry` directly** (NOT `JournalRevers… | notifications phase | H2 | resolved | `4b0ece7` |
-| G-110 | G15 | HIGH | finance | finance/consolidation-intercompany.md:816 | — | #### G15 — `ConsolidationService::calculateBalanceElimination` queries `branch_ledger` WITHOUT joining `journal_entries` to filter by `is_re… | GL posting | H2 | open | — |
-| G-111 | G16 | HIGH | finance | finance/consolidation-intercompany.md:835 | — | #### G16 — `ConsolidationService::calculateAggregateElimination` uses `min(debitNet, creditNet)` which may eliminate LESS than the true inte… | — | H2 | open | — |
+| G-110 | G15 | HIGH | finance | finance/consolidation-intercompany.md:816 | — | #### G15 — `ConsolidationService::calculateBalanceElimination` queries `branch_ledger` WITHOUT joining `journal_entries` to filter by `is_re… | GL posting | H2 | resolved | `e1e1f3e` |
+| G-111 | G16 | HIGH | finance | finance/consolidation-intercompany.md:835 | — | #### G16 — `ConsolidationService::calculateAggregateElimination` uses `min(debitNet, creditNet)` which may eliminate LESS than the true inte… | — | H2 | resolved | `e1e1f3e` |
 | G-112 | G16 | HIGH | finance | finance/fixed-assets.md:848 | — | **G16 (MAJOR):** For a fully-depreciated asset, `NBV = salvage_value`. If scrapped for ৳0, the code computes `loss = 0 − salvage = −salvage`… | notifications phase | H2 | resolved | `4b0ece7` |
 | G-113 | G19 | HIGH | finance | finance/fixed-assets.md:899 | — | **G19 (MAJOR):** The force-reversed pending schedules (set during `disposeAsset`) are NOT restored. The accountant must manually re-generate… | notifications phase | H2 | resolved | `4b0ece7` |
 | G-114 | G27 | HIGH | finance | finance/fixed-assets.md:172 | — | BR28 \| **The subsystem MUST be accessible only to `accountant`, `manager`, `admin` (route middleware).** Superadmin bypasses via `EnsureRol… | cutover, RLS audit | H2 | resolved | c4acdb0 |

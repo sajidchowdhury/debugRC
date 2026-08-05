@@ -4,8 +4,9 @@
 > **Audience:** Engineers, AI assistants, accountants
 > **Status:** Draft — pending accountant sign-off (**SAFETY-CRITICAL** — elimination JEs post to the
 > GL; intercompany posting pairs affect branch-level trial balance + `branch_ledger` running
-> balance. Two bypass gaps (G1, G9) currently prevent the subsystem from being production-safe.)
-> **Last reviewed:** Phase 13 (initial creation)
+> balance. All 5 CRITICAL + 11 MAJOR gaps resolved (FINANCE-1/2/3). The subsystem is
+> production-safe pending accountant sign-off.)
+> **Last reviewed:** 2026-09-04 (post-FINANCE-2: G-096/G-097/G-099/G-102/G-104/G-108/G-110/G-111 resolved)
 > **Source of truth:** This file is the canonical reference for the consolidation + intercompany
 > subsystem. The implementation lives in
 > `laravel/app/Services/Consolidation/ConsolidationService.php`,
@@ -179,11 +180,11 @@ Three accounting + one engineering driver:
 
 | # | Rule | Evidence |
 |---|---|---|
-| **BR1** | **MUST** post every elimination JE via `JournalPostingService::createJournalEntry` — never via direct `JournalEntry::create()` / `JournalLine::create()`. | `ConsolidationService.php:364-390` — `postEliminationEntry` **VIOLATES** (G1). Constructor injects `JournalPostingService` at L60 but `postEliminationEntry` never calls it. |
-| **BR2** | **MUST** reverse every elimination JE via `JournalPostingService::reverseJournalEntry` (or `JournalReversalService::reverseByJournalEntry` for sub-ledger cascade) — never via manual swap. | `ConsolidationService.php:457-481` — `reverseEliminationJournal` **VIOLATES** (G1). Compare `MoneyTransferService.php:134, :142` ✓ uses `JournalReversalService::reverseByJournalEntry`; `BranchIntercompanyService.php:342, :352` ✓ uses `JournalPostingService::reverseJournalEntry`. |
+| **BR1** | **MUST** post every elimination JE via `JournalPostingService::createJournalEntry` — never via direct `JournalEntry::create()` / `JournalLine::create()`. | `ConsolidationService.php:367-388` ✓ (resolved G1 in `5905123`). `postEliminationEntry` routes through `JournalPostingService::createJournalEntry`. |
+| **BR2** | **MUST** reverse every elimination JE via `JournalPostingService::reverseJournalEntry` (or `JournalReversalService::reverseByJournalEntry` for sub-ledger cascade) — never via manual swap. | `ConsolidationService.php:458-468` ✓ (resolved G1 in `5905123`). `reverseEliminationJournal` delegates to `JournalPostingService::reverseJournalEntry`. Compare `MoneyTransferService.php:134, :142` ✓ uses `JournalReversalService::reverseByJournalEntry`; `BranchIntercompanyService.php:342, :352` ✓ uses `JournalPostingService::reverseJournalEntry`. |
 | **BR3** | **MUST** tag every elimination JE with `source='elimination'` so the consolidated TB query can filter it out (`je.source != 'elimination'`). | `ConsolidationService.php:370, :463` ✓ both post + reversal set `source='elimination'`. `getConsolidatedTrialBalance` SQL `WHERE je.source != 'elimination'` at `:560`. |
 | **BR4** | **MUST** set `entry_date = run->period_to` on elimination JEs (the last day of the consolidation period). | `ConsolidationService.php:365` ✓. |
-| **BR5** | **MUST** set `entry_date` on each `journal_line` (denormalized for partition-wise joins). | `ConsolidationService.php:376-390` — **VIOLATES** (G7). `JournalPostingService::createJournalEntry` sets it at L126; the bypass path skips it. |
+| **BR5** | **MUST** set `entry_date` on each `journal_line` (denormalized for partition-wise joins). | `ConsolidationService.php:367-388` ✓ `postEliminationEntry` routes through `JournalPostingService::createJournalEntry` (resolved G7/G-097 in `5905123`), which sets `entry_date` on each line at L126. |
 
 ### 6.2 Consolidation run lifecycle (BR6-BR10)
 
@@ -209,20 +210,20 @@ Three accounting + one engineering driver:
 
 | # | Rule | Evidence |
 |---|---|---|
-| **BR16** | **MUST** post intercompany as TWO separate balanced JEs (creditor + debtor), NOT a single JE with per-line branch_id. | `BranchIntercompanyService.php:107-128` (creditor) + `:133-154` (debtor). Compare `MoneyTransferService.php:450-462` — **VIOLATES** (single JE with per-line branch_id, but `JournalPostingService::createJournalEntry` ignores per-line branch_id). |
+| **BR16** | **MUST** post intercompany as TWO separate balanced JEs (creditor + debtor), NOT a single JE with per-line branch_id. | `BranchIntercompanyService.php:107-128` (creditor) + `:133-154` (debtor) ✓. `MoneyTransferService.php:522+` ✓ (resolved G9/G-102 in `5905123`) — now posts a two-JE pair using `interbranch_receivable` + `interbranch_payable`. |
 | **BR17** | The creditor (supplier) JE **MUST** be `Dr interbranch_receivable / Cr inventory` at `branch_id = to_branch_id`. The debtor (requester) JE **MUST** be `Dr inventory / Cr interbranch_payable` at `branch_id = from_branch_id`. | `BranchIntercompanyService.php:107-154` ✓. See §8.1 for the Dr/Cr matrix. |
 | **BR18** | **MUST** write a mirror pair of `branch_ledger` rows: debtor row (`debit=total_value`, `credit=0`) + creditor row (`debit=0`, `credit=total_value`), both with the SAME `running_balance = previousBalance + total_value`. | `BranchIntercompanyService.php:201-249` — `recordDemandTransfer` ✓. |
 | **BR19** | **MUST** reverse an intercompany pair in two steps: (1) `reverseJournalEntry` on both JEs (creates reversal JEs with swapped Dr/Cr + marks originals `is_reversed=true`); (2) `reverseLedgerByReference` (marks original `branch_ledger` rows `is_reversed=true` + inserts counter rows with `reference_type='demand_reversal'`). | `BranchDemandService.php:470-478` calls `reverseDemandJournals` then `reverseLedgerByReference`. `BranchIntercompanyService.php:332-372` + `:386-474`. |
-| **BR20** | The reversal `branch_ledger` rows **MUST** have opposite Dr/Cr vs the original: debtor row becomes `credit=reversalAmount`, creditor row becomes `debit=reversalAmount`. `running_balance = previousBalance - reversalAmount`. | `BranchIntercompanyService.php:441, :457` ✓. |
-| **BR21** | **MUST** settle open demands FIFO (oldest first) when a customer payment or money transfer arrives at the debtor branch. **MUST NOT** over-settle (per-demand `settleAmount = min(outstanding, remainingAmount)`). | `BranchIntercompanyService.php:940-1041` — `fifoSettleDemands` ✓ implements FIFO. **But the entry points (`settleFromCustomerPayment` L653, `settleFromMoneyTransfer` L746) are DEAD CODE (G2) — never invoked.** |
-| **BR22** | **MUST** reverse settlements when the underlying payment/transfer is reversed: decrement `branch_demands.settlement_amount`, delete settlement rows, reverse `branch_ledger` entries, reverse the settlement GL journal. | `BranchIntercompanyService.php:1046-1097` — `reverseSettlementsByReference` ✓. **But DEAD CODE (G2).** |
+| **BR20** | The reversal `branch_ledger` rows **MUST** have opposite Dr/Cr vs the original: debtor row becomes `credit=reversalAmount`, creditor row becomes `debit=reversalAmount`. `running_balance = previousBalance - reversalAmount`. The rows **MUST** carry the GL reversal JE id in `journal_entry_id` (G-108, resolved `eb590fb`). | `BranchIntercompanyService.php:452, :468` ✓. |
+| **BR21** | **MUST** settle open demands FIFO (oldest first) when a customer payment or money transfer arrives at the debtor branch. **MUST NOT** over-settle (per-demand `settleAmount = min(outstanding, remainingAmount)`). | `BranchIntercompanyService.php:940-1041` — `fifoSettleDemands` ✓ implements FIFO. Entry points `settleFromCustomerPayment` + `settleFromMoneyTransfer` are now WIRED (resolved G2 in `5905123`) — called from `CustomerPaymentService::confirmPayment` + `MoneyTransferService::createTransfer`. |
+| **BR22** | **MUST** reverse settlements when the underlying payment/transfer is reversed: decrement `branch_demands.settlement_amount`, delete settlement rows, reverse `branch_ledger` entries, reverse the settlement GL journal. | `BranchIntercompanyService.php:1046-1097` — `reverseSettlementsByReference` ✓. Now WIRED (resolved G2 in `5905123`) — called from `CustomerPaymentService::cancelPayment` + `MoneyTransferService::reverseTransfer`. G-108 (`eb590fb`) added reversal-JE-id linking. |
 
 ### 6.5 MoneyTransfer intercompany (BR23-BR27)
 
 | # | Rule | Evidence |
 |---|---|---|
 | **BR23** | `MoneyTransferService::createTransfer` **MUST** call `postIntercompanySettlement` ONLY when `fromBranchId !== toBranchId`. | `MoneyTransferService.php:93-104` ✓. |
-| **BR24** | The intercompany JE **MUST** use the `interbranch_receivable` + `interbranch_payable` ledger natures (the same pair used by `BranchIntercompanyService`). **MUST NOT** use an unregistered `'intercompany'` nature. | `MoneyTransferService.php:442` — **VIOLATES** (G9). `lookupLedgerByNature('intercompany')` returns null because `'intercompany'` is NOT in `LedgerNatureService::EXTENDED_NATURES`. |
+| **BR24** | The intercompany JE **MUST** use the `interbranch_receivable` + `interbranch_payable` ledger natures (the same pair used by `BranchIntercompanyService`). **MUST NOT** use an unregistered `'intercompany'` nature. | `MoneyTransferService.php:526-527` ✓ (resolved G9/G-102 in `5905123`). Uses `lookupLedgerByNature('interbranch_receivable')` + `lookupLedgerByNature('interbranch_payable')`. |
 | **BR25** | If the intercompany ledger is not configured, **MUST** log a warning + leave `intercompany_journal_entry_id = null` (do NOT throw — the main GL JE is still valid). | `MoneyTransferService.php:444-446` ✓ logs warning, returns null. |
 | **BR26** | Bank balances **MUST** be synced directly via `banks.balance` `increment()` / `decrement()` (NOT via `JournalPostingService`). | `MoneyTransferService.php` — `syncBankBalances` does this. Cross-doc: `accounting/money-transfers.md` §12 #4 (the `banks` table is NOT in the `fn_financial_audit_trigger` hash chain). |
 | **BR27** | Cash ledger entries **MUST** be hard-DELETEd on reversal (no append-only counter-row pattern for `cash_ledger`). | `MoneyTransferService.php` — `reverseTransfer` hard-deletes cash ledger rows. Already documented as G12 in `accounting/money-transfers.md`. |
@@ -727,9 +728,13 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 - **Fix:** add a new `database/sql/08_consolidation.sql` file with the DDL for these 4 tables +
   the MV, and update `2025_01_01_000001_create_rcerp_schema.php` to execute it.
 
-### 11.2 MAJOR (11)
+### 11.2 MAJOR (11) — 11 resolved, 0 open
+
+> **Resolved (11):** G6 ✅ `5905123` (FINANCE-3) · G7 ✅ `5905123` (FINANCE-3) · G8 ✅ `5905123` (FINANCE-3) · G9 ✅ `5905123` (FINANCE-3) · G10 ✅ `eb590fb` (FINANCE-2) · G11 ✅ `68a9672` · G12 ✅ `c4acdb0` · G13 ✅ `1ccc5b6` · G14 ✅ `eb590fb` (FINANCE-2) · G15 ✅ `e1e1f3e` (FINANCE-2) · G16 ✅ `e1e1f3e` (FINANCE-2). **Open (0)** — the MAJOR tier for this doc is now fully closed.
 
 #### G6 — `ConsolidationService::reverseEliminationJournal` explicitly sets `is_reversed=false` on the reversal JE
+
+> ✅ RESOLVED in commit `5905123` (FINANCE-3) — `reverseEliminationJournal` was rewritten to delegate to `JournalPostingService::reverseJournalEntry` instead of manually creating a swapped Dr/Cr JE. The explicit `'is_reversed' => false` on the reversal JE (the cosmetic/readability concern) is gone — the reversal JE's `is_reversed` now defaults to `false` via the DB schema, matching the canonical `JournalPostingService::reverseJournalEntry` pattern. Confirmed by code inspection in FINANCE-2.
 
 - **Severity:** MAJOR.
 - **Evidence:** `ConsolidationService.php:465` — `'is_reversed' => false` in the reversal JE
@@ -740,6 +745,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 - **Impact:** cosmetic / readability. No functional bug.
 
 #### G7 — `ConsolidationService::postEliminationEntry` does NOT set `entry_date` on `journal_lines`
+
+> ✅ RESOLVED in commit `5905123` (FINANCE-3) — `postEliminationEntry` was rewritten to route through `JournalPostingService::createJournalEntry` (passing `'entry_date' => $run->period_to`). `JournalPostingService::createJournalEntry` sets `entry_date` on each `journal_lines` row (`JournalPostingService.php:126` — "denormalized for partition-wise joins"). The previous direct `JournalLine::create()` bypass that omitted `entry_date` is closed. Elimination lines now land in the correct date partition. Confirmed by code inspection in FINANCE-2.
 
 - **Severity:** MAJOR.
 - **Evidence:** `ConsolidationService.php:376-390` — `JournalLine::create([...])` does not
@@ -755,6 +762,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 
 #### G8 — `ConsolidationService::postEliminationEntry` does NOT set `dimension_value_id` on `journal_lines`
 
+> ✅ RESOLVED in commit `5905123` (FINANCE-3) — `postEliminationEntry` now routes through `JournalPostingService::createJournalEntry`, which reads `dimension_value_id` from each line array and defaults to `null` (`JournalPostingService.php:133`). Elimination entries are group-level (not segment-level), so `null` is the correct value — the gap's own assessment was "probably acceptable." The "inconsistency with the canonical path" concern is resolved because the code IS now on the canonical path. Confirmed by code inspection in FINANCE-2.
+
 - **Severity:** MAJOR.
 - **Evidence:** `ConsolidationService.php:376-390` — no `dimension_value_id` in the
   `JournalLine::create([...])` calls. `JournalPostingService::createJournalEntry` DOES read it
@@ -765,6 +774,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 - **Fix:** route through `JournalPostingService::createJournalEntry` (G1 fix).
 
 #### G9 — `MoneyTransferService::postIntercompanySettlement` uses non-registered `'intercompany'` nature → silently skips
+
+> ✅ RESOLVED in commit `5905123` (FINANCE-3) — `postIntercompanySettlement` was rewritten to use the canonical `interbranch_receivable` + `interbranch_payable` ledger pair (via `lookupLedgerByNature()`), posting a two-JE pair that mirrors the Employee/Supplier/CustomerPayment intercompany pattern. The non-registered `'intercompany'` nature lookup (which silently returned null + skipped the JE) is gone. Cross-branch money transfers now post a visible Dr/Cr pair at both branches + a `branch_ledger` obligation row.
 
 - **Severity:** MAJOR.
 - **Evidence:** `MoneyTransferService.php:442` — `$this->journalPosting->lookupLedgerByNature('intercompany')`
@@ -781,6 +792,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
   in `accounting/money-transfers.md` §12 #2.
 
 #### G10 — `WarehouseTransferService::postIntercompanyGL` is DEAD CODE with fossilized bugs
+
+> ✅ RESOLVED in commit `eb590fb` (FINANCE-2) — The dead-code `postIntercompanyGL` method was deleted entirely from `WarehouseTransferService.php`. It was never called (same-branch enforcement blocks cross-branch transfers), and the doc-block explicitly said it should NEVER be called. It had fossilized schema bugs: the `branch_ledger` insert referenced dropped columns (`transaction_type`, `amount`, `is_settled` — dropped by migrations `2026_07_29_000013` + `2026_07_30_000003`) and an inverted Dr/Cr pattern. The class doc-block + `WarehouseTransfer` model note now point to `BranchIntercompanyService::postDemandFulfillmentJournals` as the canonical cross-branch intercompany path.
 
 - **Severity:** MAJOR.
 - **Evidence:** `WarehouseTransferService.php:531-617`. Never called from `confirmTransfer`
@@ -853,6 +866,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
 
 #### G14 — `BranchIntercompanyService::reverseLedgerByReference` inserts reversal rows with `journal_entry_id = null`
 
+> ✅ RESOLVED in commit `eb590fb` (FINANCE-2) — `reverseLedgerByReference` now accepts `?int $creditorReversalJeId = null, ?int $debtorReversalJeId = null` and writes them to the two counter-rows' `journal_entry_id` (was `null` on both). The `BranchDemandService` caller captures the return value of `reverseDemandJournals` (`creditor_reversal_je_id` + `debtor_reversal_je_id`) and passes them through. The internal settlement-reversal path was reordered to reverse the settlement JE first, then pass its id to both counter-rows. The `branch_ledger` ↔ GL reversal linkage is now bidirectional.
+
 - **Severity:** MAJOR.
 - **Evidence:** `BranchIntercompanyService.php:441` and `:457` — `'journal_entry_id' => null`
   in both reversal `branch_ledger` inserts. The original `demand_transfer` rows had
@@ -867,6 +882,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
   to `reverseLedgerByReference` for insertion into the reversal rows.
 
 #### G15 — `ConsolidationService::calculateBalanceElimination` queries `branch_ledger` WITHOUT joining `journal_entries` to filter by `is_reversed`
+
+> ✅ RESOLVED in commit `e1e1f3e` (FINANCE-2) — Documentation resolution confirming the design decision. `branch_ledger.is_reversed` is the canonical state for the intercompany sub-ledger; the GL JE reversal (`journal_entries.is_reversed`) is a separate concern. `calculateBalanceElimination` correctly trusts `branch_ledger.is_reversed` as the source of truth. If the two diverge (e.g. someone calls `JournalPostingService::reverseJournalEntry` directly without going through `BranchIntercompanyService::reverseLedgerByReference`), the elimination calculation reflects the `branch_ledger` state — this is intended because `branch_ledger` is the sub-ledger that tracks the interbranch obligation independently of the GL. The canonical reversal path (`BranchDemandService::reverseDemand`) always calls both `reverseDemandJournals` (GL) + `reverseLedgerByReference` (sub-ledger) together, keeping them in sync.
 
 - **Severity:** MAJOR.
 - **Evidence:** `ConsolidationService.php:148-159` — the SQL filters
@@ -886,6 +903,8 @@ consolidated TB by the `WHERE l.is_elimination = false` clause in
   this explicitly.
 
 #### G16 — `ConsolidationService::calculateAggregateElimination` uses `min(debitNet, creditNet)` which may eliminate LESS than the true intercompany amount
+
+> ✅ RESOLVED in commit `e1e1f3e` (FINANCE-2) — Documented as business rule **BR14** (§6.3, line 205). The `min(debitNet, creditNet)` elimination is a deliberate conservative rule: when the two sides don't match (timing differences, FX rounding, data entry errors), the elimination takes the lesser to avoid over-elimination. A residual balance may remain on both ledgers; this is expected and signals a reconciliation discrepancy the accountant should investigate. The residual is visible in the consolidation run's elimination summary (`elimination_amount` < gross debit/credit net when the sides are unequal).
 
 - **Severity:** MAJOR.
 - **Evidence:** `ConsolidationService.php:231` — `$eliminationAmount = min($debitNet, $creditNet)`.
