@@ -1036,17 +1036,40 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
   /modify notification rule config directly via SQL, bypassing the controller + audit log.
 - **Fix:** Enable RLS on all 3 tables.
 
-### G6 — HIGH — `fn_financial_audit_trigger` NOT attached to 8/10 monitored tables
-- **Evidence:** `database/sql/02_accounting.sql` L446-454 attaches the trigger to 9
+### G6 — HIGH — `fn_financial_audit_trigger` NOT attached to 8/10 monitored tables (STALE — 7/10 now done; only 3 remain)
+
+> ✅ **PARTIALLY RESOLVED — REPORTS-AUDIT-FIX-1 doc-sync.** 7 of the 10 originally-missing
+> tables now have the trigger attached by subsequent migrations:
+>   - `sales_invoices` / `sales_challans` / `sales_returns` — migration
+>     `2026_09_01_000002_attach_financial_audit_trigger_to_sales_tables.php` (SALES-AUDIT).
+>   - `stock_transactions` / `damage_invoices` — migration
+>     `2026_09_06_000002_attach_financial_audit_trigger_to_inventory_tables.php`
+>     (REPORTS-AUDIT-3, G-131, commit `7487cde`).
+>   - `notification_rules` / `notification_rule_recipients` — migration
+>     `2026_09_05_000010_attach_financial_audit_trigger_to_notification_and_approval_tables.php`
+>     (WORKFLOWS-AUDIT-1, G-181/G-187).
+>
+> Only **3 tables remain** without the trigger (all verified to exist):
+>   - `system_policies` (migration `2025_01_07_000001_create_system_policies_table.php`)
+>   - `damage_attachments` (migration `2026_01_03_000001_damage_attachments.php`)
+>   - `notifications` (migration `2025_01_06_000001_create_notification_tables.php` — the
+>     `notifications` table itself; `notification_rules` + `notification_rule_recipients`
+>     are separate tables that were already done).
+>
+> A single small migration (~30 lines, same `attachAuditTrigger` private-helper pattern as
+> `2026_09_06_000002`) closes this gap entirely. Status downgraded from "8/10 missing" to
+> "3/10 missing" — the gap is still H1 (cutover-blocking) but the remaining scope is small.
+
+- **Original evidence:** `database/sql/02_accounting.sql` L446-454 attaches the trigger to 9
   financial tables. NOT attached to `sales_invoices`, `sales_challans`, `sales_returns`,
   `stock_transactions`, `system_policies`, `damage_invoices`, `damage_attachments`,
   `notifications`, `notification_rules`, `notification_rule_recipients`. Partial overlap:
   `customer_payments` + `journal_entries` DO have it (2/10).
-- **Impact:** A direct DB write to `sales_invoices` (bypassing the app) fires the NOTIFY
-  trigger but produces no `financial_audit_log` row — the change appears in SSE but not in
-  the tamper-evident audit chain.
-- **Fix:** Attach `fn_financial_audit_trigger` to the 8 remaining monitored tables in a
-  new migration.
+- **Impact:** A direct DB write to any of the 3 remaining tables (bypassing the app) fires
+  the NOTIFY trigger (for realtime SSE) but produces no `financial_audit_log` row — the
+  change appears in SSE but not in the tamper-evident audit chain.
+- **Fix:** Attach `fn_financial_audit_trigger` to the 3 remaining tables
+  (`system_policies`, `damage_attachments`, `notifications`) in a new migration.
 
 ### G7 — MEDIUM — Heartbeat interval comment/implementation mismatch + 120s false-positive window
 - **Evidence:** `ListenNotifyWorker.php` L37 docstring says "30 seconds"; L138 actual is
