@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Reports\ReportRangeRequest;
 use App\Models\DamageAttachment;
 use App\Models\DamageInvoice;
 use App\Models\DamageReason;
@@ -38,7 +39,7 @@ class DamageController extends Controller
         private DamageReportService $reportService
     ) {}
 
-    public function index(Request $request)
+    public function index(ReportRangeRequest $request)
     {
         // Phase 0 (Damage plan): defense-in-depth policy check behind the
         // role:admin,manager,warehouse_manager route middleware.
@@ -632,7 +633,7 @@ class DamageController extends Controller
      *
      * Route: GET admin/damages/export — role:admin,manager,warehouse_manager.
      */
-    public function export(Request $request)
+    public function export(ReportRangeRequest $request)
     {
         $this->authorize('viewAny', DamageInvoice::class);
 

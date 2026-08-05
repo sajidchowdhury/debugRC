@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Facades\CsvExporter;
 use App\Http\Controllers\Concerns\WritesExportAuditLog;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Reports\ReportRangeRequest;
 use App\Models\SalesInvoice;
 use App\Models\SalesChallan;
 use Illuminate\Http\Request;
@@ -40,7 +41,7 @@ class CsvExportController extends Controller
      * Columns: Invoice Code, Date, Customer, Mobile, Branch,
      * Salesman, Total Amount, Paid, Due, Status, Godown, Challan
      */
-    public function exportInvoices(Request $request)
+    public function exportInvoices(ReportRangeRequest $request)
     {
         $query = SalesInvoice::with(['customer', 'branch', 'salesman'])
             ->when($request->input('from_date'), fn($q, $d) => $q->where('invoice_date', '>=', $d))
@@ -127,7 +128,7 @@ class CsvExportController extends Controller
      * Columns: Challan Code, Date, Invoice No, Customer, Mobile,
      * Branch, Salesman, COGS, Transport, Status
      */
-    public function exportChallans(Request $request)
+    public function exportChallans(ReportRangeRequest $request)
     {
         $query = SalesChallan::with(['salesInvoice.customer', 'branch', 'salesInvoice.salesman'])
             ->when($request->input('from_date'), fn($q, $d) => $q->where('challan_date', '>=', $d))

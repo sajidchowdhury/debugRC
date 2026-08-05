@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Reports\ReportRangeRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -28,7 +29,7 @@ class CustomerPerformanceController extends Controller
     /**
      * Main dashboard view.
      */
-    public function index(Request $request)
+    public function index(ReportRangeRequest $request)
     {
         $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
         $salesmanId = $request->input('salesman_id') ? (int) $request->input('salesman_id') : null;

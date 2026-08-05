@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Facades\CsvExporter;
 use App\Http\Controllers\Concerns\WritesExportAuditLog;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Reports\ReportRangeRequest;
 use App\Models\Warehouse;
 use App\Models\WarehouseTransfer;
 use App\Rules\WarehouseBelongsToBranch;
@@ -85,7 +86,7 @@ class WarehouseTransferController extends Controller
         return $user ? (int) (session('branch_id') ?? $user->getBranchId() ?? 0) : 0;
     }
 
-    public function index(Request $request)
+    public function index(ReportRangeRequest $request)
     {
         $userBranchId = $this->getUserBranchId();
 
@@ -384,7 +385,7 @@ class WarehouseTransferController extends Controller
      * escaping now handled by the canonical service. Column order and
      * column labels preserved exactly. Writes an export_audit_log row.
      */
-    public function export(Request $request)
+    public function export(ReportRangeRequest $request)
     {
         $userBranchId = $this->getUserBranchId();
 

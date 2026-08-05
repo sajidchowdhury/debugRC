@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Facades\CsvExporter;
 use App\Http\Controllers\Concerns\WritesExportAuditLog;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Reports\GlobalAuditLogRequest;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
@@ -71,7 +72,7 @@ class GlobalAuditController extends Controller
     /**
      * Index — paginated, filterable list of all audit entries.
      */
-    public function index(Request $request)
+    public function index(GlobalAuditLogRequest $request)
     {
         $filters = $this->parseFilters($request);
         $query = $this->buildQuery($filters);
@@ -118,7 +119,7 @@ class GlobalAuditController extends Controller
      * The chunked DB cursor is consumed by the buildAuditCsvRows()
      * generator (also memory-bounded via chunk(500)).
      */
-    public function export(Request $request): StreamedResponse
+    public function export(GlobalAuditLogRequest $request): StreamedResponse
     {
         $filters = $this->parseFilters($request);
         $query = $this->buildQuery($filters)

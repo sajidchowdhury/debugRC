@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Reports\ReportAsOfRequest;
 use App\Services\Accounting\ReconciliationService;
 use Illuminate\Http\Request;
 
@@ -22,7 +23,7 @@ class ReconciliationController extends Controller
     /**
      * Show the reconciliation hub.
      */
-    public function index(Request $request)
+    public function index(ReportAsOfRequest $request)
     {
         $asOfDate = $request->input('as_of_date');
         $result = $this->reconciliationService->reconcileAll($asOfDate);

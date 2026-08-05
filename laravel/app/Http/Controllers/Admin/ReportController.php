@@ -396,7 +396,7 @@ class ReportController extends Controller
     /**
      * General Ledger.
      */
-    public function generalLedger(Request $request)
+    public function generalLedger(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         $ledgerId = $request->input('ledger_id') ? (int) $request->input('ledger_id') : null;
@@ -416,7 +416,7 @@ class ReportController extends Controller
     /**
      * Journal Entries.
      */
-    public function journalEntries(Request $request)
+    public function journalEntries(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         // G-044: read-site branch filtering — non-admins pinned to session branch.
@@ -452,7 +452,7 @@ class ReportController extends Controller
     /**
      * Daily Cash Book.
      */
-    public function dailyCashBook(Request $request)
+    public function dailyCashBook(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
@@ -505,7 +505,7 @@ class ReportController extends Controller
     /**
      * Branch Intercompany Ledger.
      */
-    public function branchIntercompany(Request $request)
+    public function branchIntercompany(ReportRangeRequest $request)
     {
         // G-044: read-site branch filtering — non-admins pinned to session branch.
         $branchId = $this->resolveBranchScope($request);
@@ -521,7 +521,7 @@ class ReportController extends Controller
     /**
      * Branch-wise Ledger (per-branch GL activity summary).
      */
-    public function branchWiseLedger(Request $request)
+    public function branchWiseLedger(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
 
@@ -565,7 +565,7 @@ SQL;
     // These will be fully implemented in subsequent sub-phases.
     // ============================================================
 
-    public function revenueOverview(Request $request)
+    public function revenueOverview(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         $rows = \Illuminate\Support\Facades\DB::table('sales_invoices as si')
@@ -606,12 +606,12 @@ SQL;
      * @see \App\Http\Controllers\Admin\ReportController::grossMarginCte()
      * @see \App\Services\Reports\CteReportService::grossMargin()
      */
-    public function grossMargin(Request $request)
+    public function grossMargin(ReportRangeRequest $request)
     {
         return redirect()->route('admin.reports.grossMarginCte', $request->query(), 301);
     }
 
-    public function customerPerformance(Request $request)
+    public function customerPerformance(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         $rows = \Illuminate\Support\Facades\DB::select(<<<SQL
@@ -639,7 +639,7 @@ SQL, [$data['from'], $data['to']]);
         ]);
     }
 
-    public function supplierWisePurchase(Request $request)
+    public function supplierWisePurchase(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         $rows = \Illuminate\Support\Facades\DB::select(<<<SQL
@@ -664,7 +664,7 @@ SQL, [$data['from'], $data['to']]);
         ]);
     }
 
-    public function productStockAnalysis(Request $request)
+    public function productStockAnalysis(ReportRangeRequest $request)
     {
         // G-044: read-site branch filtering — non-admins pinned to session branch.
         $branchId = $this->resolveBranchScope($request);
@@ -680,7 +680,7 @@ SQL, [$data['from'], $data['to']]);
         ]));
     }
 
-    public function productMovement(Request $request)
+    public function productMovement(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         $productId = $request->input('product_id') ? (int) $request->input('product_id') : null;
@@ -715,7 +715,7 @@ SQL, [$data['from'], $data['to']]);
     }
 
     // Operations report placeholders (audit checklists) — simpler views.
-    public function salesAuditChecklist(Request $request)
+    public function salesAuditChecklist(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
         $checks = $this->computeSalesAuditChecks($data['from'], $data['to']);
@@ -725,7 +725,7 @@ SQL, [$data['from'], $data['to']]);
         ]);
     }
 
-    public function purchaseAudit(Request $request)
+    public function purchaseAudit(ReportRangeRequest $request)
     {
         // Phase 6: redirect the old stub URL to the real checklist dashboard.
         return redirect()->route('admin.purchase-audit.checklist');
@@ -853,7 +853,7 @@ SQL, [$data['from'], $data['to']]);
      * Stock Take Weekly control report — posted/reversed/in-flight sessions
      * in the period with gain/loss totals and top-variance SKUs.
      */
-    public function stocktakeWeekly(Request $request)
+    public function stocktakeWeekly(ReportRangeRequest $request)
     {
         $from = $request->input('from_date')
             ? Carbon::parse($request->input('from_date'))->format('Y-m-d')
@@ -880,7 +880,7 @@ SQL, [$data['from'], $data['to']]);
     /**
      * CSV export of the weekly control report (Excel-friendly, BOM-prefixed).
      */
-    public function stocktakeWeeklyExport(Request $request)
+    public function stocktakeWeeklyExport(ReportRangeRequest $request)
     {
         $from = $request->input('from_date')
             ? Carbon::parse($request->input('from_date'))->format('Y-m-d')
@@ -915,7 +915,7 @@ SQL, [$data['from'], $data['to']]);
         return $user && (method_exists($user, 'isAdmin') ? $user->isAdmin() : ($user->role ?? null) === 'admin');
     }
 
-    public function branchDemandWeekly(Request $request)
+    public function branchDemandWeekly(ReportRangeRequest $request)
     {
         // G-050 (CRITICAL, REPORTS-2): this method was a 5-column stub that
         // paginated raw branch_demands rows. The REAL 23-column weekly report
@@ -1019,7 +1019,7 @@ SQL, [$data['from'], $data['to']]);
      * + employee ranking table + top-products table + status distribution +
      * detail line table with CSV export.
      */
-    public function damageReport(Request $request)
+    public function damageReport(ReportRangeRequest $request)
     {
         $data     = $this->parseDateRange($request);
         $from     = $data['from']->format('Y-m-d');
@@ -1074,7 +1074,7 @@ SQL, [$data['from'], $data['to']]);
     /**
      * CSV export of damage detail lines.
      */
-    public function damageReportExport(Request $request)
+    public function damageReportExport(ReportRangeRequest $request)
     {
         $data     = $this->parseDateRange($request);
         $from     = $data['from']->format('Y-m-d');
