@@ -285,9 +285,17 @@ class DepreciationService
                 throw new \RuntimeException("No depreciation expense ledger found. Please configure L-0903 or assign a dep_expense_ledger_id to asset {$asset->asset_code}.");
             }
 
-            $depLedgerId = $asset->dep_ledger_id;
+            // G-355 (G28) FINANCE-FA-1: mirror the BR23 dep_expense_ledger_id
+            // fallback pattern. The 'accumulated_depreciation' nature is
+            // registered in LedgerNatureService::EXTENDED_NATURES (lines
+            // 195-200) and resolves to L-0250. The fallback is dormant in the
+            // web path (FixedAssetController::store requires dep_ledger_id at
+            // L153), but useful for artisan/seed/test paths that construct
+            // assets directly without going through the controller.
+            $depLedgerId = $asset->dep_ledger_id
+                ?? $this->natureService->resolveLedgerByNature('accumulated_depreciation');
             if (!$depLedgerId) {
-                throw new \RuntimeException("No accumulated depreciation ledger found for asset {$asset->asset_code}.");
+                throw new \RuntimeException("No accumulated depreciation ledger found for asset {$asset->asset_code}. Please configure L-0250 with the 'accumulated_depreciation' nature, or assign a dep_ledger_id to the asset.");
             }
 
             $depreciationAmount = (float) $schedule->depreciation_amount;

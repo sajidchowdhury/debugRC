@@ -192,6 +192,21 @@ class LedgerNatureService
             'used_by' => 'Consolidation elimination — investment',
         ],
         // Phase 9.4: Fixed Asset & Depreciation natures
+        // G-276 (G10) FINANCE-FA-1: gives the controller a server-side way to
+        // validate that the posted asset_ledger_id is actually a fixed-asset-cost
+        // account (L-0201/L-0210/L-0220/L-0230/L-0240), not e.g. L-0101 Cash.
+        // Previously the 5 asset-at-cost ledgers had ledger_nature = null, so
+        // validateChartOfAccounts() could not type-check them and a crafted
+        // POST could bypass the dropdown filter (FixedAssetController::create
+        // filters by parent_id = L-0200 only). The companion migration
+        // 2026_09_06_000006_register_fixed_asset_cost_ledger_nature backfills
+        // the 5 seeded ledgers; FixedAssetController::store adds a guard.
+        'fixed_asset_cost' => [
+            'account_type' => 'Asset',
+            'normal_balance' => 'debit',
+            'description' => 'Fixed asset at cost (machinery, furniture, vehicles, office equipment, tangible fixed assets)',
+            'used_by' => 'Fixed asset registration — Dr side at acquisition',
+        ],
         'accumulated_depreciation' => [
             'account_type' => 'Asset',
             'normal_balance' => 'credit',

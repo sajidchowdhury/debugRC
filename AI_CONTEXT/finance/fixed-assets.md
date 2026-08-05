@@ -160,7 +160,7 @@ Three accounting drivers:
 | # | Rule | Evidence |
 |---|---|---|
 | BR23 | **Depreciation expense ledger** is resolved by: (1) `asset.dep_expense_ledger_id` if set, else (2) `natureService->resolveLedgerByNature('depreciation_expense')` (returns L-0903). | `DepreciationService.php:274-279` |
-| BR24 | **Accumulated depreciation ledger** is read from `asset.dep_ledger_id` (REQUIRED at asset creation). No nature-based fallback. ⚠️ **G28 — `accumulated_depreciation` nature is registered but never used for resolution.** | `DepreciationService.php:281-284` |
+| BR24 | **Accumulated depreciation ledger** is resolved by: (1) `asset.dep_ledger_id` if set, else (2) `natureService->resolveLedgerByNature('accumulated_depreciation')` (returns L-0250). ✅ **G28 RESOLVED in FINANCE-FA-1 (G-355)** — `DepreciationService::postDepreciation` now mirrors the BR23 `dep_expense_ledger_id` fallback pattern: `$asset->dep_ledger_id ?? $this->natureService->resolveLedgerByNature('accumulated_depreciation')`. The fallback is dormant in the web path (`FixedAssetController::store` requires `dep_ledger_id` at L153), but useful for artisan/seed/test paths that construct assets directly without going through the controller. If both the asset column AND the nature resolution return null, the service throws with an actionable message naming L-0250 as the canonical config target. The `AssetDisposalService::disposeAsset` path was NOT changed — it reads `$asset->dep_ledger_id` directly (L145), but that path is guarded by `if ($accumulatedDepAtDisposal > 0)` (L143); if accumulated depreciation exists, the dep_ledger_id MUST exist (depreciation could not have been posted without it), so the hard-read is safe. | `DepreciationService.php:288-299` |
 | BR25 | **Proceeds ledger** is resolved by: (1) `data['proceeds_ledger_id']` if provided, else (2) `natureService->resolveLedgerByNature('cash_bank')` (returns first active cash_bank ledger). | `AssetDisposalService.php:98-101` |
 | BR26 | **Gain/loss ledger** is resolved by: (1) `data['gain_loss_ledger_id']` if provided, else (2) `natureService->resolveLedgerByNature('gain_on_disposal')` or `loss_on_disposal` based on `gain_loss_type`. | `AssetDisposalService.php:88-95` |
 
@@ -231,6 +231,8 @@ Three accounting drivers:
 
    **Floor guard (BR2):** If the computed amount exceeds `openingBookValue − salvage_value`, it is clamped. This prevents over-depreciation.
 
+   > ✅ **G11 RESOLVED in FINANCE-FA-1 (G-277)** — The subsystem now codifies the **full-month convention** at the controller layer. `FixedAssetController::generateDepreciation` and `postDepreciation` both validate that the posted `period_from`/`period_to` span exactly one whole calendar month (first-of-month to last-of-month) and reject partial-month periods with an actionable error. This surfaces the issue instead of silently misstating depreciation (previously, an asset acquired Jan 15 would earn a FULL month's depreciation for January). The deeper code-change (pro-rata by days, Option B in the research report) is deferred until accountant sign-off — the subsystem status is "Draft — pending accountant sign-off (SAFETY-CRITICAL)", so behavioral pro-rata changes need accountant approval. The whole-month guard is the safe Option A: it does not change the calculation, only rejects inputs that would have been silently mis-stated. See `FixedAssetController.php` L436-454 (generateDepreciation) + L484-495 (postDepreciation).
+   >
    > **G11 (MINOR):** `$periodFrom` and `$periodTo` are stored on the schedule but NOT used in the calculation. There is no pro-rata by days (mid-month acquisition gets a full month's depreciation).
 
 2. `generateSchedule(FixedAsset $asset, string $periodFrom, string $periodTo, float $unitsProduced = 0): ?AssetDepreciationSchedule` — creates a `pending` schedule. Idempotency via application-level existence check (BR10 — weak, see G12). Verbatim body:
@@ -681,16 +683,18 @@ The migration's `seedFixedAssetLedgers()` upserts 9 ledger accounts (idempotent 
 | Code | Name | Parent | account_type | normal_balance | ledger_nature | sort_order |
 |---|---|---|---|---|---|---|
 | `L-0200` | Fixed Assets | L-0001 (ASSETS) | Asset | debit | null | 120 |
-| `L-0201` | Tangible Fixed Assets | L-0200 | Asset | debit | null | 1210 |
-| `L-0210` | Machinery & Equipment | L-0200 | Asset | debit | null | 1220 |
-| `L-0220` | Furniture & Fixtures | L-0200 | Asset | debit | null | 1230 |
-| `L-0230` | Vehicles | L-0200 | Asset | debit | null | 1240 |
-| `L-0240` | Office Equipment | L-0200 | Asset | debit | null | 1250 |
+| `L-0201` | Tangible Fixed Assets | L-0200 | Asset | debit | `fixed_asset_cost` | 1210 |
+| `L-0210` | Machinery & Equipment | L-0200 | Asset | debit | `fixed_asset_cost` | 1220 |
+| `L-0220` | Furniture & Fixtures | L-0200 | Asset | debit | `fixed_asset_cost` | 1230 |
+| `L-0230` | Vehicles | L-0200 | Asset | debit | `fixed_asset_cost` | 1240 |
+| `L-0240` | Office Equipment | L-0200 | Asset | debit | `fixed_asset_cost` | 1250 |
 | `L-0250` | Accumulated Depreciation | L-0200 | Asset | **credit** (contra-asset) | `accumulated_depreciation` | 1260 |
 | `L-0903` | Depreciation Expense | L-0900 (Admin Expenses) | Expense | debit | `depreciation_expense` | 6130 |
 | `L-0904` | Loss on Asset Disposal | L-0900 | Expense | debit | `loss_on_disposal` | 6140 |
 | `L-0804` | Gain on Asset Disposal | L-0800 (Other Income) | Income | credit | `gain_on_disposal` | 4240 |
 
+> ✅ **G10 RESOLVED in FINANCE-FA-1 (G-276)** — The 5 asset-at-cost ledgers (L-0201, L-0210..L-0240) now carry the `fixed_asset_cost` ledger nature. Three-layer fix: (1) `LedgerNatureService::EXTENDED_NATURES` registers the new nature (Asset / debit / "Fixed asset at cost") so `validateChartOfAccounts()` can type-check it; (2) migration `2026_09_06_000006_register_fixed_asset_cost_ledger_nature` backfills the 5 seeded ledgers (idempotent `WHERE ledger_nature IS NULL` skip — preserves any manual override); (3) `FixedAssetController::store` adds a server-side guard reading `$assetLedger->ledger_nature === 'fixed_asset_cost'` so a crafted POST can no longer bypass the `create()` dropdown filter (which filtered by `parent_id = L-0200` only) and point `asset_ledger_id` at e.g. L-0101 Cash. The §8.4 table above is updated to reflect the backfilled natures.
+>
 > **G10 (MINOR):** The asset-at-cost ledgers (L-0201, L-0210..L-0240) have NO `ledger_nature`. The `LedgerNatureService::validateChartOfAccounts` cannot validate that the asset-at-cost account is correctly typed. An asset could be created with `asset_ledger_id` pointing to any active Asset ledger (e.g., L-0101 Cash) and the system would not catch it programmatically — the controller's `create` action filters by `parent_id = L-0200` only.
 
 ---
@@ -742,6 +746,8 @@ sequenceDiagram
     C-->>U: redirect show page
 ```
 
+> ✅ **G26 RESOLVED in FINANCE-FA-1 (G-285)** — `FixedAssetController::store` now wraps `DocumentSequenceService::nextCode` + `FixedAsset::create` in a single `DB::transaction` closure. Under Laravel's nested-transaction semantics (PostgreSQL SAVEPOINT), `nextCode`'s inner `DB::transaction` (advisory-lock + seq-increment) becomes a savepoint that rolls back together with the outer transaction if `create()` throws (e.g., RLS WITH CHECK violation, unique constraint). The `FA-YYYY-NNNNN` sequence is no longer burned on a failed create. The sequence diagram above is unchanged on the happy path; the transactional boundary is now `C->>D` + `C->>DB: INSERT` together. See `FixedAssetController.php` L181-212.
+>
 > **G26 (MINOR):** `nextCode` is called BEFORE `FixedAsset::create`. If `create` throws, the sequence is already incremented — non-contiguous asset codes.
 
 ### 11.2 Monthly depreciation run (the bulk path)
@@ -969,11 +975,11 @@ stateDiagram-v2
 | EC4 | **Disposal reversal does not restore force-reversed schedules** | MAJOR (G19) | When a disposal is reversed, the asset goes back to `active` but the pending schedules that were force-reversed during `disposeAsset` are NOT restored. The accountant must manually re-generate them. If they forget, depreciation for those periods is permanently lost. |
 | EC5 | **Non-admin users blocked by RLS** | CRITICAL (G1) | The RLS policy on all 3 tables is admin-only (`app.is_admin = 'true'`). Accountants and managers — the intended users per the route middleware — get zero rows on SELECT and an RLS check violation on INSERT/UPDATE/DELETE. Only admin/superadmin can use the subsystem. |
 | EC6 | **Cross-branch asset creation** | CRITICAL (G25) | `branch_id` is validated as `required|exists:branches,id` but there is no check that the user has access to that branch. `EnforceBranchIsolation::inferTableFromUri` does NOT include `fixed-assets`. A non-admin user could create an asset for any branch by passing a different `branch_id` in the POST body. (Currently blocked by G1's admin-only RLS, but exploitable once G1 is fixed.) |
-| EC7 | **No partial-period depreciation** | MINOR (G11) | `$periodFrom` and `$periodTo` are stored but NOT used in the calculation. An asset acquired on Jan 15 gets a FULL month of depreciation for January (same as Jan 1). No pro-rata by days. |
+| EC7 | **No partial-period depreciation** | ✅ RESOLVED (G11) in FINANCE-FA-1 (G-277) | The subsystem now codifies the **full-month convention** at the controller layer. `generateDepreciation` + `postDepreciation` reject partial-month periods (must be first-of-month to last-of-month). The deeper pro-rata code change is deferred until accountant sign-off (subsystem status: Draft — pending accountant sign-off). See §7.2 G11 blockquote. |
 | EC8 | **Race on `disposal_code` generation** | MAJOR (G5) | `generateDisposalCode` uses `LIKE` + `ORDER BY DESC` + 1. Two concurrent disposal requests will both read the same `lastCode`, both compute the same `nextSeq`, and both try to INSERT — the second fails on the UNIQUE constraint with a user-visible error. Should use `DocumentSequenceService::nextCode`. |
 | EC9 | **`postDepreciation` partial-failure window** | CRITICAL (G13) | `postDepreciation` is NOT wrapped in `DB::transaction`. The JE creation, schedule update, and asset update are 3 separate SQL operations. If the asset update fails (e.g., RLS WITH CHECK), the JE is already posted AND the schedule is marked posted, but the asset's `accumulated_depreciation` is stale. The books are out of sync. |
 | EC10 | **Disposal reversal hard-DELETEs the audit trail** | MAJOR (G9) | `$disposal->delete()` removes the `asset_disposals` row. The GL reversal JE exists in `journal_entries` but its `reference_id` points to a deleted disposal row. The audit trail is incomplete. |
-| EC11 | **`asset_code` non-contiguous on rollback** | MINOR (G26) | `DocumentSequenceService::nextCode` is called BEFORE `FixedAsset::create`. If `create` throws, the sequence is already incremented — gaps in `FA-YYYY-NNNNN` codes. |
+| EC11 | **`asset_code` non-contiguous on rollback** | ✅ RESOLVED (G26) in FINANCE-FA-1 (G-285) | `FixedAssetController::store` wraps `nextCode` + `FixedAsset::create` in `DB::transaction`. Under Laravel nested-transaction semantics, `nextCode`'s inner transaction becomes a savepoint that rolls back together with the outer transaction if `create()` throws. The `FA-YYYY-NNNNN` sequence is no longer burned on a failed create. See §11.1 G26 blockquote. |
 | EC12 | **Force-reversal of pending schedules loses audit trail** | MINOR (G18) | The bulk update on disposal sets only `status='reversed'` — no `reversed_by`, `reversed_at`, `reverse_reason`. An auditor cannot distinguish a disposal-induced reversal from a manual reversal. |
 | EC13 | **Disposal does not zero out asset `accumulated_depreciation` / `net_book_value`** | MINOR (G17) | The asset row retains its pre-disposal values; only `status` flips to `disposed`. Reports that `SUM(accumulated_depreciation)` across all assets will include disposed assets, inflating the total. |
 | EC14 | **`BranchScope` not applied to child models** | MAJOR (G30) | `AssetDepreciationSchedule` and `AssetDisposal` do NOT have `BranchScope`. Non-admin users querying these models directly (without `whereHas('fixedAsset', ...)`) will see all branches' rows. The controller's `depreciation` and `disposals` actions only apply a branch filter when `?branch_id=` is explicitly passed. |
@@ -1009,8 +1015,8 @@ stateDiagram-v2
 
 15. **G4** — Create `config/fixed_assets.php` (default useful_life_months, default declining_balance_rate, salvage_tolerance, rounding_precision, ledger_codes).
 16. **G6** — Add an explicit `AccountingPeriodService::assertOpen(...)` call at the top of `postDepreciation` and `disposeAsset` for clarity (belt-and-suspenders with the JournalPostingService check).
-17. **G10** — Register a `fixed_asset_cost` nature and assign it to L-0210..L-0240, OR add a validation rule that checks `Ledger::find($asset_ledger_id)->parent_id` is L-0200.
-18. **G11** — Add partial-period depreciation support (`prorate_method` config option: `none` / `daily`).
+17. **G10** — ✅ RESOLVED in FINANCE-FA-1 (G-276). `fixed_asset_cost` nature registered in `LedgerNatureService::EXTENDED_NATURES`; migration `2026_09_06_000006` backfills the 5 seeded ledgers; `FixedAssetController::store` adds a server-side guard reading `$assetLedger->ledger_nature === 'fixed_asset_cost'`.
+18. **G11** — ✅ RESOLVED in FINANCE-FA-1 (G-277). Full-month convention codified at the controller layer (reject partial-month periods). Pro-rata by days (Option B) deferred until accountant sign-off.
 19. **G14** — Either switch to `JournalReversalService::reverseByJournalEntry` (harmless — it will find zero sub-ledger entries) or add a comment explaining why `JournalPostingService::reverseJournalEntry` is called directly.
 20. **G17** — In `disposeAsset`, also update `$asset->update(['accumulated_depreciation' => 0, 'net_book_value' => 0, 'status' => 'disposed'])`.
 21. **G18** — In the bulk reversal on disposal, also set `reversed_by`, `reversed_at`, `reverse_reason`.
@@ -1019,9 +1025,9 @@ stateDiagram-v2
 24. **G22** — `declining_balance_rate` required when `depreciation_method = 'declining_balance'`.
 25. **G23** — `total_estimated_units` required (>0) when `depreciation_method = 'units_of_production'`.
 26. **G24** — `disposal_proceeds` required (>0) when `disposal_type = 'sale'` or `'scrap'`.
-27. **G26** — Wrap `nextCode` + `create` in `DB::transaction` to avoid non-contiguous codes on rollback.
+27. **G26** — ✅ RESOLVED in FINANCE-FA-1 (G-285). `FixedAssetController::store` wraps `nextCode` + `create` in `DB::transaction`; the inner `nextCode` transaction becomes a savepoint that rolls back together with the outer transaction if `create()` throws.
 28. **G27** — Split the route group: read+create+edit → `role:accountant,manager,admin`; dispose+reverseDepreciation → `role:manager,admin`; postDepreciation (bulk) → `role:accountant,admin`.
-29. **G28** — Add a fallback `$asset->dep_ledger_id ?? $this->natureService->resolveLedgerByNature('accumulated_depreciation')`.
+29. **G28** — ✅ RESOLVED in FINANCE-FA-1 (G-355). `DepreciationService::postDepreciation` now mirrors the BR23 fallback: `$asset->dep_ledger_id ?? $this->natureService->resolveLedgerByNature('accumulated_depreciation')` (returns L-0250).
 30. **G29** — Wire fixed-asset creation and disposal to the approval workflow engine (Phase 14).
 31. **UI gap** — Add a controller action + route for `reverseDisposal` so it can be triggered from the UI (currently tinker-only).
 

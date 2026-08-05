@@ -13,6 +13,7 @@ use App\Services\Accounting\AssetDisposalService;
 use App\Services\Accounting\DocumentSequenceService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -159,27 +160,56 @@ class FixedAssetController extends Controller
             'notes' => 'nullable|string|max:1000',
         ]);
 
+        // G-276 (G10) FINANCE-FA-1: server-side guard that the posted
+        // asset_ledger_id is actually a fixed-asset-cost account. The create()
+        // dropdown filters by parent_id = L-0200, but a crafted POST could
+        // bypass that filter. The LedgerNatureService now registers the
+        // 'fixed_asset_cost' nature (L-0201/L-0210/L-0220/L-0230/L-0240 are
+        // backfilled by migration 2026_09_06_000006), so we can type-check
+        // here. Depreciation ledger (dep_ledger_id) is validated as a
+        // contra-asset (credit-normal Asset) — the dropdown already filters
+        // by normal_balance = credit, this guard makes it server-side too.
+        $assetLedger = Ledger::find($validated['asset_ledger_id']);
+        if (!$assetLedger
+            || $assetLedger->account_type !== 'Asset'
+            || $assetLedger->ledger_nature !== 'fixed_asset_cost') {
+            return back()->withInput()->with('error',
+                'Asset ledger must be a fixed-asset-cost account (nature = fixed_asset_cost). '
+                . 'Please select one of L-0201, L-0210, L-0220, L-0230, or L-0240.');
+        }
+
         try {
-            $validated['salvage_value'] = $validated['salvage_value'] ?? 0;
-            $validated['declining_balance_rate'] = $validated['declining_balance_rate'] ?? 20;
-            $validated['total_estimated_units'] = $validated['total_estimated_units'] ?? 0;
-            $validated['units_produced_to_date'] = 0;
-            $validated['status'] = 'active';
-            $validated['accumulated_depreciation'] = 0;
-            $validated['net_book_value'] = $validated['acquisition_cost'];
-            $validated['created_by'] = Auth::id();
+            // G-285 (G26) FINANCE-FA-1: wrap nextCode + create in a single
+            // DB::transaction so the sequence increment rolls back together
+            // with the asset create if create() throws. DocumentSequenceService::
+            // nextCode uses its own inner DB::transaction — under Laravel's
+            // nested-transaction semantics (PostgreSQL SAVEPOINT), the inner
+            // transaction becomes a savepoint that rolls back together with
+            // the outer transaction. Previously, if FixedAsset::create threw
+            // (e.g., RLS WITH CHECK violation, unique constraint), the seq
+            // was already committed → non-contiguous FA-YYYY-NNNNN codes.
+            $asset = DB::transaction(function () use ($validated) {
+                $validated['salvage_value'] = $validated['salvage_value'] ?? 0;
+                $validated['declining_balance_rate'] = $validated['declining_balance_rate'] ?? 20;
+                $validated['total_estimated_units'] = $validated['total_estimated_units'] ?? 0;
+                $validated['units_produced_to_date'] = 0;
+                $validated['status'] = 'active';
+                $validated['accumulated_depreciation'] = 0;
+                $validated['net_book_value'] = $validated['acquisition_cost'];
+                $validated['created_by'] = Auth::id();
 
-            // Generate asset code
-            $year = substr($validated['acquisition_date'], 0, 4);
-            $validated['asset_code'] = DocumentSequenceService::nextCode(
-                docType: 'fixed_asset',
-                prefix: 'FA',
-                datePart: $year,
-                padLength: 5,
-                periodKey: $year,
-            );
+                // Generate asset code
+                $year = substr($validated['acquisition_date'], 0, 4);
+                $validated['asset_code'] = DocumentSequenceService::nextCode(
+                    docType: 'fixed_asset',
+                    prefix: 'FA',
+                    datePart: $year,
+                    padLength: 5,
+                    periodKey: $year,
+                );
 
-            $asset = FixedAsset::create($validated);
+                return FixedAsset::create($validated);
+            });
 
             return redirect()
                 ->route('admin.fixed-assets.show', $asset)
@@ -403,6 +433,26 @@ class FixedAssetController extends Controller
             'branch_id' => 'nullable|exists:branches,id',
         ]);
 
+        // G-277 (G11) FINANCE-FA-1: depreciation is computed as a fixed
+        // monthly amount (no pro-rata by days). Reject partial-month periods
+        // to prevent silent over-depreciation (e.g., an asset acquired Jan 15
+        // was previously earning a FULL month's depreciation for January).
+        // The subsystem status is "Draft — pending accountant sign-off"; the
+        // pro-rata code change (Option B in the research report) is deferred
+        // until accountant sign-off. This whole-month guard is the safe
+        // Option A — it surfaces the issue at the controller layer instead
+        // of silently misstating depreciation.
+        $periodFrom = \Carbon\Carbon::parse($validated['period_from']);
+        $periodTo = \Carbon\Carbon::parse($validated['period_to']);
+        if (!$periodFrom->isSameMonth($periodTo)
+            || $periodFrom->day !== 1
+            || !$periodTo->isLastOfMonth()) {
+            return back()->withInput()->with('error',
+                "Period must span exactly one whole calendar month (first-of-month to last-of-month). "
+                . "Received {$validated['period_from']} to {$validated['period_to']}. "
+                . 'Depreciation is computed as a fixed monthly amount with no pro-rata (G11 full-month convention).');
+        }
+
         try {
             $count = $this->depreciationService->generateSchedulesForPeriod(
                 $validated['period_from'],
@@ -430,6 +480,19 @@ class FixedAssetController extends Controller
             'period_to' => 'required|date|after_or_equal:period_from',
             'branch_id' => 'nullable|exists:branches,id',
         ]);
+
+        // G-277 (G11) FINANCE-FA-1: same whole-month guard as
+        // generateDepreciation — see that method for the full rationale.
+        $periodFrom = \Carbon\Carbon::parse($validated['period_from']);
+        $periodTo = \Carbon\Carbon::parse($validated['period_to']);
+        if (!$periodFrom->isSameMonth($periodTo)
+            || $periodFrom->day !== 1
+            || !$periodTo->isLastOfMonth()) {
+            return back()->withInput()->with('error',
+                "Period must span exactly one whole calendar month (first-of-month to last-of-month). "
+                . "Received {$validated['period_from']} to {$validated['period_to']}. "
+                . 'Depreciation is computed as a fixed monthly amount with no pro-rata (G11 full-month convention).');
+        }
 
         try {
             $result = $this->depreciationService->postMonthlyDepreciation(
