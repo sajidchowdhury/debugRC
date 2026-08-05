@@ -23,7 +23,9 @@ class UpdatePurchaseOrderRequest extends FormRequest
         return [
             'supplier_id'      => 'required|integer|exists:suppliers,id',
             'branch_id'        => 'required|integer|exists:branches,id',
-            'warehouse_id'     => 'nullable|integer|exists:warehouses,id',
+            // PURCHASING-API-2 (G-123/G-124): warehouse_id is now required
+            // (was nullable — mismatch with purchase_receives.warehouse_id).
+            'warehouse_id'     => 'required|integer|exists:warehouses,id',
             'po_date'          => 'required|date',
             'expected_date'    => 'nullable|date',
             'notes'            => 'nullable|string|max:1000',

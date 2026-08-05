@@ -14,21 +14,40 @@ CREATE TABLE purchase_orders (
     po_date date NOT NULL,
     supplier_id integer NOT NULL REFERENCES suppliers(id),
     branch_id integer NOT NULL REFERENCES branches(id),
-    warehouse_id integer REFERENCES warehouses(id),
+    -- PURCHASING-API-2 (G-123/G-124): warehouse_id is now NOT NULL.
+    -- Previously nullable (mismatch with purchase_receives.warehouse_id
+    -- which is NOT NULL). Migration 2026_09_05_000004 backfills any
+    -- existing NULL rows from the branch's first active warehouse before
+    -- applying the NOT NULL constraint.
+    warehouse_id integer NOT NULL REFERENCES warehouses(id),
     sub_total numeric(14,2) DEFAULT 0,
     discount_amount numeric(14,2) DEFAULT 0,
     tax_amount numeric(14,2) DEFAULT 0,
     total_amount numeric(14,2) DEFAULT 0,
-    status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','partial','received','cancelled')),
+    -- PURCHASING-API-2 (G-116): status CHECK expanded to include the 3
+    -- approval states (submitted/approved/rejected). Migration
+    -- 2026_09_05_000003 applies the same expansion to live schemas.
+    status varchar(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','submitted','approved','rejected','sent','partial','received','cancelled')),
     expected_date date,
     notes text,
     created_by integer,
+    -- PURCHASING-API-2 (G-116): approval audit columns (mirror manual_journals).
+    -- All nullable — null for rows that have never been submitted.
+    submitted_by bigint,
+    submitted_at timestamp(0),
+    approved_by bigint,
+    approved_at timestamp(0),
+    approval_comments text,
+    rejected_by bigint,
+    rejected_at timestamp(0),
     created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp(0) DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT purchase_orders_code_unique UNIQUE (po_code)
 );
 CREATE INDEX idx_po_supplier ON purchase_orders(supplier_id);
 CREATE INDEX idx_po_branch ON purchase_orders(branch_id);
+CREATE INDEX idx_po_status ON purchase_orders(status);
+CREATE INDEX idx_po_submitted ON purchase_orders(status, submitted_at);
 
 CREATE TABLE purchase_order_items (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

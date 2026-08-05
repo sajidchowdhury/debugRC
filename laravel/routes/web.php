@@ -935,6 +935,21 @@ Route::middleware('auth')->group(function () {
         Route::post('{id}/mark-sent', [PurchaseOrderController::class, 'markAsSent'])
             ->name('markSent')
             ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+        // PURCHASING-API-2 (G-116): maker-checker approval flow for POs.
+        // submit = the PO creator requests approval (draft → submitted).
+        // approve/reject = a manager (NOT the submitter) acts on the pending
+        // request. The generic /admin/approvals queue also handles these —
+        // these PO-specific routes are convenience shortcuts from the PO
+        // show page. branch.isolation applies to all three.
+        Route::post('{id}/submit', [PurchaseOrderController::class, 'submitForApproval'])
+            ->name('submit')
+            ->middleware(['role:admin,manager,warehouse_manager', 'branch.isolation']);
+        Route::post('{id}/approve', [PurchaseOrderController::class, 'approve'])
+            ->name('approve')
+            ->middleware(['role:manager,admin', 'branch.isolation']);
+        Route::post('{id}/reject', [PurchaseOrderController::class, 'reject'])
+            ->name('reject')
+            ->middleware(['role:manager,admin', 'branch.isolation']);
         Route::post('{id}/cancel', [PurchaseOrderController::class, 'cancel'])
             ->name('cancel')
             ->middleware(['role:admin,manager', 'branch.isolation']);

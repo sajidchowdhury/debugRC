@@ -98,4 +98,26 @@ return [
     */
     'below_tolerance_status_threshold' => (float) env('PURCHASE_BELOW_TOLERANCE_STATUS_THRESHOLD', 0.0001),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Approval threshold (PURCHASING-API-2 / G-116)
+    |--------------------------------------------------------------------------
+    |
+    | POs with total_amount >= this threshold require manager approval
+    | before they can be marked sent to the supplier. POs below the
+    | threshold are auto-approved (no approval needed).
+    |
+    | This value is read ONCE by the seeding migration
+    | (2026_09_05_000003_add_purchase_order_approval_columns) to populate
+    | the `approval_workflows.min_amount` DB row. After the migration runs,
+    | the DB row is the live source of truth — admins tune it at runtime
+    | via /admin/approvals/workflows/{id}. The env value only affects the
+    | INITIAL seed (re-running the migration does NOT update an existing
+    | workflow row — it's idempotent via WHERE NOT EXISTS).
+    |
+    | Set to 0 to require approval for EVERY PO (matches ManualJournal's
+    | min_amount=0 pattern). Default: 50000 BDT (~$450 USD).
+    */
+    'approval_threshold' => (float) env('PURCHASE_APPROVAL_THRESHOLD', 50000),
+
 ];

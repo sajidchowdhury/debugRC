@@ -304,7 +304,8 @@ class PurchaseOrderController extends Controller
             $po = $this->poService->createOrder([
                 'supplier_id' => $validated['supplier_id'],
                 'branch_id' => $branchId,
-                'warehouse_id' => $validated['warehouse_id'] ?? null,
+                // PURCHASING-API-2 (G-123): warehouse_id now required (NOT NULL).
+                'warehouse_id' => $validated['warehouse_id'],
                 'po_date' => $validated['po_date'],
                 'expected_date' => $validated['expected_date'] ?? null,
                 'notes' => $validated['notes'] ?? '',
@@ -418,7 +419,8 @@ class PurchaseOrderController extends Controller
             $po = $this->poService->updateOrder($id, [
                 'supplier_id' => $validated['supplier_id'],
                 'branch_id' => $branchId,
-                'warehouse_id' => $validated['warehouse_id'] ?? null,
+                // PURCHASING-API-2 (G-123): warehouse_id now required (NOT NULL).
+                'warehouse_id' => $validated['warehouse_id'],
                 'po_date' => $validated['po_date'],
                 'expected_date' => $validated['expected_date'] ?? null,
                 'notes' => $validated['notes'] ?? '',
@@ -443,6 +445,119 @@ class PurchaseOrderController extends Controller
             $po = $this->poService->markAsSent($id);
             return redirect()->route('admin.purchase-orders.show', $po)
                 ->with('success', "PO {$po->po_code} marked as sent to supplier.");
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Submit a draft (or rejected) PO for maker-checker approval.
+     *
+     * PURCHASING-API-2 (G-116): delegates to PurchaseOrderService::submitForApproval
+     * which wraps the generic ApprovalService engine. If a workflow applies
+     * (total_amount >= threshold), the PO enters 'submitted' state and appears
+     * in the /admin/approvals queue. If auto-approved (below threshold), the
+     * PO is stamped 'approved' and can be marked sent directly.
+     */
+    public function submitForApproval(Request $request, int $id)
+    {
+        $po = PurchaseOrder::findOrFail($id);
+
+        if (!$po->canBeSubmitted()) {
+            return back()->with('error', "This PO cannot be submitted for approval (current status: {$po->status}).");
+        }
+
+        try {
+            $result = $this->poService->submitForApproval($id);
+
+            $po->refresh();
+
+            if ($result['auto_approved'] ?? false) {
+                return redirect()->route('admin.purchase-orders.show', $po)
+                    ->with('success', "PO {$po->po_code} auto-approved (total below threshold). You can now mark it as sent.");
+            }
+
+            if ($result['already_submitted'] ?? false) {
+                return redirect()->route('admin.purchase-orders.show', $po)
+                    ->with('info', "PO {$po->po_code} already has a pending approval request.");
+            }
+
+            return redirect()->route('admin.purchase-orders.show', $po)
+                ->with('success', "PO {$po->po_code} submitted for approval. Awaiting manager review.");
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Approve a pending approval request for a PO.
+     *
+     * PURCHASING-API-2 (G-116): looks up the pending approval_requests row
+     * for this PO and delegates to ApprovalService::approve(). The approver
+     * must NOT be the submitter (segregation of duties, enforced by
+     * ApprovalRequest::canBeActedBy()). The generic /admin/approvals queue
+     * also handles this — this PO-specific route is a convenience shortcut
+     * from the PO show page.
+     */
+    public function approve(Request $request, int $id)
+    {
+        $request->validate([
+            'comments' => 'nullable|string|max:500',
+        ]);
+
+        $approvalRequest = \App\Models\ApprovalRequest::where('entity_type', 'purchase_order')
+            ->where('entity_id', $id)
+            ->where('status', 'pending')
+            ->firstOrFail();
+
+        try {
+            $result = app(\App\Services\Approval\ApprovalService::class)->approve(
+                $approvalRequest,
+                $request->input('comments')
+            );
+
+            if (!$result['success']) {
+                return back()->with('error', $result['message']);
+            }
+
+            return redirect()->route('admin.purchase-orders.show', $id)
+                ->with('success', $result['message']);
+        } catch (\Throwable $e) {
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    /**
+     * Reject a pending approval request for a PO.
+     *
+     * PURCHASING-API-2 (G-116): terminal — the PO enters 'rejected' state.
+     * The submitter must edit + resubmit. The rejection reason is stored
+     * on the approval_requests row + the purchase_orders.approval_comments
+     * column (via ApprovalService::updateEntityStatus).
+     */
+    public function reject(Request $request, int $id)
+    {
+        $request->validate([
+            'reason' => 'required|string|min:3|max:500',
+        ]);
+
+        $approvalRequest = \App\Models\ApprovalRequest::where('entity_type', 'purchase_order')
+            ->where('entity_id', $id)
+            ->where('status', 'pending')
+            ->firstOrFail();
+
+        try {
+            $result = app(\App\Services\Approval\ApprovalService::class)->reject(
+                $approvalRequest,
+                $request->input('reason')
+            );
+
+            if (!$result['success']) {
+                return back()->with('error', $result['message']);
+            }
+
+            return redirect()->route('admin.purchase-orders.show', $id)
+                ->with('success', $result['message']);
         } catch (\Throwable $e) {
             return back()->with('error', $e->getMessage());
         }

@@ -306,6 +306,13 @@ class ApprovalService
      * bespoke column names. This removes the "1 entity only" architectural
      * inconsistency — the generic engine is now usable for all entities in
      * the modelMap, not just manual_journal.
+     *
+     * PURCHASING-API-2 (G-116): added `purchase_order` case. POs use the
+     * same 7-column layout as manual_journals (submitted_by/at,
+     * approved_by/at, approval_comments, rejected_by/at) added by migration
+     * 2026_09_05_000003. The PO service gates markAsSent on isApproved()
+     * || isDraft() (auto-approved path), mirroring ManualJournal's
+     * canBePosted() gate.
      */
     private function updateEntityStatus(string $entityType, int $entityId, string $status): void
     {
@@ -398,6 +405,40 @@ class ApprovalService
 
                 $damage->update($updateData);
                 break;
+
+            case 'purchase_order':
+                // PURCHASING-API-2 (G-116): Pattern-A entity (same layout as
+                // manual_journal). Uses submitted_by/at + approved_by/at +
+                // approval_comments + rejected_by/at. The 7 columns were added
+                // by migration 2026_09_05_000003. The PO's status CHECK was
+                // expanded to include 'submitted' / 'approved' / 'rejected'.
+                $po = \App\Models\PurchaseOrder::find($entityId);
+                if (!$po) break;
+
+                $updateData = ['status' => $status];
+
+                if ($status === 'submitted') {
+                    $updateData['submitted_by'] = $user->id;
+                    $updateData['submitted_at'] = now();
+                } elseif ($status === 'approved') {
+                    $updateData['approved_by'] = $user->id;
+                    $updateData['approved_at'] = now();
+                } elseif ($status === 'rejected') {
+                    $updateData['rejected_by'] = $user->id;
+                    $updateData['rejected_at'] = now();
+                } elseif ($status === 'draft') {
+                    // Reset approval fields when going back to draft.
+                    $updateData['submitted_by'] = null;
+                    $updateData['submitted_at'] = null;
+                    $updateData['approved_by'] = null;
+                    $updateData['approved_at'] = null;
+                    $updateData['approval_comments'] = null;
+                    $updateData['rejected_by'] = null;
+                    $updateData['rejected_at'] = null;
+                }
+
+                $po->update($updateData);
+                break;
         }
     }
 
@@ -411,7 +452,10 @@ class ApprovalService
             if (!$step) return;
 
             $entity = $request->getEntity();
-            $entityLabel = $entity ? ($entity->journal_code ?? $entity->code ?? "#{$request->entity_id}") : "#{$request->entity_id}";
+            // PURCHASING-API-2 (G-116): added po_code to the label chain so
+            // purchase_order approval notifications show "PO-20260905-0042"
+            // instead of the bare "#id" fallback.
+            $entityLabel = $entity ? ($entity->journal_code ?? $entity->po_code ?? $entity->code ?? "#{$request->entity_id}") : "#{$request->entity_id}";
 
             $eventType = match ($event) {
                 'submitted' => 'approval_request_submitted',
@@ -441,7 +485,8 @@ class ApprovalService
     {
         try {
             $entity = $request->getEntity();
-            $entityLabel = $entity ? ($entity->journal_code ?? $entity->code ?? "#{$request->entity_id}") : "#{$request->entity_id}";
+            // PURCHASING-API-2 (G-116): include po_code in the label chain.
+            $entityLabel = $entity ? ($entity->journal_code ?? $entity->po_code ?? $entity->code ?? "#{$request->entity_id}") : "#{$request->entity_id}";
 
             $eventType = match ($outcome) {
                 'approved' => 'approval_request_approved',

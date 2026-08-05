@@ -91,10 +91,45 @@ class PurchaseOrderPolicy
      * Mark a PO as sent (draft → sent).
      * Route: admin.purchase-orders.markSent — role:admin,manager,warehouse_manager
      * + branch.isolation.
+     *
+     * PURCHASING-API-2 (G-116): the service gate is now canBeSent()
+     * (isApproved || isDraft). The policy role-gate is unchanged —
+     * admin/manager/warehouse_manager can mark a PO sent. Approval (if a
+     * workflow applied) is enforced by the service, not the policy.
      */
     public function markSent(User $user, PurchaseOrder $po): bool
     {
         return $user->hasRole('admin', 'manager', 'warehouse_manager');
+    }
+
+    /**
+     * Submit a PO for maker-checker approval (draft/rejected → submitted).
+     * Route: admin.purchase-orders.submit — role:admin,manager,warehouse_manager
+     * + branch.isolation.
+     *
+     * PURCHASING-API-2 (G-116): same role set as markSent — the PO creator
+     * requests approval. The approver is gated by the approval_steps row's
+     * `role` column (default 'manager'), NOT by this policy method. SoD
+     * (submitter ≠ approver) is enforced by ApprovalRequest::canBeActedBy().
+     */
+    public function submitForApproval(User $user, PurchaseOrder $po): bool
+    {
+        return $user->hasRole('admin', 'manager', 'warehouse_manager');
+    }
+
+    /**
+     * Approve a pending approval request for a PO.
+     * Route: admin.purchase-orders.approve — role:manager,admin
+     * + branch.isolation.
+     *
+     * PURCHASING-API-2 (G-116): approvers are manager + admin only
+     * (warehouse_manager cannot approve POs — they can submit but not
+     * approve, matching the SoD principle). The actual SoD check
+     * (submitter ≠ approver) is enforced by ApprovalRequest::canBeActedBy().
+     */
+    public function approve(User $user, PurchaseOrder $po): bool
+    {
+        return $user->hasRole('admin', 'manager');
     }
 
     /**

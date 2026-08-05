@@ -138,10 +138,14 @@ class ApprovalRequest extends Model
      */
     public function getEntity()
     {
+        // PURCHASING-API-2 (G-116): added 'purchase_order' to the modelMap
+        // so the generic ApprovalService engine can resolve PO entities for
+        // the approval queue + notification dispatch.
         $modelMap = [
             'manual_journal' => ManualJournal::class,
             'stock_adjustment' => \App\Models\StockAdjustment::class,
             'damage_invoice' => \App\Models\DamageInvoice::class,
+            'purchase_order' => \App\Models\PurchaseOrder::class,
         ];
 
         $modelClass = $modelMap[$this->entity_type] ?? null;
