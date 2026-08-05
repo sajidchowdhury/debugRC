@@ -45,7 +45,8 @@
 -- ============================================================================
 
 -- ── 1. branch_demand_repricing — price-change adjustments on demands ────────
--- Mirrors migration 2026_07_29_000016. Append-only (no updated_at).
+-- Mirrors migration 2026_07_29_000016 + 2026_09_05_000002 (G-329).
+-- Append-only (no updated_at).
 CREATE TABLE branch_demand_repricing (
     id                    integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     branch_demand_id      integer NOT NULL REFERENCES branch_demands(id) ON DELETE CASCADE,
@@ -55,10 +56,12 @@ CREATE TABLE branch_demand_repricing (
     reason                text,
     approved_by           integer,
     journal_entry_id      integer REFERENCES journal_entries(id),
+    journal_entry_id_debtor integer REFERENCES journal_entries(id),  -- G-329: debtor (requester) side
     created_by            integer,
     created_at            timestamp(0) DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_bdr_demand ON branch_demand_repricing(branch_demand_id);
+CREATE INDEX idx_bdr_journal_debtor ON branch_demand_repricing(journal_entry_id_debtor);
 
 -- ── 2. branch_demand_audit_log — immutable forensic trail per action ────────
 -- Mirrors migration 2026_07_29_000017. Append-only (RLS blocks UPDATE/DELETE).

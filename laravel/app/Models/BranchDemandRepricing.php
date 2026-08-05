@@ -21,7 +21,8 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $adjustment_amount
  * @property string|null $reason
  * @property int|null $approved_by
- * @property int|null $journal_entry_id
+ * @property int|null $journal_entry_id        Creditor (supplier) adjustment JE id
+ * @property int|null $journal_entry_id_debtor Debtor (requester) adjustment JE id (G-329)
  * @property int|null $created_by
  * @property string $created_at
  */
@@ -39,6 +40,7 @@ class BranchDemandRepricing extends Model
         'reason',
         'approved_by',
         'journal_entry_id',
+        'journal_entry_id_debtor',  // G-329: debtor (requester) side
         'created_by',
         'created_at',
     ];
@@ -50,6 +52,7 @@ class BranchDemandRepricing extends Model
         'branch_demand_id' => 'integer',
         'approved_by' => 'integer',
         'journal_entry_id' => 'integer',
+        'journal_entry_id_debtor' => 'integer',
         'created_by' => 'integer',
         'created_at' => 'datetime',
     ];
@@ -62,6 +65,14 @@ class BranchDemandRepricing extends Model
     public function journalEntry(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'journal_entry_id');
+    }
+
+    /**
+     * The debtor-side (requester) adjustment journal entry (G-329).
+     */
+    public function debtorJournalEntry(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Accounting\JournalEntry::class, 'journal_entry_id_debtor');
     }
 
     public function approvedBy(): \Illuminate\Database\Eloquent\Relations\BelongsTo

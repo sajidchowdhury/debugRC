@@ -167,25 +167,33 @@ class BranchDemandRepricingService
 
             // Post GL adjustment journals
             $demandModel = BranchDemand::find($demandId);
-            $journalEntryId = $this->postRepricingAdjustmentJournals(
+            $jeIds = $this->postRepricingAdjustmentJournals(
                 $demandModel,
                 $adjustmentAmount,
                 $createdBy
             );
+            $creditorJeId = $jeIds['creditor_je_id'];
+            $debtorJeId   = $jeIds['debtor_je_id'];
 
             // Record branch ledger adjustment
+            // (uses the creditor JE id as the primary reference, consistent
+            //  with the prior behavior; the debtor JE id is now persisted
+            //  on the repricing row via journal_entry_id_debtor below).
             $this->recordRepricingLedgerEntry(
                 $demandModel,
                 $adjustmentAmount,
-                $journalEntryId,
+                $creditorJeId,
                 $createdBy
             );
 
-            // Update the repricing record with the journal entry ID
+            // G-329: persist BOTH journal entry ids on the repricing row.
+            // `journal_entry_id` is the creditor (supplier) side;
+            // `journal_entry_id_debtor` is the debtor (requester) side.
             DB::table('branch_demand_repricing')
                 ->where('id', $repricingId)
                 ->update([
-                    'journal_entry_id' => $journalEntryId,
+                    'journal_entry_id'        => $creditorJeId,
+                    'journal_entry_id_debtor' => $debtorJeId,
                 ]);
 
             Log::info('BranchDemand repricing adjustment created', [
@@ -195,7 +203,8 @@ class BranchDemandRepricingService
                 'new_total'           => $newTotalValue,
                 'adjustment_amount'   => $adjustmentAmount,
                 'repricing_id'        => $repricingId,
-                'journal_entry_id'    => $journalEntryId,
+                'journal_entry_id'    => $creditorJeId,
+                'journal_entry_id_debtor' => $debtorJeId,
                 'created_by'          => $createdBy,
                 'approved_by'         => $approvedBy,
             ]);
@@ -209,7 +218,8 @@ class BranchDemandRepricingService
                 'reason'              => $reason,
                 'approved_by'         => $approvedBy,
                 'repricing_id'        => $repricingId,
-                'journal_entry_id'    => $journalEntryId,
+                'journal_entry_id'    => $creditorJeId,
+                'journal_entry_id_debtor' => $debtorJeId,
                 'from_branch_id'      => (int) $demand->from_branch_id,
                 'to_branch_id'        => (int) $demand->to_branch_id,
             ], $createdBy);
@@ -239,16 +249,22 @@ class BranchDemandRepricingService
      *   - If positive adjustment: Dr Inventory / Cr Due to Branches
      *   - If negative adjustment: Dr Due to Branches / Cr Inventory
      *
+     * FINANCE-3 (G-329): returns BOTH journal entry ids (creditor + debtor)
+     * so the caller can persist them on `branch_demand_repricing`. The
+     * table now has separate `journal_entry_id` (creditor) and
+     * `journal_entry_id_debtor` columns — previously only the creditor id
+     * was stored, leaving the debtor side untraceable from the audit row.
+     *
      * @param BranchDemand $demand
      * @param float $adjustmentAmount Positive = increase, Negative = decrease
      * @param int $postedBy User ID
-     * @return int The creditor journal entry ID
+     * @return array{ creditor_je_id: int, debtor_je_id: int }
      */
     private function postRepricingAdjustmentJournals(
         BranchDemand $demand,
         float $adjustmentAmount,
         int $postedBy
-    ): int {
+    ): array {
         $absAmount = abs($adjustmentAmount);
         $isPositive = $adjustmentAmount > 0;
 
@@ -329,7 +345,13 @@ class BranchDemandRepricingService
             'debtor_je_id'   => $debtorJeId,
         ]);
 
-        return $creditorJeId;
+        // G-329: return BOTH ids so the caller can persist them on
+        // `branch_demand_repricing.journal_entry_id` (creditor) and
+        // `journal_entry_id_debtor` (debtor).
+        return [
+            'creditor_je_id' => $creditorJeId,
+            'debtor_je_id'   => $debtorJeId,
+        ];
     }
 
     // ===================== BRANCH LEDGER ADJUSTMENT =====================

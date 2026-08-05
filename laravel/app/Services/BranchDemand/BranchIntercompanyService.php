@@ -320,9 +320,32 @@ class BranchIntercompanyService
     /**
      * Reverse both creditor and debtor journals for a demand.
      *
-     * Called when a demand is reversed. The journals are reversed using
-     * JournalPostingService::reverseJournalEntry() which swaps Dr/Cr
-     * and marks the original as is_reversed.
+     * FINANCE-3 (G-331): this method calls
+     * `JournalPostingService::reverseJournalEntry` DIRECTLY instead of
+     * routing through `JournalReversalService::reverseByJournalEntry`.
+     * This is a deliberate architectural choice, NOT an oversight:
+     *
+     * `JournalReversalService::reverseByJournalEntry` performs a full
+     * cascade — it reverses the GL JE AND automatically reverses all
+     * linked sub-ledger entries (`customer_ledger`, `supplier_ledger`,
+     * `employee_ledger`) that reference the same `journal_entry_id`.
+     * However, the intercompany sub-ledger (`branch_ledger`) is NOT in
+     * that cascade list, because intercompany entries are not linked to
+     * the GL JE by `journal_entry_id` (they use a `reference_type` +
+     * `reference_id` pair instead, since one demand can have multiple
+     * GL JEs but a single branch_ledger reference pair).
+     *
+     * Therefore the canonical reversal path for BranchDemand is the
+     * explicit TWO-STEP cascade exposed by {@see reverseDemandCascade}:
+     *   1. reverseDemandJournals (this method) — reverses the GL JEs
+     *      via JournalPostingService::reverseJournalEntry.
+     *   2. reverseLedgerByReference — reverses the branch_ledger
+     *      counter-rows and links them to the GL reversal JE ids (G-108).
+     *
+     * Callers SHOULD use {@see reverseDemandCascade} (which calls both
+     * steps atomically) rather than calling this method directly. This
+     * eliminates the "risk of forgetting the sub-ledger call" documented
+     * in the G-331 gap evidence.
      *
      * @param BranchDemand $demand The demand being reversed
      * @param int $reversedBy User ID who reversed
@@ -369,6 +392,45 @@ class BranchIntercompanyService
             'creditor_reversal_je_id' => $creditorReversalId,
             'debtor_reversal_je_id'   => $debtorReversalId,
         ];
+    }
+
+    /**
+     * Reverse the full intercompany cascade for a demand: GL journals
+     * AND branch_ledger counter-rows, atomically.
+     *
+     * FINANCE-3 (G-331): this is the canonical entry point for demand
+     * reversal. It calls {@see reverseDemandJournals} (GL) and
+     * {@see reverseLedgerByReference} (sub-ledger) together, so the
+     * two-step pattern documented in G-331 is enforced by construction
+     * — callers cannot forget the sub-ledger call.
+     *
+     * The two reversal JE ids from step 1 are passed to step 2 so the
+     * branch_ledger counter-rows carry the GL reversal JE id (G-108),
+     * making the sub-ledger → GL linkage bidirectional.
+     *
+     * @param BranchDemand $demand
+     * @param int          $reversedBy
+     * @param string       $reason
+     * @return array{ creditor_reversal_je_id: int|null, debtor_reversal_je_id: int|null }
+     */
+    public function reverseDemandCascade(BranchDemand $demand, int $reversedBy, string $reason): array
+    {
+        // Step 1: reverse the GL journal entries (creditor + debtor).
+        $reversalJeIds = $this->reverseDemandJournals($demand, $reversedBy, $reason);
+
+        // Step 2: reverse the branch_ledger counter-rows, linking them
+        // to the GL reversal JE ids from step 1 (G-108 bidirectional link).
+        $this->reverseLedgerByReference(
+            'demand_transfer',
+            (int) $demand->id,
+            $reversedBy,
+            $reason,
+            $demand->demand_date,
+            $reversalJeIds['creditor_reversal_je_id'] ?? null,
+            $reversalJeIds['debtor_reversal_je_id'] ?? null
+        );
+
+        return $reversalJeIds;
     }
 
     /**

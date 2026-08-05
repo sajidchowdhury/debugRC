@@ -4,7 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use App\Models\Scopes\BranchScope;
+use App\Models\Scopes\DimensionValueBranchScope;
 
 /**
  * DimensionValue — a specific value within a dimension.
@@ -35,7 +35,10 @@ class DimensionValue extends Model
 
     protected static function booted(): void
     {
-        static::addGlobalScope(new BranchScope);
+        // FINANCE-3 (G-319): use DimensionValueBranchScope (NULL-branch inclusion)
+        // instead of the generic BranchScope (hard equality). NULL-branch rows
+        // are company-wide defaults that every non-admin user must see.
+        static::addGlobalScope(new DimensionValueBranchScope);
     }
 
     // ── Relationships ───────────────────────────────────────────────

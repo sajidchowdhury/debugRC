@@ -370,9 +370,23 @@ class BranchDemandWeeklyReportService
             ->where('bd.is_reversed', false)
             ->sum(DB::raw('bdi.qty * bdi.cost_rate')) ?? 0;
 
-        // Simple profit calculation: net sales minus an estimated cost
-        // A more accurate version would use the COGS from journal entries
-        return round($netSales - $cogsFromReturns, 2);
+        // FINANCE-3 (G-342): include $demandCogs in the returned profit.
+        // Previously $demandCogs was computed but NEVER used — the method
+        // returned `$netSales - $cogsFromReturns`, which excluded demand
+        // COGS entirely. Profit was effectively sales net of returns-only
+        // COGS, which is inaccurate (returns COGS is the COGS REVERSED by
+        // returns, not the cost of goods sold).
+        //
+        // Correct profit formula:
+        //   Profit = Net Sales - Total COGS + COGS_reversed_by_returns
+        //          = Net Sales - $demandCogs + $cogsFromReturns
+        // because $cogsFromReturns is the COGS of returned goods (a
+        // positive number per the sales_returns.cogs_amount schema
+        // comment "total COGS to reverse (snapshot)"). A return reverses
+        // the original COGS entry, so the returned goods' cost should be
+        // ADDED back to profit (it is no longer a cost — the goods came
+        // back into inventory).
+        return round($netSales - $demandCogs + $cogsFromReturns, 2);
     }
 
     /**

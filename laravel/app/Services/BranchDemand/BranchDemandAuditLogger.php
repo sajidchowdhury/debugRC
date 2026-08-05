@@ -4,6 +4,7 @@ namespace App\Services\BranchDemand;
 
 use App\Models\BranchDemand;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Branch Demand Audit Logger — Phase 8 (Anti-Gaming & Accountability Controls).
@@ -98,17 +99,42 @@ class BranchDemandAuditLogger
             $userAgent = substr($userAgent, 0, 255);
         }
 
-        DB::table('branch_demand_audit_log')->insert([
-            'branch_demand_id' => $demandId,
-            'branch_id'        => $branchId,
-            'action'           => $action,
-            'actor_id'         => $actorId,
-            'actor_role'       => $actorRole,
-            'payload'          => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-            'ip_address'       => $ipAddress,
-            'user_agent'       => $userAgent,
-            'created_at'       => now(),
-        ]);
+        // FINANCE-3 (G-336): wrap the audit-row INSERT in try/catch.
+        // The audit row is forensic, NOT a gate — a failure here MUST NOT
+        // roll back the caller's DB::transaction. The design principle
+        // documented in the class doc-block ("audit is forensic, not a
+        // gate") is now enforced by construction: if the INSERT fails
+        // (CHECK constraint violation on `action` enum, RLS policy
+        // violation, connection drop, etc.), we Log::warning with the
+        // full context and return without re-throwing. The parent
+        // transaction commits the data change; the missing audit row is
+        // surfaced for follow-up via the log.
+        try {
+            DB::table('branch_demand_audit_log')->insert([
+                'branch_demand_id' => $demandId,
+                'branch_id'        => $branchId,
+                'action'           => $action,
+                'actor_id'         => $actorId,
+                'actor_role'       => $actorRole,
+                'payload'          => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'ip_address'       => $ipAddress,
+                'user_agent'       => $userAgent,
+                'created_at'       => now(),
+            ]);
+        } catch (\Throwable $e) {
+            // Forensic-only: do NOT re-throw. Log with full context so the
+            // missing audit row can be reconciled manually.
+            Log::warning('BranchDemandAuditLogger: audit-row insert failed (forensic-only, parent txn continues)', [
+                'demand_id'   => $demandId,
+                'branch_id'   => $branchId,
+                'action'      => $action,
+                'actor_id'    => $actorId,
+                'actor_role'  => $actorRole,
+                'payload'     => $payload,
+                'error_class' => get_class($e),
+                'error_msg'   => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

@@ -516,20 +516,18 @@ class BranchDemandService
                 );
             }
 
-            // ★ Phase 3 — Reverse intercompany GL journals and branch ledger
-            // G-108: capture the reversal JE ids from reverseDemandJournals and
-            // pass them to reverseLedgerByReference so the branch_ledger
-            // counter-rows are linked to their GL reversal JEs.
+            // ★ Phase 3 — Reverse intercompany GL journals and branch ledger.
+            // FINANCE-3 (G-331): use reverseDemandCascade — the canonical
+            // two-step cascade (GL via reverseDemandJournals + sub-ledger
+            // via reverseLedgerByReference). The cascade method enforces
+            // the two-step pattern by construction (callers cannot forget
+            // the sub-ledger call). It also passes the GL reversal JE ids
+            // to reverseLedgerByReference (G-108 bidirectional link).
             $demandModel = BranchDemand::find($demandId);
-            $reversalJeIds = $this->intercompanyService->reverseDemandJournals($demandModel, $reversedBy, $reason);
-            $this->intercompanyService->reverseLedgerByReference(
-                'demand_transfer',
-                $demandId,
+            $this->intercompanyService->reverseDemandCascade(
+                $demandModel,
                 $reversedBy,
-                $reason,
-                $demand->demand_date,
-                $reversalJeIds['creditor_reversal_je_id'] ?? null,
-                $reversalJeIds['debtor_reversal_je_id'] ?? null
+                $reason
             );
 
             // Update the demand header

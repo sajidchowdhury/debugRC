@@ -72,6 +72,30 @@ class BudgetService
 
     /**
      * Activate a draft budget (makes it live for budget control checks).
+     *
+     * FINANCE-3 (G-322): the duplicate-active-budget check was buggy — the
+     * `->when($budget->branch_id, ...)` clause only re-applied the same
+     * branch filter when branch_id was truthy, so the check passed whenever
+     * a company-wide (NULL-branch) budget was being activated alongside an
+     * existing branch-specific one (or vice versa). The `budget_vs_actual`
+     * view then double-counted actuals across both budgets. The check now
+     * blocks ANY coexistence: a company-wide budget cannot coexist with any
+     * branch-specific budget for the same fiscal year, and two branch-
+     * specific budgets for the same (year, branch) cannot coexist either.
+     * The check is wrapped in a DB::transaction + lockForUpdate to close
+     * the TOCTOU race (a concurrent activation could slip between the
+     * SELECT and the UPDATE). A partial UNIQUE index
+     * (`uq_budgets_active_per_year_branch`) is added by migration
+     * `2026_09_05_000001` as the DB-level backstop.
+     *
+     * FINANCE-3 (G-326): added a maker-checker guard — the user who
+     * activates the budget MUST NOT be the same user who created it
+     * (`created_by`). This is the minimal enforcement of the maker-checker
+     * principle without introducing a full `BudgetApproval` model (which
+     * is deferred to Phase 14 per the budgeting gap catalogue). The full
+     * workflow will add a `BudgetApproval` model with `requested_by` /
+     * `approved_by` / `status` columns and a multi-step approval flow;
+     * until then, this guard prevents the most common self-approval case.
      */
     public function activateBudget(Budget $budget): Budget
     {
@@ -79,24 +103,70 @@ class BudgetService
             throw new \RuntimeException("Only draft budgets can be activated. Current status: {$budget->status}");
         }
 
-        // Check for duplicate active budget for same year/branch
-        $exists = Budget::where('fiscal_year', $budget->fiscal_year)
-            ->where('branch_id', $budget->branch_id)
-            ->where('status', 'active')
-            ->when($budget->branch_id, fn($q) => $q->where('branch_id', $budget->branch_id))
-            ->exists();
-
-        if ($exists) {
-            throw new \RuntimeException("An active budget already exists for fiscal year {$budget->fiscal_year} and this branch. Close it first.");
+        // G-326: maker-checker guard — activator cannot be the creator.
+        $activatorId = auth()->id();
+        if ($activatorId !== null && $budget->created_by !== null && $activatorId === (int) $budget->created_by) {
+            throw new \RuntimeException(
+                'Maker-checker violation: the user who created this budget cannot activate it. '
+                . 'Have another manager or admin review and activate it.'
+            );
         }
 
-        $budget->update([
-            'status'      => 'active',
-            'approved_by' => auth()->id(),
-            'approved_at' => now(),
-        ]);
+        // G-322: duplicate-active-budget check (rewritten).
+        // Block ANY coexistence of active budgets for the same fiscal year
+        // when one of them is company-wide (branch_id IS NULL). Block same-
+        // scope duplicates (two company-wide OR two same-branch) as well.
+        return DB::transaction(function () use ($budget, $activatorId) {
+            // Lock the budget row to serialize concurrent activations.
+            $locked = Budget::where('id', $budget->id)->lockForUpdate()->first();
+            $budget->refresh();
 
-        return $budget;
+            if ($budget->status !== 'draft') {
+                // Re-check after lock — another transaction may have flipped it.
+                throw new \RuntimeException("Only draft budgets can be activated. Current status: {$budget->status}");
+            }
+
+            $conflictingQuery = Budget::where('fiscal_year', $budget->fiscal_year)
+                ->where('status', 'active');
+
+            if ($budget->branch_id === null) {
+                // Activating a company-wide budget: block if ANY active
+                // budget exists for this fiscal year (company-wide OR
+                // branch-specific) — variance double-counts otherwise.
+                $conflictingQuery->where(function ($q) {
+                    $q->whereNull('branch_id')->orWhereNotNull('branch_id');
+                });
+            } else {
+                // Activating a branch-specific budget: block if (a) another
+                // active budget exists for the same (year, branch) OR
+                // (b) an active company-wide budget exists for this year.
+                $conflictingQuery->where(function ($q) use ($budget) {
+                    $q->where('branch_id', $budget->branch_id)
+                        ->orWhereNull('branch_id');
+                });
+            }
+
+            $conflicting = $conflictingQuery->lockForUpdate()->exists();
+
+            if ($conflicting) {
+                $scope = $budget->branch_id === null
+                    ? 'company-wide'
+                    : "branch #{$budget->branch_id}";
+                throw new \RuntimeException(
+                    "An active budget already exists for fiscal year {$budget->fiscal_year} "
+                    . "({$scope} or company-wide). Close the existing active budget before "
+                    . "activating a new one — variance computation would otherwise double-count."
+                );
+            }
+
+            $budget->update([
+                'status'      => 'active',
+                'approved_by' => $activatorId,
+                'approved_at' => now(),
+            ]);
+
+            return $budget;
+        });
     }
 
     /**
