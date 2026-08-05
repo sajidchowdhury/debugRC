@@ -3,7 +3,7 @@ Title: Issues Register
 Module: Cross-cutting
 Audience: Engineering + Product
 Status: Living document
-Last reviewed: 2026-09-04 (post-REPORTS-2: G-046/G-048/G-050 resolved in `1665ae5`)
+Last reviewed: 2026-09-04 (post-WORKFLOWS-APPROVAL: G-075/G-077/G-080/G-081 resolved in `d84a5a8`)
 Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.md files
 ---
 
@@ -18,13 +18,13 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | Severity | Count | Blocks cutover? |
 |---|---|---|
-| CRITICAL | 11 | Yes — all of them |
+| CRITICAL | 7 | Yes — all of them |
 | HIGH | 94 | Most |
 | MEDIUM | 67 | Some |
 | LOW | 68 | No |
 | WONTFIX | 1 | False positive / not actionable |
-| **TOTAL open** | **241** | |
-| _of which resolved_ | 116 | (kept for traceability, excluded from counts above) |
+| **TOTAL open** | **237** | |
+| _of which resolved_ | 120 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
@@ -37,7 +37,7 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | reports | 71 |
 | sales | 15 |
 | security | 14 |
-| workflows | 31 |
+| workflows | 27 |
 
 ## How to use this register
 
@@ -138,13 +138,13 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 | G-072 | G5 | CRITICAL | sales | sales/sales-invoice.md:398 | — | **G5 (CRITICAL)** — DDL `04_sales.sql` is stale: `is_blank_godown_printed`, `call_a_day`, | DDL drift | H1 | resolved | 33563e4 |
 | G-073 | G5 | CRITICAL | sales | sales/sales-overview.md:292 | — | **G5 (CRITICAL)** — DDL `04_sales.sql` is stale; many live columns/tables exist ONLY in | DDL drift | H1 | resolved | 33563e4 |
 | G-074 | G5 | CRITICAL | sales | sales/sales-return.md:321 | — | **G5 (CRITICAL)** — DDL `04_sales.sql` is stale: `cogs_amount`, `reason`, | DDL drift | H1 | resolved | 33563e4 |
-| G-075 | G1 | CRITICAL | workflows | workflows/approval-workflow.md:1090 | — | ### G1 — CRITICAL — Architectural inconsistency: generic engine used by 1 entity only | — | H1 | open | — |
+| G-075 | G1 | CRITICAL | workflows | workflows/approval-workflow.md:1090 | — | ### G1 — CRITICAL — Architectural inconsistency: generic engine used by 1 entity only | — | H1 | resolved | `d84a5a8` |
 | G-076 | G1 | CRITICAL | workflows | workflows/notification-workflow.md:1185 | — | ### G1 — CRITICAL — DOUBLE DISPATCH on 4 events | — | H1 | open | — |
-| G-077 | G2 | CRITICAL | workflows | workflows/approval-workflow.md:1101 | — | ### G2 — CRITICAL — ManualJournalService::postJournal refuses 'approved' status | GL posting | H1 | open | — |
+| G-077 | G2 | CRITICAL | workflows | workflows/approval-workflow.md:1101 | — | ### G2 — CRITICAL — ManualJournalService::postJournal refuses 'approved' status | GL posting | H1 | resolved | `d84a5a8` |
 | G-078 | G2 | CRITICAL | workflows | workflows/notification-workflow.md:1206 | — | ### G2 — CRITICAL — WRONG EVENT FORWARDED on UPDATE | — | H1 | open | — |
 | G-079 | G3 | CRITICAL | workflows | workflows/notification-workflow.md:1222 | — | ### G3 — CRITICAL — WORKER-FORWARDED EVENTS HAVE NO `$context` | notifications phase | H1 | open | — |
-| G-080 | G4 | CRITICAL | workflows | workflows/approval-workflow.md:1117 | — | ### G4 — CRITICAL — Notification dispatch is DEAD CODE | notifications phase | H1 | open | — |
-| G-081 | G7 | CRITICAL | workflows | workflows/approval-workflow.md:9 | — | G7 DDL stale) mean the approval subsystem is only partially production-ready.) | DDL drift | H1 | open | — |
+| G-080 | G4 | CRITICAL | workflows | workflows/approval-workflow.md:1117 | — | ### G4 — CRITICAL — Notification dispatch is DEAD CODE | notifications phase | H1 | resolved | `d84a5a8` |
+| G-081 | G7 | CRITICAL | workflows | workflows/approval-workflow.md:9 | — | G7 DDL stale) mean the approval subsystem is only partially production-ready.) | DDL drift | H1 | resolved | `d84a5a8` |
 | G-082 | G2 | HIGH | api | api/api-conventions.md:698 | — | G2 \| HIGH \| 3 of 15 controllers hand-roll the response array instead of using a `JsonResource` (Branch, Dashboard, Lookup, Commission). Br… | — | H2 | open | — |
 | G-083 | G3 | HIGH | api | api/api-overview.md:573 | — | G3 \| HIGH \| ZERO tests for 8 of 14 modules: Sales Cart, Sales Invoices, Sales Challans, Sales Returns, Customer Payments, Commission, Ware… | test debt | H2 | open | — |
 | G-084 | G4 | HIGH | api | api/api-conventions.md:700 | — | G4 \| HIGH \| `CommissionApiController::listRules` does NOT clamp `per_page` to 100. OOM risk. \| Add `min((int) $request->input('per_page',… | — | H2 | resolved | 1a36086 |

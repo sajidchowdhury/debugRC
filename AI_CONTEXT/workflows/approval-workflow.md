@@ -4,10 +4,14 @@
 > **Audience:** Engineers, AI assistants, accountants, auditors, compliance officers
 > **Status:** Draft — pending compliance review (**NOT SAFETY-CRITICAL in the GL sense** — approval gates
 > themselves do not post to the GL; but **business-critical** because they gate stock adjustments, stock takes,
-> damage invoices, and manual journals before those entities post. Four CRITICAL gaps (G1 architectural
+> damage invoices, and manual journals before those entities post. ~~Four CRITICAL gaps (G1 architectural
 > inconsistency, G2 approved-manual-journal dead-ends at post, G4 notification dispatch is dead code,
-> G7 DDL stale) mean the approval subsystem is only partially production-ready.)
-> **Last reviewed:** Phase 14 (initial creation)
+> G7 DDL stale) mean the approval subsystem is only partially production-ready.~~)
+> **WORKFLOWS-APPROVAL (commit `d84a5a8`):** all 4 CRITICALs in this file resolved
+> (G-075/G1, G-077/G2, G-080/G4, G-081/G7). The approval subsystem is now
+> production-ready. Remaining HIGH/MEDIUM gaps (G3/G5/G6/G8-G16) are
+> non-blocking hardening items.
+> **Last reviewed:** Phase 14 (initial creation) + WORKFLOWS-APPROVAL session
 > **Source of truth:** This file is the canonical reference for the approval subsystem. The implementation
 > lives in:
 > - `laravel/app/Services/Approval/ApprovalService.php` (407L — the generic-engine crown jewel),
@@ -1098,6 +1102,12 @@ generic engine because `updateEntityStatus` would no-op their status transitions
 approval systems = maintenance burden, behavior drift, audit fragmentation (no single approval queue
 across all entity types).
 
+> ✅ **RESOLVED — G-075 / G1 (WORKFLOWS-APPROVAL, commit `d84a5a8`).** `ApprovalService::updateEntityStatus` now handles all 3 entity types in the modelMap, not just `manual_journal`. Two new cases added to the switch:
+>   - **`stock_adjustment`** — maps generic statuses to the Pattern B columns (`submitted_by`/`submitted_at`, `approved_by`/`approved_at`). No dedicated `rejected_by`/`rejected_at` column on this table — rejection is captured via `status='rejected'` + the existing `approval_comments` text field.
+>   - **`damage_invoice`** — maps to `approval_rejected_by`/`approval_rejected_at` (NOT `rejected_by`/`rejected_at`) + `approval_notes` (NOT `approval_comments`). Column-name differences from manual_journal are documented inline.
+>
+> The generic engine is now usable for all 3 entities. Pattern B services (StockAdjustmentService, DamageService) continue to work unchanged — this fix removes the "1 entity only" limitation without forcing a migration of Pattern B callers. The `// Future: add other entity types here` comment is removed.
+
 ### G2 — CRITICAL — ManualJournalService::postJournal refuses 'approved' status
 
 `ManualJournalService::postJournal` L150-152 throws `if (!$journal->isDraft())`. But
@@ -1106,6 +1116,8 @@ approved journals. Clicking it throws "Only draft journals can be posted". The e
 workflow for manual journals is dead-ended. A user who submits + gets approval CANNOT post — they
 must cancel, recreate as draft, and post without approval. This makes the approval workflow for
 manual journals effectively useless. The auto-approve path also lands in this trap.
+
+> ✅ **RESOLVED — G-077 / G2 (WORKFLOWS-APPROVAL, commit `d84a5a8`).** `ManualJournalService::postJournal` L150 guard changed from `if (!$journal->isDraft())` to `if (!$journal->canBePosted())`. This matches the model's own contract: `ManualJournal::canBePosted()` returns true for both `isDraft()` AND `isApproved()`. Draft journals post directly (no approval needed); approved journals post after the approval gate cleared. Both paths converge on the same GL posting logic (`postToGL`). The error message is updated from "Only draft journals can be posted" to "Only draft or approved journals can be posted". The UI Post button (which was already gated by `canBePosted()`) now works end-to-end for approved journals — the approval workflow is no longer dead-ended.
 
 ### G3 — HIGH — ApprovalController has NO FormRequest classes
 
@@ -1125,6 +1137,13 @@ receive a notification; requesters never learn their request was approved/reject
 manually poll `/admin/approvals`. (Damage uses different event names `damage_invoice_submitted/
 approved/rejected` which ARE in `NotificationService::EVENT_META` but have NO seeded
 `NotificationRule` rows — also dead.)
+
+> ✅ **RESOLVED — G-080 / G4 (WORKFLOWS-APPROVAL, commit `d84a5a8`).** Three-layer fix so approval notifications fire out of the box:
+>   1. **`NotificationRule::EVENTS`** — added the 4 approval events (`approval_request_submitted`, `approval_request_next_level`, `approval_request_approved`, `approval_request_rejected`) to the model's EVENTS constant. Previously these were dispatched by `ApprovalService` but NOT in EVENTS, so `NotificationService::dispatch` silently returned 0 (no rule matched).
+>   2. **`NotificationService::EVENT_META`** — added icon/color/title metadata for the 4 events so they render correctly in the notification UI.
+>   3. **`NotificationRuleSeeder`** — added 4 default rules: `submitted` + `next_level` → admins + sales managers (the approval worklist); `approved` + `rejected` → `invoice_creator` (the submitter, resolved via context at dispatch time). The seeder is idempotent — re-running skips existing rules.
+>
+> The `ApprovalService::notifyApprovers/notifyRequester` methods already dispatched the correct event names — they were just firing into a void. Now the events are registered + seeded, so approvers receive a notification when a request is submitted, and requesters learn when their request is approved/rejected. The separate damage-specific events (`damage_invoice_submitted/approved/rejected`) remain un-seeded — they're a Damage-module concern, not in this approval-engine cluster.
 
 ### G5 — HIGH — No branch.isolation on approval routes
 
@@ -1153,6 +1172,13 @@ audit log shows it.
 The 4 generic approval tables exist ONLY in the migration file — NOT in `database/sql/*.sql`. A
 fresh install from the SQL baseline + `php artisan migrate` works, but `php artisan schema:dump`
 round-trip or a re-deploy from SQL snapshot only would lose the approval engine. Additionally:
+
+> ✅ **RESOLVED — G-081 / G7 (WORKFLOWS-APPROVAL, commit `d84a5a8`).** Three DDL changes bring the SQL baseline in sync with the migrations:
+>   1. **Created `database/sql/11_approval_workflow.sql`** — defines all 4 generic approval tables (`approval_workflows`, `approval_steps`, `approval_requests`, `approval_actions`) with their indexes, CHECK constraints, and the seed default Manual Journal workflow (2 levels: manager → admin). Idempotent seed using `WHERE NOT EXISTS`.
+>   2. **Refreshed `02_accounting.sql`** — `manual_journals` CHECK expanded from `('draft','posted','reversed')` to the 6-state `('draft','submitted','approved','posted','reversed','rejected')`; 7 approval columns added (`submitted_by`/`submitted_at`, `approved_by`/`approved_at`, `approval_comments`, `rejected_by`/`rejected_at`); 2 indexes added (`idx_mj_status`, `idx_mj_submitted` partial).
+>   3. **Refreshed `03_stock.sql`** — `damage_invoices` `status` column added (was missing entirely) with the 6-state CHECK `('draft','submitted','approved','confirmed','cancelled','rejected')`; 7 approval columns added (`submitted_by`/`submitted_at`, `approved_by`/`approved_at`, `approval_rejected_by`/`approval_rejected_at`, `approval_notes`); 2 partial indexes added (`idx_dmg_submitted`, `idx_dmg_approved_pending`).
+>
+> A fresh install from the SQL baseline now includes the full approval engine. The migrations remain the source of truth for runtime; this file is the canonical reference for DBAs and external readers.
 `manual_journals` in `02_accounting.sql` L291 has CHECK `('draft','posted','reversed')` only —
 missing the 3 new states. `manual_journals` in `02_accounting.sql` is missing all 6 approval columns.
 `damage_invoices` in `03_stock.sql` is missing approval columns AND has no status CHECK at all.
