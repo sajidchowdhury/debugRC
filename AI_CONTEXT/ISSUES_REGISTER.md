@@ -34,26 +34,27 @@ Source of truth: This file consolidates gaps documented across all AI_CONTEXT/*.
 
 | Severity | Count | Blocks cutover? |
 |---|---|---|
-| CRITICAL | 2 | Yes — all of them |
-| HIGH | 10 | Most |
-| MEDIUM | 20 | Some |
-| LOW | 23 | No |
-| WONTFIX | 2 | False positive / not actionable |
-| **TOTAL open** | **57** | (HIGH 10 + MEDIUM 20 + LOW 23 + WONTFIX 2; CRITICAL 2 tracked separately per historical convention) |
-| _of which resolved_ | 300 | (kept for traceability, excluded from counts above) |
+| CRITICAL | 0 | — (all resolved, CRITICAL-WAVE-1) |
+| HIGH | 0 | — (all resolved, HIGH-WAVE-1/2/3) |
+| MEDIUM | 0 | — (all resolved, MEDIUM-WAVE-1/2/3) |
+| LOW | 0 | No (all resolved, LOW-WAVE-2) |
+| PARTIAL | 2 | No (G-236/G-239 carry-overs — partially implemented, deferred follow-up) |
+| WONTFIX | 3 | False positive / not actionable |
+| **TOTAL open** | **0** | (ZERO open gaps of any severity; campaign complete) |
+| _of which resolved_ | 352 | (kept for traceability, excluded from counts above) |
 
 ### By sector
 
 | Sector | Open issues |
 |---|---|
-| api | 16 |
-| architecture | 5 |
-| finance | 2 |
+| api | 0 |
+| architecture | 0 |
+| finance | 0 |
 | purchasing | 0 |
-| reports | 17 |
-| sales | 3 |
-| security | 6 |
-| workflows | 8 |
+| reports | 0 |
+| sales | 0 |
+| security | 0 |
+| workflows | 0 |
 
 ## How to use this register
 
