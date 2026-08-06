@@ -1,17 +1,27 @@
 <?php
 
 /**
- * Help System — Route Registry (Phase 2 scaffold).
+ * Help System — Route Registry.
  *
  * Maps Laravel route names -> help menu keys.
  * Auto-generated from docs/help-inventory.csv (Phase 1).
  * Total mappings: 214
  *
- * Resolution in HelpService::menuKeyForRoute():
+ * Resolution priority in HelpService::menuKeyForRoute():
  *   1. Exact route-name match (this file).
- *   2. (Phase 3) controller@action fallback.
- *   3. (Phase 3) controller@* wildcard.
+ *   2. controller@action fallback (action-registry.php).
+ *   3. controller@* wildcard (action-registry.php).
  *   4. null -> empty-state card.
+ *
+ * Duplicate route_name resolution (admin.branch-demands.index):
+ *   The route is shared by TWO sidebar entries:
+ *     - Standalone top-level 'Branch Demand' menu  (finance.branch-demand)  — PRIMARY
+ *     - Legacy Inventory > BranchDemand sub-menu   (inventory.branch-demand) — ALIAS
+ *   Both describe the SAME page (/admin/branch-demands), so the registry
+ *   points to the primary (finance.branch-demand). The inventory.branch-demand
+ *   menu_key still appears in modules.php under the inventory module's menu list;
+ *   Phase 7 will author menus/inventory/branch-demand.php as a content alias to
+ *   menus/finance/branch-demand.php so both sidebar entries show the same help.
  *
  * @return array<string,string>
  */
@@ -38,7 +48,7 @@ return [
     'admin.branch-demand-shadow.index' => 'finance.branch-demand-shadow',
     'admin.branch-demands.audit' => 'finance.branch-demand-audit',
     'admin.branch-demands.checklist' => 'finance.branch-demand-checklist',
-    'admin.branch-demands.index' => 'inventory.branch-demand',
+    'admin.branch-demands.index' => 'finance.branch-demand', // primary; legacy alias: inventory.branch-demand
     'admin.branch-demands.pending' => 'finance.branch-demand-pending',
     'admin.branch-demands.pending-receipt' => 'finance.branch-demand-pending-receipt',
     'admin.branch-demands.price-range-comparison' => 'finance.branch-demand-price-range-comparison',

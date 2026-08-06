@@ -3,17 +3,22 @@
 namespace App\Services\Help;
 
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Route;
 
 /**
  * Help Service — resolves routes to help menu keys + loads content files.
  *
- * Phase 2 scaffold: route-name exact-match resolution + module/menu file loading.
- * Phase 3 will add controller@action + controller@* wildcard fallback.
+ * Resolution priority in menuKeyForRoute():
+ *   1. Exact route-name match   (resources/help/registry.php)
+ *   2. controller@action match (resources/help/action-registry.php)
+ *   3. controller@* wildcard    (resources/help/action-registry.php)
+ *   4. null -> empty-state card
  *
  * Content lives in resources/help/:
- *   - registry.php   : [route_name => menu_key]
- *   - modules.php    : [module_key => module_meta + menus[]]
- *   - menus/{module}/{slug}.php  : per-menu Bangla content (Phase 7)
+ *   - registry.php          : [route_name => menu_key]                (214 mappings)
+ *   - action-registry.php   : [controller@action => menu_key]         (214 + 59 wildcards)
+ *   - modules.php            : [module_key => module_meta + menus[]]
+ *   - menus/{module}/{slug}.php : per-menu Bangla content (Phase 7)
  *
  * @see docs/HELP_SYSTEM_IMPLEMENTATION_PLAN.md §4.2 (content resolution flow)
  */
@@ -21,10 +26,14 @@ class HelpService
 {
     private const CACHE_TTL = 86400; // 1 day — content files are static
     private const CACHE_KEY_REGISTRY = 'help:registry';
+    private const CACHE_KEY_ACTION_REGISTRY = 'help:action-registry';
     private const CACHE_KEY_MODULES = 'help:modules';
 
     /** @var array<string,string>|null */
     private ?array $registry = null;
+
+    /** @var array<string,string>|null */
+    private ?array $actionRegistry = null;
 
     /** @var array<string,array>|null */
     private ?array $modules = null;
@@ -32,7 +41,11 @@ class HelpService
     /**
      * Resolve a Laravel route name to a help menu key.
      *
-     * Phase 2: exact match only. Phase 3 adds controller@action + wildcard fallback.
+     * Resolution chain (per plan §4.2):
+     *   1. Exact route-name match in registry.php.
+     *   2. controller@action match in action-registry.php.
+     *   3. controller@* wildcard in action-registry.php.
+     *   4. null — caller shows the "not yet written" empty-state card.
      *
      * @param  string|null  $routeName  e.g. 'admin.customers.index'
      * @return string|null  e.g. 'master-data.customers', or null if no help exists.
@@ -50,8 +63,63 @@ class HelpService
             return $registry[$routeName];
         }
 
-        // 2-3. controller@action + controller@* wildcard fallback — Phase 3 TODO.
+        // 2-3. controller@action + controller@* wildcard fallback.
+        $controllerAction = $this->controllerActionForRoute($routeName);
+        if ($controllerAction !== null) {
+            $actionRegistry = $this->loadActionRegistry();
+
+            // 2. controller@action exact match.
+            if (isset($actionRegistry[$controllerAction])) {
+                return $actionRegistry[$controllerAction];
+            }
+
+            // 3. controller@* wildcard (catches collapsed resource actions:
+            //    create/store/show/edit/update/destroy all route to the
+            //    controller's primary menu key, which is its index page's help).
+            $controller = explode('@', $controllerAction, 2)[0];
+            $wildcardKey = $controller . '@*';
+            if (isset($actionRegistry[$wildcardKey])) {
+                return $actionRegistry[$wildcardKey];
+            }
+        }
+
+        // 4. No help content for this route.
         return null;
+    }
+
+    /**
+     * Resolve a route name to its "Controller@action" short form.
+     *
+     * e.g. 'admin.customers.create' -> 'CustomerController@create'
+     * Returns null for Closure routes, missing routes, or routes without
+     * a controller action (e.g. view-only routes).
+     *
+     * @param  string  $routeName
+     * @return string|null  e.g. 'CustomerController@create'
+     */
+    private function controllerActionForRoute(string $routeName): ?string
+    {
+        $route = Route::getRoutes()->getByName($routeName);
+        if ($route === null) {
+            return null;
+        }
+
+        $action = $route->getAction();
+        $controller = $action['controller'] ?? null;
+        if (!is_string($controller) || !str_contains($controller, '@')) {
+            return null;
+        }
+
+        [$fqcn, $method] = explode('@', $controller, 2);
+        if ($fqcn === '' || $method === '') {
+            return null;
+        }
+
+        // Strip namespace, keep short class name (matches inventory CSV format).
+        $parts = explode('\\', $fqcn);
+        $shortName = end($parts);
+
+        return $shortName . '@' . $method;
     }
 
     /**
@@ -138,6 +206,29 @@ class HelpService
     }
 
     /**
+     * @return array<string,string>
+     */
+    private function loadActionRegistry(): array
+    {
+        if ($this->actionRegistry !== null) {
+            return $this->actionRegistry;
+        }
+
+        /** @var array<string,string> $cached */
+        $cached = Cache::remember(self::CACHE_KEY_ACTION_REGISTRY, self::CACHE_TTL, function (): array {
+            $path = resource_path('help/action-registry.php');
+            if (!is_file($path)) {
+                return [];
+            }
+            /** @var mixed $data */
+            $data = require $path;
+            return is_array($data) ? $data : [];
+        });
+
+        return $this->actionRegistry = $cached;
+    }
+
+    /**
      * @return array<string,array<string,mixed>>
      */
     private function loadModules(): array
@@ -161,15 +252,18 @@ class HelpService
     }
 
     /**
-     * Invalidate the cached registry + modules (called when content files change).
+     * Invalidate the cached registry + action-registry + modules
+     * (called when content files change, e.g. after authoring new help content).
      *
      * @return void
      */
     public function clearCache(): void
     {
         Cache::forget(self::CACHE_KEY_REGISTRY);
+        Cache::forget(self::CACHE_KEY_ACTION_REGISTRY);
         Cache::forget(self::CACHE_KEY_MODULES);
         $this->registry = null;
+        $this->actionRegistry = null;
         $this->modules = null;
     }
 }
