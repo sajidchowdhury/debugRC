@@ -43,6 +43,49 @@ class AppServiceProvider extends ServiceProvider
         // continue to call `CsvExporter::export(...)` via the
         // \App\Facades\CsvExporter Facade — call-site syntax unchanged.
         $this->app->singleton(\App\Services\Export\CsvExporter::class);
+
+        // MEDIUM-WAVE-2-B (G-252 / notification-workflow.md §G14): Register
+        // NotificationService + ListenNotifyService as singletons.
+        //
+        // Both services are stateless — neither carries request-specific
+        // data — so singleton binding is safe + correct. The rationale for
+        // singleton (vs the previous "let the container auto-resolve on each
+        // call" default) is threefold:
+        //
+        //   1. **Single dispatch queue semantics.** NotificationService is
+        //      the central dispatcher for ALL ERP notifications (Phase 10).
+        //      Conceptually there should be one logical dispatcher per
+        //      process — registering it as a singleton makes that explicit
+        //      + lets future hardening (e.g. a per-process in-flight
+        //      dispatch log or a deferred-dispatch queue) attach state to
+        //      the shared instance instead of refactoring every call site.
+        //
+        //   2. **Single PG LISTEN connection.** ListenNotifyService bridges
+        //      PostgreSQL LISTEN/NOTIFY with Redis Pub/Sub (Phase 1E). The
+        //      service exposes `emitNotify()` + `publishToUser()` (called
+        //      from NotificationService::dispatch) and is consumed by the
+        //      ListenNotifyWorker artisan command. Singleton-binding it
+        //      ensures the worker + the dispatcher share the same Redis
+        //      publisher abstraction (and, when a long-lived worker
+        //      process holds the singleton, the same Redis connection
+        //      pool) — no risk of N parallel Redis publishers competing
+        //      on the same channel.
+        //
+        //   3. **Single shared Redis publisher.** Both services publish to
+        //      the same `rcerp:sse:*` Redis channels. Sharing a singleton
+        //      lets a future refactor centralize the Redis client (one
+        //      connection pool, one Pub/Sub multiplexer) without touching
+        //      call sites.
+        //
+        // The NotificationService constructor takes an optional
+        // ListenNotifyService dependency (`?ListenNotifyService $listenNotify
+        // = null`); the container auto-resolves this when NotificationService
+        // is resolved (which is now also a singleton, so the same
+        // ListenNotifyService instance is injected on every resolution).
+        // ListenNotifyService has NO constructor at all (verified L46 of
+        // ListenNotifyService.php) — also safe as a singleton.
+        $this->app->singleton(\App\Services\Notification\NotificationService::class);
+        $this->app->singleton(\App\Services\Notification\ListenNotifyService::class);
     }
 
     /**

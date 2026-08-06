@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Notification Rule Recipient — Phase 4 / F-18b.
@@ -53,10 +54,31 @@ class NotificationRuleRecipient extends Model
 
     /**
      * Human-readable label for this recipient selection.
+     *
+     * G-253 (MEDIUM-WAVE-2-B / notification-workflow.md §G15): the previous
+     * `NotificationRule::RECIPIENTS[$this->recipient_type] ?? $this->recipient_type`
+     * silently returned the raw `recipient_type` string when the pivot row
+     * carried an unknown type (e.g. a stale `warehouse_manager_of_branch_old`
+     * left over from a refactor). The admin rules UI then showed the raw
+     * string with no signal that something was wrong. We now log a warning
+     * + return a clearly-marked "Unknown recipient type: <type>" label so
+     * the admin can see + report the stale row. Chose log+skip over throw
+     * to avoid 500ing the admin rules page or blocking other valid rule
+     * selections on the same page.
      */
     public function getLabelAttribute(): string
     {
-        $label = NotificationRule::RECIPIENTS[$this->recipient_type] ?? $this->recipient_type;
+        // G-253: explicit unknown-type handling (was silent `?? $this->recipient_type`).
+        if (!array_key_exists($this->recipient_type, NotificationRule::RECIPIENTS)) {
+            Log::warning('Unknown recipient type: ' . $this->recipient_type, [
+                'notification_rule_recipient_id' => $this->id,
+                'notification_rule_id'           => $this->notification_rule_id,
+                'recipient_type'                 => $this->recipient_type,
+            ]);
+            return 'Unknown recipient type: ' . $this->recipient_type;
+        }
+
+        $label = NotificationRule::RECIPIENTS[$this->recipient_type];
         if ($this->recipient_type === 'specific_user' && $this->recipientUser) {
             return 'Specific: ' . $this->recipientUser->username;
         }

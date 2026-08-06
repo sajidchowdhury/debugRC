@@ -288,7 +288,33 @@ class NotificationService
                     ? $baseUserQuery()->where('id', $selection->recipient_user_id)->get()
                     : collect(),
 
-                default => collect(),
+                // G-253 (MEDIUM-WAVE-2-B / notification-workflow.md §G15):
+                // the previous `default => collect()` silently returned an
+                // empty collection when a pivot row carried an unknown
+                // `recipient_type` (e.g. a stale `warehouse_manager_of_branch_old`
+                // left over from a refactor, or a typo introduced via a
+                // raw SQL insert). The dispatch would then skip that
+                // selection with no log entry — the admin's rule appeared
+                // to be configured correctly but never fired for that
+                // recipient. We now log a warning identifying the rule +
+                // the unknown type, then return an empty collection
+                // (skip). Chose log+skip over throw to avoid 500ing the
+                // dispatching module (e.g. a SalesInvoiceService::confirm
+                // call) or blocking other valid recipient selections on
+                // the same rule. The matching UI-side guard in
+                // NotificationRuleRecipient::getLabelAttribute surfaces
+                // the unknown type on the admin rules page so the admin
+                // can correct it.
+                default => (function () use ($rule, $selection) {
+                    Log::warning('Unknown recipient type in NotificationService::resolveRecipients', [
+                        'rule_id'                       => $rule->id,
+                        'rule_name'                     => $rule->name,
+                        'event'                         => $rule->event,
+                        'notification_rule_recipient_id' => $selection->id,
+                        'recipient_type'                => $selection->recipient_type,
+                    ]);
+                    return collect();
+                })(),
             };
 
             $resolved = $resolved->merge($users);

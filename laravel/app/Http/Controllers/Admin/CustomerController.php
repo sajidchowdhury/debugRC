@@ -10,6 +10,7 @@ use App\Models\Employee;
 use App\Models\SalesInvoice;
 use App\Models\SalesReturn;
 use App\Services\MasterData\CodeGenerator;
+use App\Services\Notification\NotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -41,6 +42,29 @@ class CustomerController extends BaseMasterDataController
     protected string $label      = 'Customer';
     protected string $routePrefix = 'admin.customers';
     protected string $viewDir     = 'admin.customers';
+
+    /**
+     * G-255 (MEDIUM-WAVE-2-B / notification-workflow.md §G16): injected
+     * NotificationService via constructor DI (was previously resolved via
+     * `app(NotificationService::class)` at the single call site in
+     * update() — the comment there said "Resolved via app() to avoid
+     * touching the parent-controller constructor signature" but the
+     * parent (BaseMasterDataController) has NO explicit constructor, so
+     * adding one here is safe + brings this controller in line with the
+     * 7 other NotificationService call sites (BranchDemandService,
+     * SalesInvoiceService, DamageService, ApprovalService, etc.) which all
+     * use constructor DI. Laravel's container auto-resolves the
+     * dependency (now registered as a singleton in AppServiceProvider per
+     * G-252), so no other wiring change is needed.
+     */
+    public function __construct(
+        private NotificationService $notificationService
+    ) {
+        // BaseMasterDataController has no constructor — no parent call
+        // needed. The property is promoted via PHP 8 constructor
+        // property promotion (matches the NotificationService constructor
+        // pattern).
+    }
 
     protected array $searchFields = [
         'customer_code',
@@ -698,12 +722,14 @@ class CustomerController extends BaseMasterDataController
             // F-18c: fire customer_limit_increased when the credit_limit was
             // raised (strictly greater than the old value). Decreases + no-change
             // do NOT fire — the user's predefined event is "After INCREASING
-            // customer limit". Resolved via app() to avoid touching the
-            // parent-controller constructor signature.
+            // customer limit". G-255 (MEDIUM-WAVE-2-B): now resolved via
+            // constructor DI (private NotificationService $notificationService)
+            // instead of `app(NotificationService::class)` — consistent with
+            // the 7 other NotificationService call sites + mockable in tests.
             $newCreditLimit = (float) ($item->fresh()->credit_limit ?? 0);
             if ($newCreditLimit > $oldCreditLimit) {
                 try {
-                    app(\App\Services\Notification\NotificationService::class)->dispatch(
+                    $this->notificationService->dispatch(
                         'customer_limit_increased',
                         "Credit limit for customer {$item->customer_name} ({$item->customer_code}) "
                         . "raised from Tk " . number_format($oldCreditLimit, 2)

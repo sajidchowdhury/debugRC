@@ -1280,6 +1280,31 @@ NOT auto-fill `created_at/updated_at` on `ApprovalStep::create()`. Columns stay 
 `ApprovalAction.php` L24 (mitigated: migration sets `acted_at DEFAULT CURRENT_TIMESTAMP` which serves
 the audit purpose; `created_at/updated_at` absent entirely from that migration).
 
+> ✅ **RESOLVED — G-246 / G10 (MEDIUM-WAVE-2-B).** Aligned the model with
+> the migration. `ApprovalStep.php` now declares `public $timestamps = true;`
+> (the Eloquent default) — the previous `$timestamps = false` override was
+> removed. The `approval_steps` table's `created_at` + `updated_at` columns
+> (declared at L50 of migration `2026_08_10_000001_create_approval_workflow_engine.php`)
+> are now populated on every `ApprovalStep::create()` / `->update()` call,
+> restoring the audit trail for workflow-step edits (admins can now see
+> when a step was added / last modified by the workflow designer).
+>
+> **ApprovalAction.php was intentionally left UNTOUCHED.** Its
+> `$timestamps = false` IS correct: the `approval_actions` migration (L79-91
+> of the same migration file) deliberately omits `$table->timestamps()` and
+> uses `acted_at` (with `DEFAULT CURRENT_TIMESTAMP`) as the audit timestamp
+> instead. The previous note in this §G10 about ApprovalAction's
+> `$timestamps = false` was a "mitigated" observation, not a separate
+> fix-able gap — the migration's design choice to use a single `acted_at`
+> column (not the standard Eloquent `created_at`/`updated_at` pair) is
+> intentional + correct for an immutable audit-log table where rows are
+> never updated after insertion.
+>
+> An explanatory comment was added to `ApprovalStep.php` documenting the
+> G-246 alignment + cross-referencing ApprovalAction's intentional
+> divergence. No migration change was needed — the schema already had
+> the columns; only the model override was stale.
+
 ### G11 — HIGH — No menu/nav entry for admin/approvals
 
 No menu seed, no nav view references `/admin/approvals`. Users can only reach the approval queue by

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\StockTake;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\StockTake\ApproveSessionRequest;
 use App\Http\Requests\Api\V1\StockTake\ImportCountsRequest;
+use App\Http\Requests\Api\V1\StockTake\PostSessionRequest;
 use App\Http\Requests\Api\V1\StockTake\ReasonRequest;
 use App\Http\Requests\Api\V1\StockTake\SaveCountsRequest;
 use App\Http\Requests\Api\V1\StockTake\StoreSessionRequest;
@@ -326,11 +327,10 @@ class StockTakeSessionApiController extends Controller
      *
      * POST /api/v1/stock-take/sessions/{id}/post
      */
-    public function post(Request $request, int $id): JsonResponse
+    public function post(PostSessionRequest $request, int $id): JsonResponse
     {
-        $request->validate([
-            'post_reason' => 'nullable|string|max:500',
-        ]);
+        // Validation handled by PostSessionRequest (G-208 / MEDIUM-WAVE-2-C).
+        // $request->validated()['post_reason'] is available if needed.
 
         try {
             $session = $this->stockTakeService->postSession($id, Auth::id());

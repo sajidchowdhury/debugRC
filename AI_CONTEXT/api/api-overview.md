@@ -121,7 +121,9 @@ requests.
   role checks work identically to web. (`ApiAuth::handle()` line 47.)
 - **MUST** rate-limit: default 60 req/min per (token, IP) bucket. Read-only dashboard +
   lookup endpoints get 120 req/min. Transactional writes (Sales/Stock/Branch-Demand) get
-  30 req/min. Override per route via `->middleware('api.rate:N')`.
+  30 req/min. Override per route via `->middleware('api.rate:N')`. The full three-tier
+  policy (read-only polled: 120 / standard read: 60 / transactional write: 30) with
+  rationale + per-tier example routes is documented in `api-conventions.md` §9.4.1.
 - **MUST** set `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` headers on
   every rate-limited response (success or failure).
 - **MUST** return HTTP 429 with `Retry-After` header + JSON `{message, retry_after}` when

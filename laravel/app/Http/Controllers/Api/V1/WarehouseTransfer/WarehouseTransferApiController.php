@@ -5,6 +5,9 @@ namespace App\Http\Controllers\Api\V1\WarehouseTransfer;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\WarehouseTransfer\WarehouseTransferResource;
 use App\Http\Requests\Api\V1\WarehouseTransfer\StoreWarehouseTransferRequest;
+use App\Http\Requests\Api\V1\WarehouseTransfer\ConfirmWarehouseTransferRequest;
+use App\Http\Requests\Api\V1\WarehouseTransfer\CancelWarehouseTransferRequest;
+use App\Http\Requests\Api\V1\WarehouseTransfer\ProductStockRequest;
 use App\Models\Warehouse;
 use App\Models\WarehouseTransfer;
 use App\Services\Stock\StockAvailabilityService;
@@ -256,11 +259,11 @@ class WarehouseTransferApiController extends Controller
      *
      * Requires: manager or admin role (destructive — applies stock).
      */
-    public function confirm(Request $request, int $id): JsonResponse
+    public function confirm(ConfirmWarehouseTransferRequest $request, int $id): JsonResponse
     {
-        $request->validate([
-            'confirm_reason' => 'nullable|string|max:500',
-        ]);
+        // Validation handled by ConfirmWarehouseTransferRequest (G-208 / MEDIUM-WAVE-2-C).
+        // $request->validated() is available if needed; this action takes no
+        // validated input beyond the optional confirm_reason.
 
         // Phase 1: Defense-in-depth — check branch before confirming
         $transfer = WarehouseTransfer::find($id);
@@ -315,14 +318,13 @@ class WarehouseTransferApiController extends Controller
      *
      * Requires: manager or admin role (destructive — may reverse stock/GL).
      */
-    public function cancel(Request $request, int $id): JsonResponse
+    public function cancel(CancelWarehouseTransferRequest $request, int $id): JsonResponse
     {
-        $request->validate([
-            'cancel_reason' => 'required|string|max:500',
-        ]);
+        // Validation handled by CancelWarehouseTransferRequest (G-208 / MEDIUM-WAVE-2-C).
+        $cancelReason = $request->validated()['cancel_reason'];
 
         try {
-            $transfer = $this->transferService->cancelTransfer($id, Auth::id(), $request->input('cancel_reason'));
+            $transfer = $this->transferService->cancelTransfer($id, Auth::id(), $cancelReason);
             $transfer->load(['fromWarehouse', 'toWarehouse', 'fromBranch', 'toBranch', 'items.product', 'createdBy']);
 
             return response()->json([
@@ -355,12 +357,9 @@ class WarehouseTransferApiController extends Controller
      * Phase 2: Uses StockAvailabilityService which subtracts the sales
      * pipeline (open invoice dispatches) from physical qty.
      */
-    public function productStock(Request $request): JsonResponse
+    public function productStock(ProductStockRequest $request): JsonResponse
     {
-        $validated = $request->validate([
-            'product_id'   => 'required|integer|exists:products,id',
-            'warehouse_id' => 'required|integer|exists:warehouses,id',
-        ]);
+        $validated = $request->validated();
 
         $warehouseId = (int) $validated['warehouse_id'];
         $productId   = (int) $validated['product_id'];

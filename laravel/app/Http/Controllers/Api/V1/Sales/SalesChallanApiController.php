@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Sales;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Api\V1\Sales\CancelSalesChallanRequest;
 use App\Http\Requests\Api\V1\Sales\PrepareGodownRequest;
 use App\Http\Requests\Api\V1\Sales\IssueChallanRequest;
 use App\Http\Resources\Api\V1\Sales\SalesChallanResource;
@@ -225,11 +226,9 @@ class SalesChallanApiController extends Controller
      *
      * POST /api/v1/sales/challans/{id}/cancel
      */
-    public function cancel(Request $request, int $id): JsonResponse
+    public function cancel(CancelSalesChallanRequest $request, int $id): JsonResponse
     {
-        $validated = $request->validate([
-            'reason' => 'required|string|min:10|max:500',
-        ]);
+        $validated = $request->validated();
 
         $challan = SalesChallan::findOrFail($id);
         $this->salesAccess->assertBranchAccessible($challan->branch_id);

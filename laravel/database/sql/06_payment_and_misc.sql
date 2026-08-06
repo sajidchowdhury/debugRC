@@ -268,6 +268,52 @@ CREATE INDEX idx_ual_created_at_brin ON user_audit_log USING BRIN (created_at) W
 CREATE TRIGGER trg_audit_notification_rules AFTER INSERT OR UPDATE OR DELETE ON notification_rules FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
 CREATE TRIGGER trg_audit_notification_rule_recipients AFTER INSERT OR UPDATE OR DELETE ON notification_rule_recipients FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger();
 
+-- ── Table: system_policies (DDL baseline mirror — MEDIUM-WAVE-2-A / G-243) ──
+-- CREATE TABLE IF NOT EXISTS so a fresh psql load of 01-11_*.sql creates the
+-- table BEFORE the trg_audit_system_policies trigger block below attaches to
+-- it. The trigger attachment would otherwise fail with
+-- `relation "system_policies" does not exist` on a DBA point-in-time recovery
+-- rebuild from the SQL baseline alone.
+--
+-- DDL baseline mirror: `php artisan migrate` REMAINS THE CANONICAL INSTALL
+-- PATH. This block exists so the SQL baseline can stand alone for DBA
+-- recovery / documentation parity with the migration-defined schema. On a
+-- production install the table + indexes are created by migration
+-- 2025_01_07_000001_create_system_policies_table.php; this DDL block is a
+-- best-effort mirror that is idempotent (`CREATE TABLE IF NOT EXISTS`) and
+-- will not override an existing migration-created table.
+--
+-- Schema mirror of 2025_01_07_000001_create_system_policies_table.php.
+-- Modes: NORMAL, INVESTIGATION, READ_ONLY (future), MAINTENANCE (future),
+-- EMERGENCY (future). System-scoped (no branch_id) — managed exclusively
+-- by SystemPolicyService::activate()/deactivate() under superadmin Gate.
+CREATE TABLE IF NOT EXISTS system_policies (
+    id BIGSERIAL PRIMARY KEY,
+    mode VARCHAR(30) NOT NULL DEFAULT 'NORMAL',
+    is_active BOOLEAN NOT NULL DEFAULT FALSE,
+    activated_by BIGINT,
+    activated_at TIMESTAMP(0) WITHOUT TIME ZONE,
+    deactivated_by BIGINT,
+    deactivated_at TIMESTAMP(0) WITHOUT TIME ZONE,
+    reason TEXT,
+    expires_at TIMESTAMP(0) WITHOUT TIME ZONE,
+    metadata JSONB,
+    activation_source VARCHAR(30) NOT NULL DEFAULT 'admin_panel',
+    ip_address VARCHAR(45),
+    user_agent VARCHAR(255),
+    created_at TIMESTAMP(0) WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP(0) WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS system_policies_mode_index ON system_policies(mode);
+CREATE INDEX IF NOT EXISTS system_policies_is_active_index ON system_policies(is_active);
+-- Partial unique index: only one active policy at a time. Enforced by the
+-- service layer (SystemPolicyService::activate() deactivates the prior
+-- policy in the same transaction). The DB-level constraint is the
+-- defense-in-depth guard against direct DB writes (G9 RLS + G10 audit
+-- trigger further constrain such writes).
+CREATE UNIQUE INDEX IF NOT EXISTS system_policies_one_active
+    ON system_policies (is_active) WHERE is_active = true;
+
 -- ── Audit trigger: system_policies (AUDIT-TRAIL-1 G-094) ───────────────────
 -- Attach fn_financial_audit_trigger to the Compliance & Security Policy
 -- Framework header table (mode: NORMAL/INVESTIGATION/READ_ONLY/MAINTENANCE/
@@ -280,11 +326,6 @@ CREATE TRIGGER trg_audit_notification_rule_recipients AFTER INSERT OR UPDATE OR 
 -- (DDL baseline mirror — on a fresh DB, `php artisan migrate` is the
 -- canonical install path; this appendix is documentation + DBA point-in-time
 -- recovery use only).
---
--- The system_policies table itself is created by migration
--- 2025_01_07_000001 (NOT in this SQL baseline — it is migration-only). The
--- trigger is documented here for DBA point-in-time recovery parity with the
--- notification config triggers above.
 --
 -- The trigger function reads branch_id from the row's JSONB (works for
 -- tables without a branch_id column — system_policies is system-scoped,

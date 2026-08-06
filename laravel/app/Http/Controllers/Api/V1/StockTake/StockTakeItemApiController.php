@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\StockTake;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Api\V1\StockTake\UpdateStockTakeItemRequest;
 use App\Models\StockTakeSession;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -117,12 +118,9 @@ class StockTakeItemApiController extends Controller
      * warehouse's item set, etc.). Returns the updated line + the new
      * updated_at (for optimistic-concurrency control on the client).
      */
-    public function update(Request $request, int $sessionId, int $itemId): JsonResponse
+    public function update(UpdateStockTakeItemRequest $request, int $sessionId, int $itemId): JsonResponse
     {
-        $validated = $request->validate([
-            'physical_qty' => 'required|numeric',
-            'reason'       => 'nullable|string|max:500',
-        ]);
+        $validated = $request->validated();
 
         // Look up the item to get its warehouse_id + product_id (the service's
         // saveCounts is keyed by warehouse + product_id, not by item id).

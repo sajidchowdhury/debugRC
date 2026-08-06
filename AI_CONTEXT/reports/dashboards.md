@@ -717,6 +717,21 @@ sequenceDiagram
 > Note: the `DashboardApiController` (REST API counterpart) hardcodes `now()` / `7 days` / `30 days` and takes NO request parameters — it does NOT need a FormRequest (no user input to validate). Documented here for clarity.
 | **G12** | **MEDIUM** (cross-ref `reports/materialized-views.md` G12) | `UserPerformanceDashboardController::cached():450` has `int $ttl = 60` default. `timed():481` has hardcoded `200.0` ms threshold. No `config/reports.php` file exists. | Tuning the cache TTL or slow-query threshold requires a code change + redeploy. | Create `config/reports.php` with `'dashboard_cache_ttl'`, `'slow_query_threshold_ms'`, `'mv_refresh_concurrently'`. |
 | **G13** | **MEDIUM** | `routes/api.php:115-120` — all 3 dashboard endpoints have `->middleware('api.rate:120')`. Compare to other API endpoints: `branches` at 60 req/min, `lookups/*` at 120 req/min, most write endpoints at 30 req/min. No documentation in `routes/api.php` header (L20-90) explaining the rate-tier conventions. | Phase 17 (API Layer) will need to document the 4 rate tiers (30/60/120 + default) in `api/api-conventions.md`. Without that, the choice of 120 for dashboard looks arbitrary. | Defer to Phase 17. Flag for cross-reference: `api/api-conventions.md` §rate-limits should enumerate the tiers. |
+
+> ✅ **RESOLVED — G-230 (MEDIUM-WAVE-2-C).** Doc-only resolution. The three-tier rate-limit
+> policy (read-only polled: 120 req/min; standard read: 60 req/min; transactional write:
+> 30 req/min) was already implemented in code (`config/api.php` §7.6 + per-route
+> `->middleware('api.rate:N')` declarations across `routes/api.php`), but it was not
+> documented anywhere. **MEDIUM-WAVE-2-C** added a new `api/api-conventions.md` §9.4.1
+> "Rate-limit tiers" section enumerating the three tiers with rationale + example routes per
+> tier, and cross-referenced it from `api-overview.md` §6 (MUST rate-limit bullet). The
+> dashboard's 120 req/min cap is justified by (a) read-only nature (no DB writes, no locks),
+> (b) polling semantics (the mobile app refreshes the dashboard every ~5s = 12 req/min per
+> active user, well within the 120 cap), and (c) the DB-cost ceiling (each request fires
+> ~8 SELECTs — capped at 960 DB queries/min per token, which the connection pool can absorb).
+> No code change was required — the policy was already correctly implemented; only the
+> documentation was missing. Closes G-230 (this row's cross-reference to `api/api-conventions.md`
+> §rate-limits).
 | **G15** | **MEDIUM** | `DashboardApiController::index` L34-78 fires 6 active-count queries + 2 today-aggregate queries on every request — no `Cache::remember`. Compare to `UserPerformanceDashboardController::index` L92-210 which wraps every metric in 60s `Cache::remember`. The API is rate-limited at 120 req/min but each request hits the DB 8×. | A mobile app polling `/api/v1/dashboard` every 5s would generate 24 req/min × 8 DB queries = 192 DB queries/min just for one client. The 120 req/min rate limit caps this at 960 DB queries/min per token. | Add `Cache::remember('api:dashboard:summary', 30, fn() => [...])` to `index()`. Same for `salesTrend` (5 min cache) and `topProducts` (15 min cache). |
 | **G16** | **LOW** | `LegacyDashboardController` private methods end with `catch (\Throwable $e) { return [...zeros...]; }` (L60-62, L205-213, L253-255, L287-289, L331-333, L368-370, L406-408, L493-500). No `Log::warning` — errors silently swallowed. Same pattern in `UserPerformanceDashboardController` BUT that controller DOES `Log::warning`. | A broken query in `LegacyDashboardController` produces a dashboard with all zeros and no log entry — impossible to debug. | Add `Log::warning('Legacy getX failed: ' . $e->getMessage())` to each catch. (Moot if G7 is fixed by deleting the controller.) |
 

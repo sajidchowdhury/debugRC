@@ -751,6 +751,19 @@ investigation mode with NO audit log, NO event, NO cache invalidation.
 Evidence: grep `ENABLE ROW LEVEL SECURITY.*system_policies` returns 0 hits.
 
 ### G10 — NEW — `fn_financial_audit_trigger` NOT attached to `system_policies` (MEDIUM)
+
+> ✅ **RESOLVED — MEDIUM-WAVE-2-A.** Backfill (no code change in this wave) — confirmed via `grep
+> system_policies database/migrations/` that the trigger is ALREADY attached by migration
+> `2026_09_06_000005_attach_financial_audit_trigger_to_remaining_tables.php` (commit `d8fe690`,
+> AUDIT-TRAIL-1 / G-094). That migration creates `trg_audit_system_policies AFTER INSERT OR UPDATE
+> OR DELETE ON system_policies FOR EACH ROW EXECUTE FUNCTION fn_financial_audit_trigger()` after
+> defensively verifying the trigger function exists in `pg_proc` and the table exists in
+> `information_schema.tables`. The same `trg_audit_system_policies` block is also mirrored in
+> `database/sql/06_payment_and_misc.sql` for DBA point-in-time recovery parity (see G11 below for
+> the table-DDL baseline mirror added in this wave). This row was filed before the G-094
+> AUDIT-TRAIL-1 wave ran, so it remained OPEN in this doc pending a re-verification pass — that
+> re-verification is what this MEDIUM-WAVE-2-A entry records. No further code change needed.
+
 The hash-chain audit trigger is attached to 10 financial tables in `02_accounting.sql:446-455`.
 NOT attached to `system_policies`. The compliance framework — whose entire purpose is auditable
 mode switches — has NO hash-chain audit trail at the DB level. The only audit trail is the
@@ -758,6 +771,21 @@ mode switches — has NO hash-chain audit trail at the DB level. The only audit 
 see G9). Recurring cross-phase gap (Phase 13 found 15+ tables missing the trigger).
 
 ### G11 — NEW — `system_policies` DDL missing from `database/sql/*.sql` baseline (MEDIUM)
+
+> ✅ **RESOLVED — MEDIUM-WAVE-2-A.** Added a `CREATE TABLE IF NOT EXISTS system_policies (...)`
+> block + 3 indexes (mode, is_active, partial-unique `system_policies_one_active WHERE
+> is_active = true`) to `laravel/database/sql/06_payment_and_misc.sql`, placed BEFORE the existing
+> `trg_audit_system_policies` trigger block so a fresh psql load of `01-11_*.sql` creates the
+> table before the trigger attaches to it (previously the trigger attachment would fail with
+> `relation "system_policies" does not exist` on a DBA point-in-time recovery rebuild from the SQL
+> baseline alone). The DDL is a schema mirror of migration
+> `2025_01_07_000001_create_system_policies_table.php` (canonical install path is still `php
+> artisan migrate` — the SQL block is idempotent `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF
+> NOT EXISTS` so it will NOT override an existing migration-created table). The stale "NOT in
+> this SQL baseline" comment that previously sat above the `trg_audit_system_policies` block has
+> been removed and replaced with a DDL-baseline-mirror header comment explaining the canonical-
+> install-path relationship.
+
 Phase 13 found 5 subsystems (consolidation, branch-demand, budgeting, dimensions, fixed-assets)
 had stale DDL — tables existed only in migrations, not in the `01-07_*.sql` baseline.
 `system_policies` fits the same pattern: `CREATE TABLE` exists only in
@@ -767,6 +795,29 @@ baseline + migration sequence works (migrations run after SQL files), but anyone
 SQL baseline to understand the schema will miss this table.
 
 ### G12 — NEW — `rcerp_notify_system_policy()` PG trigger is dead in practice (MEDIUM)
+
+> ✅ **RESOLVED — MEDIUM-WAVE-2-A.** Fixed (not removed) via migration
+> `2026_09_07_000011_fix_rcerp_notify_system_policy_trigger.php`. The consumers were already
+> wired up end-to-end (`ListenNotifyService::PG_CHANNELS` includes `'rcerp_system'` at line 59;
+> `ListenNotifyWorker` LISTENs on every channel in `PG_CHANNELS` and forwards payloads to Redis
+> Pub/Sub + the SSE controller; `public/assets/js/notification.js:158` registers an
+> `eventSource.addEventListener('rcerp_system', ...)` handler that calls
+> `showBeautifulNotification('System Policy Changed', ...)`). Only the producer (the trigger) was
+> broken. The migration (a) DROPs the old function + trigger, (b) recreates the function with
+> 3 cases that match the actual `SystemPolicyService::activate()` / `deactivate()` flow: (1)
+> INSERT of a new active policy — captures `activate()` step 2 with `old_mode` looked up from the
+> just-deactivated prior policy (same transaction; falls back to `'NORMAL'` on first-ever
+> activation); (2) UPDATE on `is_active` true→false — captures both `deactivate()` and
+> `activate()` step 1 (prior policy deactivation), with `new_mode = 'NORMAL'`; (3) UPDATE on
+> `mode` change (original case, retained for safety — current service never does an in-place mode
+> change but a future DBA hot-fix might). (c) Recreates the trigger as `AFTER INSERT OR UPDATE`
+> (the original was `AFTER UPDATE` only — INSERT was missing, which was the second reason the
+> original was dead even if the function had handled INSERT). Defensive `pg_proc` check for the
+> `rcerp_notify(...)` helper + `information_schema.tables` check for `system_policies` mirror the
+> `2026_09_06_000005` (AUDIT-TRAIL-1) pattern. `down()` restores the original broken shape
+> (AFTER UPDATE only, mode-change-only case) for reversibility. Payload contract unchanged — the
+> JS consumer's `data.changes.old_mode` + `data.changes.new_mode` reads work in all 3 cases.
+
 The PG trigger fires `AFTER UPDATE ON system_policies WHEN NEW.mode IS DISTINCT FROM OLD.mode`.
 But `SystemPolicyService::activate()` does (a) `UPDATE` previous policy setting
 `is_active=false, deactivated_by, deactivated_at` (does NOT change `mode`), then (b) `INSERT` a

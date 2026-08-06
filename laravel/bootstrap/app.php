@@ -61,6 +61,18 @@ return Application::configure(basePath: dirname(__DIR__))
             // Menu permission — blocks direct URL access to menus the user can't view.
             'menu.permission' => \App\Http\Middleware\EnsureMenuPermission::class,
         ]);
+
+        // MEDIUM-WAVE-2-C (G-197 / api-conventions.md G8): global ETag +
+        // conditional-GET middleware for the API stack. Runs as a "post"
+        // middleware (calls $next first, then attaches ETag + honors
+        // If-None-Match). Applies to every /api/* route via Laravel 11's
+        // $middleware->api([...]) helper. Mobile clients polling read endpoints
+        // (dashboard, lookups) can now send If-None-Match to receive a 304 Not
+        // Modified when the body is unchanged — saves bandwidth + battery.
+        // See api-conventions.md §11.5 for the canonical pattern + client usage.
+        $middleware->api([
+            \App\Http\Middleware\ETag::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Phase 3 (Stock Take plan): render the outbound-freeze block as a

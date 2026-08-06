@@ -1574,6 +1574,14 @@ flowchart LR
 - **Fix:** None required. Could combine `recent` + `unreadCount` into one endpoint for
   perf.
 
+> ✅ **RESOLVED — MEDIUM-WAVE-2-B.** Reclassified as NOT-A-GAP per prior reviewer
+> note — endpoint IS bounded with `limit(5)`; original concern was based on stale
+> code. The `NotificationController::recent()` method calls
+> `auth()->user()->notifications()->limit(5)->get()` — a hardcoded `limit(5)` is
+> appropriate for a dropdown's "recent notifications" preview and is bounded by
+> definition. The `inbox()` method paginates at 25 and `unreadCount()` is a COUNT,
+> so neither endpoint can return an unbounded result set. No code change.
+
 ### G14 — MEDIUM — `NotificationService` NOT registered as singleton
 - **Evidence:** `AppServiceProvider.php:12-37` `register()` binds 8 singletons but NOT
   `NotificationService` or `ListenNotifyService`. Both are stateless.
@@ -1581,6 +1589,33 @@ flowchart LR
 - **Fix:** Add `$this->app->singleton(\App\Services\Notification\NotificationService::class)`
   + `$this->app->singleton(\App\Services\Notification\ListenNotifyService::class)` to
   `AppServiceProvider::register()`.
+
+> ✅ **RESOLVED — MEDIUM-WAVE-2-B.** Both services are now registered as
+> singletons in `AppServiceProvider::register()`. The rationale (documented
+> inline in the file):
+>
+>   1. **Single dispatch queue semantics.** `NotificationService` is the central
+>      dispatcher for ALL ERP notifications (Phase 10). Conceptually there should
+>      be one logical dispatcher per process — singleton-binding makes that
+>      explicit + lets future hardening (e.g. an in-flight dispatch log or a
+>      deferred-dispatch queue) attach state to the shared instance.
+>
+>   2. **Single PG LISTEN connection.** `ListenNotifyService` bridges
+>      PostgreSQL LISTEN/NOTIFY with Redis Pub/Sub (Phase 1E). Singleton-binding
+>      it ensures the worker + the dispatcher share the same Redis publisher
+>      abstraction — no risk of N parallel Redis publishers competing on the
+>      same channel.
+>
+>   3. **Single shared Redis publisher.** Both services publish to the same
+>      `rcerp:sse:*` Redis channels. Sharing a singleton lets a future refactor
+>      centralize the Redis client (one connection pool, one Pub/Sub
+>      multiplexer) without touching call sites.
+>
+> Both classes are stateless (verified: `NotificationService` constructor takes
+> only an optional `?ListenNotifyService $listenNotify = null`; `ListenNotifyService`
+> has NO constructor at all). The container auto-resolves the optional
+> `NotificationService` dependency on resolution. No behavior change — only the
+> instantiation count per request drops from N to 1.
 
 ### G15 — MEDIUM — Stale `recipient_type` string silent fallback
 - **Evidence:** `NotificationRuleRecipient.php:59`
@@ -1593,6 +1628,40 @@ flowchart LR
   DB level (enum or CHECK IN list matching `RECIPIENTS` keys). OR throw on unknown types
   in `getLabelAttribute`.
 
+> ✅ **RESOLVED — MEDIUM-WAVE-2-B.** Found TWO silent fallbacks (not one) —
+> both fixed with log+skip (no throw, no DB-level CHECK constraint):
+>
+>   1. **`NotificationRuleRecipient::getLabelAttribute`** (the UI-side path the
+>      original §G15 evidence identified) — replaced the
+>      `NotificationRule::RECIPIENTS[$this->recipient_type] ?? $this->recipient_type`
+>      null-coalesce with an explicit `array_key_exists()` check. On unknown type,
+>      `Log::warning('Unknown recipient type: {type}')` fires with the pivot row
+>      ID + rule ID for traceability, and the method returns a clearly-marked
+>      `'Unknown recipient type: <type>'` label so the admin sees the stale row
+>      on the rules page (instead of the raw string, which looked like a feature
+>      label).
+>
+>   2. **`NotificationService::resolveRecipients` default match arm** (the
+>      dispatch-time path the original §G15 evidence MISSED) — was
+>      `default => collect()`, silently returning an empty collection when a
+>      pivot row carried an unknown `recipient_type`. The dispatch would then
+>      skip that selection with no log entry — the admin's rule appeared to be
+>      configured correctly but never fired for that recipient. Replaced with a
+>      logging closure that warns (`'Unknown recipient type in
+>      NotificationService::resolveRecipients'`) with the rule_id + rule_name +
+>      event + recipient_type, then returns `collect()` (skip).
+>
+> Chose log+skip over throw in both paths to avoid 500ing the admin rules page
+> (UI path) or blocking other valid recipient selections on the same rule
+> (dispatch path) when a single stale row is encountered. The two warnings
+> surface the same condition from two angles so the admin sees it both in the
+> UI AND in `storage/logs/laravel.log`.
+>
+> Did NOT add the DB-level CHECK constraint the original Fix suggested — that
+> would require a migration + would throw on existing stale rows instead of
+> surfacing them. The application-level guards are sufficient + safer for a
+> system with seeded default rules that may be edited across versions.
+
 ### G16 — MEDIUM — `CustomerController` resolves `NotificationService` via `app()` not constructor DI
 - **Evidence:** `CustomerController.php:706`
   `app(\App\Services\Notification\NotificationService::class)->dispatch(…)`. Comment
@@ -1603,6 +1672,40 @@ flowchart LR
 - **Fix:** Refactor `CustomerController` constructor to inject `NotificationService` (or
   extract the customer-limit-increase notification into a `CustomerService` that has
   constructor DI).
+
+> ✅ **RESOLVED — MEDIUM-WAVE-2-B.** Refactored `CustomerController` to use
+> constructor DI. Three changes:
+>
+>   1. Added `use App\Services\Notification\NotificationService;` import.
+>
+>   2. Added a constructor with PHP 8 constructor property promotion:
+>      ```php
+>      public function __construct(
+>          private NotificationService $notificationService
+>      ) {
+>          // BaseMasterDataController has no constructor — no parent call needed.
+>      }
+>      ```
+>      The previous comment "Resolved via app() to avoid touching the
+>      parent-controller constructor signature" was based on a false premise —
+>      `BaseMasterDataController` (the parent) has NO explicit constructor
+>      (verified by grep), and the Laravel base `Controller` also has no
+>      constructor since Laravel 5.4. Adding a constructor here is safe.
+>
+>   3. Replaced the single `app(\App\Services\Notification\NotificationService::class)->dispatch(...)`
+>      call at the `customer_limit_increased` dispatch site in `update()` with
+>      `$this->notificationService->dispatch(...)`. Updated the surrounding
+>      comment to reference G-255 + explain the DI switch.
+>
+> Laravel's container auto-resolves the constructor dependency — and now that
+> `NotificationService` is registered as a singleton in `AppServiceProvider`
+> (G-252 / §G14 above), the same shared instance is injected on every
+> resolution. No other wiring change needed. The 7 other NotificationService
+> call sites (BranchDemandService, SalesInvoiceService, DamageService,
+> ApprovalService, etc.) already use constructor DI — this controller is now
+> consistent with them and is mockable in tests (e.g.
+> `$this->mock(NotificationService::class)` in a unit test will swap the
+> singleton binding).
 
 > ✅ **RESOLVED — LOW-B.** File deleted in this commit. Cross-ref G-270 (`architecture/realtime-events.md` G15) — same dead file, same fix.
 
