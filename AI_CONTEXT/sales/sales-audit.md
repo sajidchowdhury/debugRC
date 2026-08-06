@@ -393,6 +393,23 @@ Render admin.reports.sales_audit_checklist with 3 pass/warn/fail badges
    detection, payment-AR drift, sales return reversal integrity, stale draft cleanup
    verification. No `SalesAuditService` class — checklist logic lives inline in
    `ReportController::computeSalesAuditChecks`.
+
+   > ✅ **RESOLVED — G-154 (HIGH-WAVE-2-A).** Extracted `App\Services\Sales\SalesAuditService`
+   > from the inline `ReportController::computeSalesAuditChecks` private method. The new
+   > service mirrors `PurchaseAuditService`'s architecture: constructor accepts `?int $branchId`
+   > + date range, `runHealthChecks()` returns a 12-section report with `{sections, summary,
+   > ran_at, branch_id, detail_tables}`. The 12 sections cover: (1) module scope, (2) sales
+   > invoices — missing GL journals / unbalanced JEs / missing salesman / future-dated, (3) sales
+   > challans — missing COGS journals / unlinked invoices, (4) sales returns — missing journals /
+   > missing invoice ref / reversal integrity, (5) customer payments — payment-AR drift / missing
+   > ledger / reversal audit, (6) commission reconciliation — entries without rules / stale
+   > unconfirmed / orphan reversals, (7) customer ledger — missing entries / imbalance, (8)
+   > transport adjustments — missing journals, (9) RLS bypass detection — branch_override actions,
+   > (10) stale draft cleanup — drafts >14 days, (11) GL journal links — missing references, (12)
+   > audit trail — missing log entries. `ReportController::salesAuditChecklist` refactored to
+   > delegate to the service + a new `salesAuditRun` JSON endpoint added for AJAX refresh. Blade
+   > view rewritten to render the sectioned report (mirrors purchase-audit/checklist.blade.php).
+   > Two detail tables: `missing_gl_journals` + `stale_drafts` for drill-down.
 3. **G9 (MAJOR)** — `SalesInvoiceController::auditTrail` inlines its own action list that
    OMITS the 4 R4 cart events (`cart_item_added`, `cart_item_updated`, `cart_item_removed`,
    `cart_cleared`) that `SalesAuditLogger::recentSalesEvents` properly includes. The audit-trail

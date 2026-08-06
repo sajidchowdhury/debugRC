@@ -759,6 +759,21 @@ class CommissionService
     /**
      * Get commission summary for a salesman in a period.
      *
+     * HIGH-WAVE-2 (G-159/G8): Reads pre-aggregated totals from the
+     * `mv_commission_summary` materialized view (one row per
+     * salesman-period-branch) instead of loading every commission_entries
+     * row for the period + joining sales_invoices for cumulative sales on
+     * every API call. The MV is refreshed by refresh_all_report_views()
+     * (pg_cron fallback) + the Laravel RefreshReportViews command (PHP-
+     * driven CONCURRENTLY primary path).
+     *
+     * The entries collection is still loaded (the response includes a
+     * detail `entries` key for the API consumer). The aggregate totals
+     * (total_sales, total_commission, confirmed/pending/paid) come from
+     * the MV. If the MV is not yet refreshed or unavailable (e.g. the
+     * migration hasn't run on this environment), the method falls back to
+     * the original direct-computation path so the API never breaks.
+     *
      * @return array{
      *   salesman: array,
      *   period: string,
@@ -778,6 +793,42 @@ class CommissionService
             ->orderBy('entry_date')
             ->get();
 
+        // Attempt to read pre-aggregated totals from the MV. Fall back to
+        // direct computation if the MV is unavailable (not yet refreshed,
+        // migration not run, etc.).
+        $mvRow = null;
+        try {
+            $mvRow = DB::table('mv_commission_summary')
+                ->where('salesman_id', $salesmanId)
+                ->where('commission_period', $period)
+                ->first();
+        } catch (\Throwable $e) {
+            // MV might not exist yet — fall back to direct computation.
+            Log::debug('mv_commission_summary read failed, falling back to direct computation', [
+                'salesman_id' => $salesmanId,
+                'period' => $period,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        if ($mvRow !== null) {
+            return [
+                'salesman' => [
+                    'id' => $salesmanId,
+                    'name' => $mvRow->salesman_name ?? $salesman?->name,
+                    'employee_code' => $mvRow->employee_code ?? $salesman?->employee_code,
+                ],
+                'period' => $period,
+                'total_sales' => round((float) $mvRow->total_sales, 2),
+                'total_commission' => round((float) $mvRow->total_commission, 2),
+                'confirmed_commission' => round((float) $mvRow->confirmed_commission, 2),
+                'pending_commission' => round((float) $mvRow->pending_commission, 2),
+                'paid_commission' => round((float) $mvRow->paid_commission, 2),
+                'entries' => $entries,
+            ];
+        }
+
+        // Fallback: direct computation (pre-G-159 path).
         $totalSales = $this->getCumulativeSalesForPeriod($salesmanId, $period);
         $totalCommission = $entries->sum(fn($e) => (float) $e->commission_amount);
         $confirmedCommission = $entries->where('status', 'confirmed')->sum(fn($e) => (float) $e->commission_amount);
@@ -803,10 +854,58 @@ class CommissionService
     /**
      * Get commission summary for all salesmen in a branch/period.
      *
+     * HIGH-WAVE-2 (G-159/G8): Reads pre-aggregated per-salesman rows from
+     * the `mv_commission_summary` materialized view (one row per
+     * salesman-period-branch) instead of loading every commission_entries
+     * row for the period + grouping by salesman in PHP on every API call.
+     *
+     * Same defensive-fallback pattern as getSalesmanSummary: if the MV is
+     * unavailable, fall back to direct computation.
+     *
      * @return array
      */
     public function getBranchSummary(?int $branchId, string $period): array
     {
+        // Attempt to read pre-aggregated rows from the MV.
+        $mvRows = null;
+        try {
+            $query = DB::table('mv_commission_summary')
+                ->where('commission_period', $period);
+            if ($branchId) {
+                $query->where('branch_id', $branchId);
+            }
+            $mvRows = $query->orderBy('salesman_name')->get();
+        } catch (\Throwable $e) {
+            // MV might not exist yet — fall back to direct computation.
+            Log::debug('mv_commission_summary read failed, falling back to direct computation', [
+                'branch_id' => $branchId,
+                'period' => $period,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        if ($mvRows !== null) {
+            $summaries = $mvRows->map(function ($row) {
+                return [
+                    'salesman_id' => $row->salesman_id,
+                    'salesman_name' => $row->salesman_name,
+                    'total_commission' => round((float) $row->total_commission, 2),
+                    'pending_commission' => round((float) $row->pending_commission, 2),
+                    'confirmed_commission' => round((float) $row->confirmed_commission, 2),
+                    'paid_commission' => round((float) $row->paid_commission, 2),
+                ];
+            })->all();
+
+            return [
+                'period' => $period,
+                'branch_id' => $branchId,
+                'total_commission' => round(array_sum(array_column($summaries, 'total_commission')), 2),
+                'salesmen_count' => $mvRows->count(),
+                'salesmen' => $summaries,
+            ];
+        }
+
+        // Fallback: direct computation (pre-G-159 path).
         $query = CommissionEntry::where('commission_period', $period);
 
         if ($branchId) {

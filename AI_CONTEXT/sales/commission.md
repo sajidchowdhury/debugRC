@@ -402,6 +402,16 @@ stateDiagram-v2
 6. **G8 (MAJOR)** — No materialized view for commission summaries. `getSalesmanSummary` and
    `getBranchSummary` recompute from `commission_entries` + `sales_invoices` joins on every API
    call.
+
+   > ✅ **RESOLVED — G-159 (HIGH-WAVE-2-B).** Created materialized view
+   > `mv_commission_summary` that pre-aggregates per-salesman-per-period commission
+   > totals (total/confirmed/pending/paid commission + cumulative sales + entry count).
+   > Added to the `refresh_all_report_views()` function (migration + SQL baseline
+   > `10_materialized_views.sql`). `CommissionService::getSalesmanSummary` and
+   > `getBranchSummary` now read pre-aggregated data from the MV instead of loading
+   > all `commission_entries` rows + computing sums in PHP + joining `sales_invoices`
+   > on every API call. Both methods retain a defensive fallback to direct
+   > computation if the MV is not yet refreshed or unavailable.
 7. **G10 (MAJOR)** — Commission API read endpoints (`listRules`, `showRule`, `listEntries`,
    `salesmanSummary`, `branchSummary`) have NO `api.auth:admin` middleware — any authenticated
    bearer token can list ALL commission rules and entries.
@@ -428,6 +438,18 @@ stateDiagram-v2
 9. **G12 (MAJOR)** — No web UI for commission rule management. Commission rules can ONLY be
    created/deactivated via the API (admin bearer token). An accountant or manager without API
    access cannot configure commission rules.
+
+   > ✅ **RESOLVED — G-164 (HIGH-WAVE-2-B).** Created `App\Http\Controllers\Admin\CommissionRuleController`
+   > with 5 actions (index/create/store/show/deactivate) + 3 Blade views
+   > (`admin.commission-rules/index`, `create`, `show`). Routes registered at
+   > `admin/commission-rules/*` with `role:admin,manager` middleware (mirrors the
+   > API's `api.auth:admin` for writes + `api.auth:manager,admin` for reads). The
+   > `store` action reuses the existing `StoreCommissionRuleRequest` FormRequest
+   > (same validation as the API) + calls `CommissionService::createRule()` (same
+   > business logic as the API — no duplication). The create form supports all 4
+   > rule types (flat/tiered/product_group/target_bonus) with JS-driven conditional
+   > sections for tiers, product groups, and targets. An accountant or manager can
+   > now configure commission rules via the browser without API access.
 10. **G14 (MAJOR)** — `reverseOnReturn` uses `commission_period = now()->format('Y-m')` for the
     reversal entry — NOT the original entry's period. Distorts month-end summaries.
 

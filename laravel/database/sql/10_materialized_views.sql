@@ -243,7 +243,54 @@ CREATE UNIQUE INDEX IF NOT EXISTS mv_pms_prod_wh_idx
 CREATE INDEX IF NOT EXISTS mv_pms_branch_idx
     ON mv_product_movement_summary (branch_id);
 
--- ── 8. refresh_all_report_views() — rewritten per REPORTS-1 ─────────────────
+-- ── 8. mv_commission_summary — per-salesman-per-period commission aggregates ─
+-- HIGH-WAVE-2 (G-159/G8): pre-computes the heavy commission summary joins so
+-- CommissionService::getSalesmanSummary / getBranchSummary read pre-aggregated
+-- data instead of re-computing from commission_entries + sales_invoices on
+-- every API call.
+--
+-- One row per (salesman_id, commission_period, branch_id). Joins
+-- commission_entries (the per-allocation/per-reversal entries written by
+-- CommissionService::calculateForInvoice + reverseOnReturn) and aggregates
+-- total/confirmed/pending/paid commission + entry_count. The cumulative
+-- sales figure is computed via a correlated subquery against sales_invoices
+-- (same filter logic as CommissionService::getCumulativeSalesForPeriod:
+-- non-cancelled, non-reversed, non-soft-deleted invoices for the salesman
+-- in the period's month range).
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_commission_summary AS
+SELECT
+    ce.salesman_id,
+    e.name AS salesman_name,
+    e.employee_code,
+    ce.branch_id,
+    ce.commission_period,
+    COALESCE(SUM(ce.commission_amount), 0) AS total_commission,
+    COALESCE(SUM(CASE WHEN ce.status = 'confirmed' THEN ce.commission_amount ELSE 0 END), 0) AS confirmed_commission,
+    COALESCE(SUM(CASE WHEN ce.status = 'calculated' THEN ce.commission_amount ELSE 0 END), 0) AS pending_commission,
+    COALESCE(SUM(CASE WHEN ce.status = 'paid' THEN ce.commission_amount ELSE 0 END), 0) AS paid_commission,
+    COUNT(ce.id) AS entry_count,
+    COALESCE((
+        SELECT SUM(si.total_amount) FROM sales_invoices si
+        WHERE si.salesman_id = ce.salesman_id
+          AND si.invoice_date >= (ce.commission_period || '-01')::date
+          AND si.invoice_date <= (date_trunc('month', (ce.commission_period || '-01')::date) + interval '1 month - 1 day')::date
+          AND si.status NOT IN ('cancelled', 'reversed')
+          AND COALESCE(si.is_reversed, false) = false
+          AND si.deleted_at IS NULL
+    ), 0) AS total_sales
+FROM commission_entries ce
+LEFT JOIN employees e ON e.id = ce.salesman_id
+WHERE ce.deleted_at IS NULL
+GROUP BY ce.salesman_id, e.name, e.employee_code, ce.branch_id, ce.commission_period;
+
+CREATE UNIQUE INDEX IF NOT EXISTS mv_commission_summary_sm_per_branch_idx
+    ON mv_commission_summary (salesman_id, commission_period, branch_id);
+CREATE INDEX IF NOT EXISTS mv_commission_summary_period_idx
+    ON mv_commission_summary (commission_period);
+CREATE INDEX IF NOT EXISTS mv_commission_summary_branch_idx
+    ON mv_commission_summary (branch_id);
+
+-- ── 9. refresh_all_report_views() — rewritten per REPORTS-1 ─────────────────
 -- Per-MV BEGIN…EXCEPTION…END subblocks (one MV failure no longer aborts
 -- the whole function). Plain REFRESH (no CONCURRENTLY — CONCURRENTLY
 -- cannot run inside a PL/pgSQL function body; the Laravel
@@ -470,11 +517,43 @@ BEGIN
              ARRAY[]::TEXT[], _op_user, current_user, _branch_id,
              'refresh_all_report_views()', '127.0.0.1', NULL);
     END;
+
+    -- mv_commission_summary — added in HIGH-WAVE-2 (G-159/G8).
+    -- Pre-aggregates per-salesman-per-period commission totals so
+    -- CommissionService::getSalesmanSummary / getBranchSummary can read
+    -- pre-computed rows instead of re-joining commission_entries +
+    -- sales_invoices on every API call. Wrapped in its own BEGIN…EXCEPTION
+    -- so a missing MV (environments that haven't run this migration)
+    -- doesn't abort the function.
+    BEGIN
+        _start_ts := clock_timestamp();
+        REFRESH MATERIALIZED VIEW mv_commission_summary;
+        _elapsed_ms := EXTRACT(EPOCH FROM (clock_timestamp() - _start_ts)) * 1000;
+        INSERT INTO financial_audit_log
+            (table_name, operation, record_id, before_data, after_data,
+             changed_columns, performed_by, db_session_user, branch_id,
+             request_path, request_ip, request_id)
+        VALUES
+            ('mv_commission_summary', 'REFRESH', 0, NULL,
+             jsonb_build_object('status','ok','elapsed_ms',_elapsed_ms),
+             ARRAY[]::TEXT[], _op_user, current_user, _branch_id,
+             'refresh_all_report_views()', '127.0.0.1', NULL);
+    EXCEPTION WHEN OTHERS THEN
+        INSERT INTO financial_audit_log
+            (table_name, operation, record_id, before_data, after_data,
+             changed_columns, performed_by, db_session_user, branch_id,
+             request_path, request_ip, request_id)
+        VALUES
+            ('mv_commission_summary', 'REFRESH', 0, NULL,
+             jsonb_build_object('status','failed','error',SQLERRM),
+             ARRAY[]::TEXT[], _op_user, current_user, _branch_id,
+             'refresh_all_report_views()', '127.0.0.1', NULL);
+    END;
 END;
 $$ LANGUAGE plpgsql;
 
--- ── 9. mv_refresh_log + audit-log trigger (G-234 / REPORTS-AUDIT-FIX-1) ─────
--- Lightweight staleness tracker for the 8 financial MVs + mv_consolidated_trial_balance.
+-- ── 10. mv_refresh_log + audit-log trigger (G-234 / REPORTS-AUDIT-FIX-1) ────
+-- Lightweight staleness tracker for the 8 financial MVs + mv_consolidated_trial_balance + mv_commission_summary.
 --
 -- The original G-234 plan added a `computed_at` column to each MV via
 -- `ALTER MATERIALIZED VIEW ... ADD COLUMN` — but PostgreSQL does NOT support

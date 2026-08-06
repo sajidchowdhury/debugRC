@@ -15,6 +15,7 @@ use App\Services\Stock\StockTakeVarianceReport;
 use App\Services\Stock\StockTakeWeeklyReport;
 use App\Services\Reports\DamageReportService;
 use App\Services\Accounting\JournalPostingService;
+use App\Services\Sales\SalesAuditService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -1142,11 +1143,48 @@ SQL, [$data['from'], $data['to']]);
     public function salesAuditChecklist(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
-        $checks = $this->computeSalesAuditChecks($data['from'], $data['to']);
+        $branchId = $this->resolveBranchIdForRead(
+            $request->input('branch_id') ? (int) $request->input('branch_id') : null
+        );
+
+        $report = (new SalesAuditService(
+            $branchId > 0 ? $branchId : null,
+            $data['from']->format('Y-m-d'),
+            $data['to']->format('Y-m-d')
+        ))->runHealthChecks();
+
+        $branchName = 'All branches';
+        if ($branchId > 0) {
+            $branchName = \App\Models\Branch::find($branchId)?->branch_name ?? ("Branch #{$branchId}");
+        }
+
         return view('admin.reports.sales_audit_checklist', [
             'meta' => ['title' => 'Sales Audit Checklist', 'from_date' => $data['from']->format('Y-m-d'), 'to_date' => $data['to']->format('Y-m-d')],
-            'checks' => $checks,
+            'report' => $report,
+            'branch_name' => $branchName,
+            'branch_id' => $branchId,
         ]);
+    }
+
+    /**
+     * JSON refresh endpoint for the "Re-run checks" button on the sales
+     * audit checklist. Returns the full 12-section report so the front-end
+     * can re-render sections + summary chips in place.
+     */
+    public function salesAuditRun(ReportRangeRequest $request)
+    {
+        $data = $this->parseDateRange($request);
+        $branchId = $this->resolveBranchIdForRead(
+            $request->input('branch_id') ? (int) $request->input('branch_id') : null
+        );
+
+        $report = (new SalesAuditService(
+            $branchId > 0 ? $branchId : null,
+            $data['from']->format('Y-m-d'),
+            $data['to']->format('Y-m-d')
+        ))->runHealthChecks();
+
+        return response()->json($report);
     }
 
     public function purchaseAudit(ReportRangeRequest $request)
@@ -1673,6 +1711,17 @@ SQL, [$data['from'], $data['to']]);
 
     /**
      * Compute sales audit checklist checks.
+     *
+     * @deprecated HIGH-WAVE-2-A (G-154): superseded by
+     *             {@see \App\Services\Sales\SalesAuditService::runHealthChecks()}.
+     *             The service expands the 3-section inline checklist into a
+     *             12-section report (invoices, challans, returns, payments,
+     *             commission, customer ledger, transport, RLS, stale drafts,
+     *             GL journal links, audit trail). Retained as a private
+     *             fallback for any legacy callers; new code should use the
+     *             service directly. Verified 2026-09-08: no external callers
+     *             (grep'd `computeSalesAuditChecks` across laravel/app —
+     *             only this definition references the name).
      */
     private function computeSalesAuditChecks(Carbon $from, Carbon $to): array
     {

@@ -32,6 +32,7 @@ use App\Http\Controllers\Admin\PurchaseOrderController;
 use App\Http\Controllers\Admin\PurchaseReceiveController;
 use App\Http\Controllers\Admin\PurchaseReturnController;
 use App\Http\Controllers\Admin\PurchaseAuditController;
+use App\Http\Controllers\Admin\CommissionRuleController;
 use App\Http\Controllers\Admin\SalesCartController;
 use App\Http\Controllers\Admin\SalesInvoiceController;
 use App\Http\Controllers\Admin\SalesChallanController;
@@ -415,6 +416,7 @@ Route::middleware('auth')->group(function () {
 
         // Operations
         Route::get('sales-audit-checklist', [ReportController::class, 'salesAuditChecklist'])->name('salesAuditChecklist');
+        Route::get('sales-audit-checklist/run', [ReportController::class, 'salesAuditRun'])->name('salesAuditRun');
         Route::get('purchase-audit', [ReportController::class, 'purchaseAudit'])->name('purchaseAudit');
         // Phase 6 (Stock Take plan): variance + weekly control reports with
         // CSV export (Excel-friendly BOM) and per-line GL drill-down.
@@ -1101,6 +1103,25 @@ Route::middleware('auth')->group(function () {
     Route::get('admin/purchase-audit/run', [PurchaseAuditController::class, 'runChecks'])
         ->name('admin.purchase-audit.run')
         ->middleware('role:admin,manager,accountant');
+
+    // ============================================================
+    // HIGH-WAVE-2 (G-164/G12): Commission rule management web UI.
+    // Mirrors the API endpoints (CommissionApiController) but for
+    // browser-based access. RBAC: admin, manager (same as API writes —
+    // API reads use `api.auth:manager,admin`; API writes use `api.auth:admin`).
+    // The store action reuses StoreCommissionRuleRequest (same validation
+    // as the API) + CommissionService::createRule() (same business logic
+    // as the API — no duplication). The create form supports all 4 rule
+    // types (flat/tiered/product_group/target_bonus) with JS-driven
+    // conditional sections for tiers, product groups, and targets.
+    // ============================================================
+    Route::prefix('admin/commission-rules')->name('admin.commission-rules.')->middleware('role:admin,manager')->group(function () {
+        Route::get('/', [CommissionRuleController::class, 'index'])->name('index');
+        Route::get('create', [CommissionRuleController::class, 'create'])->name('create');
+        Route::post('/', [CommissionRuleController::class, 'store'])->name('store');
+        Route::get('{id}', [CommissionRuleController::class, 'show'])->name('show')->whereNumber('id');
+        Route::post('{id}/deactivate', [CommissionRuleController::class, 'deactivate'])->name('deactivate')->whereNumber('id');
+    });
 
     // ============================================================
     // Phase 8.1: Sales Cart Service (per-user-per-customer draft cart)
