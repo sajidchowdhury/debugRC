@@ -719,6 +719,21 @@ Gap IDs are stable references shared with `api-overview.md` §13 and `api-conven
 | ~~G1~~ ✅ | ~~CRITICAL~~ RESOLVED | `API_REFERENCE.md` documents only 14 of 100 `/v1` endpoints (86% drift). See `api-reference-index.md` §4. | Rewrite `API_REFERENCE.md` from this file's per-module tables. |
 | ~~G2~~ ✅ | ~~CRITICAL~~ RESOLVED | `ApiDocController::endpoints()` hardcodes 23 of 100 endpoint cards (77% drift). | Generate from `routes/api.php` reflection, OR add a test that fails on drift. |
 | G3 | CRITICAL | ZERO tests for 8 of 14 modules: Sales Cart, Sales Invoices, Sales Challans, Sales Returns, Customer Payments, Commission, Warehouse Transfers, Stock Adjustments = 56 endpoints untested. | Add a `*_ApiTest.php` per module. |
+
+> ✅ **RESOLVED — G-007 / G-083 (CRITICAL-WAVE-1-A).** The "8 of 14 modules" claim in the original gap text was STALE — at the time of this wave, 9 of the 14 API modules already had dedicated Feature API tests under `tests/Feature/Api/V1/`:
+> - **Sales** — `CommissionApiTest` (1), `CustomerPaymentApiTest` (1), `SalesChallanApiTest` (1), `SalesInvoiceApiTest` (1) ✅
+> - **StockTake** — `StockTakeSessionApiTest` (1) ✅
+> - **Master data** — `BranchApiTest`, `DashboardApiTest`, `LookupApiTest`, `BranchIsolationApiTest` ✅
+>
+> The genuine gap was 5 of 14 modules (not 8). This wave backfills those 5 with new dedicated Feature API test files, all extending `Tests\TestCase` (DatabaseTransactions + Redis-middleware-stripped) + using the `BuildsRoleUsers` + `IssuesApiTokens` traits per the G5 convention:
+>
+> 1. `laravel/tests/Feature/Api/V1/Sales/SalesCartApiTest.php` — 13 tests (AUTH ×3 + SHOW ×3 + AVAILABILITY ×2 + STORE validation ×2 + CLEAR/SOFT-HOLD validation ×2 + VALIDATE happy-path ×1)
+> 2. `laravel/tests/Feature/Api/V1/Sales/SalesReturnApiTest.php` — 13 tests (AUTH ×4 + LIST ×2 + SHOW ×2 + INVOICE-DETAILS ×2 + STORE validation ×2 + REVERSE validation ×1)
+> 3. `laravel/tests/Feature/Api/V1/StockAdjustment/StockAdjustmentApiTest.php` — 14 tests (AUTH ×4 + LIST ×2 + SHOW ×2 + STORE happy-path + STORE validation ×3 + CANCEL state-transition + CANCEL validation ×1)
+> 4. `laravel/tests/Feature/Api/V1/StockTake/StockTakeItemApiTest.php` — 10 tests (AUTH ×2 + LIST items ×3 + SHOW item ×2 + VARIANCE report ×1 + UPDATE validation ×2)
+> 5. `laravel/tests/Feature/Api/V1/WarehouseTransfer/WarehouseTransferApiTest.php` — 15 tests (AUTH ×4 + LIST ×2 + SHOW ×2 + PRODUCT-STOCK ×2 + STORE happy-path + STORE validation ×2 + CANCEL state-transition + CANCEL validation ×1)
+>
+> Total new test methods: **65** (13+13+14+10+15). All 5 files verified structurally (Python `{}`/`()`/`[]` brace-balance check — all balanced, no PHP binary in the sandbox). State-machine coverage on the 3 stateful modules (StockAdjustment, WarehouseTransfer, SalesReturn) — draft→cancelled transitions asserted via `assertDatabaseHas(..., ['status' => 'cancelled'])`. Cross-referenced from `api-overview.md` §13 G3 (HIGH — same stale "8 of 14" claim).
 | G4 | HIGH | `CommissionApiController::listRules` does not clamp `per_page` (OOM risk). | Add `min((int) ..., 100)`. |
 | G5 | MEDIUM | `BranchDemandApiTest` hand-rolls token issuance 16× instead of using `IssuesApiTokens`. | Refactor to use the helper. |
 | G6 | HIGH | Role-gate inconsistency: Sales Cart/Invoices/Returns/Payments write endpoints have NO route-level `api.auth:role` gate. | Add `api.auth:salesman,manager,admin` to those routes. |
