@@ -708,6 +708,29 @@ sequenceDiagram
 
 > ✅ **RESOLVED — G-140 (REPORTS-AUDIT-3).** Pre-deletion verification: `rg "intelligent-sales-cockpit" app/ resources/ routes/ config/` returned 0 matches (no references outside `/public/`). `git rm public/assets/dashboard/intelligent-sales-cockpit.html` (1700L) executed. The `public/assets/dashboard/` directory became empty after deletion — git does not track empty directories, so the directory itself disappeared from the working tree; it can be re-created when a new asset is added (no further cleanup needed).
 | **G9** | **HIGH** | `UserPerformanceDashboardController.php` is 2246L with 16 private metric methods, each containing 1-3 inline `DB::table(...)` / `DB::select($sql, $bindings)` queries. `getWorkPattern` L1489-1545 + `getActivitySummary` L1560-1654 build raw SQL UNION ALLs across 6 tables by string interpolation. No metric method delegates to a service — all queries inline. | Violates Phase 4 coding-standards (controllers should be thin; SQL belongs in services). Hard to unit-test (no service to mock). Any schema change requires editing the controller. The class is 5× the size of the largest service (`ReportService.php` 1171L). | Extract each Phase's metric methods into a service: `SalesPerformanceMetricsService`, `CollectionMetricsService`, `OperationalMetricsService`, `CommissionMetricsService`, `StockDisciplineMetricsService`, `ApprovalWorkloadService`. Controller becomes a thin orchestrator. |
+
+> ✅ **RESOLVED — G-144 (HIGH-WAVE-3).** Extracted all 16 private metric methods
+> from `UserPerformanceDashboardController` (2273L) into 6 service classes in
+> `App\Services\Dashboard\`:
+> - `SalesPerformanceMetricsService` (Phase 1 — 5 methods: getSalesKPIs, getSalesTrend,
+>   getSalesByProductGroup, getTopCustomers, getCustomerAcquisition)
+> - `CollectionMetricsService` (Phase 2 — 4 methods: getCollectionKPIs, getReceivableAging,
+>   getReturnKPIs, getPaymentModeMix)
+> - `OperationalMetricsService` (Phase 3 — 5 methods: getVelocityKPIs, getPipelineSnapshot,
+>   getWorkPattern, getActivitySummary, getNotificationEngagement)
+> - `CommissionMetricsService` (Phase 4 — 1 method: getCommissionSummary)
+> - `StockDisciplineMetricsService` (Phase 4 — 2 methods: getStockDiscipline, getAccuracyKPIs)
+> - `ApprovalWorkloadService` (Phase 5 — 1 method: getApprovalWorkload)
+>
+> A shared trait `App\Services\Dashboard\Concerns\PeriodRangeHelpers` holds the
+> `previousPeriodRange` helper used by 3 of the services. The controller is now a
+> thin orchestrator (~700L): it resolves context (auth/employee/period), delegates
+> metric computation to the injected services via the existing `cached()`/`timed()`
+> wrappers, and renders the view. All 6 services are injected via constructor DI
+> (Laravel auto-resolves — no AppServiceProvider binding needed since they're
+> stateless). Each service can now be unit-tested in isolation with a mocked DB
+> facade. No behavior change — every method body was moved verbatim.
+
 | **G10** | **HIGH** | `UserPerformanceDashboardController::index` L92 accepts bare `Request $request`. `resolvePeriod` L561-601 reads `?period`, `?from`, `?to` — validated inline via `isValidDate()` regex L606-613 (manual `preg_match` + `checkdate`). `salesTrendAjax` L518 reads `?days` via `min(max((int)$request->input('days', 7), 7), 90)` — inline clamp. `fragmentAjax` L229 inherits same resolution. No `FormRequest` class exists. `DashboardApiController` index/salesTrend/topProducts take NO request parameter — they hardcode `now()` / `7 days` / `30 days`. `resolveRoleSections` default for unknown roles is permissive. | Unvalidated input flows into SQL `WHERE` clauses. The `isValidDate` regex protects against SQL injection (parameterized via `?` bindings) but doesn't catch semantically invalid ranges. Any new role auto-gets dashboard access (permissive default). | Create `app/Http/Requests/Dashboard/PerformanceDashboardRequest.php` with rules. Tighten `resolveRoleSections` default to restrictive (no sections enabled for unknown roles). |
 
 > ✅ **RESOLVED — G-148 (REPORTS-AUDIT-3).** New FormRequest `app/Http/Requests/Dashboard/PerformanceDashboardRequest.php` created with rules: `period` nullable|string|in:today,mtd,qtd,last30,custom; `from` nullable|date|before_or_equal:today; `to` nullable|date|after_or_equal:from|before_or_equal:today; `employee_id` nullable|integer|exists:employees,id; `days` nullable|integer|min:7|max:90. The `withValidator()` hook enforces the semantic constraint: when `period=custom`, BOTH `from` AND `to` are required (otherwise the controller's `resolvePeriod()` falls through to MTD — the FormRequest now returns a 422 instead so the user knows the request was malformed). Applied to 3 controller methods: `index`, `salesTrendAjax`, `fragmentAjax` (all changed from `Request $request` → `PerformanceDashboardRequest $request`). The existing `resolvePeriod()` helper continues reading from `$request->input(...)` — the FormRequest validation runs FIRST so invalid input gets a 422 instead of relying on the manual `isValidDate()` regex fallback to MTD.
