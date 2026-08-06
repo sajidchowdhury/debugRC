@@ -9,8 +9,10 @@
 @if(auth()->check())
 <div
     class="offcanvas offcanvas-end help-module-offcanvas"
+    role="dialog"
     tabindex="-1"
     id="helpModuleOffcanvas"
+    aria-modal="true"
     aria-labelledby="helpModuleOffcanvasLabel"
     data-bs-scroll="false"
     data-bs-backdrop="true"

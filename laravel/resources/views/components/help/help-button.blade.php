@@ -10,6 +10,10 @@
  * Position: fixed bottom-right (above the footer pill).
  * Aria-label: "সাহায্য" (Bangla for "Help").
  *
+ * Phase 8 a11y: declares aria-haspopup="dialog" + aria-expanded + aria-controls
+ * so screen readers announce it as a toggle that opens the #helpOffcanvas dialog.
+ * help.js syncs aria-expanded on shown/hidden.bs.offcanvas.
+ *
  * @var string|null $menuKey  Resolved by layout from the current route.
  */
 @endphp
@@ -21,6 +25,9 @@
     class="help-fab"
     aria-label="সাহায্য — এই পেজের বাংলা ব্যাখ্যা দেখুন"
     title="সাহায্য (?)"
+    aria-haspopup="dialog"
+    aria-expanded="false"
+    aria-controls="helpOffcanvas"
     data-menu-key="{{ $menuKey ?? '' }}"
     data-help-url="{{ route('help.menu', ['key' => '__KEY__']) }}"
 >

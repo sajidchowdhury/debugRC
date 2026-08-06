@@ -17,8 +17,10 @@
 @if(auth()->check())
 <div
     class="offcanvas offcanvas-end help-offcanvas"
+    role="dialog"
     tabindex="-1"
     id="helpOffcanvas"
+    aria-modal="true"
     aria-labelledby="helpOffcanvasLabel"
     data-bs-scroll="false"
     data-bs-backdrop="true"

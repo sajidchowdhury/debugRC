@@ -613,3 +613,197 @@ body:has(.help-footer-bar) footer.mt-auto { margin-bottom: 44px; }
     .help-breadcrumb { font-size: 0.7rem; max-width: 100%; }
     .help-module-menu-item__key { font-size: 0.62rem; }
 }
+
+/* =========================================================================
+   Phase 8 — Visual Polish & Responsive Pass
+   §6.2 premium theme (rounded-2xl, refined gradients/shadows/glassmorphism),
+   §6.3 motion (spring-ease standardised, content-swap fade-out→fade-in),
+   §8.2 mobile tap targets ≥44px, focus-visible rings, reduced-motion guard,
+   focus-trap affordance (JS-driven; CSS reserves focus-visible styling).
+   All additive. Scoped to .help-*. Degrades gracefully on older browsers
+   (color-mix, backdrop-filter, :focus-visible are all progressive enhancements).
+   ========================================================================= */
+
+/* ----- 8.1 Premium theme: rounded-2xl (16px) on cards + content blocks ----- */
+.help-module-card { border-radius: 16px; }
+.help-module-card__icon { border-radius: 12px; }
+.help-menu-content__icon { border-radius: 12px; }
+.help-module-content__icon { border-radius: 12px; }
+.help-menu-content__summary-card { border-radius: 12px; }
+.help-callout { border-radius: 12px; }
+.help-mermaid-wrap { border-radius: 12px; }
+.help-module-menu-item { border-radius: 10px; }
+.help-related-chip { border-radius: 999px; }     /* pill chips */
+.help-role-chip { border-radius: 999px; }
+.help-back-btn { border-radius: 999px; }
+.help-module-sheet {
+    border-top-left-radius: 20px;
+    border-top-right-radius: 20px;
+}
+.help-offcanvas__back { border-radius: 0; }       /* full-width bar, no radius */
+
+/* ----- 8.1 Premium shadows + gradient brighten on hover ----- */
+.help-module-card {
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.help-module-card:hover, .help-module-card:focus-visible {
+    box-shadow: 0 14px 30px -8px rgba(15, 23, 42, 0.28), 0 4px 10px -4px rgba(15, 23, 42, 0.1);
+}
+.help-module-card:hover .help-module-card__icon,
+.help-module-card:focus-visible .help-module-card__icon {
+    filter: brightness(1.12) saturate(1.1);
+}
+.help-menu-content__summary-card {
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+/* Subtle card lift on the menu/module content icon for a premium feel */
+.help-menu-content__icon, .help-module-content__icon {
+    box-shadow: 0 4px 12px -4px rgba(15, 23, 42, 0.25);
+}
+
+/* ----- 8.1 Glassmorphism enhancement (footer pill + sheet header) ----- */
+.help-footer-pill {
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(16px) saturate(180%);
+    -webkit-backdrop-filter: blur(16px) saturate(180%);
+    box-shadow: 0 -2px 20px -6px rgba(15, 23, 42, 0.15),
+                inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    border-color: rgba(255, 255, 255, 0.5);
+}
+.help-module-sheet__header {
+    background: rgba(248, 250, 252, 0.85);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+
+/* ----- 8.1 Standardise spring-ease motion (cubic-bezier(.22,1,.36,1)) ----- */
+.help-fab, .help-footer-pill, .help-module-card, .help-module-menu-item,
+.help-related-chip, .help-back-btn {
+    transition: transform 280ms cubic-bezier(.22, 1, .36, 1),
+                box-shadow 280ms cubic-bezier(.22, 1, .36, 1),
+                background 200ms ease,
+                border-color 200ms ease,
+                color 200ms ease,
+                filter 200ms ease;
+}
+
+/* ----- 8.1 Content-swap fade-OUT (120ms) → fade-IN (200ms) -----
+   help.js adds .help-body--fade-out before swapping content, then removes it
+   and re-adds .help-body--fade-in (defined in Phase 4) on the new content.
+   The keyframe keeps opacity:0 (forwards) so the old content stays hidden
+   during the 120ms until the swap. */
+.help-body--fade-out {
+    animation: help-body-fade-out 120ms cubic-bezier(.22, 1, .36, 1) forwards;
+}
+@keyframes help-body-fade-out {
+    from { opacity: 1; transform: translateY(0); }
+    to   { opacity: 0; transform: translateY(-6px); }
+}
+
+/* ----- 8.2 Focus-visible rings (keyboard navigation) -----
+   Distinct, tinted outline on every interactive help element so keyboard
+   users always see where focus is. Uses the module tint where available. */
+.help-fab:focus-visible,
+.help-footer-pill:focus-visible,
+.help-module-card:focus-visible,
+.help-module-menu-item:focus-visible,
+.help-related-chip:focus-visible,
+.help-back-btn:focus-visible,
+.help-offcanvas .btn-close:focus-visible,
+.help-module-offcanvas .btn-close:focus-visible,
+.help-module-sheet .btn-close:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--help-tint-c1, #475569) 55%, #fff);
+    outline-offset: 2px;
+    border-radius: inherit;
+}
+/* Module cards / menu items tint to their own colour (--mc1) not the offcanvas tint */
+.help-module-card:focus-visible,
+.help-module-menu-item:focus-visible {
+    outline-color: color-mix(in srgb, var(--mc1, #475569) 55%, #fff);
+}
+
+/* ----- 8.2 Mobile tap targets ≥44px (WCAG 2.5.5) -----
+   Ensures every interactive element is comfortably tappable at 360/414px. */
+@media (max-width: 575.98px) {
+    .help-footer-pill { min-height: 44px; }
+    .help-module-card { min-height: 44px; padding: 12px; }
+    .help-module-menu-item { min-height: 44px; padding: 11px 12px; }
+    .help-back-btn { min-height: 40px; }
+    /* Enlarge the close (×) hit area on touch */
+    .help-module-sheet .btn-close,
+    .help-offcanvas .btn-close,
+    .help-module-offcanvas .btn-close {
+        min-width: 44px;
+        min-height: 44px;
+        background-size: 1.1em;
+    }
+}
+
+/* ----- 8.2 Mobile: bottom sheet becomes a true bottom drawer -----
+   Taller max-height (85vh) so the 8 module cards are reachable without
+   excessive scroll; rounded top corners; slightly tighter padding. */
+@media (max-width: 575.98px) {
+    .help-module-sheet {
+        max-height: 85vh;
+        border-top-left-radius: 18px;
+        border-top-right-radius: 18px;
+    }
+    .help-module-sheet__header { padding: 12px 16px; }
+    .help-module-sheet__body { padding: 12px 16px 20px; }
+}
+
+/* ----- 8.2 Cross-browser: ensure offcanvas fills viewport height on mobile -----
+   Guarantees no content peeks behind a full-screen drawer (Chrome/Firefox/Edge). */
+@media (max-width: 575.98px) {
+    .help-offcanvas, .help-module-offcanvas {
+        height: 100% !important;
+        max-height: 100vh !important;
+    }
+    /* Body content scrolls independently; header + back bar stay fixed */
+    .help-offcanvas__body, .help-module-offcanvas__body {
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        flex: 1 1 auto;
+    }
+}
+
+/* ----- 8.2 Module offcanvas: stack as flex column so the body scrolls ----- */
+.help-offcanvas, .help-module-offcanvas {
+    display: flex;
+    flex-direction: column;
+}
+
+/* ----- 8.2 Print: already hidden in Phase 5; ensure backdrops also vanish ----- */
+@media print {
+    .help-offcanvas__back { display: none !important; }
+}
+
+/* ----- 8.2 Comprehensive prefers-reduced-motion guard (FINAL, overrides all) -----
+   Every animation + transition in the help system collapses to instant show/hide.
+   Listed exhaustively so no Phase-2/4/5/8 motion survives this guard. */
+@media (prefers-reduced-motion: reduce) {
+    .help-fab,
+    .help-fab__pulse,
+    .help-footer-pill,
+    .help-module-card,
+    .help-module-menu-item,
+    .help-related-chip,
+    .help-back-btn,
+    .help-menu-content__icon,
+    .help-module-content__icon,
+    .help-offcanvas,
+    .help-module-offcanvas,
+    .help-module-sheet {
+        animation: none !important;
+        transition: none !important;
+    }
+    .help-body--fade-in,
+    .help-body--fade-out,
+    .help-mermaid-wrap--rendered {
+        animation: none !important;
+    }
+    .help-module-card:hover, .help-module-card:focus-visible {
+        transform: none !important;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04) !important;
+    }
+}

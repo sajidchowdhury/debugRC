@@ -26,8 +26,10 @@ $colors = [
 @if(auth()->check())
 <div
     class="offcanvas offcanvas-bottom help-module-sheet"
+    role="dialog"
     tabindex="-1"
     id="helpModuleSheet"
+    aria-modal="true"
     aria-labelledby="helpModuleSheetLabel"
     data-bs-backdrop="true"
 >
