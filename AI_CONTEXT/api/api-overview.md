@@ -599,9 +599,60 @@ Gap IDs are stable references used across `api-conventions.md`, `api-modules.md`
 | G11 | MEDIUM | No API tests for idempotency (G7 endpoints). The `Cache::get/put` replay path is never exercised in tests. | Add a `test_finalize_with_same_idempotency_token_returns_idempotent_replay` test. |
 | G12 | MEDIUM | `POST /branch-demands/{id}/reprice` has only a validation-path test, no happy-path test. | Add a `test_reprice_demand_happy_path` test. |
 | G13 | LOW | The Commission module has NO web mirror (API-only) AND no API tests — 8 endpoints are completely untested on both surfaces. | Add `CommissionApiTest.php` (this also closes part of G3). |
+
+> ✅ **RESOLVED — G-265 (LOW-WAVE-2).** The gap row text was **stale** — the
+> Commission module's API test file
+> `laravel/tests/Feature/Api/V1/Sales/CommissionApiTest.php` was created by
+> CRITICAL-WAVE-1-A (the "API-4" subagent) and shipped with **21 test
+> methods** covering all 8 Commission endpoints:
+>
+> 1. `GET /sales/commission/rules` (list) — 4 tests: 401 no-token, 401
+>    invalid-token, paginated JSON shape, salesman_id filter, per_page clamp.
+> 2. `GET /sales/commission/rules/{id}` (show) — 2 tests: returns rule by
+>    id, 404 for unknown id.
+> 3. `POST /sales/commission/rules` (create, admin-only) — 4 tests: 403
+>    non-admin, 201 happy path with admin token, 422 missing required
+>    field, 422 invalid rule_type.
+> 4. `POST /sales/commission/rules/{id}/deactivate` (delete-equivalent,
+>    admin-only) — 2 tests: 200 success with admin, 403 non-admin.
+> 5. `GET /sales/commission/entries` (list) — 2 tests: paginated JSON
+>    shape, period filter.
+> 6. `GET /sales/commission/salesman-summary` — 1 test: 422 without
+>    period.
+> 7. `GET /sales/commission/branch-summary` — 2 tests: 422 invalid
+>    period format, 200 valid period.
+> 8. `POST /sales/commission/confirm-period` (admin-only) — 3 tests: 403
+>    non-admin, 422 without period, 200 with no pending entries.
+>
+> The test extends `Tests\TestCase` (DatabaseTransactions +
+> Redis-middleware stripped) and uses the `BuildsRoleUsers` +
+> `IssuesApiTokens` traits per the G5 convention. The class docblock
+> documents the 8-endpoint coverage map. Note: there is no separate
+> "update" endpoint on the Commission API (rules are deactivated, not
+> edited) — the 8 endpoints above are the complete Commission surface.
+>
+> Note: G-264 (in `api-modules.md` §13) and G-265 (here) are the **same
+> gap** cited in two source docs — both close against the same single test
+> file. No code change was needed in this wave — the file already existed;
+> this entry + the parallel G-264 entry in `api-modules.md` correct the
+> stale "8 endpoints untested" claim that was never updated when
+> CRITICAL-WAVE-1-A shipped the test file.
 | ~~G14~~ ✅ | ~~MEDIUM~~ RESOLVED | ~~No CORS config (`config/cors.php` absent). Browser SPA consumers will hit Laravel 11's default CORS, which blocks credentialed cross-origin requests.~~ **MEDIUM-WAVE-1** — created `config/cors.php` with an env-driven policy: `paths => ['api/*', 'sanctum/csrf-cookie']`, `allowed_methods => ['*']`, `allowed_origins` from `CORS_ALLOWED_ORIGINS` env (comma-separated, no wildcard so credentialed requests work), `allowed_headers => ['*']`, `exposed_headers` includes the custom `X-RateLimit-*` + `X-Total-Count` headers, `supports_credentials` from env (default false — the API uses Bearer tokens, not cookies). The primary consumers remain mobile/AI sidecars (no CORS constraint); a future browser SPA can now consume the API by setting `CORS_ALLOWED_ORIGINS`. | No further action. |
 | ~~G15~~ ✅ | ~~MEDIUM~~ RESOLVED | ~~No `Accept` negotiation. The API ignores `Accept` headers and always returns JSON. A future `v2` cannot be selected via `Accept: application/vnd.rcerp.v2+json`.~~ **MEDIUM-WAVE-1** — the versioning strategy is decided in §14 below: **URL-path versioning** (`/api/v1`, future `/api/v2`), NOT Accept-header negotiation. v2 ships as a parallel `Route::prefix('v2')` group; v1 stays default ≥1 major release; deprecation via `Deprecation`/`Sunset` headers (G16). Accept-header negotiation rejected — URL-path is simpler for mobile clients + already in place. Closes alongside `api-conventions.md` G9 (G-200). | No further action. |
 | G16 | LOW | No `Sunset` / `Deprecation` header machinery. When v2 ships, v1 endpoints cannot be deprecated gracefully. | Add a `Deprecation` middleware that attaches `Sunset` + `Deprecation` headers to flagged routes. |
+
+> ✅ **RESOLVED — G-268 (LOW-WAVE-2).** Duplicate of G-262 (see
+> `api-conventions.md` §13 G11). No v1 endpoint is deprecated yet — v1 is
+> the only API surface in production and remains the default per §14
+> (URL-path versioning; v2 has not shipped). The `Deprecation` / `Sunset`
+> header machinery is therefore unnecessary today and is explicitly planned
+> for the v2 cutover wave (cross-reference §14 "Forward plan":
+> *"Deprecation will be signaled via `Deprecation: true` + `Sunset: <date>`
+> response headers on v1 routes (requires a new middleware — G16)"*). The
+> `Deprecation` middleware will be added as part of the v2 cutover wave
+> alongside the parallel v2 `Route::prefix('v2')` route group. Adding the
+> middleware now (with zero deprecated routes to flag) would be dead code +
+> a maintenance burden. No code change.
 
 ---
 

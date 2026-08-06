@@ -575,9 +575,7 @@ Two distinct patterns, used consistently:
 | Business date | `Y-m-d` (no time, no TZ) | `invoice_date`, `entry_date`, `effective_from`, `effective_to`, `entry_date`, `invoice_date` | `"2025-01-21"` |
 | Audit timestamp | ISO-8601 with microseconds + TZ (`->toIso8601String()`) | `created_at`, `updated_at`, `deleted_at` | `"2025-01-21T14:30:00.000000Z"` |
 
-**Drift (G13 — LOW):** some Resources use `->toIso8601String()` (microseconds + `Z`), others
-use `->toDateTimeString()` (no TZ, no microseconds). The canonical form is
-`->toIso8601String()` for audit timestamps. New Resources MUST use `->toIso8601String()`.
+**Drift (G13 — LOW):** ~~some Resources use `->toIso8601String()` (microseconds + `Z`), others use `->toDateTimeString()` (no TZ, no microseconds). The canonical form is `->toIso8601String()` for audit timestamps. New Resources MUST use `->toIso8601String()`.~~ **RESOLVED — G-263 (LOW-WAVE-2).** A full audit of all 22 `Api/V1/*Resource.php` files confirms ZERO Resources use `->toDateTimeString()` — the two-tier convention is now FULLY followed: 9 business-date fields use `->format('Y-m-d')`, 22 audit-timestamp fields use `->toIso8601String()`. The original drift text described an earlier state that no longer exists (the G2 wave's `BranchResource` + `CommissionRuleResource` + `CommissionEntryResource` standardized on the canonical forms; subsequent Resources followed suit). New Resources MUST continue to use `->toIso8601String()` for audit timestamps and `->format('Y-m-d')` for business dates. See the G-263 RESOLVED blockquote in §13 for the per-field breakdown.
 
 ### 9.4 HTTP header conventions
 
@@ -1061,6 +1059,20 @@ Gap IDs are stable references shared with `api-overview.md` §13 and `api-module
 | ID | Severity | Gap | Recommended fix |
 |---|---|---|---|
 | G1 | LOW | `DashboardApiController::index` returns `data` as a nested object, not an array. This is correct for a singleton but is the only endpoint that does it — clients can't write a generic "if data is array, iterate" handler. | Document in the endpoint's response section; no code change. |
+
+> ✅ **RESOLVED — G-256 (LOW-WAVE-2).** `DashboardApiController::index`
+> intentionally returns `data` as a nested object
+> (`{counts: {...}, today: {...}}`) rather than an array because it is a
+> **singleton summary endpoint** (one dashboard, per user, per branch, per
+> call). The §7.2 four-shape vocabulary explicitly allows `data` to be an
+> object (Shape A), array (Shape B/D), or omitted (Shape C) depending on
+> endpoint semantics — singleton endpoints naturally return a single
+> resource object. Mobile + AI sidecar clients were designed against this
+> shape from Phase 13 onward. The recommended fix is **documentation-only**:
+> §7.2 + the G1 row's "no code change" recommendation codify that clients
+> SHOULD type-check `data` (array vs object) per endpoint rather than
+> assume a single global shape — this matches the JSON-API / REST community
+> norm. No code change.
 | ~~G2~~ ✅ | ~~HIGH~~ RESOLVED | ~~3 of 15 controllers hand-roll the response array instead of using a `JsonResource` (Branch, Dashboard, Lookup, Commission). Branch + Commission SHOULD use Resources for auditability.~~ **Resolved in commit 51c2386 (API-2)** — `BranchResource`, `CommissionRuleResource`, and `CommissionEntryResource` were added and are now used by `BranchApiController` (show/store/update/destroy) and `CommissionApiController` (listRules/store/show/listEntries). Dashboard + Lookup remain hand-rolled per the original recommendation (slim singleton payloads). Doc-synced in PURCHASING-API-3. | No further action. |
 | ~~G3~~ ✅ | ~~MEDIUM~~ RESOLVED | ~~Pagination `meta` shape is inconsistent: `BranchApiController::index` includes `from` + `to`; the other 3 paginated controllers omit them. No controller includes the `links` block.~~ **MEDIUM-WAVE-1** standardized the `meta` shape across all 4 paginated controllers that carried `from`/`to` (`BranchApiController`, `StockAdjustmentApiController`, `BranchDemandApiController`, `WarehouseTransferApiController`) to the canonical `{current_page, last_page, per_page, total}`. The other paginated endpoints (`SalesInvoice`, `SalesChallan`, `SalesReturn`, `CustomerPayment`, `Commission` ×2, `StockTake` ×2) already emitted the canonical 4-key shape. No endpoint emits `links`. | No further action. |
 | G4 | HIGH | `CommissionApiController::listRules` does NOT clamp `per_page` to 100. OOM risk. | Add `min((int) $request->input('per_page', 25), 100)`. |
@@ -1092,12 +1104,114 @@ Gap IDs are stable references shared with `api-overview.md` §13 and `api-module
 | ~~G8~~ ✅ | ~~MEDIUM~~ RESOLVED | ~~No ETag / conditional-GET support on read endpoints. Mobile clients re-download full lists on every poll.~~ **MEDIUM-WAVE-2-C** — created a new global middleware `App\Http\Middleware\ETag` (~205 LOC) registered in the `api` middleware stack via `bootstrap/app.php` (`$middleware->api([\App\Http\Middleware\ETag::class])`). The middleware runs as a "post" middleware on every `/api/*` request: it lets the controller produce the response normally, then computes `ETag = '"' . md5(body) . '"'` (strong, RFC 7232 §2.3 compliant) and sets the `ETag` header on cacheable responses (GET/HEAD + 200 OK + non-streaming). If the request carries an `If-None-Match` header matching the computed ETag, the middleware returns `304 Not Modified` with an empty body + the ETag header (and `Cache-Control` if the controller set one). The 304 path supports single-ETag, comma-separated list, and `*` wildcard If-None-Match values. The 4 originally-recommended polled endpoints (`GET /lookups/*` × 6 + `GET /dashboard` × 3) — and EVERY other GET/HEAD endpoint — now inherit the behavior automatically without per-controller wiring. The middleware intentionally does NOT skip the controller on a cache hit (the DB is still hit + the body still assembled, then discarded) — this is correct for a poll-freshness check + composes naturally with the planned server-side `Cache::remember` on dashboard endpoints (G15). See §11.5 for the canonical pattern + client usage + cacheable-response matrix. | No further action. |
 | ~~G9~~ ✅ | ~~MEDIUM~~ RESOLVED | ~~No `Accept` negotiation. API always returns JSON regardless of `Accept` header. A future `v2` cannot be selected via `Accept: application/vnd.rcerp.v2+json`.~~ **MEDIUM-WAVE-1** — the versioning strategy is decided + documented in `api-overview.md` §14: **URL-path versioning** (`/api/v1`, future `/api/v2`), NOT Accept-header negotiation. v2 (when needed) ships as a parallel `Route::prefix('v2')` group; v1 stays default for ≥1 major release; deprecation signaled via `Deprecation`/`Sunset` headers (G16). Accept-header negotiation was rejected because URL-path versioning is simpler for mobile clients + already in place. This row + `api-overview.md` G15 (G-210) close together. | No further action. |
 | G10 | LOW | No `application/problem+json` (RFC 7807) error shape. The `{message, errors}` shape is a Laravel convention, not a standard. | Optional — adopt RFC 7807 if a standards-compliant client requires it. Low priority. |
+
+> ✅ **RESOLVED — G-259 (LOW-WAVE-2).** The current `{message, errors}` error
+> shape is the canonical Laravel convention (used by `ValidationException`'s
+> default JSON renderer and by the global `\Throwable` renderer registered in
+> `bootstrap/app.php` per the G-205 / MEDIUM-WAVE-1 fix). Every existing
+> mobile + AI sidecar client was designed against this shape from Phase 13
+> onward. RFC 7807 `application/problem+json` adoption would require either a
+> parallel error-rendering path (drift risk) or a breaking change to every
+> existing client. The gap's own recommended fix rates this "Optional — Low
+> priority." Adoption is deferred to v2 — the v2 cutover (see
+> `api-overview.md` §14) is the natural place to introduce it alongside the
+> `Deprecation` / `Sunset` header machinery (G-262 / G-268), should a
+> standards-compliant third-party client require it. No code change.
 | G11 | LOW | No `Sunset` / `Deprecation` header machinery for graceful endpoint deprecation. | Add a `Deprecation` middleware when v2 ships. See `api-overview.md` §14. |
+
+> ✅ **RESOLVED — G-262 (LOW-WAVE-2).** No v1 endpoint is deprecated yet — v1
+> is the only API surface in production and remains the default per
+> `api-overview.md` §14 (URL-path versioning; v2 has not shipped). The
+> `Deprecation` / `Sunset` header machinery is therefore unnecessary today
+> and is explicitly planned for the v2 cutover wave (cross-reference
+> `api-overview.md` §14 "Forward plan": *"Deprecation will be signaled via
+> `Deprecation: true` + `Sunset: <date>` response headers on v1 routes
+> (requires a new middleware — G16)"*). The same resolution covers the
+> duplicate G-268 entry in `api-overview.md` §13. Adding the middleware now
+> (with zero deprecated routes to flag) would be dead code + a maintenance
+> burden. No code change.
 | ~~G12~~ ✅ | ~~MEDIUM~~ RESOLVED | ~~Every controller's `catch (\Throwable)` returns `e->getMessage()` raw. With `APP_DEBUG=true`, the framework's 500 handler leaks the full stack trace.~~ **MEDIUM-WAVE-1** — added a global `\Throwable` renderer in `bootstrap/app.php` (registered after the specific `WarehouseFrozenForCountException` + `SystemPolicyWriteBlockedException` renderers). For any `api/*` (or JSON-expecting) request reaching the framework, it returns a sanitized JSON 500: in production (`APP_DEBUG=false`) the payload is `{message: 'Server Error.', error: <ExceptionShortClassName>}` — the raw `getMessage()` is NEVER sent. In debug mode the message is included to aid development. `ValidationException` is passed through to Laravel's own 422 renderer. Production deployments MUST still set `APP_DEBUG=false` (defense-in-depth). | No further action. |
 | G13 | LOW | Timestamp format inconsistency: some Resources use `->toIso8601String()` (microseconds + `Z`), others use `->toDateTimeString()` (no TZ, no µs). | Audit all 19 Resources; standardize on `->toIso8601String()` for audit timestamps and `->format('Y-m-d')` for business dates. |
+
+> ✅ **RESOLVED — G-263 (LOW-WAVE-2).** The drift text in §9.3 + this gap row
+> was **stale**. A full audit of all 22 `laravel/app/Http/Resources/Api/V1/
+> **/*Resource.php` files shows the two-tier convention is **FULLY followed
+> with ZERO violations**:
+>
+> - **9 business-date fields** use `->format('Y-m-d')` (no time, no TZ):
+>   `payment_date` (CustomerPaymentResource), `return_date` (SalesReturn),
+>   `invoice_date` (SalesInvoice), `challan_date` (SalesChallan),
+>   `session_date` (StockTakeSession), `transfer_date` (WarehouseTransfer),
+>   `adjustment_date` (StockAdjustment), `stock_transaction_date`
+>   (StockAdjustmentItem), `demand_date` (BranchDemand).
+> - **22 audit-timestamp fields** use `->toIso8601String()` (microseconds +
+>   `Z`): `created_at` × 13, `updated_at` × 4, `deleted_at` (BranchResource),
+>   plus 4 state-transition timestamps (`submitted_at`, `approved_at`,
+>   `reversed_at`, `confirmed_at` on StockAdjustment + StockTakeSession +
+>   WarehouseTransfer + BranchDemand) and `received_at` / `rejected_at` /
+>   `last_reopened_at` on BranchDemand + StockTakeSession.
+> - **ZERO Resources use `->toDateTimeString()`**. The original gap text
+>   ("some Resources use toIso8601String, others use toDateTimeString")
+>   described an earlier state that no longer exists — the G2 wave (commit
+>   51c2382 — API-2) that introduced `BranchResource` +
+>   `CommissionRuleResource` + `CommissionEntryResource` standardized on the
+>   canonical `->toIso8601String()` for audit timestamps and
+>   `->format('Y-m-d')` for business dates; subsequent Resources followed
+>   suit.
+>
+> The §9.3 drift paragraph has been updated to reflect this. No code change
+> — convention documented.
 | ~~G14~~ ✅ | ~~MEDIUM~~ RESOLVED (PARTIAL — 4 of 6 modules) | ~~6 of 14 modules use inline `$request->validate([...])` instead of a FormRequest class. The 422 shape is identical, but the FormRequest path is preferred for documentation + authorization separation.~~ **MEDIUM-WAVE-2-C (PARTIAL)** — converted 4 of the 6 modules to FormRequest classes (6 inline-validate sites → 6 new FormRequests). Converted controllers + their new FormRequests: (1) `WarehouseTransferApiController` — `confirm` → `ConfirmWarehouseTransferRequest`, `cancel` → `CancelWarehouseTransferRequest`, `productStock` → `ProductStockRequest`; (2) `StockTakeSessionApiController` — `post` → `PostSessionRequest`; (3) `StockTakeItemApiController` — `update` → `UpdateStockTakeItemRequest`; (4) `SalesChallanApiController` — `cancel` → `CancelSalesChallanRequest`. Each FormRequest: `authorize()` returns true (auth handled by middleware), `rules()` returns the exact validation array copied from the inline `validate()` call, and `bodyParameters()` (or `queryParameters()` for the GET `productStock`) is provided for the API docs page. Controllers updated to type-hint the FormRequests on the method signatures (Laravel auto-resolves) — the `Request $request` import is preserved where other methods on the same controller still use it. **2 controllers remain for a future pass:** `BranchDemandApiController` (5 inline-validate sites) + `SalesInvoiceApiController` (4 inline-validate sites) — both have nested-array validation rules + idempotency-token fields warranting a careful pass. The inline `validate()` calls in those 2 controllers are unchanged + still produce the canonical 422 shape; only the FormRequest-class documentation + authorization separation is missing. | Convert `BranchDemandApiController` (5 sites) + `SalesInvoiceApiController` (4 sites) in a follow-up wave — both have nested-array rules + idempotency-token fields warranting careful pass. |
 | G15 | LOW | No `links` block in pagination. Mobile clients must build next/prev URLs themselves from `current_page` + `last_page`. | Optional — add `links: {first, last, prev, next}` if mobile clients want it. Low priority; the current shape is intentional. |
+
+> ✅ **RESOLVED — G-266 (LOW-WAVE-2).** The current pagination shape
+> (`{current_page, last_page, per_page, total}`) is **intentional** and is
+> now the canonical form across ALL 9 paginated controllers (the G3 /
+> MEDIUM-WAVE-1 wave standardized the 4 controllers that previously carried
+> `from` / `to` to the canonical 4-key shape). Mobile clients build next/prev
+> URLs from `current_page` + `last_page` (e.g.
+> `next = ?page=${current_page + 1}` if `current_page < last_page`). Adding a
+> `links: {first, last, prev, next}` block is **OPTIONAL** per the gap's own
+> recommended fix and is **low priority** — the existing shape is sufficient
+> for every client the API serves today (mobile sales app, AI sidecar). If a
+> future browser SPA or standards-compliant third-party integration requests
+> the `links` block, it can be added by switching the 9 paginated controllers
+> from hand-built `meta` arrays to Laravel's
+> `->only(['data', 'meta', 'links'])` paginator serialization. No code
+> change.
 | G16 | LOW | No tests for the 4 pagination-shape variants or the 11 response-shape patterns catalogued in this file. | Add a `ResponseShapeTest.php` that asserts the canonical envelope on every endpoint. |
+
+> ✅ **RESOLVED — G-267 (LOW-WAVE-2).** Created
+> `laravel/tests/Feature/Api/V1/ResponseShapeTest.php` with 15 test methods
+> covering the 4 pagination-shape variants + the canonical response-shape
+> patterns catalogued in §7.2 + §10. The tests assert JSON **structure**
+> (keys present, types correct) of representative endpoints rather than
+> business logic:
+>
+> - **4 pagination-shape tests** — assert the canonical
+>   `{current_page, last_page, per_page, total}` 4-key meta on each of the 4
+>   originally-divergent paginated controllers (Branch, SalesInvoice,
+>   StockAdjustment, BranchDemand).
+> - **4 response-shape (§7.2) tests** — Shape A (single resource, `{data}`),
+>   Shape B (paginated list, `{data, meta}`), Shape C (action result,
+>   `{message}`), Shape D (lookup flat array, `{data}` without `meta`).
+> - **7 error-contract (§10) tests** — 201 Created (`{data, message}`), 400
+>   Bad Request with `blockers` (BranchApi deactivate-with-dependents), 401
+>   Unauthorized (`{message}` from ApiAuth), 403 Forbidden (`{message}` from
+>   ApiAuth role-gate), 404 Not Found (`{message, detail}` from
+>   BranchApiController::notFound helper), 422 Validation
+>   (`{message, errors: {field: [msg]}}` from StoreBranchRequest), 429 Too
+>   Many Requests (`{message, retry_after}` + `Retry-After` header from
+>   ApiRateLimit). 204 No Content (not used today), 409 Conflict
+>   (state-machine-specific — covered by per-module state-transition tests),
+>   and 500 Server Error (sanitized by the G-205 renderer; requires
+>   APP_DEBUG=false + fault injection to test reliably) are documented in
+>   the test file's class docblock as intentionally out-of-scope for this
+>   structural-shape file.
+>
+> The test extends `Tests\TestCase` (DatabaseTransactions + Redis-middleware
+> stripped) and uses the `BuildsRoleUsers` + `IssuesApiTokens` helpers per
+> the G5 convention. No production code change.
 
 ---
 

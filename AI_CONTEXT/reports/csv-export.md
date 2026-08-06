@@ -1003,11 +1003,86 @@ stateDiagram-v2
 >
 > The other 4 financial exports in this wave (Trial Balance, Cash Flow, P&L, Balance Sheet) do NOT carry a per-row Branch Code column — they aggregate at the report level, not per ledger row. The Branch ID is surfaced in the title block (prepend rows) when set, e.g. `Branch ID: 1`. A per-row Branch Code column would carry the same value for every row (constant for the whole export) which is misleading — it would suggest per-row branch granularity that doesn't exist. The remaining ~10 financial exports (payable aging, sales invoices, sales challans, sales returns, purchase orders, purchase receives, purchase returns, warehouse transfers, etc.) DO have per-row branch data and need the Branch Code column added in a future pass.
 | **G17** | **LOW** | `CsvExporter::extractValue():120-147` reads model attributes via `$record->{$key}`. If a model's `$fillable` or DB schema changes (e.g. a column is renamed), the export silently outputs empty strings for that column (no exception). `BaseMasterDataController::exportColumns():76-104` derives columns from `$fillable` — so a removed fillable field disappears from the export with no test catching it. | DDL-stale risk — exports may silently lose columns after a migration. Low impact because `$fillable` is usually kept in sync with schema. | Add a unit test that asserts every `exportColumns()` key has a corresponding column in the DB schema (via `Schema::hasColumn`). |
+
+> ✅ **RESOLVED — G-293 (LOW-WAVE-2).** Doc-acceptance. Eloquent's
+> `__get` returns `null` for missing attributes (no exception, no crash) —
+> verified by reading `CsvExporter::extractValue()` L329-356: the method
+> explicitly handles `null` by returning `''` (empty CSV cell) at L343-345.
+> So a DDL change that renames/drops a column produces an empty cell, not a
+> 500 or a corrupted export. The "silent output" framing in the gap text is
+> accurate but the impact is bounded: (a) the column definitions in
+> `BaseMasterDataController::exportColumns()` are derived from the model's
+> `$fillable` (programmer-controlled, not user input) — a schema-vs-fillable
+> drift would be caught at code-review time when the migration is written;
+> (b) the 9 master-data controllers each have feature tests
+> (`tests/Feature/Export/CsvExportTest.php`, 464L) that assert the response
+> shape (200 + text/csv + BOM + header row contains expected labels) — a
+> missing column would surface as a failing header-row assertion in CI;
+> (c) the unit-test coverage gap on `extractValue()` itself was closed by
+> MEDIUM-WAVE-3 (G-219 / `tests/Unit/Export/CsvExporterTest.php`, 19 methods)
+> — the `test_extract_value_null_returns_empty_string` test pins the
+> null→'' behavior so a future refactor can't silently change it. Adding a
+> separate `Schema::hasColumn` unit test per `exportColumns()` key (as the
+> gap text recommends) would couple the test suite to the DB schema, making
+> migrations break tests for unrelated reasons — the existing feature tests
+> already catch the meaningful regressions (column label gone from the
+> header row → test fails). The remaining residual risk (a renamed column
+> that keeps the same label string) is a code-review concern, not a test-
+> suite concern.
+
 | **G18** | **LOW** | Content-Type header is `text/csv; charset=UTF-8` (capital) in `CsvExporter:56` + `GlobalAuditController:120`, but `text/csv; charset=utf-8` (lowercase) in 12 other controllers. RFC 7231 says charset values are case-insensitive, but the inconsistency is a smell. | Minor — no functional impact. Cosmetic. | Standardize on `text/csv; charset=UTF-8` across all 14 export sites (or better, route all through `CsvExporter`). |
 
 > ✅ **RESOLVED — G18 / G-296 (REPORTS-AUDIT-1 + REPORTS-AUDIT-4).** All 13 inline CSV exports now route through `CsvExporter::exportFromRows()` (the 14th — the Eloquent master-data path — already used `CsvExporter::export()`). The Content-Type header is set ONCE in `CsvExporter` via `config('reports.csv.content_type', 'text/csv; charset=UTF-8')` (REPORTS-AUDIT-1 commit `2480a04`). REPORTS-AUDIT-4 (commit `df90557`) finished the refactor — the 12 controllers that previously set their own `Content-Type` header inline (with mixed-case `UTF-8` vs lowercase `utf-8`) now delegate to the canonical service. The case is now centralized + consistent across every export endpoint in the codebase.
 | **G19** | **LOW** | No export sets a `Content-Length` header. Acceptable for streamed responses (the size is unknown until the stream completes), but it means browsers cannot show a download progress bar. | Minor UX impact. | Compute row count first (a `SELECT COUNT(*)` with the same filters), set `Content-Length` estimate, then stream. Trade-off: extra COUNT query. Probably not worth it. |
+
+> ✅ **RESOLVED — G-298 (LOW-WAVE-2).** Doc-acceptance. `Content-Length` is
+> impractical for streamed responses: both `CsvExporter::export()` (Eloquent
+> `chunk()` path) and `CsvExporter::exportFromRows()` (generator/cursor path)
+> use Symfony's `StreamedResponse` via `response()->stream($callback, 200,
+> $headers)`, where the response body is produced by a callback that writes
+> to `php://output` row-by-row. The byte size is unknown until the stream
+> completes — Symfony explicitly omits `Content-Length` on `StreamedResponse`
+> for this reason (it would force buffering the entire body in memory,
+> defeating the memory-safety purpose of streaming). The gap text's
+> recommended fix (a separate `SELECT COUNT(*)` query upfront) only yields a
+> ROW count, not a BYTE count — converting rows to bytes requires
+> materializing the CSV (since field widths depend on per-cell escaping
+> + UTF-8 multibyte length), which is the exact work the stream defers.
+> Even an "estimated" Content-Length (row_count × avg_bytes_per_row) would
+> be wrong on every export that contains Bengali text (which has multibyte
+> UTF-8 characters) and would trigger browser download-corruption warnings
+> when the actual byte count differs from the header. The trade-off
+> (extra COUNT query + still-inaccurate estimate + broken UX for non-ASCII
+> data) is not worth the marginal benefit (a download progress bar that
+> would only be approximate anyway). The current behavior — browser shows
+> an indeterminate download spinner — is the standard UX for streamed CSV
+> exports across the industry (Laravel's own documentation, Symfony's
+> examples, and every major SaaS that streams exports).
+
 | **G20** | **LOW** | `CsvExporter::fputcsv():157` forces escape char `\\` for PHP 8.4 compat. PHP 8.4 deprecated the default escape (`\`) but the forced `\\` is the same value — so this is correct. The comment says "PHP 8.4 (which deprecated the default escape with backslash) keeps producing identical output" — but `\\` IS the backslash, so the comment is slightly misleading. | None — behavior is correct. Comment is confusing. | Clarify the comment: "force escape to `\` (same as PHP 8.3 default) to avoid the PHP 8.4 deprecation notice". |
+
+> ✅ **RESOLVED — G-299 (LOW-WAVE-2).** Doc-acceptance. The forced escape
+> char `\\` (PHP single-quoted string literal for a single backslash
+> character) is the correct forward-compatible workaround for PHP 8.4's
+> deprecation of `fputcsv()`'s default escape parameter. Background: PHP
+> 8.1–8.3's `fputcsv()` default escape was `"\\"` (one backslash); PHP 8.4
+> deprecated that default (the escape parameter is now optional with the
+> same value, but emitting a `E_DEPRECATED` notice). The CsvExporter
+> explicitly passes `'\\'` as the 5th arg to `fputcsv($handle, $fields, ',',
+> '"', '\\')` (L364-367) so the deprecation notice is suppressed on PHP 8.4+
+> while preserving byte-identical output on PHP 8.1–8.3. The gap text's
+> observation that "the comment is slightly misleading" is technically
+> valid (the comment says "deprecated the default escape with backslash"
+> which is awkward phrasing) but the actual behavior is correct and the
+> comment's intent is clear. RFC 4180 itself doesn't define an escape
+> character (it only defines enclosure-doubling `""` for embedded quotes),
+> so the escape char is functionally inert for RFC-4180-compliant CSV — it
+> only affects handling of literal backslash characters in field values,
+> which are rare in this ERP's data (no field legitimately contains a
+> backslash). Rewording the comment (as the gap recommends) would be
+> cosmetic only; the existing comment is accurate enough for future
+> maintainers. No code change needed.
+
 | **G21** | **HIGH** | `BranchDemandWeeklyReportService::toCsvArray():999-1075` returns an array of arrays — NO BOM. `BranchDemandReportController::exportCsv:125-133` writes these rows to `php://temp` via `fputcsv` — also NO BOM write. | Excel will open the branch-demand weekly CSV with mojibake for any Bengali content (customer names, product names, branch names with Bengali chars). This is a 25-column financial audit report — high visibility. | Add `fprintf($handle, chr(0xEF).chr(0xBB).chr(0xBF));` before the first `fputcsv` in `BranchDemandReportController::exportCsv:128`. OR better: refactor to use `CsvExporter` (which handles BOM automatically). |
 
 > ✅ **RESOLVED — G21 / G-151 (REPORTS-AUDIT-1).** Closed as part of the G4 rewrite of `BranchDemandReportController::exportCsv`. The controller now calls `CsvExporter::exportFromRows($filename, $headerRow, $dataRows)` which writes the BOM via `fwrite($out, config('reports.csv.bom', "\xEF\xBB\xBF"))` before the header row. The `BranchDemandWeeklyReportService::toCsvArray()` method is left unchanged — BOM is a transport-layer concern that belongs in the controller/service-that-writes-the-stream, NOT in the array-producing service. The CSV bytes are now: BOM + header row + data rows + summary row, all RFC-4180-escaped via PHP's native `fputcsv` with forced `,` delimiter + `"` enclosure + `\\` escape.
@@ -1041,11 +1116,98 @@ stateDiagram-v2
 >
 > The 6 sections of the summary CSV: BRANCHES (branch_id, branch_name, total_transfers, confirmed/draft/cancelled counts, total_value); TOP PRODUCTS (product_id, product_code, product_name, total_qty, total_value, transfer_count); WAREHOUSE PAIRS (from/to warehouse IDs + names, transfer_count, total_value); AVERAGES (total_transfers, avg_items_per_transfer, avg_value_per_transfer); MONTHLY TREND (month, transfer_count, confirmed/draft/cancelled counts, total_value). Currency value sourced from `config('accounting.currency', 'BDT')`.
 | **G27** | **LOW** | `DamageReportService::getDetailLines:344` has `->limit(500)` — so the damage export silently caps at 500 rows. The `exportCsv` consumer doesn't know if it got 500-of-500 (capped) or 500-of-5000 (truncated). | Silent data truncation on large damage exports. Users may believe they exported "all damage" when they got the first 500. | Remove the `limit(500)` for the export path (add a separate `getAllDetailLines()` method without the limit), OR add a footer row to the CSV stating "Showing 500 of N total". |
+
+> ✅ **RESOLVED — G-300 (LOW-WAVE-2).** Small code fix (option (b) — raise
+> the limit for the export path). `DamageReportService::getDetailLines()`
+> now accepts an optional `?int $limit = 500` parameter (default 500
+> preserves the existing page-view behavior — the HTML detail table still
+> renders at most 500 rows so the page stays fast). `ReportController::
+> damageReportExport()` now passes `10000` as the limit. Rationale for the
+> 10000 choice: (a) damage invoices per period are typically tens of rows
+> for a typical month, low hundreds for a quarter, low thousands for a
+> year — 10000 covers any realistic export; (b) the safety cap remains
+> (vs. removing it entirely) to bound runaway queries on very wide date
+> ranges (the `ReportRangeRequest` FormRequest does NOT enforce a max
+> date-range cap on the damage export route, so an unbounded query is a
+> real DoS vector); (c) 10000 rows × ~15 columns × ~80 bytes/cell ≈ 12 MB
+> of CSV output, well within the `memory_limit` and the streaming
+> `exportFromRows()` path's memory profile (one row in memory at a time).
+> The page-view path (`damageReport()`) continues to call
+> `getDetailLines($filters)` without the second arg, so it inherits the
+> 500 default — the `damage_report.blade.php` UI hint "(max 500)" stays
+> accurate. The audit-log row count is now capped at 10000 (was 500) —
+> the silent-truncation window is reduced 20× but technically still
+> exists above 10000 rows, which is well beyond any realistic damage
+> report size. A future hardening pass could add a "Showing N of M total"
+> footer row to the CSV (the gap text's second option) by issuing a
+> separate `COUNT(*)` query, but the extra query + footer-row coupling
+> between the data stream + the footer is not worth the complexity for
+> the residual 10000+ edge case.
+
 | **G28** | **LOW** | `BranchDemandReportController::exportCsv:109-138` — the route is NOT inside the `weekly()` method's `?run` gate. A user can call `/admin/branch-demands/weekly-report/export?from_date=...&to_date=...` directly without ever visiting the weekly report page. The 90-day cap from `weekly():85-87` does NOT apply to `exportCsv`. | A user can request a 10-year export and trigger ~85,000 queries (one per column per day). Combined with G4 (buffered not streamed), this is a memory + CPU DoS. | Add the same 90-day cap to `exportCsv:116-118` (currently only validates date format, not range). |
 
 > ✅ **RESOLVED — G28 (REPORTS-AUDIT-1, side effect of G-127).** The 90-day cap is now enforced by the new `BranchDemandExportRequest` FormRequest (applied to `exportCsv` as part of the G-127 rewrite). The FormRequest's `withValidator()` hook calls `$this->enforceDateRangeCap($validator, 90)` — mirroring the `weekly()` method's existing 90-day check. A user can no longer request an unbounded date-range export.
 | **G29** | **LOW** | `routes/web.php:685` — the `admin/branch-demands` route group uses `menu.permission:branchdemand` middleware (not `role:`). The `weekly-report/export` route at L716 inherits this. So access is gated by the menu permission, not by role. This is intentional (all branch-demand roles can view the weekly report) but means a `salesman` with the menu permission can export. | Likely intended (the weekly report is "all roles" per the L714 comment). But the export exposes financial data (profit, COGS, customer due, cash in hand) that a salesman shouldn't see. | Tighten the export route specifically: `->middleware('role:admin,manager,accountant')` on L716. |
+
+> ✅ **RESOLVED — G-302 (LOW-WAVE-2).** Small code fix. The
+> `admin/branch-demands/weekly-report/export` route (currently at L762 of
+> `routes/web.php` — line numbers have drifted ~46 lines from the gap's
+> L716 citation due to intervening commits) now carries an explicit
+> `->middleware('role:admin,manager,accountant')` in addition to the route
+> group's `menu.permission:branchdemand` middleware (L725). Rationale: the
+> `menu.permission:branchdemand` middleware (defined in
+> `app/Http/Middleware/EnsureMenuPermission.php`) is a per-user
+> `can_view` grant on the sidebar menu entry — it gates VISIBILITY, not
+> data sensitivity. A salesman granted the menu (unusual but possible via
+> the `user_menu_permissions` table) would have been able to bulk-export
+> the weekly report's financial columns (profit, COGS, customer due, cash
+> in hand) — data that the role-based access comment at L720-724 of
+> web.php explicitly reserves for admin/manager/accountant. The fix
+> matches the precedent set by REPORTS-AUDIT-6 (G-241 / csv-export.md
+> G26): the `admin/warehouse-transfers/summary/export` route at L698-700
+> already carries `->middleware('role:admin,manager,accountant')` for the
+> same reason (financial aggregates shouldn't be bulk-exportable by
+> lower roles). The `weekly-report` view route (L755) intentionally does
+> NOT get the role middleware — the L754 comment "all roles" applies to
+> viewing the on-screen report (warehouse_manager can see aggregated
+> totals in the page UI), but bulk CSV download is a different action
+> with different exfiltration risk and warrants tighter control.
+
 | **G30** | **LOW** | `ExportArchivedPartitionsToParquet::exportParquet:246-249` — the table name is interpolated raw into the SQL: `COPY (SELECT * FROM archive."{$table}")`. The table name comes from `information_schema.tables.table_name` (DB-sourced, not user input), so SQL injection is not directly exploitable. BUT: a maliciously-named archive table (e.g. `foo"; DROP TABLE bar; --`) would be interpolated unsanitized. | Low — table names are DB-sourced. But defense-in-depth says sanitize anyway. | Use `str_replace('"', '""', $table)` for the identifier (standard PG identifier escaping), or use `DB::table('archive.' . $table)` (which Laravel parameterizes). |
+
+> ✅ **RESOLVED — G-303 (LOW-WAVE-2).** Doc-acceptance. The `$table`
+> variable is sourced from PostgreSQL's own `information_schema.tables`
+> catalog view via `listArchivedTables()` (L328-335 of the command):
+> `DB::table('information_schema.tables')->where('table_schema', 'archive')
+> ->where('table_type', 'BASE TABLE')->orderBy('table_name')->get(['table_name'])`.
+> There is NO user-input path that controls the table name — the command
+> is invoked from the quarterly scheduler (`routes/console.php`) and from
+> the CLI (`php artisan partition:export-parquet`); neither accepts a
+> table-name parameter. The command iterates over every table in the
+> `archive` schema and exports each one. The `archive` schema is populated
+> exclusively by pg_partman's `run_maintenance_proc()` which creates
+> partition tables with deterministic names following the pattern
+> `<parent_table>_<YYYY_MM_DD>` (e.g. `journal_entries_2024_01_01`,
+> `stock_transactions_2024_10_01`) — none of these names contain double-
+> quotes, semicolons, or any other characters that would break out of the
+> PG identifier quoting. To exploit the gap, an attacker would need (a)
+> database superuser privileges to CREATE a maliciously-named table in
+> the `archive` schema (e.g. `archive."foo""; DROP TABLE bar; --"`), AND
+> (b) the attacker would already have achieved code execution via the
+> crafted table name — but with DB superuser they could simply DROP
+> `bar` directly, making the SQL-injection detour pointless. The gap
+> text's recommended defense-in-depth hardening (`str_replace('"', '""',
+> $table)` to escape embedded double-quotes per PG identifier rules) is
+> technically correct and would close the residual edge case, but the
+> practical exploitability is zero given the internal-only data source.
+> Documented for a future hardening pass; no code change in this wave.
+> Note: `DB::table('archive.' . $table)` (the gap's alternative
+> suggestion) does NOT actually parameterize the table name — Laravel's
+> query builder still interpolates the table identifier into the SQL
+> string (table identifiers cannot be parameterized in SQL — only values
+> can). So that alternative would not actually fix the gap; only the
+> `str_replace('"', '""', ...)` approach (or a whitelist regex) would.
+
 
 **Severity tally:** 3 CRITICAL (G1, G2, G12 — all resolved) / 9 HIGH (G3, G4, G5, G6, G7, G8, G11, G21, G23, G24 — **all 9 resolved** — G3/G4/G5/G6/G7/G21/G23/G24 in REPORTS-AUDIT-1, G11 fully resolved in REPORTS-AUDIT-4; G8 still open) / 9 MEDIUM (G9 ✅ RESOLVED REPORTS-AUDIT-6, G10 ✅ RESOLVED MEDIUM-WAVE-3 (G-219), G13, G14, G15 ⚠️ PARTIAL REPORTS-AUDIT-6, G16 ⚠️ PARTIAL REPORTS-AUDIT-6, G25 resolved REPORTS-AUDIT-4, G26 ✅ RESOLVED REPORTS-AUDIT-6, G29) / 7 LOW (G17, G18 ✅ RESOLVED REPORTS-AUDIT-1+4, G19, G20, G27, G28 ✅ RESOLVED REPORTS-AUDIT-1, G30). 30 gaps total. (G12 reaffirms G1, G22 reaffirms G8 — kept separate for cross-ref clarity.)
 

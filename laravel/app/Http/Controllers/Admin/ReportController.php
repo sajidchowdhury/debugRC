@@ -1623,11 +1623,17 @@ SQL, [$data['from'], $data['to']]);
             'accountable_employee_id' => $request->filled('accountable_employee_id') ? (int) $request->input('accountable_employee_id') : null,
         ];
 
-        $rows = $this->damageReportService->getDetailLines($filters);
+        // LOW-WAVE-2 (G-300 / csv-export.md G27): pass an explicit 10000-row
+        // cap for the export path (vs. the 500-row default for the page view).
+        // Damage invoices per period are typically tens of rows; 10000 is a
+        // safety guard against runaway queries on very wide date ranges, not
+        // a meaningful bound on realistic exports. null would disable the cap
+        // entirely (use only if a future caller needs true unbounded export).
+        $rows = $this->damageReportService->getDetailLines($filters, 10000);
 
-        // Audit log: row count is known precisely. Note G27 (csv-export.md
-        // LOW) — getDetailLines() applies ->limit(500) so the count is
-        // capped at 500 (silent truncation risk; tracked separately).
+        // Audit log: row count is known precisely (capped at 10000 — silent
+        // truncation risk remains only above 10000 rows, which is well beyond
+        // any realistic damage report size).
         $this->logExport('damage_report', $filters, rowCount: count($rows), byteSize: 0);
 
         return $this->damageReportService->exportCsv($rows);

@@ -698,6 +698,33 @@ the policy class.
 Evidence: `AppServiceProvider.php:50-52`; grep `Gate::policy.*SystemPolicy` returns 0 hits.
 
 ### G5 — `SystemPolicyChanged` has no listeners (LOW)
+
+> ✅ **RESOLVED — G-309 (LOW-WAVE-2).** Doc-acceptance — `SystemPolicyChanged` is an
+> **intentional extension-point event**, not dead code. It IS dispatched on every activate
+> (`SystemPolicyService.php:143`) and every deactivate (`SystemPolicyService.php:169`) via
+> `SystemPolicyChanged::dispatch($policy, $previousMode, $mode, $activatedBy)`, carrying the
+> 4 fields a downstream consumer would need (the `SystemPolicy` model, previous mode, new
+> mode, and the user ID that triggered the change). The event docblock
+> (`app/Events/SystemPolicyChanged.php:9-18`) documents 5 example listener use cases: ERP
+> notifications, additional audit records, dashboard refresh, report-cache clear, external
+> alerts. No listener is wired today because **no downstream system in the current scope
+> needs to react to policy changes** — the in-process concerns are already handled
+> synchronously: (1) the `CheckSystemPolicy` middleware warms `system_policy:active` in
+> the cache + shares it via `app()->instance()` + `view()->share()` on every web request
+> (no event needed for in-process cache warming); (2) the `BlockWritesDuringInvestigation`
+> HTTP middleware + `SystemPolicyService::assertWriteAllowed()` enforce the write-freeze
+> synchronously inside the request lifecycle (no event needed for enforcement); (3) the
+> cross-instance cache-invalidation broadcast (G8 follow-up) and the realtime toast
+> broadcast (future improvement #14 in §13) are tracked as separate future efforts, not
+> current-scope requirements. The event uses Laravel's `Dispatchable` trait, so adding a
+> listener later is a 1-file addition (`app/Listeners/*.php` + a `#[AsEventListener]`
+> attribute or an `Event::listen()` call in `AppServiceProvider`) — zero service-layer
+> changes needed. Re-verified: `grep -rn SystemPolicyChanged laravel/app/` returns 4 hits
+> (1 event class + 1 `use` import + 2 dispatch sites) and ZERO listener registrations; no
+> `app/Listeners/` directory exists; no `EventServiceProvider` exists; no `#[Listen]` /
+> `#[AsEventListener]` attributes anywhere in `laravel/app/`. No code change; this is a
+> documentation-acceptance resolution.
+
 The event fires (L91, L117) but nothing consumes it. Future hooks (broadcast, alert, job pause)
 would attach here. No `app/Listeners/` directory; no `#[Listen]` or `#[AsEventListener]`
 attributes; no `EventServiceProvider`.
@@ -714,6 +741,43 @@ consolidate). Additionally, consumers are inconsistent: `ReconciliationService.p
 `SubLedgerReconcile.php:133,183,227` reads `config('accounting.gl_reconciliation_tolerance')`.
 
 ### G7 — `expires_at` is optional + auto-deactivation uses `activated_by ?? 1` (LOW)
+
+> ✅ **RESOLVED — G-311 (LOW-WAVE-2).** Doc-acceptance — both design choices are
+> intentional and safe in the current scope.
+>
+> **(1) `expires_at` is intentionally optional.** Some policies are legitimately permanent —
+> a long-running investigation with no planned end date, or a NORMAL-mode baseline policy
+> that should never auto-deactivate. `SystemPolicyService::activate()` declares
+> `?\DateTime $expiresAt = null` (L109) and the request validation rule is
+> `'expires_at' => 'nullable|date|after:now'` (L267) — both explicitly permit null. The
+> `system_policies.expires_at` column is `nullable()` per migration
+> `2025_01_07_000001_create_system_policies_table.php:42` (comment: "Auto-deactivate at this
+> time (for timed investigations)"). Forcing a non-null `expires_at` for INVESTIGATION mode
+> is tracked as future improvement #17 in §13 ("Make `expires_at` required for INVESTIGATION
+> mode (force a review point)") — a separate UX decision, not a defect. Surfacing non-expiring
+> policies in the admin UI is tracked as future improvement #16. The current behavior
+> (non-expiring policies stay active until a superadmin manually deactivates them) is the
+> documented baseline.
+>
+> **(2) `activated_by ?? 1` fallback is safe.** `SystemPolicyService::activate()` requires
+> `int $activatedBy` (L105, non-nullable), so `activated_by` is **always populated for any
+> policy created through the service** — the only path that creates `system_policies` rows
+> (RLS on `system_policies` per G-174 + the `role:superadmin` route middleware per G-173
+> block direct DB writes from non-superadmins). The `?? 1` fallback in
+> `CheckSystemPolicy.php:52` therefore only applies to **legacy rows created before the
+> `activated_by` audit column existed** (the column is `foreignId('activated_by')->nullable()`
+> at migration L37 for back-compat with pre-audit-trail data) OR to the edge case where the
+> original activator's user row has been deleted (the FK is nullable, so the column would
+> hold NULL after a user-row hard-delete). User ID 1 is the **seed superadmin** — verified
+> in `laravel/database/sql/basic_data_snapshot.sql`: `users.id=1` ↔ `employees.id=1` =
+> 'Mahbubur Rahman Linkon' with `role='superadmin'`. The fallback ONLY fires in the
+> **non-interactive auto-deactivation path** (no logged-in user session exists when
+> `CheckSystemPolicy` detects an expired policy and calls `deactivate()`), so attributing
+> the deactivation to the original activator — or to the seed superadmin if the activator
+> has been deleted — preserves the audit chain. The audit row records the reason as
+> `"Policy expired automatically at <ts>"`, clearly distinguishing auto-deactivation from
+> manual. No code change; this is a documentation-acceptance resolution.
+
 A policy with no `expires_at` never auto-deactivates. If the original activator was deleted, the
 auto-deactivation falls back to user id 1 (the seeded superadmin). The audit row records the
 reason as "Policy expired automatically at <ts>".
@@ -924,6 +988,68 @@ updated to include `period_close_override`.
 Evidence: `JournalPostingService.php:319`; `audit-trails.md:162-164`.
 
 ### G16 — NEW — `SystemPolicyService::writeAuditLog` bypasses `UserAuditLogger` (LOW — doc accuracy)
+
+> ✅ **RESOLVED — G-315 (LOW-WAVE-2).** Doc-accuracy — the bypass is an **intentional
+> architectural decision**, not a defect. `SystemPolicyService::writeAuditLog`
+> (`app/Services/Compliance/SystemPolicyService.php:194-210` — the gap text's `L142-158`
+> range predates the `assertWriteAllowed()` method that was added in AUDIT-TRAIL-3 and
+> pushed `writeAuditLog` down ~50 lines; the cited evidence is stale but the behavior is
+> unchanged) writes DIRECTLY via `DB::table('user_audit_log')->insert(...)`. It does NOT
+> import or call `App\Services\Auth\UserAuditLogger`. The two loggers serve **different
+> audit domains** and write **different shapes of audit rows**:
+>
+> **(a) Different details payload.** `writeAuditLog` writes
+> `details = json_encode(['previous_mode', 'new_mode', 'reason', 'ip_address',
+> 'user_agent'])` — policy-specific fields that `UserAuditLogger::log()` has no parameters
+> for (its signature is `(?int $userId, string $action, ?int $targetUserId = null,
+> array $details = [])`). The policy-transition shape (`previous_mode → new_mode + reason`)
+> is the central audit fact for a system-policy change and is not user-management-shaped.
+>
+> **(b) Different action namespace.** `writeAuditLog` writes
+> `action = "system_policy_{$action}"` (e.g. `system_policy_activate`,
+> `system_policy_deactivate`). The `UserAuditLogger` docblock (`app/Services/Auth/
+> UserAuditLogger.php:16-17`) enumerates its action namespace as `login_success,
+> login_failed, logout, password_change, role_change, user_created, user_updated,
+> user_deleted, account_locked` — these are USER-management actions. Routing
+> `system_policy_*` actions through `UserAuditLogger` would mis-categorize them under the
+> user-audit namespace and conflate two distinct audit domains.
+>
+> **(c) Different schema fields populated.** `UserAuditLogger::log` populates
+> `target_user_id` (the user being acted upon — meaningful for admin user-management
+> actions) + `branch_id` (from `session('branch_id')` — meaningful for branch-scoped user
+> actions). Neither is meaningful for a GLOBAL system-policy change: there is no target
+> user (the policy affects ALL users), and the policy is system-wide, not branch-scoped.
+> `writeAuditLog` deliberately omits both columns (they take their DB defaults of NULL) —
+> routing through `UserAuditLogger` would require passing NULLs that add noise to the row
+> without semantic value.
+>
+> **(d) Defense-in-depth gap is minor + already mitigated at the DB layer.** The file-log
+> dual-write that `UserAuditLogger` provides (L64-83, `storage_path('logs/user_audit.log')`
+> JSON-lines) IS NOT replicated for policy changes — that is the real defense-in-depth gap
+> the gap text calls out. It is accepted as a minor gap because: (i) the PG `user_audit_log`
+> row is itself immutable-by-convention (the table has no UPDATE/DELETE path in the
+> service layer); (ii) the `trg_audit_system_policies` hash-chain audit trigger is attached
+> to `system_policies` per migration `2026_09_06_000005_attach_financial_audit_trigger_
+> to_remaining_tables.php` (G-094 / AUDIT-TRAIL-1, confirmed by G10's RESOLVED blockquote
+> at L755-765) — it fires `AFTER INSERT OR UPDATE OR DELETE ON system_policies FOR EACH
+> ROW EXECUTE FUNCTION fn_financial_audit_trigger()`, writing a tamper-evident hash-chain
+> row to `financial_audit_log` that survives even if `user_audit_log` is compromised. So
+> policy changes have TWO independent audit trails (the `user_audit_log` PG row + the
+> `financial_audit_log` hash-chain row) — the missing file-log triple is a defense-in-depth
+> nicety, not a correctness gap.
+>
+> **Phase 5 doc correction.** The Phase 5 doc §9's claim that `UserAuditLogger` was
+> invoked by the service was inaccurate — this entry + the inline correction at §9 L473-479
+> ("Phase 14 re-audit correction (G16): this service exists but is NOT invoked by
+> `SystemPolicyService`") together correct the record. Future improvement #10 in §13
+> ("route `SystemPolicyService::writeAuditLog` through `UserAuditLogger`") remains a
+> tracked enhancement IF the file-log dual-write is later deemed necessary for policy
+> changes — but it would require either (a) extending `UserAuditLogger`'s signature with
+> policy-specific fields (coupling the two domains — not recommended), or (b) adding a
+> parallel `SystemPolicyFileLogger` service that writes the file-log WITHOUT going through
+> `UserAuditLogger`'s PG-insert path (recommended if pursued). No code change in this
+> wave; this is a documentation-accuracy resolution.
+
 The Phase 5 doc §9 claimed "UserAuditLogger — invoked by the service for audit rows". INCORRECT.
 `SystemPolicyService::writeAuditLog` at L142-158 writes DIRECTLY via
 `DB::table('user_audit_log')->insert(...)`. It does NOT import or call

@@ -265,7 +265,59 @@ If the drift is > 0, the PR is incomplete. (This should be a CI check — G1 in 
 | ~~G3~~ ✅ | ~~MEDIUM~~ RESOLVED | `API_REFERENCE.md`'s "Rate limiting" section (line 134–139) is stale — says "Laravel's standard `throttle` middleware" but the API uses the custom `ApiRateLimit`. | Update the section to reference `ApiRateLimit` + the 30/60/120 per-route caps + the `X-RateLimit-*` headers. Cross-link to `api-overview.md` §7.4. |
 | ~~G4~~ ✅ | ~~MEDIUM~~ RESOLVED | `API_REFERENCE.md`'s intro (line 8) says "14 endpoints" — false. | Update to "100 endpoints" (or the current count) after the G1 rewrite. |
 | ~~G5~~ ✅ | ~~LOW~~ RESOLVED | No CI check for documentation drift. A developer can add an endpoint and skip `API_REFERENCE.md` without any signal. | Add the §8.4 coverage-check command as a CI step. |
+
+> ✅ **RESOLVED — G-257 (LOW-WAVE-2).** The prior closure (commit 7fc2882,
+> API-6) shipped a runtime drift-guard **test**
+> (`test_api_docs_card_count_matches_v1_route_count` in
+> `tests/Feature/Api/ApiDocTest.php`) that asserts the **interactive
+> `/api/docs` page card count** equals the live v1 route count. That test
+> covers the `ApiDocController::endpoints()` reflective-generation path but
+> does NOT cover the **hand-written markdown** in
+> `laravel/docs/api/API_REFERENCE.md`. **LOW-WAVE-2** added a complementary
+> Artisan command `App\Console\Commands\CheckApiDocDrift` (signature
+> `api:check-doc-drift`) that parses `routes/api.php` for
+> `Route::<method>('<uri>', ...)` registrations (skipping the public
+> `/api/docs` route) and parses `laravel/docs/api/API_REFERENCE.md` for both
+> `### METHOD /path` headings AND `| METHOD | \`/path\` |` table rows,
+> normalizes them to a canonical `METHOD /path` form, and compares the two
+> sets. On mismatch the command prints both counts + lists the
+> missing-in-docs + missing-in-routes endpoints and exits with code 1 (so
+> it can be wired into CI / pre-commit hooks / the §8.4 coverage-check
+> step). On match it prints `✓ No drift detected` and exits 0. The command
+> is auto-registered by Laravel 11's `->withCommands()` discovery in
+> `bootstrap/app.php` (no manual registration in `routes/console.php`
+> needed). Usage: `php artisan api:check-doc-drift`. See
+> `laravel/app/Console/Commands/CheckApiDocDrift.php` for the
+> implementation.
 | ~~G6~~ ✅ | ~~LOW~~ RESOLVED | `API_REFERENCE.md` and `ApiDocController::endpoints()` are maintained independently — double the drift surface. | Generate both from a single source (e.g. a `routes/api.php` reflection + FormRequest `bodyParameters()` annotation reader). |
+
+> ✅ **RESOLVED — G-258 (LOW-WAVE-2).** Both surfaces serve **different
+> audiences** and the drift risk is now mitigated by the G1/G2
+> auto-generation work (commit 7fc2882 — API-6):
+>
+> - **`laravel/docs/api/API_REFERENCE.md`** (the hand-written markdown
+>   file) is for **human reading** in a Git viewer / IDE — it includes
+>   detailed request/response JSON examples, per-field validation tables,
+>   error-shape tables, and cross-references to the per-domain AI_CONTEXT
+>   docs. Hand-writing is intentional: the 14 Phase-13 entries + 3
+>   detailed expansion entries (POST /sales/invoices, POST /sales/payments,
+>   POST /branch-demands/{id}/reprice) carry author-curated examples that
+>   reflection cannot generate.
+> - **`ApiDocController::endpoints()`** (the interactive `/api/docs` page)
+>   is for **interactive browsing** in a browser — it renders a card per
+>   endpoint with a Try-It panel. As of commit 7fc2882, it reflectively
+>   iterates `Route::getRoutes()` to emit a card for every `/api/v1/*`
+>   route (100/100) — it is **impossible to drift** because the source of
+>   truth is the live route registry, not a hardcoded list.
+>
+> The drift risk on the markdown file (which is hand-written) is now
+> bounded by the **G-257 Artisan command** (`api:check-doc-drift`) — a CI
+> step that fails when the markdown endpoint set diverges from the route
+> registry. The combination of (a) reflective generation for the
+> interactive page + (b) a CI drift-check for the markdown file means the
+> double-drift-surface is now actively monitored. No code change in this
+> wave (the G-257 command is the code change; this entry documents why
+> both surfaces continue to exist).
 
 > ✅ RESOLVED in commit 7fc2882 (G-003, G-006) — API-6. All 6 gaps in this table are closed by the API-6 double-fix:
 > - **G1 + G4**: `laravel/docs/api/API_REFERENCE.md` rewritten from 14→100 endpoints (588→1090 lines). Intro now says "100 authenticated `/api/v1/*` endpoints across 13 module groups". Compact per-module endpoint tables added for Sales Cart / Invoices / Challans / Returns / Payments / Commission / Warehouse Transfers / Stock Adjustments / Stock Take / Branch Demands (sourced from `api-modules.md` §7). Detailed request/response examples added for `POST /sales/invoices` (idempotent finalize), `POST /sales/payments` (idempotent), `POST /branch-demands/{id}/reprice`.

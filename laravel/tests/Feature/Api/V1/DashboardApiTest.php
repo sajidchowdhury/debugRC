@@ -103,26 +103,24 @@ class DashboardApiTest extends TestCase
         $token = $this->apiTokenForUser($user);
 
         // Insert a single sales invoice for today.
+        // G-294 (LOW-WAVE-2-B2): refactored from DB::table('sales_invoices')->insert([...])
+        // to SalesInvoice::factory()->create([...]) so the test exercises the
+        // real Eloquent model path (fillable guards + boot events: AuditableMasterData
+        // logs to user_audit_log; ApplySystemPolicyScope + BranchScope global scopes).
+        // `due_amount` is a GENERATED ALWAYS AS (total_amount - paid_amount) STORED
+        // column — the factory omits it (an explicit value would raise SQLSTATE 428C9).
         $branch   = Branch::factory()->create();
         $customer = Customer::factory()->forBranch($branch->id)->create();
-        DB::table('sales_invoices')->insert([
-            'invoice_code'   => 'INV-API-' . uniqid(),
-            'invoice_date'   => now()->toDateString(),
-            'customer_id'    => $customer->id,
-            'branch_id'      => $branch->id,
-            'sub_total'      => 100,
-            'total_amount'   => 250.50,
-            'paid_amount'    => 0,
-            'due_amount'     => 250.50,
-            'payment_mode'   => 'cash',
-            'status'         => 'confirmed',
-            'is_reversed'    => false,
-            'is_godown_prepared' => false,
-            'is_challan_issued' => false,
-            'is_soft_hold'   => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        SalesInvoice::factory()
+            ->forCustomerBranch($customer->id, $branch->id)
+            ->create([
+                'invoice_code' => 'INV-API-' . uniqid(),
+                'invoice_date' => now()->toDateString(),
+                'sub_total'    => 100,
+                'total_amount' => 250.50,
+                'paid_amount'  => 0,
+                'status'       => 'confirmed',
+            ]);
 
         $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->getJson('/api/v1/dashboard');
@@ -170,26 +168,21 @@ class DashboardApiTest extends TestCase
         $user  = $this->makeRoleUser('manager');
         $token = $this->apiTokenForUser($user);
 
+        // G-294 (LOW-WAVE-2-B2): refactored DB::table insert → SalesInvoice::factory()
+        // (see test_dashboard_today_block_reports_today_invoice_count_and_total above
+        // for rationale). `due_amount` is GENERATED — omitted from the override array.
         $branch   = Branch::factory()->create();
         $customer = Customer::factory()->forBranch($branch->id)->create();
-        DB::table('sales_invoices')->insert([
-            'invoice_code'   => 'INV-API-TREND-' . uniqid(),
-            'invoice_date'   => now()->toDateString(),
-            'customer_id'    => $customer->id,
-            'branch_id'      => $branch->id,
-            'sub_total'      => 80,
-            'total_amount'   => 80,
-            'paid_amount'    => 0,
-            'due_amount'     => 80,
-            'payment_mode'   => 'cash',
-            'status'         => 'confirmed',
-            'is_reversed'    => false,
-            'is_godown_prepared' => false,
-            'is_challan_issued' => false,
-            'is_soft_hold'   => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        SalesInvoice::factory()
+            ->forCustomerBranch($customer->id, $branch->id)
+            ->create([
+                'invoice_code' => 'INV-API-TREND-' . uniqid(),
+                'invoice_date' => now()->toDateString(),
+                'sub_total'    => 80,
+                'total_amount' => 80,
+                'paid_amount'  => 0,
+                'status'       => 'confirmed',
+            ]);
 
         $response = $this->withHeaders(['Authorization' => $this->bearerHeader($token)])
             ->getJson('/api/v1/dashboard/sales-trend');
@@ -228,25 +221,23 @@ class DashboardApiTest extends TestCase
         $customer = Customer::factory()->forBranch($branch->id)->create();
         $product  = Product::factory()->create();
 
-        // Insert a sales invoice with one item.
-        $invoiceId = DB::table('sales_invoices')->insertGetId([
-            'invoice_code'   => 'INV-API-TOP-' . uniqid(),
-            'invoice_date'   => now()->toDateString(),
-            'customer_id'    => $customer->id,
-            'branch_id'      => $branch->id,
-            'sub_total'      => 200,
-            'total_amount'   => 200,
-            'paid_amount'    => 0,
-            'due_amount'     => 200,
-            'payment_mode'   => 'cash',
-            'status'         => 'confirmed',
-            'is_reversed'    => false,
-            'is_godown_prepared' => false,
-            'is_challan_issued' => false,
-            'is_soft_hold'   => false,
-            'created_at'     => now(),
-            'updated_at'     => now(),
-        ]);
+        // G-294 (LOW-WAVE-2-B2): refactored DB::table('sales_invoices')->insertGetId
+        // → SalesInvoice::factory()->create() (exercises fillable + boot events).
+        // `due_amount` is GENERATED (total_amount - paid_amount) — omitted.
+        // The items row still uses DB::table() because SalesInvoiceItem has no
+        // factory yet (documented as a follow-up; the cited gap is only the 3
+        // sales_invoices insert sites).
+        $invoice = SalesInvoice::factory()
+            ->forCustomerBranch($customer->id, $branch->id)
+            ->create([
+                'invoice_code' => 'INV-API-TOP-' . uniqid(),
+                'invoice_date' => now()->toDateString(),
+                'sub_total'    => 200,
+                'total_amount' => 200,
+                'paid_amount'  => 0,
+                'status'       => 'confirmed',
+            ]);
+        $invoiceId = $invoice->id;
         DB::table('sales_invoice_items')->insert([
             'sales_invoice_id' => $invoiceId,
             'product_id'       => $product->id,

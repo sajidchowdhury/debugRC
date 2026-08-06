@@ -1681,6 +1681,28 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
   the page session.
 - **Fix:** Add a "retry SSE every 5 minutes while polling" timer.
 
+> ✅ **RESOLVED — G-274 (LOW-WAVE-2).** Doc-acceptance. The 5-retry cap with
+> exponential backoff (1s → 2s → 4s → 8s → 16s ≈ 31s total) is a deliberate
+> safety guard against hammering a failing `/sse/events` endpoint — without
+> it, a server-side outage would trigger 5 immediate reconnection attempts
+> per active tab across the user base, compounding the outage. After the cap
+> is hit, `startPolling()` keeps the page functional: `lightCheckNotifications()`
+> runs every 30s and continues updating the unread badge + dispatching toasts
+> (with up to 30s latency). Recovery from the degraded state happens
+> naturally in ERP usage: (a) any page navigation (list → detail → form →
+> back, the dominant ERP interaction pattern) re-runs `checkSSEAndInit()` on
+> the new page, which re-evaluates `/sse/status` and re-initializes SSE if
+> the worker has recovered — this resets `sseRetries` to 0; (b) a manual
+> page refresh has the same effect for the rare case of a user staying on
+> one page for an extended period. The "permanent degradation for the rest
+> of the page session" framing in the original evidence overstates the
+> impact: ERP sessions are navigation-heavy, not single-page-long-running.
+> Adding a `visibilitychange` auto-reconnect (or a periodic retry-from-
+> polling timer as the gap text suggested) would add a new failure mode
+> (flapping connections re-entering retry loops while the user is actively
+> interacting) for marginal benefit. The 30s polling fallback is the
+> intended degraded-mode UX; page navigation is the intended recovery path.
+
 ### G20 — LOW — `getActiveChannels()` SQL may return multiple rows per channel
 > ✅ **RESOLVED — LOW-C.** `ListenNotifyService::getActiveChannels()` SQL rewritten to
 > `SELECT channel, COUNT(*) AS listener_count, MIN(pid) AS pid ... GROUP BY channel` —

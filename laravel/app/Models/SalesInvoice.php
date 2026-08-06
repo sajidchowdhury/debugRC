@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use App\Traits\AuditableMasterData;
@@ -70,7 +71,7 @@ use App\Models\Scopes\BranchScope;
  */
 class SalesInvoice extends Model
 {
-    use SoftDeletes, AuditableMasterData, ApplySystemPolicyScope;
+    use HasFactory, SoftDeletes, AuditableMasterData, ApplySystemPolicyScope;
 
     protected $table = 'sales_invoices';
 

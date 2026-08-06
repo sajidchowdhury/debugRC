@@ -753,7 +753,15 @@ Route::middleware('auth')->group(function () {
 
         // Phase 6: Weekly Audit Report — all roles
         Route::get('weekly-report', [BranchDemandReportController::class, 'weekly'])->name('weekly-report');
-        Route::get('weekly-report/export', [BranchDemandReportController::class, 'exportCsv'])->name('weekly-report.export');
+        // LOW-WAVE-2 (G-302 / csv-export.md G29): tighten the export route to
+        // admin/manager/accountant. The route group's menu.permission:branchdemand
+        // middleware (L725 above) gates visibility per-user, but the export
+        // exposes financial data (profit, COGS, customer due, cash in hand)
+        // that warehouse_manager + lower roles shouldn't be able to bulk-download.
+        // Matches the precedent set by warehouse-transfers/summary/export (L698).
+        Route::get('weekly-report/export', [BranchDemandReportController::class, 'exportCsv'])
+            ->middleware('role:admin,manager,accountant')
+            ->name('weekly-report.export');
         Route::get('weekly-report/drill-down', [BranchDemandReportController::class, 'drillDown'])->name('weekly-report.drill-down');
 
         // Phase 8: Audit & Accountability — admin, manager, accountant

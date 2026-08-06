@@ -286,10 +286,19 @@ class DamageReportService
     /**
      * Line-level detail rows for the main report table.
      *
+     * LOW-WAVE-2 (G-300 / csv-export.md G27): the $limit parameter lets the
+     * CSV export path request a larger row cap (the controller passes 10000)
+     * while the HTML page view continues to use the default 500-row cap so
+     * the rendered table stays bounded. The cap is a safety guard against
+     * runaway queries on very wide date ranges — not a meaningful bound on
+     * realistic damage reports (a typical month has tens of rows). Pass
+     * null to disable the limit entirely (use with care).
+     *
      * @param array{from?:string, to?:string, branch_id?:int, warehouse_id?:int, damage_type?:string, status?:string, accountable_employee_id?:int} $filters
+     * @param int|null $limit  Max rows to return (default 500 for the page view; export path passes 10000). null = no limit.
      * @return array<int, object>
      */
-    public function getDetailLines(array $filters = []): array
+    public function getDetailLines(array $filters = [], ?int $limit = 500): array
     {
         $from = $filters['from'] ?? now()->startOfMonth()->format('Y-m-d');
         $to   = $filters['to']   ?? now()->toDateString();
@@ -342,7 +351,10 @@ class DamageReportService
             $q->where('di.accountable_employee_id', (int) $filters['accountable_employee_id']);
         }
 
-        $q->orderByDesc('di.damage_date')->orderByDesc('di.id')->limit(500);
+        $q->orderByDesc('di.damage_date')->orderByDesc('di.id');
+        if ($limit !== null) {
+            $q->limit($limit);
+        }
 
         return $q->get()->all();
     }

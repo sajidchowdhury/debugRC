@@ -757,6 +757,31 @@ Gap IDs are stable references shared with `api-overview.md` §13 and `api-conven
 | G12 | MEDIUM | `POST /branch-demands/{id}/reprice` has only a validation-path test. | Add a happy-path test. |
 | G13 | LOW | Commission module has NO web mirror AND no API tests — 8 endpoints untested on both surfaces. | Add `CommissionApiTest.php`. |
 
+> ✅ **RESOLVED — G-264 (LOW-WAVE-2).** The gap row text was **stale** — the
+> Commission module's API test file
+> `laravel/tests/Feature/Api/V1/Sales/CommissionApiTest.php` was created by
+> CRITICAL-WAVE-1-A (the "API-4" subagent) and shipped with **21 test
+> methods** covering all 8 Commission endpoints (list rules, show rule,
+> store rule admin-only, deactivate rule admin-only, list entries,
+> salesman-summary, branch-summary, confirm-period admin-only). The test
+> extends `Tests\TestCase` (DatabaseTransactions + Redis-middleware
+> stripped) and uses the `BuildsRoleUsers` + `IssuesApiTokens` traits per
+> the G5 convention. Coverage spans AUTH (401 no-token, 401 invalid-token,
+> 403 non-admin on writes), HAPPY PATH (list, show, create, deactivate,
+> list-entries, summaries, confirm), VALIDATION (422 missing required
+> field, 422 invalid rule_type, 422 missing period, 422 invalid period
+> format), and PAGINATION (per_page clamp to 100, period filter,
+> salesman_id filter). Note: there is no separate "update" endpoint on the
+> Commission API (rules are deactivated, not edited) — the 8 endpoints
+> above are the complete Commission surface.
+>
+> Note: G-264 (here) and G-265 (in `api-overview.md` §13) are the **same
+> gap** cited in two source docs — both close against the same single test
+> file. No code change was needed in this wave — the file already existed;
+> this entry + the parallel G-265 entry in `api-overview.md` correct the
+> stale "8 endpoints untested" claim that was never updated when
+> CRITICAL-WAVE-1-A shipped the test file.
+
 ---
 
 ## 14. Verification commands
