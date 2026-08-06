@@ -373,6 +373,19 @@ See `docs/worklog.md` (in-repo) for the full per-phase work logs.
 5. **Bangla review:** per plan §11.3, all Bangla should be reviewed by a native speaker
    (Sajid/team) before each module merge. This is a human-process dependency, not a code one.
 
+6. **Blade `@json()` multi-statement gotcha:** the `@json()` directive splits its argument
+   on the first comma (to inject the default JSON-flags argument). Passing a multi-statement
+   closure / IIFE / any expression with commas inside `(...)` produces mangled PHP and a
+   `ParseError: syntax error, unexpected token ";"` at runtime. **This bit us in Phase 9:**
+   the `searchIndex` emission in `partials/help-system.blade.php` originally used
+   `@json((function () use ($helpService) { ... })())` — it passed all static (regex-based)
+   validators but crashed the real PHP runtime on `/admin/sales-invoices`. Fixed by moving
+   the computation into the `@php` block and emitting `@json($searchIndex)` on a single
+   line. See `docs/HELP_AUTHORING_GUIDE.md` §2 "Blade gotcha" for the do/don't pattern.
+   **Root cause of the gap:** the sandbox has no PHP runtime, so the Phase 9/10 validators
+   (pure-Python regex checkers) couldn't catch a compile-time PHP error. Future: add a
+   `php -l` lint pass to CI, or at minimum a Blade-compile dry-run.
+
 ---
 
 ## 12. File map

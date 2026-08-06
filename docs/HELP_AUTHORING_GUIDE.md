@@ -119,6 +119,37 @@ php artisan cache:clear
 (Content files in `menus/` are NOT cached — they're `require`d per request and opcode-cached
 by PHP. So editing a content file needs no cache clear.)
 
+### ⚠️ Blade gotcha: never pass a multi-statement expression to `@json()`
+
+The `@json()` Blade directive splits its argument on the first comma (to inject
+the default JSON-flags argument). This means **multi-statement closures,
+IIFEs, or any expression with a comma inside `(...)`** will be mangled into
+invalid PHP at compile time — producing `ParseError: syntax error, unexpected
+token ";"` at runtime.
+
+**Don't do this:**
+```blade
+searchIndex: @json((function () use ($helpService) {
+    $out = [];
+    foreach ($helpService->modules() as $k => $m) { /* ... */ }
+    return $out;
+})()),
+```
+
+**Do this instead** — compute in `@php`, emit the variable:
+```blade
+@php
+    $searchIndex = [];
+    foreach ($helpService->modules() as $k => $m) { /* ... */ }
+@endphp
+
+<script>
+    searchIndex: @json($searchIndex),
+</script>
+```
+
+Single-line expressions with arrow functions (e.g. `@json(collect($x)->mapWithKeys(fn ($m, $k) => [$k => $m['title_bn']]))`) are safe — the comma in `fn ($m, $k)` only adds harmless extra whitespace after the split-and-rejoin. The rule of thumb: **if it has braces `{ }` or more than one statement, move it to `@php`.**
+
 ---
 
 ## 3. Add a Mermaid diagram
