@@ -62,10 +62,11 @@
                 <table class="table table-sm mb-0" id="linesTable">
                     <thead class="table-light">
                         <tr>
-                            <th style="width:40%;">Ledger</th>
-                            <th class="text-end" style="width:15%;">Debit (Tk)</th>
-                            <th class="text-end" style="width:15%;">Credit (Tk)</th>
-                            <th style="width:25%;">Line description</th>
+                            <th style="width:30%;">Ledger</th>
+                            <th style="width:18%;">Dimension</th>
+                            <th class="text-end" style="width:12%;">Debit (Tk)</th>
+                            <th class="text-end" style="width:12%;">Credit (Tk)</th>
+                            <th style="width:23%;">Line description</th>
                             <th class="text-center" style="width:5%;"></th>
                         </tr>
                     </thead>
@@ -73,6 +74,7 @@
                     <tfoot class="table-light fw-bold">
                         <tr>
                             <td class="text-end">Totals</td>
+                            <td></td>
                             <td class="text-end" id="totalDebitCell">0.00</td>
                             <td class="text-end" id="totalCreditCell">0.00</td>
                             <td>
@@ -102,6 +104,10 @@
 </div>
 
 {{-- Line row template --}}
+{{-- G-321 (MEDIUM-WAVE-3): added .mj-dim-value <select> for the per-line dimension tag.
+    The dropdown is optional ("None" option = empty value). Options come from
+    $dimensionValuesGrouped, which is built by ManualJournalController::create()
+    and keyed by dimension name (optgroup). --}}
 <template id="lineRowTemplate">
     <tr class="mj-line-row">
         <td>
@@ -111,6 +117,18 @@
                     <optgroup label="{{ $type }}">
                         @foreach ($group as $l)
                             <option value="{{ $l->id }}">{{ $l->ledger_code }} — {{ $l->ledger_name }}</option>
+                        @endforeach
+                    </optgroup>
+                @endforeach
+            </select>
+        </td>
+        <td>
+            <select class="form-select form-select-sm mj-dim-value" title="Optional dimension tag for segment reporting">
+                <option value="">— None —</option>
+                @foreach ($dimensionValuesGrouped as $dimName => $values)
+                    <optgroup label="{{ $dimName }}">
+                        @foreach ($values as $v)
+                            <option value="{{ $v['id'] }}">{{ $v['label'] }}</option>
                         @endforeach
                     </optgroup>
                 @endforeach

@@ -333,6 +333,15 @@ CREATE TABLE manual_journal_lines (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     manual_journal_id integer NOT NULL REFERENCES manual_journals(id) ON DELETE CASCADE,
     ledger_id integer NOT NULL,
+    -- G-321 (MEDIUM-WAVE-3) FINANCE-DIM-1: per-line dimension tag for segment
+    -- reporting. Nullable — most manual-journal lines are NOT tagged. FK to
+    -- dimension_values(id) is declared in 08_budgeting_and_dimensions.sql
+    -- (DEFERRABLE INITIALLY DEFERRED + ON DELETE SET NULL — same pattern as
+    -- journal_lines.dimension_value_id / fk_jl_dim_value). The migration
+    -- 2026_09_08_000001 adds this column post-hoc; this canonical DDL now
+    -- includes it so fresh `psql -f database/sql/*.sql` installs have the
+    -- column without needing the migration.
+    dimension_value_id integer,
     debit numeric(15,2) NOT NULL DEFAULT 0,
     credit numeric(15,2) NOT NULL DEFAULT 0,
     description varchar(500),
@@ -347,6 +356,7 @@ CREATE TABLE manual_journal_lines (
 CREATE INDEX idx_mjl_journal ON manual_journal_lines(manual_journal_id);
 CREATE INDEX idx_mjl_journal_status ON manual_journal_lines(manual_journal_id, status);
 CREATE INDEX idx_mjl_ledger ON manual_journal_lines(ledger_id);
+CREATE INDEX idx_mjl_dim_value ON manual_journal_lines(dimension_value_id);
 
 -- Phase 1.3: Enable pgcrypto for digest() (SHA-256 hashing in audit trigger)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;

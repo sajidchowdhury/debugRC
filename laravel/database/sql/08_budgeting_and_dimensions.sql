@@ -79,6 +79,19 @@ ALTER TABLE journal_lines
     FOREIGN KEY (dimension_value_id) REFERENCES dimension_values(id)
     ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED;
 
+-- G-321 (G4, MEDIUM-WAVE-3) FINANCE-DIM-1: same FK pattern on
+-- manual_journal_lines.dimension_value_id. Mirrors fk_jl_dim_value above
+-- (DEFERRABLE INITIALLY DEFERRED + ON DELETE SET NULL). The column is declared
+-- in 02_accounting.sql; this FK is declared here alongside fk_jl_dim_value so
+-- both dimension-tag FKs live in the dimensions baseline file. The migration
+-- 2026_09_08_000001 adds this FK post-hoc; this canonical DDL now includes it
+-- so fresh `psql -f database/sql/*.sql` installs have the FK without needing
+-- the migration.
+ALTER TABLE manual_journal_lines
+    ADD CONSTRAINT fk_mjl_dim_value
+    FOREIGN KEY (dimension_value_id) REFERENCES dimension_values(id)
+    ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED;
+
 -- ── 3. budgets ─────────────────────────────────────────────────
 -- Budget header: one per (fiscal_year, branch, period_type). Status lifecycle:
 -- draft → active → cancelled. period_type: monthly (12 periods), quarterly (4),

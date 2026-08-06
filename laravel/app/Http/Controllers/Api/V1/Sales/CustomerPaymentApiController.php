@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Sales;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\SortsLists;
 use App\Http\Requests\Api\V1\Sales\StorePaymentRequest;
 use App\Http\Resources\Api\V1\Sales\CustomerPaymentResource;
 use App\Models\CustomerPayment;
@@ -43,6 +44,8 @@ use Illuminate\Support\Facades\Cache;
  */
 class CustomerPaymentApiController extends Controller
 {
+    use SortsLists;
+
     public function __construct(
         private CustomerPaymentService $paymentService,
         private SalesAccess $salesAccess
@@ -52,6 +55,24 @@ class CustomerPaymentApiController extends Controller
      * List customer payments with filters.
      *
      * GET /api/v1/sales/payments
+     *
+     * Query params:
+     *   ?from_date=        payment_date >=
+     *   ?to_date=          payment_date <=
+     *   ?customer_id=      filter by customer
+     *   ?branch_id=        filter by branch
+     *   ?payment_mode=     cash|bank|mobile_banking|cheque|adjustment
+     *   ?transaction_type= receive|discount|write_off|payment
+     *   ?is_reversed=      bool filter
+     *   ?search=           ILIKE on payment_code
+     *   ?per_page=         page size (default 25, max 100)
+     *   ?page=             page number
+     *   ?sort=             sort field (G-196). Whitelist:
+     *                      id, payment_code, payment_date, amount,
+     *                      payment_mode, transaction_type, created_at.
+     *                      Unknown values silently fall back to the default
+     *                      (payment_date desc, id desc).
+     *   ?order=            asc|desc (G-196). Default: desc.
      */
     public function index(Request $request): JsonResponse
     {
@@ -65,9 +86,17 @@ class CustomerPaymentApiController extends Controller
             ->when($request->input('is_reversed'), fn($q, $r) => $q->where('is_reversed', (bool) $r))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('payment_code', 'ILIKE', "%{$search}%");
-            })
-            ->orderBy('payment_date', 'desc')
-            ->orderBy('id', 'desc');
+            });
+
+        // G-196 (MEDIUM): sort convention — ?sort=field&order=asc|desc with
+        // a per-endpoint whitelist. Default `payment_date desc, id desc`
+        // preserves the prior hard-coded behavior. See api-conventions.md §8.5.
+        $query = $this->applySort(
+            $query,
+            ['id', 'payment_code', 'payment_date', 'amount', 'payment_mode', 'transaction_type', 'created_at'],
+            'payment_date',
+            'desc',
+        );
 
         $perPage = min((int) ($request->input('per_page', 25)), 100);
         $payments = $query->paginate($perPage);

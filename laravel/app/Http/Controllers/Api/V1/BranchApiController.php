@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\SortsLists;
 use App\Http\Resources\Api\V1\Branch\BranchResource;
 use App\Http\Requests\Api\V1\Branch\StoreBranchRequest;
 use App\Http\Requests\Api\V1\Branch\UpdateBranchRequest;
@@ -27,6 +28,8 @@ use Illuminate\Support\Facades\DB;
  */
 class BranchApiController extends Controller
 {
+    use SortsLists;
+
     /**
      * List branches with pagination + optional search.
      *
@@ -35,6 +38,10 @@ class BranchApiController extends Controller
      *             — ?q= is accepted as a deprecated alias (G-193).
      *   ?page=     page number (default 1)
      *   ?per_page= page size (default 25, max 100)
+     *   ?sort=     sort field (G-196). Whitelist:
+     *              id, branch_code, branch_name, is_active, created_at.
+     *              Unknown values silently fall back to the default (id).
+     *   ?order=    asc|desc (G-196). Default: desc.
      */
     public function index(Request $request): JsonResponse
     {
@@ -53,7 +60,17 @@ class BranchApiController extends Controller
             });
         }
 
-        $paginator = $query->orderBy('id', 'desc')->paginate($perPage);
+        // G-196 (MEDIUM): sort convention — ?sort=field&order=asc|desc with a
+        // per-endpoint whitelist. Default `id desc` preserves the prior
+        // behavior (single orderBy on id). See api-conventions.md §8.5.
+        $query = $this->applySort(
+            $query,
+            ['id', 'branch_code', 'branch_name', 'is_active', 'created_at'],
+            'id',
+            'desc',
+        );
+
+        $paginator = $query->paginate($perPage);
 
         return response()->json([
             'data' => BranchResource::collection($paginator->items()),

@@ -35,6 +35,15 @@ class StoreManualJournalRequest extends FormRequest
             'description'  => ['nullable', 'string', 'max:1000'],
             'status'       => ['required', 'in:draft,post'],
             'lines'        => ['required', 'string'], // JSON string — decoded + validated in service
+            // G-321 (MEDIUM-WAVE-3): dimension tag per line. The `lines` field is
+            // sent as a JSON string (see manual-journal.js collectLines()), so
+            // Laravel's `lines.*.dimension_value_id` rule does NOT fire on the
+            // wire-level request — the rule is declared here for documentation +
+            // future-proofing (if the form is ever changed to submit lines as an
+            // array, the rule would activate). The actual per-line cast +
+            // existence check happens in toServicePayload() (int cast) and the
+            // FK constraint on manual_journal_lines.dimension_value_id (DB-level).
+            'lines.*.dimension_value_id' => ['nullable', 'integer', 'exists:dimension_values,id'],
         ];
     }
 
@@ -57,7 +66,7 @@ class StoreManualJournalRequest extends FormRequest
      *     branch_id: int,
      *     description: string,
      *     post: bool,
-     *     lines: array<int, {ledger_id: int, debit: float, credit: float, description: string}>,
+     *     lines: array<int, {ledger_id: int, debit: float, credit: float, description: string, dimension_value_id: int|null}>,
      *     created_by: int|null
      * }
      */
@@ -71,12 +80,15 @@ class StoreManualJournalRequest extends FormRequest
         }
 
         // Normalize each line: cast types, default description.
+        // G-321: pass dimension_value_id through — nullable int, 0/empty → null.
         $lines = array_map(function ($line) {
+            $dimValueId = (int) ($line['dimension_value_id'] ?? 0);
             return [
-                'ledger_id'   => (int) ($line['ledger_id'] ?? 0),
-                'debit'       => (float) ($line['debit'] ?? 0),
-                'credit'      => (float) ($line['credit'] ?? 0),
-                'description' => (string) ($line['description'] ?? ''),
+                'ledger_id'          => (int) ($line['ledger_id'] ?? 0),
+                'debit'              => (float) ($line['debit'] ?? 0),
+                'credit'             => (float) ($line['credit'] ?? 0),
+                'description'        => (string) ($line['description'] ?? ''),
+                'dimension_value_id' => $dimValueId > 0 ? $dimValueId : null,
             ];
         }, $lines);
 

@@ -52,7 +52,7 @@
                 row.remove();
                 recalc();
             });
-            row.querySelectorAll('.mj-debit, .mj-credit, .mj-ledger, .mj-line-desc').forEach(function (el) {
+            row.querySelectorAll('.mj-debit, .mj-credit, .mj-ledger, .mj-line-desc, .mj-dim-value').forEach(function (el) {
                 el.addEventListener('input', recalc);
                 el.addEventListener('change', recalc);
             });
@@ -77,8 +77,17 @@
                 var debit = parseAmount(row.querySelector('.mj-debit'));
                 var credit = parseAmount(row.querySelector('.mj-credit'));
                 var desc = row.querySelector('.mj-line-desc')?.value?.trim() || '';
+                // G-321 (MEDIUM-WAVE-3): per-line dimension tag (optional).
+                // Empty string → 0 → server treats as null (no tag).
+                var dimValueId = parseInt(row.querySelector('.mj-dim-value')?.value || '0', 10);
                 if (ledgerId > 0 && (debit > 0 || credit > 0)) {
-                    lines.push({ ledger_id: ledgerId, debit: debit, credit: credit, description: desc });
+                    lines.push({
+                        ledger_id: ledgerId,
+                        debit: debit,
+                        credit: credit,
+                        description: desc,
+                        dimension_value_id: dimValueId || null
+                    });
                 }
             });
             return lines;

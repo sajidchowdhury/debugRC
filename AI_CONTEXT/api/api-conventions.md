@@ -336,6 +336,8 @@ relations; **hand-roll** is acceptable for slim lookup-style payloads.
 | `from_date`, `to_date` | date (Y-m-d) | — | Date range filter. Used by Sales Invoices, Stock Adjustments, Branch Demands. |
 | `status` | string | — | Status filter. Used by Sales Invoices, Stock Adjustments, Stock Take Sessions. |
 | `customer_id` / `branch_id` / `warehouse_id` / `product_id` | integer | — | Foreign-key filters. |
+| `sort` | string | per-endpoint | Sort field (G-196). **MUST** be one of the per-endpoint whitelist (§8.5). Unknown values silently fall back to the endpoint default — NOT a 422. |
+| `order` | `asc` \| `desc` | `desc` | Sort direction (G-196). Any value other than `asc` / `desc` (case-insensitive) falls back to `desc`. |
 
 ### 8.2 Response shape (canonical)
 
@@ -382,6 +384,160 @@ $rules = $query->paginate($perPage);  // no min(..., 100) — OOM risk
 
 A malicious client could request `?per_page=999999` and force the server to load every
 commission rule into memory. **Fix:** add `min((int) ..., 100)`.
+
+### 8.5 Sort parameters (`?sort=field&order=asc|desc`)
+
+> ✅ **RESOLVED — G-196 (MEDIUM-WAVE-3).** The previous gap (G6) flagged that no API
+> list endpoint accepted `?sort=` / `?order=` — every paginated `index()` hard-coded
+> `orderBy('created_at', 'desc')` (or a similar single/double sort). **MEDIUM-WAVE-3**
+> added a reusable trait `App\Http\Controllers\Api\Concerns\SortsLists` exposing
+> `applySort($query, array $allowedSortFields, $defaultField = 'created_at',
+> $defaultDirection = 'desc')`. The trait reads `?sort=` + `?order=` from the active
+> request, validates `sort` against a per-endpoint whitelist, validates `order` against
+> `['asc', 'desc']`, silently falls back to the endpoint default on any unknown value
+> (NOT a 422 — keeps the API forgiving for mobile clients carrying an outdated column
+> name across an app upgrade), and appends a stable `ORDER BY id <direction>` tie-breaker
+> when the resolved sort field isn't already `id` (preserves the historical
+> `orderBy(field, dir)->orderBy('id', dir)` pattern for deterministic pagination). 6 of
+> 9 paginated controllers were wired in this wave (Branch, SalesInvoice, CustomerPayment,
+> StockAdjustment, BranchDemand, WarehouseTransfer — covering all 5 domain modules that
+> expose a paginated list endpoint). The remaining 3 (SalesChallan, SalesReturn,
+> CommissionApi ×2, StockTake ×2) can adopt the trait in a follow-up — the convention is
+> documented here so any future endpoint can opt-in with a single `use SortsLists;` +
+> `applySort(...)` call.
+
+**Convention:**
+
+- `?sort=<column>` — MUST be one of the per-endpoint whitelist. Unknown values are
+  silently ignored (the endpoint's default sort applies). Mobile clients do NOT receive
+  a 422 for an outdated column name across an app upgrade.
+- `?order=asc|desc` — defaults to `desc`. Any value other than `asc` or `desc`
+  (case-insensitive) falls back to the default direction.
+- Omitting both `?sort` and `?order` keeps the endpoint's existing default sort
+  (the 3rd/4th arguments to `applySort`).
+- A stable tie-breaker `ORDER BY id <direction>` is appended automatically when the
+  resolved sort field is not already `id` — this preserves the historical
+  `orderBy(field, dir)->orderBy('id', dir)` pattern that guarantees deterministic
+  pagination when the primary sort field has duplicate values.
+
+**Whitelist rationale:** the whitelist is defense against SQL injection AND against
+information disclosure. Clients must not be able to sort by internal columns such as
+`journal_entry_id`, `reversed_by`, `intercompany_journal_entry_id`, or `deleted_by` —
+those could leak existence/state of related records. Each endpoint publishes its
+whitelist in the controller's `index()` docblock + the table below.
+
+**Wired endpoints + whitelists (MEDIUM-WAVE-3):**
+
+| Endpoint | Default sort | Whitelist |
+|---|---|---|
+| `GET /api/v1/branches` | `id desc` | `id, branch_code, branch_name, is_active, created_at` |
+| `GET /api/v1/sales/invoices` | `invoice_date desc, id desc` | `id, invoice_code, invoice_date, total_amount, status, created_at` |
+| `GET /api/v1/sales/payments` | `payment_date desc, id desc` | `id, payment_code, payment_date, amount, payment_mode, transaction_type, created_at` |
+| `GET /api/v1/stock-adjustments` | `adjustment_date desc, id desc` | `id, adjustment_code, adjustment_date, adjustment_type, total_amount, status, created_at` |
+| `GET /api/v1/branch-demands` | `demand_date desc, id desc` | `id, demand_code, demand_date, status, total_value, created_at` |
+| `GET /api/v1/warehouse-transfers` | `transfer_date desc, id desc` | `id, transfer_code, transfer_date, status, created_at` |
+
+**Implementation (canonical):**
+
+```php
+// laravel/app/Http/Controllers/Api/Concerns/SortsLists.php
+trait SortsLists
+{
+    public function applySort(
+        $query,
+        array $allowedSortFields,
+        $defaultField = 'created_at',
+        $defaultDirection = 'desc'
+    ) {
+        $field     = (string) request('sort', '');
+        $direction = strtolower((string) request('order', ''));
+
+        if (!in_array($field, $allowedSortFields, true)) {
+            $field = $defaultField;  // unknown sort — silently fall back
+        }
+        if ($direction !== 'asc' && $direction !== 'desc') {
+            $direction = $defaultDirection;  // unknown dir — silently fall back
+        }
+
+        $query->orderBy($field, $direction);
+
+        // Stable tie-breaker for deterministic pagination.
+        if ($field !== 'id') {
+            $query->orderBy('id', $direction);
+        }
+
+        return $query;
+    }
+}
+
+// Usage in a controller's index():
+class SalesInvoiceApiController extends Controller
+{
+    use SortsLists;
+
+    public function index(Request $request): JsonResponse
+    {
+        $query = SalesInvoice::with(['customer', 'items'])
+            ->when($request->input('from_date'), fn($q, $d) => $q->where('invoice_date', '>=', $d))
+            ->when($request->input('search'), fn($q, $s) => $q->where('invoice_code', 'ILIKE', "%{$s}%"));
+
+        $query = $this->applySort(
+            $query,
+            ['id', 'invoice_code', 'invoice_date', 'total_amount', 'status', 'created_at'],
+            'invoice_date',
+            'desc',
+        );
+
+        $perPage = min((int) ($request->input('per_page', 25)), 100);
+        $invoices = $query->paginate($perPage);
+        // ...
+    }
+}
+```
+
+**Client usage:**
+
+```
+# Default sort (no params) — server applies its hard-coded default:
+GET /api/v1/sales/invoices
+# server: ORDER BY invoice_date DESC, id DESC
+
+# Sort by total_amount ascending, tie-break by id ascending:
+GET /api/v1/sales/invoices?sort=total_amount&order=asc
+# server: ORDER BY total_amount ASC, id ASC
+
+# Unknown sort field — silently falls back to default (NOT a 422):
+GET /api/v1/sales/invoices?sort=internal_column_xyz
+# server: ORDER BY invoice_date DESC, id DESC (default applies)
+
+# Unknown order value — falls back to desc:
+GET /api/v1/sales/invoices?sort=invoice_code&order=horizontal
+# server: ORDER BY invoice_code DESC, id DESC
+
+# Sort by id only — no tie-breaker added:
+GET /api/v1/sales/invoices?sort=id&order=asc
+# server: ORDER BY id ASC
+```
+
+**Verification command:**
+
+```bash
+# Default sort — server applies its hard-coded default:
+curl -sS -H "Authorization: Bearer <token>" \
+     'https://erp.example.com/api/v1/sales/invoices' | jq '.data[0].invoice_code'
+
+# Sort by total_amount ascending:
+curl -sS -H "Authorization: Bearer <token>" \
+     'https://erp.example.com/api/v1/sales/invoices?sort=total_amount&order=asc' \
+  | jq '.data | map(.total_amount)'
+# expected: ascending array of total_amount values
+
+# Unknown sort field — silently falls back to default (NOT a 422):
+curl -sS -o /dev/null -w '%{http_code}\n' \
+     -H "Authorization: Bearer <token>" \
+     'https://erp.example.com/api/v1/sales/invoices?sort=internal_column_xyz'
+# expected: 200 (NOT 422)
+```
 
 ---
 
@@ -910,6 +1066,28 @@ Gap IDs are stable references shared with `api-overview.md` §13 and `api-module
 | G4 | HIGH | `CommissionApiController::listRules` does NOT clamp `per_page` to 100. OOM risk. | Add `min((int) $request->input('per_page', 25), 100)`. |
 | ~~G5~~ ✅ | ~~MEDIUM~~ RESOLVED | ~~Search param name drift: `q` (Branches, Stock Take) vs `search` (Sales, Stock Adjustment, Branch Demand).~~ **MEDIUM-WAVE-1** — `BranchApiController::index` now reads `search` first with `q` as a deprecated backward-compat alias (`$request->input('search', $request->input('q', ''))`). Stock Take already used `search` (the gap evidence was stale). All 8 paginated search endpoints now accept `search`; `q` remains accepted on Branches for one release. | No further action. |
 | G6 | MEDIUM | No sort convention. No endpoint accepts `?sort=field` or `?order=asc`. All list endpoints hard-code `orderBy('created_at', 'desc')` or similar. | Add `?sort=field&order=asc|desc` to list endpoints, with a whitelist of sortable fields. |
+
+> ✅ **RESOLVED — G-196 (MEDIUM-WAVE-3).** The previous gap (G6) flagged that no API
+> list endpoint accepted `?sort=` / `?order=` — every paginated `index()` hard-coded
+> `orderBy('created_at', 'desc')` (or similar single/double sort). **MEDIUM-WAVE-3**
+> added a reusable trait `App\Http\Controllers\Api\Concerns\SortsLists` exposing
+> `applySort($query, array $allowedSortFields, $defaultField = 'created_at',
+> $defaultDirection = 'desc')`. The trait reads `?sort=` + `?order=` from the active
+> request, validates `sort` against a per-endpoint whitelist (defense against SQL
+> injection + information disclosure — internal columns like `journal_entry_id` /
+> `reversed_by` are NOT in any whitelist), validates `order` against `['asc', 'desc']`,
+> silently falls back to the endpoint default on any unknown value (NOT a 422 — keeps
+> the API forgiving for mobile clients carrying an outdated column name across an app
+> upgrade), and appends a stable `ORDER BY id <direction>` tie-breaker when the resolved
+> sort field isn't already `id` (preserves the historical
+> `orderBy(field, dir)->orderBy('id', dir)` pattern for deterministic pagination). 6 of
+> 9 paginated controllers were wired in this wave (Branch, SalesInvoice, CustomerPayment,
+> StockAdjustment, BranchDemand, WarehouseTransfer — covering all 5 domain modules that
+> expose a paginated list endpoint). The remaining 3 (SalesChallan, SalesReturn,
+> CommissionApi ×2, StockTake ×2) can adopt the trait in a follow-up — the convention is
+> documented in §8.5 so any future endpoint can opt-in with a single `use SortsLists;` +
+> `applySort(...)` call.
+
 | ~~G7~~ ✅ | ~~HIGH~~ RESOLVED | ~~Idempotency implemented on only 3 of ~14 transactional write endpoints. See §11.3.~~ **PURCHASING-API-3** retrofitted the 4 High-risk endpoints (`POST /sales/returns`, `/stock-adjustments`, `/warehouse-transfers`, `/branch-demands`) with an optional `idempotency_token` (UUID) + 5-min cache lookup. **PURCHASING-API-4** retrofitted the 4 Medium-risk endpoints (`POST /sales/challans/godown`, `/branch-demands/{id}/send`, `/branch-demands/{id}/reprice`, `/stock-take/sessions`) with the same pattern; the path-parameterized endpoints namespace the cache key with the demand id. Total idempotent endpoints: 11 of ~14 (3 required + 8 optional). Only Low-risk endpoints (second-call hits 409) intentionally skip the pattern. See §11.1 + §11.3. | Fully resolved — only Low-risk endpoints intentionally skipped. |
 | ~~G8~~ ✅ | ~~MEDIUM~~ RESOLVED | ~~No ETag / conditional-GET support on read endpoints. Mobile clients re-download full lists on every poll.~~ **MEDIUM-WAVE-2-C** — created a new global middleware `App\Http\Middleware\ETag` (~205 LOC) registered in the `api` middleware stack via `bootstrap/app.php` (`$middleware->api([\App\Http\Middleware\ETag::class])`). The middleware runs as a "post" middleware on every `/api/*` request: it lets the controller produce the response normally, then computes `ETag = '"' . md5(body) . '"'` (strong, RFC 7232 §2.3 compliant) and sets the `ETag` header on cacheable responses (GET/HEAD + 200 OK + non-streaming). If the request carries an `If-None-Match` header matching the computed ETag, the middleware returns `304 Not Modified` with an empty body + the ETag header (and `Cache-Control` if the controller set one). The 304 path supports single-ETag, comma-separated list, and `*` wildcard If-None-Match values. The 4 originally-recommended polled endpoints (`GET /lookups/*` × 6 + `GET /dashboard` × 3) — and EVERY other GET/HEAD endpoint — now inherit the behavior automatically without per-controller wiring. The middleware intentionally does NOT skip the controller on a cache hit (the DB is still hit + the body still assembled, then discarded) — this is correct for a poll-freshness check + composes naturally with the planned server-side `Cache::remember` on dashboard endpoints (G15). See §11.5 for the canonical pattern + client usage + cacheable-response matrix. | No further action. |
 | ~~G9~~ ✅ | ~~MEDIUM~~ RESOLVED | ~~No `Accept` negotiation. API always returns JSON regardless of `Accept` header. A future `v2` cannot be selected via `Accept: application/vnd.rcerp.v2+json`.~~ **MEDIUM-WAVE-1** — the versioning strategy is decided + documented in `api-overview.md` §14: **URL-path versioning** (`/api/v1`, future `/api/v2`), NOT Accept-header negotiation. v2 (when needed) ships as a parallel `Route::prefix('v2')` group; v1 stays default for ≥1 major release; deprecation signaled via `Deprecation`/`Sunset` headers (G16). Accept-header negotiation was rejected because URL-path versioning is simpler for mobile clients + already in place. This row + `api-overview.md` G15 (G-210) close together. | No further action. |

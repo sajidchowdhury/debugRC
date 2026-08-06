@@ -20,6 +20,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property int $id
  * @property int $manual_journal_id
  * @property int $ledger_id
+ * @property int|null $dimension_value_id  G-321: optional dimension tag for segment reporting
  * @property string $debit
  * @property string $credit
  * @property string|null $description
@@ -37,6 +38,7 @@ class ManualJournalLine extends Model
     protected $fillable = [
         'manual_journal_id',
         'ledger_id',
+        'dimension_value_id',
         'debit',
         'credit',
         'description',
@@ -49,6 +51,7 @@ class ManualJournalLine extends Model
         'credit'      => 'decimal:2',
         'manual_journal_id' => 'integer',
         'ledger_id'   => 'integer',
+        'dimension_value_id' => 'integer',
         'journal_line_id' => 'integer',
     ];
 
@@ -64,6 +67,15 @@ class ManualJournalLine extends Model
     public function ledger(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(Ledger::class, 'ledger_id');
+    }
+
+    /**
+     * G-321 (MEDIUM-WAVE-3): optional dimension tag for segment reporting.
+     * Nullable — most manual-journal lines are NOT dimension-tagged.
+     */
+    public function dimensionValue(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(DimensionValue::class, 'dimension_value_id');
     }
 
     public function journalLine(): \Illuminate\Database\Eloquent\Relations\BelongsTo

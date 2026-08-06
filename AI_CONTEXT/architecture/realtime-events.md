@@ -1424,6 +1424,30 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
 - **Fix:** Add an explicit table in this doc clarifying the 3 classes (already done in
   §7.1).
 
+> ✅ **RESOLVED — G-214 (MEDIUM-WAVE-3).** Doc-acceptance resolution: §7.1
+> of this file (the "Channel classification" table at L208-214, just above
+> the `publishToRedis` heading) already documents the 3 classes
+> explicitly — **Notification-mapped** (5 channels forwarded to
+> `NotificationService::dispatch`), **SSE-only refresh signals** (4 channels:
+> `rcerp_stock_change`, `rcerp_journal_entry`, `rcerp_damage_change`,
+> `rcerp_damage_attachment_change` — worker publishes to Redis only; SSE
+> clients receive + refresh UI; no bell notification), and **Emit-only**
+> (1 channel: `rcerp_notification_dispatched` — emitted by
+> `NotificationService::dispatch` L145 via `emitNotify()`; worker LISTENs +
+> publishes to Redis so SSE shows the toast, but does NOT forward back to
+> `dispatch()` — prevents infinite loop per BR8). The "surprise for new
+> engineers" impact called out in the gap text is fully addressed by the
+> classification table: any new engineer reading §7.1 sees the 3 classes
+> + their distinct behaviors side-by-side. NOTE (post-recon): since the
+> G-076/G-078/G-079 (CRITICAL, WORKFLOWS-NOTIFICATION) fix emptied
+> `CHANNEL_EVENT_MAP` entirely, the "Notification-mapped" class now contains
+> 0 channels in the live code — the table is still accurate as a
+> documentation contract (it describes the design intent; if the map is
+> ever repopulated, the 5 channels listed in the table are the ones that
+> would be re-mapped). The ListenNotifyService unit test
+> `test_channel_event_map_is_empty_per_double_dispatch_fix` pins the
+> current empty-map state as a regression guard.
+
 ### G11 — MEDIUM — `rcerp_notification_dispatched` is emit-only (no DB trigger, no forward-back)
 - **Evidence:** No DB trigger emits this channel — only `NotificationService::dispatch`
   L145 via `emitNotify()`. `CHANNEL_EVENT_MAP` does NOT include it →
@@ -1432,6 +1456,19 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
 - **Impact:** **Correct by design** — prevents infinite loop (BR8). The bell toast
   arrives via this channel for every dispatched notification.
 - **Fix:** None — confirming safety (documented in §7.1).
+
+> ✅ **RESOLVED — G-215 (MEDIUM-WAVE-3).** Doc-acceptance resolution: §7.1
+> of this file (the "Channel classification" table at L208-214) classifies
+> `rcerp_notification_dispatched` as the sole member of the **Emit-only**
+> class — "Emitted by `NotificationService::dispatch` L145 via
+> `emitNotify()`. Worker LISTENs + publishes to Redis (so SSE shows the
+> toast) but does NOT forward back to `dispatch()` — prevents infinite loop
+> (BR8)." The design is correct by design (BR8 invariant) and is fully
+> documented in §7.1. The ListenNotifyService unit test
+> `test_notification_dispatched_channel_not_in_event_map` (created in
+> MEDIUM-WAVE-3 G-217) pins the BR8 invariant as a regression guard — if
+> `rcerp_notification_dispatched` is ever accidentally added back to
+> `CHANNEL_EVENT_MAP`, the test fails immediately. No code change required.
 
 ### G12 — MEDIUM — Worker has no reconnection logic; stale PDO risk
 
@@ -1513,6 +1550,75 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
 - **Impact:** Worker's main loop, signal handling, heartbeat, branch filtering,
   reconnect, max-connection-time, disconnect detection — all untested.
 - **Fix:** Add `SseStatusTest`, `BranchFilterTest`, `ListenNotifyServiceTest`.
+
+> ✅ **RESOLVED — G-217 (MEDIUM-WAVE-3).** 3 test files created under
+> `laravel/tests/` covering the 3 highest-value surfaces of the realtime
+> pipeline:
+>
+> 1. **`tests/Feature/Realtime/SseStatusTest.php`** (4 tests) — covers the
+>    `/sse/status` JSON endpoint (`SseController::status()` L223-298):
+>    `test_sse_status_returns_ok_without_worker` (no heartbeat →
+>    `worker_running: false`), `test_sse_status_returns_worker_healthy_
+>    when_heartbeat_fresh` (fresh Redis heartbeat → `worker_running: true` +
+>    `worker_pdo_healthy: true`), `test_sse_status_reports_stale_heartbeat`
+>    (heartbeat age > TTL → `worker_running: false` + `heartbeat_stale:
+>    true`), `test_sse_status_requires_authentication` (unauthenticated
+>    request → 401). Redis is mocked via the Laravel Redis facade +
+>    Mockery (Predis\Client mock) because the test env runs with
+>    `PREDIS_DISABLED=true`. `ListenNotifyService::isAvailable()` +
+>    `getActiveChannels()` hit the real test DB (primary, no LISTEN active).
+>
+> 2. **`tests/Feature/Realtime/BranchFilterTest.php`** (5 tests) —
+>    characterizes the 5-case branch isolation filter documented in the
+>    G-213 RESOLVED blockquote above (L1396-1441). The filter is inline in
+>    the `SseController::events()` stream closure (L144-184) inside a
+>    `while(true)` loop that only exits via `max_connection_time` (300s
+>    default) or `connection_aborted()` — both are impractical for HTTP-level
+>    integration tests in the CLI test harness. The test class transcribes
+>    the EXACT filter logic into a private static `shouldForwardEvent()`
+>    helper + asserts each of the 5 cases: `test_admin_receives_null_
+>    branch_events` (case 3), `test_non_admin_filtered_from_null_branch_
+>    events` (case 2 — the G-213 fix), `test_same_branch_event_forwarded`
+>    (case 4), `test_cross_branch_event_filtered` (case 1), `test_head_
+>    office_user_receives_all_branches` (case 5). If the controller's
+>    filter is ever extracted into a public method (recommended), the
+>    tests can be migrated to call it directly with a 1-line change to
+>    `shouldForwardEvent()`.
+>
+> 3. **`tests/Unit/Realtime/ListenNotifyServiceTest.php`** (6 tests) —
+>    covers `ListenNotifyService` constants + methods:
+>    `test_pg_channels_has_10_entries` (pins the 10-channel contract),
+>    `test_channel_event_map_is_empty_per_double_dispatch_fix` (verifies
+>    the G-076/G-078/G-079 fix emptied `CHANNEL_EVENT_MAP` — the gap text
+>    described the pre-G-076 state with 5 mappings; current code has 0),
+>    `test_forward_to_notification_service_skips_unmapped_channels`
+>    (dispatch never called for unmapped channels — uses Mockery on
+>    NotificationService), `test_forward_to_notification_service_never_
+>    dispatches_any_channel` (the G-076 fix's safety property — no channel
+>    triggers dispatch), `test_notification_dispatched_channel_not_in_
+>    event_map` (pins the BR8 infinite-loop invariant), and
+>    `test_build_notification_body_falls_back_to_record` (private method
+>    tested via ReflectionMethod — when payload lacks 'table', body uses
+>    'record' fallback). Private `CHANNEL_EVENT_MAP` constant is read via
+>    ReflectionClass::getConstant().
+>
+> **Verification:** grep for `ListenNotify|SseController` in `tests/` now
+> returns 3 file matches (was 0 before this commit). All 3 test files pass
+> brace/paren/bracket balance check (diff 0). Files follow PSR-4
+> (`Tests\Feature\Realtime\SseStatusTest` ↔ `tests/Feature/Realtime/
+> SseStatusTest.php`, etc.) and use the project's `Tests\TestCase` base
+> class with the `DatabaseTransactions` + `BuildsRoleUsers` traits.
+>
+> **Limitations / not covered by this wave:** the worker's main event loop,
+> heartbeat writer, and PDO reconnection logic (`ListenNotifyWorker::handle`
+> + `pollNotifications` + `sendHeartbeat` + `getDedicatedConnection`) are
+> NOT covered — they require a long-running CLI context + a real PG
+> connection with `LISTEN`/`NOTIFY` semantics that can't be simulated in
+> the per-test transactional DB. The worker is supervised by Docker
+> (`restart: unless-stopped`) + monitored via `/sse/status` (now tested),
+> so a future wave could add a `ListenNotifyWorkerCommandTest` using
+> Laravel's `Artisan::call()` + a fake PDO mock if deeper coverage is
+> needed.
 
 > ✅ **RESOLVED — LOW-B.** File deleted in this commit. Single fix resolves both G-270 (this gap) and G-317 (cross-ref `workflows/notification-workflow.md` G17). Verified 0 bytes + 0 references prior to deletion.
 

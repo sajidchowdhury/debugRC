@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\BranchDemand;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\SortsLists;
 use App\Http\Resources\Api\V1\BranchDemand\BranchDemandResource;
 use App\Http\Requests\Api\V1\BranchDemand\StoreBranchDemandRequest;
 use App\Http\Requests\Api\V1\BranchDemand\SendBranchDemandRequest;
@@ -70,6 +71,8 @@ use Illuminate\Support\Facades\Log;
  */
 class BranchDemandApiController extends Controller
 {
+    use SortsLists;
+
     public function __construct(
         private BranchDemandService $demandService,
         private BranchIntercompanyService $intercompanyService,
@@ -114,6 +117,11 @@ class BranchDemandApiController extends Controller
      *   ?search=         search demand_code (ILIKE)
      *   ?per_page=       page size (default 25, max 100)
      *   ?page=           page number
+     *   ?sort=           sort field (G-196). Whitelist:
+     *                    id, demand_code, demand_date, status, total_value,
+     *                    created_at. Unknown values silently fall back to
+     *                    the default (demand_date desc, id desc).
+     *   ?order=          asc|desc (G-196). Default: desc.
      */
     public function index(Request $request): JsonResponse
     {
@@ -144,9 +152,18 @@ class BranchDemandApiController extends Controller
             $query->where('demand_code', 'ILIKE', '%' . $request->search . '%');
         }
 
-        $paginator = $query->orderByDesc('demand_date')
-            ->orderByDesc('id')
-            ->paginate($perPage);
+        // G-196 (MEDIUM): sort convention — ?sort=field&order=asc|desc with
+        // a per-endpoint whitelist. Default `demand_date desc, id desc`
+        // preserves the prior hard-coded behavior (orderByDesc on both
+        // demand_date + id). See api-conventions.md §8.5.
+        $query = $this->applySort(
+            $query,
+            ['id', 'demand_code', 'demand_date', 'status', 'total_value', 'created_at'],
+            'demand_date',
+            'desc',
+        );
+
+        $paginator = $query->paginate($perPage);
 
         return response()->json([
             'data' => BranchDemandResource::collection($paginator),

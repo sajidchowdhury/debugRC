@@ -1352,6 +1352,30 @@ trigger).
 `status='approved'` forever. The approval timeline becomes stale/misleading (shows approved with no
 indication the journal was later reversed).
 
+> ✅ **RESOLVED — G-250 / G13 (MEDIUM-WAVE-3).** `ManualJournalService::reverseJournal`
+> now cascades to `approval_requests` — between the "mark reversed" step and the
+> audit log, a new step queries
+> `ApprovalRequest::where('entity_type', 'manual_journal')->where('entity_id', $journalId)->where('status', 'approved')`
+> and updates each matching row to `status='cancelled'` with the `rejection_reason`
+> column set to `"Manual journal reversed on {Y-m-d H:i:s}: {reason}"`. Design
+> decision: reuse the existing `cancelled` status (already in the
+> `approval_requests` CHECK constraint — see `11_approval_workflow.sql` L75)
+> rather than introducing a new `superseded` status. This mirrors the
+> `cleanup_orphan_approval_requests()` SQL function (`11_approval_workflow.sql`
+> L190-196) which also uses `status='cancelled'` + `rejection_reason` for
+> non-pending voiding, and semantically mirrors `ApprovalService::cancel()` (just
+> triggered by a different lifecycle event — reversal, not requester-cancel). The
+> implementation uses the `ApprovalRequest` model directly (NOT
+> `ApprovalService::cancel()`) because `cancel()` requires `Auth::user()`,
+> requires the request to be pending, and would call `updateEntityStatus()` to
+> reset the manual journal back to 'draft' (undoing the reversal we just did).
+> The audit log details array now includes `'approval_requests_cancelled' =>
+> $count` (int, the number of approval_requests rows that were cancelled —
+> typically 0 for auto-approved journals that never went through the workflow, 1
+> for workflow-approved journals). Brace/paren/bracket balance on the modified
+> `ManualJournalService.php`: 44/44 braces, 247/247 parens, 61/61 brackets (all
+> 0 diff — verified structurally; no PHP binary in sandbox).
+
 > ⚠️ **FALSE POSITIVE — LOW-D.** Agent LOW-D was tasked with deleting `ApprovalService::cancel()` as dead code, but the verification step (`grep -r '\->cancel\(' laravel/`) found **1 live call site** that contradicts the gap's evidence. The method is NOT dead code — it is reachable from HTTP via the Purchase Order cancellation flow:
 > - **Route:** `routes/web.php:961` — `Route::post('{id}/cancel', [PurchaseOrderController::class, 'cancel'])` (gated by `role:admin,manager` + `branch.isolation`)
 > - **Controller:** `app/Http/Controllers/Admin/PurchaseOrderController.php:594-603` — `cancel()` calls `$this->poService->cancelOrder($id, auth()->id(), $request->validated('cancel_reason'))`

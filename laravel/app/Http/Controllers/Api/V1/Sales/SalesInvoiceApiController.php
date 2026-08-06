@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Sales;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\SortsLists;
 use App\Http\Requests\Api\V1\Sales\FinalizeInvoiceRequest;
 use App\Http\Resources\Api\V1\Sales\SalesInvoiceResource;
 use App\Models\SalesInvoice;
@@ -31,6 +32,8 @@ use Illuminate\Support\Facades\Cache;
  */
 class SalesInvoiceApiController extends Controller
 {
+    use SortsLists;
+
     public function __construct(
         private SalesInvoiceService $invoiceService,
         private SalesAccess $salesAccess
@@ -40,6 +43,21 @@ class SalesInvoiceApiController extends Controller
      * List invoices with pagination and filters.
      *
      * GET /api/v1/sales/invoices
+     *
+     * Query params:
+     *   ?from_date=    invoice_date >=
+     *   ?to_date=      invoice_date <=
+     *   ?customer_id=  filter by customer
+     *   ?branch_id=    filter by branch (admin only — RLS for non-admins)
+     *   ?status=       draft|confirmed|cancelled|reversed
+     *   ?search=       ILIKE on invoice_code
+     *   ?per_page=     page size (default 25, max 100)
+     *   ?page=         page number
+     *   ?sort=         sort field (G-196). Whitelist:
+     *                  id, invoice_code, invoice_date, total_amount,
+     *                  status, created_at. Unknown values silently fall
+     *                  back to the default (invoice_date desc, id desc).
+     *   ?order=        asc|desc (G-196). Default: desc.
      */
     public function index(Request $request): JsonResponse
     {
@@ -51,9 +69,17 @@ class SalesInvoiceApiController extends Controller
             ->when($request->input('status'), fn($q, $s) => $q->where('status', $s))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('invoice_code', 'ILIKE', "%{$search}%");
-            })
-            ->orderBy('invoice_date', 'desc')
-            ->orderBy('id', 'desc');
+            });
+
+        // G-196 (MEDIUM): sort convention — ?sort=field&order=asc|desc with
+        // a per-endpoint whitelist. Default `invoice_date desc, id desc`
+        // preserves the prior hard-coded behavior. See api-conventions.md §8.5.
+        $query = $this->applySort(
+            $query,
+            ['id', 'invoice_code', 'invoice_date', 'total_amount', 'status', 'created_at'],
+            'invoice_date',
+            'desc',
+        );
 
         $perPage = min((int) ($request->input('per_page', 25)), 100);
         $invoices = $query->paginate($perPage);

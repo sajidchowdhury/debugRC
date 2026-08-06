@@ -2,6 +2,7 @@
 
 namespace App\Services\Accounting;
 
+use App\Models\ApprovalRequest;
 use App\Models\ManualJournal;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -171,12 +172,16 @@ class ManualJournalService
             }
 
             // Convert to the format expected by postToGL.
+            // G-321: include dimension_value_id so the draft→post path carries
+            // the dimension tag through to GL (the create() path already does
+            // via validateAndNormalizeLines; this mirrors it for postJournal()).
             $lines = $draftLines->map(function ($line) {
                 return [
                     'ledger_id'   => (int) $line->ledger_id,
                     'debit'       => (float) $line->debit,
                     'credit'      => (float) $line->credit,
                     'description' => $line->description ?? '',
+                    'dimension_value_id' => $line->dimension_value_id ?? null,
                 ];
             })->toArray();
 
@@ -258,10 +263,42 @@ class ManualJournalService
                 'updated_at'     => now(),
             ]);
 
-            // 3. Audit log.
+            // 3. Cascade to approval_requests — G-250 (MEDIUM-WAVE-3).
+            // The approval that authorized this journal is now void because the
+            // underlying journal was reversed. Mark the approval_request row as
+            // 'cancelled' (an existing status in the approval_requests CHECK
+            // constraint — see 11_approval_workflow.sql L75) with the
+            // rejection_reason column recording WHY it was cancelled. This
+            // mirrors the cleanup_orphan_approval_requests() SQL function in
+            // 11_approval_workflow.sql L190-196 which also uses status='cancelled'
+            // + rejection_reason for non-pending voiding. The approval timeline
+            // is now honest: instead of showing 'approved' forever for a journal
+            // that no longer has effect, it shows 'cancelled' with the reversal
+            // reason.
+            //
+            // Using the ApprovalRequest model directly (NOT
+            // ApprovalService::cancel()) because cancel() requires Auth::user(),
+            // requires the request to be pending, and would call
+            // updateEntityStatus() to reset the manual journal back to 'draft'
+            // (undoing the reversal we just did). Direct model update avoids all
+            // three issues. Only 'approved' rows are touched — pending/rejected/
+            // already-cancelled rows are left as-is.
+            $approvalRequestsCancelled = ApprovalRequest::where('entity_type', 'manual_journal')
+                ->where('entity_id', $journalId)
+                ->where('status', 'approved')
+                ->update([
+                    'status'           => 'cancelled',
+                    'rejection_reason' => 'Manual journal reversed on '
+                        . now()->format('Y-m-d H:i:s')
+                        . ": {$reason}",
+                    'updated_at'       => now(),
+                ]);
+
+            // 4. Audit log.
             $this->logAudit('manual_journal_reversed', $reversedBy, $journalId, [
-                'journal_code' => $journal->journal_code,
-                'reason'       => $reason,
+                'journal_code'                => $journal->journal_code,
+                'reason'                      => $reason,
+                'approval_requests_cancelled' => $approvalRequestsCancelled,
             ]);
 
             return ManualJournal::find($journalId);
@@ -335,6 +372,11 @@ class ManualJournalService
                 'credit'    => (float) $line['credit'],
                 // NO entity_type/entity_id — manual journals are accountant-defined
                 'memo'      => $line['description'] ?: null,
+                // G-321 (MEDIUM-WAVE-3): pass-through to JournalPostingService::createJournalEntry,
+                // which already reads $line['dimension_value_id'] ?? null at L156 and
+                // populates journal_lines.dimension_value_id. Null when the line is
+                // not dimension-tagged (the common case).
+                'dimension_value_id' => $line['dimension_value_id'] ?? null,
             ];
         }
 
@@ -365,15 +407,18 @@ class ManualJournalService
         $lineRows = [];
         foreach ($lines as $line) {
             $lineRows[] = [
-                'manual_journal_id' => $journalId,
-                'ledger_id'         => (int) $line['ledger_id'],
-                'debit'             => (float) $line['debit'],
-                'credit'            => (float) $line['credit'],
-                'description'       => $line['description'] ?? null,
-                'status'            => $status,
-                'journal_line_id'   => null, // filled in after GL posting
-                'created_at'        => now(),
-                'updated_at'        => now(),
+                'manual_journal_id'  => $journalId,
+                'ledger_id'          => (int) $line['ledger_id'],
+                // G-321 (MEDIUM-WAVE-3): persist the dimension tag on the draft
+                // line so it survives draft→post. Null when not tagged.
+                'dimension_value_id' => $line['dimension_value_id'] ?? null,
+                'debit'              => (float) $line['debit'],
+                'credit'             => (float) $line['credit'],
+                'description'        => $line['description'] ?? null,
+                'status'             => $status,
+                'journal_line_id'    => null, // filled in after GL posting
+                'created_at'         => now(),
+                'updated_at'         => now(),
             ];
         }
 
@@ -452,6 +497,9 @@ class ManualJournalService
                 'debit'       => round($debit, 2),
                 'credit'      => round($credit, 2),
                 'description' => (string) ($line['description'] ?? ''),
+                // G-321 (MEDIUM-WAVE-3): preserve the dimension tag through
+                // normalization. 0/empty → null (nullable column).
+                'dimension_value_id' => (int) ($line['dimension_value_id'] ?? 0) ?: null,
             ];
         }
 

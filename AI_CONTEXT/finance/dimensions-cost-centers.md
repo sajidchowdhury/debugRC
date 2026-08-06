@@ -85,17 +85,36 @@ Three management-accounting drivers:
 > The only way to populate `journal_lines.dimension_value_id` is via direct SQL. Segment
 > reports will return 0 until tagging is wired.
 >
-> ⏳ **G-321 DEFERRED** (FINANCE-DIM-1 wave): the manual-journal wiring (approach a
-> from the research report) is deferred to a follow-up wave. It touches the GL posting
-> path (`ManualJournalService::createJournal` → `JournalPostingService::createJournalEntry`)
-> and needs careful testing. The minimum viable wiring requires: (1) migration adding
-> `dimension_value_id` to `manual_journal_lines`; (2) `StoreManualJournalRequest`
-> validation + `toServicePayload()` pass-through; (3) Blade form dropdown per line-row;
-> (4) `ManualJournalLine` model `$fillable`. `JournalPostingService::createJournalEntry`
-> already reads `$line['dimension_value_id'] ?? null` at L156, so the pass-through is
-> automatic once the manual-journal path populates the key. The full-rollout approach
-> (b) — wiring into sales/purchase/stock/expense/income modules — is a separate
-> larger effort (~3-4h). Tracked as the last open gap in the dimensions cluster.
+> ✅ **RESOLVED — G-321 (MEDIUM-WAVE-3).** Manual-journal dimension tagging is
+> now wired end-to-end (approach a — minimum viable wiring via the manual-journal
+> path). The full chain: Blade `<select class="mj-dim-value">` dropdown per
+> line-row in `manual-journals/create.blade.php` (options grouped by dimension
+> name, "— None —" default) → JS `collectLines()` includes
+> `dimension_value_id` in the JSON posted to `#linesInput` →
+> `StoreManualJournalRequest::toServicePayload()` casts per-line
+> `dimension_value_id` to nullable int (0/empty → null) + declares the
+> `lines.*.dimension_value_id` validation rule (documented; the JSON-string
+> `lines` field means the rule activates only if the form is ever changed to
+> submit lines as an array — the real cast happens in `toServicePayload`) →
+> `ManualJournalService::validateAndNormalizeLines()` preserves the tag in the
+> normalized line array → `persistLines()` writes it to
+> `manual_journal_lines.dimension_value_id` (new column, migration
+> `2026_09_08_000001`) → `postToGL()` passes it through to
+> `JournalPostingService::createJournalEntry()` which already reads
+> `$line['dimension_value_id'] ?? null` at L156 and populates
+> `journal_lines.dimension_value_id` (the GL crown-jewel column that drives
+> segment reports). The draft→post path (`postJournal()`) also carries the tag
+> through (the `draftLines->map()` now includes `dimension_value_id`). Schema:
+> new migration adds `dimension_value_id integer NULL` + `idx_mjl_dim_value`
+> index + `fk_mjl_dim_value` FK (`DEFERRABLE INITIALLY DEFERRED ON DELETE SET
+> NULL` — mirrors `fk_jl_dim_value`). SQL baselines `02_accounting.sql` (column
+> + index) and `08_budgeting_and_dimensions.sql` (FK) updated so fresh
+> `psql -f` installs include the wiring without needing the migration. Model
+> `ManualJournalLine` `$fillable` + `dimensionValue()` `belongsTo` relation
+> added. Segment reports will now return non-zero rows for any manual-journal
+> line the accountant tags. The full-rollout approach (b) — wiring into
+> sales/purchase/stock/expense/income modules — remains a separate larger
+> effort (~3-4h) and is tracked as a future enhancement.
 
 ---
 

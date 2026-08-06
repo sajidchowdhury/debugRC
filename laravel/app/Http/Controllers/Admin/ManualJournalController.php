@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreManualJournalRequest;
+use App\Models\DimensionValue;
 use App\Models\ManualJournal;
 use App\Services\Accounting\ManualJournalService;
 use App\Services\Approval\ApprovalService;
@@ -80,18 +81,45 @@ class ManualJournalController extends Controller
 
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
+        // G-321 (MEDIUM-WAVE-3): load active dimension values for the per-line
+        // dimension-tag dropdown. Eager-load the parent dimension so the Blade
+        // form can group values under their dimension name (optgroup). The
+        // DimensionValueBranchScope global scope automatically filters to
+        // "branch_id IS NULL OR branch_id = session branch" for non-admins
+        // (FINANCE-3 / G-319), so company-wide + this-branch values are visible
+        // and cross-branch values are excluded — matches the BranchScope
+        // semantics applied to manual_journals themselves.
+        $dimensionValues = DimensionValue::with('dimension')
+            ->active()
+            ->orderBy('dimension_id')
+            ->orderBy('name')
+            ->get(['id', 'dimension_id', 'code', 'name']);
+
+        // Group by dimension name for the Blade optgroup layout.
+        // ->groupBy on a relation returns a Collection keyed by the dimension's
+        // name attribute. We map to a simpler [id => label] flat list keyed
+        // by dimension name so the Blade template can iterate cleanly.
+        $dimensionValuesGrouped = $dimensionValues
+            ->groupBy(fn($v) => $v->dimension?->name ?? '(unassigned)')
+            ->map(fn($group) => $group->map(fn($v) => [
+                'id'    => $v->id,
+                'label' => "{$v->code} — {$v->name}",
+            ])->values()->all())
+            ->all();
+
         // Branch restriction: non-admin users get their own branch auto-selected.
         $user = auth()->user();
         $userBranchId = (int) (session('branch_id') ?? ($user ? $user->getBranchId() : 0));
         $isAdmin = $user && $user->isAdmin();
 
         return view('admin.manual-journals.create', [
-            'title'        => 'New Manual Journal',
-            'ledgers'      => $ledgers,
-            'branches'     => $branches,
-            'today'        => now()->format('Y-m-d'),
-            'isAdmin'      => $isAdmin,
-            'userBranchId' => $userBranchId,
+            'title'                   => 'New Manual Journal',
+            'ledgers'                 => $ledgers,
+            'branches'                => $branches,
+            'today'                   => now()->format('Y-m-d'),
+            'isAdmin'                 => $isAdmin,
+            'userBranchId'            => $userBranchId,
+            'dimensionValuesGrouped'  => $dimensionValuesGrouped,
         ]);
     }
 

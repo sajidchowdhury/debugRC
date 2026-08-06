@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\StockAdjustment;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\SortsLists;
 use App\Http\Resources\Api\V1\StockAdjustment\StockAdjustmentResource;
 use App\Http\Requests\Api\V1\StockAdjustment\StoreStockAdjustmentRequest;
 use App\Models\StockAdjustment;
@@ -74,6 +75,8 @@ use Illuminate\Support\Facades\Log;
  */
 class StockAdjustmentApiController extends Controller
 {
+    use SortsLists;
+
     public function __construct(
         private StockAdjustmentService $adjustmentService,
         private StockAdjustmentPolicyService $policy,
@@ -102,6 +105,13 @@ class StockAdjustmentApiController extends Controller
      *                          (default: warehouse.branch + branch only —
      *                          keeps the list payload small; use show() for
      *                          the full detail with audit_logs + journal_entry)
+     *   ?sort=                  sort field (G-196). Whitelist:
+     *                          id, adjustment_code, adjustment_date,
+     *                          adjustment_type, total_amount, status,
+     *                          created_at. Unknown values silently fall
+     *                          back to the default (adjustment_date desc,
+     *                          id desc).
+     *   ?order=                 asc|desc (G-196). Default: desc.
      *
      * Branch isolation: set.api.branch has set the app.branch_id GUC, so
      * RLS on stock_adjustments filters the query at the DB level for
@@ -144,9 +154,17 @@ class StockAdjustmentApiController extends Controller
             ->when($request->input('branch_id'), fn($q, $bid) => $q->where('branch_id', $bid))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('adjustment_code', 'ILIKE', "%{$search}%");
-            })
-            ->orderBy('adjustment_date', 'desc')
-            ->orderBy('id', 'desc');
+            });
+
+        // G-196 (MEDIUM): sort convention — ?sort=field&order=asc|desc with
+        // a per-endpoint whitelist. Default `adjustment_date desc, id desc`
+        // preserves the prior hard-coded behavior. See api-conventions.md §8.5.
+        $query = $this->applySort(
+            $query,
+            ['id', 'adjustment_code', 'adjustment_date', 'adjustment_type', 'total_amount', 'status', 'created_at'],
+            'adjustment_date',
+            'desc',
+        );
 
         $paginator = $query->paginate($perPage);
 

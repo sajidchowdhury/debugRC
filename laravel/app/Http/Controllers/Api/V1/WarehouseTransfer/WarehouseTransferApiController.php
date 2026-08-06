@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\WarehouseTransfer;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\SortsLists;
 use App\Http\Resources\Api\V1\WarehouseTransfer\WarehouseTransferResource;
 use App\Http\Requests\Api\V1\WarehouseTransfer\StoreWarehouseTransferRequest;
 use App\Http\Requests\Api\V1\WarehouseTransfer\ConfirmWarehouseTransferRequest;
@@ -52,6 +53,8 @@ use Illuminate\Support\Facades\Log;
  */
 class WarehouseTransferApiController extends Controller
 {
+    use SortsLists;
+
     public function __construct(
         private WarehouseTransferService $transferService,
         private StockService $stockService,
@@ -72,6 +75,11 @@ class WarehouseTransferApiController extends Controller
      *   ?search=             search transfer_code (ILIKE)
      *   ?per_page=           page size (default 25, max 100)
      *   ?page=               page number
+     *   ?sort=               sort field (G-196). Whitelist:
+     *                        id, transfer_code, transfer_date, status,
+     *                        created_at. Unknown values silently fall back
+     *                        to the default (transfer_date desc, id desc).
+     *   ?order=              asc|desc (G-196). Default: desc.
      */
     public function index(Request $request): JsonResponse
     {
@@ -85,9 +93,17 @@ class WarehouseTransferApiController extends Controller
             ->when($request->input('status'), fn($q, $s) => $q->where('status', $s))
             ->when($request->input('search'), function ($q, $search) {
                 $q->where('transfer_code', 'ILIKE', "%{$search}%");
-            })
-            ->orderBy('transfer_date', 'desc')
-            ->orderBy('id', 'desc');
+            });
+
+        // G-196 (MEDIUM): sort convention — ?sort=field&order=asc|desc with
+        // a per-endpoint whitelist. Default `transfer_date desc, id desc`
+        // preserves the prior hard-coded behavior. See api-conventions.md §8.5.
+        $query = $this->applySort(
+            $query,
+            ['id', 'transfer_code', 'transfer_date', 'status', 'created_at'],
+            'transfer_date',
+            'desc',
+        );
 
         $paginator = $query->paginate($perPage);
 
