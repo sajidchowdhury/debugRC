@@ -1,8 +1,20 @@
 @php
 /**
  * Menu Content — rendered server-side, fetched via /help/menu/{key} into the offcanvas.
- * Phase 2 scaffold: shows the full content when $content exists, or a friendly
+ *
+ * Renders the full §5.1 content schema when $content exists, or a friendly
  * "not yet written" empty-state card when it does not (Phase 7 authors content).
+ *
+ * Sections (in order):
+ *   1. Header (icon + Bangla title + English subtitle)
+ *   2. Summary card (tinted to module colour)
+ *   3. Role chips row ("কাদের জন্য")
+ *   4. "কী কাজ করা যায়" icon bullet list
+ *   5. "কাদের ডেটা পরিবর্তন করে" mini table
+ *   6. "সাবধানতা" callout (only if cautions non-empty)
+ *   7. Mermaid diagram block (only if diagram set + snippet attached)
+ *   8. Related-menu chips
+ *   9. Footer (updated_at + menu key)
  *
  * @var string $key         e.g. 'sales.invoice'
  * @var array|null $content  The menu content array (§5.1 schema) or null.
@@ -11,6 +23,17 @@
 
 $colorToken = $module['color'] ?? 'slate';
 $empty = $content === null;
+
+// Friendly role labels (Bangla) — fallback to the raw role string.
+$roleLabels = [
+    'salesman'   => 'সেলসম্যান',
+    'manager'    => 'ম্যানেজার',
+    'admin'      => 'অ্যাডমিন',
+    'superadmin' => 'সুপার অ্যাডমিন',
+    'accountant' => 'অ্যাকাউন্ট্যান্ট',
+    'warehouse'  => 'গোডাউন',
+    'auditor'    => 'অডিটর',
+];
 @endphp
 
 @if($empty)
@@ -37,8 +60,9 @@ $empty = $content === null;
         </p>
     </div>
 @else
-    {{-- Full menu content (Phase 7) — rendered per §5.1 schema --}}
+    {{-- Full menu content (§5.1 schema) --}}
     <div class="help-menu-content" data-help-color="{{ $colorToken }}">
+        {{-- 1. Header --}}
         <header class="help-menu-content__header">
             <span class="help-menu-content__icon" aria-hidden="true">
                 <i class="fa-solid {{ $content['icon'] ?? 'fa-circle-info' }}"></i>
@@ -51,19 +75,24 @@ $empty = $content === null;
             </div>
         </header>
 
+        {{-- 2. Summary --}}
         @if(!empty($content['summary']))
-            <p class="help-menu-content__summary">{{ $content['summary'] }}</p>
+            <div class="help-menu-content__summary-card">
+                <p class="help-menu-content__summary">{{ $content['summary'] }}</p>
+            </div>
         @endif
 
+        {{-- 3. Role chips --}}
         @if(!empty($content['for_roles']))
             <div class="help-menu-content__roles">
                 <span class="help-section-label">কাদের জন্য:</span>
                 @foreach($content['for_roles'] as $role)
-                    <span class="help-role-chip">{{ $role }}</span>
+                    <span class="help-role-chip">{{ $roleLabels[$role] ?? $role }}</span>
                 @endforeach
             </div>
         @endif
 
+        {{-- 4. What you can do --}}
         @if(!empty($content['what_you_can_do']))
             <div class="help-menu-content__section">
                 <p class="help-section-label">কী কাজ করা যায়:</p>
@@ -78,6 +107,7 @@ $empty = $content === null;
             </div>
         @endif
 
+        {{-- 5. Impacts table --}}
         @if(!empty($content['impacts']))
             <div class="help-menu-content__section">
                 <p class="help-section-label">কাদের ডেটা পরিবর্তন করে:</p>
@@ -94,6 +124,7 @@ $empty = $content === null;
             </div>
         @endif
 
+        {{-- 6. Cautions callout --}}
         @if(!empty($content['cautions']))
             <div class="help-callout help-callout--caution">
                 <p class="help-callout__title">
@@ -108,19 +139,53 @@ $empty = $content === null;
             </div>
         @endif
 
+        {{-- 7. Mermaid diagram (only if snippet was attached by HelpService) --}}
+        @if(!empty($content['_diagram_mermaid']))
+            <div class="help-menu-content__section">
+                <p class="help-section-label">কিভাবে চলে:</p>
+                <div class="help-mermaid-wrap" data-mermaid-key="{{ $content['diagram'] }}">
+                    <pre class="mermaid help-mermaid-block">{{ $content['_diagram_mermaid'] }}</pre>
+                </div>
+            </div>
+        @endif
+
+        {{-- 8. Related menu chips --}}
         @if(!empty($content['related']))
             <div class="help-menu-content__section">
                 <p class="help-section-label">সম্পর্কিত:</p>
                 <div class="help-related-chips">
                     @foreach($content['related'] as $relKey)
+                        @php
+                            // Try to extract a friendly label from the menu key.
+                            // e.g. 'sales.cart' -> 'Cart', 'master-data.customers' -> 'Customers'
+                            $relLabel = $relKey;
+                            if (str_contains($relKey, '.')) {
+                                $parts = explode('.', $relKey, 2);
+                                $slug = end($parts);
+                                // Convert 'customer-payment' -> 'Customer Payment'
+                                $relLabel = ucwords(str_replace('-', ' ', $slug));
+                            }
+                        @endphp
                         <button
                             type="button"
                             class="help-related-chip"
                             data-menu-key="{{ $relKey }}"
-                        >{{ $relKey }}</button>
+                            title="{{ $relKey }}"
+                        >{{ $relLabel }}</button>
                     @endforeach
                 </div>
             </div>
         @endif
+
+        {{-- 9. Footer --}}
+        <footer class="help-menu-content__footer">
+            @if(!empty($content['updated_at']))
+                <span class="help-menu-content__updated">
+                    <i class="fa-regular fa-clock" aria-hidden="true"></i>
+                    আপডেট: {{ $content['updated_at'] }}
+                </span>
+            @endif
+            <span class="help-menu-content__keyhint">কী: <code>{{ $key }}</code></span>
+        </footer>
     </div>
 @endif

@@ -28,6 +28,7 @@ class HelpService
     private const CACHE_KEY_REGISTRY = 'help:registry';
     private const CACHE_KEY_ACTION_REGISTRY = 'help:action-registry';
     private const CACHE_KEY_MODULES = 'help:modules';
+    private const CACHE_KEY_DIAGRAMS = 'help:diagrams';
 
     /** @var array<string,string>|null */
     private ?array $registry = null;
@@ -37,6 +38,9 @@ class HelpService
 
     /** @var array<string,array>|null */
     private ?array $modules = null;
+
+    /** @var array<string,string>|null */
+    private ?array $diagrams = null;
 
     /**
      * Resolve a Laravel route name to a help menu key.
@@ -153,7 +157,20 @@ class HelpService
         /** @var mixed $content */
         $content = require $path;
 
-        return is_array($content) ? $content : null;
+        if (!is_array($content)) {
+            return null;
+        }
+
+        // If the content references a diagram key, attach the Mermaid snippet
+        // so the Blade component can render a [data-mermaid] block.
+        if (!empty($content['diagram']) && is_string($content['diagram'])) {
+            $diagrams = $this->loadDiagrams();
+            if (isset($diagrams[$content['diagram']])) {
+                $content['_diagram_mermaid'] = $diagrams[$content['diagram']];
+            }
+        }
+
+        return $content;
     }
 
     /**
@@ -252,7 +269,32 @@ class HelpService
     }
 
     /**
-     * Invalidate the cached registry + action-registry + modules
+     * Load the Mermaid diagram snippets (keyed by diagram key).
+     *
+     * @return array<string,string>
+     */
+    private function loadDiagrams(): array
+    {
+        if ($this->diagrams !== null) {
+            return $this->diagrams;
+        }
+
+        /** @var array<string,string> $cached */
+        $cached = Cache::remember(self::CACHE_KEY_DIAGRAMS, self::CACHE_TTL, function (): array {
+            $path = resource_path('help/diagrams.php');
+            if (!is_file($path)) {
+                return [];
+            }
+            /** @var mixed $data */
+            $data = require $path;
+            return is_array($data) ? $data : [];
+        });
+
+        return $this->diagrams = $cached;
+    }
+
+    /**
+     * Invalidate the cached registry + action-registry + modules + diagrams
      * (called when content files change, e.g. after authoring new help content).
      *
      * @return void
@@ -262,8 +304,10 @@ class HelpService
         Cache::forget(self::CACHE_KEY_REGISTRY);
         Cache::forget(self::CACHE_KEY_ACTION_REGISTRY);
         Cache::forget(self::CACHE_KEY_MODULES);
+        Cache::forget(self::CACHE_KEY_DIAGRAMS);
         $this->registry = null;
         $this->actionRegistry = null;
         $this->modules = null;
+        $this->diagrams = null;
     }
 }

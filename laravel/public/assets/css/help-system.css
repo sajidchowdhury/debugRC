@@ -350,4 +350,130 @@
     .help-fab, .help-footer-pill, .help-module-card, .help-module-menu-item, .help-related-chip {
         transition: none !important;
     }
+    .help-fab__pulse { display: none !important; }
+    .help-body--fade-in { animation: none !important; }
+    .help-mermaid-wrap--rendered { animation: none !important; }
+}
+
+/* =========================================================================
+   Phase 4 — Door 1 polish
+   ========================================================================= */
+
+/* ----- FAB idle float + pulse ring ----- */
+.help-fab {
+    animation: help-fab-float 3s ease-in-out infinite;
+}
+@keyframes help-fab-float {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-4px); }
+}
+.help-fab__pulse {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    pointer-events: none;
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5);
+    animation: help-fab-pulse 2.5s ease-out infinite;
+}
+@keyframes help-fab-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.45); }
+    70%  { box-shadow: 0 0 0 14px rgba(245, 158, 11, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .help-fab { animation: none !important; }
+    .help-fab__pulse { animation: none !important; display: none; }
+}
+
+/* ----- Content body fade-in (applied by help.js on each inject) ----- */
+.help-body--fade-in {
+    animation: help-body-fade-in 220ms cubic-bezier(.22, 1, .36, 1);
+}
+@keyframes help-body-fade-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ----- Menu content: summary card (tinted to module colour) ----- */
+.help-menu-content__summary-card {
+    background: color-mix(in srgb, var(--help-tint-c1, #475569) 8%, #fff);
+    border: 1px solid color-mix(in srgb, var(--help-tint-c1, #475569) 20%, #fff);
+    border-left: 4px solid var(--help-tint-c1, #475569);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+}
+.help-menu-content__summary-card .help-menu-content__summary { margin: 0; }
+
+/* ----- Menu content: Mermaid block ----- */
+.help-mermaid-wrap {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 16px 12px;
+    overflow-x: auto;
+    text-align: center;
+    min-height: 60px;
+}
+.help-mermaid-block {
+    margin: 0;
+    font-family: inherit;
+    background: transparent;
+}
+.help-mermaid-block--error {
+    color: #b91c1c;
+    font-size: 0.8rem;
+    padding: 8px;
+}
+.help-mermaid-wrap--rendered {
+    animation: help-mermaid-fade-in 350ms cubic-bezier(.22, 1, .36, 1);
+}
+@keyframes help-mermaid-fade-in {
+    from { opacity: 0; transform: scale(0.97); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+/* ----- Menu content: footer (updated_at + key) ----- */
+.help-menu-content__footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 20px;
+    padding-top: 12px;
+    border-top: 1px solid #e2e8f0;
+    font-size: 0.72rem;
+    color: #94a3b8;
+}
+.help-menu-content__updated i { margin-right: 3px; }
+.help-menu-content__keyhint code {
+    color: #64748b;
+    background: #f1f5f9;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.85em;
+}
+
+/* ----- Related chip: friendlier hover (slight tint to module colour) ----- */
+.help-related-chip:hover {
+    background: color-mix(in srgb, var(--help-tint-c1, #475569) 12%, #f1f5f9);
+    border-color: var(--help-tint-c1, #475569);
+    color: var(--help-tint-c2, #1e293b);
+}
+
+/* ----- Offcanvas slide-in polish (Bootstrap already animates; this adds a subtle header glow) ----- */
+.help-offcanvas__header::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: -1px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+}
+.help-offcanvas__header { position: relative; }
+
+/* ----- Mobile: FAB tap target + offcanvas full-screen tweaks ----- */
+@media (max-width: 575.98px) {
+    .help-menu-content__footer { font-size: 0.68rem; }
+    .help-mermaid-wrap { padding: 12px 8px; }
 }
