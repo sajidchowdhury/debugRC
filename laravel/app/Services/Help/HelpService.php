@@ -174,7 +174,11 @@ class HelpService
     }
 
     /**
-     * Load a module's metadata (title, icon, color, tagline, menus list).
+     * Load a module's metadata (title, icon, color, tagline, intro, menus list).
+     *
+     * If the module declares a 'diagram' key, the matching Mermaid snippet is
+     * attached as '_diagram_mermaid' (same pattern as loadMenuContent) so the
+     * Blade component can render a mini cycle diagram in the module offcanvas.
      *
      * @param  string  $key  e.g. 'sales'
      * @return array<string,mixed>|null
@@ -182,7 +186,21 @@ class HelpService
     public function loadModuleContent(string $key): ?array
     {
         $modules = $this->loadModules();
-        return $modules[$key] ?? null;
+        $module = $modules[$key] ?? null;
+
+        if ($module === null) {
+            return null;
+        }
+
+        // Attach the Mermaid snippet if the module references a diagram key.
+        if (!empty($module['diagram']) && is_string($module['diagram'])) {
+            $diagrams = $this->loadDiagrams();
+            if (isset($diagrams[$module['diagram']])) {
+                $module['_diagram_mermaid'] = $diagrams[$module['diagram']];
+            }
+        }
+
+        return $module;
     }
 
     /**

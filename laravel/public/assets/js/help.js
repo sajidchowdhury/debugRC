@@ -1,10 +1,12 @@
 /* =========================================================================
-   Help System JS — Phase 4.
-   ~200 lines vanilla JS. No jQuery, no Alpine. Uses Bootstrap 5 data-API
-   for show/hide; this file wires the fetch + content injection + Mermaid.
+   Help System JS — Phase 5.
+   ~260 lines vanilla JS. No jQuery, no Alpine. Uses Bootstrap 5 data-API
+   for show/hide; this file wires the fetch + content injection + Mermaid
+   + the Door 2 content-swap UX (module → menu → back).
 
    Door 1: floating help button → right offcanvas with current page's menu content.
-   Door 2: footer pill → bottom-up module sheet → module offcanvas → menu offcanvas.
+   Door 2: footer pill → bottom-up module sheet → module offcanvas → menu offcanvas
+           (with a "← মডিউলে ফিরে যান" back button + breadcrumb when opened from a module).
 
    Mermaid is lazy-loaded: when a [data-mermaid-key] block is injected into the
    DOM, this script injects the Mermaid CDN <script> tag once and calls
@@ -20,6 +22,10 @@
     var mermaidLoading = false;   // script tag in flight
     var mermaidReady = false;     // mermaid global available
     var pendingMermaid = [];     // blocks waiting for mermaid to finish loading
+
+    // ---- Door 2 navigation state (Phase 5 §4.3 content-swap UX) ----
+    var currentModuleKey = null;   // module key of the open module offcanvas
+    var menuFromModule = false;    // is the menu offcanvas open via the module flow?
 
     // ---- Bootstrap Offcanvas helpers ----
     function getOffcanvas(id) {
@@ -98,6 +104,22 @@
         oc.style.setProperty('--help-tint-c2', pair[1]);
     }
 
+    // ---- Back-bar + breadcrumb (Phase 5 §4.3) ----
+    function showBackBar(moduleKey, menuTitle) {
+        var bar = document.getElementById('helpOffcanvasBack');
+        if (!bar) return;
+        bar.hidden = false;
+        var moduleTitle = (CFG.moduleTitles && CFG.moduleTitles[moduleKey]) || moduleKey || 'মডিউল';
+        var modSpan = bar.querySelector('.help-breadcrumb__module');
+        var menuSpan = bar.querySelector('.help-breadcrumb__menu');
+        if (modSpan) modSpan.textContent = moduleTitle;
+        if (menuSpan) menuSpan.textContent = menuTitle || '';
+    }
+    function hideBackBar() {
+        var bar = document.getElementById('helpOffcanvasBack');
+        if (bar) bar.hidden = true;
+    }
+
     // ---- Mermaid lazy-load ----
     function ensureMermaidThen(cb) {
         if (mermaidReady) { cb(); return; }
@@ -148,9 +170,14 @@
     }
 
     // ---- Door 1: floating help button → right offcanvas with menu content ----
-    function openMenuOffcanvas(menuKey) {
+    // fromModule (bool): true when opened via the Door 2 module flow — shows the
+    // back bar + breadcrumb. False (default) when opened from the FAB directly.
+    function openMenuOffcanvas(menuKey, fromModule) {
+        menuFromModule = !!fromModule;
+
         if (!menuKey) {
             // No key for this page — open the offcanvas with an empty-state directly.
+            if (!menuFromModule) hideBackBar();
             var body = document.getElementById('helpOffcanvasBody');
             if (body) {
                 body.innerHTML =
@@ -164,9 +191,19 @@
             showOffcanvas('helpOffcanvas');
             return;
         }
+
         loadInto('helpOffcanvasBody', urlFor(CFG.endpoints.menu, menuKey), function (body) {
             applyTintFromContent(body, 'helpOffcanvas');
             renderMermaidIn(body);
+            if (menuFromModule) {
+                // Build the breadcrumb from the module title + the menu's Bangla title
+                // (read from the injected content's .help-menu-content__title-bn).
+                var titleEl = body.querySelector('.help-menu-content__title-bn');
+                var menuTitle = titleEl ? (titleEl.textContent || menuKey) : menuKey;
+                showBackBar(currentModuleKey, menuTitle);
+            } else {
+                hideBackBar();
+            }
         });
         showOffcanvas('helpOffcanvas');
     }
@@ -178,6 +215,7 @@
 
     // ---- Door 2: module card → module offcanvas ----
     function openModuleOffcanvas(moduleKey) {
+        currentModuleKey = moduleKey;
         hideOffcanvas('helpModuleSheet');
         loadInto('helpModuleOffcanvasBody', urlFor(CFG.endpoints.module, moduleKey), function (body) {
             applyTintFromContent(body, 'helpModuleOffcanvas');
@@ -187,11 +225,23 @@
     }
 
     // ---- Door 2: menu chip inside module offcanvas → menu offcanvas ----
+    // Closes the module offcanvas first, then opens the menu offcanvas with the
+    // back-bar visible (so the user can return to the module). The 180ms delay
+    // lets the module offcanvas start closing before the menu one opens
+    // (prevents both backdrops from stacking on mobile).
     function openMenuFromModule(menuKey) {
         hideOffcanvas('helpModuleOffcanvas');
-        // Small delay so the module offcanvas starts closing before the menu one opens
-        // (prevents both backdrops from stacking on mobile).
-        setTimeout(function () { openMenuOffcanvas(menuKey); }, 180);
+        setTimeout(function () { openMenuOffcanvas(menuKey, true); }, 180);
+    }
+
+    // ---- Door 2: back button → reopen the module offcanvas ----
+    function backToModule() {
+        hideOffcanvas('helpOffcanvas');
+        setTimeout(function () {
+            if (currentModuleKey) {
+                openModuleOffcanvas(currentModuleKey);
+            }
+        }, 180);
     }
 
     // ---- Event wiring (delegated) ----
@@ -201,7 +251,14 @@
         if (fab) {
             e.preventDefault();
             var key = fab.getAttribute('data-menu-key') || CFG.currentMenuKey || '';
-            openMenuOffcanvas(key);
+            openMenuOffcanvas(key, false);
+            return;
+        }
+        // Back-to-module button (inside the menu offcanvas, Phase 5)
+        var backBtn = e.target.closest('#helpBackToModule');
+        if (backBtn) {
+            e.preventDefault();
+            backToModule();
             return;
         }
         // Footer pill
@@ -218,14 +275,32 @@
             openModuleOffcanvas(card.getAttribute('data-module-key'));
             return;
         }
-        // Menu item (in module offcanvas) OR related chip (in menu offcanvas)
-        var menuItem = e.target.closest('[data-menu-key]');
-        if (menuItem && (menuItem.classList.contains('help-module-menu-item') || menuItem.classList.contains('help-related-chip'))) {
+        // Menu item (in module offcanvas) — closes module offcanvas, opens menu offcanvas.
+        var moduleMenuItem = e.target.closest('.help-module-menu-item[data-menu-key]');
+        if (moduleMenuItem) {
             e.preventDefault();
-            openMenuFromModule(menuItem.getAttribute('data-menu-key'));
+            openMenuFromModule(moduleMenuItem.getAttribute('data-menu-key'));
+            return;
+        }
+        // Related chip (inside the menu offcanvas) — in-place content swap.
+        // Preserves the fromModule context (back bar stays if we came from a module).
+        var relatedChip = e.target.closest('.help-related-chip[data-menu-key]');
+        if (relatedChip) {
+            e.preventDefault();
+            openMenuOffcanvas(relatedChip.getAttribute('data-menu-key'), menuFromModule);
             return;
         }
     });
+
+    // Reset Door 2 navigation state when the menu offcanvas closes (Esc / backdrop /
+    // explicit close) so the next FAB open doesn't show a stale back bar.
+    var menuOcEl = document.getElementById('helpOffcanvas');
+    if (menuOcEl) {
+        menuOcEl.addEventListener('hidden.bs.offcanvas', function () {
+            menuFromModule = false;
+            hideBackBar();
+        });
+    }
 
     // Keyboard: "?" toggles current-page help (Phase 9 nice-to-have, but handler is ready).
     document.addEventListener('keydown', function (e) {
@@ -239,6 +314,6 @@
     });
 
     if (window.console && console.debug) {
-        console.debug('[help-system] Phase 4 initialised; currentMenuKey=' + (CFG.currentMenuKey || '(none)'));
+        console.debug('[help-system] Phase 5 initialised; currentMenuKey=' + (CFG.currentMenuKey || '(none)'));
     }
 })();

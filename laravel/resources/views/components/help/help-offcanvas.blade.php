@@ -35,6 +35,26 @@
             aria-label="বন্ধ করুন"
         ></button>
     </div>
+    {{-- Back-to-module bar (Phase 5 §4.3 content-swap UX). Hidden by default;
+         help.js reveals it when the menu offcanvas is opened FROM a module
+         (via the footer pill → module sheet → module offcanvas → menu chip flow).
+         When opened directly from the FAB (Door 1), this stays hidden. --}}
+    <div class="help-offcanvas__back" id="helpOffcanvasBack" hidden>
+        <button
+            type="button"
+            class="help-back-btn"
+            id="helpBackToModule"
+            aria-label="মডিউলে ফিরে যান"
+        >
+            <i class="fa-solid fa-arrow-left" aria-hidden="true"></i>
+            <span>মডিউলে ফিরে যান</span>
+        </button>
+        <nav class="help-breadcrumb" id="helpBreadcrumb" aria-label="breadcrumb">
+            <span class="help-breadcrumb__module">মডিউল</span>
+            <i class="fa-solid fa-chevron-right help-breadcrumb__sep" aria-hidden="true"></i>
+            <span class="help-breadcrumb__menu">মেনু</span>
+        </nav>
+    </div>
     <div class="offcanvas-body help-offcanvas__body" id="helpOffcanvasBody">
         {{-- Initial loading placeholder (replaced on first fetch) --}}
         <div class="help-loading-placeholder">

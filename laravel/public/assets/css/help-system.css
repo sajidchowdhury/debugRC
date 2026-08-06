@@ -477,3 +477,139 @@
     .help-menu-content__footer { font-size: 0.68rem; }
     .help-mermaid-wrap { padding: 12px 8px; }
 }
+
+/* =========================================================================
+   Phase 5 — Door 2 polish (footer pill, module sheet, module offcanvas,
+   content-swap back bar + breadcrumb, module content intro/diagram)
+   ========================================================================= */
+
+/* ----- §11.1 sticky-footer rule: lift the existing ERP footer above the
+   help pill so the ~40px pill does not visually overlap it. Only applies on
+   authed pages (this stylesheet is loaded only then). Targets the sticky page
+   footer (.mt-auto). Degrades gracefully on browsers without :has(). ----- */
+body:has(.help-footer-bar) footer.mt-auto { margin-bottom: 44px; }
+
+/* Hide the entire help UI when printing (pill, FAB, offcanvas backdrops). */
+@media print {
+    .help-footer-bar, .help-fab, .help-offcanvas, .help-module-offcanvas,
+    .help-module-sheet, .offcanvas-backdrop { display: none !important; }
+}
+
+/* ----- Module sheet: card hover lift (-3px) + gradient brighten (§6.3) ----- */
+.help-module-card:hover, .help-module-card:focus-visible {
+    transform: translateY(-3px);
+    box-shadow: 0 12px 24px -6px rgba(15, 23, 42, 0.2);
+}
+.help-module-card:hover .help-module-card__icon,
+.help-module-card:focus-visible .help-module-card__icon {
+    filter: brightness(1.08);
+}
+
+/* ----- Module offcanvas header glow (mirrors help-offcanvas) ----- */
+.help-module-offcanvas__header { position: relative; }
+.help-module-offcanvas__header::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: -1px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+}
+
+/* ----- Back-to-module bar + breadcrumb (inside the menu offcanvas, §4.3) ----- */
+.help-offcanvas__back {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 16px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+}
+.help-offcanvas__back[hidden] { display: none; }
+.help-back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border: 1px solid color-mix(in srgb, var(--help-tint-c1, #475569) 40%, #fff);
+    border-radius: 999px;
+    background: #fff;
+    color: var(--help-tint-c2, #1e293b);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, transform 0.15s ease;
+}
+.help-back-btn:hover {
+    background: color-mix(in srgb, var(--help-tint-c1, #475569) 10%, #fff);
+    transform: translateX(-2px);
+}
+.help-breadcrumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.74rem;
+    color: #64748b;
+    max-width: 62%;
+}
+.help-breadcrumb__module {
+    font-weight: 600;
+    color: var(--help-tint-c2, #1e293b);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.help-breadcrumb__sep {
+    font-size: 0.6rem;
+    color: #94a3b8;
+    flex: 0 0 auto;
+}
+.help-breadcrumb__menu {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ----- Module content: intro paragraph (tinted card, §5.2) ----- */
+.help-module-content__intro {
+    color: #334155;
+    font-size: 0.92rem;
+    line-height: 1.6;
+    margin-bottom: 18px;
+    padding: 12px 14px;
+    background: color-mix(in srgb, var(--mc1, #475569) 6%, #fff);
+    border-left: 3px solid var(--mc1, #475569);
+    border-radius: 0 8px 8px 0;
+}
+
+/* ----- Module menu item: two-line layout (friendly label + raw key) ----- */
+.help-module-menu-item__label {
+    font-family: inherit;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #0f172a;
+}
+.help-module-menu-item__key {
+    width: 100%;
+    margin-top: 2px;
+    padding-left: 22px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.68rem;
+    color: #94a3b8;
+}
+.help-module-menu-item:hover .help-module-menu-item__key { color: #64748b; }
+
+/* ----- Reduced motion: disable Phase 5 transitions ----- */
+@media (prefers-reduced-motion: reduce) {
+    .help-back-btn { transition: none !important; }
+    .help-module-card:hover, .help-module-card:focus-visible { transform: none !important; }
+}
+
+/* ----- Mobile: back bar stacks, breadcrumb wraps ----- */
+@media (max-width: 575.98px) {
+    .help-offcanvas__back { padding: 8px 12px; gap: 6px; }
+    .help-back-btn { font-size: 0.74rem; padding: 4px 10px; }
+    .help-breadcrumb { font-size: 0.7rem; max-width: 100%; }
+    .help-module-menu-item__key { font-size: 0.62rem; }
+}

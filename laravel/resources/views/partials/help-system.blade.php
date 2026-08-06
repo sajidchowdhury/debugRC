@@ -60,6 +60,9 @@ $helpJsVer  = is_file($helpJsPath) ? filemtime($helpJsPath) : '1';
             },
             currentMenuKey: @json($menuKey),
             csrfToken: @json(csrf_token()),
+            // Module key -> Bangla title map (Phase 5). Lets help.js render the
+            // breadcrumb ("মডিউল: সেলস › সেলস ইনভয়েস") without an extra round-trip.
+            moduleTitles: @json(collect($helpService->modules())->mapWithKeys(fn ($m, $k) => [$k => $m['title_bn']])),
         };
     </script>
 @endif
