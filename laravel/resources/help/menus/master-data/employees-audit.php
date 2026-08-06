@@ -1,0 +1,40 @@
+<?php
+
+/**
+ * Help content for: master-data.employees-audit
+ * Route: admin.employees.audit
+ *
+ * Audit trail for the Employee master — read-only history of who changed what
+ * and when, for every employee record.
+ *
+ * @see docs/HELP_SYSTEM_IMPLEMENTATION_PLAN.md §5.1 (schema), §5.2 (sub-page convention)
+ */
+
+return [
+    'key'        => 'master-data.employees-audit',
+    'module'     => 'master-data',
+    'title_bn'   => 'কর্মচারী অডিট',
+    'title_en'   => 'Employee Audit',
+    'icon'       => 'fa-list-check',
+    'summary'    => 'এটি কর্মচারী পেজের অডিট ট্রেইল — কে কখন কী বদলেছে তার ইতিহাস।',
+
+    'for_roles'  => ['admin', 'superadmin', 'manager', 'accountant'],
+
+    'what_you_can_do' => [
+        ['icon' => 'fa-list-check',       'text' => 'অডিট লগ দেখা — কে কখন কী বদলেছে'],
+        ['icon' => 'fa-filter',           'text' => 'তারিখ বা ইউজার দিয়ে ফিল্টার করা'],
+        ['icon' => 'fa-file-export',      'text' => 'লগ এক্সপোর্ট করা'],
+    ],
+
+    'impacts' => [
+        ['who' => 'অডিট লগ',  'what' => 'শুধু রিড-অনলি — মূল ডেটা বদলায় না'],
+    ],
+
+    'cautions' => [
+        'শুধু দেখার জন্য — এখান থেকে সরাসরি কোনো তথ্য বদলানো যায় না।',
+    ],
+
+    'related' => ['master-data.employees', 'master-data.employees-account', 'master-data.employees-print'],
+
+    'updated_at' => '2026-08-07',
+];

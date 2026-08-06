@@ -24,8 +24,18 @@ completeness audit. It answers two questions:
 | Modules in `modules.php` | 8 |
 | Menu keys listed across all modules | 215 |
 | Unique menu keys (union) | 215 |
-| **Authored content files (have Bangla help)** | **3** |
-| **Menu keys MISSING content (Phase 7 backlog)** | **212** |
+| **Authored content files (have Bangla help)** | **215** ✅ Phase 7 complete |
+| **Menu keys MISSING content (Phase 7 backlog)** | **0** ✅ |
+
+> **Phase 7 update (2026-08-07):** All 212 missing content files were authored
+> across 8 sub-sessions (7a–7h) + 3 pre-existing Phase-4 demos = 215/215.
+> Per-module final counts: master-data 30, inventory 29 (incl. branch-demand
+> alias), purchasing 8, sales 25, accounting 33, finance 37, reports 36,
+> system 17. 10 diagrams wired (one per module that the plan specified a
+> diagram for, plus sales-invoice-flow on invoices from Phase 4).
+> Validated by `parse_work/phase7_validate.py`: 0 syntax errors, 0 U+FFFD
+> Bengali corruptions, 0 missing keys, 0 orphan files, all 10 diagrams on
+> the expected menu keys.
 
 ---
 

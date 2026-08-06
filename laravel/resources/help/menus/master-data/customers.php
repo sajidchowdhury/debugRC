@@ -23,7 +23,7 @@ return [
     'what_you_can_do' => [
         ['icon' => 'fa-user-plus',          'text' => 'নতুন খদ্দের যোগ করা (নাম, ফোন, ঠিকানা, এলাকা)'],
         ['icon' => 'fa-magnifying-glass',   'text' => 'নাম বা ফোন দিয়ে খদ্দের খুঁজে বের করা'],
-        ['icon' => 'fa-pen-to-square',      'text' => '�গের তথ্য এডিট করা (ঠিকানা বদল, ফোন আপডেট)'],
+        ['icon' => 'fa-pen-to-square',      'text' => 'আগের তথ্য এডিট করা (ঠিকানা বদল, ফোন আপডেট)'],
         ['icon' => 'fa-file-invoice-dollar', 'text' => 'খদ্দেরের বর্তমান বকেয়া দেখা'],
         ['icon' => 'fa-print',              'text' => 'খদ্দের ডিরেক্টরি প্রিন্ট করা'],
         ['icon' => 'fa-list-check',         'text' => 'অডিট লগ দেখা — কে কখন কী পরিবর্তন করেছে'],
