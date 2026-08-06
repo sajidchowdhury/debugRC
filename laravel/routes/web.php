@@ -61,6 +61,7 @@ use App\Http\Controllers\Admin\FiscalYearController;
 use App\Http\Controllers\Admin\ConsolidationController;
 use App\Http\Controllers\Admin\BankReconciliationController;
 use App\Http\Controllers\Admin\FixedAssetController;
+use App\Http\Controllers\HelpController;
 use Illuminate\Support\Facades\Route;
 
 /**
@@ -90,6 +91,17 @@ Route::middleware('guest')->group(function () {
 Route::middleware('auth')->group(function () {
     Route::post('logout', [AuthenticatedSessionController::class, 'destroy'])
         ->name('logout');
+
+    // ============================================================
+    // Help System — Menu & Module Helper (Phase 2 scaffold).
+    // Returns HTML partials for the help offcanvas + module sheet.
+    // Throttled to prevent abuse; auth-only (no public help access).
+    // See docs/HELP_SYSTEM_IMPLEMENTATION_PLAN.md
+    // ============================================================
+    Route::prefix('help')->middleware('throttle:30,1')->group(function () {
+        Route::get('menu/{key}', [HelpController::class, 'menu'])->name('help.menu');
+        Route::get('module/{key}', [HelpController::class, 'module'])->name('help.module');
+    });
 
     // ============================================================
     // User Performance Dashboard (Phase 0+ — per-user attribution

@@ -23,5 +23,10 @@
 
     <script src="/assets/js/bootstrep/bootstrap.bundle.min.js"></script>
     @yield('scripts')
+
+    {{-- Help System — Menu & Module Helper (Phase 2 scaffold). Auth-gated:
+         login/forgot/reset pages render nothing; the 4 branch-demand-shadow
+         pages that extend this layout DO get the helper. --}}
+    @include('partials.help-system')
 </body>
 </html>

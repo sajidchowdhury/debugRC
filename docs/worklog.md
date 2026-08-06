@@ -1521,3 +1521,89 @@ Stage Summary:
   1. Blade: data-tab now renders as "tab-X" to match pane IDs.
   2. JS: switchPerfTab normalizes its input (strips leading "tab-" if present, then prepends "tab-") so it works regardless of which format the caller uses. All internal comparisons now use the consistent fullTabId form.
 - Now clicking any tab correctly toggles pane visibility, updates the active button state, persists to sessionStorage, and updates the URL hash.
+
+---
+Task ID: P1-INVENTORY
+Agent: general-purpose (subagent)
+Task: Phase 1 — Discovery & Inventory for the RC_ERP Menu & Module Helper system. Extract every authenticated web route, cross-reference with the menus table seeder, group into 8 modules, produce docs/help-inventory.csv.
+
+Work Log:
+- Read /home/z/my-project/download/debugRC/docs/worklog.md (1,523 lines) to understand prior work context (warehouse transfer phase 6, dashboard tabbed-nav bugfixes).
+- Read routes/web.php (1,940 lines, 500 Route:: declarations parsed via custom Python parser at /home/z/parse_work/parse_routes.py). The auth group opens at line 90 (`Route::middleware('auth')->group(function () {`) and closes at line 1,936. Public auth routes (login/forgot/reset) above line 90 are excluded entirely.
+- Parsed every Route::get/post/put/patch/delete/resource/match inside the auth group, correctly tracking `Route::prefix('X')->name('X.')->group(function () { ... })` nesting so URIs and route names are reconstructed with their prefixes (e.g. `admin/products/export` + `admin.products.export`).
+- Read the two menu seeder migrations:
+  - `database/migrations/2025_01_10_000001_seed_menus_from_legacy.php` (172 lines) — seeds 36 menu rows: 7 top-level (Dashboard, Administration, Sales, Purchase, Inventory, Accounting, Reports) + 9 Administration children + 5 Sales + 3 Purchase + 5 Inventory + 4 Accounting top-level + 2 Overview + 4 Sub-ledgers + 3 Vouchers + 3 Journals & Period.
+  - `database/migrations/2026_07_29_000018_add_branch_demand_sidebar_menu.php` (123 lines) — adds the standalone "Branch Demand" top-level menu with 6 sub-items (My Demands, Pending for Me, Receipt Confirmations, Weekly Report, Audit Checklist, Reconciliation).
+- Cross-referenced the menu hierarchy with `app/Services/MenuService.php` (405 lines) — confirmed the legacy controller → Laravel route-name map (e.g. `customer` → `admin.customers.index`, `branchdemand` → resolves via `resolveBranchDemandRoute()` per action).
+- Built the inventory CSV with a Python script (`/home/z/parse_work/build_csv.py`) using:
+  - A 62-entry CONTROLLER_INFO table mapping each controller → (module, slug, label_bn, label_en).
+  - A COLLAPSED_INDEX table giving each controller the correct route_name + URI + action for its collapsed .index row (e.g. `ApprovalController` → `admin.approvals.queue` since its "index" is literally named `queue`; `SalesCartController` → `admin.sales.cart` since `cart` IS the index page).
+  - A PAGE_ACTIONS table listing the custom page-rendering actions per controller (audit, print, checklist, reconcile, summary, weekly-report, slip, etc.) that each get their own row.
+  - An ACTION_SLUG_MAP to kebab-case action names for menu_keys (e.g. `printInvoice` → `print-invoice`, `healthSummary` → `health-summary`).
+- Wrote `docs/help-inventory.csv` with header comments + 215 data rows (UTF-8, comma-separated, csv.QUOTE_MINIMAL). Validated with Python csv.DictReader — every row has exactly 9 fields, no parsing errors.
+- Confirmed layouts by grepping `@extends('layouts.*')` across `resources/views/`:
+  - `layouts.admin` — 236 files (the main authenticated layout, as the plan assumed).
+  - `layouts.print` — 17 files (print views: invoices, challans, slips).
+  - `layouts.app` — 7 files (3 auth: login/forgot/reset + 4 branch-demand-shadow pages).
+  - `admin.partials.print-layout` — 9 files (master-data directory prints: customers, products, suppliers, banks, employees, ledgers, branches, warehouses, users).
+  - `layouts.plain` and `layouts.print-legacy` — 0 files (defined in `resources/views/layouts/` but never extended).
+  - Total: 269 `@extends` directives across all blade views.
+
+Stage Summary:
+- Produced: `/home/z/my-project/download/debugRC/docs/help-inventory.csv` (215 rows across 8 modules, + 22 header comment lines).
+- Module counts: master-data=30, inventory=28, purchasing=8, sales=25, accounting=33, finance=38, reports=36, system=17. (Total = 215.)
+- Routes parsed from `routes/web.php`: 500 total. Of these: 215 page-route rows emitted (after collapsing resource actions), 224 AJAX/form-POST-mutation/file-download endpoints skipped (with `# SKIPPED AJAX: 224` count line in CSV header), 3 auth/branch-switch/ui-preview routes excluded, 38 `Route::resource(...)` registrations collapsed into 1 .index row per controller (plus 1 explicit resource-action route each that is also collapsed, totalling 76+39=115 routes represented by collapsed rows).
+- Layouts in use: `layouts.admin` (236), `layouts.print` (17), `admin.partials.print-layout` (9), `layouts.app` (7 — auth + branch-demand-shadow). `layouts.plain` and `layouts.print-legacy` are defined but unused. The plan's assumption that `layouts.admin` is the main authenticated layout is CORRECT — 88% of all blade views extend it.
+- Edge cases resolved:
+  1. **Branch Demand dual placement**: Both the legacy `BranchDemand` entry under Inventory (from the 2025 menu seeder) AND the standalone `Branch Demand` top-level menu (from the 2026_07_29 migration) map to the **finance** module per plan §6.1, but with DIFFERENT menu_keys: `finance.branch-demand` (the standalone top-level menu) and `inventory.branch-demand` (the legacy Inventory→BranchDemand duplicate). Both rows share the same `admin.branch-demands.index` route_name/URI. CSV rows #145 + #211 reflect this.
+  2. **`/dashboard` route**: assigned to `reports` module with menu_key `reports.dashboard` (route_name `dashboard`, URI `dashboard`, controller `UserPerformanceDashboardController`). The `dashboard.salesTrend` and `dashboard.fragment` AJAX endpoints are SKIPPED.
+  3. **Approval workflow**: `ApprovalController` routes (`admin/approvals` queue, `admin/approvals/workflows`) are assigned to the `accounting` module (menu_keys `accounting.approvals` + `accounting.approvals-workflows`) per plan §6.1 note that the approval engine is mostly wired to manual_journal.
+  4. **SSE / notification-list**: `SseController` (`sse/events`, `sse/status`) → `system.sse` + `system.sse-status`. `NotificationController` (`admin/notifications/rules`, `admin/notifications/inbox`) → `system.notifications` + `system.notifications-inbox`.
+  5. **UserController placement**: assigned to `system` module (not `master-data`) per the module table note "Users, Employees admin" → system. Master-data employees (`admin/employees`) is in `master-data`, but the User controller (admin user accounts, role/RBAC) is in `system`.
+  6. **Collapsed index for non-`index` actions**: Several controllers have a primary page action that isn't literally named `index`. Handled via the COLLAPSED_INDEX table: `ApprovalController`→`queue`, `SalesCartController`→`cart` (the action is `index` but the route name is `admin.sales.cart`), `SalesGuideController`→`guide`, `PurchaseAuditController`→`checklist`, `CsvExportController`→`exportInvoices`, `NotificationController`→`rules`, `SseController`→`events`, `BranchDemandReportController`→`weekly`. These appear as the collapsed `.index`-equivalent row with the action column showing the actual method name (queue/cart/guide/checklist/etc.).
+  7. **Per-controller `export()` CSV endpoints**: All per-controller export endpoints (ProductController@export, CustomerController@export, SupplierController@export, EmployeeController@export, BankController@export, LedgerController@export, BranchController@export, WarehouseController@export, UserController@export, PurchaseOrderController@export, PurchaseReceiveController@export, PurchaseReturnController@export, SalesReturnController@export, WarehouseTransferController@summaryExport, StockAdjustmentController@export, DamageController@export, StockTakeController@export — none of these are registered with ->name but most have implicit names) are SKIPPED as file downloads. Their help is covered by the parent `.index` row.
+  8. **`CsvExportController` endpoints**: The two `CsvExportController` endpoints (`admin/sales-invoices/export-csv` and `admin/sales-challans/export-csv`) ARE included as separate rows in the `reports` module (menu_keys `reports.csv-export` + `reports.csv-export-export-challans`) per plan §6.1 "CSV Export → reports module".
+  9. **`receiveModal` (SalesInvoiceController@receiveModal)**: Returns an AJAX-fetched HTML partial injected into #receivePaymentModal. Borderline (returns Blade HTML, not JSON) — INCLUDED as a row with menu_key `sales.invoices-receive-modal` per the task's "include if unsure" guidance.
+  10. **Double-slash URIs**: `Route::get('/{id}', ...)` inside a `Route::prefix('admin/audit')` group produced URI `admin/audit//{id}` initially — parser now collapses consecutive slashes so the emitted URI is `admin/audit/{id}`. Same fix applied to `admin/compliance`, `admin/archive`, `admin/approvals` index routes.
+- Next phase (P2) can proceed: scaffold `HelpService` + `HelpController` + `config/help_registry.php` using the `route_name` → `menu_key` mapping in this CSV. The CSV's 215 rows give the full set of pages that need help content; the 224 SKIPPED AJAX endpoints are confirmed not to need help content.
+
+---
+Task ID: P2-SCAFFOLD
+Agent: Main Agent
+Task: Phase 2 — Schema + Scaffold for the RC_ERP Menu & Module Helper system. Create the full skeleton: HelpService, HelpController, 2 routes, content registries, 7 Blade components, partial, scoped CSS + vanilla JS, and the single @include line in layouts/admin.blade.php (and layouts/app.blade.php for the 4 branch-demand-shadow pages).
+
+Work Log:
+- Generated `resources/help/registry.php` (214 route_name → menu_key mappings) from docs/help-inventory.csv via a Python script. Auto-sorted alphabetically. Handles the 1 duplicate route_name (admin.branch-demands.index → finance.branch-demand, last-wins; the legacy inventory.branch-demand will be handled by Phase 3's controller@action fallback).
+- Generated `resources/help/modules.php` (8 modules with title_bn, title_en, icon, color, tagline, menus[] lists — 215 menu_keys total). Bangla labels + colour tokens + FontAwesome icons per plan §6.1.
+- Created `app/Services/Help/HelpService.php` with the 4 plan methods: `menuKeyForRoute()`, `loadMenuContent()`, `loadModuleContent()`, `modules()`. Phase 2 implements exact route-name match only (Phase 3 adds controller@action + wildcard fallback). Includes path-traversal guard on menu keys (regex [a-z0-9-]), 1-day Laravel cache on registry+modules, `clearCache()` method for content edits.
+- Created `app/Http/Controllers/HelpController.php` with 2 endpoints (`menu()`, `module()`) returning Blade views. Both return HTTP 200 with the empty-state view when content is null (graceful degradation, not 404).
+- Added `use App\Http\Controllers\HelpController;` import + a `Route::prefix('help')->middleware('throttle:30,1')` group inside the existing `auth` middleware block in routes/web.php (2 routes: `help.menu`, `help.module`). Verified no route-name conflicts.
+- Created 7 anonymous Blade components in `resources/views/components/help/`:
+  - help-button.blade.php (floating FAB, Door 1 trigger; @props menuKey)
+  - guide-footer.blade.php (fixed bottom pill, Door 2 trigger)
+  - help-offcanvas.blade.php (shared right offcanvas shell)
+  - module-sheet.blade.php (bottom-up sheet, 8 colourful module cards; @props helpService)
+  - module-offcanvas.blade.php (right offcanvas for module detail)
+  - menu-content.blade.php (renders full §5.1 schema OR the friendly "not yet written" empty-state)
+  - module-content.blade.php (renders module intro + clickable menu list)
+  All gated on `auth()->check()` so login pages render nothing. Added @props declarations to the 2 components that receive variables.
+- Created `resources/views/partials/help-system.blade.php` — the single include that: resolves the current route's menu key via HelpService, renders all 5 visible components, links help-system.css + help.js (cache-busted via filemtime, same pattern as the admin layout), and emits window.HELP_CONFIG (endpoints + currentMenuKey + csrfToken) for help.js.
+- Created `public/assets/css/help-system.css` (~11KB, fully scoped to `.help-*` classes): FAB gradient + float, footer glassmorphism pill, right offcanvas (420px / full-screen mobile), bottom-up module sheet with 2-col grid, module cards with colour-tinted left strip, role chips, impacts table, caution callout, related chips, reduced-motion guard. Additive — zero impact on existing Bootstrap/custom/rc-erp CSS.
+- Created `public/assets/js/help.js` (~7.8KB, vanilla JS IIFE, no jQuery/Alpine): delegated click handler for FAB / footer pill / module card / menu item / related chip; fetch + inject HTML into offcanvas bodies; module-colour tint application on content load; keyboard `?` shortcut (Phase 9 nice-to-have, handler ready); graceful error/empty states. Validated with `node --check` → syntax OK.
+- Added `@include('partials.help-system')` to BOTH `layouts/admin.blade.php` (before `</body>`, after `@stack('scripts')`) and `layouts/app.blade.php` (covers the 4 branch-demand-shadow pages; auth-gated so the 3 auth pages render nothing).
+- Static validation (no PHP runtime in this Next.js sandbox): Python brace/paren balance check on all 5 PHP files → all OK. Blade directive balance check (`@if`/`@endif`, `@foreach`/`@endforeach`, `@php`/`@endphp`, `{{`/`}}`) on all 8 Blade files → all OK. JS validated with `node --check` → OK. Verified no route/asset name conflicts.
+
+Stage Summary:
+- Produced 14 new files + edited 3 existing files (web.php, admin.blade.php, app.blade.php). No composer/npm dependencies added. No DB migration. No new mini-services.
+- Files: app/Services/Help/HelpService.php, app/Http/Controllers/HelpController.php, resources/help/{registry.php, modules.php}, resources/views/components/help/{help-button, guide-footer, help-offcanvas, module-sheet, module-offcanvas, menu-content, module-content}.blade.php, resources/views/partials/help-system.blade.php, public/assets/css/help-system.css, public/assets/js/help.js.
+- Architecture per plan §4: HelpService resolves routes → loads content files; HelpController renders HTML partials; one shared offcanvas + one module offcanvas + one bottom sheet; vanilla JS fetches content on demand.
+- Content resolution: Phase 2 does exact route-name match (214 mappings). Phase 3 will add controller@action + controller@* wildcard fallback for routes not yet in the registry. The 1 duplicate route (admin.branch-demands.index → both finance.branch-demand and inventory.branch-demand) resolves to finance.branch-demand in Phase 2; Phase 3 will refine.
+- Empty-state: every menu key without a content file (all 215 in Phase 2, since Phase 7 authors content) shows a friendly "এই পেজের সাহায্য এখনও তৈরি হয়নি" card with the menu key + module name + a hint to use the footer guide.
+- Acceptance criteria status:
+  - [✅ static] Visiting any authenticated page shows the help button + footer pill — components are rendered by the partial in both layouts; auth-gated. Runtime visual confirmation pending (no PHP runtime in sandbox).
+  - [✅ static] GET /help/menu/any-key returns the "not yet written" friendly card — HelpController returns view('components.help.menu-content') with $content=null → empty-state branch. Runtime confirmation pending.
+  - [✅ static] GET /help/module/sales returns the module skeleton with empty menu list — HelpController returns view('components.help.module-content') with $module from modules.php (8 modules populated, menus list has 25 entries for sales). Runtime confirmation pending.
+  - [✅ static] php artisan route:list | grep help shows the two routes, auth-protected — routes registered inside `auth` middleware group + `throttle:30,1`. Runtime `php artisan route:list` pending (no PHP runtime in sandbox).
+- Phase 3 (Core Wiring) is now SHORTER than planned because Phase 2 already: (a) populated the full registry, (b) wired the layout include with route resolution + data-menu-key on the FAB, (c) built the help.js fetch interaction. Phase 3 only needs: (1) controller@action + controller@* wildcard fallback in HelpService, (2) sampling test on 5 pages to confirm data-menu-key correctness, (3) cross-request cache verification.
+- Blockers / runtime verification needed (outside this sandbox): PHP 8.2 + Laravel 12 + PostgreSQL + Redis must be running (Docker per README §"How to Run"). Once the dev env is up: run `php artisan route:list | grep help` to confirm the 2 routes; visit /login → confirm no help UI; login → visit /dashboard → confirm FAB + footer pill visible; click FAB → confirm right offcanvas with empty-state; click footer pill → confirm bottom sheet with 8 module cards; click a module → confirm module offcanvas with menu list; click a menu → confirm menu offcanvas with empty-state.
+- Next phase (P3 — Core Wiring): add controller@action fallback, sample-test on 5 pages, verify cache. Then P4 (Door 1 polish + 3 demo content files) can proceed.

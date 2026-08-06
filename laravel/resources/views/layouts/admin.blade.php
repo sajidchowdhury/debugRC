@@ -485,5 +485,14 @@
         })();
     </script>
     @stack('scripts')
+
+    {{-- ============================================================ --}}
+    {{-- Help System — Menu & Module Helper (Phase 2 scaffold).       --}}
+    {{-- One include pulls in: floating help button, footer pill,     --}}
+    {{-- right offcanvas, module offcanvas, bottom-up module sheet,   --}}
+    {{-- scoped CSS + vanilla JS. Auth-gated (login pages render nil).--}}
+    {{-- See docs/HELP_SYSTEM_IMPLEMENTATION_PLAN.md                 --}}
+    {{-- ============================================================ --}}
+    @include('partials.help-system')
 </body>
 </html>
