@@ -57,6 +57,20 @@
             <span class="help-breadcrumb__menu">মেনু</span>
         </nav>
     </div>
+    {{-- §9.5 Print actions bar. Hidden by default; help.js reveals it once real
+         menu content is loaded (so the button never prints a loading spinner or
+         the empty-state). Clicking opens a clean print view in a new window. --}}
+    <div class="help-offcanvas__actions" id="helpOffcanvasActions" hidden>
+        <button
+            type="button"
+            class="help-print-btn"
+            id="helpPrintBtn"
+            aria-label="এই সাহায্য প্রিন্ট করুন"
+        >
+            <i class="fa-solid fa-print" aria-hidden="true"></i>
+            <span>প্রিন্ট করুন</span>
+        </button>
+    </div>
     <div class="offcanvas-body help-offcanvas__body" id="helpOffcanvasBody">
         {{-- Initial loading placeholder (replaced on first fetch) --}}
         <div class="help-loading-placeholder">

@@ -37,10 +37,10 @@ $roleLabels = [
 @endphp
 
 @if($empty)
-    {{-- Friendly empty-state (HTTP 200, not 404) --}}
+    {{-- Friendly empty-state (HTTP 200, not 404). §9.4 polish: illustration + mailto --}}
     <div class="help-empty-state" data-help-color="{{ $colorToken }}">
-        <div class="help-empty-state__icon" aria-hidden="true">
-            <i class="fa-regular fa-circle-question"></i>
+        <div class="help-empty-state__illustration" aria-hidden="true">
+            <i class="fa-solid fa-feather-pointed"></i>
         </div>
         <h6 class="help-empty-state__title">এই পেজের সাহায্য এখনও তৈরি হয়নি</h6>
         <p class="help-empty-state__text">
@@ -54,6 +54,23 @@ $roleLabels = [
                 মডিউল: <strong>{{ $module['title_bn'] }}</strong>
             </p>
         @endif
+        {{-- §9.4 mailto request link. Pre-fills subject + body with the menu key
+             so the maintainer knows exactly which page needs content. --}}
+        @php
+            $supportEmail = config('app.help_support_email', 'support@example.com');
+            $mailtoSubject = rawurlencode('সাহায্য লেখার অনুরোধ: ' . $key);
+            $mailtoBody = rawurlencode(
+                "এই মেনুর জন্য বাংলা সাহায্য লেখার অনুরোধ করা হলো।\n\n" .
+                "মেনু কী: " . $key . "\n" .
+                "মডিউল: " . ($module['title_bn'] ?? '(অজানা)') . "\n\n" .
+                "বিস্তারিত: ..."
+            );
+            $mailtoHref = "mailto:{$supportEmail}?subject={$mailtoSubject}&body={$mailtoBody}";
+        @endphp
+        <a href="{{ $mailtoHref }}" class="help-empty-state__mailto">
+            <i class="fa-solid fa-envelope" aria-hidden="true"></i>
+            অনুরোধ পাঠান
+        </a>
         <hr class="my-3">
         <p class="small text-muted">
             🧭 পুরো সিস্টেম গাইড দেখতে নিচের "<strong>My Creative Code Guide</strong>" বাটনে ক্লিক করুন।

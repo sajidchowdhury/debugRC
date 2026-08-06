@@ -45,10 +45,33 @@ $colors = [
         ></button>
     </div>
     <div class="offcanvas-body help-module-sheet__body">
-        <p class="help-module-sheet__hint text-muted small mb-3">
+        {{-- §9.1 in-guide search box (client-side live filter) --}}
+        <div class="help-search" role="search">
+            <i class="fa-solid fa-magnifying-glass help-search__icon" aria-hidden="true"></i>
+            <label for="helpSearchInput" class="visually-hidden">মডিউল বা মেনু খুঁজুন</label>
+            <input
+                type="search"
+                id="helpSearchInput"
+                class="help-search__input"
+                placeholder="মডিউল বা মেনু খুঁজুন…  (Search modules / menus)"
+                autocomplete="off"
+                aria-describedby="helpSearchHint"
+            >
+            <button
+                type="button"
+                class="help-search__clear"
+                id="helpSearchClear"
+                aria-label="সার্চ মুছুন"
+                hidden
+            >
+                <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+            </button>
+        </div>
+
+        <p class="help-module-sheet__hint text-muted small mb-3" id="helpSearchHint">
             যে মডিউলটি সম্পর্কে জানতে চান তার কার্ডে ক্লিক করুন।
         </p>
-        <div class="help-module-grid">
+        <div class="help-module-grid" id="helpModuleGrid">
             @foreach($modules as $modKey => $mod)
                 @php
                     [$c1, $c2] = $colors[$mod['color']] ?? $colors['slate'];
@@ -60,6 +83,7 @@ $colors = [
                     data-module-key="{{ $modKey }}"
                     style="--mc1: {{ $c1 }}; --mc2: {{ $c2 }};"
                     aria-label="{{ $mod['title_bn'] }} — {{ $mod['title_en'] }}"
+                    data-search-text="{{ mb_strtolower($mod['title_bn'] . ' ' . $mod['title_en'] . ' ' . $mod['tagline']) }}"
                 >
                     <span class="help-module-card__icon" aria-hidden="true">
                         <i class="fa-solid {{ $mod['icon'] }}"></i>
@@ -72,6 +96,12 @@ $colors = [
                     <span class="help-module-card__count">{{ $menuCount }} মেনু</span>
                 </button>
             @endforeach
+        </div>
+
+        {{-- §9.1 search results: matching menus (flat list, shown when search has text) --}}
+        <div class="help-search-results" id="helpSearchResults" aria-live="polite">
+            <p class="help-search-results__label">মিলে যাওয়া মেনু:</p>
+            <div class="help-search-results__list" id="helpSearchResultsList"></div>
         </div>
     </div>
 </div>

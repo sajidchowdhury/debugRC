@@ -63,6 +63,35 @@ $helpJsVer  = is_file($helpJsPath) ? filemtime($helpJsPath) : '1';
             // Module key -> Bangla title map (Phase 5). Lets help.js render the
             // breadcrumb ("মডিউল: সেলস › সেলস ইনভয়েস") without an extra round-trip.
             moduleTitles: @json(collect($helpService->modules())->mapWithKeys(fn ($m, $k) => [$k => $m['title_bn']])),
+            // §9.1 in-guide search index: every module + every menu_key (with a
+            // derived human label) so the module-sheet search box can filter
+            // modules + menus live, client-side, with no extra endpoint.
+            searchIndex: @json((function () use ($helpService) {
+                $modules = $helpService->modules();
+                $out = [];
+                foreach ($modules as $modKey => $mod) {
+                    $menus = [];
+                    foreach ($mod['menus'] ?? [] as $menuKey) {
+                        // Derive a human label from the menu_key slug
+                        // (e.g. 'sales.customer-payment' -> 'Customer Payment').
+                        $slug = str_contains($menuKey, '.')
+                            ? substr(strrchr($menuKey, '.'), 1)
+                            : $menuKey;
+                        $label = ucwords(str_replace('-', ' ', $slug));
+                        $menus[] = ['key' => $menuKey, 'label' => $label];
+                    }
+                    $out[] = [
+                        'key' => $modKey,
+                        'title_bn' => $mod['title_bn'] ?? $modKey,
+                        'title_en' => $mod['title_en'] ?? '',
+                        'tagline' => $mod['tagline'] ?? '',
+                        'color' => $mod['color'] ?? 'slate',
+                        'icon' => $mod['icon'] ?? 'fa-folder',
+                        'menus' => $menus,
+                    ];
+                }
+                return $out;
+            })()),
         };
     </script>
 @endif

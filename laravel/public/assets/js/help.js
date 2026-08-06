@@ -1,6 +1,6 @@
 /* =========================================================================
-   Help System JS — Phase 8 (Visual Polish & Responsive Pass).
-   ~380 lines vanilla JS. No jQuery, no Alpine. Uses Bootstrap 5 data-API
+   Help System JS — Phase 9 (Interactive Niceties).
+   ~560 lines vanilla JS. No jQuery, no Alpine. Uses Bootstrap 5 data-API
    for show/hide; this file wires the fetch + content injection + Mermaid
    + the Door 2 content-swap UX (module → menu → back).
 
@@ -14,6 +14,13 @@
    - Focus return to the trigger button on close.
    - aria-expanded synced on the FAB + footer pill.
    - `?` shortcut guarded so it won't re-trigger while a dialog is open.
+
+   Phase 9 additions (§9.1–9.5):
+   - §9.1 in-guide search (module sheet): live filter modules + menus by Bangla/English text.
+   - §9.2 recently viewed: ★ button beside footer pill opens a popover listing the
+     last 5 menus opened (localStorage, degrades gracefully).
+   - §9.3 keyboard shortcuts: `?` (current page), `Shift+G` (module sheet).
+   - §9.5 print: "প্রিন্ট করুন" button in the menu offcanvas → clean new-window print view.
 
    Mermaid is lazy-loaded: when a [data-mermaid-key] block is injected into the
    DOM, this script injects the Mermaid CDN <script> tag once and calls
@@ -249,6 +256,15 @@
             } else {
                 hideBackBar();
             }
+            // §9.2 record recently-viewed + §9.5 reveal the print bar only when
+            // real (non-empty-state) menu content was loaded.
+            var isRealContent = !!body.querySelector('.help-menu-content');
+            if (isRealContent) {
+                recordRecentlyViewed(menuKey);
+                showPrintBar(true);
+            } else {
+                showPrintBar(false);
+            }
         });
         showOffcanvas('helpOffcanvas');
     }
@@ -429,6 +445,7 @@
     // Keyboard: "?" toggles current-page help (Phase 9 nice-to-have, handler ready).
     // Guard: do nothing while a help drawer is already open (focus is trapped
     // inside it) so the shortcut doesn't fight the focus management.
+    // §9.3 adds Shift+G to open the module sheet.
     document.addEventListener('keydown', function (e) {
         var tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
         if (tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable)) return;
@@ -437,10 +454,357 @@
             e.preventDefault();
             var fab = document.getElementById('helpButton');
             if (fab) fab.click();
+            return;
+        }
+        // §9.3 Shift+G → open the module sheet (Door 2 entry).
+        if ((e.key === 'G' || e.key === 'g') && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            if (anyHelpOffcanvasOpen()) return;
+            e.preventDefault();
+            openModuleSheet();
+            return;
         }
     });
 
     if (window.console && console.debug) {
-        console.debug('[help-system] Phase 8 initialised; currentMenuKey=' + (CFG.currentMenuKey || '(none)'));
+        console.debug('[help-system] Phase 9 initialised; currentMenuKey=' + (CFG.currentMenuKey || '(none)'));
     }
+
+    // =====================================================================
+    // Phase 9 — Interactive Niceties
+    // =====================================================================
+
+    // ---- §9.2 Recently-viewed store (localStorage, graceful degradation) ----
+    var RECENT_KEY = 'help:recent';
+    var RECENT_MAX = 5;
+    var recentStore = null;   // null = unavailable; [] = available but empty
+    (function initRecentStore() {
+        try {
+            var test = '__help_test__';
+            window.localStorage.setItem(test, test);
+            window.localStorage.removeItem(test);
+            recentStore = window.localStorage;
+        } catch (e) {
+            recentStore = null;   // private mode / disabled / quota
+        }
+    })();
+
+    function getRecent() {
+        if (!recentStore) return [];
+        try {
+            var raw = recentStore.getItem(RECENT_KEY);
+            if (!raw) return [];
+            var arr = JSON.parse(raw);
+            return Array.isArray(arr) ? arr : [];
+        } catch (e) { return []; }
+    }
+    function setRecent(arr) {
+        if (!recentStore) return;
+        try { recentStore.setItem(RECENT_KEY, JSON.stringify(arr)); }
+        catch (e) { /* quota / disabled — silent */ }
+    }
+    function recordRecentlyViewed(menuKey) {
+        if (!menuKey || !recentStore) return;
+        var arr = getRecent().filter(function (k) { return k !== menuKey; });
+        arr.unshift(menuKey);
+        if (arr.length > RECENT_MAX) arr = arr.slice(0, RECENT_MAX);
+        setRecent(arr);
+        refreshRecentButton();
+    }
+
+    // Resolve a menu_key → {label, moduleKey, color, icon} using CFG.searchIndex.
+    function resolveMenuMeta(menuKey) {
+        var idx = CFG.searchIndex || [];
+        for (var i = 0; i < idx.length; i++) {
+            var mod = idx[i];
+            var menus = mod.menus || [];
+            for (var j = 0; j < menus.length; j++) {
+                if (menus[j].key === menuKey) {
+                    return { label: menus[j].label, moduleKey: mod.key, color: mod.color, icon: mod.icon };
+                }
+            }
+        }
+        return null;
+    }
+
+    // Show/hide the ★ button depending on whether there is any history.
+    function refreshRecentButton() {
+        var btn = document.getElementById('helpRecentBtn');
+        if (!btn) return;
+        if (!recentStore) { btn.hidden = true; return; }
+        var arr = getRecent();
+        btn.hidden = arr.length === 0;
+    }
+
+    // ---- §9.2 Recently-viewed popover render + toggle ----
+    function renderRecentPopover() {
+        var list = document.getElementById('helpRecentList');
+        if (!list) return;
+        var arr = getRecent();
+        if (!arr.length) {
+            list.innerHTML = '<div class="help-recent-popover__empty">' +
+                '<i class="fa-regular fa-clock" aria-hidden="true"></i>' +
+                'এখনও কোনো সাহায্য দেখা হয়নি।</div>';
+            return;
+        }
+        var html = '';
+        arr.forEach(function (key) {
+            var meta = resolveMenuMeta(key);
+            var label = meta ? meta.label : key;
+            var c1 = (COLOR_MAP[meta && meta.color] || COLOR_MAP.slate)[0];
+            var c2 = (COLOR_MAP[meta && meta.color] || COLOR_MAP.slate)[1];
+            var icon = meta ? meta.icon : 'fa-circle-dot';
+            html +=
+                '<button type="button" class="help-recent-item" data-menu-key="' + escapeAttr(key) + '" ' +
+                'style="--ri-c1: ' + c1 + '; --ri-c2: ' + c2 + ';" ' +
+                'aria-label="' + escapeAttr(label) + '">' +
+                '<span class="help-recent-item__icon"><i class="fa-solid ' + icon + '"></i></span>' +
+                '<span class="help-recent-item__body">' +
+                '<span class="help-recent-item__label">' + escapeHtml(label) + '</span>' +
+                '<span class="help-recent-item__key">' + escapeHtml(key) + '</span>' +
+                '</span></button>';
+        });
+        list.innerHTML = html;
+    }
+    function toggleRecentPopover(forceOpen) {
+        var pop = document.getElementById('helpRecentPopover');
+        var btn = document.getElementById('helpRecentBtn');
+        if (!pop || !btn) return;
+        var willOpen = (forceOpen === undefined) ? pop.hidden : forceOpen;
+        if (willOpen) {
+            renderRecentPopover();
+            pop.hidden = false;
+            pop.classList.add('help-recent-popover--open');
+            btn.setAttribute('aria-expanded', 'true');
+        } else {
+            pop.hidden = true;
+            pop.classList.remove('help-recent-popover--open');
+            btn.setAttribute('aria-expanded', 'false');
+        }
+    }
+
+    // ---- §9.1 In-guide search (module sheet) ----
+    function runSearch(query) {
+        var q = (query || '').trim().toLowerCase();
+        var grid = document.getElementById('helpModuleGrid');
+        var hint = document.getElementById('helpSearchHint');
+        var clearBtn = document.getElementById('helpSearchClear');
+        var resultsBox = document.getElementById('helpSearchResults');
+        var resultsList = document.getElementById('helpSearchResultsList');
+
+        if (clearBtn) clearBtn.hidden = !q;
+
+        if (!q) {
+            // Reset: show all module cards + hide results.
+            if (grid) { grid.querySelectorAll('.help-module-card').forEach(function (c) { c.style.display = ''; }); }
+            if (hint) hint.style.display = '';
+            if (resultsBox) resultsBox.style.display = 'none';
+            if (resultsList) resultsList.innerHTML = '';
+            return;
+        }
+
+        // Filter module cards by their data-search-text (title_bn + title_en + tagline).
+        if (grid) {
+            grid.querySelectorAll('.help-module-card').forEach(function (card) {
+                var hay = card.getAttribute('data-search-text') || '';
+                card.style.display = hay.indexOf(q) !== -1 ? '' : 'none';
+            });
+        }
+        if (hint) hint.style.display = 'none';
+
+        // Build flat menu results from the search index.
+        var matches = [];
+        var idx = CFG.searchIndex || [];
+        idx.forEach(function (mod) {
+            (mod.menus || []).forEach(function (m) {
+                var labelLc = (m.label || '').toLowerCase();
+                var keyLc = (m.key || '').toLowerCase();
+                if (labelLc.indexOf(q) !== -1 || keyLc.indexOf(q) !== -1) {
+                    matches.push({ key: m.key, label: m.label, moduleKey: mod.key, color: mod.color, icon: mod.icon });
+                }
+            });
+        });
+
+        if (!resultsBox || !resultsList) return;
+        if (!matches.length) {
+            resultsList.innerHTML = '<div class="help-search-results__empty">কোনো মেনু পাওয়া যায়নি।</div>';
+        } else {
+            var html = '';
+            matches.slice(0, 30).forEach(function (m) {
+                var pair = COLOR_MAP[m.color] || COLOR_MAP.slate;
+                var modTitle = (CFG.moduleTitles && CFG.moduleTitles[m.moduleKey]) || m.moduleKey;
+                html +=
+                    '<button type="button" class="help-search-result" data-menu-key="' + escapeAttr(m.key) + '" ' +
+                    'style="--sr-c1: ' + pair[0] + '; --sr-c2: ' + pair[1] + ';" ' +
+                    'aria-label="' + escapeAttr(m.label) + ' (' + escapeAttr(modTitle) + ')">' +
+                    '<span class="help-search-result__icon"><i class="fa-solid ' + m.icon + '"></i></span>' +
+                    '<span class="help-search-result__body">' +
+                    '<span class="help-search-result__label">' + escapeHtml(m.label) + '</span>' +
+                    '<span class="help-search-result__meta">' + escapeHtml(modTitle) + ' · ' + escapeHtml(m.key) + '</span>' +
+                    '</span></button>';
+            });
+            resultsList.innerHTML = html;
+        }
+        resultsBox.style.display = 'block';
+    }
+
+    // ---- §9.5 Print: open a clean print window with the current menu content ----
+    function printCurrentMenu() {
+        var body = document.getElementById('helpOffcanvasBody');
+        if (!body) return;
+        var content = body.querySelector('.help-menu-content');
+        if (!content) return;
+        var titleEl = body.querySelector('.help-menu-content__title-bn');
+        var title = titleEl ? (titleEl.textContent || 'সাহায্য') : 'সাহায্য';
+        var w = window.open('', '_blank', 'width=720,height=900');
+        if (!w) { alert('পপ-আপ ব্লক করা হয়েছে। প্রিন্টের জন্য পপ-আপ অনুমোদন করুন।'); return; }
+        w.document.open();
+        w.document.write(
+            '<!DOCTYPE html><html lang="bn"><head><meta charset="utf-8">' +
+            '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+            '<title>' + escapeHtml(title) + ' — সাহায্য</title>' +
+            '<style>' +
+            'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;' +
+            'max-width:720px;margin:0 auto;padding:32px 24px;color:#0f172a;line-height:1.6;}' +
+            'h1{font-size:1.3rem;margin:0 0 4px;}' +
+            '.help-menu-content__title-en{color:#64748b;font-size:0.85rem;margin:0 0 16px;}' +
+            '.help-menu-content__summary-card{background:#f8fafc;border-left:4px solid #475569;' +
+            'border-radius:8px;padding:12px 14px;margin:0 0 16px;}' +
+            '.help-menu-content__summary{margin:0;color:#334155;}' +
+            '.help-role-chip{display:inline-block;padding:2px 10px;border-radius:999px;' +
+            'background:#f1f5f9;color:#1e293b;font-size:0.78rem;margin:0 4px 4px 0;}' +
+            '.help-section-label{font-size:0.74rem;font-weight:700;text-transform:uppercase;' +
+            'letter-spacing:.04em;color:#64748b;margin:18px 0 8px;}' +
+            '.help-icon-list{list-style:none;padding:0;margin:0;}' +
+            '.help-icon-list li{padding:4px 0;display:flex;gap:8px;}' +
+            '.help-icon-list li i{color:#475569;margin-top:3px;}' +
+            '.help-impacts-table{width:100%;border-collapse:collapse;font-size:0.9rem;}' +
+            '.help-impacts-table td{padding:6px 8px;border-bottom:1px solid #e2e8f0;vertical-align:top;}' +
+            '.help-impacts-table__who{font-weight:600;width:32%;border-left:3px solid #475569;}' +
+            '.help-callout{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;' +
+            'padding:10px 12px;margin:12px 0;color:#92400e;}' +
+            '.help-callout__title{font-weight:700;margin-bottom:4px;}' +
+            '.help-callout ul{padding-left:18px;margin:0;}' +
+            '.help-mermaid-wrap{text-align:center;margin:12px 0;}' +
+            '.help-menu-content__footer{margin-top:20px;padding-top:10px;' +
+            'border-top:1px solid #e2e8f0;font-size:0.74rem;color:#94a3b8;' +
+            'display:flex;justify-content:space-between;}' +
+            'code{background:#f1f5f9;padding:1px 5px;border-radius:3px;font-size:0.85em;}' +
+            '@media print{body{padding:0;}}' +
+            '</style></head><body>'
+        );
+        w.document.write(content.outerHTML);
+        w.document.write('</body></html>');
+        w.document.close();
+        // Give the new window a tick to lay out, then print.
+        w.focus();
+        setTimeout(function () { try { w.print(); } catch (e) {} }, 300);
+    }
+
+    // ---- small HTML/attr escape helpers ----
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    function escapeAttr(s) {
+        return escapeHtml(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    // ---- §9.5 Show/hide the print actions bar ----
+    function showPrintBar(show) {
+        var bar = document.getElementById('helpOffcanvasActions');
+        if (!bar) return;
+        bar.hidden = !show;
+    }
+
+    // ---- Phase 9 event wiring (delegated; appended to the same document) ----
+    document.addEventListener('click', function (e) {
+        // §9.2 Recently-viewed ★ button toggle
+        var recentBtn = e.target.closest('#helpRecentBtn');
+        if (recentBtn) {
+            e.preventDefault();
+            var pop = document.getElementById('helpRecentPopover');
+            toggleRecentPopover(pop ? pop.hidden : true);
+            return;
+        }
+        // §9.2 Recently-viewed clear-all
+        var recentClear = e.target.closest('#helpRecentClear');
+        if (recentClear) {
+            e.preventDefault();
+            setRecent([]);
+            renderRecentPopover();
+            refreshRecentButton();
+            return;
+        }
+        // §9.2 Recently-viewed item → open that menu's offcanvas (Door 1 flow)
+        var recentItem = e.target.closest('.help-recent-item[data-menu-key]');
+        if (recentItem) {
+            e.preventDefault();
+            toggleRecentPopover(false);
+            openMenuOffcanvas(recentItem.getAttribute('data-menu-key'), false);
+            return;
+        }
+        // §9.1 Search result item → open that menu's offcanvas directly
+        var sr = e.target.closest('.help-search-result[data-menu-key]');
+        if (sr) {
+            e.preventDefault();
+            hideOffcanvas('helpModuleSheet');
+            setTimeout(function () {
+                openMenuOffcanvas(sr.getAttribute('data-menu-key'), false);
+            }, 180);
+            return;
+        }
+        // §9.5 Print button
+        var printBtn = e.target.closest('#helpPrintBtn');
+        if (printBtn) {
+            e.preventDefault();
+            printCurrentMenu();
+            return;
+        }
+        // Click outside the popover → close it (but not when clicking inside it).
+        var pop = document.getElementById('helpRecentPopover');
+        var rb = document.getElementById('helpRecentBtn');
+        if (pop && !pop.hidden && !pop.contains(e.target) && !(rb && rb.contains(e.target))) {
+            toggleRecentPopover(false);
+        }
+    });
+
+    // ---- §9.1 Search input wiring ----
+    var searchInput = document.getElementById('helpSearchInput');
+    var searchClearBtn = document.getElementById('helpSearchClear');
+    if (searchInput) {
+        var searchTimer = null;
+        searchInput.addEventListener('input', function () {
+            var val = searchInput.value || '';
+            if (searchTimer) clearTimeout(searchTimer);
+            searchTimer = setTimeout(function () { runSearch(val); }, 120);
+        });
+        searchInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') {
+                searchInput.value = '';
+                runSearch('');
+                searchInput.focus();
+            }
+        });
+    }
+    if (searchClearBtn) {
+        searchClearBtn.addEventListener('click', function () {
+            if (searchInput) { searchInput.value = ''; searchInput.focus(); runSearch(''); }
+        });
+    }
+    // Reset the search when the module sheet closes (so it's clean next open).
+    var moduleSheetEl = document.getElementById('helpModuleSheet');
+    if (moduleSheetEl) {
+        moduleSheetEl.addEventListener('hidden.bs.offcanvas', function () {
+            if (searchInput) searchInput.value = '';
+            runSearch('');
+        });
+    }
+
+    // ---- §9.2 Init recently-viewed button visibility on load ----
+    refreshRecentButton();
+    // Close the popover if a help offcanvas opens over it.
+    ['helpOffcanvas', 'helpModuleOffcanvas', 'helpModuleSheet'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('show.bs.offcanvas', function () { toggleRecentPopover(false); });
+    });
 })();
