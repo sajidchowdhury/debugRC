@@ -1059,6 +1059,115 @@ Ordered by severity (HIGH first). Each item maps to a gap in §14.
   infrastructure + the correct notifications table schema.
 - **Fix:** Regenerate `database/sql/*.sql` baseline from a migrated DB.
 
+> ✅ **RESOLVED — G-091 (HIGH-WAVE-1).** DDL baseline sync — the
+> `database/sql/*.sql` baseline files now mirror the FINAL post-migration
+> state of 9 notification-related migrations. Cross-referenced with G-182
+> (`workflows/notification-workflow.md` G7 — same root issue, same fix).
+>
+> **4 deltas closed across 3 SQL baseline files:**
+>   1. **`06_payment_and_misc.sql` L180-205** — replaced the legacy
+>      `notifications` table (`user_id`, `title`, `body`, `is_read`) with
+>      the Laravel-standard polymorphic schema (uuid PK + notifiable_id +
+>      notifiable_type + type + jsonb data + read_at + timestamps) + the
+>      `notifications_notifiable_type_notifiable_id_index` + the partial
+>      `idx_notif_is_read` (WHERE read_at IS NULL) index. Mirrors migration
+>      `2025_01_06_000001_create_notification_tables.php`.
+>   2. **`06_payment_and_misc.sql` L270-316** — added the missing CREATE
+>      TABLE DDL for `notification_rules` (with `deleted_at` for the
+>      `NotificationRule` model's `use SoftDeletes;` declaration, verified
+>      at `app/Models/NotificationRule.php:31`) + the
+>      `notification_rule_recipients` pivot table (multi-recipient types
+>      per rule, F-18b schema). The FINAL post-migration state (after
+>      migration `2025_01_26_000001` dropped `recipient_type` +
+>      `recipient_user_id` from `notification_rules`). Placed BEFORE the
+>      existing audit triggers (L318-319 `trg_audit_notification_rules` +
+>      `trg_audit_notification_rule_recipients`) so they can reference
+>      the tables. Audit triggers verified — table names match.
+>   3. **`07_views_triggers_constraints.sql` L1799-2410** — appended a new
+>      "HIGH-WAVE-1: LISTEN / NOTIFY + Notification-RLS baseline mirror"
+>      section with: (a) the `rcerp_notify(channel, table, action, id,
+>      branch_id, changes)` helper function; (b) 8 trigger functions
+>      (`rcerp_notify_sales_invoice`, `_sales_challan`, `_sales_return`,
+>      `_customer_payment`, `_stock_change`, `_journal_entry`,
+>      `_system_policy` [the MEDIUM-WAVE-2-A G-244 3-case logic from
+>      migration `2026_09_07_000011`, NOT the original broken version
+>      from `2025_01_21_000001`], `_damage`); (c) 8 triggers attached to
+>      their tables (sales_invoices, sales_challans, sales_returns,
+>      customer_payments, stock_transactions, journal_entries,
+>      damage_invoices, system_policies) with `DROP TRIGGER IF EXISTS` +
+>      `CREATE TRIGGER` for idempotency; (d) the
+>      `v_listen_notify_channels` monitoring view; (e) RLS policies on
+>      all 3 notification tables (admin-only SELECT/UPDATE/DELETE for
+>      `notifications` + `notification_rules` +
+>      `notification_rule_recipients`; INSERT for `notifications` is
+>      authenticated-user since the app creates notifications from many
+>      non-admin contexts — mirrors migration `2026_08_30_000002`
+>      G-093/G-179). SQL copied VERBATIM from the migration heredocs (no
+>      paraphrasing).
+>   4. **`basic_data_snapshot.sql` L4371-4467** — replaced the 4
+>      migration-seeded `notification_rules` rows with the full 22 rows
+>      (4 migration-seeded return_* rules with IDs 1-4, keeping their
+>      original `created_at='2026-07-30 17:06:02'` + 18 seeder defaults
+>      with IDs 5-22, `created_at='2026-09-07 00:00:00'`, sourced from
+>      `NotificationRuleSeeder::DEFAULTS` — the 9 predefined business
+>      events + 2 sales-return sub-flows + 4 approval-workflow events +
+>      3 damage-invoice approval events) + added a new
+>      `notification_rule_recipients` block with 36 pivot rows (4
+>      migration-seeded + 32 seeder-default, one per recipient_type per
+>      rule).
+>
+> **9 migrations reconciled** (source of truth — read IN FULL before
+> editing the baseline):
+>   1. `2025_01_06_000001_create_notification_tables.php` — Laravel-
+>      standard `notifications` table + initial `notification_rules` schema.
+>   2. `2025_01_09_000003_seed_return_notification_rules.php` — seeds 4
+>      return_* rules (the original 4 rows in the snapshot).
+>   3. `2025_01_21_000001_add_listen_notify_triggers.php` — Task 31:
+>      `rcerp_notify()` helper + 7 trigger functions + 7 triggers +
+>      `v_listen_notify_channels` view.
+>   4. `2025_01_26_000001_notification_rules_multi_recipients.php` —
+>      creates `notification_rule_recipients` pivot + DROPS
+>      `recipient_type` + `recipient_user_id` from `notification_rules`.
+>   5. `2026_01_02_000001_damage_listen_notify_and_audit.php` —
+>      `rcerp_notify_damage()` + `trg_notify_damage_invoices`.
+>   6. `2026_08_30_000002_add_rls_mvs_notifications_approvals.php` — RLS
+>      policies on 3 notification tables (G-093 / G-179).
+>   7. `2026_09_05_000010_attach_financial_audit_trigger_to_notification_
+>      and_approval_tables.php` — audit triggers on `notification_rules` +
+>      `notification_rule_recipients` (ALREADY EXISTED in the baseline at
+>      L268-269 — verified only, no change needed).
+>   8. `2026_09_06_000001_add_notification_rules_menu.php` — menu entry
+>      (NOT DDL — skipped, no SQL baseline impact).
+>   9. `2026_09_07_000011_fix_rcerp_notify_system_policy_trigger.php` —
+>      MEDIUM-WAVE-2-A G-244 fix: replaces the broken
+>      `rcerp_notify_system_policy()` with the 3-case logic + recreates
+>      the trigger as `AFTER INSERT OR UPDATE` (was `AFTER UPDATE` only).
+>
+> **Verification (STRUCTURAL ONLY — no PHP binary in sandbox per wave
+> rules):** Python brace-balance check on all 3 modified SQL files (count
+> `(` vs `)` after stripping string literals + `--` line comments + `$$
+> ... $$` heredoc bodies) — all balanced (0 diff). Grep-verified: (a)
+> `rg -c "rcerp_notify" 07_views_triggers_constraints.sql` shows the
+> expected large count; (b) `rg -c "notification_rule_recipients"
+> 06_payment_and_misc.sql` shows the CREATE TABLE + 2 indexes + audit
+> trigger; (c) `rg -c "INSERT INTO.*notification_rules"
+> basic_data_snapshot.sql` shows 22; (d) `rg "notifiable_id|notifiable_type"
+> 06_payment_and_misc.sql` matches the Laravel-standard schema; (e) the
+> legacy `user_id` / `title` / `body` / `is_read` columns are GONE from
+> the notifications table DDL.
+>
+> **Caveat:** the LISTEN/NOTIFY SQL is copied VERBATIM from the migration
+> heredocs (no paraphrasing) — including the migration comments inside
+> the SQL. `php artisan migrate` remains the canonical install path; the
+> SQL baseline mirror is for DBA point-in-time recovery / documentation
+> parity. The orchestrator's docs-sync commit should run
+> `php artisan migrate:fresh --seed` on a CI host with PostgreSQL to
+> confirm runtime behavior matches the baseline. The RLS policies use the
+> `current_setting('app.is_admin', true) = 'true' OR (false)` pattern
+> (admin-only via the false condition + admin-bypass folded in) — matches
+> the migration's `createSelectPolicy`/`createInsertPolicy`/etc. helpers
+> exactly.
+
 ### G4 — HIGH — Worker not scheduled by Laravel cron; no in-repo supervisor/systemd config
 
 > ✅ **RESOLVED** (G-092). In-repo supervisor + systemd config templates now

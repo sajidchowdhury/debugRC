@@ -177,21 +177,32 @@ CREATE TABLE employee_transactions (
 CREATE INDEX idx_et_employee ON employee_transactions(employee_id);
 CREATE INDEX idx_et_journal ON employee_transactions(journal_entry_id);
 
--- ===================== NOTIFICATIONS =====================
+-- ===================== NOTIFICATIONS (Laravel-standard) =====================
+-- HIGH-WAVE-1 (G-091 / G-182): DDL baseline sync. Mirrors the FINAL post-
+-- migration state of migration `2025_01_06_000001_create_notification_tables.php`
+-- (drops the legacy Phase-2 `notifications` table + recreates with Laravel's
+-- standard polymorphic schema: uuid PK + notifiable_id + notifiable_type +
+-- type + jsonb data + read_at + timestamps). The legacy schema
+-- (`user_id`, `title`, `body`, `is_read`) is GONE — Laravel's Notification
+-- facade sends DatabaseNotification instances that require THIS shape.
+-- `php artisan migrate` remains the canonical install path; this block is
+-- the SQL baseline mirror for DBA point-in-time recovery / documentation
+-- parity with the migration-defined schema.
 CREATE TABLE notifications (
-    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    title varchar(200) NOT NULL,
-    body text,
-    type varchar(50),
-    reference_type varchar(30),
-    reference_id integer,
-    is_read boolean NOT NULL DEFAULT false,
-    read_at timestamp(0),
-    created_at timestamp(0) DEFAULT CURRENT_TIMESTAMP
+    id uuid PRIMARY KEY,
+    notifiable_id bigint NOT NULL,
+    notifiable_type varchar(255) NOT NULL,
+    type varchar(255) NOT NULL,
+    data jsonb NOT NULL,
+    read_at timestamp(0) WITHOUT TIME ZONE,
+    created_at timestamp(0) WITHOUT TIME ZONE,
+    updated_at timestamp(0) WITHOUT TIME ZONE
 );
-CREATE INDEX idx_notif_user ON notifications(user_id);
-CREATE INDEX idx_notif_is_read ON notifications(is_read);
+CREATE INDEX notifications_notifiable_type_notifiable_id_index ON notifications(notifiable_type, notifiable_id);
+-- Partial index for unread dropdown queries (WHERE read_at IS NULL) —
+-- explicitly created by migration `2025_01_06_000001` L49-53 to keep the
+-- inbox dropdown fast on tables with many read notifications.
+CREATE INDEX idx_notif_is_read ON notifications(read_at) WHERE read_at IS NULL;
 
 -- ===================== INVESTIGATION MODE =====================
 -- Phase 11 will simplify this to a simple admin toggle (no QR, no OTP).
@@ -255,6 +266,54 @@ CREATE INDEX idx_ual_user ON user_audit_log(user_id);
 CREATE INDEX idx_ual_action ON user_audit_log(action);
 -- BRIN replaces B-tree on created_at for append-only partitioned table
 CREATE INDEX idx_ual_created_at_brin ON user_audit_log USING BRIN (created_at) WITH (pages_per_range = 64);
+
+-- ===================== NOTIFICATION RULES + PIVOT (F-18b multi-recipients) =====================
+-- HIGH-WAVE-1 (G-091 / G-182): DDL baseline sync. Mirrors the FINAL post-
+-- migration state of 2 migrations:
+--   1. `2025_01_06_000001_create_notification_tables.php` — initial
+--      notification_rules schema (with single `recipient_type` +
+--      `recipient_user_id` columns).
+--   2. `2025_01_26_000001_notification_rules_multi_recipients.php` — creates
+--      the `notification_rule_recipients` pivot + backfills existing rules
+--      into the pivot + DROPS `recipient_type` + `recipient_user_id` columns
+--      from `notification_rules` (multi-recipient selection now lives in the
+--      pivot table — one rule → many recipient types).
+-- The FINAL schema below reflects the state AFTER migration #2 (the dropped
+-- columns are NOT here). `deleted_at` is added by the `NotificationRule` model's
+-- `use SoftDeletes;` declaration (verified at app/Models/NotificationRule.php:31).
+-- `created_by` is `foreignId` (bigint) but the migration does NOT add a FK
+-- constraint to `users(id)` — mirroring that decision here (no FK in the
+-- baseline either). `php artisan migrate` remains the canonical install path.
+CREATE TABLE notification_rules (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name varchar(255) NOT NULL,
+    event varchar(255) NOT NULL,
+    channel varchar(255) NOT NULL DEFAULT 'database',
+    is_active boolean NOT NULL DEFAULT true,
+    times_fired integer NOT NULL DEFAULT 0,
+    description text,
+    created_by bigint,
+    created_at timestamp(0) WITHOUT TIME ZONE,
+    updated_at timestamp(0) WITHOUT TIME ZONE,
+    deleted_at timestamp(0) WITHOUT TIME ZONE
+);
+CREATE INDEX notification_rules_event_index ON notification_rules(event);
+CREATE INDEX notification_rules_is_active_index ON notification_rules(is_active);
+
+-- Pivot table for multi-select recipient types per rule (F-18b).
+-- One rule → many recipient_type selections (admin, warehouse_manager_of_branch,
+-- salesman_of_invoice, invoice_creator, specific_user, etc.).
+-- `recipient_user_id` is only set for `specific_user` (NULL for all other types).
+CREATE TABLE notification_rule_recipients (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    notification_rule_id bigint NOT NULL REFERENCES notification_rules(id) ON DELETE CASCADE,
+    recipient_type varchar(255) NOT NULL,
+    recipient_user_id integer,
+    created_at timestamp(0) WITHOUT TIME ZONE,
+    updated_at timestamp(0) WITHOUT TIME ZONE
+);
+CREATE INDEX notification_rule_recipients_notification_rule_id_recipient_type_index ON notification_rule_recipients(notification_rule_id, recipient_type);
+CREATE INDEX notification_rule_recipients_recipient_type_index ON notification_rule_recipients(recipient_type);
 
 -- ── Audit triggers: notification config tables (WORKFLOWS-AUDIT-1 G-181) ────
 -- Attach fn_financial_audit_trigger to the 2 admin-managed notification config

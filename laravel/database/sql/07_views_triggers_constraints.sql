@@ -1795,3 +1795,616 @@ CREATE OR REPLACE VIEW v_ar_aging_today AS
 SELECT rcerp_ar_aging_cte(CURRENT_DATE, NULL) AS aging_data;
 
 -- End of MV + CTE baseline mirror (G-128/G-129, REPORTS-AUDIT-2).
+
+-- ============================================================
+-- HIGH-WAVE-1 (G-091 / G-182): LISTEN / NOTIFY + Notification-RLS baseline mirror.
+-- Mirrors the FINAL post-migration state of 4 migrations:
+--   - 2025_01_21_000001_add_listen_notify_triggers.php (Task 31 — rcerp_notify()
+--     helper + 7 trigger functions + 7 triggers + v_listen_notify_channels view)
+--   - 2026_01_02_000001_damage_listen_notify_and_audit.php (rcerp_notify_damage()
+--     + trg_notify_damage_invoices)
+--   - 2026_09_07_000011_fix_rcerp_notify_system_policy_trigger.php (MEDIUM-WAVE-2-A
+--     G-244 fix — REPLACES the original broken rcerp_notify_system_policy() with
+--     the 3-case logic + recreates trg_notify_system_policies as AFTER INSERT OR
+--     UPDATE instead of just AFTER UPDATE)
+--   - 2026_08_30_000002_add_rls_mvs_notifications_approvals.php (G-093 / G-179 —
+--     RLS policies on notifications + notification_rules + notification_rule_recipients)
+--
+-- `php artisan migrate` remains the canonical install path; this appendix is the
+-- SQL baseline mirror for DBA point-in-time recovery / documentation parity.
+-- The SQL below is copied VERBATIM from the migration heredocs (no paraphrasing)
+-- so the baseline exactly matches what the migrations produce.
+-- ============================================================
+
+-- ===================== LISTEN / NOTIFY TRIGGERS =====================
+-- PostgreSQL LISTEN/NOTIFY for Real-Time Updates.
+-- When key business events occur (invoice finalized, challan issued, payment
+-- received, etc.), a database trigger fires pg_notify() which pushes a JSON
+-- payload to a named channel. A long-running PHP worker (ListenNotifyWorker
+-- artisan command) LISTENs on these channels and forwards events to:
+--   1. Redis Pub/Sub (for SSE endpoint consumption)
+--   2. Laravel's NotificationService (for rule-based dispatch)
+--
+-- Channels:
+--   - rcerp_sales_invoice    — sales_invoices INSERT/UPDATE
+--   - rcerp_sales_challan    — sales_challans INSERT/UPDATE
+--   - rcerp_sales_return     — sales_returns INSERT/UPDATE
+--   - rcerp_customer_payment — customer_payments INSERT/UPDATE
+--   - rcerp_stock_change     — stock_transactions INSERT
+--   - rcerp_journal_entry    — journal_entries INSERT
+--   - rcerp_damage_change    — damage_invoices INSERT/UPDATE/DELETE
+--   - rcerp_system           — system_policies INSERT/UPDATE
+
+-- ============================================================
+-- 1. Helper function: rcerp_notify(channel, table, action, id, branch_id, changes)
+--    Central function to send structured notifications via pg_notify.
+--    All trigger functions delegate to this for consistent payload format.
+-- ============================================================
+CREATE OR REPLACE FUNCTION rcerp_notify(
+    p_channel   text,
+    p_table     text,
+    p_action    text,
+    p_id        integer,
+    p_branch_id integer DEFAULT NULL,
+    p_changes   jsonb  DEFAULT '{}'::jsonb
+)
+RETURNS void AS $$
+DECLARE
+    v_payload jsonb;
+BEGIN
+    v_payload := jsonb_build_object(
+        'table',        p_table,
+        'action',       p_action,
+        'id',           p_id,
+        'branch_id',    p_branch_id,
+        'changes',      p_changes,
+        'triggered_at', CURRENT_TIMESTAMP
+    );
+
+    PERFORM pg_notify(p_channel, v_payload::text);
+END;
+$$ LANGUAGE plpgsql
+;
+
+-- ============================================================
+-- 2. Trigger function: rcerp_notify_sales_invoice()
+--    Fires on sales_invoices INSERT and UPDATE.
+--    On INSERT: notifies with key fields (status, customer_id, total).
+--    On UPDATE: only notifies if important columns changed
+--      (status, is_godown_prepared, is_challan_issued, is_reversed,
+--       total_amount, paid_amount, call_a_day).
+-- ============================================================
+CREATE OR REPLACE FUNCTION rcerp_notify_sales_invoice()
+RETURNS trigger AS $$
+DECLARE
+    v_changes jsonb := '{}'::jsonb;
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        v_changes := jsonb_build_object(
+            'status',            NEW.status,
+            'customer_id',       NEW.customer_id,
+            'total_amount',      NEW.total_amount,
+            'is_godown_prepared', NEW.is_godown_prepared,
+            'is_challan_issued',  NEW.is_challan_issued
+        );
+        PERFORM rcerp_notify('rcerp_sales_invoice', TG_TABLE_NAME, 'INSERT', NEW.id, NEW.branch_id, v_changes);
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'UPDATE' THEN
+        -- Only notify on meaningful column changes (avoid noise from updated_at)
+        IF NEW.status            IS DISTINCT FROM OLD.status OR
+           NEW.is_godown_prepared IS DISTINCT FROM OLD.is_godown_prepared OR
+           NEW.is_challan_issued  IS DISTINCT FROM OLD.is_challan_issued OR
+           NEW.is_reversed        IS DISTINCT FROM OLD.is_reversed OR
+           NEW.total_amount       IS DISTINCT FROM OLD.total_amount OR
+           NEW.paid_amount        IS DISTINCT FROM OLD.paid_amount OR
+           NEW.call_a_day      IS DISTINCT FROM OLD.call_a_day
+        THEN
+            -- Build changes object with only the changed columns
+            v_changes := '{}'::jsonb;
+            IF NEW.status IS DISTINCT FROM OLD.status THEN
+                v_changes := jsonb_set(v_changes, '{status}', to_jsonb(NEW.status));
+            END IF;
+            IF NEW.is_godown_prepared IS DISTINCT FROM OLD.is_godown_prepared THEN
+                v_changes := jsonb_set(v_changes, '{is_godown_prepared}', to_jsonb(NEW.is_godown_prepared));
+            END IF;
+            IF NEW.is_challan_issued IS DISTINCT FROM OLD.is_challan_issued THEN
+                v_changes := jsonb_set(v_changes, '{is_challan_issued}', to_jsonb(NEW.is_challan_issued));
+            END IF;
+            IF NEW.is_reversed IS DISTINCT FROM OLD.is_reversed THEN
+                v_changes := jsonb_set(v_changes, '{is_reversed}', to_jsonb(NEW.is_reversed));
+            END IF;
+            IF NEW.total_amount IS DISTINCT FROM OLD.total_amount THEN
+                v_changes := jsonb_set(v_changes, '{total_amount}', to_jsonb(NEW.total_amount));
+            END IF;
+            IF NEW.paid_amount IS DISTINCT FROM OLD.paid_amount THEN
+                v_changes := jsonb_set(v_changes, '{paid_amount}', to_jsonb(NEW.paid_amount));
+            END IF;
+            IF NEW.call_a_day IS DISTINCT FROM OLD.call_a_day THEN
+                v_changes := jsonb_set(v_changes, '{call_a_day}', to_jsonb(NEW.call_a_day));
+            END IF;
+
+            PERFORM rcerp_notify('rcerp_sales_invoice', TG_TABLE_NAME, 'UPDATE', NEW.id, NEW.branch_id, v_changes);
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql
+;
+
+-- ============================================================
+-- 3. Trigger function: rcerp_notify_sales_challan()
+--    Fires on sales_challans INSERT and UPDATE.
+--    Tracks status changes and reversal flags.
+-- ============================================================
+CREATE OR REPLACE FUNCTION rcerp_notify_sales_challan()
+RETURNS trigger AS $$
+DECLARE
+    v_changes jsonb := '{}'::jsonb;
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        -- sales_challans has no `status` column — use is_reversed and
+        -- is_dispatch_soft_hold as the state flags. The invoice link is
+        -- sales_invoice_id (not invoice_id).
+        v_changes := jsonb_build_object(
+            'sales_invoice_id',     NEW.sales_invoice_id,
+            'is_reversed',          NEW.is_reversed,
+            'is_dispatch_soft_hold', NEW.is_dispatch_soft_hold
+        );
+        PERFORM rcerp_notify('rcerp_sales_challan', TG_TABLE_NAME, 'INSERT', NEW.id, NEW.branch_id, v_changes);
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.is_reversed          IS DISTINCT FROM OLD.is_reversed OR
+           NEW.is_dispatch_soft_hold IS DISTINCT FROM OLD.is_dispatch_soft_hold
+        THEN
+            IF NEW.is_reversed IS DISTINCT FROM OLD.is_reversed THEN
+                v_changes := jsonb_set(v_changes, '{is_reversed}', to_jsonb(NEW.is_reversed));
+            END IF;
+            IF NEW.is_dispatch_soft_hold IS DISTINCT FROM OLD.is_dispatch_soft_hold THEN
+                v_changes := jsonb_set(v_changes, '{is_dispatch_soft_hold}', to_jsonb(NEW.is_dispatch_soft_hold));
+            END IF;
+            PERFORM rcerp_notify('rcerp_sales_challan', TG_TABLE_NAME, 'UPDATE', NEW.id, NEW.branch_id, v_changes);
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql
+;
+
+-- ============================================================
+-- 4. Trigger function: rcerp_notify_sales_return()
+--    Fires on sales_returns INSERT and UPDATE.
+--    Tracks status progression (pending → confirmed → reversed).
+-- ============================================================
+CREATE OR REPLACE FUNCTION rcerp_notify_sales_return()
+RETURNS trigger AS $$
+DECLARE
+    v_changes jsonb := '{}'::jsonb;
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        -- sales_returns has `status` (created/confirmed/reversed) and
+        -- `sales_invoice_id` (not invoice_id).
+        v_changes := jsonb_build_object(
+            'status',          NEW.status,
+            'sales_invoice_id', NEW.sales_invoice_id,
+            'is_reversed',     NEW.is_reversed
+        );
+        PERFORM rcerp_notify('rcerp_sales_return', TG_TABLE_NAME, 'INSERT', NEW.id, NEW.branch_id, v_changes);
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.status      IS DISTINCT FROM OLD.status OR
+           NEW.is_reversed IS DISTINCT FROM OLD.is_reversed
+        THEN
+            IF NEW.status IS DISTINCT FROM OLD.status THEN
+                v_changes := jsonb_set(v_changes, '{status}', to_jsonb(NEW.status));
+            END IF;
+            IF NEW.is_reversed IS DISTINCT FROM OLD.is_reversed THEN
+                v_changes := jsonb_set(v_changes, '{is_reversed}', to_jsonb(NEW.is_reversed));
+            END IF;
+            PERFORM rcerp_notify('rcerp_sales_return', TG_TABLE_NAME, 'UPDATE', NEW.id, NEW.branch_id, v_changes);
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql
+;
+
+-- ============================================================
+-- 5. Trigger function: rcerp_notify_customer_payment()
+--    Fires on customer_payments INSERT and UPDATE.
+--    Tracks status and amount changes.
+-- ============================================================
+CREATE OR REPLACE FUNCTION rcerp_notify_customer_payment()
+RETURNS trigger AS $$
+DECLARE
+    v_changes jsonb := '{}'::jsonb;
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        -- customer_payments has no `status` column — use is_reversed and
+        -- payment_mode for state. transaction_type is added by migration
+        -- 2025_01_09_000005 (which runs before this one).
+        v_changes := jsonb_build_object(
+            'transaction_type', NEW.transaction_type,
+            'payment_mode',     NEW.payment_mode,
+            'amount',           NEW.amount,
+            'customer_id',      NEW.customer_id
+        );
+        PERFORM rcerp_notify('rcerp_customer_payment', TG_TABLE_NAME, 'INSERT', NEW.id, NEW.branch_id, v_changes);
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.is_reversed      IS DISTINCT FROM OLD.is_reversed OR
+           NEW.amount           IS DISTINCT FROM OLD.amount
+        THEN
+            IF NEW.is_reversed IS DISTINCT FROM OLD.is_reversed THEN
+                v_changes := jsonb_set(v_changes, '{is_reversed}', to_jsonb(NEW.is_reversed));
+            END IF;
+            IF NEW.amount IS DISTINCT FROM OLD.amount THEN
+                v_changes := jsonb_set(v_changes, '{amount}', to_jsonb(NEW.amount));
+            END IF;
+            PERFORM rcerp_notify('rcerp_customer_payment', TG_TABLE_NAME, 'UPDATE', NEW.id, NEW.branch_id, v_changes);
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql
+;
+
+-- ============================================================
+-- 6. Trigger function: rcerp_notify_stock_change()
+--    Fires on stock_transactions INSERT only.
+--    Notifies for real-time stock level updates (dashboard, availability).
+-- ============================================================
+CREATE OR REPLACE FUNCTION rcerp_notify_stock_change()
+RETURNS trigger AS $$
+DECLARE
+    v_branch_id integer;
+BEGIN
+    -- stock_transactions has no branch_id column directly — look it up
+    -- from the warehouse. qty and rate are the actual column names
+    -- (not qty_change / avg_cost).
+    SELECT w.branch_id INTO v_branch_id
+    FROM warehouses w
+    WHERE w.id = NEW.warehouse_id;
+
+    PERFORM rcerp_notify('rcerp_stock_change', TG_TABLE_NAME, 'INSERT', NEW.id, v_branch_id,
+        jsonb_build_object(
+            'product_id',     NEW.product_id,
+            'warehouse_id',   NEW.warehouse_id,
+            'reference_type', NEW.reference_type,
+            'reference_id',   NEW.reference_id,
+            'qty',            NEW.qty,
+            'rate',           NEW.rate
+        )
+    );
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql
+;
+
+-- ============================================================
+-- 7. Trigger function: rcerp_notify_journal_entry()
+--    Fires on journal_entries INSERT only.
+--    Notifies for real-time GL dashboard updates.
+-- ============================================================
+CREATE OR REPLACE FUNCTION rcerp_notify_journal_entry()
+RETURNS trigger AS $$
+BEGIN
+    PERFORM rcerp_notify('rcerp_journal_entry', TG_TABLE_NAME, 'INSERT', NEW.id, NEW.branch_id,
+        jsonb_build_object(
+            'entry_no',       NEW.entry_no,
+            'reference_type', NEW.reference_type,
+            'reference_id',   NEW.reference_id,
+            'is_reversed',    NEW.is_reversed
+        )
+    );
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql
+;
+
+-- ============================================================
+-- 8. Trigger function: rcerp_notify_system_policy()
+--    MEDIUM-WAVE-2-A (G-244) — 3-case logic from migration
+--    2026_09_07_000011_fix_rcerp_notify_system_policy_trigger.php.
+--    This REPLACES the original broken version from migration
+--    2025_01_21_000001 (which only fired on UPDATE with NEW.mode IS
+--    DISTINCT FROM OLD.mode — never triggered by SystemPolicyService).
+--    Fires on system_policies INSERT (new active policy) + UPDATE
+--    (is_active true→false or mode change). Notifies for policy
+--    activations / deactivations.
+-- ============================================================
+CREATE OR REPLACE FUNCTION rcerp_notify_system_policy()
+RETURNS trigger AS $$
+DECLARE
+    v_old_mode text;
+    v_new_mode text;
+    v_action   text;
+BEGIN
+    -- Case 1: INSERT of a new active policy.
+    -- Captures SystemPolicyService::activate() step 2 (the new policy
+    -- INSERT). The just-deactivated prior policy (step 1 UPDATE) is in the
+    -- same transaction, so we look up its mode as old_mode. If no prior
+    -- policy existed (first-ever activation), old_mode defaults to NORMAL.
+    IF TG_OP = 'INSERT' AND NEW.is_active = true THEN
+        SELECT mode INTO v_old_mode
+        FROM system_policies
+        WHERE is_active = false
+          AND deactivated_at IS NOT NULL
+          AND id <> NEW.id
+        ORDER BY deactivated_at DESC
+        LIMIT 1;
+
+        v_old_mode := COALESCE(v_old_mode, 'NORMAL');
+        v_new_mode := NEW.mode;
+        v_action   := 'INSERT';
+
+        PERFORM rcerp_notify('rcerp_system', TG_TABLE_NAME, v_action, NEW.id, NULL,
+            jsonb_build_object(
+                'policy_id', NEW.id,
+                'old_mode',  v_old_mode,
+                'new_mode',  v_new_mode
+            )
+        );
+        RETURN NEW;
+    END IF;
+
+    -- Case 2: UPDATE on is_active from true to false.
+    -- Captures BOTH SystemPolicyService::deactivate() (no following INSERT —
+    -- the policy returns to NORMAL) AND activate() step 1 (the prior policy
+    -- is being deactivated; the following INSERT in step 2 will emit its
+    -- own event under Case 1 with the real new_mode). new_mode for this
+    -- case is 'NORMAL' (no active policy after this UPDATE).
+    IF TG_OP = 'UPDATE' AND OLD.is_active = true AND NEW.is_active = false THEN
+        v_old_mode := OLD.mode;
+        v_new_mode := 'NORMAL';
+        v_action   := 'DEACTIVATE';
+
+        PERFORM rcerp_notify('rcerp_system', TG_TABLE_NAME, v_action, NEW.id, NULL,
+            jsonb_build_object(
+                'policy_id', NEW.id,
+                'old_mode',  v_old_mode,
+                'new_mode',  v_new_mode
+            )
+        );
+        RETURN NEW;
+    END IF;
+
+    -- Case 3 (defensive, original behaviour): UPDATE on mode change.
+    -- The current SystemPolicyService NEVER updates `mode` on an existing
+    -- row (it INSERTs a new row instead), so this case is dead in practice.
+    -- It is retained for safety: a future DBA hot-fix or a new code path
+    -- that does an in-place mode change will still emit a notification.
+    IF TG_OP = 'UPDATE' AND NEW.mode IS DISTINCT FROM OLD.mode THEN
+        v_old_mode := OLD.mode;
+        v_new_mode := NEW.mode;
+        v_action   := 'UPDATE';
+
+        PERFORM rcerp_notify('rcerp_system', TG_TABLE_NAME, v_action, NEW.id, NULL,
+            jsonb_build_object(
+                'policy_id', NEW.id,
+                'old_mode',  v_old_mode,
+                'new_mode',  v_new_mode
+            )
+        );
+        RETURN NEW;
+    END IF;
+
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql
+;
+
+-- ============================================================
+-- 9. Trigger function: rcerp_notify_damage()
+--    Fires on damage_invoices INSERT / UPDATE / DELETE.
+--    On INSERT: notifies with damage_type + status + total_value.
+--    On UPDATE: only notifies if a meaningful column changed
+--      (status, is_reversed, total_value, damage_type,
+--       journal_entry_id, branch_id, warehouse_id).
+--    On DELETE: always notifies (row removed → index must refresh).
+-- ============================================================
+CREATE OR REPLACE FUNCTION rcerp_notify_damage()
+RETURNS trigger AS $$
+DECLARE
+    v_changes jsonb := '{}'::jsonb;
+    v_id      integer;
+    v_branch  integer;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        -- DELETE has no NEW row; use OLD for id + branch_id so branch-
+        -- scoped SSE clients still receive the removal event.
+        v_id     := OLD.id;
+        v_branch := OLD.branch_id;
+        v_changes := jsonb_build_object('status', OLD.status, 'is_reversed', OLD.is_reversed);
+        PERFORM rcerp_notify('rcerp_damage_change', TG_TABLE_NAME, 'DELETE', v_id, v_branch, v_changes);
+        RETURN OLD;
+    END IF;
+
+    -- INSERT
+    IF TG_OP = 'INSERT' THEN
+        v_changes := jsonb_build_object(
+            'status',           NEW.status,
+            'damage_type',      NEW.damage_type,
+            'total_value',      NEW.total_value,
+            'is_reversed',      NEW.is_reversed,
+            'journal_entry_id', NEW.journal_entry_id
+        );
+        PERFORM rcerp_notify('rcerp_damage_change', TG_TABLE_NAME, 'INSERT', NEW.id, NEW.branch_id, v_changes);
+        RETURN NEW;
+    END IF;
+
+    -- UPDATE: only notify on meaningful changes (skip updated_at noise).
+    IF NEW.status           IS DISTINCT FROM OLD.status OR
+       NEW.is_reversed      IS DISTINCT FROM OLD.is_reversed OR
+       NEW.total_value      IS DISTINCT FROM OLD.total_value OR
+       NEW.damage_type      IS DISTINCT FROM OLD.damage_type OR
+       NEW.journal_entry_id IS DISTINCT FROM OLD.journal_entry_id OR
+       NEW.branch_id        IS DISTINCT FROM OLD.branch_id OR
+       NEW.warehouse_id     IS DISTINCT FROM OLD.warehouse_id
+    THEN
+        IF NEW.status IS DISTINCT FROM OLD.status THEN
+            v_changes := jsonb_set(v_changes, '{status}', to_jsonb(NEW.status));
+        END IF;
+        IF NEW.is_reversed IS DISTINCT FROM OLD.is_reversed THEN
+            v_changes := jsonb_set(v_changes, '{is_reversed}', to_jsonb(NEW.is_reversed));
+        END IF;
+        IF NEW.total_value IS DISTINCT FROM OLD.total_value THEN
+            v_changes := jsonb_set(v_changes, '{total_value}', to_jsonb(NEW.total_value));
+        END IF;
+        IF NEW.damage_type IS DISTINCT FROM OLD.damage_type THEN
+            v_changes := jsonb_set(v_changes, '{damage_type}', to_jsonb(NEW.damage_type));
+        END IF;
+        IF NEW.journal_entry_id IS DISTINCT FROM OLD.journal_entry_id THEN
+            -- journal_entry_id is nullable: to_jsonb(NULL) returns SQL NULL,
+            -- which would nullify the whole v_changes object via jsonb_set.
+            -- COALESCE to JSON 'null' so the key is recorded as a JSON null
+            -- instead (matches the INSERT branch's jsonb_build_object behaviour).
+            v_changes := jsonb_set(v_changes, '{journal_entry_id}', COALESCE(to_jsonb(NEW.journal_entry_id), 'null'::jsonb));
+        END IF;
+        IF NEW.branch_id IS DISTINCT FROM OLD.branch_id THEN
+            v_changes := jsonb_set(v_changes, '{branch_id}', to_jsonb(NEW.branch_id));
+        END IF;
+        IF NEW.warehouse_id IS DISTINCT FROM OLD.warehouse_id THEN
+            v_changes := jsonb_set(v_changes, '{warehouse_id}', to_jsonb(NEW.warehouse_id));
+        END IF;
+
+        PERFORM rcerp_notify('rcerp_damage_change', TG_TABLE_NAME, 'UPDATE', NEW.id, NEW.branch_id, v_changes);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql
+;
+
+-- ============================================================
+-- 10. Attach triggers to tables.
+--     DROP TRIGGER IF EXISTS before CREATE TRIGGER for idempotency on
+--     re-runs (mirrors the migration pattern + the existing baseline
+--     convention at L341 trg_audit_system_policies + L709
+--     trg_stw_no_overlapping_frozen).
+-- ============================================================
+DROP TRIGGER IF EXISTS trg_notify_sales_invoices ON sales_invoices;
+CREATE TRIGGER trg_notify_sales_invoices
+    AFTER INSERT OR UPDATE ON sales_invoices
+    FOR EACH ROW EXECUTE FUNCTION rcerp_notify_sales_invoice();
+
+DROP TRIGGER IF EXISTS trg_notify_sales_challans ON sales_challans;
+CREATE TRIGGER trg_notify_sales_challans
+    AFTER INSERT OR UPDATE ON sales_challans
+    FOR EACH ROW EXECUTE FUNCTION rcerp_notify_sales_challan();
+
+DROP TRIGGER IF EXISTS trg_notify_sales_returns ON sales_returns;
+CREATE TRIGGER trg_notify_sales_returns
+    AFTER INSERT OR UPDATE ON sales_returns
+    FOR EACH ROW EXECUTE FUNCTION rcerp_notify_sales_return();
+
+DROP TRIGGER IF EXISTS trg_notify_customer_payments ON customer_payments;
+CREATE TRIGGER trg_notify_customer_payments
+    AFTER INSERT OR UPDATE ON customer_payments
+    FOR EACH ROW EXECUTE FUNCTION rcerp_notify_customer_payment();
+
+DROP TRIGGER IF EXISTS trg_notify_stock_transactions ON stock_transactions;
+CREATE TRIGGER trg_notify_stock_transactions
+    AFTER INSERT ON stock_transactions
+    FOR EACH ROW EXECUTE FUNCTION rcerp_notify_stock_change();
+
+DROP TRIGGER IF EXISTS trg_notify_journal_entries ON journal_entries;
+CREATE TRIGGER trg_notify_journal_entries
+    AFTER INSERT ON journal_entries
+    FOR EACH ROW EXECUTE FUNCTION rcerp_notify_journal_entry();
+
+DROP TRIGGER IF EXISTS trg_notify_damage_invoices ON damage_invoices;
+CREATE TRIGGER trg_notify_damage_invoices
+    AFTER INSERT OR UPDATE OR DELETE ON damage_invoices
+    FOR EACH ROW EXECUTE FUNCTION rcerp_notify_damage();
+
+-- system_policies: drop BOTH the canonical plural name + the defensive
+-- singular-name variant (in case a prior partial run of migration
+-- 2026_09_07_000011 created it under the singular name). The canonical
+-- name (per 2025_01_21_000001 convention `trg_notify_<table>`) is the
+-- plural form `trg_notify_system_policies`.
+DROP TRIGGER IF EXISTS trg_notify_system_policies ON system_policies;
+DROP TRIGGER IF EXISTS trg_notify_system_policy ON system_policies;
+CREATE TRIGGER trg_notify_system_policies
+    AFTER INSERT OR UPDATE ON system_policies
+    FOR EACH ROW EXECUTE FUNCTION rcerp_notify_system_policy();
+
+-- ============================================================
+-- 11. Monitoring view: v_listen_notify_channels
+--     Shows active LISTEN/NOTIFY activity via pg_stat_activity.
+-- ============================================================
+CREATE OR REPLACE VIEW v_listen_notify_channels AS
+SELECT
+    pid,
+    usename,
+    application_name,
+    client_addr,
+    backend_start,
+    query_start,
+    state,
+    query
+FROM pg_stat_activity
+WHERE query ILIKE '%LISTEN%'
+   OR query ILIKE '%rcerp_%'
+ORDER BY backend_start DESC
+;
+
+-- ============================================================
+-- 12. RLS policies on the 3 notification tables (G-093 / G-179).
+--     Mirrors migration 2026_08_30_000002_add_rls_mvs_notifications_approvals.php
+--     (the G-093/G-179 section). Admin-only SELECT/UPDATE/DELETE for all
+--     3 tables; INSERT for `notifications` is authenticated-user (app
+--     creates notifications from many non-admin contexts like
+--     sales_invoice finalize). The user-scoped SELECT policy
+--     (notifiable_id = current_setting('app.user_id', true)::bigint)
+--     would be the correct long-term fix, BUT the `app.user_id` GUC is
+--     NOT set by any middleware (verified by grep on app/Http/Middleware/
+--     — only `app.branch_id` + `app.is_admin` + `app.request_*` audit-
+--     trail GUCs are set). Admin-only is the safe interim posture.
+--     notification_rules + notification_rule_recipients are admin-managed
+--     config (route middleware `role:admin`) — admin-only for ALL verbs.
+-- ============================================================
+
+-- --- notifications ---
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_notifications_select ON notifications FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR (false));
+CREATE POLICY rls_notifications_insert ON notifications FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR (current_setting('app.branch_id', true) IS NOT NULL));
+CREATE POLICY rls_notifications_update ON notifications FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR (false)) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR (false));
+CREATE POLICY rls_notifications_delete ON notifications FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR (false));
+CREATE POLICY rls_notifications_admin ON notifications FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+-- --- notification_rules ---
+ALTER TABLE notification_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_rules FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_notification_rules_select ON notification_rules FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR (false));
+CREATE POLICY rls_notification_rules_insert ON notification_rules FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR (false));
+CREATE POLICY rls_notification_rules_update ON notification_rules FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR (false)) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR (false));
+CREATE POLICY rls_notification_rules_delete ON notification_rules FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR (false));
+CREATE POLICY rls_notification_rules_admin ON notification_rules FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+-- --- notification_rule_recipients ---
+ALTER TABLE notification_rule_recipients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_rule_recipients FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_notification_rule_recipients_select ON notification_rule_recipients FOR SELECT USING (current_setting('app.is_admin', true) = 'true' OR (false));
+CREATE POLICY rls_notification_rule_recipients_insert ON notification_rule_recipients FOR INSERT WITH CHECK (current_setting('app.is_admin', true) = 'true' OR (false));
+CREATE POLICY rls_notification_rule_recipients_update ON notification_rule_recipients FOR UPDATE USING (current_setting('app.is_admin', true) = 'true' OR (false)) WITH CHECK (current_setting('app.is_admin', true) = 'true' OR (false));
+CREATE POLICY rls_notification_rule_recipients_delete ON notification_rule_recipients FOR DELETE USING (current_setting('app.is_admin', true) = 'true' OR (false));
+CREATE POLICY rls_notification_rule_recipients_admin ON notification_rule_recipients FOR ALL USING (current_setting('app.is_admin', true) = 'true') WITH CHECK (current_setting('app.is_admin', true) = 'true');
+
+-- End of HIGH-WAVE-1 LISTEN/NOTIFY + Notification-RLS baseline mirror (G-091 / G-182).
