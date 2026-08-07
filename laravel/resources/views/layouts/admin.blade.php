@@ -383,10 +383,16 @@
         </div>
     </div>
 
-    {{-- ==================== STICKY FOOTER (no-print) ==================== --}}
-    <footer class="no-print shrink-0 bg-amber-900 text-amber-100 py-3 text-center text-xs mt-auto">
-        Remote Center — code with love and coffee by mycreativecode © {{ date('Y') }}
-    </footer>
+    {{-- ==================== FOOTER REMOVED ====================
+        The standalone amber footer bar has been removed. The floating
+        "🧭 My Creative Code Guide" pill (Door 2 of the help system) —
+        rendered by @include('partials.help-system') below — now serves
+        as the single persistent bottom element. It opens the module
+        browser (8 modules / 215 menus) AND carries the brand mark.
+        No separate footer is needed. The body uses min-h-screen +
+        flex-col + flex-1 on the content container, so removing this
+        block leaves no layout gap (the floating pill is position:fixed).
+    --}}
 
     {{-- ==================== SCRIPTS ==================== --}}
     <script src="/assets/js/bootstrep/bootstrap.bundle.min.js"></script>
