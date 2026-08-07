@@ -30,6 +30,28 @@ class HelpService
     private const CACHE_KEY_MODULES = 'help:modules';
     private const CACHE_KEY_DIAGRAMS = 'help:diagrams';
 
+    /**
+     * Build a cache key that includes the source file's modification time.
+     *
+     * This makes the cache AUTO-BUST whenever the file is edited — e.g.
+     * after deploying new help content or fixing a registry mapping. The
+     * old stale cache entry lingers until its TTL expires (harmless),
+     * while the new mtime suffix ensures the next request loads fresh
+     * data immediately. Without this, the static cache key would return
+     * stale data for up to 86400 s after a file change, causing the `?`
+     * help button to show empty-state on pages whose help was recently
+     * added or rewritten.
+     *
+     * @param  string $base  e.g. 'help:registry'
+     * @param  string $path  Absolute path to the source .php file
+     * @return string        e.g. 'help:registry:1700000000'
+     */
+    private function mtimeKey(string $base, string $path): string
+    {
+        $mtime = is_file($path) ? (int) filemtime($path) : 0;
+        return $base . ':' . $mtime;
+    }
+
     /** @var array<string,string>|null */
     private ?array $registry = null;
 
@@ -226,9 +248,11 @@ class HelpService
             return $this->registry;
         }
 
+        $path = resource_path('help/registry.php');
+        $key  = $this->mtimeKey(self::CACHE_KEY_REGISTRY, $path);
+
         /** @var array<string,string> $cached */
-        $cached = Cache::remember(self::CACHE_KEY_REGISTRY, self::CACHE_TTL, function (): array {
-            $path = resource_path('help/registry.php');
+        $cached = Cache::remember($key, self::CACHE_TTL, function () use ($path): array {
             if (!is_file($path)) {
                 return [];
             }
@@ -249,9 +273,11 @@ class HelpService
             return $this->actionRegistry;
         }
 
+        $path = resource_path('help/action-registry.php');
+        $key  = $this->mtimeKey(self::CACHE_KEY_ACTION_REGISTRY, $path);
+
         /** @var array<string,string> $cached */
-        $cached = Cache::remember(self::CACHE_KEY_ACTION_REGISTRY, self::CACHE_TTL, function (): array {
-            $path = resource_path('help/action-registry.php');
+        $cached = Cache::remember($key, self::CACHE_TTL, function () use ($path): array {
             if (!is_file($path)) {
                 return [];
             }
@@ -272,9 +298,11 @@ class HelpService
             return $this->modules;
         }
 
+        $path = resource_path('help/modules.php');
+        $key  = $this->mtimeKey(self::CACHE_KEY_MODULES, $path);
+
         /** @var array<string,array<string,mixed>> $cached */
-        $cached = Cache::remember(self::CACHE_KEY_MODULES, self::CACHE_TTL, function (): array {
-            $path = resource_path('help/modules.php');
+        $cached = Cache::remember($key, self::CACHE_TTL, function () use ($path): array {
             if (!is_file($path)) {
                 return [];
             }
@@ -297,9 +325,11 @@ class HelpService
             return $this->diagrams;
         }
 
+        $path = resource_path('help/diagrams.php');
+        $key  = $this->mtimeKey(self::CACHE_KEY_DIAGRAMS, $path);
+
         /** @var array<string,string> $cached */
-        $cached = Cache::remember(self::CACHE_KEY_DIAGRAMS, self::CACHE_TTL, function (): array {
-            $path = resource_path('help/diagrams.php');
+        $cached = Cache::remember($key, self::CACHE_TTL, function () use ($path): array {
             if (!is_file($path)) {
                 return [];
             }
@@ -312,17 +342,36 @@ class HelpService
     }
 
     /**
-     * Invalidate the cached registry + action-registry + modules + diagrams
-     * (called when content files change, e.g. after authoring new help content).
+     * Invalidate the cached registry + action-registry + modules + diagrams.
+     *
+     * With the mtime-based cache keys (see mtimeKey()), this is mostly a
+     * no-op for Redis — the static-base keys below only match entries
+     * cached by the OLD (pre-mtime) code. New entries use mtime-suffixed
+     * keys that auto-bust when the source file is edited. The in-memory
+     * properties are always reset so the next call re-reads from disk.
      *
      * @return void
      */
     public function clearCache(): void
     {
+        // Forget legacy static-key entries (pre-mtime code).
         Cache::forget(self::CACHE_KEY_REGISTRY);
         Cache::forget(self::CACHE_KEY_ACTION_REGISTRY);
         Cache::forget(self::CACHE_KEY_MODULES);
         Cache::forget(self::CACHE_KEY_DIAGRAMS);
+
+        // Also forget the current mtime-based keys.
+        $files = [
+            self::CACHE_KEY_REGISTRY         => resource_path('help/registry.php'),
+            self::CACHE_KEY_ACTION_REGISTRY  => resource_path('help/action-registry.php'),
+            self::CACHE_KEY_MODULES          => resource_path('help/modules.php'),
+            self::CACHE_KEY_DIAGRAMS         => resource_path('help/diagrams.php'),
+        ];
+        foreach ($files as $base => $path) {
+            Cache::forget($this->mtimeKey($base, $path));
+        }
+
+        // Reset in-memory state so the next access re-reads from disk.
         $this->registry = null;
         $this->actionRegistry = null;
         $this->modules = null;
