@@ -47,6 +47,7 @@ use App\Http\Controllers\Admin\SalesReturnController;
 use App\Http\Controllers\Admin\SalesGuideController;
 use App\Http\Controllers\Admin\GoLiveChecklistController;
 use App\Http\Controllers\Admin\AccountingPeriodController;
+use App\Http\Controllers\Admin\ApprovalController;
 use App\Http\Controllers\SseController;
 use App\Http\Controllers\Admin\NotificationController;
 use App\Http\Controllers\Admin\SystemPolicyController;
