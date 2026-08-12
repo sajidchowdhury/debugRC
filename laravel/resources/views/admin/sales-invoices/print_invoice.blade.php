@@ -49,9 +49,14 @@
 
     $invoiceDate = \Carbon\Carbon::parse($invoice->invoice_date);
 
-    // Branch invoice settings
-    $headerImage = $branch?->invoice_header_image ? Storage::disk('public')->path($branch->invoice_header_image) : null;
-    $footerImage = $branch?->invoice_footer_image ? Storage::disk('public')->path($branch->invoice_footer_image) : null;
+    // Branch invoice settings — use URL for browser, path for DomPDF
+    $isPdfMode = request()->input('mode') === 'pdf';
+    $headerImage = $branch?->invoice_header_image
+        ? ($isPdfMode ? Storage::disk('public')->path($branch->invoice_header_image) : Storage::disk('public')->url($branch->invoice_header_image))
+        : null;
+    $footerImage = $branch?->invoice_footer_image
+        ? ($isPdfMode ? Storage::disk('public')->path($branch->invoice_footer_image) : Storage::disk('public')->url($branch->invoice_footer_image))
+        : null;
     $headerText = $branch?->invoice_header_text;
     $footerText = $branch?->invoice_footer_text;
     $watermarkText = $branch?->invoice_watermark_text ?? ($branch?->company?->company_name ?? '');
@@ -59,9 +64,9 @@
     $signatoryTitle = $branch?->invoice_signatory_title;
     $termsText = $branch?->invoice_terms;
 
-    // Check if header image file exists
-    $hasHeaderImage = $headerImage && file_exists($headerImage);
-    $hasFooterImage = $footerImage && file_exists($footerImage);
+    // Check if header/footer image exists
+    $hasHeaderImage = $headerImage && ($isPdfMode ? file_exists($headerImage) : true);
+    $hasFooterImage = $footerImage && ($isPdfMode ? file_exists($footerImage) : true);
 @endphp
 
 <!DOCTYPE html>
@@ -78,8 +83,8 @@
         * { box-sizing: border-box; }
         body {
             font-family: 'Noto Sans SC', 'Noto Sans Bengali', 'SolaimanLipi', 'Arial', sans-serif;
-            font-size: 11px;
-            line-height: 1.4;
+            font-size: 13px;
+            line-height: 1.45;
             color: #000;
             margin: 0;
             padding: 0;
@@ -125,7 +130,7 @@
         }
         .header-text-section {
             padding: 4px 0;
-            font-size: 10px;
+            font-size: 12px;
         }
 
         /* === Metadata fields (bordered boxes) === */
@@ -136,8 +141,8 @@
         }
         .meta-table td {
             border: 1px solid #000;
-            padding: 3px 6px;
-            font-size: 11px;
+            padding: 4px 7px;
+            font-size: 13px;
             vertical-align: top;
         }
         .meta-table .meta-label {
@@ -156,9 +161,9 @@
         }
         .product-table th {
             border: 1px solid #000;
-            padding: 4px 5px;
+            padding: 5px 6px;
             font-weight: bold;
-            font-size: 11px;
+            font-size: 13px;
             text-align: center;
             background: #f5f5f5;
         }
@@ -167,8 +172,8 @@
         }
         .product-table td {
             border: 1px solid #000;
-            padding: 3px 5px;
-            font-size: 11px;
+            padding: 4px 6px;
+            font-size: 13px;
         }
         .product-table td.col-sl {
             text-align: center;
@@ -193,7 +198,7 @@
         }
         .product-table tr.total-row-grand td {
             font-weight: bold;
-            font-size: 12px;
+            font-size: 14px;
             border: 1px solid #000;
         }
         .product-table .total-label {
@@ -208,7 +213,7 @@
         /* === Terms section === */
         .terms-section {
             margin-top: 8px;
-            font-size: 9.5px;
+            font-size: 11px;
             line-height: 1.5;
         }
         .terms-section .terms-title {
@@ -232,11 +237,11 @@
             padding-top: 20px;
         }
         .signature-label {
-            font-size: 10px;
+            font-size: 12px;
             text-align: center;
         }
         .signature-name {
-            font-size: 10px;
+            font-size: 12px;
             text-align: center;
             font-weight: bold;
         }
@@ -256,17 +261,19 @@
             justify-content: space-between;
             align-items: flex-end;
             margin-top: 4px;
-            font-size: 9px;
+            font-size: 10px;
             color: #555;
+            border-top: 1px solid #ccc;
+            padding-top: 4px;
         }
         .footer-text {
             flex: 1;
             text-align: center;
-            font-size: 9px;
+            font-size: 10px;
         }
         .footer-page {
             text-align: right;
-            font-size: 10px;
+            font-size: 11px;
             white-space: nowrap;
         }
 
@@ -298,17 +305,17 @@
                 {{-- Fallback: text-based header when no image uploaded --}}
                 <table style="width:100%; border-collapse:collapse; border-bottom:2px solid #b91c1c; padding-bottom:4px; margin-bottom:4px;">
                     <tr>
-                        <td style="width:20%; vertical-align:top; padding:2px;">
+                        <td style="width:18%; vertical-align:middle; padding:4px 6px;">
                             {{-- Logo placeholder --}}
-                            <div style="font-size:18px; font-weight:bold; color:#dc2626;">&#9733; STAR</div>
+                            <div style="font-size:22px; font-weight:bold; color:#dc2626;">&#9733; STAR</div>
                         </td>
-                        <td style="width:55%; text-align:center; vertical-align:top; padding:2px;">
-                            <div style="font-size:10px;">সেলফোন: {{ e($branch?->phone ?? '') }}</div>
-                            <div style="font-size:20px; font-weight:bold; color:#e91e63; margin:2px 0;">রিমোট সেন্টার</div>
-                            <div style="font-size:14px; font-weight:bold; color:#1565c0; letter-spacing:2px;">REMOTE CENTER</div>
-                            <div style="font-size:9px; margin-top:2px;">{{ e($branch?->address ?? $branch?->branch_name ?? '') }}</div>
+                        <td style="width:52%; text-align:center; vertical-align:middle; padding:4px 2px;">
+                            <div style="font-size:12px;">সেলফোন: {{ e($branch?->phone ?? '') }}</div>
+                            <div style="font-size:24px; font-weight:bold; color:#e91e63; margin:2px 0;">রিমোট সেন্টার</div>
+                            <div style="font-size:16px; font-weight:bold; color:#1565c0; letter-spacing:2px;">REMOTE CENTER</div>
+                            <div style="font-size:11px; margin-top:2px;">{{ e($branch?->address ?? $branch?->branch_name ?? '') }}</div>
                         </td>
-                        <td style="width:25%; text-align:right; vertical-align:top; padding:2px; font-size:10px; line-height:1.6;">
+                        <td style="width:30%; text-align:right; vertical-align:middle; padding:4px 6px; font-size:12px; line-height:1.6;">
                             @if ($branch?->phone)
                                 <div>{{ e($branch->phone) }}</div>
                             @endif
@@ -345,12 +352,12 @@
                     <table style="width:100%; border-collapse:collapse;">
                         <tr>
                             <td style="border:none; border-right:1px solid #000; width:50%; padding:0 4px;">
-                                <span class="meta-label" style="font-size:10px;">উপজেলা:</span>
-                                <span class="meta-value" style="font-size:10px;">{{ e($customer?->upazila ?? $customer?->area ?? '—') }}</span>
+                                <span class="meta-label" style="font-size:12px;">উপজেলা:</span>
+                                <span class="meta-value" style="font-size:12px;">{{ e($customer?->upazila ?? $customer?->area ?? '—') }}</span>
                             </td>
                             <td style="border:none; padding:0 4px;">
-                                <span class="meta-label" style="font-size:10px;">জেলা:</span>
-                                <span class="meta-value" style="font-size:10px;">{{ e($customer?->district ?? '—') }}</span>
+                                <span class="meta-label" style="font-size:12px;">জেলা:</span>
+                                <span class="meta-value" style="font-size:12px;">{{ e($customer?->district ?? '—') }}</span>
                             </td>
                         </tr>
                     </table>
@@ -389,49 +396,65 @@
 
                 {{-- ===== TOTALS (last page only, inside the table grid) ===== --}}
                 @if ($isLastPage)
+                    @php
+                        $totalQty = $allItems->sum('qty');
+                        $discount = (float) ($invoice->discount_amount ?? 0);
+                        $vat = 0.00; // No VAT column in model
+                        $deliveryCharge = (float) ($invoice->transport_cost ?? 0);
+                        $subtotal = (float) $invoice->sub_total;
+                        $grandTotal = (float) $invoice->total_amount;
+                        $paid = (float) ($invoice->paid_amount ?? 0);
+                        $previousDue = 0.00; // No previous_due column; due_amount covers it
+                        $totalDue = (float) ($invoice->due_amount ?? 0);
+                    @endphp
                     {{-- Subtotal --}}
                     <tr class="total-row">
                         <td colspan="2" class="total-label">মোট</td>
-                        <td class="total-value">{{ number_format((float) $allItems->sum('qty'), 0) }}</td>
-                        <td>Pcs</td>
+                        <td class="total-value">{{ number_format($totalQty, 0) }}</td>
+                        <td style="text-align:center;">Pcs</td>
                         <td></td>
-                        <td class="total-value">{{ number_format((float) $invoice->sub_total, 2) }}</td>
+                        <td class="total-value">{{ number_format($subtotal, 2) }}</td>
                     </tr>
                     {{-- Discount --}}
                     <tr class="total-row">
                         <td colspan="5" class="total-label">ছাড়</td>
-                        <td class="total-value">{{ number_format((float) ($invoice->discount_amount ?? 0), 2) }}</td>
+                        <td class="total-value">{{ number_format($discount, 2) }}</td>
                     </tr>
                     {{-- VAT --}}
                     <tr class="total-row">
-                        <td colspan="5" class="total-label">ভ্যাটকরণে</td>
-                        <td class="total-value">0.00</td>
+                        <td colspan="5" class="total-label">ভ্যাটকরণ</td>
+                        <td class="total-value">{{ number_format($vat, 2) }}</td>
                     </tr>
-                    {{-- Tax at source --}}
+                    {{-- Delivery Charge --}}
                     <tr class="total-row">
-                        <td colspan="5" class="total-label">উৎসে কর ব্যয়</td>
-                        <td class="total-value">0.00</td>
+                        <td colspan="5" class="total-label">ডেলিভারি খরচ</td>
+                        <td class="total-value">{{ number_format($deliveryCharge, 2) }}</td>
                     </tr>
-                    {{-- Grand Total --}}
+                    {{-- Grand Total (সর্বমোট) --}}
                     <tr class="total-row-grand">
-                        <td colspan="2" class="total-label">এককালীন হওয়ার মত মোট বাট টাকা</td>
-                        <td colspan="3" style="font-size:10px; font-style:italic;">{{ $bengaliWords((float) $invoice->total_amount) }}</td>
-                        <td class="total-value">সর্বমোট: {{ number_format((float) $invoice->total_amount, 2) }}</td>
+                        <td colspan="5" class="total-label">সর্বমোট</td>
+                        <td class="total-value">{{ number_format($grandTotal, 2) }}</td>
+                    </tr>
+                    {{-- Bengali words for the amount --}}
+                    <tr class="total-row">
+                        <td colspan="6" style="font-size:11px; font-style:italic; text-align:left;">
+                            {{ $bengaliWords($grandTotal) }}
+                        </td>
                     </tr>
                     {{-- Paid --}}
                     <tr class="total-row">
                         <td colspan="5" class="total-label">জমা</td>
-                        <td class="total-value">{{ number_format((float) ($invoice->paid_amount ?? 0), 2) }}</td>
+                        <td class="total-value">{{ number_format($paid, 2) }}</td>
                     </tr>
                     {{-- Previous Due --}}
                     <tr class="total-row">
-                        <td colspan="5" class="total-label">পূর্বে বকেয়া</td>
-                        <td class="total-value">0.00</td>
+                        <td colspan="5" class="total-label">পূর্বের বকেয়া</td>
+                        <td class="total-value">{{ number_format($previousDue, 2) }}</td>
                     </tr>
                     {{-- Total Due --}}
                     <tr class="total-row">
                         <td colspan="5" class="total-label">মোট বকেয়া</td>
-                        <td class="total-value">{{ number_format((float) ($invoice->due_amount ?? 0), 2) }}</td>
+                        <td class="total-value">{{ number_format($totalDue, 2) }}</td>
                     </tr>
                 @endif
             </tbody>
@@ -456,7 +479,7 @@
                     @if ($signatoryName)
                         <div class="signature-name">{{ e($signatoryName) }}</div>
                         @if ($signatoryTitle)
-                            <div style="font-size:9px; text-align:center;">{{ e($signatoryTitle) }}</div>
+                            <div style="font-size:11px; text-align:center;">{{ e($signatoryTitle) }}</div>
                         @endif
                     @endif
                     <div class="signature-line"></div>
@@ -466,17 +489,17 @@
         @endif
 
         {{-- ===== FOOTER (repeats on every page) ===== --}}
-        <div class="invoice-footer">
+        <div class="invoice-footer" style="margin-top:12px;">
             @if ($hasFooterImage)
-                <img src="{{ $footerImage }}" alt="Invoice Footer">
+                <img src="{{ $footerImage }}" alt="Invoice Footer" style="width:100%; max-height:120px; object-fit:contain;">
             @endif
             @if ($footerText)
-                <div style="font-size:9px; text-align:center; margin-top:2px;">{!! $footerText !!}</div>
+                <div style="font-size:10px; text-align:center; margin-top:4px;">{!! $footerText !!}</div>
             @endif
             <div class="footer-row">
-                <div style="font-size:9px;">&#9733; STAR</div>
+                <div style="font-size:10px; color:#dc2626; font-weight:bold;">&#9733; STAR</div>
                 <div class="footer-text">
-                    নিচে নামাঙ্কিত স্থান, অফিসের নামাঙ্কিত পৃষ্ঠে উদ্ধৃতিটি করুন
+                    নিশ্চিত নাম্যতা যুক্ত, আধুনিক নাগাদ পণ্য উৎপাদন কেন্দ্র
                 </div>
                 <div class="footer-page">Page {{ $page }} of {{ $totalPages }}</div>
             </div>
