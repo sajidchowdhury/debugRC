@@ -42,7 +42,7 @@ return [
     | Sales
     |--------------------------------------------------------------------------
     */
-    'sales'             => ['admin', 'manager', 'salesman'],
+    'sales'             => ['admin', 'manager', 'salesman', 'accountant'],
     'salesreturn'       => ['admin', 'manager', 'salesman', 'accountant', 'warehouse_manager'],
     'challan'           => ['admin', 'manager', 'warehouse_manager', 'dispatcher'],
 

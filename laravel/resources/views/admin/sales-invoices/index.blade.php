@@ -57,20 +57,30 @@
     ];
 @endphp
 
-<div class="space-y-6 sales-invoices-app">
-    {{-- Hero header (amber/orange gradient — showcase spec) --}}
-    <div class="bg-gradient-to-r from-amber-500 via-amber-600 to-orange-500 rounded-xl p-4 shadow-lg">
-        <div class="flex items-center justify-between flex-wrap gap-3">
-            <div>
-                <h1 class="text-xl font-bold text-white">গোডাউন ও চালান</h1>
-                <p class="text-amber-100 text-sm mt-0.5">
-                    <span id="heroInvoiceCount"
-                          aria-live="polite" aria-atomic="true">{{ number_format((int) ($stats['total'] ?? 0)) }}</span>
-                    invoices on your collection list
-                </p>
+<div class="space-y-3 sales-invoices-app">
+    {{-- Compact hero header (amber→orange gradient, like challans) --}}
+    <div class="si-hero">
+        <div>
+            <h1><i class="fas fa-file-invoice-dollar"></i> Sales Invoices</h1>
+            <div class="si-hero-sub">
+                <span id="heroInvoiceCount" aria-live="polite" aria-atomic="true">{{ number_format((int) ($stats['total'] ?? 0)) }}</span>
+                invoices ·
+                <i class="fas fa-map-marker-alt"></i>
+                {{ e(session('branch_name', auth()->user()?->employee?->branch?->branch_name ?? 'Branch')) }}
             </div>
-            <a href="{{ route('admin.sales.cart') }}" class="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm hover:bg-white/30 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors">
-                <x-erp.icon name="plus" class="size-4" /> New Sale / নতুন বিক্রয়
+        </div>
+        <div class="si-hero-actions">
+            <a href="{{ route('admin.sales.cart') }}" class="btn btn-light btn-sm">
+                <i class="fas fa-plus me-1"></i> New Sale
+            </a>
+            @can('exportCsv', \App\Models\SalesInvoice::class)
+            <a href="{{ route('admin.sales-invoices.export-csv') }}"
+               class="btn btn-light btn-sm" target="_blank" id="csvExportBtnVisible" title="Export CSV">
+                <i class="fas fa-file-csv me-1"></i> Export
+            </a>
+            @endcan
+            <a href="{{ route('admin.sales.audit') }}" class="btn btn-light btn-sm" title="Audit trail">
+                <i class="fas fa-clipboard-list me-1"></i> Audit
             </a>
         </div>
     </div>
@@ -148,48 +158,38 @@
         <a id="csvExportBtn" href="{{ route('admin.sales-invoices.export-csv') }}" class="hidden"></a>
     </form>
 
-    {{-- R22 + BUG-52: Single filter card — scope + status chips with live
-        counts, plus an inline smart-search box and Export CSV button. --}}
-    <x-erp.left-accent-card accent="orange" icon="clipboard-list" title="Filter" title-bn="ফিল্টার" body-class="!py-2">
-        {{-- F-32: Date presets + visible date inputs. The 5 preset pills
-            resolve to concrete from_date/to_date values client-side (no
-            server round-trip). "Custom" clears the preset highlight and
-            focuses the date inputs so the user can pick an arbitrary range.
-            The #datePresets wrapper + .date-preset-btn elements are the DOM
-            the existing JS ($presets, applyDatePreset, setActivePreset)
-            binds to. #from_date / #to_date are type="date" so the native
-            browser picker is used + the existing change handler fires. --}}
-        <div class="d-flex flex-wrap gap-2 align-items-center mb-2 pb-2 border-bottom">
-            <span class="text-muted small me-2">
-                <i class="fas fa-calendar-days me-1"></i>Period
-                <small class="text-muted fw-normal">(date range)</small>:
-            </span>
+    {{-- R22 + BUG-52: Compact filter panel — date presets, status chips,
+        smart search, all in one tight card. --}}
+    <div class="si-filter-card">
+        {{-- Date presets row --}}
+        <div class="si-filter-row si-filter-dates">
+            <span class="si-filter-label"><i class="fas fa-calendar-days"></i> Period</span>
             <x-erp.date-presets id="datePresets" />
-            <div class="d-flex align-items-center gap-1 ms-sm-auto">
+            <div class="si-filter-date-inputs">
                 <input type="date" id="from_date" name="from_date" value="{{ $filters['from_date'] }}"
-                       class="form-control form-control-sm" style="max-width:150px;"
+                       class="form-control form-control-sm" style="max-width:140px;"
                        aria-label="From date" autocomplete="off">
                 <span class="text-muted px-1" aria-hidden="true">→</span>
                 <input type="date" id="to_date" name="to_date" value="{{ $filters['to_date'] }}"
-                       class="form-control form-control-sm" style="max-width:150px;"
+                       class="form-control form-control-sm" style="max-width:140px;"
                        aria-label="To date" autocomplete="off">
             </div>
+            <div class="si-filter-search">
+                <span class="input-group-text"><i class="fas fa-search"></i></span>
+                <input type="search" id="filterSearch" name="search" class="form-control"
+                       placeholder="Invoice, customer, mobile…"
+                       value="{{ $filters['search'] ?? '' }}" autocomplete="off">
+            </div>
         </div>
-        <div class="d-flex flex-wrap gap-2 align-items-center" id="statusChipRow">
-            <span class="text-muted small me-2">
-                <i class="fas fa-filter me-1"></i>Status
-                <small class="text-muted fw-normal">(live counts)</small>:
-            </span>
+        {{-- Status chips row --}}
+        <div class="si-filter-row" id="statusChipRow">
+            <span class="si-filter-label"><i class="fas fa-filter"></i> Status</span>
             @foreach ($statusChips as $key => $chip)
                 @php
                     $isScope = in_array($key, ['today', 'pending_godown', 'pending_challan'], true);
                     $isActive = $isScope
                         ? ($scope === $key)
                         : ($scope === null && $filters['status_chip'] === $key);
-                    // Build the data-* attribute as a pre-escaped string so we
-                    // avoid an inline conditional directive inside the button
-                    // tag (Blade can mis-compile inline if/else/endif that
-                    // share a line with double-brace echoes).
                     $chipDataAttr = $isScope
                         ? 'data-scope="' . e($key) . '"'
                         : 'data-status="' . e($key) . '"';
@@ -204,74 +204,53 @@
             @endforeach
             <input type="hidden" id="status_chip" name="status_chip" value="{{ $filters['status_chip'] }}">
             <input type="hidden" id="scope" name="scope" value="{{ $scope ?? '' }}">
-
-            {{-- Inline smart search — drives the DataTables AJAX search param.
-                Debounced (320ms) in the JS below. --}}
-            <div class="ms-auto input-group input-group-sm" style="max-width: 280px;">
-                <span class="input-group-text"><i class="fas fa-search"></i></span>
-                <input type="search" id="filterSearch" name="search" class="form-control"
-                       placeholder="Invoice, customer, mobile, branch…"
-                       value="{{ $filters['search'] ?? '' }}" autocomplete="off">
-            </div>
-
-            {{-- Export CSV — mirrors the current filter params via JS.
-                Phase 6: @can guard (SalesInvoicePolicy::exportCsv —
-                accountant/manager/admin only; salesman excluded per F-30). --}}
-            @can('exportCsv', \App\Models\SalesInvoice::class)
-            <a href="{{ route('admin.sales-invoices.export-csv') }}"
-               class="btn btn-outline-success btn-sm" target="_blank" id="csvExportBtnVisible">
-                <i class="fas fa-file-csv me-1"></i> Export
-            </a>
-            @endcan
         </div>
-    </x-erp.left-accent-card>
+    </div>
 
     {{-- Phase 2 (UI/UX): Active filter bar — shows every active filter as a
         removable tag + "Clear all". Populated by renderActiveFilterBar(). --}}
     <x-erp.active-filter-bar id="activeFilterBar" />
 
-    {{-- R21: Invoices table (server-side DataTables) --}}
-    <x-erp.left-accent-card accent="cyan" icon="file-text" title="Invoices" title-bn="চালান তালিকা" body-class="!p-0">
-        <x-slot:actions>
-            {{-- Phase 5 (UI/UX): keyboard-shortcut hint. Shown only when
-                the shortcut layer is enabled (desktop, fine pointer).
-                Clicking it reveals a SweetAlert2 cheatsheet. --}}
-            <span id="kbdHint" class="rc-kbd-hint" role="button" tabindex="0"
-                  title="Keyboard shortcuts: j/k move, r receive, c call-it-a-day, e edit, / search, Esc clear"
-                  aria-label="Show keyboard shortcuts">
-                <kbd>j</kbd><kbd>k</kbd> navigate · <kbd>/</kbd> search
+    {{-- R21: Invoices table — compact results card --}}
+    <div class="si-results-card">
+        <div class="si-results-head">
+            <span class="si-results-title">
+                <i class="fas fa-file-text text-amber-500"></i> Invoices
             </span>
-        </x-slot:actions>
+            <div class="si-results-meta">
+                <span id="kbdHint" class="rc-kbd-hint" role="button" tabindex="0"
+                      title="Keyboard shortcuts"
+                      aria-label="Show keyboard shortcuts">
+                    <kbd>j</kbd><kbd>k</kbd> · <kbd>/</kbd> search
+                </span>
+            </div>
+        </div>
             {{-- Phase 1 (UI/UX): Bulk action bar — appears when ≥1 row is checked. --}}
-            <div class="px-3 pt-3">
+            <div class="si-bulk-shell">
                 <div id="invoiceBulkBar"
                      role="region"
                      aria-label="Bulk actions"
-                     class="hidden sticky top-0 z-20 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5 shadow-sm flex flex-wrap items-center justify-between gap-3">
+                     class="hidden sticky top-0 z-20 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 shadow-sm flex flex-wrap items-center justify-between gap-2">
                     <div class="flex items-center gap-2 text-sm">
                         <span class="inline-flex items-center justify-center size-5 rounded-full bg-amber-500 text-white text-xs font-bold">
                             <i class="fas fa-check" style="font-size:0.6rem;"></i>
                         </span>
                         <span class="font-medium text-amber-900">
                             <span id="bulkSelectedCount" aria-live="polite" aria-atomic="true">0</span>
-                            selected / নির্বাচিত
+                            selected
                         </span>
                     </div>
                     <div class="flex items-center gap-2 flex-wrap">
                         <button type="button" id="bulkCallItADay"
-                                class="inline-flex items-center gap-2 rounded-lg bg-orange-500 hover:bg-orange-600 text-white px-3 py-1.5 text-sm font-medium shadow-sm transition-colors disabled:opacity-50 disabled:pointer-events-none">
-                            <i class="fas fa-check-circle"></i>
-                            Call It A Day
+                                class="inline-flex items-center gap-1 rounded-md bg-orange-500 hover:bg-orange-600 text-white px-2.5 py-1 text-sm font-medium shadow-sm transition-colors disabled:opacity-50 disabled:pointer-events-none">
+                            <i class="fas fa-check-circle"></i> Call It A Day
                         </button>
                         <button type="button" id="bulkClear"
-                                class="inline-flex items-center gap-2 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-3 py-1.5 text-sm font-medium transition-colors">
-                            <i class="fas fa-times"></i>
-                            Clear
+                                class="inline-flex items-center gap-1 rounded-md bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-2.5 py-1 text-sm font-medium transition-colors">
+                            <i class="fas fa-times"></i> Clear
                         </button>
                     </div>
                 </div>
-                {{-- Phase 5 (UI/UX): Screen-reader status region — announced on
-                    filter / selection / payment changes via announceSR(). --}}
                 <x-erp.sr-status id="srStatus" />
             </div>
 
@@ -279,7 +258,7 @@
             <div id="invoiceCards" class="sales-invoices-mobile-cards"></div>
 
             <div class="table-responsive sales-invoices-desktop-table">
-                <table class="table table-sm table-striped table-hover align-middle mb-0" id="invoiceTable"
+                <table class="table table-sm table-hover align-middle mb-0" id="invoiceTable"
                        style="width:100%">
                     <thead class="table-light">
                         <tr>
@@ -297,7 +276,7 @@
                             <th data-data="paid_amount" class="text-end">Paid (Tk)</th>
                             <th data-data="due_amount" class="text-end">Due (Tk)</th>
                             <th data-data="status">Status</th>
-                            <th data-data="is_soft_hold" class="text-center">Soft Hold?</th>
+                            <th data-data="is_soft_hold" class="text-center">Hold</th>
                             <th data-data="actions" class="text-center" data-orderable="false">Actions</th>
                         </tr>
                     </thead>
@@ -305,11 +284,7 @@
                 </table>
             </div>
 
-            {{-- Phase 4 (UI/UX): Empty states. Shown by updateEmptyState()
-                in the DataTables drawCallback when recordsDisplay === 0.
-                Two variants: "filters returned nothing" (with Clear-all
-                button) and "genuinely no invoices" (with Create-invoice
-                CTA). role="status" so screen readers announce the change. --}}
+            {{-- Phase 4 (UI/UX): Empty states --}}
             <div id="invoiceEmptyStateFiltered" class="hidden" role="status">
                 <x-erp.empty-state icon="inbox"
                     title="No invoices match your filters"
@@ -338,7 +313,7 @@
                     </x-slot:action>
                 </x-erp.empty-state>
             </div>
-    </x-erp.left-accent-card>
+    </div>
 </div>
 
 {{--
@@ -2143,19 +2118,94 @@ $(function () {
        card visuals (already ported to Laravel assets). The styles
        below are page-specific additions. */
 
-    .sales-invoices-app { padding-bottom: 2rem; }
+    .sales-invoices-app { padding-bottom: 1.5rem; font-size: 0.875rem; }
 
-    /* Status chips (R22). The base .status-chip class lives in
-       sales-today-index.css; here we add the Laravel-specific
-       Bootstrap-5 button integration so the chips look like buttons
-       but inherit the chip colour rules. */
+    /* ===== Compact hero (amber→orange gradient) ===== */
+    .si-hero {
+        display: flex; align-items: center; justify-content: space-between;
+        flex-wrap: wrap; gap: 0.5rem;
+        padding: 0.75rem 1rem; border-radius: 0.75rem;
+        background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%);
+        color: #fff; margin-bottom: 0.5rem;
+    }
+    .si-hero h1 {
+        font-size: 1.125rem; font-weight: 700; margin: 0;
+        display: flex; align-items: center; gap: 0.5rem;
+    }
+    .si-hero-sub {
+        font-size: 0.75rem; opacity: 0.85; margin-top: 0.125rem;
+    }
+    .si-hero-actions {
+        display: flex; align-items: center; gap: 0.375rem; flex-wrap: wrap;
+    }
+    .si-hero-actions .btn { font-size: 0.75rem; padding: 0.25rem 0.625rem; }
+    @media (max-width: 575.98px) {
+        .si-hero { padding: 0.5rem 0.75rem; }
+        .si-hero h1 { font-size: 1rem; }
+    }
+
+    /* ===== Compact filter card ===== */
+    .si-filter-card {
+        background: #fff; border: 1px solid #e5e7eb; border-radius: 0.5rem;
+        padding: 0.5rem 0.75rem; margin-bottom: 0.5rem;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .si-filter-row {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem;
+    }
+    .si-filter-row + .si-filter-row { margin-top: 0.375rem; padding-top: 0.375rem; border-top: 1px solid #f3f4f6; }
+    .si-filter-label {
+        font-size: 0.75rem; font-weight: 600; color: #78716c;
+        display: inline-flex; align-items: center; gap: 0.375rem;
+        white-space: nowrap; margin-right: 0.25rem;
+    }
+    .si-filter-date-inputs {
+        display: flex; align-items: center; gap: 0.25rem; margin-left: auto;
+    }
+    .si-filter-search {
+        display: flex; align-items: center; margin-left: 0.5rem;
+        max-width: 240px; width: 100%;
+    }
+    .si-filter-search .input-group-text {
+        font-size: 0.75rem; padding: 0.25rem 0.5rem;
+        border-radius: 0.375rem 0 0 0.375rem;
+    }
+    .si-filter-search .form-control {
+        font-size: 0.8rem; padding: 0.25rem 0.5rem;
+        border-radius: 0 0.375rem 0.375rem;
+    }
+    @media (max-width: 767.98px) {
+        .si-filter-date-inputs { margin-left: 0; }
+        .si-filter-search { max-width: 100%; margin-left: 0; margin-top: 0.25rem; }
+    }
+
+    /* ===== Compact results card ===== */
+    .si-results-card {
+        background: #fff; border: 1px solid #e5e7eb; border-radius: 0.5rem;
+        overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .si-results-head {
+        display: flex; align-items: center; justify-content: space-between;
+        flex-wrap: wrap; gap: 0.5rem;
+        padding: 0.5rem 0.75rem; border-bottom: 1px solid #f3f4f6; background: #fafaf9;
+    }
+    .si-results-title {
+        font-size: 0.8rem; font-weight: 600; color: #44403c;
+        display: flex; align-items: center; gap: 0.375rem;
+    }
+    .si-results-meta {
+        display: flex; align-items: center; gap: 0.5rem;
+    }
+    .si-bulk-shell { padding: 0.25rem 0.5rem; }
+
+    /* ===== Status chips (R22) — compact pill style ===== */
     .status-chip {
         display: inline-flex;
         align-items: center;
-        gap: 0.25rem;
+        gap: 0.3rem;
         border-radius: 999px;
-        padding: 0.25rem 0.75rem;
-        font-size: 0.82rem;
+        padding: 0.3rem 0.7rem;
+        font-size: 0.8rem;
         font-weight: 500;
         background: #f1f5f9;
         color: #334155;
@@ -2169,9 +2219,9 @@ $(function () {
         color: #fff;
     }
     .status-chip .chip-count {
-        font-size: 0.7rem;
+        font-size: 0.72rem;
         font-weight: 600;
-        padding: 0.15rem 0.4rem;
+        padding: 0.1rem 0.4rem;
         border-radius: 999px;
         background: rgba(255, 255, 255, 0.25);
     }
@@ -2244,7 +2294,7 @@ $(function () {
         color: #4b5563;          /* text-gray-600 */
         transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
         text-decoration: none;
-        font-size: 0.8rem;
+        font-size: 0.82rem;
         line-height: 1;
         cursor: pointer;
     }
@@ -2318,9 +2368,9 @@ $(function () {
         display: inline-flex;
         align-items: center;
         gap: 0.25rem;
-        padding: 0.125rem 0.5rem;
+        padding: 0.15rem 0.5rem;
         border-radius: 999px;
-        font-size: 0.78rem;
+        font-size: 0.82rem;
         font-weight: 600;
         line-height: 1.25;
         white-space: nowrap;
@@ -2347,7 +2397,7 @@ $(function () {
         padding: 0.1rem 0.55rem;
         border: 1px solid;
         border-radius: 999px;
-        font-size: 0.72rem;
+        font-size: 0.78rem;
         font-weight: 600;
         line-height: 1.3;
         max-width: 100%;
@@ -2392,7 +2442,7 @@ $(function () {
         align-items: center;
         gap: 0.25rem;
         margin-left: 0.5rem;
-        font-size: 0.7rem;
+        font-size: 0.75rem;
         color: #6b7280;
     }
     .rc-kbd-hint kbd {
@@ -2408,7 +2458,7 @@ $(function () {
         background: #f9fafb;
         color: #374151;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 0.65rem;
+        font-size: 0.7rem;
         line-height: 1;
     }
     @media (pointer: coarse) { .rc-kbd-hint { display: none !important; } }

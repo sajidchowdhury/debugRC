@@ -153,7 +153,11 @@ class MenuService
             'user' => 'admin.users.index',
             'bank' => 'admin.banks.index',
             'ledger' => 'admin.ledgers.index',
-            'sales' => $action === 'create' ? 'admin.sales.cart' : 'admin.sales-invoices.index',
+            'sales' => $action === 'create' ? 'admin.sales.cart'
+                : ($action === 'audit' ? 'admin.sales.audit'
+                : ($action === 'guide' ? 'admin.sales.guide'
+                : ($action === 'today' ? 'admin.sales-invoices.index'
+                : 'admin.sales-invoices.index'))),
             'challan' => 'admin.sales-challans.index',
             'salesreturn' => 'admin.sales-returns.index',
             'purchaseorder' => 'admin.purchase-orders.index',
