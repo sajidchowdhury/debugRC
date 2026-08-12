@@ -26,7 +26,7 @@
             <h1 class="h3 mb-1">
                 <i class="fas fa-chart-pie me-2"></i> Reports
             </h1>
-            <p class="mb-0 opacity-75">Phase 5 reporting layer — 23 financial &amp; operational reports across 5 categories.</p>
+            <p class="mb-0 opacity-75">Financial &amp; operational reports — branch-wise &amp; fiscal-year controlled.</p>
         </div>
         <div class="d-flex flex-wrap gap-1">
             <a href="{{ route('admin.reconciliation.index') }}" class="btn btn-light btn-sm">

@@ -62,7 +62,7 @@ class ReportController extends Controller
         $data = $this->parseDateRange($request);
         $accountType = $request->input('account_type');
         $includeZero = $request->boolean('include_zero');
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->reportService->trialBalance(
             $data['from'], $data['to'], $accountType, $includeZero, $branchId
@@ -265,7 +265,7 @@ class ReportController extends Controller
     public function profitAndLoss(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->reportService->profitAndLoss($data['from'], $data['to'], $branchId);
 
@@ -402,7 +402,7 @@ class ReportController extends Controller
     public function balanceSheet(ReportAsOfRequest $request)
     {
         $asOf = $this->parseAsOfDate($request);
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        $branchId = $this->resolveBranchScope($request);
         $includeZero = $request->boolean('include_zero');
 
         $report = $this->reportService->balanceSheet($asOf, $branchId, $includeZero);
@@ -536,7 +536,7 @@ class ReportController extends Controller
     public function cashFlow(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->reportService->cashFlow($data['from'], $data['to'], $branchId);
 
@@ -686,7 +686,7 @@ class ReportController extends Controller
     {
         $data = $this->parseDateRange($request);
         $ledgerId = $request->input('ledger_id') ? (int) $request->input('ledger_id') : null;
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->reportService->generalLedger($data['from'], $data['to'], $ledgerId, $branchId);
 
@@ -741,7 +741,7 @@ class ReportController extends Controller
     public function dailyCashBook(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
-        $branchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->reportService->dailyCashBook($data['from'], $data['to'], $branchId);
 
@@ -993,23 +993,30 @@ SQL;
     public function revenueOverview(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
-        $rows = \Illuminate\Support\Facades\DB::table('sales_invoices as si')
+        $branchId = $this->resolveBranchScope($request);
+
+        $query = \Illuminate\Support\Facades\DB::table('sales_invoices as si')
             ->leftJoin('customers as c', 'c.id', '=', 'si.customer_id')
             ->leftJoin('branches as b', 'b.id', '=', 'si.branch_id')
             ->leftJoin('employees as e', 'e.id', '=', 'si.salesman_id')
             ->whereBetween('si.invoice_date', [$data['from'], $data['to']])
             ->whereNull('si.deleted_at')
+            ->when($branchId, fn($q) => $q->where('si.branch_id', $branchId))
             ->select(
                 'si.id', 'si.invoice_code', 'si.invoice_date', 'si.status',
                 'si.total_amount', 'si.paid_amount', 'si.due_amount',
                 'c.customer_name', 'b.branch_name', 'e.name as salesman_name'
             )
-            ->orderBy('si.invoice_date', 'desc')
-            ->paginate(50);
+            ->orderBy('si.invoice_date', 'desc');
+
+        $rows = $query->paginate(50);
+        $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
 
         return view('admin.reports.revenue_overview', [
-            'meta' => ['title' => 'Revenue Overview', 'from_date' => $data['from']->format('Y-m-d'), 'to_date' => $data['to']->format('Y-m-d')],
+            'meta' => ['title' => 'Date Wise Sales Report', 'from_date' => $data['from']->format('Y-m-d'), 'to_date' => $data['to']->format('Y-m-d')],
             'data' => $rows,
+            'branches' => $branches,
+            'selectedBranchId' => $branchId,
         ]);
     }
 
@@ -1108,6 +1115,7 @@ SQL, [$data['from'], $data['to']]);
     public function productMovement(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
+        $branchId = $this->resolveBranchScope($request);
         $productId = $request->input('product_id') ? (int) $request->input('product_id') : null;
         $warehouseId = $request->input('warehouse_id') ? (int) $request->input('warehouse_id') : null;
 
@@ -1117,6 +1125,7 @@ SQL, [$data['from'], $data['to']]);
             ->whereBetween('st.transaction_date', [$data['from'], $data['to']])
             ->when($productId, fn($q) => $q->where('st.product_id', $productId))
             ->when($warehouseId, fn($q) => $q->where('st.warehouse_id', $warehouseId))
+            ->when($branchId, fn($q) => $q->where('st.branch_id', $branchId))
             ->select(
                 'st.transaction_date', 'st.reference_type', 'st.reference_id',
                 'st.qty', 'st.rate', 'st.total_value',
@@ -1143,9 +1152,7 @@ SQL, [$data['from'], $data['to']]);
     public function salesAuditChecklist(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
-        $branchId = $this->resolveBranchIdForRead(
-            $request->input('branch_id') ? (int) $request->input('branch_id') : null
-        );
+        $branchId = $this->resolveBranchIdForRead($this->resolveBranchScope($request));
 
         $report = (new SalesAuditService(
             $branchId > 0 ? $branchId : null,
@@ -1174,9 +1181,7 @@ SQL, [$data['from'], $data['to']]);
     public function salesAuditRun(ReportRangeRequest $request)
     {
         $data = $this->parseDateRange($request);
-        $branchId = $this->resolveBranchIdForRead(
-            $request->input('branch_id') ? (int) $request->input('branch_id') : null
-        );
+        $branchId = $this->resolveBranchIdForRead($this->resolveBranchScope($request));
 
         $report = (new SalesAuditService(
             $branchId > 0 ? $branchId : null,
@@ -1214,7 +1219,7 @@ SQL, [$data['from'], $data['to']]);
             'from'          => $data['from']->format('Y-m-d'),
             'to'            => $data['to']->format('Y-m-d'),
             'session_id'    => $request->filled('session_id') ? (int) $request->input('session_id') : null,
-            'branch_id'     => $request->filled('branch_id') ? (int) $request->input('branch_id') : null,
+            'branch_id'     => $this->resolveBranchScope($request),
             'warehouse_id'  => $request->filled('warehouse_id') ? (int) $request->input('warehouse_id') : null,
             'product_id'    => $request->filled('product_id') ? (int) $request->input('product_id') : null,
         ];
@@ -1267,7 +1272,7 @@ SQL, [$data['from'], $data['to']]);
             'from'          => $data['from']->format('Y-m-d'),
             'to'            => $data['to']->format('Y-m-d'),
             'session_id'    => $request->filled('session_id') ? (int) $request->input('session_id') : null,
-            'branch_id'     => $request->filled('branch_id') ? (int) $request->input('branch_id') : null,
+            'branch_id'     => $this->resolveBranchScope($request),
             'warehouse_id'  => $request->filled('warehouse_id') ? (int) $request->input('warehouse_id') : null,
             'product_id'    => $request->filled('product_id') ? (int) $request->input('product_id') : null,
         ];
@@ -1323,7 +1328,7 @@ SQL, [$data['from'], $data['to']]);
         $to = $request->input('to_date')
             ? Carbon::parse($request->input('to_date'))->format('Y-m-d')
             : Carbon::now()->format('Y-m-d');
-        $branchId = $request->filled('branch_id') ? (int) $request->input('branch_id') : null;
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->stocktakeWeeklyReport->getWeekly($from, $to, $branchId);
         $branches = \App\Models\Branch::active()->orderBy('branch_name')->get();
@@ -1350,7 +1355,7 @@ SQL, [$data['from'], $data['to']]);
         $to = $request->input('to_date')
             ? Carbon::parse($request->input('to_date'))->format('Y-m-d')
             : Carbon::now()->format('Y-m-d');
-        $branchId = $request->filled('branch_id') ? (int) $request->input('branch_id') : null;
+        $branchId = $this->resolveBranchScope($request);
 
         $report = $this->stocktakeWeeklyReport->getWeekly($from, $to, $branchId);
 
@@ -1556,7 +1561,7 @@ SQL, [$data['from'], $data['to']]);
         $data     = $this->parseDateRange($request);
         $from     = $data['from']->format('Y-m-d');
         $to       = $data['to']->format('Y-m-d');
-        $branchId = $request->filled('branch_id') ? (int) $request->input('branch_id') : null;
+        $branchId = $this->resolveBranchScope($request);
 
         $filters = [
             'from'       => $from,
@@ -1611,7 +1616,7 @@ SQL, [$data['from'], $data['to']]);
         $data     = $this->parseDateRange($request);
         $from     = $data['from']->format('Y-m-d');
         $to       = $data['to']->format('Y-m-d');
-        $branchId = $request->filled('branch_id') ? (int) $request->input('branch_id') : null;
+        $branchId = $this->resolveBranchScope($request);
 
         $filters = [
             'from'       => $from,
@@ -1656,7 +1661,9 @@ SQL, [$data['from'], $data['to']]);
         $to = $request->input('to_date')
             ? Carbon::parse($request->input('to_date'))
             : Carbon::now();
-        return ['from' => $from, 'to' => $to];
+
+        // Apply fiscal year restriction for non-superadmins
+        return $this->resolveFiscalScope($request, $from, $to);
     }
 
     /**
@@ -1664,9 +1671,26 @@ SQL, [$data['from'], $data['to']]);
      */
     private function parseAsOfDate(Request $request): Carbon
     {
-        return $request->input('as_of_date')
+        $asOf = $request->input('as_of_date')
             ? Carbon::parse($request->input('as_of_date'))
             : Carbon::now();
+
+        // Apply fiscal year restriction for non-superadmins
+        $user = $request->user();
+        if (!$user?->isSuperadmin()) {
+            $fiscalYear = \App\Models\FiscalYear::where('is_current', true)
+                ->where('status', 'open')
+                ->first();
+            if ($fiscalYear) {
+                $fyEnd = Carbon::parse($fiscalYear->end_date);
+                // Cannot query beyond fiscal year end
+                if ($asOf->gt($fyEnd)) {
+                    $asOf = $fyEnd;
+                }
+            }
+        }
+
+        return $asOf;
     }
 
     /**
@@ -1704,15 +1728,51 @@ SQL, [$data['from'], $data['to']]);
         $sessionBranchId = (int) (session('branch_id') ?? $user?->getBranchId() ?? 0);
         $requestBranchId = $request->input('branch_id') ? (int) $request->input('branch_id') : null;
 
-        // Admins can view any branch (or all branches when null).
-        if ($user?->isAdmin()) {
+        // Only superadmin can view any branch (or all branches when null).
+        if ($user?->isSuperadmin()) {
             return $requestBranchId;
         }
 
-        // Non-admins: pin to session branch_id. If they explicitly
+        // Non-superadmins: pin to session branch_id. If they explicitly
         // requested their own branch, honor it; otherwise force the
         // session branch (defense in depth against crafted requests).
         return $sessionBranchId > 0 ? $sessionBranchId : null;
+    }
+
+    /**
+     * Apply fiscal year restriction for non-superadmins.
+     *
+     * Superadmin can query any date range.
+     * All other roles are restricted to the current fiscal year.
+     * Returns the clamped ['from' => Carbon, 'to' => Carbon] array.
+     */
+    private function resolveFiscalScope(Request $request, Carbon $from, Carbon $to): array
+    {
+        $user = $request->user();
+
+        // Superadmin: no fiscal restriction
+        if ($user?->isSuperadmin()) {
+            return ['from' => $from, 'to' => $to];
+        }
+
+        // Find the current fiscal year
+        $fiscalYear = \App\Models\FiscalYear::where('is_current', true)
+            ->where('status', 'open')
+            ->first();
+
+        if (!$fiscalYear) {
+            // No active fiscal year found — allow the request as-is
+            return ['from' => $from, 'to' => $to];
+        }
+
+        $fyStart = Carbon::parse($fiscalYear->start_date);
+        $fyEnd = Carbon::parse($fiscalYear->end_date);
+
+        // Clamp the requested range to fiscal year boundaries
+        $clampedFrom = $from->lt($fyStart) ? $fyStart : $from;
+        $clampedTo = $to->gt($fyEnd) ? $fyEnd : $to;
+
+        return ['from' => $clampedFrom, 'to' => $clampedTo];
     }
 
     /**

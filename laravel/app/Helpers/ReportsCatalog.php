@@ -37,9 +37,9 @@ class ReportsCatalog
                 'accent' => 'sales',
                 'tagline' => 'Track invoices, collections, and customer momentum',
                 'reports' => [
-                    self::r('revenue_overview', 'Revenue Overview', 'Invoice-level register with customer & salesman filters', 'admin.reports.revenueOverview', 'fa-file-invoice-dollar', ['invoice', 'export'], 30, true),
-                    self::r('sales_funnel', 'Sales Funnel / Pipeline', 'Pipeline stages, conversion rates, velocity & forecast', 'admin.reports.salesFunnel', 'fa-filter', ['pipeline', 'funnel', 'forecast'], 30, true),
-                    self::r('gross_margin', 'Gross Margin (CTE)', 'True per-product margin via invoice-item → challan-item → stock-transaction COGS join', 'admin.reports.grossMarginCte', 'fa-percent', ['margin', 'cogs', 'cte', 'export'], 30, true),
+                    self::r('revenue_overview', 'Date Wise Sales Report', 'Date-wise invoice register with customer & salesman filters', 'admin.reports.revenueOverview', 'fa-file-invoice-dollar', ['invoice', 'export'], 30, true),
+                    self::r('sales_funnel', 'Dispatch Report', 'Dispatch pipeline stages, conversion rates & delivery status', 'admin.reports.salesFunnel', 'fa-truck', ['dispatch', 'pipeline', 'delivery'], 30, true),
+                    self::r('gross_margin', 'Invoice Details Report', 'Invoice-wise product details with margin & COGS breakdown', 'admin.reports.grossMarginCte', 'fa-list-alt', ['invoice', 'details', 'margin', 'export'], 30, true),
                     self::r('customer_performance', 'Customer Performance', '360° customer value, loyalty, CLV, churn risk', 'admin.reports.customerPerformance', 'fa-users', ['customer', 'clv', 'churn'], 30, true),
                 ],
             ],
@@ -51,8 +51,8 @@ class ReportsCatalog
                 'tagline' => 'Supplier spend, GRN history, and what you still owe',
                 'reports' => [
                     self::r('supplier_wise_purchase', 'Supplier-wise Purchase', 'Spend profile per supplier', 'admin.reports.supplierWisePurchase', 'fa-industry', ['supplier'], 30),
-                    self::r('payable_aging', 'Payable Aging', 'Outstanding supplier balances by age bucket', 'admin.reports.payableAging', 'fa-clock', ['aging', 'finance'], 0, true, 'as_of'),
-                    self::r('receivable_aging', 'Receivable Aging', 'Customer due balances by age bucket with GL footnote', 'admin.reports.receivableAging', 'fa-clock', ['aging', 'finance'], 0, true, 'as_of'),
+                    self::r('payable_aging', 'Supplier Due Report', 'Supplier outstanding balances by age bucket', 'admin.reports.payableAging', 'fa-clock', ['supplier', 'due', 'aging'], 0, true, 'as_of'),
+                    self::r('receivable_aging', 'Customer Due Report', 'Customer outstanding balances by age bucket', 'admin.reports.receivableAging', 'fa-clock', ['customer', 'due', 'aging'], 0, true, 'as_of'),
                 ],
             ],
             [
@@ -62,8 +62,8 @@ class ReportsCatalog
                 'accent' => 'inventory',
                 'tagline' => 'On-hand truth, valuation, and movement trails',
                 'reports' => [
-                    self::r('product_stock_analysis', 'Product Stock Analysis', 'In/out movement with opening & closing', 'admin.reports.productStockAnalysis', 'fa-microscope', ['movement'], 30),
-                    self::r('product_movement', 'Product Movement', 'Chronological ledger for one SKU', 'admin.reports.productMovement', 'fa-route', ['movement'], 30),
+                    self::r('product_stock_analysis', 'Stock Report', 'On-hand stock valuation with branch & warehouse breakdown', 'admin.reports.productStockAnalysis', 'fa-boxes-stacked', ['stock', 'valuation'], 30),
+                    self::r('product_movement', 'Product Movement Report', 'Chronological stock ledger for one or all SKUs', 'admin.reports.productMovement', 'fa-route', ['movement'], 30),
                     self::r('warehouse_transfer_summary', 'Warehouse Transfer Summary', 'Period aggregates, top products, warehouse pairs, and trends', 'admin.warehouse-transfers.summary', 'fa-right-left', ['transfer', 'warehouse', 'export'], 30, false, 'range'),
                     self::r('abc_report', 'ABC Classification', 'Pareto ranking of SKUs by value contribution (mv_product_abc_classification)', 'admin.stock-take.abc-report', 'fa-list-ol', ['abc', 'classification', 'inventory'], 0, false, 'range'),
                 ],
@@ -98,7 +98,7 @@ class ReportsCatalog
                     self::r('purchase_audit', 'Purchase Audit Checklist', 'GRN, supplier ledger, and purchase posting integrity', 'admin.purchase-audit.checklist', 'fa-truck', ['control', 'audit'], 0, false, 'range'),
                     self::r('stocktake_variance', 'Stock Take Variance', 'Line-level count vs system by session with GL drill-down', 'admin.reports.stocktakeVariance', 'fa-table', ['detail', 'variance'], 30, false, 'range'),
                     self::r('stocktake_weekly', 'Stock Take — Weekly Control', 'Posted sessions, gain/loss totals & top SKU variances', 'admin.reports.stocktakeWeekly', 'fa-chart-line', ['control', 'variance'], 7, false, 'range'),
-                    self::r('branch_demand_weekly', 'Branch Demand — Weekly', 'Inter-branch demand, settlement & floor stock — 23-column Excel-audit replication', 'admin.branch-demands.weekly-report', 'fa-share-nodes', ['branch'], 7, false, 'range'),
+                    self::r('branch_demand_weekly', 'Branch Demand & Approval Report', 'Branch-wise demand, approval status, settlement & floor stock', 'admin.branch-demands.weekly-report', 'fa-share-nodes', ['branch', 'demand', 'approval'], 7, false, 'range'),
                     self::r('damage_report', 'Damage Report', 'Damage cost by month, category, warehouse, employee & top products', 'admin.reports.damageReport', 'fa-triangle-exclamation', ['damage', 'loss', 'export'], 30, true, 'range'),
                     self::r('reconciliation_index', 'Reconciliation Hub', 'AR/AP/employee-payable 3-way subledger reconciliation vs GL control accounts', 'admin.reconciliation.index', 'fa-scale-balanced', ['reconciliation', 'gl', 'control'], 0, false, 'range'),
                 ],
