@@ -49,14 +49,27 @@
 
     $invoiceDate = \Carbon\Carbon::parse($invoice->invoice_date);
 
-    // Branch invoice settings — use URL for browser, path for DomPDF
+    // Branch invoice settings
     $isPdfMode = request()->input('mode') === 'pdf';
-    $headerImage = $branch?->invoice_header_image
-        ? ($isPdfMode ? Storage::disk('public')->path($branch->invoice_header_image) : Storage::disk('public')->url($branch->invoice_header_image))
-        : null;
-    $footerImage = $branch?->invoice_footer_image
-        ? ($isPdfMode ? Storage::disk('public')->path($branch->invoice_footer_image) : Storage::disk('public')->url($branch->invoice_footer_image))
-        : null;
+    $headerImageDbPath = $branch?->invoice_header_image; // relative path e.g. "branch-invoices/xxx.png"
+    $footerImageDbPath = $branch?->invoice_footer_image;
+
+    // For browser: use public URL; for DomPDF: use absolute filesystem path
+    if ($headerImageDbPath) {
+        $headerImage = $isPdfMode
+            ? Storage::disk('public')->path($headerImageDbPath)
+            : Storage::disk('public')->url($headerImageDbPath);
+    } else {
+        $headerImage = null;
+    }
+    if ($footerImageDbPath) {
+        $footerImage = $isPdfMode
+            ? Storage::disk('public')->path($footerImageDbPath)
+            : Storage::disk('public')->url($footerImageDbPath);
+    } else {
+        $footerImage = null;
+    }
+
     $headerText = $branch?->invoice_header_text;
     $footerText = $branch?->invoice_footer_text;
     $watermarkText = $branch?->invoice_watermark_text ?? ($branch?->company?->company_name ?? '');
@@ -65,8 +78,8 @@
     $termsText = $branch?->invoice_terms;
 
     // Check if header/footer image exists
-    $hasHeaderImage = $headerImage && ($isPdfMode ? file_exists($headerImage) : true);
-    $hasFooterImage = $footerImage && ($isPdfMode ? file_exists($footerImage) : true);
+    $hasHeaderImage = !empty($headerImage) && ($isPdfMode ? file_exists($headerImage) : true);
+    $hasFooterImage = !empty($footerImage) && ($isPdfMode ? file_exists($footerImage) : true);
 @endphp
 
 <!DOCTYPE html>
@@ -298,9 +311,10 @@
         @endphp
 
         {{-- ===== PAGE HEADER (repeats on every page) ===== --}}
+        {{-- Debug: branch_id={{ $branch?->id ?? 'NULL' }}, header_img={{ $headerImageDbPath ?? 'NULL' }}, hasHeader={{ $hasHeaderImage ? 'Y' : 'N' }}, url={{ $headerImage ?? 'NULL' }} --}}
         <div class="invoice-header">
             @if ($hasHeaderImage)
-                <img src="{{ $headerImage }}" alt="Invoice Header">
+                <img src="{{ $headerImage }}" alt="Invoice Header" style="width:100%; max-height:180px; object-fit:contain; display:block; margin:0 auto;">
             @else
                 {{-- Fallback: text-based header when no image uploaded --}}
                 <table style="width:100%; border-collapse:collapse; border-bottom:2px solid #b91c1c; padding-bottom:4px; margin-bottom:4px;">
