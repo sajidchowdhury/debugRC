@@ -77,9 +77,11 @@
     $signatoryTitle = $branch?->invoice_signatory_title;
     $termsText = $branch?->invoice_terms;
 
-    // Check if header/footer image exists
-    $hasHeaderImage = !empty($headerImage) && ($isPdfMode ? file_exists($headerImage) : true);
-    $hasFooterImage = !empty($footerImage) && ($isPdfMode ? file_exists($footerImage) : true);
+    // Check if header/footer image exists on disk (for both browser and PDF mode)
+    $headerImagePath = $headerImageDbPath ? Storage::disk('public')->path($headerImageDbPath) : null;
+    $footerImagePath = $footerImageDbPath ? Storage::disk('public')->path($footerImageDbPath) : null;
+    $hasHeaderImage = !empty($headerImage) && $headerImagePath && file_exists($headerImagePath);
+    $hasFooterImage = !empty($footerImage) && $footerImagePath && file_exists($footerImagePath);
 @endphp
 
 <!DOCTYPE html>
@@ -311,7 +313,6 @@
         @endphp
 
         {{-- ===== PAGE HEADER (repeats on every page) ===== --}}
-        {{-- Debug: branch_id={{ $branch?->id ?? 'NULL' }}, header_img={{ $headerImageDbPath ?? 'NULL' }}, hasHeader={{ $hasHeaderImage ? 'Y' : 'N' }}, url={{ $headerImage ?? 'NULL' }} --}}
         <div class="invoice-header">
             @if ($hasHeaderImage)
                 <img src="{{ $headerImage }}" alt="Invoice Header" style="width:100%; max-height:180px; object-fit:contain; display:block; margin:0 auto;">
