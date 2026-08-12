@@ -430,8 +430,12 @@ class UserController extends BaseMasterDataController
         $allMenus = $menuService->getAllMenus();
         $userPermissions = $menuService->getUserPermissions($id);
 
-        // Build the hierarchical menu tree with permission data
-        $menuTree = $this->buildMenuTreeWithPermissions($allMenus, $userPermissions);
+        // Get role-menu compatibility map
+        $roleMenuAccess = config('role-menu-access', []);
+        $userRole = $user->employee?->role ?? 'user';
+
+        // Build the hierarchical menu tree with permission data + role compatibility
+        $menuTree = $this->buildMenuTreeWithPermissions($allMenus, $userPermissions, $roleMenuAccess, $userRole);
 
         return view("{$this->viewDir}.menu-permissions", [
             'title'       => "{$user->username} — menu permissions",
@@ -439,11 +443,15 @@ class UserController extends BaseMasterDataController
             'menuTree'    => $menuTree,
             'routePrefix' => $this->routePrefix,
             'label'       => $this->label,
+            'userRole'    => $userRole,
+            'roleMenuAccess' => $roleMenuAccess,
         ]);
     }
 
     /**
      * Save the menu permissions for a user.
+     * Includes role-menu compatibility validation: menus that are not
+     * allowed for the user's role are blocked with an error message.
      */
     public function updateMenuPermissions(Request $request, int $id)
     {
@@ -461,6 +469,58 @@ class UserController extends BaseMasterDataController
             'permissions.*.can_edit' => 'boolean',
         ]);
 
+        // ─── Role-Menu Compatibility Check ───
+        // Prevent granting menus that are incompatible with the user's role.
+        $roleMenuAccess = config('role-menu-access', []);
+        $userRole = $user->employee?->role ?? 'user';
+        $incompatibleMenus = [];
+
+        // Load menu details for validation
+        $menuIds = collect($validated['permissions'] ?? [])->pluck('menu_id')->toArray();
+        $menuDetails = DB::table('menus')->whereIn('id', $menuIds)->pluck('controller', 'id');
+
+        foreach ($validated['permissions'] ?? [] as $perm) {
+            // Only check when granting can_view = true (granting access)
+            if (empty($perm['can_view'])) {
+                continue;
+            }
+
+            $menuId = (int) $perm['menu_id'];
+            $controller = strtolower($menuDetails[$menuId] ?? '');
+
+            // Skip if controller is not in the restriction map (open to all)
+            if (!isset($roleMenuAccess[$controller])) {
+                continue;
+            }
+
+            $allowedRoles = $roleMenuAccess[$controller];
+
+            // Check if user's role is allowed
+            if (!in_array($userRole, $allowedRoles, true)) {
+                $menuLabel = DB::table('menus')->where('id', $menuId)->value('menu_label');
+                $incompatibleMenus[] = [
+                    'menu_label' => $menuLabel,
+                    'controller' => $controller,
+                    'allowed_roles' => $allowedRoles,
+                    'user_role' => $userRole,
+                ];
+            }
+        }
+
+        // If there are incompatible menus, block the save with error details
+        if (!empty($incompatibleMenus)) {
+            $errorMessages = [];
+            foreach ($incompatibleMenus as $im) {
+                $roleList = implode(', ', array_map('ucfirst', $im['allowed_roles']));
+                $errorMessages[] = "\"{$im['menu_label']}\" is only for {$roleList} — not for " . ucfirst($im['user_role']);
+            }
+            return back()->withInput()->withErrors([
+                'role_conflict' => 'Cannot grant these menus due to role incompatibility:',
+                'role_details'  => $errorMessages,
+            ]);
+        }
+
+        // ─── Save Permissions ───
         $menuService = app(MenuService::class);
 
         DB::transaction(function () use ($validated, $menuService, $id) {
@@ -494,7 +554,7 @@ class UserController extends BaseMasterDataController
     /**
      * Build a hierarchical menu tree with permission data attached.
      */
-    private function buildMenuTreeWithPermissions($allMenus, $userPermissions): array
+    private function buildMenuTreeWithPermissions($allMenus, $userPermissions, $roleMenuAccess = [], $userRole = 'user'): array
     {
         $byParent = [];
         foreach ($allMenus as $menu) {
@@ -502,20 +562,32 @@ class UserController extends BaseMasterDataController
             $byParent[$parentId][] = $menu;
         }
 
-        $buildLevel = function ($parentId) use (&$buildLevel, $byParent, $userPermissions) {
+        $buildLevel = function ($parentId) use (&$buildLevel, $byParent, $userPermissions, $roleMenuAccess, $userRole) {
             $items = [];
             foreach (($byParent[$parentId] ?? []) as $menu) {
                 $perm = $userPermissions[$menu->id] ?? null;
+                $controller = strtolower($menu->controller ?? '');
+
+                // Determine if this menu is compatible with the user's role
+                $roleCompatible = true;
+                $allowedRoles = null;
+                if (isset($roleMenuAccess[$controller])) {
+                    $allowedRoles = $roleMenuAccess[$controller];
+                    $roleCompatible = in_array($userRole, $allowedRoles, true);
+                }
+
                 $items[] = [
-                    'id'         => $menu->id,
-                    'menu_label' => $menu->menu_label,
-                    'controller' => $menu->controller,
-                    'action'     => $menu->action,
-                    'icon'       => $menu->icon,
-                    'is_active'  => $menu->is_active,
-                    'can_view'   => $perm ? $perm->can_view : false,
-                    'can_edit'   => $perm ? $perm->can_edit : false,
-                    'children'   => $buildLevel($menu->id),
+                    'id'              => $menu->id,
+                    'menu_label'      => $menu->menu_label,
+                    'controller'      => $menu->controller,
+                    'action'          => $menu->action,
+                    'icon'            => $menu->icon,
+                    'is_active'       => $menu->is_active,
+                    'can_view'        => $perm ? $perm->can_view : false,
+                    'can_edit'        => $perm ? $perm->can_edit : false,
+                    'role_compatible' => $roleCompatible,
+                    'allowed_roles'   => $allowedRoles,
+                    'children'        => $buildLevel($menu->id),
                 ];
             }
             return $items;
