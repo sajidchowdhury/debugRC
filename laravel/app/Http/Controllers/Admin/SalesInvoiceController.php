@@ -505,16 +505,35 @@ class SalesInvoiceController extends Controller
 
     /**
      * P1-6: Print invoice (paginated, A4-friendly).
+     *
+     * Supports two output modes:
+     *   - ?mode=pdf  → DomPDF server-side PDF (exact layout, multi-page)
+     *   - default    → HTML view (browser preview, then window.print())
+     *
+     * Branch-specific header/footer images are loaded from the branch model
+     * and injected into the view for rendering.
      */
     public function printInvoice(int $id)
     {
-        $invoice = SalesInvoice::with(['items.product', 'customer', 'branch', 'salesman', 'dispatchers'])
+        $invoice = SalesInvoice::with(['items.product', 'customer', 'branch.company', 'salesman', 'dispatchers'])
             ->findOrFail($id);
 
-        return view('admin.sales-invoices.print_invoice', [
-            'title' => 'Invoice ' . $invoice->invoice_code,
+        $data = [
+            'title'   => 'Invoice ' . $invoice->invoice_code,
             'invoice' => $invoice,
-        ]);
+        ];
+
+        // If ?mode=pdf, render via DomPDF for exact multi-page output
+        if (request()->input('mode') === 'pdf') {
+            $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView(
+                'admin.sales-invoices.print_invoice', $data
+            );
+            $pdf->setPaper('A4', 'portrait');
+            return $pdf->stream('invoice-' . $invoice->invoice_code . '.pdf');
+        }
+
+        // Default: HTML view (browser print dialog)
+        return view('admin.sales-invoices.print_invoice', $data);
     }
 
     /**

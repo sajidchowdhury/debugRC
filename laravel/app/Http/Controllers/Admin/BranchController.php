@@ -155,6 +155,43 @@ class BranchController extends BaseMasterDataController
             }
         }
 
+        // Handle invoice header/footer image uploads
+        if ($request->hasFile('invoice_header_image')) {
+            // Delete old header if exists
+            if ($item->invoice_header_image) {
+                \Storage::disk('public')->delete($item->invoice_header_image);
+            }
+            $validated['invoice_header_image'] = $request->file('invoice_header_image')
+                ->store('branch-invoices', 'public');
+        } elseif ($request->input('remove_header')) {
+            if ($item->invoice_header_image) {
+                \Storage::disk('public')->delete($item->invoice_header_image);
+            }
+            $validated['invoice_header_image'] = null;
+        }
+
+        if ($request->hasFile('invoice_footer_image')) {
+            // Delete old footer if exists
+            if ($item->invoice_footer_image) {
+                \Storage::disk('public')->delete($item->invoice_footer_image);
+            }
+            $validated['invoice_footer_image'] = $request->file('invoice_footer_image')
+                ->store('branch-invoices', 'public');
+        } elseif ($request->input('remove_footer')) {
+            if ($item->invoice_footer_image) {
+                \Storage::disk('public')->delete($item->invoice_footer_image);
+            }
+            $validated['invoice_footer_image'] = null;
+        }
+
+        // Handle invoice text fields (not file uploads)
+        $validated['invoice_header_text'] = $request->input('invoice_header_text');
+        $validated['invoice_footer_text'] = $request->input('invoice_footer_text');
+        $validated['invoice_watermark_text'] = $request->input('invoice_watermark_text');
+        $validated['invoice_signatory_name'] = $request->input('invoice_signatory_name');
+        $validated['invoice_signatory_title'] = $request->input('invoice_signatory_title');
+        $validated['invoice_terms'] = $request->input('invoice_terms');
+
         try {
             $item->update($validated);
             return redirect()->route("{$this->routePrefix}.show", $item)

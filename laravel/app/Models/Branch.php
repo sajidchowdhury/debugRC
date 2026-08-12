@@ -30,6 +30,14 @@ class Branch extends Model
         'address',
         'phone',
         'email',
+        'invoice_header_image',
+        'invoice_footer_image',
+        'invoice_header_text',
+        'invoice_footer_text',
+        'invoice_watermark_text',
+        'invoice_signatory_name',
+        'invoice_signatory_title',
+        'invoice_terms',
         'is_active',
         'created_by',
         'deleted_by',
@@ -76,5 +84,41 @@ class Branch extends Model
     public function scopeActive(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
     {
         return $query->where('is_active', true)->whereNull('deleted_at');
+    }
+
+    /**
+     * Get the full public URL for the invoice header image.
+     */
+    public function getInvoiceHeaderUrlAttribute(): ?string
+    {
+        if (!$this->invoice_header_image) return null;
+        return \Storage::disk('public')->url($this->invoice_header_image);
+    }
+
+    /**
+     * Get the full public URL for the invoice footer image.
+     */
+    public function getInvoiceFooterUrlAttribute(): ?string
+    {
+        if (!$this->invoice_footer_image) return null;
+        return \Storage::disk('public')->url($this->invoice_footer_image);
+    }
+
+    /**
+     * Get the absolute server path for the invoice header image (for DomPDF).
+     */
+    public function getInvoiceHeaderPathAttribute(): ?string
+    {
+        if (!$this->invoice_header_image) return null;
+        return storage_path('app/public/' . $this->invoice_header_image);
+    }
+
+    /**
+     * Get the absolute server path for the invoice footer image (for DomPDF).
+     */
+    public function getInvoiceFooterPathAttribute(): ?string
+    {
+        if (!$this->invoice_footer_image) return null;
+        return storage_path('app/public/' . $this->invoice_footer_image);
     }
 }
