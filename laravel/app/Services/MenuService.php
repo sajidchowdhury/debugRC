@@ -185,6 +185,18 @@ class MenuService
             'approval' => $action === 'workflows' ? 'admin.approvals.workflows' : 'admin.approvals.queue',
             // WORKFLOWS-AUDIT-2 (G-185): Notification Rules sidebar menu.
             'notification' => 'admin.notifications.rules',
+            // Missing menu entries added 2026-09-09 — routes existed but had no menu row.
+            'stocktransaction'       => 'admin.stock.transactions',
+            'purchaseaudit'          => 'admin.purchase-audit.checklist',
+            'commission'             => 'admin.commission-rules.index',
+            'productcategory'        => 'admin.product-categories.index',
+            'productgroup'           => 'admin.product-groups.index',
+            'archive'                => 'admin.archive.index',
+            'globalaudit'            => 'admin.audit.index',
+            'systemhealth'           => 'admin.system-health.index',
+            'compliance'             => 'admin.compliance.index',
+            'shadowmode'             => 'admin.shadow-mode.index',
+            'branchdemandshadow'     => 'admin.branch-demand-shadow.index',
         ];
 
         $routeName = $routeMap[$controller] ?? null;
