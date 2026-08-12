@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\StockTransaction;
+use App\Services\Sales\SalesAccess;
 use App\Services\Stock\StockService;
 use App\Services\Stock\StockAvailabilityService;
 use Illuminate\Http\Request;
@@ -172,6 +173,10 @@ class StockTransactionController extends Controller
     /**
      * AJAX: per-warehouse breakdown for a product in a branch.
      * Used by the challan picker modal.
+     *
+     * BUG-1 fix: added SalesAccess::assertBranchAccessible() so non-admin
+     * users cannot query other branches' warehouse stock. Previously any
+     * authenticated user could pass any branch_id and see cross-branch data.
      */
     public function warehouseBreakdown(Request $request)
     {
@@ -180,9 +185,14 @@ class StockTransactionController extends Controller
             'branch_id' => 'required|integer|exists:branches,id',
         ]);
 
+        $branchId = (int) $request->input('branch_id');
+
+        // Defense-in-depth: non-admin users can only access their own branch.
+        app(SalesAccess::class)->assertBranchAccessible($branchId);
+
         $breakdown = $this->availabilityService->getBranchWarehouseBreakdown(
             (int) $request->input('product_id'),
-            (int) $request->input('branch_id'),
+            $branchId,
             $request->input('exclude_invoice_id') ? (int) $request->input('exclude_invoice_id') : null
         );
 

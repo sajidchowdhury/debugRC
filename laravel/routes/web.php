@@ -1332,11 +1332,11 @@ Route::middleware('auth')->group(function () {
 
         // Godown prep + challan issue — warehouse_manager, dispatcher, manager, admin
         Route::get('godown/{invoiceId}', [SalesChallanController::class, 'godown'])
-            ->name('godown')->middleware('role:warehouse_manager,dispatcher,manager,admin');
+            ->name('godown')->middleware(['role:warehouse_manager,dispatcher,manager,admin', 'branch.isolation']);
         Route::post('godown/{invoiceId}', [SalesChallanController::class, 'storeGodown'])
             ->name('storeGodown')->middleware(['role:warehouse_manager,dispatcher,manager,admin', 'branch.isolation']);
         Route::get('issue/{invoiceId}', [SalesChallanController::class, 'challanForm'])
-            ->name('challan-form')->middleware('role:warehouse_manager,dispatcher,manager,admin');
+            ->name('challan-form')->middleware(['role:warehouse_manager,dispatcher,manager,admin', 'branch.isolation']);
         Route::post('issue/{invoiceId}', [SalesChallanController::class, 'issueChallan'])
             ->name('issueChallan')->middleware(['role:warehouse_manager,dispatcher,manager,admin', 'branch.isolation']);
         // Challan reverse — manager, admin only (legacy reverse_challan)
